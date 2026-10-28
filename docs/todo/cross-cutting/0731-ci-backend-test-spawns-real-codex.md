@@ -1,6 +1,7 @@
 # Two backend schedule tests run the real Codex CLI, which calls OpenAI and logs the prompt
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `863b5782` (2026-10-27). Fixed on 2026-10-28
+against `main` at `1d1f0a87`; see Current state.
 
 Two tests in `apps/backend/src/core/public-api/public-api-schedules.test.ts`
 launch an environment with a first prompt. That queues the first-prompt
@@ -19,9 +20,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Make the public-API harness hermetic for naming**: add a failing assertion first, then give the harness a stub `codex`. Status: open.
-2. **Keep the prompt out of the rename failure log**: log a content-free summary instead of Codex's stderr. Status: open.
-3. **Confirm on CI**: check that CI backend output no longer shows `api.openai.com` or the slug prompt. Status: open (depends on 1 and 2).
+1. **Make the public-API harness hermetic for naming**: add a failing assertion first, then give the harness a stub `codex`. Status: done (2026-10-28).
+2. **Keep the prompt out of the rename failure log**: log a content-free summary instead of Codex's stderr. Status: done (2026-10-28).
+3. **Confirm on CI**: check that CI backend output no longer shows `api.openai.com` or the slug prompt. Status: done (2026-10-28) by the recommended focused local run; CI's own output is not inspected (see Needs verification).
 
 ### 1. Make the public-API harness hermetic for naming
 
@@ -93,7 +94,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** `test:logged` deletes passing output, so the check needs a run whose backend group prints, or a local run of the one file.
 
-**Investigation.** Not started.
+**Investigation.** Done 2026-10-28 with the recommended evidence, a focused
+local run (see Current state for the commands and counts).
 
 **Decisions.**
 
@@ -107,39 +109,77 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Current state
 
-- `createPublicApiHarness` has no naming stub
-  (`apps/backend/src/core/public-api/test-support.ts:56-80`), so
-  `resolveCodexBinary` falls back to `codex` on `PATH`
-  (`apps/backend/src/core/commands-agent-support.ts:360-375`).
-- `public-api-schedules.test.ts:203` and `:512` launch environments with a
-  prompt, which reaches `generateEnvironmentNameWithCodexExec`
-  (`commands-agent-support.ts:683-722`, spawn at `:692`).
-- CI run 40379705332 shows both tests running Codex 0.164.0 against
-  `api.openai.com` and getting 401. The tests pass regardless.
-- The rename failure warning logs Codex's stderr, prompt included
-  (`commands-registry.ts:199-200`, `shell.ts:326-331`), and retries every 30
-  seconds while the intent is pending (`commands-registry.ts:183-187`,
-  `index.ts:1821-1830`).
-- Other backend fixtures already stub Codex (`apps/backend/tests/command-fixtures.ts:1048`, `:1361`).
+Fixed on 2026-10-28.
+
+- `createPublicApiHarness` writes a slug-writing stub at `<root>/bin/codex`
+  (`installNamingStub` in `apps/backend/src/core/public-api/test-support.ts`).
+  `resourceRoot` is the harness root, so `resolveCodexBinary` finds the stub
+  before it would fall back to `codex` on `PATH`. The stub appends one line per
+  call to `<root>/codex-naming.log`, and `harness.namingCalls()` returns them.
+- Both schedule tests (`public-api-schedules.test.ts`, "environment launch:
+  resolves the base branch's newest commit when it fires" and "public launch
+  replay after admission uses its original commit after the branch advances")
+  assert, through `expectOneNamingCall`, that naming ran exactly once, as
+  `exec` with `--output-last-message`, with their prompt in the slug prompt.
+- A failed first-prompt rename no longer passes the error to `console.warn`.
+  `PendingRenameFailureLog` (`apps/backend/src/core/pending-rename-failure-log.ts`)
+  logs `[ElectronBackend] Failed to rename environment from pending prompt`
+  with `{ environmentId, reason, error, exitCode, signal }`, where `reason` is
+  `command-timed-out`, `command-missing`, `command-failed` or `error` and
+  `error` is the error's class name. Repeated failures for the same
+  environment and intent are logged only as a count at the 2nd, 4th, 8th...
+  failure, and once more when a retry succeeds. `commands-registry.ts` records
+  the failure inside `pendingEnvironmentRenameTask`; its callers only swallow
+  the rejection. `reconcilePendingEnvironmentRenames` forgets environments that
+  no longer hold an intent.
+- Tests: `pending-rename-failure-log.test.ts` (summary fields, once per
+  intent, power-of-two counts, recovery, pruning);
+  `tests/commands-environment.test.ts` "retains a failed pending rename…" now
+  uses a failing stub whose stderr echoes its whole argument list, slug prompt
+  included, and asserts the single warning carries neither the user prompt nor
+  the slug prompt; `tests/commands-registry-environments-create.test.ts` "backs
+  off failed reconciliation…" asserts the failure line and the recovery count.
+- Failing first: with only the assertions added and a recording sentinel
+  `codex` first on `PATH` (it never reaches the network; it prints a 401 line
+  and echoes its arguments to stderr, as a signed-out Codex does), both
+  schedule tests failed (8 pass, 2 fail), the sentinel was called twice, and
+  the output held two `api.openai.com` lines and the prompts. A mutation that
+  adds the error to the warning fails both logging tests.
+- After the fix, the same focused run: 10 pass, 0 fail, no sentinel call, no
+  `api.openai.com` line, no "scheduled audit", "replay audit" or "slug
+  generator" text in the output.
+- Other harnesses (Outstanding work, item 4): no other gap. Static search: the
+  only backend test files that reach `prepare_environment_first_prompt`,
+  `rename_environment_from_prompt` or a pending rename through the real
+  registry either stub Codex (`isolateCodexBinaryLookup` with `withFakeCodex`
+  in `commands-environment.test.ts` and
+  `commands-registry-environments-create.test.ts`) or replace the command
+  (`prompt-queue-drainer.test.ts`, `native-agent-service-dispatch.test.ts`,
+  `index.test.ts`); the other matches only read `pendingRenamePrompt`.
+  Dynamic check: the whole backend package, both tiers (781 files, 12,891
+  tests), with the sentinel first on `PATH`, made no call to it.
+- [testing-guide.md](../../development/testing-guide.md#agent-clis-on-path)
+  documents the `PATH` fallback and which fixtures stub Codex.
 
 ## Outstanding work
 
 ### Code
 
-1. Add the stub-log assertions to the two schedule tests and see them fail.
-2. Write a slug-writing stub `codex` at `<root>/bin/codex` in
-   `createPublicApiHarness`, logging its calls to a file in the harness root.
-3. Replace the payload of `logPendingEnvironmentRenameFailure` with a
-   content-free summary, and log repeated failures for the same intent once.
-   Add a test that a failing stub whose stderr echoes the prompt produces a
-   warning without the prompt text.
-4. Search the other backend harnesses that call `prepare_environment_first_prompt`
-   or launch with a prompt for the same gap.
+1. **Done (2026-10-28):** stub-log assertions added to the two schedule
+   tests; they failed before the stub (see Current state).
+2. **Done (2026-10-28):** slug-writing stub at `<root>/bin/codex` in
+   `createPublicApiHarness`, logging to `<root>/codex-naming.log`.
+3. **Done (2026-10-28):** content-free summary, logged once per environment
+   and intent, then as a count; tested with a failing stub that echoes the
+   prompt.
+4. **Done (2026-10-28):** other backend harnesses searched, statically and by
+   a full backend run with a recording `codex` on `PATH`; no other gap.
 
 ### Qualification
 
-- Focused run of `public-api-schedules.test.ts` with a signed-out `codex` on
-  `PATH`: no `api.openai.com` line and no slug prompt in the output.
+- **Done (2026-10-28):** focused run of `public-api-schedules.test.ts` with a
+  signed-out stand-in `codex` on `PATH`: no `api.openai.com` line and no slug
+  prompt in the output (decision 4 explains the stand-in).
 
 ## Constraints and rationale
 
@@ -150,21 +190,84 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - Do not change `PATH` globally in the harness: tests run in parallel
   workers and some already change it.
 
+## Assumptions and decisions
+
+1. **Stub location: a slug-writing stub at `<root>/bin/codex` in
+   `createPublicApiHarness` (2026-10-28).** Options: (a) the stub in the
+   harness root; (b) a naming construction option on
+   `CommandRegistryOptions`, faked by the harness; (c) a suite-wide fail-fast
+   `codex` prepended to `PATH` in `tests/setup-node.ts`. Chose (a), as the
+   analysis recommended. Pros: no product change, no process-wide `PATH`
+   change, and the real `runCommand` spawn, output file and rename still run
+   end to end. Cons: protects only this harness; another fixture that forgets
+   still leaks (the testing guide now says so, and item 4 found none today).
+   (b) adds a product seam used only by tests and skips the real spawn path;
+   (c) conflicts with CI deliberately putting the pinned Codex on `PATH` and
+   with tests that change `PATH` themselves.
+2. **Proof: assert one `exec` call with `--output-last-message` in the stub
+   log (2026-10-28).** Options: (a) the stub-log assertion; (b) assert the
+   environment's final name. Chose (a), plus a check that the call's last
+   argument contains the test's prompt. Pros: deterministic, fails before the
+   stub exists, and proves naming ran rather than being skipped. Cons: tied to
+   the naming call's argument shape. (b) needs an extra wait because the
+   rename is asynchronous and the tests delete the environment. The stub
+   flattens tabs and newlines in each argument so one call is one log line.
+3. **Warning content and repeats (2026-10-28).** Options for content: (a) a
+   content-free summary; (b) keep stderr with `redactValues` for the slug and
+   user prompts. Chose (a): error class name, exit code, signal and a fixed
+   `reason` derived from `timedOut` and `executableMissing`. Pros: meets
+   invariant 12 by construction and still separates a timeout, a missing
+   binary and a refusing Codex. Cons: Codex's own text (for example the 401
+   wording) is gone, so a support case needs a manual `codex exec`. (b) fails
+   open on any re-wrapped echo. The `reason` names say "command", not
+   "codex", because the same path also runs Git for the branch rename, so a
+   `CommandFailedError` is not always Codex's. For repeats, options were (a)
+   log the first failure per environment and intent, then only a count;
+   (b) log every retry. Chose (a), with the count logged at power-of-two
+   failures and once on recovery, so a signed-out user gets about seven lines
+   in an hour instead of 120 and the count is still visible. Cons: a small
+   per-environment map in the registry closure; it is pruned on each
+   reconcile pass to environments that still hold an intent. A changed
+   intent, or an environment pruned while stopped, logs its first failure
+   again. The recovery line uses `console.warn` like the failure lines so the
+   three can be found together.
+4. **Qualification evidence: a focused local run with a stand-in signed-out
+   `codex` (2026-10-28).** Options: (a) a focused local run; (b) wait for a
+   red `main` run and search its backend output. Chose (a), as recommended.
+   The stand-in is a recording shell script first on `PATH`, not the real
+   Codex binary with an empty `CODEX_HOME`: the host's `codex` is signed in
+   with the user's account, and an empty `CODEX_HOME` alone does not prove
+   Codex would not find a keyring login, so the real binary was not run. The
+   stand-in prints a `wss://api.openai.com` 401 line and echoes its arguments,
+   so any call would have shown up in the output, as it did before the fix.
+   Pros: deterministic, no network, no use of the user's login. Cons: not CI
+   itself, and not the real binary.
+5. **The retry-policy question moved to a new file (2026-10-28).** The open
+   question (fall back to a local slug sooner when Codex is not signed in) is
+   a product choice outside this file's scope. It is now
+   [0430-first-prompt-naming-signed-out-retries.md](0430-first-prompt-naming-signed-out-retries.md),
+   so this file has nothing left.
+
 ## Open questions
 
-- Should first-prompt naming fall back to a local slug sooner when Codex is
-  not signed in, as feature-build does, rather than retrying every 30
-  seconds?
+- None. The retry-policy question is in
+  [0430-first-prompt-naming-signed-out-retries.md](0430-first-prompt-naming-signed-out-retries.md).
 
 ## Needs verification
 
-- Whether a signed-in developer `codex` on `PATH` makes a real model call
-  from these tests (inferred from code, not run).
+- Whether, before this fix, a signed-in developer `codex` on `PATH` made a
+  real model call from these tests. Inferred from code, deliberately not run
+  (it would use the user's account). The fix makes the question moot for this
+  harness: the stub is always found before `PATH`.
+- CI output itself was not inspected after the fix; passing output is deleted
+  by `test:logged`, so only a later red run with this change would show the
+  backend group. The local runs above are the evidence.
 
 ## Related
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md): where this was found.
-- [testing-guide.md](../../development/testing-guide.md)
+- [0430-first-prompt-naming-signed-out-retries.md](0430-first-prompt-naming-signed-out-retries.md): the retry policy for a Codex that cannot sign in.
+- [testing-guide.md](../../development/testing-guide.md#agent-clis-on-path): agent CLIs on `PATH` in tests.
 - [backend-runtime.md](../../architecture/backend-runtime.md): test seams as construction options.
 
 ## Replaces

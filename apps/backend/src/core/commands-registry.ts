@@ -24,6 +24,7 @@ import {
   renameEnvironmentFromPrompt,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { PendingRenameFailureLog } from "./pending-rename-failure-log.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
@@ -115,6 +116,7 @@ export function createCommandRegistry(
 
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const pendingEnvironmentRenameRetryAt = new Map<string, number>();
+  const pendingEnvironmentRenameFailures = new PendingRenameFailureLog();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
   const bridgeReadinessWaits = new Map<
     string,
@@ -161,6 +163,8 @@ export function createCommandRegistry(
     const existing = pendingEnvironmentRenameTasks.get(environmentId);
     if (existing) return existing;
 
+    // The intent this attempt read, so repeated failures for it log once.
+    let intent = "";
     // Defer admission by one microtask so the task is present in the coalescing
     // map before lifecycle admission can fail synchronously during shutdown.
     // More importantly, callers only ever schedule this task: a caller may
@@ -174,17 +178,20 @@ export function createCommandRegistry(
           // Keep the intent for the next successful start instead of renaming a
           // branch inside an environment that can no longer accept the prompt.
           if (!prompt || environment?.status !== "running") return;
+          intent = prompt;
           await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
           await context.runtime.prMonitor.sync(context);
         }),
       )
       .then(() => {
         pendingEnvironmentRenameRetryAt.delete(environmentId);
+        if (intent) pendingEnvironmentRenameFailures.succeeded(environmentId);
       })
       .catch((error) => {
         // Keep the durable intent and bound automatic retries. Authentication or
         // model outages must not spin `codex exec` on the two-second backend sweep.
         pendingEnvironmentRenameRetryAt.set(environmentId, Date.now() + 30_000);
+        pendingEnvironmentRenameFailures.failed(environmentId, intent, error);
         throw error;
       })
       .finally(() => {
@@ -197,9 +204,8 @@ export function createCommandRegistry(
     return task;
   };
 
-  const logPendingEnvironmentRenameFailure = (error: unknown): void => {
-    console.warn("[ElectronBackend] Failed to rename environment from pending prompt:", error);
-  };
+  // The task logged the failure itself, without its message.
+  const ignorePendingEnvironmentRenameFailure = (): void => undefined;
 
   const schedulePendingEnvironmentRename = (
     environmentId: string,
@@ -207,7 +213,7 @@ export function createCommandRegistry(
   ): void => {
     if (pendingEnvironmentRenameTasks.has(environmentId)) return;
     void pendingEnvironmentRenameTask(environmentId, context).catch(
-      logPendingEnvironmentRenameFailure,
+      ignorePendingEnvironmentRenameFailure,
     );
   };
 
@@ -252,6 +258,13 @@ export function createCommandRegistry(
     const environments = await context.storage.loadEnvironments();
     const tasks: Promise<void>[] = [];
     let pending = 0;
+    pendingEnvironmentRenameFailures.retainOnly(
+      new Set(
+        environments
+          .filter((environment) => environment.pendingRenamePrompt?.trim())
+          .map((environment) => environment.id),
+      ),
+    );
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.pendingRenamePrompt?.trim()) continue;
       pending += 1;
@@ -260,7 +273,7 @@ export function createCommandRegistry(
       }
       tasks.push(
         pendingEnvironmentRenameTask(environment.id, context).catch(
-          logPendingEnvironmentRenameFailure,
+          ignorePendingEnvironmentRenameFailure,
         ),
       );
     }

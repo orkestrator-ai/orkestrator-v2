@@ -340,6 +340,26 @@ says whether one is armed, and `restore()` reports any it drops. The
 - Do not swap a sleep for an async query that waits the same wall time, and
   never change a production debounce or retry constant to make a test cheaper.
 
+### Agent CLIs on `PATH`
+
+Default and slow-tier tests must not reach the network or a provider login. A
+backend path that resolves an agent CLI (`resolveCodexBinary` and its siblings
+in `commands-agent-support.ts`) checks the managed copies first
+(`toolchainBinDir`, `<resourceRoot>/bin`, `<appRoot>/binaries`,
+`<appRoot>/bin`) and then falls back to the bare name, so `PATH` decides. CI
+puts the pinned Codex on `PATH`, and a developer's `PATH` usually has a
+signed-in one. Launching an environment with a prompt runs first-prompt naming
+(`codex exec`), so a fixture that can reach it must supply a stub:
+
+- `createPublicApiHarness` (`apps/backend/src/core/public-api/test-support.ts`)
+  writes a slug-writing stub at `<root>/bin/codex` and logs each call;
+  `harness.namingCalls()` returns them.
+- The command fixtures (`apps/backend/tests/command-fixtures.ts`) offer
+  `isolateCodexBinaryLookup`, `withFakeCodex` and `codexSlugScript`.
+
+Do not prepend a stub to `PATH` for the whole suite: tests run in parallel
+workers and some change `PATH` themselves.
+
 `mise run typecheck` covers every location: package tests through each
 package's typecheck script (`tsconfig.test.json` in the backend and desktop),
 root tests and `scripts/` through `tests/tsconfig.json`, and the browser and

@@ -34,9 +34,56 @@ export interface PublicApiHarness {
     request?: { requestId: string; namespace?: string },
   ): Promise<PublicActionResponse<T>>;
   createRepository(name: string): Promise<{ projectPath: string; originPath: string }>;
+  /**
+   * Each first-prompt naming call the stub `codex` received, as its argument
+   * list, oldest first.
+   */
+  namingCalls(): Promise<string[][]>;
   /** A second storage/registry over the same data directory ("restart"). */
   restart(): Promise<PublicApiHarness>;
   cleanup(): Promise<void>;
+}
+
+const NAMING_LOG = "codex-naming.log";
+
+/**
+ * A `codex` that answers first-prompt naming without the network. It sits at
+ * `<root>/bin/codex`, the managed-binary path `resolveCodexBinary` checks
+ * before falling back to `PATH`, so a CI runner's pinned Codex or a
+ * developer's signed-in one is never reached.
+ */
+function namingStubScript(logPath: string): string {
+  const quotedLog = `'${logPath.replaceAll("'", "'\\''")}'`;
+  return `#!/bin/sh
+tab=$(printf '\\t')
+line=""
+out=""
+prev=""
+for arg in "$@"; do
+  line="$line$(printf '%s' "$arg" | tr '\\t\\n' '  ')$tab"
+  if [ "$prev" = "--output-last-message" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+printf '%s\\n' "$line" >> ${quotedLog}
+[ -n "$out" ] || exit 2
+printf '%s\\n' '{"slug":"stub-named"}' > "$out"
+`;
+}
+
+async function installNamingStub(root: string): Promise<void> {
+  const stub = path.join(root, "bin", "codex");
+  await fs.mkdir(path.dirname(stub), { recursive: true });
+  await fs.writeFile(stub, namingStubScript(path.join(root, NAMING_LOG)), { mode: 0o755 });
+}
+
+/** One line per call; arguments are tab-separated with tabs and newlines flattened. */
+function parseNamingLog(log: string): string[][] {
+  return log
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split("\t").slice(0, -1));
 }
 
 async function git(args: string[], cwd?: string): Promise<string> {
@@ -64,6 +111,7 @@ export async function createPublicApiHarness(
   const root = options.root ?? (await fs.mkdtemp(path.join(os.tmpdir(), "ork-public-api-")));
   const dataDir = options.dataDir ?? path.join(root, "data");
   await fs.mkdir(dataDir, { recursive: true });
+  await installNamingStub(root);
   const storage = new StorageService(dataDir);
   await storage.init();
   const commands = createCommandRegistry(
@@ -126,6 +174,10 @@ export async function createPublicApiHarness(
       await git(["remote", "add", "origin", originPath], projectPath);
       await git(["push", "-u", "origin", "main"], projectPath);
       return { projectPath, originPath };
+    },
+    async namingCalls() {
+      const log = await fs.readFile(path.join(root, NAMING_LOG), "utf8").catch(() => "");
+      return parseNamingLog(log);
     },
     async restart() {
       await dispose();

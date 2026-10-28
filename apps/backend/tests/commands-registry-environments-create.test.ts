@@ -1,5 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
+import {
+  PENDING_RENAME_FAILED_MESSAGE,
+  PENDING_RENAME_RECOVERED_MESSAGE,
+} from "../src/core/pending-rename-failure-log";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -483,7 +487,14 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
           expect(environment.name).toBe("retry-recovered");
           expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
-          expect(warn).toHaveBeenCalledTimes(1);
+          // One content-free failure line, then one count when the retry succeeds.
+          expect(warn.mock.calls).toEqual([
+            [
+              PENDING_RENAME_FAILED_MESSAGE,
+              expect.objectContaining({ environmentId: environment.id }),
+            ],
+            [PENDING_RENAME_RECOVERED_MESSAGE, { environmentId: environment.id, failures: 1 }],
+          ]);
 
           Object.assign(environment, {
             name: "20260415-123456",

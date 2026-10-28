@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   PERSISTED_SDK_ID,
@@ -19,6 +19,14 @@ import {
 import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 import { sessions } from "./session-manager-core.js";
 import type { ClaudeTurnInFlightMark } from "./session-preferences.js";
+import { resetProcessIdentityCacheForTesting } from "./process-identity.js";
+import {
+  HAS_PROC,
+  HAS_PS,
+  recordedIdentity,
+  spawnLiveOwner,
+  stopLiveOwners,
+} from "./process-identity-test-harness.js";
 
 // Loaded after the harness so they bind to the same mocked session-manager graph.
 const {
@@ -184,6 +192,11 @@ describe("turn-in-flight mark", () => {
 });
 
 describe("restoring a session a restart cut short", () => {
+  afterEach(async () => {
+    resetProcessIdentityCacheForTesting();
+    await stopLiveOwners();
+  });
+
   test("reports the turn failed with interruption restart, then a new turn continues it", async () => {
     await withTemporaryClaudeHome("claude-turn-restored-", async () => {
       await leaveMarkFromDeadBridge(undefined, "cut-short");
@@ -215,6 +228,9 @@ describe("restoring a session a restart cut short", () => {
       const mark = await storedMark("present", 2_000, bridgeInstanceIdForTesting());
       expect(mark?.pid).toBe(process.pid);
       expect(mark?.requestId).toBe("continuation");
+      // The observer below proves this process alive by that identity.
+      expect(mark?.processStartedAt).toBe(Math.round(performance.timeOrigin));
+      if (HAS_PROC) expect(mark?.procStart).toMatch(/^\d+$/);
       // A second bridge has a different instance id and pid, but sees our live
       // process as the owner of this continuation.
       const observer = Bun.spawn(
@@ -288,6 +304,47 @@ describe("restoring a session a restart cut short", () => {
       expect(restored.error).toBeUndefined();
     });
   });
+
+  test.skipIf(!HAS_PROC && !HAS_PS)(
+    "blames a dead predecessor whose pid now belongs to another live process",
+    async () => {
+      await withTemporaryClaudeHome("claude-turn-restored-reused-", async () => {
+        const reused = spawnLiveOwner();
+        await updateSessionPreferences(PERSISTED_SDK_ID, {
+          turnInFlight: {
+            bridgeInstanceId: "a-bridge-that-died",
+            pid: reused.pid,
+            startedAt: 1,
+            ...recordedIdentity(reused),
+            ...(HAS_PROC ? { procStart: "1" } : {}),
+            processStartedAt: reused.startedAt - 3_600_000,
+          },
+        });
+        const restored = await materializePersistedSession();
+        expect(restored).toMatchObject({ status: "error", interruption: "restart" });
+      });
+    },
+  );
+
+  test.skipIf(!HAS_PROC && !HAS_PS)(
+    "leaves a turn alone when the live writer still has its recorded identity",
+    async () => {
+      await withTemporaryClaudeHome("claude-turn-restored-identity-", async () => {
+        const writer = spawnLiveOwner();
+        await updateSessionPreferences(PERSISTED_SDK_ID, {
+          turnInFlight: {
+            bridgeInstanceId: "another-bridge",
+            pid: writer.pid,
+            startedAt: 1,
+            ...recordedIdentity(writer),
+          },
+        });
+        const restored = await materializePersistedSession();
+        expect(restored.status).toBe("idle");
+        expect(restored.interruption).toBeUndefined();
+      });
+    },
+  );
 
   test("leaves this process's own mark alone after the session left memory", async () => {
     await withTemporaryClaudeHome("claude-turn-restored-self-", async () => {

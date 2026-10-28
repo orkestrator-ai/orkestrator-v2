@@ -93,3 +93,7 @@ also failed: expected one read, received two (2224.98 ms). That command reported
 remains non-green in isolation; no new flake classification or test relaxation
 is inferred. Evidence: `/tmp/orkestrator-test-run.O5dRFB/unrelated-web-owners.log.gz`
 and the aggregate log in `/tmp/orkestrator-test-run.DpxCwj/` after completion.
+
+## Pending rename recovery review — 2026-10-28
+
+The aggregate repeated this failure and the complete unchanged owner passed alone. Commands, timings and the aggregate capacity limitation are recorded in [1247](../aggregate-validation-runs/1247-pending-rename-recovery-validation.md). No implementation, assertion, wait, timeout or skip changed.

@@ -6,6 +6,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
+import { PENDING_RENAME_FAILED_MESSAGE } from "../src/core/pending-rename-failure-log";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -223,9 +224,11 @@ describe("Electron backend command registry", () => {
       console.warn = consoleWarnMock;
 
       try {
+        // Like a signed-out Codex, the stub echoes its prompt into stderr, which
+        // becomes the CommandFailedError message.
         await withFakeCodex(
           `#!/bin/sh
-printf 'codex auth required\\n' >&2
+printf 'codex auth required\\nuser: %s\\n' "$*" >&2
 exit 1
 `,
           async () => {
@@ -237,15 +240,31 @@ exit 1
             await waitForCondition(
               () =>
                 consoleWarnMock.mock.calls.some(
-                  ([message]) =>
-                    message ===
-                    "[ElectronBackend] Failed to rename environment from pending prompt:",
+                  ([message]) => message === PENDING_RENAME_FAILED_MESSAGE,
                 ),
               "failed pending rename to settle",
             );
           },
         );
 
+        const renameWarnings = consoleWarnMock.mock.calls.filter(([message]) =>
+          String(message).includes("pending prompt"),
+        );
+        expect(renameWarnings).toEqual([
+          [
+            PENDING_RENAME_FAILED_MESSAGE,
+            {
+              environmentId: environment.id,
+              reason: "command-failed",
+              error: "CommandFailedError",
+              exitCode: 1,
+              signal: null,
+            },
+          ],
+        ]);
+        const logged = JSON.stringify(consoleWarnMock.mock.calls);
+        expect(logged).not.toContain("OAuth callback");
+        expect(logged).not.toContain("slug generator");
         expect(environment.pendingRenamePrompt).toBe("Please review the OAuth callback flow");
         expect(emitted.some(({ event }) => event === "environment-renamed")).toBe(false);
 

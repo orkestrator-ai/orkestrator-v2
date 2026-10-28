@@ -18,3 +18,7 @@
 - **Disposition:** open.
 - **Evidence:** recurred on 2026-10-25 in [0815](../aggregate-validation-runs/0815-container-rebuild-state-validation.md) (load 54 to 65). The owner passed alone there and today (18/18, 0.2 s; Bun 1.4.4). The test still expects at least two runs of 5 ms timers after a fixed `Bun.sleep(40)` (`preview-partition-retention.test.ts:463`).
 - **Next step:** poll (bounded) until two runs are seen, then close the transport and check that no further run happens.
+
+## Pending rename review — 2026-10-28
+
+Preparation's `mise run test` repeated the expected-at-least-two/received-one failure (41.76 ms). Evidence: `.orkestrator/review-artifacts/review-validation-fabbd29e-2cbf-4f6a-94fa-442f4bb48d78/validation-07.stdout.txt`. The complete unchanged owner passed with `mise run test:logged -- --name recorded-desktop-failure-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/preview-partition-retention.test.ts --parallel=1 --only-failures` (exit 0, 0.5 s). No preview implementation, assertion, delay, timeout or skip changed.

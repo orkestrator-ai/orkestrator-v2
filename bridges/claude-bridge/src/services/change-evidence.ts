@@ -46,6 +46,12 @@ import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/
 import type { ProbeObservation } from "@orkestrator/protocol/node/workspace-change-probe";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { claudeChangeEvidenceDir } from "./claude-home.js";
+import {
+  currentProcessIdentity,
+  parseIdentityFields,
+  type RecordedOwner,
+  recordedOwnerState,
+} from "./process-identity.js";
 
 export type CaptureExecutor = "container-worker" | "host-worker";
 
@@ -326,26 +332,29 @@ function createChangeEvidence(options: ClaudeChangeEvidenceOptions): ClaudeChang
  * a pid file: two processes compacting one entries file would drop each
  * other's unacknowledged evidence.
  */
-function claimSpoolDirectory(): string | undefined {
-  const scope = process.env.CWD || process.cwd();
-  const directory = join(
-    claudeChangeEvidenceDir(),
-    createHash("sha256").update(scope).digest("hex").slice(0, 32),
-  );
+export function claimSpoolDirectory(
+  root = claudeChangeEvidenceDir(),
+  scope = process.env.CWD || process.cwd(),
+): string | undefined {
+  const directory = join(root, createHash("sha256").update(scope).digest("hex").slice(0, 32));
   const owner = join(directory, "owner.pid");
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const fd = openSync(owner, "wx", 0o600);
-        writeSync(fd, String(process.pid));
+        writeSync(fd, ownerFileContents());
         closeSync(fd);
         return directory;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
-        const holder = Number.parseInt(readFileSync(owner, "utf8"), 10);
-        if (holder === process.pid) return directory;
-        if (Number.isSafeInteger(holder) && holder > 0 && processIsAlive(holder)) return undefined;
+        const holder = parseOwnerFile(readFileSync(owner, "utf8"));
+        if (holder) {
+          // Runs once per process, so it may ask `ps` where `/proc` is missing.
+          const state = recordedOwnerState(holder, { slowPath: true });
+          if (state === "current") return directory;
+          if (state !== "dead") return undefined;
+        }
         rmSync(owner, { force: true });
       }
     }
@@ -355,12 +364,34 @@ function claimSpoolDirectory(): string | undefined {
   return undefined;
 }
 
-function processIsAlive(pid: number): boolean {
+/**
+ * The pid on the first line, which is all an older bridge reads (it parses
+ * the leading integer), and this process's identity as JSON on the second.
+ */
+function ownerFileContents(): string {
+  const { pid, ...identity } = currentProcessIdentity();
+  return `${pid}\n${JSON.stringify(identity)}\n`;
+}
+
+function parseOwnerFile(raw: string): RecordedOwner | undefined {
+  const [first = "", second] = raw.split("\n");
+  const pid = Number.parseInt(first, 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  if (!second) return { pid };
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    const parsed = JSON.parse(second) as Record<string, unknown> | null;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.instance !== "string" ||
+      parsed.instance.length === 0 ||
+      parsed.instance.length > 64
+    ) {
+      return { pid };
+    }
+    return { pid, instance: parsed.instance, ...parseIdentityFields(parsed) };
+  } catch {
+    return { pid };
   }
 }
 

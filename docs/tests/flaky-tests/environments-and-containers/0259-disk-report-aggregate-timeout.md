@@ -257,3 +257,7 @@ The complete unchanged owner passed: `mise run test:logged -- --name cleanup-dis
 - **Assessment:** recurrence of the existing timing failure. No disk-report code, assertion, deadline or skip changed. The aggregate also contains unrelated persistent migration and macOS profile-cleanup failures; its result remains non-green.
 
 - **Root/support counts:** 3,513 passed, 15 failed and one between-test error across 3,528 tests in 170 files (427.68 s). One new diagnostic-bounds assertion was corrected in `99f0842c3` and its complete owner passed separately; the other failures are in untouched owners.
+
+## Pending rename recovery review — 2026-10-28
+
+The aggregate repeated this failure and the complete unchanged owner passed alone. Commands, timings and the aggregate capacity limitation are recorded in [1247](../aggregate-validation-runs/1247-pending-rename-recovery-validation.md). No implementation, assertion, wait, timeout or skip changed.

@@ -24,6 +24,7 @@
  * `BuildPipelineStageDispatch` port wired here.
  */
 import type {
+  BuildPipelineCodeRewindPreview,
   BuildPipeline,
   BuildPipelineAgent,
   StartBuildPipelineInput,
@@ -164,6 +165,14 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
     return this.lifecycle.restartStep(pipelineId, stageId);
+  }
+
+  previewCodeRewind(pipelineId: string, stageId: string): Promise<BuildPipelineCodeRewindPreview> {
+    return this.lifecycle.previewCodeRewind(pipelineId, stageId);
+  }
+
+  rewindCode(pipelineId: string, stageId: string, expectedHead: string): Promise<BuildPipeline> {
+    return this.lifecycle.rewindCode(pipelineId, stageId, expectedHead);
   }
 
   skipStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {

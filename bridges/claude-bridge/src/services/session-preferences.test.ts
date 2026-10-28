@@ -3,11 +3,21 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeHome, claudeSessionPreferencesDir, setClaudeHomeForTesting } from "./claude-home.js";
+import { BRIDGE_INSTANCE_ID, resetProcessIdentityCacheForTesting } from "./process-identity.js";
+import {
+  exitedChildPid,
+  HAS_PROC,
+  HAS_PS,
+  recordedIdentity,
+  spawnLiveOwner,
+  stopLiveOwners,
+} from "./process-identity-test-harness.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
   readSessionPreferences,
   sessionPreferencesUnavailable,
+  setPreferenceLockTimeoutForTesting,
   updateSessionPreferences,
 } from "./session-preferences.js";
 
@@ -28,6 +38,9 @@ describe("session preferences", () => {
 
   afterEach(async () => {
     setClaudeHomeForTesting(null);
+    setPreferenceLockTimeoutForTesting(null);
+    resetProcessIdentityCacheForTesting();
+    await stopLiveOwners();
     await rm(testHome, { recursive: true, force: true });
   });
 
@@ -261,18 +274,25 @@ describe("session preferences", () => {
     });
   });
 
-  test("does not steal an old lock whose owner process is still alive", async () => {
+  /** Write a lock as another process would, optionally back-dated past the stale window. */
+  async function seedLock(owner: Record<string, unknown>, options: { stale: boolean }) {
     await mkdir(claudeSessionPreferencesDir(), { recursive: true });
     const lockPath = `${preferencePath()}.lock`;
-    await writeFile(lockPath, JSON.stringify({ token: "live-owner", pid: process.pid }), "utf-8");
-    const staleDate = new Date(Date.now() - 60_000);
-    await utimes(lockPath, staleDate, staleDate);
+    await writeFile(lockPath, JSON.stringify({ token: "seeded-owner", ...owner }), "utf-8");
+    if (options.stale) {
+      const staleDate = new Date(Date.now() - 60_000);
+      await utimes(lockPath, staleDate, staleDate);
+    }
+    return lockPath;
+  }
 
+  /** The update is still waiting on the lock; release it and let the update land. */
+  async function expectHeldUntilReleased(lockPath: string) {
     let settled = false;
     const update = updateSessionPreferences(SESSION_ID, { planMode: true }).finally(() => {
       settled = true;
     });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(settled).toBe(false);
 
     await rm(lockPath, { force: true });
@@ -280,6 +300,146 @@ describe("session preferences", () => {
     expect(await readSessionPreferences(SESSION_ID)).toEqual({
       planMode: true,
     });
+  }
+
+  /** The update takes the lock over well inside the (shortened) wait. */
+  async function expectTakenOver() {
+    setPreferenceLockTimeoutForTesting(1_000);
+    await updateSessionPreferences(SESSION_ID, { planMode: true });
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({
+      planMode: true,
+    });
+    expect(
+      (await readdir(claudeSessionPreferencesDir())).some(
+        (name) => name.includes(".recover-") || name.endsWith(".lock"),
+      ),
+    ).toBe(false);
+  }
+
+  test("does not steal an old lock whose owner process is still alive", async () => {
+    // An older bridge's lock names only a pid: a live one is never overruled.
+    const owner = spawnLiveOwner();
+    await expectHeldUntilReleased(await seedLock({ pid: owner.pid }, { stale: true }));
+  });
+
+  test("does not steal an old lock whose live owner still has its recorded identity", async () => {
+    const owner = spawnLiveOwner();
+    const lockPath = await seedLock(
+      { pid: owner.pid, instance: "another-bridge", ...recordedIdentity(owner) },
+      { stale: true },
+    );
+    await expectHeldUntilReleased(lockPath);
+  });
+
+  test("takes over at once a lock naming this process's pid under another instance", async () => {
+    // A container restart can hand the dead bridge's pid to this one.
+    await seedLock({ pid: process.pid, instance: "a-bridge-that-died" }, { stale: false });
+    await expectTakenOver();
+  });
+
+  test("takes over at once an older bridge's lock naming this process's pid", async () => {
+    // This process records its pid only under its own instance id.
+    await seedLock({ pid: process.pid }, { stale: false });
+    await expectTakenOver();
+  });
+
+  test("takes over at once a fresh lock whose owner pid is gone", async () => {
+    await seedLock(
+      { pid: await exitedChildPid(), instance: "a-bridge-that-died" },
+      { stale: false },
+    );
+    await expectTakenOver();
+  });
+
+  test("keeps the stale window for an older bridge's lock whose pid is gone", async () => {
+    const lockPath = await seedLock({ pid: await exitedChildPid() }, { stale: false });
+    await expectHeldUntilReleased(lockPath);
+  });
+
+  test("never takes over a lock this process holds", async () => {
+    const lockPath = await seedLock(
+      { pid: process.pid, instance: BRIDGE_INSTANCE_ID },
+      { stale: true },
+    );
+    await expectHeldUntilReleased(lockPath);
+  });
+
+  test.skipIf(!HAS_PROC)(
+    "on Linux takes over at once a lock whose live pid has another start time",
+    async () => {
+      const owner = spawnLiveOwner();
+      await seedLock(
+        {
+          pid: owner.pid,
+          instance: "a-bridge-that-died",
+          ...recordedIdentity(owner),
+          procStart: "1",
+        },
+        { stale: false },
+      );
+      await expectTakenOver();
+    },
+  );
+
+  test.skipIf(!HAS_PROC)("on Linux takes over at once a lock written before a reboot", async () => {
+    const owner = spawnLiveOwner();
+    await seedLock(
+      {
+        pid: owner.pid,
+        instance: "a-bridge-that-died",
+        ...recordedIdentity(owner),
+        bootId: "another-boot",
+      },
+      { stale: false },
+    );
+    await expectTakenOver();
+  });
+
+  test.skipIf(!HAS_PS)(
+    "without /proc evidence asks ps only once the lock is past the stale window",
+    async () => {
+      const owner = spawnLiveOwner();
+      const reused = {
+        pid: owner.pid,
+        instance: "a-bridge-that-died",
+        processStartedAt: owner.startedAt - 3_600_000,
+      };
+      // Fresh: a live owner's heartbeat would keep it so, and no ps is spawned.
+      await expectHeldUntilReleased(await seedLock(reused, { stale: false }));
+      await seedLock(reused, { stale: true });
+      await expectTakenOver();
+    },
+  );
+
+  test("refuses with a typed timeout when a live owner keeps the lock", async () => {
+    const owner = spawnLiveOwner();
+    const lockPath = await seedLock({ pid: owner.pid }, { stale: false });
+    setPreferenceLockTimeoutForTesting(50);
+
+    await expect(updateSessionPreferences(SESSION_ID, { planMode: true })).rejects.toMatchObject({
+      name: "PreferenceLockTimeoutError",
+      code: "preference-lock-timeout",
+    });
+    expect(await readSessionPreferences(SESSION_ID)).toBeUndefined();
+    expect(JSON.parse(await readFile(lockPath, "utf-8"))).toMatchObject({ pid: owner.pid });
+  });
+
+  test("recovers a recovery marker left by this process's pid under another instance", async () => {
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    const lockPath = `${preferencePath()}.lock`;
+    await writeFile(
+      lockPath,
+      JSON.stringify({ token: "dead-owner", pid: process.pid, instance: "a-bridge-that-died" }),
+      "utf-8",
+    );
+    const lockStat = await stat(lockPath);
+    await writeFile(
+      `${lockPath}.recover-${lockStat.dev}-${lockStat.ino}`,
+      JSON.stringify({ token: "dead-recovery", pid: process.pid, instance: "a-bridge-that-died" }),
+      "utf-8",
+    );
+
+    await expectTakenOver();
   });
 
   test("recovers an abandoned stale-recovery marker and cleans it up", async () => {

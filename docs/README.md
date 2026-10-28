@@ -57,7 +57,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [web-page-annotations.md](architecture/web-page-annotations.md) | Preview notes, capture spool, backend threads and their copy-on-write commits, native dispatch, review, migration. Real-stack gates: [0044-web-annotation-qualification.md](todo/previews-and-annotations/0044-web-annotation-qualification.md). |
 | [keyboard-shortcuts.md](architecture/keyboard-shortcuts.md) | The keyboard shortcuts dialog: who sees ⌘⇧K / Ctrl+Shift+K (renderer capture listener, layouts, native preview views, realms), the desktop View › Keyboard Shortcuts… item and its IPC request kinds, echo suppression, browser-client limits. |
 | [browser-previews.md](architecture/browser-previews.md) | Service previews: registry, local-environment discovery and listener ownership, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. Rollout: [0042-service-preview-rollout.md](todo/previews-and-annotations/0042-service-preview-rollout.md). |
-| [build-pipeline-view.md](architecture/build-pipeline-view.md) | The build pipeline tab's flow graph and inspector, and the flow-graph components it shares with Multi Review: the projection of the record (passes unrolled to the right, faded definite steps, the reviewer fan-out, Ticket and PR nodes), node actions including retrying one reviewer, restarts that rewind to a step's round with the superseded run kept as a previous attempt, and the read and view-state constraints. Follow-ups: [0315-build-pipeline-flow-graph.md](todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md), [0405-build-pipeline-rewind-follow-ups.md](todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md). |
+| [build-pipeline-view.md](architecture/build-pipeline-view.md) | The build pipeline tab's flow graph and inspector, and the flow-graph components it shares with Multi Review: the projection of the record (passes unrolled to the right, faded definite steps, the reviewer fan-out, Ticket and PR nodes), node actions including retrying one reviewer, restarts that rewind to a step's round with the superseded run kept as a previous attempt (Address rerunning on its round's kept report, a package-only restart), the confirmed "Rewind code to here" reset, and the read and view-state constraints. Follow-ups: [0315-build-pipeline-flow-graph.md](todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md), [0405-build-pipeline-rewind-follow-ups.md](todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md). |
 | [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Auto-fix and auto-PR ordering and recovery. Fan-out budgets and the efficiency benchmark. |
 | [user-commands.md](architecture/user-commands.md) | Composer `!` commands run as the user (worktree, container, coordinator checkout) with live output, input and cancel, given to the agent on its next turn; detection of shell prompts that need the user (sign-in links, device codes, ENTER, passwords, host keys) and where they surface, including the coordinator. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle, per-provider support tables. |
@@ -181,14 +181,28 @@ Rules of thumb:
 - When the last item in a file is done, set its **Finished** column to Yes
   in the folder index in the same change. Then move any durable behaviour into
   `architecture/` or `development/`, delete the file and remove its row from
-  the folder index. Its number is not reused.
+  the folder index. Renumber the remaining ranks to `1..n` in row order. Its
+  todo number is not reused.
 - To add work, create a new file with the next number and the same headings
   in the folder that fits, and add a rated row (Finished: No) to that
   folder's index. A new
   folder also needs its own `0000-index.md` and a row in
   [`todo/0000-index.md`](todo/0000-index.md).
+- After any row removal, insertion, or move, renumber that folder's ranks to
+  `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
+- `tests/unit/todo-index.test.ts` fails when two files share a number or a
+  folder index is missing a rated row for a file, has invalid Criticality or
+  Finished values, or has ranks other than `1..n` in row order. It also requires
+  every area folder to be linked from the top-level index. Two numbers were
+  already shared when it was added and stay allowlisted: 0054 (three files) and
+  0723 (two). Neither may gain another file.
+- Two open pull requests can each pick the same next number and each pass CI,
+  so the guard may first fire on `main` after the second merges. Fix forward:
+  rename the newer file to the next free number, update every link to it,
+  and record the old number in its "Replaces" section. A file that only just
+  merged has few links, so this does not undo a number anyone relies on.
 
 Live-provider and platform runs (macOS, Docker Desktop, Electron, Safari and
 iOS, two machines) are the most common open gate. They are batched in

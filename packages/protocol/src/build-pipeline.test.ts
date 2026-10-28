@@ -26,6 +26,7 @@ import {
   type BuildStepConfig,
   type BuildStepKey,
   type PipelineSessionPhase,
+  MAX_PIPELINE_ROUND_REVIEW_REPORTS,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 import {
@@ -1885,6 +1886,38 @@ describe("build pipeline protocol", () => {
       isBuildPipeline({
         ...snapshot(),
         structuredReview: { ...report, issues: "not-an-array" },
+      }),
+    ).toBe(false);
+
+    // Per-round copies: one per round, rounds 0 to the maximum iteration.
+    const rounds = (count: number) =>
+      Array.from({ length: count }, (_, iteration) => ({
+        iteration,
+        sessionKey: `review-${iteration}`,
+        report,
+      }));
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        roundReviewReports: rounds(MAX_PIPELINE_ROUND_REVIEW_REPORTS),
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        roundReviewReports: rounds(MAX_PIPELINE_ROUND_REVIEW_REPORTS + 1),
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        roundReviewReports: [{ iteration: 0, sessionKey: "", report }],
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        roundReviewReports: [{ iteration: 0, sessionKey: "review-0", report: {} }],
       }),
     ).toBe(false);
 

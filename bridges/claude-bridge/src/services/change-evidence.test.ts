@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -18,6 +18,7 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 import {
+  claimSpoolDirectory,
   claudeChangeCapabilities,
   claudeChangeEvidence,
   claudeToolKind,
@@ -27,6 +28,15 @@ import {
   resetClaudeChangeEvidenceForTesting,
 } from "./change-evidence.js";
 import { coordinatorProcessPolicy } from "./read-only-policy.js";
+import { BRIDGE_INSTANCE_ID, resetProcessIdentityCacheForTesting } from "./process-identity.js";
+import {
+  exitedChildPid,
+  HAS_PROC,
+  HAS_PS,
+  recordedIdentity,
+  spawnLiveOwner,
+  stopLiveOwners,
+} from "./process-identity-test-harness.js";
 
 type Hook = (
   input: Record<string, unknown>,
@@ -440,5 +450,84 @@ describe("Claude evidence from a live turn", () => {
       { kind: "turn", phase: "succeeded", writerLiveness: expect.any(String) },
     ]);
     expect(turns[1]!.event).not.toMatchObject({ writerLiveness: "may-write" });
+  });
+});
+
+describe("Claude change-evidence spool claim", () => {
+  let root: string;
+  const scope = "/workspace/claim-test";
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "claude-spool-claim-"));
+  });
+
+  afterEach(async () => {
+    rmSync(root, { recursive: true, force: true });
+    resetProcessIdentityCacheForTesting();
+    await stopLiveOwners();
+  });
+
+  function ownerFile(directory: string): string {
+    return join(directory, "owner.pid");
+  }
+
+  /** Claim once to learn the directory, then leave `contents` as its owner file. */
+  function seedOwner(contents: string): string {
+    const directory = claimSpoolDirectory(root, scope)!;
+    writeFileSync(ownerFile(directory), contents);
+    return directory;
+  }
+
+  test("records the pid where an older bridge reads it and the identity beside it", () => {
+    const directory = claimSpoolDirectory(root, scope)!;
+    const [pid, identity] = readFileSync(ownerFile(directory), "utf8").split("\n");
+    // An older bridge parses the leading integer only.
+    expect(Number.parseInt(readFileSync(ownerFile(directory), "utf8"), 10)).toBe(process.pid);
+    expect(pid).toBe(String(process.pid));
+    expect(JSON.parse(identity!)).toMatchObject({
+      instance: BRIDGE_INSTANCE_ID,
+      processStartedAt: Math.round(performance.timeOrigin),
+    });
+    // Claiming again in the same process keeps the claim.
+    expect(claimSpoolDirectory(root, scope)).toBe(directory);
+  });
+
+  test("takes over a claim left by this process's pid under another instance", () => {
+    const directory = seedOwner(
+      `${process.pid}\n${JSON.stringify({ instance: "a-bridge-that-died" })}\n`,
+    );
+    expect(claimSpoolDirectory(root, scope)).toBe(directory);
+    expect(readFileSync(ownerFile(directory), "utf8")).toContain(BRIDGE_INSTANCE_ID);
+  });
+
+  test("takes over a claim whose pid is gone", async () => {
+    const directory = seedOwner(String(await exitedChildPid()));
+    expect(claimSpoolDirectory(root, scope)).toBe(directory);
+  });
+
+  test("leaves an older bridge's claim to its live pid", () => {
+    const owner = spawnLiveOwner();
+    seedOwner(String(owner.pid));
+    expect(claimSpoolDirectory(root, scope)).toBeUndefined();
+  });
+
+  test.skipIf(!HAS_PROC && !HAS_PS)("leaves a claim to a live owner with its identity", () => {
+    const owner = spawnLiveOwner();
+    seedOwner(
+      `${owner.pid}\n${JSON.stringify({ instance: "another-bridge", ...recordedIdentity(owner) })}\n`,
+    );
+    expect(claimSpoolDirectory(root, scope)).toBeUndefined();
+  });
+
+  test.skipIf(!HAS_PROC && !HAS_PS)("takes over a claim whose live pid was reused", () => {
+    const owner = spawnLiveOwner();
+    const directory = seedOwner(
+      `${owner.pid}\n${JSON.stringify({
+        instance: "a-bridge-that-died",
+        ...(HAS_PROC ? { procStart: "1" } : {}),
+        processStartedAt: owner.startedAt - 3_600_000,
+      })}\n`,
+    );
+    expect(claimSpoolDirectory(root, scope)).toBe(directory);
   });
 });

@@ -40,6 +40,18 @@ async function waitFor<T>(
   }
 }
 
+/** First-prompt naming ran once, through the harness's stub `codex`. */
+async function expectOneNamingCall(harness: PublicApiHarness, prompt: string): Promise<void> {
+  const calls = await waitFor(
+    () => harness.namingCalls(),
+    (calls) => calls.length > 0,
+  );
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toContain("exec");
+  expect(calls[0]).toContain("--output-last-message");
+  expect(calls[0]!.at(-1)).toContain(prompt);
+}
+
 async function enableMessaging(harness: PublicApiHarness): Promise<void> {
   const config = await harness.storage.loadConfig();
   await harness.storage.updateGlobalConfig({
@@ -242,6 +254,7 @@ describe("a schedule fires each action kind", () => {
       () => stub.sends.filter((send) => send.prompt.includes("scheduled audit")).length,
       (count) => count === 1,
     );
+    await expectOneNamingCall(harness, "scheduled audit");
     const launched = scheduler.service.get({ kind: "operator" }, created.result.scheduleId)
       .fires[0]!;
     await harness.commands.get("delete_environment")!(
@@ -562,6 +575,7 @@ test("public launch replay after admission uses its original commit after the br
     outcome: { baseCommit: originalCommit },
   });
   expect(stub.sends.filter((send) => send.prompt.includes("replay audit"))).toHaveLength(1);
+  await expectOneNamingCall(harness, "replay audit");
   await harness.commands.get("delete_environment")!(
     { environmentId: fire.outcome!.environmentId },
     harness.context,

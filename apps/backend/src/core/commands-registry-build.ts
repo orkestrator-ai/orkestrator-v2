@@ -84,6 +84,23 @@ export function registerBuildPipelineCommands(
       asNonBlankString(stageId, "stageId"),
     );
   });
+  // "Rewind code to here": the preview names the commits a reset drops; the
+  // confirmed request carries the HEAD that preview read.
+  register("preview_build_pipeline_code_rewind", ({ pipelineId, stageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.previewCodeRewind(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+    );
+  });
+  register("rewind_build_pipeline_code", ({ pipelineId, stageId, expectedHead }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.rewindCode(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+      asNonBlankString(expectedHead, "expectedHead"),
+    );
+  });
   register("skip_build_pipeline_step", ({ pipelineId, stageId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.skipStep(

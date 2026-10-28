@@ -95,11 +95,21 @@ export function pipelineNodeStatusLabel(
         ? "Closed"
         : "Open";
   }
+  if (node.state === "cancelled" && isSkipped(node, pipeline)) return "Skipped";
   if (node.reviewer && node.state !== "complete") {
     return reviewerStatusLabel(node.reviewer, pipeline.reviewFanout?.reviewers ?? []);
   }
   if (node.placeholder) return "Not started yet";
   return STATE_LABEL[node.state];
+}
+
+/** The user skipped this step: its session, or the validation run it shows. */
+function isSkipped(node: PipelineFlowNode, pipeline: BuildPipeline): boolean {
+  if (node.hasValidation) {
+    const run = pipeline.validationRun;
+    return run !== undefined && run.id === pipeline.skippedValidationRunId;
+  }
+  return node.session?.skipped === true;
 }
 
 /** `{agent} · {model} · {effort}`, or what describes a node without a session. */
@@ -187,17 +197,19 @@ export function pipelineNodeView({
           node.kind === "attempt" ? (node.attemptExpanded ? "shown" : "collapsed") : "superseded",
         tone: "muted",
       }
-    : node.reviewer && node.state !== "complete"
-      ? reviewerStatusWord(node.reviewer)
-      : node.state === "running"
-        ? { text: "running", tone: "running" }
-        : node.state === "paused"
-          ? { text: "paused", tone: "warning" }
-          : node.state === "failed"
-            ? { text: "failed", tone: "destructive" }
-            : node.state === "cancelled"
-              ? { text: "stopped", tone: "muted" }
-              : undefined;
+    : node.state === "cancelled" && isSkipped(node, pipeline)
+      ? { text: "skipped", tone: "muted" }
+      : node.reviewer && node.state !== "complete"
+        ? reviewerStatusWord(node.reviewer)
+        : node.state === "running"
+          ? { text: "running", tone: "running" }
+          : node.state === "paused"
+            ? { text: "paused", tone: "warning" }
+            : node.state === "failed"
+              ? { text: "failed", tone: "destructive" }
+              : node.state === "cancelled"
+                ? { text: "stopped", tone: "muted" }
+                : undefined;
   return {
     id: node.id,
     kind: node.kind,

@@ -243,6 +243,46 @@ export function pipelineSessionKind(session: PipelineSession): PipelineFlowNodeK
   }
 }
 
+const SKIP_LABELS: Partial<Record<PipelineFlowNodeKind, string>> = {
+  build: "Skip to review",
+  fix: "Skip to review",
+  review: "Skip review",
+  reviewer: "Skip review",
+  consolidation: "Skip review",
+  address: "Skip to verification",
+  verify: "Skip verification",
+};
+
+/**
+ * What skipping a node would do, if the node is the step the pipeline is on
+ * and that step can be skipped: the stage id the backend checks it against,
+ * and the action's label. Review preparation and the pull request cannot be.
+ */
+export function pipelineSkipAction(
+  pipeline: BuildPipeline,
+  node: PipelineFlowNode,
+): { stageId: string; label: string } | null {
+  const paused = pipeline.phase === "paused";
+  if (node.placeholder || node.superseded || (!isActiveBuildPhase(pipeline.phase) && !paused))
+    return null;
+  const run = pipeline.validationRun;
+  // While a validation run is unsealed it is the step the pipeline is on. A
+  // pause cancels it, and skipping then seals what it had.
+  if (run && !pipeline.reviewPackage) {
+    return node.hasValidation &&
+      (run.status === "planned" ||
+        run.status === "running" ||
+        (paused && run.status === "cancelled"))
+      ? { stageId: `validation:${run.id}`, label: "Skip validation" }
+      : null;
+  }
+  if (node.state !== "running" && node.state !== "paused") return null;
+  const session = node.session;
+  const label = SKIP_LABELS[node.kind];
+  if (!session || session.superseded || !label) return null;
+  return { stageId: session.sdkSessionId, label };
+}
+
 /** "Build", then "Build 2" for the next pass, and so on. */
 function numbered(name: string, occurrence: number): string {
   return occurrence <= 1 ? name : `${name} ${occurrence}`;
@@ -278,6 +318,7 @@ function reviewerSessionState(
   pipeline: BuildPipeline,
   live: ReviewerRecord | undefined,
 ): FlowNodeState {
+  if (session.skipped) return "cancelled";
   if (live && live.sessionKey === session.sessionKey) return reviewerFlowState(live.status);
   switch (session.reviewerOutcome) {
     case "completed":
@@ -307,7 +348,7 @@ function sessionState(
   pipeline: BuildPipeline,
   current: boolean,
 ): FlowNodeState {
-  if (session.superseded) return "cancelled";
+  if (session.superseded || session.skipped) return "cancelled";
   if (session.status === "error") return "failed";
   if (pipeline.phase === "failed" && pipeline.failureContext?.sessionId === session.sdkSessionId) {
     return "failed";

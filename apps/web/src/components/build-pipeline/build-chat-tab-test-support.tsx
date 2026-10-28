@@ -112,6 +112,13 @@ export const restartStepMock = mock(
     backendRevision: 15,
   }),
 );
+export const skipStepMock = mock(
+  async (pipelineId: string, _stageId: string): Promise<BuildPipeline> => ({
+    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    phase: "reviewing" as const,
+    backendRevision: 17,
+  }),
+);
 export const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
@@ -140,6 +147,7 @@ mock.module("@/lib/backend", () => ({
   restartBuildPipelineCurrentStep: restartCurrentStepMock,
   retryBuildPipelineStage: retryStageMock,
   restartBuildPipelineStep: restartStepMock,
+  skipBuildPipelineStep: skipStepMock,
   retryBuildPipelineReviewer: retryReviewerMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,

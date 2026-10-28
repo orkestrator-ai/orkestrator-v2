@@ -434,6 +434,32 @@ export class BuildPipelineSupervisor {
       return;
     }
 
+    if (pipeline.skipRequest) {
+      const { phase } = pipeline.skipRequest;
+      delete pipeline.skipRequest;
+      if (phase === "build" || phase === "fix") {
+        await this.startReviewPackagePreparation(pipeline);
+        return;
+      }
+      if (phase === "review") {
+        // The review produced nothing to address; verification judges the
+        // work on its own.
+        delete pipeline.reviewFanout;
+        delete pipeline.structuredReview;
+        delete pipeline.structuredReviewRequestId;
+        delete pipeline.verificationResult;
+        delete pipeline.verificationFeedback;
+      }
+      if (phase === "verify") {
+        delete pipeline.verificationResult;
+        delete pipeline.verificationFeedback;
+        await this.startStage(pipeline, "pr", "creating-pr");
+        return;
+      }
+      await this.startStage(pipeline, "verify", "verifying");
+      return;
+    }
+
     if (
       pipeline.stageRetryRequested &&
       pipeline.phase === "reviewing" &&
@@ -1076,9 +1102,15 @@ export class BuildPipelineSupervisor {
 
   private async advanceValidation(pipeline: BuildPipeline): Promise<void> {
     let run = pipeline.validationRun!;
+    // A skipped run is stopped, and then sealed with the results it had.
+    const skipped = pipeline.skippedValidationRunId === run.id;
     if (run.status === "planned" || run.status === "running") {
       run = await this.ctx.invoke<ReviewValidationRun>(
-        run.status === "planned" ? "start_review_validation" : "status_review_validation",
+        skipped
+          ? "cancel_review_validation"
+          : run.status === "planned"
+            ? "start_review_validation"
+            : "status_review_validation",
         {
           environmentId: pipeline.environmentId,
           run,
@@ -1098,7 +1130,7 @@ export class BuildPipelineSupervisor {
       packageId: run.id,
       round,
       targetBranch,
-      preparation: validationPreparation(run),
+      preparation: validationPreparation(run, { allowCancelled: skipped }),
       expectedHead: run.plan.headRef,
       validationPlan: run.plan,
       additionalLimitations: buildPipelineReviewPackageContext(pipeline, notes).limitations,

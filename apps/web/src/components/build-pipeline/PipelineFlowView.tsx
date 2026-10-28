@@ -19,6 +19,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  SkipForward,
   Square,
   type LucideIcon,
 } from "lucide-react";
@@ -49,6 +50,7 @@ import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
   pipelineReviewPassNodes,
+  pipelineSkipAction,
   type PipelineFlowModel,
   type PipelineFlowNode,
 } from "./pipeline-flow";
@@ -389,6 +391,16 @@ export function PipelineFlowView({
         onSelect: () => controls.restartStage(node.id),
       });
     }
+    const skip = pipelineSkipAction(pipeline, node);
+    if (skip) {
+      actions.push({
+        key: "skip",
+        label: skip.label,
+        icon: SkipForward,
+        disabled,
+        onSelect: () => controls.skipStage(skip.stageId),
+      });
+    }
     if (node.kind === "pr" && pullRequest && shipped) {
       actions.push({
         key: "view-pr",
@@ -516,6 +528,17 @@ export function PipelineFlowView({
   if (!selected) return null;
   const selectedView = views.get(selected.id)!;
   const selectedActions = nodeActions.get(selected.id) ?? [];
+  // The Tests view's own "Stop tests and continue" is the same skip.
+  const skipValidation = selectedActions.find(
+    (action) => action.key === "skip" && selected.hasValidation,
+  );
+  const validationStop = skipValidation
+    ? {
+        onStop: skipValidation.onSelect,
+        stopping:
+          controls.pending || pipeline.skippedValidationRunId === pipeline.validationRun?.id,
+      }
+    : {};
   const composer =
     selected.session !== undefined &&
     selected.session === currentSession &&
@@ -620,6 +643,7 @@ export function PipelineFlowView({
                   now={now}
                   pullRequest={pullRequest}
                   shipped={shipped}
+                  validationStop={validationStop}
                   onShowAttemptStep={showAttemptStep}
                 />
               </div>
@@ -644,6 +668,7 @@ export function PipelineFlowView({
                     environmentId={environmentId}
                     run={selected.validationRun ?? pipeline.validationRun!}
                     now={now}
+                    {...validationStop}
                   />
                 </TabsContent>
               </Tabs>
@@ -764,6 +789,7 @@ function InspectorBody({
   now,
   pullRequest,
   shipped,
+  validationStop,
   onShowAttemptStep,
 }: {
   node: PipelineFlowNode;
@@ -772,6 +798,7 @@ function InspectorBody({
   now: number;
   pullRequest: ReturnType<typeof usePipelinePullRequest>;
   shipped: boolean;
+  validationStop: { onStop?: () => void; stopping?: boolean };
   onShowAttemptStep: (attemptId: string, sessionKey: string) => void;
 }) {
   if (node.kind === "ticket") return <PipelineTicketView pipeline={pipeline} />;
@@ -794,6 +821,7 @@ function InspectorBody({
         run={node.validationRun ?? pipeline.validationRun!}
         stopCommand={node.superseded ? null : undefined}
         now={now}
+        {...validationStop}
       />
     );
   }

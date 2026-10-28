@@ -166,6 +166,10 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.restartStep(pipelineId, stageId);
   }
 
+  skipStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
+    return this.lifecycle.skipStep(pipelineId, stageId);
+  }
+
   restartCurrentStep(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.restartCurrentStep(pipelineId);
   }

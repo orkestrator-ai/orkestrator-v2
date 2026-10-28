@@ -103,6 +103,14 @@ export type PipelineRestartRequest =
   | { kind: "validation"; implementationPhase: "build" | "fix" };
 
 /**
+ * Durable handoff from an explicit UI skip to the background supervisor: the
+ * stage that was stopped, whose successor the supervisor opens next.
+ */
+export type PipelineSkipRequest = {
+  phase: Exclude<PipelineSessionPhase, "pr" | "resolve-conflicts">;
+};
+
+/**
  * One restart that rewound the pipeline to an earlier point of its loop.
  *
  * Restarting a step returns the pipeline to that step's own round
@@ -548,6 +556,8 @@ export interface PipelineSession {
   sessionlessReviewers?: PipelineSessionlessReviewer[];
   /** This consolidation was discarded by a reviewer retry; its result is no longer usable. */
   superseded?: boolean;
+  /** The user skipped this stage; the pipeline moved on without its result. */
+  skipped?: boolean;
   /**
    * The {@link PipelineRewind.id} of the restart that superseded this session.
    *
@@ -739,7 +749,10 @@ export function isReviewPackagePreparationSession(
 
 /** The active work in a build/fix phase that still holds a validation run. */
 export function reviewValidationStage(
-  pipeline: Pick<BuildPipeline, "validationRun" | "reviewPackage" | "reviewRetryRequested">,
+  pipeline: Pick<
+    BuildPipeline,
+    "validationRun" | "reviewPackage" | "reviewRetryRequested" | "skippedValidationRunId"
+  >,
   phase: ResumableBuildPhase | undefined,
 ): "validation" | "review-package" | null {
   if (
@@ -749,9 +762,10 @@ export function reviewValidationStage(
   ) {
     return null;
   }
-  return pipeline.reviewRetryRequested || pipeline.validationRun.status === "cancelled"
-    ? "review-package"
-    : "validation";
+  if (pipeline.reviewRetryRequested) return "review-package";
+  // A skipped run is sealed with the results it had, even once it is cancelled.
+  if (pipeline.skippedValidationRunId === pipeline.validationRun.id) return "validation";
+  return pipeline.validationRun.status === "cancelled" ? "review-package" : "validation";
 }
 
 export interface PipelineInteractionTranscriptQuestion {
@@ -952,6 +966,13 @@ export interface BuildPipeline {
   reviewRetryRequested?: boolean;
   /** Selected historical stage to start again on the next supervisor pass. */
   restartRequest?: PipelineRestartRequest;
+  /** Skipped stage whose successor opens on the next supervisor pass. */
+  skipRequest?: PipelineSkipRequest;
+  /**
+   * The validation run the user skipped. The supervisor stops it and seals the
+   * review package with the results it had, rather than preparing again.
+   */
+  skippedValidationRunId?: string;
   /** Retried independently of stage dispatch until the active ticket is reconciled. */
   pendingKanbanReactivation?: boolean;
   /** Earliest retry after a failed Kanban reactivation, persisted across reloads. */
@@ -1298,6 +1319,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.sessionlessReviewers.length <= MAX_BUILD_PIPELINE_REVIEWERS &&
         value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
     (value.superseded === undefined || typeof value.superseded === "boolean") &&
+    (value.skipped === undefined || typeof value.skipped === "boolean") &&
     (value.supersededBy === undefined ||
       (isNonBlankString(value.supersededBy) && value.supersededBy.length <= 128)) &&
     (value.supersededAt === undefined || isIsoDate(value.supersededAt)) &&
@@ -1548,6 +1570,16 @@ function isPipelineRestartRequest(value: unknown): value is PipelineRestartReque
   );
 }
 
+function isPipelineSkipRequest(value: unknown): value is PipelineSkipRequest {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) => key === "phase") &&
+    SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
+    value.phase !== "pr" &&
+    value.phase !== "resolve-conflicts"
+  );
+}
+
 function isPipelineRewind(value: unknown): value is PipelineRewind {
   return (
     isRecord(value) &&
@@ -1651,6 +1683,8 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
+    (value.skipRequest !== undefined && !isPipelineSkipRequest(value.skipRequest)) ||
+    !isOptionalNonBlankString(value.skippedValidationRunId) ||
     (value.kanbanReactivationRetryAt !== undefined &&
       !isIsoDate(value.kanbanReactivationRetryAt)) ||
     (value.pendingKanbanReactivation !== undefined &&

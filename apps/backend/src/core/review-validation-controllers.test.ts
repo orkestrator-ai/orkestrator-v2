@@ -19,6 +19,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
+import { rewritePipeline } from "./build-pipeline-review-fanout-test-support.js";
 
 async function harness() {
   const directory = await mkdtemp(path.join(tmpdir(), "validation-controllers-"));
@@ -498,6 +499,179 @@ test("pipeline fails a corrupt validation restart without a retained plan", asyn
       phase: "failed",
       error: "Validation restart plan is missing",
     });
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+/** A single-review pipeline advanced until its validation run is running. */
+async function pipelineWithRunningValidation(
+  h: Awaited<ReturnType<typeof harness>>,
+  taskId: string,
+) {
+  const service = new BuildPipelineService(h.storage, h.invoke, {
+    autoAdvance: false,
+    provider: async () => h.provider,
+  });
+  const started = await service.start({
+    taskId,
+    projectId: "project-1",
+    existingEnvironmentId: "env-1",
+    environmentType: "local",
+    agentType: "claude",
+    taskTitle: taskId,
+    taskSnapshot: {
+      title: taskId,
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      images: [],
+    },
+  });
+  const read = async () =>
+    (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+  for (let pass = 0; pass < 8 && (await read()).validationRun?.status !== "running"; pass += 1) {
+    await service.advanceNow(started.id);
+  }
+  expect((await read()).validationRun?.status).toBe("running");
+  return { service, pipelineId: started.id, read };
+}
+
+test("skipping validation stops the checks and seals their partial results for the review", async () => {
+  const h = await harness();
+  const { service, pipelineId, read } = await pipelineWithRunningValidation(
+    h,
+    "task-skip-validation",
+  );
+  try {
+    const runId = (await read()).validationRun!.id;
+    await expect(service.skipStep(pipelineId, "validation:stale-run")).rejects.toThrow(
+      "This step has already finished",
+    );
+
+    const sendsBeforeSkip = h.sends.length;
+    const skipped = await service.skipStep(pipelineId, `validation:${runId}`);
+    expect(h.calls.some((call) => call.name === "cancel_review_validation")).toBe(true);
+    expect(skipped.phase).toBe("reviewing");
+    expect(skipped.skippedValidationRunId).toBe(runId);
+    expect(skipped.validationRun).toMatchObject({ id: runId, status: "cancelled" });
+    expect(skipped.reviewPackage?.id).toBe(runId);
+    const sealing = h.calls.filter((call) => call.name === "generate_looped_review_package");
+    expect(sealing).toHaveLength(1);
+    const preparation = sealing[0]!.args.preparation as {
+      validation: Array<{ status: string }>;
+    };
+    expect(preparation.validation.map((result) => result.status)).toEqual(["incomplete"]);
+    // The review starts; validation is not prepared again.
+    expect(h.sends).toHaveLength(sendsBeforeSkip + 1);
+    expect(h.sends.at(-1)!.options.schema).not.toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
+    expect(skipped.sessions.at(-1)).toMatchObject({ phase: "review", status: "running" });
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("skipping a paused validation seals the cancelled run instead of preparing again", async () => {
+  const h = await harness();
+  const { service, pipelineId, read } = await pipelineWithRunningValidation(h, "task-skip-paused");
+  try {
+    const runId = (await read()).validationRun!.id;
+    const paused = await service.pause(pipelineId);
+    expect(paused.phase).toBe("paused");
+    expect(paused.validationRun?.status).toBe("cancelled");
+
+    const skipped = await service.skipStep(pipelineId, `validation:${runId}`);
+    expect(skipped.phase).toBe("reviewing");
+    expect(skipped.pausedFromPhase).toBeUndefined();
+    expect(skipped.reviewPackage?.id).toBe(runId);
+    expect(skipped.sessions.some((session) => session.label === "Review Package Session")).toBe(
+      false,
+    );
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("a replacement controller recovers a persisted skipped validation run", async () => {
+  const h = await harness();
+  const { service, pipelineId, read } = await pipelineWithRunningValidation(h, "task-skip-recover");
+  let restored: BuildPipelineService | undefined;
+  try {
+    const runId = (await read()).validationRun!.id;
+    await service.pause(pipelineId);
+    await service.shutdown();
+    // Durable state after admitting the skip, before the supervisor seals it.
+    await rewritePipeline(h.storage, pipelineId, (pipeline) => {
+      pipeline.phase = pipeline.pausedFromPhase!;
+      delete pipeline.pausedFromPhase;
+      delete pipeline.pauseCause;
+      pipeline.skippedValidationRunId = runId;
+    });
+    const sendsBeforeRecovery = h.sends.length;
+    restored = new BuildPipelineService(h.storage, h.invoke, {
+      autoAdvance: false,
+      provider: async () => h.provider,
+    });
+    await restored.init();
+    await restored.advanceNow(pipelineId);
+    const recovered = await read();
+    expect(recovered.phase).toBe("reviewing");
+    expect(recovered.reviewPackage?.id).toBe(runId);
+    expect(recovered.skippedValidationRunId).toBe(runId);
+    expect(recovered.validationRun?.status).toBe("cancelled");
+    expect(h.sends).toHaveLength(sendsBeforeRecovery + 1);
+    expect(h.sends.at(-1)!.options.schema).not.toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
+    expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
+      1,
+    );
+  } finally {
+    await service.shutdown();
+    await restored?.shutdown();
+    await h.cleanup();
+  }
+});
+
+test("skipping an agent stage stops its session and opens the next stage", async () => {
+  const h = await harness();
+  const { service, pipelineId, read } = await pipelineWithRunningValidation(h, "task-skip-review");
+  const aborted: string[] = [];
+  h.provider.abort = async (sessionId) => {
+    aborted.push(sessionId);
+  };
+  try {
+    h.finish();
+    await service.advanceNow(pipelineId);
+    const reviewing = await read();
+    expect(reviewing.phase).toBe("reviewing");
+    const review = reviewing.sessions.at(-1)!;
+    expect(review).toMatchObject({ phase: "review", status: "running" });
+
+    const verifying = await service.skipStep(pipelineId, review.sdkSessionId);
+    expect(aborted).toEqual([review.sdkSessionId]);
+    expect(verifying.phase).toBe("verifying");
+    expect(verifying.structuredReview).toBeUndefined();
+    expect(verifying.sessions.find((s) => s.sdkSessionId === review.sdkSessionId)).toMatchObject({
+      skipped: true,
+      status: "idle",
+    });
+    const verify = verifying.sessions.at(-1)!;
+    expect(verify).toMatchObject({ phase: "verify", status: "running" });
+
+    // A renderer still showing the review cannot skip the stage after it.
+    await expect(service.skipStep(pipelineId, review.sdkSessionId)).rejects.toThrow(
+      "This step has already finished",
+    );
+
+    const shipping = await service.skipStep(pipelineId, verify.sdkSessionId);
+    expect(shipping.phase).toBe("creating-pr");
+    expect(shipping.verificationResult).toBeUndefined();
+    expect(shipping.sessions.at(-1)).toMatchObject({ phase: "pr", status: "running" });
+    await expect(
+      service.skipStep(pipelineId, shipping.sessions.at(-1)!.sdkSessionId),
+    ).rejects.toThrow("The pull request step cannot be skipped");
   } finally {
     await service.shutdown();
     await h.cleanup();

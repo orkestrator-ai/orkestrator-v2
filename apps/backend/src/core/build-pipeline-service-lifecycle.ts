@@ -106,6 +106,28 @@ function enqueueUserMessage(pipeline: BuildPipeline, text: string): Error | unde
   return undefined;
 }
 
+/**
+ * Clears the per-stage bookkeeping a restart or skip leaves behind: errors,
+ * in-flight prompts and interactions, queued messages, retry flags and a pause.
+ */
+function clearStageControlState(candidate: BuildPipeline): void {
+  delete candidate.error;
+  delete candidate.failureContext;
+  delete candidate.reconnectAttempt;
+  delete candidate.pendingPromptAttempt;
+  delete candidate.activePromptContext;
+  delete candidate.pendingInteractionResolution;
+  delete candidate.pendingUserMessages;
+  delete candidate.reviewRetryRequested;
+  delete candidate.stageRetryRequested;
+  delete candidate.interactionRetryRequested;
+  delete candidate.stallWarning;
+  delete candidate.pausedFromPhase;
+  delete candidate.pauseCause;
+  delete candidate.completionCommentStatus;
+  delete candidate.completionCommentError;
+}
+
 export class BuildPipelineLifecycle {
   constructor(
     private readonly ctx: BuildPipelineContext,
@@ -973,23 +995,7 @@ export class BuildPipelineLifecycle {
           // cannot confirm cancellation. Its id is discarded below.
         }
       }
-      if (candidate.reviewFanout) {
-        await this.agents.abandonReviewFanout(candidate, "idle");
-      } else {
-        const current = sessionForCurrentPhase(candidate);
-        if (current?.status === "running") {
-          try {
-            await (
-              await this.agents.provider(candidate, sessionAgent(candidate, current))
-            ).abort(current.sdkSessionId);
-          } catch {
-            // Restart rotates to a new session; a failed best-effort abort must
-            // not strand the durable request on the obsolete generation.
-          }
-          current.status = "idle";
-          current.completedAt ??= new Date().toISOString();
-        }
-      }
+      await this.stopCurrentStage(candidate);
 
       // Old records kept only the latest accepted Verify verdict. Preserve it
       // on its owning session before clearing the live result during rewind.
@@ -1164,27 +1170,157 @@ export class BuildPipelineLifecycle {
           : restart.implementationPhase === "fix"
             ? "fixing"
             : "building";
-      delete candidate.error;
-      delete candidate.failureContext;
-      delete candidate.reconnectAttempt;
-      delete candidate.pendingPromptAttempt;
-      delete candidate.activePromptContext;
-      delete candidate.pendingInteractionResolution;
-      delete candidate.pendingUserMessages;
-      delete candidate.reviewRetryRequested;
-      delete candidate.stageRetryRequested;
-      delete candidate.interactionRetryRequested;
-      delete candidate.stallWarning;
-      delete candidate.pausedFromPhase;
-      delete candidate.pauseCause;
-      delete candidate.completionCommentStatus;
-      delete candidate.completionCommentError;
+      delete candidate.skipRequest;
+      clearStageControlState(candidate);
       candidate.pendingKanbanReactivation = true;
       delete candidate.kanbanReactivationRetryAt;
     });
     if (rejection) throw rejection;
     if (!satisfied) await this.stageSupervisor.runLocked(pipelineId);
     return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
+  /**
+   * Skips the stage the pipeline is on and moves to the one after it, without
+   * the skipped stage's result. `stageId` names the stage the user saw, so a
+   * renderer behind the latest transition cannot skip the stage after it.
+   *
+   * Skipping validation stops the checks and seals the review package with the
+   * results they had, as a Multi Review's "stop validation" does. Skipping an
+   * agent stage stops its session: an implementation turn goes to review
+   * preparation, a review or an address turn to verification, and a
+   * verification to the pull request. Review preparation cannot be skipped,
+   * because the review reads the package it produces.
+   */
+  async skipStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.ctx.mutate(pipelineId, async (candidate) => {
+      const phase =
+        candidate.phase === "paused" ? candidate.pausedFromPhase : resumablePhase(candidate.phase);
+      const stagePhase = phase ? sessionPhaseFor(phase) : null;
+      if (!phase || !stagePhase) {
+        rejection = new Error("This build has no running step to skip");
+        return;
+      }
+      const validationTarget = reviewValidationStage(candidate, phase);
+      const run = candidate.validationRun;
+      if (validationTarget === "validation" || stageId.startsWith("validation:")) {
+        // A pause cancels the run, so a paused pipeline's run may be cancelled;
+        // in a running one that means preparation is starting over instead.
+        const skippable =
+          run !== undefined &&
+          stageId === `validation:${run.id}` &&
+          !candidate.reviewPackage &&
+          !candidate.reviewRetryRequested &&
+          (phase === "building" || phase === "fixing") &&
+          (run.status === "planned" ||
+            run.status === "running" ||
+            (run.status === "cancelled" && candidate.phase === "paused"));
+        if (!skippable) {
+          rejection = new Error("This step has already finished");
+          return;
+        }
+        // The supervisor stops the run and seals its partial results; recording
+        // the intent first means a restart in between still skips it.
+        candidate.skippedValidationRunId = run.id;
+        candidate.phase = phase;
+        clearStageControlState(candidate);
+        return;
+      }
+      const session = sessionForCurrentPhase(candidate);
+      const fanoutReview =
+        phase === "reviewing" && usesReviewFanout(candidate) && Boolean(candidate.reviewFanout);
+      const named = candidate.sessions.find(
+        (entry) => entry.sdkSessionId === stageId || entry.sessionKey === stageId,
+      );
+      const isCurrent =
+        named !== undefined &&
+        !named.superseded &&
+        !isSupersededPipelineSession(named) &&
+        named.phase === stagePhase &&
+        (fanoutReview
+          ? Boolean(named.sessionKey) &&
+            (candidate.reviewFanout!.reviewers.some(
+              (reviewer) => reviewer.sessionKey === named.sessionKey,
+            ) ||
+              candidate.reviewFanout!.consolidation?.sessionKey === named.sessionKey)
+          : named === session);
+      if (!isCurrent) {
+        rejection = new Error("This step has already finished");
+        return;
+      }
+      if (
+        validationTarget === "review-package" ||
+        named.label === REVIEW_PACKAGE_SESSION_LABEL ||
+        stagePhase === "pr" ||
+        stagePhase === "resolve-conflicts"
+      ) {
+        rejection = new Error(
+          stagePhase === "resolve-conflicts"
+            ? "Conflict resolution cannot be skipped"
+            : stagePhase === "pr"
+              ? "The pull request step cannot be skipped"
+              : "Review preparation cannot be skipped: the review needs the package it prepares",
+        );
+        return;
+      }
+
+      // A late tool submission from the skipped stage must not be accepted
+      // once its successor has started.
+      await this.closeWorkflowResults(
+        candidate,
+        "superseded",
+        new Set(candidate.pendingResultConsumptions ?? []),
+      );
+      await this.stopCurrentStage(candidate);
+      if (fanoutReview) {
+        const fanout = candidate.reviewFanout!;
+        // Keep the interrupted pass visible after the supervisor retires its
+        // live state. Skipping the panel discards all of its reviewer results;
+        // skipping only consolidation preserves the settled reviewer outcomes.
+        const skippedKeys = new Set(
+          fanout.reviewers
+            .filter((reviewer) => !fanout.consolidation || reviewer.status === "cancelled")
+            .map((reviewer) => reviewer.sessionKey),
+        );
+        if (fanout.consolidation) skippedKeys.add(fanout.consolidation.sessionKey);
+        for (const entry of candidate.sessions) {
+          if (!entry.sessionKey || !skippedKeys.has(entry.sessionKey)) continue;
+          entry.skipped = true;
+          entry.completedAt ??= new Date().toISOString();
+        }
+      } else {
+        named.skipped = true;
+        named.completedAt ??= new Date().toISOString();
+      }
+      candidate.skipRequest = { phase: stagePhase };
+      candidate.phase = phase;
+      delete candidate.restartRequest;
+      clearStageControlState(candidate);
+    });
+    if (rejection) throw rejection;
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
+  /** Stops whatever agent work the current stage has running. Best effort. */
+  private async stopCurrentStage(candidate: BuildPipeline): Promise<void> {
+    if (candidate.reviewFanout) {
+      await this.agents.abandonReviewFanout(candidate, "idle");
+      return;
+    }
+    const current = sessionForCurrentPhase(candidate);
+    if (current?.status !== "running") return;
+    try {
+      await (
+        await this.agents.provider(candidate, sessionAgent(candidate, current))
+      ).abort(current.sdkSessionId);
+    } catch {
+      // The pipeline moves to a new session; a failed best-effort abort must
+      // not strand the durable request on the obsolete generation.
+    }
+    current.status = "idle";
+    current.completedAt ??= new Date().toISOString();
   }
 
   /**

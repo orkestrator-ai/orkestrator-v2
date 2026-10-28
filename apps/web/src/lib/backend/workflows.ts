@@ -1022,6 +1022,14 @@ export async function restartBuildPipelineStep(
   return invoke<BackendBuildPipeline>("restart_build_pipeline_step", { pipelineId, stageId });
 }
 
+/** Skips the pipeline's current stage and moves on to the next one. */
+export async function skipBuildPipelineStep(
+  pipelineId: string,
+  stageId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("skip_build_pipeline_step", { pipelineId, stageId });
+}
+
 export async function retryBuildPipelineInteractionFailure(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {

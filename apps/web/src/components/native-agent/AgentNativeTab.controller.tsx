@@ -393,6 +393,9 @@ export function SharedNativeAgentController({
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
+  const [queueEditPending, setQueueEditPending] = useState(false);
+  // Reserve synchronously: events can arrive before React commits the disabled UI.
+  const queueEditPendingRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
   /**
    * A tab opened only to resume creates no provider session of its own. The
@@ -573,7 +576,7 @@ export function SharedNativeAgentController({
   );
   const addTranscriptAnnotation = useCallback(
     (selectedText: string): TranscriptAnnotation | null => {
-      if (submitInFlightRef.current || isDispatching) return null;
+      if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return null;
       const text = normalizeTranscriptAnnotationText(selectedText);
       if (!text) return null;
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
@@ -591,7 +594,7 @@ export function SharedNativeAgentController({
   );
   const updateTranscriptAnnotationComment = useCallback(
     (annotationId: string, comment: string) => {
-      if (submitInFlightRef.current || isDispatching) return;
+      if (queueEditPendingRef.current || submitInFlightRef.current || isDispatching) return;
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
       updateDraft(sessionKey, {
         annotations: current.annotations.map((annotation) =>
@@ -1312,6 +1315,7 @@ export function SharedNativeAgentController({
   );
   const updateControlsSafely = useCallback(
     async (update: Parameters<typeof updateControls>[0]) => {
+      if (queueEditPendingRef.current) return null;
       try {
         return await updateControls(update);
       } catch (error) {
@@ -1322,7 +1326,8 @@ export function SharedNativeAgentController({
     [label, updateControls],
   );
   const phase = projection?.turn.phase;
-  const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
+  const settingsLocked =
+    queueEditPending || isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
   const isProviderTurnActive =
     phase === "running" || phase === "recovering" || phase === "cancelling";
@@ -1411,6 +1416,7 @@ export function SharedNativeAgentController({
       ? recoverableDispatch
       : undefined;
   const sendLocked =
+    queueEditPending ||
     !projection ||
     !sessionStateAuthoritative ||
     authenticationRequired ||
@@ -1685,7 +1691,7 @@ export function SharedNativeAgentController({
       modeOverride?: "build" | "plan",
       submitOptions?: { literal?: boolean; noQueue?: boolean },
     ) => {
-      if (submitInFlightRef.current) return false;
+      if (queueEditPendingRef.current || submitInFlightRef.current) return false;
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
       // caller once the turn ends and this callback changes.
@@ -2270,6 +2276,7 @@ export function SharedNativeAgentController({
 
   const handleFileMentionSelect = useCallback(
     (file: FileCandidate) => {
+      if (queueEditPendingRef.current) return;
       const mention = createMention(file);
       closeFileMentionMenu({ suppressReopenFor: file.filename });
       inputRef.current?.insertMention(mention);
@@ -2278,6 +2285,7 @@ export function SharedNativeAgentController({
   );
   const handleWorkspaceFileMention = useCallback(
     (file: FileCandidate) => {
+      if (queueEditPendingRef.current) return;
       const mention = createMention(file);
       closeFileMentionMenu({ suppressReopenFor: file.filename });
       inputRef.current?.insertMentionAtCursor(mention);
@@ -2286,6 +2294,7 @@ export function SharedNativeAgentController({
   );
   const handleWorkspaceFileAttach = useCallback(
     (file: FileCandidate) => {
+      if (queueEditPendingRef.current) return;
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
@@ -2318,6 +2327,7 @@ export function SharedNativeAgentController({
   );
   const handlePastedImage = useCallback(
     (attachment: { id: string; type: "image"; path: string; previewUrl: string; name: string }) => {
+      if (queueEditPendingRef.current) return;
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       updateDraft(sessionKey, {
         attachments: [...(current?.attachments ?? []), attachment],
@@ -2337,7 +2347,9 @@ export function SharedNativeAgentController({
     writeImage: isReadOnlyCoordinator ? writeCoordinatorImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
-      adapter.capabilities.attachments.images && selectedModel?.supportsImageInput !== false,
+      !queueEditPendingRef.current &&
+      adapter.capabilities.attachments.images &&
+      selectedModel?.supportsImageInput !== false,
     onImageRejected: () => toast.error("Images are not supported by this agent"),
     logLabel: "SharedNativeAgentController",
   });
@@ -3157,71 +3169,84 @@ export function SharedNativeAgentController({
     // Editing loads the prompt into the composer, so anything
     // already there would be destroyed. Refusing with a reason
     // beats the silent overwrite.
+    const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
     if (
-      draft.text.trim().length > 0 ||
-      draft.attachments.length > 0 ||
-      draft.annotations.length > 0
+      queueEditPendingRef.current ||
+      submitInFlightRef.current ||
+      current.text.trim().length > 0 ||
+      current.attachments.length > 0 ||
+      current.annotations.length > 0
     ) {
       throw composerOccupiedError();
     }
-    await removeQueued(message.id);
-    const queued = message as Record<string, unknown> & {
-      id: string;
-      text: string;
-    };
-    const attachments = Array.isArray(queued.attachments)
-      ? queued.attachments.flatMap((candidate) => {
-          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-            return [];
-          }
-          const attachment = candidate as Record<string, unknown>;
-          if (
-            (attachment.type !== "file" && attachment.type !== "image") ||
-            typeof attachment.path !== "string" ||
-            !attachment.path
-          )
-            return [];
-          const type: "file" | "image" = attachment.type;
-          return [
-            {
-              id: typeof attachment.id === "string" ? attachment.id : crypto.randomUUID(),
-              type,
-              path: attachment.path,
-              name:
-                typeof attachment.filename === "string"
-                  ? attachment.filename
-                  : (attachment.path.split("/").at(-1) ?? "attachment"),
-              ...(typeof attachment.dataUrl === "string" ? { previewUrl: attachment.dataUrl } : {}),
-            },
-          ];
-        })
-      : [];
-    updateDraft(sessionKey, {
-      text: message.text,
-      mentions: [],
-      attachments,
-      annotations: [],
-    });
-    await updateControlsSafely({
-      ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
-      ...(typeof queued.reasoningEffort === "string"
-        ? { reasoningId: queued.reasoningEffort }
-        : {}),
-      ...(queued.mode === "build" || queued.mode === "plan" ? { mode: queued.mode } : {}),
-      ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
-      ...(typeof queued.executionAgent === "string"
-        ? { executionProfileId: queued.executionAgent }
-        : typeof queued.agent === "string"
-          ? { executionProfileId: queued.agent }
+    queueEditPendingRef.current = true;
+    setQueueEditPending(true);
+    try {
+      const queued = message as Record<string, unknown> & {
+        id: string;
+        text: string;
+      };
+      const attachments = Array.isArray(queued.attachments)
+        ? queued.attachments.flatMap((candidate) => {
+            if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+              return [];
+            }
+            const attachment = candidate as Record<string, unknown>;
+            if (
+              (attachment.type !== "file" && attachment.type !== "image") ||
+              typeof attachment.path !== "string" ||
+              !attachment.path
+            )
+              return [];
+            const type: "file" | "image" = attachment.type;
+            return [
+              {
+                id: typeof attachment.id === "string" ? attachment.id : crypto.randomUUID(),
+                type,
+                path: attachment.path,
+                name:
+                  typeof attachment.filename === "string"
+                    ? attachment.filename
+                    : (attachment.path.split("/").at(-1) ?? "attachment"),
+                ...(typeof attachment.dataUrl === "string"
+                  ? { previewUrl: attachment.dataUrl }
+                  : {}),
+              },
+            ];
+          })
+        : [];
+      // Keep the queued item recoverable if restoring its settings fails.
+      await updateControls({
+        ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
+        ...(typeof queued.reasoningEffort === "string"
+          ? { reasoningId: queued.reasoningEffort }
           : {}),
-      ...(typeof queued.includeLocalSettings === "boolean"
-        ? { includeLocalSettings: queued.includeLocalSettings }
-        : {}),
-      ...(typeof queued.promptSuggestions === "boolean"
-        ? { promptSuggestions: queued.promptSuggestions }
-        : {}),
-    });
-    inputRef.current?.focus();
+        ...(queued.mode === "build" || queued.mode === "plan" ? { mode: queued.mode } : {}),
+        ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
+        ...(typeof queued.executionAgent === "string"
+          ? { executionProfileId: queued.executionAgent }
+          : typeof queued.agent === "string"
+            ? { executionProfileId: queued.agent }
+            : {}),
+        ...(typeof queued.includeLocalSettings === "boolean"
+          ? { includeLocalSettings: queued.includeLocalSettings }
+          : {}),
+        ...(typeof queued.promptSuggestions === "boolean"
+          ? { promptSuggestions: queued.promptSuggestions }
+          : {}),
+      });
+      await removeQueued(message.id);
+      updateDraft(sessionKey, {
+        text: message.text,
+        mentions: [],
+        attachments,
+        annotations: [],
+      });
+    } finally {
+      queueEditPendingRef.current = false;
+      setQueueEditPending(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
   };
   const canSteerQueuedPrompt = (message: { id: string }) => {
     // Steering carries text only, and a queued command must be
@@ -3398,7 +3423,7 @@ export function SharedNativeAgentController({
         ) : null
       }
       annotations={draft.annotations}
-      annotationInteractionEnabled={!isSubmitting && !isDispatching}
+      annotationInteractionEnabled={!queueEditPending && !isSubmitting && !isDispatching}
       onAddAnnotation={addTranscriptAnnotation}
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       onAnnotationCommentDone={focusComposerAfterAnnotationComment}
@@ -3417,7 +3442,7 @@ export function SharedNativeAgentController({
           layout={composerCentered ? "centered" : "bottom"}
           attachments={draft.attachments}
           onRemoveAttachment={(attachmentId) => {
-            if (draft.submissionPending) return;
+            if (queueEditPendingRef.current || draft.submissionPending) return;
             updateDraft(sessionKey, {
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
             });
@@ -3427,7 +3452,7 @@ export function SharedNativeAgentController({
             openWebAnnotationThread(data.environmentId, annotationId)
           }
           onClearAnnotations={() => {
-            if (draft.submissionPending) return;
+            if (queueEditPendingRef.current || draft.submissionPending) return;
             const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
             updateDraft(sessionKey, {
               annotations: [],
@@ -3442,11 +3467,15 @@ export function SharedNativeAgentController({
           text={draft.text}
           mentions={draft.mentions}
           onTextAndMentionsChange={(text, mentions) => {
-            if (draft.submissionPending) return;
+            if (queueEditPendingRef.current || draft.submissionPending) return;
             updateDraft(sessionKey, { text, mentions });
           }}
           onCursorPositionChange={detectFileMention}
           onKeyDown={(event) => {
+            if (queueEditPendingRef.current) {
+              event.preventDefault();
+              return;
+            }
             if (fileMentionMenuOpen && handleFileMentionKeyDown(event, handleFileMentionSelect)) {
               return;
             }
@@ -3464,7 +3493,7 @@ export function SharedNativeAgentController({
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
           placeholder={`Message ${label}`}
-          disabled={isSubmitting || draft.submissionPending === true}
+          disabled={queueEditPending || isSubmitting || draft.submissionPending === true}
           isSending={isDispatching || isSubmitting}
           isLoading={isTurnActive}
           menus={
@@ -3485,7 +3514,7 @@ export function SharedNativeAgentController({
                 {adapter.capabilities.attachments.files ||
                 adapter.capabilities.attachments.images ? (
                   <NativeAttachmentMenu
-                    disabled={sendLocked && !canQueue}
+                    disabled={queueEditPending || (sendLocked && !canQueue)}
                     fileSearch={fileSearch}
                     onSelectFile={handleWorkspaceFileAttach}
                     onMentionFile={handleWorkspaceFileMention}
@@ -3733,6 +3762,7 @@ export function SharedNativeAgentController({
             authenticationRequired || !sendLocked || canQueue || Boolean(draftSessionAction)
           }
           sendDisabled={
+            queueEditPending ||
             (sendLocked && !draftSessionAction) ||
             isDispatching ||
             (!draft.text.trim() &&

@@ -29,6 +29,22 @@ test("compose gallery restores keyboard focus after Escape and the close button"
   }
 });
 
+test("queue edit keeps the caret in the composer and the opener names its purpose", async ({
+  page,
+}) => {
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.focus();
+  const strip = page.getByTestId("compose-queue-strip");
+  await expect(
+    strip.getByRole("button", { name: "View queued prompts (123)", exact: true }),
+  ).toBeVisible();
+  await strip.getByRole("button", { name: "Edit the next queued prompt", exact: true }).click();
+  await expect(input).toBeFocused();
+  await expect(input).toContainText("Also run the focused regression");
+  await expect(strip).toContainText("Queued prompt 2");
+});
+
 test("compose controls stay reachable in a narrow viewport", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.goto("/native-compose");

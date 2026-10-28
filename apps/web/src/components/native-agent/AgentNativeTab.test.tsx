@@ -393,6 +393,14 @@ const deleteComposeDraftMock = mock(async (draftKey: string, expectedRevision?: 
 // captures: which staging route a composer hands the hook.
 let latestPasteOptions: {
   worktreePath?: string | null;
+  canAttachImage?: () => boolean;
+  onAttach?: (attachment: {
+    id: string;
+    type: "image";
+    path: string;
+    previewUrl: string;
+    name: string;
+  }) => void;
   writeImage?: (filename: string, base64Data: string) => Promise<string>;
 } | null = null;
 mock.module("@/hooks/useNativeComposeBarPaste", () => ({
@@ -12044,6 +12052,343 @@ describe("AgentNativeTab", () => {
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
         ),
       ).toBeTruthy();
+    });
+
+    test.each(["removal", "refresh"] as const)(
+      "inline edit reserves text and attachments during queue %s",
+      async (step) => {
+        const tabId = `tab-inline-edit-${step}`;
+        const sessionKey = createSessionKey("env-1", tabId);
+        const queued = {
+          id: "queued-1",
+          text: "Queued task",
+          mode: "build",
+          attachments: [
+            { id: "file-1", type: "file", path: "/tmp/notes.txt", filename: "notes.txt" },
+          ],
+        };
+        seedProjection({ queue: { items: [queued] } });
+        let complete!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          complete = resolve;
+        });
+        let refreshStarted = false;
+        removePromptQueueMessageMock.mockImplementationOnce(async () => {
+          if (step === "removal") await pending;
+          else {
+            const projection = await getNativeAgentProjectionMock({
+              agent: "codex",
+              environmentId: "env-1",
+            });
+            getNativeAgentProjectionMock.mockImplementationOnce(async () => {
+              refreshStarted = true;
+              await pending;
+              return projection;
+            });
+          }
+        });
+        render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+        const input = await screen.findByRole("textbox");
+        fireEvent.click(await screen.findByRole("button", { name: "Edit the next queued prompt" }));
+        await waitFor(() => expect(removePromptQueueMessageMock).toHaveBeenCalledTimes(1));
+        if (step === "refresh") await waitFor(() => expect(refreshStarted).toBe(true));
+        expect(input.getAttribute("contenteditable")).toBe("false");
+        expect(
+          (screen.getByRole("button", { name: "Add attachment" }) as HTMLButtonElement).disabled,
+        ).toBe(true);
+        fireEvent.input(input, { target: { textContent: "Typing while waiting" } });
+        act(() =>
+          latestPasteOptions?.onAttach?.({
+            id: "new-image",
+            type: "image",
+            path: "/tmp/new.png",
+            name: "new.png",
+            previewUrl: "data:image/png;base64,AAAA",
+          }),
+        );
+        expect(latestPasteOptions?.canAttachImage?.()).toBe(false);
+        // Neither path accepted content which the queued draft would overwrite.
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey)).toMatchObject({
+          text: "",
+          attachments: [],
+        });
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+        await act(async () => {
+          complete();
+          await pending;
+        });
+        await waitFor(() =>
+          expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey)).toMatchObject({
+            text: "Queued task",
+            attachments: [{ id: "file-1", name: "notes.txt", path: "/tmp/notes.txt" }],
+          }),
+        );
+        await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
+        await waitFor(() => expect(document.activeElement).toBe(input));
+        fireEvent.input(input, { target: { textContent: "Queued task revised" } });
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).text).toBe(
+          "Queued task revised",
+        );
+      },
+    );
+
+    test.each(["idle", "running"] as const)(
+      "inline edit blocks Send and Enter until queued settings are restored (%s)",
+      async (phase) => {
+        seedProjection({
+          phase,
+          queue: {
+            items: [
+              {
+                id: "queued-1",
+                text: "Plan this",
+                model: "model-b",
+                reasoningEffort: "high",
+                mode: "plan",
+              },
+            ],
+          },
+        });
+        render(
+          <AgentNativeTab
+            tabId={`tab-inline-settings-${phase}`}
+            data={identity("codex")}
+            isActive
+          />,
+        );
+        const input = await screen.findByRole("textbox");
+        const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+        let complete!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          complete = resolve;
+        });
+        updateNativeAgentControlsMock.mockImplementationOnce(async () => {
+          await pending;
+          return getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" });
+        });
+        fireEvent.click(edit);
+        await waitFor(() =>
+          expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+            update: { modelId: "model-b", reasoningId: "high", mode: "plan" },
+          }),
+        );
+        expect(input.getAttribute("contenteditable")).toBe("false");
+        const sendTitle = phase === "running" ? "Add to queue" : "Send";
+        const send = screen.queryByTitle(sendTitle) as HTMLButtonElement | null;
+        expect(send === null || send.disabled).toBe(true);
+        if (send) fireEvent.click(send);
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+        seedProjection({
+          phase,
+          queue: { items: [] },
+          composer: {
+            models: [
+              {
+                platform: "codex",
+                id: "model-b",
+                label: "Model B",
+                reasoning: [{ id: "high", label: "High" }],
+              },
+            ],
+            selectedModelId: "model-b",
+            selectedReasoningId: "high",
+            selectedModeId: "plan",
+          },
+        });
+        await act(async () => {
+          complete();
+          await pending;
+        });
+        await waitFor(() => expect(input.textContent).toBe("Plan this"));
+        await waitFor(() =>
+          expect((screen.getByTitle(sendTitle) as HTMLButtonElement).disabled).toBe(false),
+        );
+        fireEvent.keyDown(input, { key: "Enter" });
+        if (phase === "running") {
+          await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalled());
+          expect(enqueuePromptQueueMessageMock.mock.calls.at(-1)).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                text: "Plan this",
+                model: "model-b",
+                reasoningEffort: "high",
+                mode: "plan",
+              }),
+            ]),
+          );
+        } else {
+          await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+          expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+            model: "model-b",
+            reasoningEffort: "high",
+            mode: "plan",
+          });
+        }
+      },
+    );
+
+    test("inline edit failure preserves the queued item and releases the composer", async () => {
+      seedProjection({ queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] } });
+      render(
+        <AgentNativeTab tabId="tab-inline-settings-error" data={identity("codex")} isActive />,
+      );
+      const input = await screen.findByRole("textbox");
+      const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+      updateNativeAgentControlsMock.mockRejectedValueOnce(new Error("Settings failed"));
+      mockToastError.mockClear();
+      fireEvent.click(edit);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
+        ),
+      );
+      expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(input.textContent).toBe("");
+      await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
+      fireEvent.input(input, { target: { textContent: "Still usable" } });
+      expect(
+        nativeComposeDraft(
+          useNativeComposeStore.getState(),
+          createSessionKey("env-1", "tab-inline-settings-error"),
+        ).text,
+      ).toBe("Still usable");
+    });
+
+    test.each(["steer", "edit", "remove"] as const)(
+      "inline %s uses queue error toasts",
+      async (action) => {
+        seedProjection({
+          phase: "running",
+          actions: { steer: true },
+          queue: { items: [{ id: "queued-1", text: "Queued task" }] },
+        });
+        render(
+          <AgentNativeTab tabId={`tab-inline-error-${action}`} data={identity("codex")} isActive />,
+        );
+        const name =
+          action === "steer"
+            ? "Steer the next queued prompt into the running turn"
+            : action === "edit"
+              ? "Edit the next queued prompt"
+              : "Remove the next queued prompt";
+        const button = await screen.findByRole("button", { name });
+        if (action === "steer")
+          steerNativeAgentQueuedPromptMock.mockRejectedValueOnce(new Error("Disconnected"));
+        else removePromptQueueMessageMock.mockRejectedValueOnce(new Error("Disconnected"));
+        mockToastError.mockClear();
+        fireEvent.click(button);
+        await waitFor(() =>
+          expect(mockToastError).toHaveBeenCalledWith(
+            action === "steer"
+              ? "Could not steer the running turn: Disconnected"
+              : "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
+          ),
+        );
+        await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+      },
+    );
+
+    test.each(["steer", "remove"] as const)("inline %s targets the queue head", async (action) => {
+      seedProjection({
+        phase: "running",
+        actions: { steer: true },
+        queue: {
+          items: [
+            { id: "head", text: "First" },
+            { id: "tail", text: "Second" },
+          ],
+        },
+      });
+      render(<AgentNativeTab tabId={`tab-inline-${action}`} data={identity("codex")} isActive />);
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name:
+            action === "steer"
+              ? "Steer the next queued prompt into the running turn"
+              : "Remove the next queued prompt",
+        }),
+      );
+      if (action === "steer") {
+        await waitFor(() =>
+          expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledWith(
+            expect.objectContaining({ messageId: "head" }),
+          ),
+        );
+        expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() =>
+          expect(removePromptQueueMessageMock).toHaveBeenCalledWith(
+            expect.any(String),
+            "env-1",
+            "head",
+          ),
+        );
+      }
+    });
+
+    test.each([
+      "annotation",
+      "attachment",
+      "command",
+      "async-id",
+      "async-request",
+      "idle",
+    ] as const)("inline queue controls respect the %s head", async (gate) => {
+      seedProjection({
+        phase: gate === "idle" ? "idle" : "running",
+        actions: { steer: true },
+        queue: {
+          items: [
+            {
+              id: gate === "async-id" ? nativeAsyncQuestionRequestId("question-1") : "queued-1",
+              text: "Queued task",
+              ...(gate === "annotation"
+                ? { origin: { kind: "web-annotation", requestId: "req-1", bodyHash: "hash-1" } }
+                : {}),
+              ...(gate === "attachment"
+                ? { attachments: [{ type: "image", path: "/tmp/image.png" }] }
+                : {}),
+              ...(gate === "command" ? { command: { name: "review" } } : {}),
+              ...(gate === "async-request"
+                ? { requestId: nativeAsyncQuestionRequestId("question-1") }
+                : {}),
+            },
+          ],
+        },
+      });
+      render(
+        <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
+      );
+      const strip = within(await screen.findByTestId("compose-queue-strip"));
+      expect(strip.queryByRole("button", { name: /Steer the next/ })).toBeNull();
+      for (const name of ["Edit the next queued prompt", "Remove the next queued prompt"]) {
+        expect(Boolean(strip.queryByRole("button", { name }))).toBe(gate !== "annotation");
+      }
+    });
+
+    test("inline edit refuses an occupied composer without moving its caret", async () => {
+      seedProjection({ queue: { items: [{ id: "queued-1", text: "Queued task" }] } });
+      render(<AgentNativeTab tabId="tab-inline-occupied" data={identity("codex")} isActive />);
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Unsent draft" } });
+      act(() => input.focus());
+      const edit = await screen.findByRole("button", { name: "Edit the next queued prompt" });
+      mockToastError.mockClear();
+      expect(fireEvent.mouseDown(edit)).toBe(false);
+      fireEvent.click(edit);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "The composer already has an unsent draft. Send or clear it before editing a queued prompt.",
+        ),
+      );
+      expect(document.activeElement).toBe(input);
+      expect(input.textContent).toBe("Unsent draft");
+      expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
     });
 
     test("refuses to load a queued prompt over an occupied composer", async () => {

@@ -118,7 +118,9 @@ function QueuedPromptStrip({ queue }: { queue: NativeComposeQueueState }) {
         onClick={queue.onOpen}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-muted-foreground transition-colors hover:text-foreground"
         aria-label={
-          queue.error ? `${queue.length} queued prompts blocked: ${queue.error.message}` : undefined
+          queue.error
+            ? `${queue.length} queued prompts blocked: ${queue.error.message}`
+            : `View queued prompts (${queue.length})`
         }
         title={
           queue.error ? `Queued prompt was not sent: ${queue.error.message}` : "View queued prompts"
@@ -149,6 +151,7 @@ function QueuedPromptStrip({ queue }: { queue: NativeComposeQueueState }) {
       {queue.onEdit ? (
         <button
           type="button"
+          onMouseDown={(event) => event.preventDefault()}
           onClick={() => void run(queue.onEdit)}
           disabled={pending}
           aria-busy={pending}

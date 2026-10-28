@@ -23,3 +23,10 @@ The isolated run took 4.7 seconds. The aggregate failure is recorded in
 `.orkestrator/review-artifacts/review-validation-718526c1-13d2-4dd8-aa63-6778b1a57ec1/validation-04.stdout.txt`.
 Host contention is a possible contributor; the cause is unconfirmed. No test
 assertion or timeout was changed.
+
+The required `mise run test` rerun reproduced the same pair of failures:
+the backlog test took 8,355.96 ms, followed by the same closed-database error
+in the next case (128.22 ms). The backend again reported 9,904 passed,
+87 skipped and two failed tests across 651 files (265.16 seconds). Its evidence
+is retained with the default-suite rerun's failure artifacts. The desktop
+package reported 1,274 passed, 16 skipped and zero failed tests in that run.

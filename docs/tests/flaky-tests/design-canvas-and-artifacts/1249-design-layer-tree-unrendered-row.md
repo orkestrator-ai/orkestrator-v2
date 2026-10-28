@@ -38,3 +38,20 @@ The failure precedes opening the dialog in this journey. The expected layer row
 is absent after the keyboard navigation; whether rendering, focus, or layer
 loading is responsible remains unproven. Capture the active treeitem and frame
 loading state at the failed End key before changing the timeout or assertion.
+
+
+## Uniform app shortcuts review recurrence — 2026-10-28
+
+The nine-worker component aggregate reported this case again (both 30-second
+DesignCanvas deadlines for 0174, and mobile unrendered-frame selection for
+1249). The complete unchanged DesignCanvas, DesignCanvasAccessibility and
+SetupRecovery owners passed sequentially with one worker: 20 passed, exit 0,
+77.0 seconds. Command:
+
+```sh
+mise run test:logged -- --name design-and-layer-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DesignCanvasAccessibility.spec.ts e2e/SetupRecovery.spec.ts --workers=1
+```
+
+No assertion, timeout or skip changed. The cause remains unestablished; this
+case stays open. Aggregate counts and artifact paths are recorded in
+[0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#uniform-app-shortcut-review-repairs--2026-10-28).

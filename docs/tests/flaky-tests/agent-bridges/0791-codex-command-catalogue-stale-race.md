@@ -170,3 +170,18 @@ mise run test:logged -- --name merge-codex-catalogue-recheck -- bun test --cwd b
 Aggregate evidence: `orkestrator-test-run.Xy7MuA/bridges.log.gz` below the host
 temporary directory after completion. The merge changes no Codex bridge code,
 assertions, timeouts, or skips; the original aggregate remains non-green.
+
+## Project landing-tab review — 2026-10-28
+
+Preparation's `mise run test` repeated `a cold app-server child > two pre-plugin
+answers stay stale until late plugins are observed and confirmed` at line 273
+(114.52 ms), using the default concurrent workspace/root/bridges/protocol groups.
+The unchanged complete owner passed alone (exit 0, 1.6 s):
+
+```sh
+mise run test:logged -- --name prior-codex-failure -- bun --cwd=bridges/codex-bridge test ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is `validation-05.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-715de670-9258-47de-9a56-3b5d32afcae9/`.
+No catalogue code, assertions, timeouts or skips changed.

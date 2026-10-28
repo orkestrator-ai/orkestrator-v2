@@ -3,6 +3,8 @@ import {
   isWorkspaceRealm,
   parseRealmMessage,
   parseShellMessage,
+  projectLandingBoardTab,
+  projectLandingTab,
   readFrameEnvelope,
   realmCoordinatorDefers,
   realmInitialRequest,
@@ -99,6 +101,33 @@ test("a realm's coordinator defers to the command node only when grouped by repo
   expect(realmCoordinatorDefers("machine")).toBe(false);
   expect(realmCoordinatorDefers("project")).toBe(false);
   expect(realmCoordinatorDefers("activity")).toBe(false);
+});
+
+test("a sidebar project entry lands on Home only for another node's project grouped by repository", () => {
+  const expected = {
+    repository: { command: "coordinator", leaf: "home" },
+    machine: { command: "coordinator", leaf: "coordinator" },
+    project: { command: "coordinator", leaf: "coordinator" },
+    activity: { command: "coordinator", leaf: "coordinator" },
+  } as const;
+  for (const grouping of ["repository", "machine", "project", "activity"] as const) {
+    for (const node of ["command", "leaf"] as const) {
+      const onCommandNode = node === "command";
+      const tab = expected[grouping][node];
+      expect({ grouping, node, tab: projectLandingTab(grouping, onCommandNode) }).toEqual({
+        grouping,
+        node,
+        tab,
+      });
+      // Home is where another node's realm opens a project anyway, so it is not asked for.
+      expect(projectLandingBoardTab(grouping, onCommandNode)).toBe(
+        tab === "coordinator" ? "coordinator" : undefined,
+      );
+    }
+  }
+  // Before the grouping is known, a leaf's coordinator defers, so its home is shown.
+  expect(projectLandingTab(null, false)).toBe("home");
+  expect(projectLandingTab(null, true)).toBe("coordinator");
 });
 
 test("explicit board intent survives realm URLs and messages, with only known tabs accepted", () => {

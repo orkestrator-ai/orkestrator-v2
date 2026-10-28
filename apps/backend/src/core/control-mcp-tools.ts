@@ -22,6 +22,11 @@ import {
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { z } from "zod";
 import {
+  ticketKindField,
+  ticketSectionsField,
+  ticketStructuredOutput,
+} from "./ticket-tool-fields.js";
+import {
   allEnvironments,
   compactMessages,
   environmentSummary,
@@ -257,6 +262,7 @@ function ticketSummary(task: JsonRecord): JsonRecord {
 function ticketDetail(task: JsonRecord): JsonRecord {
   return {
     ...ticketSummary(task),
+    ...ticketStructuredOutput(task as Parameters<typeof ticketStructuredOutput>[0]),
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
     comments: Array.isArray(task.comments) ? task.comments.slice(-50) : [],
@@ -1115,11 +1121,14 @@ export async function createControlMcp(
     "create_ticket",
     {
       title: "Create a Kanban ticket",
-      description: "Create a ticket in one configured project.",
+      description:
+        "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
         title: z.string().trim().min(1).max(500),
+        kind: ticketKindField,
+        sections: ticketSectionsField,
         description: z.string().max(100_000).default(""),
         acceptanceCriteria: z.string().max(100_000).default(""),
         status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
@@ -1132,7 +1141,18 @@ export async function createControlMcp(
         openWorldHint: false,
       },
     },
-    async ({ requestId, projectId, title, description, acceptanceCriteria, status, nodeId }) => {
+    async ({
+      requestId,
+      projectId,
+      title,
+      kind,
+      sections,
+      description,
+      acceptanceCriteria,
+      status,
+      nodeId,
+    }) => {
+      const structured = { ...(kind ? { kind } : {}), ...(sections ? { sections } : {}) };
       if (operator) {
         return operatorCreateTicket(callerOnNode(operator, nodeId), {
           requestId,
@@ -1141,6 +1161,7 @@ export async function createControlMcp(
           description,
           acceptanceCriteria,
           status,
+          ...structured,
         });
       }
       coordinatorNodeRefused(nodeId);
@@ -1153,6 +1174,7 @@ export async function createControlMcp(
         acceptanceCriteria,
         status,
         requestId,
+        ...structured,
       });
       if (!isRecord(task)) throw new Error("Kanban ticket creation returned no ticket");
       return toolResult({ ticket: ticketDetail(task) });
@@ -1163,21 +1185,26 @@ export async function createControlMcp(
     "update_ticket",
     {
       title: "Update a Kanban ticket",
-      description: "Update specified editable fields of a ticket in one project.",
+      description:
+        "Update specified editable fields of a ticket in one project; sections replaces only the sections it names.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256).optional(),
           projectId: z.string().trim().min(1).max(200),
           ticketId: z.string().trim().min(1).max(200),
           title: z.string().trim().min(1).max(500).optional(),
+          kind: ticketKindField,
+          sections: ticketSectionsField,
           description: z.string().max(100_000).optional(),
           acceptanceCriteria: z.string().max(100_000).optional(),
           status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
           nodeId: nodeIdField,
         })
         .refine(
-          ({ title, description, acceptanceCriteria, status }) =>
+          ({ title, kind, sections, description, acceptanceCriteria, status }) =>
             title !== undefined ||
+            kind !== undefined ||
+            sections !== undefined ||
             description !== undefined ||
             acceptanceCriteria !== undefined ||
             status !== undefined,

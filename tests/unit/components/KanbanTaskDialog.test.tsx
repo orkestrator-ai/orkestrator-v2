@@ -78,6 +78,12 @@ const addTaskMock = mock(
     "task-created",
 );
 const updateTaskMock = mock(async (_taskId: string, _updates: KanbanTaskUpdates) => {});
+const updateTaskContentMock = mock(
+  async (
+    _taskId: string,
+    _content: { title?: string; kind?: string; markdown?: string },
+  ): Promise<boolean> => true,
+);
 const deleteTaskMock = mock(async (_taskId: string) => {});
 const moveTaskMock = mock(async (_taskId: string, _status: KanbanTask["status"]) => {});
 const addCommentMock = mock(async (_taskId: string, _text: string) => {});
@@ -259,6 +265,7 @@ function installKanbanActionMocks() {
     loadTasks: mock(async () => {}),
     addTask: addTaskMock,
     updateTask: updateTaskMock,
+    updateTaskContent: updateTaskContentMock,
     deleteTask: deleteTaskMock,
     moveTask: moveTaskMock,
     addComment: addCommentMock,
@@ -364,6 +371,8 @@ describe("KanbanTaskDialog", () => {
     addTaskMock.mockImplementation(async () => "task-created");
     updateTaskMock.mockClear();
     updateTaskMock.mockImplementation(async () => {});
+    updateTaskContentMock.mockClear();
+    updateTaskContentMock.mockImplementation(async () => true);
     deleteTaskMock.mockClear();
     moveTaskMock.mockClear();
     addCommentMock.mockClear();
@@ -751,35 +760,121 @@ describe("KanbanTaskDialog", () => {
     });
   });
 
-  test("edit mode saves title, description, and acceptance criteria changes", async () => {
+  test("edit mode shows the ticket as section tiles with criteria ticks", () => {
+    render(
+      <KanbanTaskDialog
+        task={makeTask({
+          kind: "work-brief",
+          description: "A description\n\n## Delivery\n\nPolicy: push-no-pr",
+          acceptanceCriteria: "- Passes\n- Fails\n- Unknown\n- New",
+          sections: {
+            summary: "A description",
+            delivery: { policy: "push-no-pr" },
+            acceptanceCriteria: [
+              {
+                id: "ac-1",
+                text: "Passes",
+                check: {
+                  status: "passed",
+                  evidence: "bun test a",
+                  checkedAt: "2026-10-28T00:00:00.000Z",
+                  source: "verify",
+                },
+              },
+              {
+                id: "ac-2",
+                text: "Fails",
+                check: {
+                  status: "failed",
+                  evidence: "still broken",
+                  checkedAt: "2026-10-28T00:00:00.000Z",
+                  source: "verify",
+                },
+              },
+              {
+                id: "ac-3",
+                text: "Unknown",
+                check: {
+                  status: "not-checked",
+                  evidence: "needs a phone",
+                  checkedAt: "2026-10-28T00:00:00.000Z",
+                  source: "verify",
+                },
+              },
+              { id: "ac-4", text: "New" },
+            ],
+          },
+        })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("ticket-kind").textContent).toBe("Work brief");
+    expect(screen.getByTestId("ticket-tile-summary").textContent).toContain("A description");
+    expect(screen.getByTestId("ticket-delivery-policy").textContent).toBe(
+      "Push, no PR (Multi Review next)",
+    );
+    const statuses = screen
+      .getAllByTestId("ticket-criterion")
+      .map((item) => item.getAttribute("data-status"));
+    expect(statuses).toEqual(["passed", "failed", "not-checked", "unchecked"]);
+    expect(screen.getByTestId("ticket-criteria-tally").textContent).toBe(
+      "1/4 passed · 1 failed · 1 not checked",
+    );
+    expect(screen.getByText("still broken", { exact: false })).toBeTruthy();
+  });
+
+  test("a legacy ticket without sections still shows its text as tiles", () => {
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    expect(screen.getByTestId("ticket-kind").textContent).toBe("Feature ticket");
+    expect(screen.getByTestId("ticket-tile-summary").textContent).toContain("A description");
+    expect(screen.getByTestId("ticket-tile-acceptanceCriteria").textContent).toContain(
+      "Some criteria",
+    );
+  });
+
+  test("edit opens one markdown editor and saves only what changed", async () => {
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
-    fireEvent.click(screen.getByText("Existing task"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = screen.getByLabelText("Ticket text") as HTMLTextAreaElement;
+    expect(editor.value).toBe("A description\n\n## Acceptance criteria\n\n- Some criteria");
+
+    // A title-only edit must not re-render the legacy text.
     fireEvent.change(screen.getByDisplayValue("Existing task"), {
       target: { value: "  Updated task  " },
     });
-    fireEvent.change(screen.getByPlaceholderText("Description..."), {
-      target: { value: "  Updated description  " },
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateTaskContentMock).toHaveBeenCalledWith("task-1", { title: "Updated task" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work brief" }));
+    fireEvent.change(screen.getByLabelText("Ticket text"), {
+      target: { value: "New\n\n## Acceptance criteria\n\n- Some criteria\n- Another" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-      title: "Updated task",
-      description: "Updated description",
-    });
-
-    fireEvent.click(screen.getByText("Some criteria"));
-    fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
-      target: { value: "  Updated acceptance criteria  " },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
-      acceptanceCriteria: "Updated acceptance criteria",
-    });
+    await waitFor(() =>
+      expect(updateTaskContentMock).toHaveBeenLastCalledWith("task-1", {
+        kind: "work-brief",
+        markdown: "New\n\n## Acceptance criteria\n\n- Some criteria\n- Another",
+      }),
+    );
+    expect(updateTaskMock).not.toHaveBeenCalled();
   });
 
-  test("edit mode cancel controls discard title and acceptance-criteria edits", () => {
+  test("a failed save keeps the editor open with the edit", async () => {
+    updateTaskContentMock.mockImplementation(async () => false);
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Ticket text"), { target: { value: "Kept" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateTaskContentMock).toHaveBeenCalled());
+    expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe("Kept");
+  });
+
+  test("edit mode cancel discards title and text edits", () => {
     render(
       <KanbanTaskDialog
         task={makeTask({ description: "", acceptanceCriteria: "" })}
@@ -788,22 +883,34 @@ describe("KanbanTaskDialog", () => {
       />,
     );
 
-    expect(screen.getByText("Click to add a description...")).toBeTruthy();
-    fireEvent.click(screen.getByText("Existing task"));
+    fireEvent.click(screen.getByText("Click to add a description and acceptance criteria..."));
+    expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe(
+      "## Context\n\n## Acceptance criteria\n\n## Out of scope",
+    );
     fireEvent.change(screen.getByDisplayValue("Existing task"), {
       target: { value: "Discarded title" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(updateTaskMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Existing task")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Click to add acceptance criteria..."));
-    fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
-      target: { value: "Discarded criteria" },
+    fireEvent.change(screen.getByLabelText("Ticket text"), {
+      target: { value: "Discarded text" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(updateTaskMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Click to add acceptance criteria...")).toBeTruthy();
+    expect(updateTaskContentMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Existing task")).toBeTruthy();
+    expect(screen.getByText("Click to add a description and acceptance criteria...")).toBeTruthy();
+  });
+
+  test("saving an untouched template sends nothing", async () => {
+    render(
+      <KanbanTaskDialog
+        task={makeTask({ description: "", acceptanceCriteria: "" })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Ticket text")).toBeNull());
+    expect(updateTaskContentMock).not.toHaveBeenCalled();
   });
 
   test("pressing Enter in the create title submits the task", async () => {

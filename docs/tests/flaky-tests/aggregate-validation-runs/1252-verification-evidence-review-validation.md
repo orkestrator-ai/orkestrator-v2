@@ -1,6 +1,6 @@
 # Verification evidence review validation
 
-- **ID:** 1248
+- **ID:** 1252
 - **Status:** open
 - **Date observed:** 2026-10-28
 - **Command:** `mise run test:logged -- --name review-fixes-default -- mise run test`

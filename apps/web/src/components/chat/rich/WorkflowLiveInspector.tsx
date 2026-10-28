@@ -204,7 +204,7 @@ export function WorkflowLiveInspector({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-5xl" data-workflow-live-inspector="true">
+      <DialogContent size="5xl" data-workflow-live-inspector="true">
         <DialogTitle className="flex items-center gap-2">
           <Radio aria-hidden="true" className="size-4" />
           Live workflow · {title}

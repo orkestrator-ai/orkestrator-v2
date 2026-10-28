@@ -197,10 +197,11 @@ export function KeyboardShortcutsDialog({
       }}
     >
       <DialogContent
+        size="2xl"
         showCloseButton={false}
         data-testid="keyboard-shortcuts-dialog"
         className={cn(
-          "flex max-h-[min(36rem,calc(100dvh-1rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl sm:p-0",
+          "flex max-h-[min(36rem,calc(100dvh-1rem))] flex-col gap-0 overflow-hidden p-0 sm:p-0",
           Z_FULLSCREEN_DIALOG,
         )}
         overlayClassName={Z_FULLSCREEN_DIALOG}

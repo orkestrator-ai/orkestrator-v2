@@ -4,6 +4,7 @@ import {
   getKanbanTasks,
   addKanbanTask,
   updateKanbanTask,
+  updateKanbanTaskContent,
   deleteKanbanTask,
   addKanbanComment,
   deleteKanbanComment,
@@ -72,6 +73,11 @@ interface KanbanState {
       >
     >,
   ) => Promise<void>;
+  /** Save an edit of the ticket's title, kind and markdown. Resolves false when it failed. */
+  updateTaskContent: (
+    taskId: string,
+    content: Parameters<typeof updateKanbanTaskContent>[1],
+  ) => Promise<boolean>;
   clearTaskBuildStatus: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, newStatus: KanbanStatus) => Promise<void>;
@@ -140,6 +146,22 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       }));
     } catch (error) {
       console.error("[KanbanStore] Failed to update task:", error);
+    }
+  },
+
+  updateTaskContent: async (taskId, content) => {
+    try {
+      const updated = await updateKanbanTaskContent(taskId, content);
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }));
+      return true;
+    } catch (error) {
+      console.error("[KanbanStore] Failed to update task content:", error);
+      toast.error("Could not save the ticket", {
+        description: "Your edit is still in the editor, so you can retry.",
+      });
+      return false;
     }
   },
 

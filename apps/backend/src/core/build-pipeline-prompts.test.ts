@@ -32,6 +32,7 @@ import {
   reviewPrompt,
   structuredReportRepairPrompt,
   verificationPrompt,
+  verificationCriteriaSection,
   worktreeSnapshotSection,
 } from "./build-pipeline-prompts.js";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
@@ -580,8 +581,65 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Do not use the final-response channel for an update");
     expect(prompt).toContain("Never emit a partial or provisional verification verdict");
     expect(prompt).toContain("make the final assistant response the only JSON object");
-    expect(prompt).toContain('{"complete":true,"rationale":"..."}');
+    expect(prompt).toContain(
+      '{"complete":true,"rationale":"...","acceptanceCriteria":[{"id":"ac-1","status":"passed","evidence":"..."}]}',
+    );
     expect(prompt).toContain("Use Bun.");
+  });
+
+  test("verificationPrompt lists each criterion by id and forbids passing what it cannot check", () => {
+    const prompt = verificationPrompt(
+      {
+        ...pipeline(),
+        taskSnapshot: {
+          ...pipeline().taskSnapshot,
+          acceptanceCriteriaItems: [
+            { id: "ac-3", text: "Ticks show in the <Ticket> node" },
+            { id: "ac-7", text: "Works on a phone" },
+          ],
+        },
+      },
+      "",
+      "main",
+    );
+    expect(prompt).toContain("**Acceptance criteria to check**");
+    expect(prompt).toContain('"id": "ac-3"');
+    expect(prompt).toContain("\\u003cTicket\\u003e");
+    expect(prompt).toContain('"id": "ac-7"');
+    expect(prompt).toContain("Never mark such a criterion passed");
+    expect(prompt).toContain("Any failed criterion means complete: false");
+    // The criteria come before the output contract that names the field.
+    expect(prompt.indexOf("Acceptance criteria to check")).toBeLessThan(
+      prompt.indexOf('"acceptanceCriteria":['),
+    );
+  });
+
+  test("only the repeated criterion list is shortened; the snapshot and ticket context keep full text", () => {
+    const text = "x".repeat(10_000) + "required tail";
+    const taskSnapshot = {
+      ...pipeline().taskSnapshot,
+      acceptanceCriteria: `- ${text}`,
+      acceptanceCriteriaItems: [{ id: "ac-9", text }],
+    };
+    const section = verificationCriteriaSection(taskSnapshot);
+    const serialized = section
+      .split("<acceptance-criteria-json>\n")[1]!
+      .split("\n</acceptance-criteria-json>")[0]!;
+    expect(JSON.parse(serialized)).toEqual([{ id: "ac-9", text: "x".repeat(10_000) }]);
+    expect(taskSnapshot.acceptanceCriteriaItems[0]!.text).toBe(text);
+    expect(verificationPrompt({ ...pipeline(), taskSnapshot }, "", "main")).toContain(text);
+  });
+
+  test("verificationPrompt derives criterion ids from an old snapshot's text", () => {
+    const legacy = verificationPrompt(pipeline(), "", "main");
+    expect(legacy).toContain('"id": "ac-1"');
+    expect(legacy).toContain("Returning to an inactive tab rehydrates state.");
+    const none = verificationPrompt(
+      { ...pipeline(), taskSnapshot: { ...pipeline().taskSnapshot, acceptanceCriteria: "" } },
+      "",
+      "main",
+    );
+    expect(none).toContain("Return an empty `acceptanceCriteria` array");
   });
 
   test("verificationPrompt discloses the exact certification baseline", () => {

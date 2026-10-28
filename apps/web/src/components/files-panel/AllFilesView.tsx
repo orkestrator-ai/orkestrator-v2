@@ -371,7 +371,7 @@ export function AllFilesView({
         open={moveSourcePaths !== null}
         onOpenChange={(open) => !open && setMoveSourcePaths(null)}
       >
-        <DialogContent className="max-h-[min(32rem,calc(100vh-2rem))] sm:max-w-md">
+        <DialogContent size="md" className="max-h-[min(32rem,calc(100vh-2rem))]">
           <DialogHeader>
             <DialogTitle>{moveCount > 1 ? "Move files" : "Move file"}</DialogTitle>
             <DialogDescription>

@@ -136,7 +136,7 @@ export function MultiReviewRestartDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(calc(100%-1rem),42rem)] sm:max-w-[42rem]">
+      <DialogContent size="2xl">
         <DialogHeader>
           <DialogTitle>Restart {stepLabel}</DialogTitle>
           <DialogDescription>

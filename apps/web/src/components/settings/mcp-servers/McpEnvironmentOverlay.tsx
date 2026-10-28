@@ -435,7 +435,8 @@ export function McpDefaultsRefreshDialog({
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent
-        className={cn("sm:max-w-xl", Z_FULLSCREEN_DIALOG)}
+        size="xl"
+        className={Z_FULLSCREEN_DIALOG}
         overlayClassName={Z_FULLSCREEN_DIALOG}
         onCloseAutoFocus={(event) => {
           if (!onRestoreFocus) return;

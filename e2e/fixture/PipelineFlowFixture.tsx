@@ -337,6 +337,42 @@ function scenario(): BuildPipeline {
     });
     return pipeline;
   }
+  if (name === "ticket-tiles") {
+    // A finished run, so the Ticket node can show the last Verify's ticks.
+    const pipeline = loops();
+    pipeline.sessions = pipeline.sessions.map((session) =>
+      session.sessionKey === "verify-2"
+        ? {
+            ...session,
+            acceptanceCriteriaResults: [
+              {
+                id: "ac-1",
+                status: "passed",
+                evidence: "PipelineFlow.spec.ts lays the graph out.",
+              },
+              { id: "ac-2", status: "not-checked", evidence: "Needs a real phone." },
+            ],
+          }
+        : session,
+    );
+    pipeline.taskSnapshot = {
+      ...SNAPSHOT,
+      description: [
+        "Make the build pipeline tab look like **Multi Review**.",
+        "## Problem",
+        "The ticket is one long blob.",
+        "## Context",
+        "The Ticket node is the first step.",
+        "## Constraints",
+        "Keep old snapshots readable.",
+        "## Delivery",
+        "Policy: push-no-pr",
+        "## Rollout",
+        "No flag.",
+      ].join("\n\n"),
+    };
+    return pipeline;
+  }
   if (name === "images") {
     const pipeline = fanout();
     pipeline.taskSnapshot = {

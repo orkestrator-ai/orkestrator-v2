@@ -1,5 +1,6 @@
 import {
   VERIFICATION_VERDICT_SCHEMA,
+  isLegacyVerificationVerdict,
   isVerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -623,7 +624,12 @@ export function validateWorkflowResult(
   context?: WorkflowResultSlotInput["context"],
 ): WorkflowResultValidationIssue[] {
   const registeredSchema = workflowResultJsonSchema(kind, schema);
-  const structural = validateWorkflowJsonSchema(registeredSchema, value);
+  // Keep the old two-field shape compatible. The consumer records every
+  // omitted snapshot criterion as not checked, including on current turns.
+  const structural =
+    kind === "verification-result" && isLegacyVerificationVerdict(value)
+      ? []
+      : validateWorkflowJsonSchema(registeredSchema, value);
   if (structural.length > 0) return structural;
   try {
     if (kind === "feature-plan-state" && !parseFeaturePlannerStateValue(value))
@@ -635,7 +641,9 @@ export function validateWorkflowResult(
     else if (kind === "fix-result") parseFixResult(value);
     else if (kind === "pr-result") parsePrResult(value);
     else if (kind === "verification-result" && !isVerificationVerdict(value))
-      throw new Error("Expected exactly a boolean complete field and a string rationale field");
+      throw new Error(
+        "Expected exactly a boolean complete field, a string rationale field and an acceptanceCriteria array",
+      );
     else if (kind === "review-report" || kind === "consolidated-review") {
       const parsed = safeParseStructuredReviewReport(value, { allowLegacyTestResults: true });
       if (!parsed.success) return parsed.error.issues.map(fromReviewIssue).slice(0, MAX_ISSUES);

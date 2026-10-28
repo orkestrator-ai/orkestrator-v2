@@ -9,6 +9,7 @@
  */
 
 import { Braces, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck } from "lucide-react";
+import { CriterionStatusIcon, criterionStateLabel } from "@/components/tickets/criterion-status";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   StructuredReviewFindingsView,
@@ -136,9 +137,31 @@ export function JsonPayloadPart({
               sectionExpansionKey={`${expansionKey}/report-section`}
             />
           ) : payload.kind === "verification" ? (
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-              {payload.verdict.rationale}
-            </p>
+            <>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+                {payload.verdict.rationale}
+              </p>
+              {payload.verdict.acceptanceCriteria?.length ? (
+                <ul data-testid="verification-criteria" className="mt-2 flex flex-col gap-1.5">
+                  {payload.verdict.acceptanceCriteria.map((criterion, index) => (
+                    <li
+                      key={`${criterion.id}-${index}`}
+                      data-status={criterion.status}
+                      className="flex min-w-0 gap-2 text-sm"
+                    >
+                      <CriterionStatusIcon state={criterion.status} />
+                      <span className="min-w-0 break-words">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {criterion.id}
+                        </span>{" "}
+                        {criterionStateLabel(criterion.status)}
+                        {criterion.evidence ? `: ${criterion.evidence}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
           ) : (
             <>
               <JsonTree value={payload.value} expansionKey={`${expansionKey}/tree`} />

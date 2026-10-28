@@ -242,7 +242,8 @@ export function MediaGalleryDialog({
         showCloseButton={false}
         aria-label={`Image preview: ${title}`}
         onKeyDown={onKeyDown}
-        className="flex h-[90vh] w-[min(96rem,calc(100vw-2rem))] max-w-none flex-col gap-2 p-3 sm:max-w-none"
+        size="full"
+        className="flex h-[90vh] w-[min(96rem,calc(100vw-2rem))] flex-col gap-2 p-3"
       >
         <DialogTitle className="sr-only">Image preview: {title}</DialogTitle>
         <DialogDescription className="sr-only">

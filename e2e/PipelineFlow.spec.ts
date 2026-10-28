@@ -233,8 +233,8 @@ test("shows the ticket the pipeline started with, never the prompt", async ({ pa
   await node(page, "Ticket").click();
   const ticket = page.getByTestId("pipeline-ticket");
   await expect(ticket.getByRole("heading", { name: "Build pipeline flow graph" })).toBeVisible();
-  await expect(ticket.getByRole("region", { name: "Description" })).toContainText("Multi Review");
-  await expect(ticket.getByRole("region", { name: "Description" }).locator("strong")).toHaveText(
+  await expect(ticket.getByRole("region", { name: "Summary" })).toContainText("Multi Review");
+  await expect(ticket.getByRole("region", { name: "Summary" }).locator("strong")).toHaveText(
     "Multi Review",
   );
   await expect(ticket.getByRole("region", { name: "Acceptance criteria" })).toContainText(
@@ -244,6 +244,55 @@ test("shows the ticket the pipeline started with, never the prompt", async ({ pa
   // No images were attached, so that section is left out.
   await expect(ticket.getByRole("region", { name: /Reference images/ })).toHaveCount(0);
   await expect(page.getByText("You are building a feature")).toHaveCount(0);
+});
+
+test("the Ticket inspector tiles the ticket's sections and stacks them when narrow", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=ticket-tiles");
+  await node(page, "Ticket").click();
+  const grid = page.getByTestId("ticket-sections-grid");
+  await expect(grid).toBeVisible();
+  const tiles = grid.locator("section");
+  await expect(tiles).toHaveText([
+    /Summary/,
+    /Problem/,
+    /Context/,
+    /Constraints/,
+    /Acceptance criteria/,
+    /Delivery/,
+    /Rollout/,
+  ]);
+  await expect(page.getByTestId("ticket-delivery-policy")).toHaveText(
+    "Push, no PR (Multi Review next)",
+  );
+  // The newest Verify's ticks, on the inspector and the node face.
+  const criteria = grid.getByTestId("ticket-criterion");
+  await expect(criteria).toHaveCount(2);
+  await expect(criteria.nth(0)).toHaveAttribute("data-status", "passed");
+  await expect(criteria.nth(1)).toHaveAttribute("data-status", "not-checked");
+  await expect(criteria.nth(1)).toContainText("Needs a real phone.");
+  await expect(page.getByTestId("ticket-criteria-tally")).toHaveText("1/2 passed · 1 not checked");
+  await expect(page.getByTestId("pipeline-ticket-verify-round")).toContainText("round 2");
+  await expect(node(page, "Ticket")).toContainText("1/2 criteria");
+  const layout = await grid.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    tiles: [...element.querySelectorAll("section")].map((tile) =>
+      tile.getBoundingClientRect().toJSON(),
+    ) as Box[],
+  }));
+  const problem = layout.tiles[1]!;
+  const context = layout.tiles[2]!;
+  // 36rem is the container width at which tiles go side by side.
+  if (layout.width >= 576) {
+    expect(Math.abs(problem.y - context.y)).toBeLessThan(1);
+    expect(context.x).toBeGreaterThan(problem.x);
+  } else {
+    expect(context.y).toBeGreaterThanOrEqual(problem.y + problem.height);
+  }
+  for (const tile of layout.tiles) {
+    expect(tile.x + tile.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  }
 });
 
 test("the PR node shows the link, its state and CI checks", async ({ page }) => {

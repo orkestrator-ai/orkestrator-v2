@@ -3,6 +3,7 @@ import * as realDndCore from "@dnd-kit/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ComponentProps } from "react";
+import { ticketContentFromSections } from "@orkestrator/protocol/ticket-sections";
 
 const realDndCoreSnapshot = { ...realDndCore };
 const draggableState = {
@@ -88,6 +89,43 @@ function renderCard(task: KanbanTask, props: Partial<ComponentProps<typeof Kanba
     </DndContext>,
   );
 }
+
+describe("KanbanCard ticket sections", () => {
+  afterEach(cleanup);
+
+  test("shows the first prose section, not the headed description mirror", () => {
+    renderCard(
+      makeTask({
+        ...ticketContentFromSections("work-brief", { problem: "Tickets are blobs." }),
+      }),
+    );
+    expect(screen.getByText("Tickets are blobs.")).toBeTruthy();
+    expect(screen.queryByText(/## Problem/)).toBeNull();
+  });
+
+  test("shows a criteria tally once Verify has checked something", () => {
+    const check = {
+      status: "passed" as const,
+      evidence: "e",
+      checkedAt: "2026-10-28T00:00:00.000Z",
+      source: "verify" as const,
+    };
+    renderCard(
+      makeTask({
+        ...ticketContentFromSections("feature", {
+          acceptanceCriteria: [
+            { id: "ac-1", text: "A", check },
+            { id: "ac-2", text: "B" },
+          ],
+        }),
+      }),
+    );
+    expect(screen.getByTestId("kanban-card-criteria").textContent).toBe("1/2");
+    cleanup();
+    renderCard(makeTask({ acceptanceCriteria: "- A\n- B" }));
+    expect(screen.queryByTestId("kanban-card-criteria")).toBeNull();
+  });
+});
 
 describe("KanbanCard", () => {
   afterEach(() => {

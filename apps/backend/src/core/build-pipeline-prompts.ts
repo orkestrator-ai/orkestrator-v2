@@ -1,4 +1,5 @@
-import { usesReviewFanout } from "@orkestrator/protocol/build-pipeline";
+import { taskSnapshotCriteria, usesReviewFanout } from "@orkestrator/protocol/build-pipeline";
+import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import { createHash } from "node:crypto";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
@@ -645,7 +646,32 @@ export const VERIFICATION_WORKTREE_INSTRUCTION =
   "Leave this checkout's Git-visible state exactly as you found it: the same HEAD and the same uncommitted and untracked paths, with nothing added or removed (ignored build output and caches are fine). Do not edit files, create commits, create worktrees or install dependencies. Before submitting, run `git status --porcelain --untracked-files=all` in this checkout and remove anything you created. The backend compares the worktree before it accepts your verdict and rejects the verdict if anything differs.";
 
 export const VERIFICATION_OUTPUT_CONTRACT =
-  'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}';
+  'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"...","acceptanceCriteria":[{"id":"ac-1","status":"passed","evidence":"..."}]}';
+
+/**
+ * The criteria Verify must judge one by one, with the ids its answer uses.
+ * Each criterion is marked passed only on evidence the verifier established
+ * itself; one it cannot establish here is marked not checked, never passed.
+ */
+export function verificationCriteriaSection(task: TaskSnapshot): string {
+  const criteria = taskSnapshotCriteria(task);
+  if (criteria.length === 0) {
+    return "**Acceptance criteria to check**: the ticket lists none. Return an empty `acceptanceCriteria` array and judge the ticket's intent.";
+  }
+  const previews = criteria.map(({ id, text }) => ({
+    id,
+    text: text.slice(0, TICKET_SECTION_LIMITS.maxCriterionLength),
+  }));
+  return `**Acceptance criteria to check**: return exactly one \`acceptanceCriteria\` entry for each id below, in this order.
+<acceptance-criteria-json>
+${promptCarrierJson(previews)}
+</acceptance-criteria-json>
+Long entries in this list are previews. Judge the full criterion text in the ticket above.
+- \`passed\`: only with evidence you established yourself: the command or test you ran and its result, or the diff lines that do it. Another agent's claim is not evidence.
+- \`failed\`: the committed change does not meet it. Any failed criterion means complete: false.
+- \`not-checked\`: you could not establish it either way here, for example it needs a live provider, another platform, credentials or a person. Say what is missing. Never mark such a criterion passed.
+Keep each \`evidence\` to one or two sentences. Name any not-checked criterion in the rationale.`;
+}
 
 export function verificationPrompt(
   pipeline: BuildPipeline,
@@ -662,6 +688,7 @@ export function verificationPrompt(
     `Compare against origin/${targetBranch}. This is a quick acceptance review of the diff, not another validation pass, and should take minutes. Read the change with git diff origin/${targetBranch}...HEAD, plus the files it touches where you need context, and decide whether it does what the ticket asked: every acceptance criterion and the ticket's intent. Earlier stages already built, tested and reviewed this work. Do not run the test suite, typecheck, lint, build, browser or Electron tests, and do not check out, build or test origin/${targetBranch} or any other baseline. Run a command only when an acceptance criterion cannot be judged by reading the code and the evidence below, and then run the single narrowest check that settles it, such as one test file; that check may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
     recorded || "**Recorded validation**: none is available for this round. Judge from the diff.",
     addressReportSection(addressReport),
+    verificationCriteriaSection(pipeline.taskSnapshot),
     verificationFailureInstruction(targetBranch),
     worktree
       ? worktreeSnapshotSection(worktree, {

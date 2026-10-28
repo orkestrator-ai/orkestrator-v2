@@ -17,6 +17,13 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
+import {
+  DELIVERY_POLICIES,
+  TICKET_KIND_GUIDANCE,
+  TICKET_KINDS,
+  TICKET_SECTION_LIMITS,
+  TICKET_SECTIONS_GUIDANCE,
+} from "./ticket-sections.js";
 import { PUBLIC_ACTION_NAMES, PUBLIC_API_LIMITS, type PublicActionName } from "./public-api.js";
 import {
   PUBLIC_CHANGE_SCOPES,
@@ -218,6 +225,68 @@ const ticketTitle: PublicJsonSchema = {
 function ticketText(description: string): PublicJsonSchema {
   return { type: "string", maxLength: 100_000, description };
 }
+const ticketKind: PublicJsonSchema = {
+  type: "string",
+  enum: TICKET_KINDS,
+  description: TICKET_KIND_GUIDANCE,
+};
+const ticketSections: PublicJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  description: TICKET_SECTIONS_GUIDANCE,
+  properties: {
+    summary: ticketText("What the ticket is about."),
+    problem: ticketText("What is wrong today."),
+    context: ticketText("Background, evidence and where to look."),
+    decisions: ticketText("Choices already made."),
+    constraints: ticketText("Limits on how the work is done."),
+    acceptanceCriteria: {
+      type: "array",
+      maxItems: TICKET_SECTION_LIMITS.maxAcceptanceCriteria,
+      items: { type: "string", minLength: 1, maxLength: TICKET_SECTION_LIMITS.maxCriterionLength },
+      description: "One checkable criterion per entry. An unchanged entry keeps its result.",
+    },
+    checks: {
+      type: "array",
+      maxItems: TICKET_SECTION_LIMITS.maxChecks,
+      items: { type: "string", minLength: 1, maxLength: TICKET_SECTION_LIMITS.maxCheckLength },
+      description: "Standard commands that must pass.",
+    },
+    delivery: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        policy: {
+          type: "string",
+          enum: DELIVERY_POLICIES,
+          description: "How the work is delivered.",
+        },
+        note: ticketText("Anything the policy does not say."),
+      },
+    },
+    reporting: ticketText("Report fields beyond the project's standard report."),
+    outOfScope: ticketText("What the ticket leaves alone."),
+    custom: {
+      type: "array",
+      maxItems: TICKET_SECTION_LIMITS.maxCustomSections,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "body"],
+        properties: {
+          title: {
+            type: "string",
+            minLength: 1,
+            maxLength: TICKET_SECTION_LIMITS.maxCustomTitleLength,
+          },
+          body: ticketText("Section text."),
+        },
+      },
+      description: "Extra titled sections, in order.",
+    },
+    notes: ticketText("Anything else."),
+  },
+};
 
 const agentSelection: Record<string, PublicJsonSchema> = {
   agent: {
@@ -1376,6 +1445,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         {
           projectId,
           title: ticketTitle,
+          kind: ticketKind,
+          sections: ticketSections,
           description: ticketText("Ticket description."),
           acceptanceCriteria: ticketText("Acceptance criteria."),
           status: { ...ticketStatus, description: "Column (default backlog)." },
@@ -1392,6 +1463,11 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           projectId,
           ticketId,
           title: ticketTitle,
+          kind: ticketKind,
+          sections: {
+            ...ticketSections,
+            description: `${TICKET_SECTIONS_GUIDANCE} Sections not named are unchanged.`,
+          },
           description: ticketText("New description."),
           acceptanceCriteria: ticketText("New acceptance criteria."),
           status: { ...ticketStatus, description: "Move the ticket to this column." },

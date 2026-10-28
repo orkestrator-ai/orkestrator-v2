@@ -20,3 +20,15 @@
 The deadline reproduces on `origin/main`, so it predates the keyboard-shortcuts branch, whose main-process input hooks add no quit-time work. The process table at the deadline was not captured, so we don't yet know which descendant outlived the quit. Host load is a possible cause, not a proven one; [0671](0671-design-electron-preview-group-shutdown.md) is the earlier Vite-group shutdown case for the same spec.
 
 **Next step:** capture `ps -axo pid,ppid,stat,command` for the owned tree when `waitForStopped` times out, then rerun the owner on a quiet host.
+
+## Dialog-width review repair recurrence (2026-10-28)
+
+The required exact rerun of
+`mise run test:logged -- --name agent-electron -- mise run test:agent:electron`
+(one worker) repeated `Owned processes did not exit` from the same design
+journey cleanup path after its UI assertions completed. The suite finished with
+33 passed, four failed, one skipped and six not run in 608.9 seconds. The other
+failures concerned service-preview HMR, annotation process shutdown, and a
+workspace-realm screenshot. No new isolated reproduction or root-cause claim
+is made for this recurrence. Compressed evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Fk5GUs/agent-electron.log.gz`.

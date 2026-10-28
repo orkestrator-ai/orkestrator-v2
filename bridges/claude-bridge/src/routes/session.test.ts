@@ -20,6 +20,7 @@ const realClaudeSignInSnapshot = { ...realClaudeSignIn };
 // here so the real catalogue functions serve real rows through the route.
 import { sessions as coreSessions } from "../services/session-manager-core.js";
 import type { SessionState } from "../types/index.js";
+import { PreferenceLockTimeoutError } from "../services/session-preferences.js";
 
 // --- Mock session-manager before importing the route ---
 
@@ -755,6 +756,17 @@ describe("session routes", () => {
 
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "disk full" });
+    });
+
+    test("keeps a non-claim preference lock timeout as 500", async () => {
+      const error = new PreferenceLockTimeoutError();
+      mockSetSessionPreferences.mockRejectedValueOnce(error);
+
+      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: true });
+
+      expect(res.status).toBe(500);
+      expect(await jsonBody(res)).toEqual({ error: error.message });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("maps an unknown session preference update to 404", async () => {

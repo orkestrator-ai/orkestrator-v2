@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -773,6 +773,44 @@ describe("session lifecycle", () => {
     } finally {
       await releaseTemporaryClaudeHome(directory);
     }
+  });
+
+  test("admits a prompt after recovering a leftover preference lock", async () => {
+    await withTemporaryClaudeHome("claude-dispatch-lock-recovery-", async () => {
+      const session = createSession("launch");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+      const requestId = "recovered-lock";
+      const preferencesPath = join(claudeSessionPreferencesDir(), `${sdkSessionId}.json`);
+      await updateSessionPreferences(sdkSessionId, {
+        planMode: true,
+      });
+      await writeFile(
+        `${preferencesPath}.lock`,
+        JSON.stringify({ token: "leftover", pid: process.pid, instance: "dead-predecessor" }),
+      );
+      setPreferenceLockTimeoutForTesting(1_000);
+      const dispatch = mock(() => {
+        // Persistence must finish before the prompt is admitted.
+        const started = readFile(preferencesPath, "utf8").then((raw) => {
+          expect(JSON.parse(raw)).toMatchObject({
+            planMode: true,
+            dispatchedRequestIds: [requestId],
+          });
+        });
+        return { started, completion: Promise.resolve() };
+      });
+      try {
+        expect(await claimPromptDispatch(session.id, requestId, dispatch)).toBe("claimed");
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(session.dispatchedRequestIds?.has(requestId)).toBe(true);
+        expect(await readdir(claudeSessionPreferencesDir())).toEqual([`${sdkSessionId}.json`]);
+        expect(await claimPromptDispatch(session.id, requestId, dispatch)).toBe("duplicate");
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        setPreferenceLockTimeoutForTesting(null);
+      }
+    });
   });
 
   test("refuses definitely when a live owner keeps the preference lock through the claim", async () => {

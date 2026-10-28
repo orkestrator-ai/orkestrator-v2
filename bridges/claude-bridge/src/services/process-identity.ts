@@ -154,14 +154,13 @@ export function parsePsStartTime(text: string): number | undefined {
   );
 }
 
-const psVerdicts = new Map<string, { state: "alive" | "dead" | "unverified"; at: number }>();
+const psVerdicts = new Map<string, { state: "dead" | "unverified"; at: number }>();
 
 /**
  * Compare a live pid's start with the recorded one through `ps`. Spawns at
- * most once per pid and recorded start: a verdict cannot go stale in the
- * unsafe direction, since a pid that stops matching never matches again and
- * one that matched is checked for liveness first. An unanswered `ps` is retried
- * after a minute.
+ * each slow-path check for a matching owner: a live pid can have been reused
+ * since the last check. Only dead verdicts are permanent; an unanswered `ps`
+ * is retried after a minute.
  */
 function psOwnerState(pid: number, processStartedAt: number): "alive" | "dead" | "unverified" {
   const key = `${pid}:${processStartedAt}`;
@@ -188,7 +187,7 @@ function psOwnerState(pid: number, processStartedAt: number): "alive" | "dead" |
     // No `ps`: the owner stays unverified.
   }
   psVerdicts.delete(key);
-  psVerdicts.set(key, { state, at: Date.now() });
+  if (state !== "alive") psVerdicts.set(key, { state, at: Date.now() });
   while (psVerdicts.size > PS_CACHE_LIMIT) {
     const oldest = psVerdicts.keys().next().value;
     if (oldest === undefined) break;
@@ -225,7 +224,8 @@ export function recordedOwnerState(
   return "unverified";
 }
 
-/** Test-only: forget cached `ps` answers. */
+/** Test-only: forget cached identity and `ps` answers. */
 export function resetProcessIdentityCacheForTesting(): void {
   psVerdicts.clear();
+  ownIdentity = undefined;
 }

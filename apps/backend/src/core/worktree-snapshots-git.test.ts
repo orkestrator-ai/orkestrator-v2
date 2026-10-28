@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { promises as fs } from "node:fs";
-import os from "node:os";
+import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import { getLocalGitStatusDetailed } from "./commands-files.js";
@@ -64,7 +63,11 @@ async function readRows(): Promise<ChangeRow[]> {
 }
 
 beforeAll(async () => {
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-snapshots-git-")));
+  // Qualify native notifications on the worktree filesystem. Bun on macOS can
+  // establish a watcher in the system temp directory without delivering edits.
+  const fixtureParent = path.resolve(import.meta.dir, "../../../../output/watch-fixtures");
+  await fs.mkdir(fixtureParent, { recursive: true });
+  root = await fs.realpath(await fs.mkdtemp(path.join(fixtureParent, "ork-snapshots-git-")));
   repo = path.join(root, "repo");
   linked = path.join(root, "linked");
   await fs.mkdir(repo);
@@ -76,6 +79,8 @@ beforeAll(async () => {
 
   metrics = new RecurringWorkMetrics();
   const gitFetches = createGitFetchScheduler();
+  const readinessFile = ".watcher-ready";
+  let readinessHints = 0;
   service = new DiffStatsService({
     metrics,
     pollIntervalMs: 10 * 60_000,
@@ -83,7 +88,18 @@ beforeAll(async () => {
     emit: (event, payload) => {
       if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT) events.push(payload as never);
     },
-    startWatcher: (options) => startWorktreeWatcher({ ...options, settleMs: 50 }),
+    startWatcher: (options) =>
+      startWorktreeWatcher({
+        ...options,
+        settleMs: 50,
+        startWatch: (target, listener, watchOptions) =>
+          watch(target, { ...watchOptions, persistent: false }, (event, filename) => {
+            const name = filename?.toString() ?? null;
+            if (target === linked && name?.split(path.sep).at(-1) === readinessFile)
+              readinessHints++;
+            listener(event, name);
+          }),
+      }),
     scan: async (target) => {
       const detailed = await getLocalGitStatusDetailed(
         target.worktreePath!,
@@ -112,8 +128,28 @@ beforeAll(async () => {
   // Recursive fs.watch is not available on every platform; there the owner
   // documents a polling fallback, which the unit suite covers.
   if (!service.isWatching("env")) watchingSupported = false;
-  else await until(() => events.some((event) => event.watched === true));
-});
+  else {
+    await until(() => events.some((event) => event.watched === true));
+    // Native stream registration can finish after metadata coverage is known.
+    // Prove a real root notification arrived before the tracked-edit test;
+    // periodic scans remain disabled and cannot satisfy this readiness gate.
+    const marker = path.join(linked, readinessFile);
+    const revision = latestRevision();
+    const deadline = Date.now() + 15_000;
+    let attempt = 0;
+    while (readinessHints === 0 && Date.now() < deadline) {
+      await fs.writeFile(marker, String(attempt++));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(readinessHints).toBeGreaterThan(0);
+    await until(() => latestRevision() > revision);
+    const beforeRemoval = latestRevision();
+    const hintsBeforeRemoval = readinessHints;
+    await fs.rm(marker);
+    await until(() => readinessHints > hintsBeforeRemoval && latestRevision() > beforeRemoval);
+    expect(await readRows()).toEqual([]);
+  }
+}, 45_000);
 
 afterAll(async () => {
   service?.shutdown();

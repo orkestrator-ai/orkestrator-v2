@@ -44,12 +44,14 @@ git config; the fallbacks below keep that safe.
 ## Worktrees created by older versions
 
 `removeLegacyWorktreeFsmonitor` runs from `getLocalGitStatusDetailed`, which
-diff stats call for every local environment, once per worktree per backend
-process. It reads only the linked worktree's own `config.worktree`, by explicit
+diff stats call with explicit ownership established from non-project-home local
+environments. Successful migrations are cached per backend process; concurrent
+scans share an attempt and transient Git/config failures are retried next time. It reads only the linked worktree's own `config.worktree`, by explicit
 path (`git config --worktree` falls back to the shared config when
 per-worktree config is off). If that file says `core.fsmonitor=true`, the key is
-unset and the daemon is stopped. A main checkout (a project home) is skipped
-because Orkestrator never wrote its config, and any other value is left alone.
+unset and the daemon is stopped. Project homes, including linked user checkouts,
+and paths without established application ownership are skipped. Main checkouts
+and any other config value are left alone.
 
 ## Stopping daemons
 
@@ -70,7 +72,10 @@ These reads already had timeouts; on a timeout each now retries once with
 - the review package's worktree status (`commands-review.ts`, 30 s);
 - the validation worker's drift check (10 s, `spawnSync` `ETIMEDOUT`);
 - the worktree fingerprint probe's status read (10 s inside the probe; once it
-  has fallen back, the rest of the probe skips the daemon too).
+  has fallen back, the rest of the probe skips the daemon too). The probe owns
+  each Git process group, gives timed-out Git 250 ms to remove its index lock,
+  then kills descendants, closes captured streams and reaps Git before retrying.
+  Windows uses a bounded `taskkill /t /f` helper for descendant cleanup.
 
 Other failures are not retried. Other git calls were left as they are.
 

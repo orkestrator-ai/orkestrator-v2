@@ -47,19 +47,29 @@ const fsmonitorMigrations = new Map<string, Promise<void>>();
 
 /**
  * Removes the `core.fsmonitor=true` that older versions wrote into a linked
- * worktree's own `config.worktree`, and stops the daemon it started. Runs once
- * per worktree per backend process; later calls share the first result.
+ * application-owned worktree's own `config.worktree`, and stops its daemon.
+ * Runs once per worktree per backend process after success; concurrent calls
+ * share the attempt.
  *
  * Only that file is read or written, by explicit path rather than through
  * `git config --worktree`, which falls back to the shared repository config
- * when per-worktree config is off. A main checkout (a project home) is skipped
- * because Orkestrator never wrote its config. Any other value, including the
- * user's own `false`, is left alone.
+ * when per-worktree config is off. Callers must establish application ownership;
+ * project homes (including linked checkouts) must never opt in. Any other value,
+ * including the user's own `false`, is left alone.
  */
-export function removeLegacyWorktreeFsmonitor(worktreePath: string): Promise<void> {
+export function removeLegacyWorktreeFsmonitor(
+  worktreePath: string,
+  applicationOwned = false,
+): Promise<void> {
+  if (!applicationOwned) return Promise.resolve();
   let migration = fsmonitorMigrations.get(worktreePath);
   if (!migration) {
-    migration = migrateWorktreeFsmonitor(worktreePath).catch(() => undefined);
+    migration = migrateWorktreeFsmonitor(worktreePath).catch(() => {
+      // A transient Git/config failure must not disable migration for this process.
+      if (fsmonitorMigrations.get(worktreePath) === migration) {
+        fsmonitorMigrations.delete(worktreePath);
+      }
+    });
     fsmonitorMigrations.set(worktreePath, migration);
   }
   return migration;
@@ -90,7 +100,11 @@ async function migrateWorktreeFsmonitor(worktreePath: string): Promise<void> {
     { timeoutMs: 10_000 },
   ).then(
     (result) => result.stdout.trim(),
-    () => "",
+    (error) => {
+      // Exit 1 means the key/file is absent. Other failures need another attempt.
+      if (error instanceof CommandFailedError && error.exitCode === 1) return "";
+      throw error;
+    },
   );
   if (value !== "true") return;
 

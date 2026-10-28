@@ -962,6 +962,7 @@ export async function getLocalGitStatusDetailed(
   targetBranch: string,
   includeUncommitted: boolean,
   fetches: LocalGitFetches,
+  applicationOwnedWorktree = false,
 ): Promise<{
   changes: GitFileChange[];
   truncated: boolean;
@@ -972,9 +973,9 @@ export async function getLocalGitStatusDetailed(
 }> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
-  // Diff stats read every local environment, so this is where a worktree created
-  // by an older version sheds the fsmonitor setting it was given.
-  await removeLegacyWorktreeFsmonitor(worktreePath);
+  // Diff tracking establishes ownership from environment records before opting
+  // into migration. Unknown paths and project homes keep their own settings.
+  await removeLegacyWorktreeFsmonitor(worktreePath, applicationOwnedWorktree);
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];

@@ -1,20 +1,25 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { enableGitScanCaches } from "./commands-files.js";
+import { enableGitScanCaches, getLocalGitStatusDetailed } from "./commands-files.js";
 import {
   GIT_FSMONITOR_DISABLED_ARGS,
   removeLegacyWorktreeFsmonitor,
   resetLegacyFsmonitorMigrationsForTests,
   retryGitWithoutFsmonitorOnTimeout,
+  runGitWithFsmonitorFallback,
   stopGitFsmonitorDaemon,
 } from "./git-fsmonitor.js";
 import { CommandFailedError, runCommand } from "./shell.js";
+import * as shell from "./shell.js";
+import { StorageService, createProject } from "./storage.js";
+import { ProjectGitService } from "./project-git-service.js";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  mock.restore();
   resetLegacyFsmonitorMigrationsForTests();
   await Promise.all(
     tempDirectories
@@ -77,7 +82,7 @@ describe("git fsmonitor", () => {
     // The user's own shared setting is not ours to change.
     await git(project, ["config", "core.fsmonitor", "true"]);
 
-    await removeLegacyWorktreeFsmonitor(worktree);
+    await removeLegacyWorktreeFsmonitor(worktree, true);
 
     const configFile = path.join(project, ".git", "worktrees", "worktree", "config.worktree");
     await expect(readConfig(configFile, "core.fsmonitor")).resolves.toBe("");
@@ -93,8 +98,8 @@ describe("git fsmonitor", () => {
     await git(project, ["config", "--worktree", "core.fsmonitor", "true"]);
     await git(worktree, ["config", "--worktree", "core.fsmonitor", "false"]);
 
-    await removeLegacyWorktreeFsmonitor(project);
-    await removeLegacyWorktreeFsmonitor(worktree);
+    await removeLegacyWorktreeFsmonitor(project, true);
+    await removeLegacyWorktreeFsmonitor(worktree, true);
 
     await expect(
       readConfig(path.join(project, ".git", "config.worktree"), "core.fsmonitor"),
@@ -111,11 +116,174 @@ describe("git fsmonitor", () => {
     const { project, worktree } = await createRepositoryWithWorktree();
     await git(project, ["config", "core.fsmonitor", "true"]);
 
-    await removeLegacyWorktreeFsmonitor(worktree);
+    await removeLegacyWorktreeFsmonitor(worktree, true);
 
     await expect(readConfig(path.join(project, ".git", "config"), "core.fsmonitor")).resolves.toBe(
       "true",
     );
+  });
+
+  test("a linked project-home scan preserves the user's setting and daemon", async () => {
+    const { project, worktree } = await createRepositoryWithWorktree();
+    await git(worktree, ["config", "extensions.worktreeConfig", "true"]);
+    await git(worktree, ["config", "--worktree", "core.fsmonitor", "true"]);
+    const daemonSupported = process.platform !== "linux";
+    if (daemonSupported) await git(worktree, ["fsmonitor--daemon", "start"]);
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      calls.push(args);
+      return original(command, args, options);
+    });
+    try {
+      await getLocalGitStatusDetailed(worktree, "main", true, {
+        ensureFetched: async () => undefined,
+      });
+      await expect(
+        readConfig(path.join(project, ".git/worktrees/worktree/config.worktree"), "core.fsmonitor"),
+      ).resolves.toBe("true");
+      expect(calls.some((args) => args.includes("stop"))).toBe(false);
+      if (daemonSupported) {
+        await expect(git(worktree, ["fsmonitor--daemon", "status"])).resolves.toContain(
+          "is watching",
+        );
+      }
+    } finally {
+      await stopGitFsmonitorDaemon(worktree);
+    }
+  });
+
+  test("migration stops the daemon and concurrent/later scans migrate only once", async () => {
+    const { worktree } = await createRepositoryWithWorktree();
+    await git(worktree, ["config", "extensions.worktreeConfig", "true"]);
+    await git(worktree, ["config", "--worktree", "core.fsmonitor", "true"]);
+    if (process.platform !== "linux") await git(worktree, ["fsmonitor--daemon", "start"]);
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      calls.push(args);
+      return original(command, args, options);
+    });
+    try {
+      const first = removeLegacyWorktreeFsmonitor(worktree, true);
+      expect(removeLegacyWorktreeFsmonitor(worktree, true)).toBe(first);
+      await first;
+      await removeLegacyWorktreeFsmonitor(worktree, true);
+      expect(calls.filter((args) => args.includes("rev-parse"))).toHaveLength(1);
+      expect(calls.filter((args) => args.includes("stop"))).toHaveLength(1);
+      if (process.platform !== "linux") {
+        await expect(git(worktree, ["fsmonitor--daemon", "status"])).rejects.toThrow();
+      }
+    } finally {
+      await stopGitFsmonitorDaemon(worktree);
+    }
+  });
+
+  for (const failingArgument of ["rev-parse", "--get", "--unset"]) {
+    test(`a scan retries migration after a transient ${failingArgument} failure`, async () => {
+      const { project, worktree } = await createRepositoryWithWorktree();
+      await git(worktree, ["config", "extensions.worktreeConfig", "true"]);
+      await git(worktree, ["config", "--worktree", "core.fsmonitor", "true"]);
+      const original = shell.runCommand;
+      let attempts = 0;
+      spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+        if (
+          args.includes(failingArgument) &&
+          (failingArgument !== "rev-parse" || args.includes("--git-common-dir")) &&
+          attempts++ === 0
+        ) {
+          throw new CommandFailedError("transient config failure", { exitCode: 128 });
+        }
+        return original(command, args, options);
+      });
+      const scan = () =>
+        getLocalGitStatusDetailed(
+          worktree,
+          "main",
+          true,
+          {
+            ensureFetched: async () => undefined,
+          },
+          true,
+        );
+      await scan();
+      const config = path.join(project, ".git/worktrees/worktree/config.worktree");
+      await expect(readConfig(config, "core.fsmonitor")).resolves.toBe("true");
+      await scan();
+      await expect(readConfig(config, "core.fsmonitor")).resolves.toBe("");
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    });
+  }
+
+  test("local status scans retry all timed-out status/diff reads with fsmonitor disabled", async () => {
+    const { worktree } = await createRepositoryWithWorktree();
+    await fs.writeFile(path.join(worktree, "new.txt"), "new\n");
+    const original = shell.runCommand;
+    const reads: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      if (args.includes("diff") || args.includes("status")) {
+        reads.push(args);
+        if (!args.includes("core.fsmonitor=false")) {
+          throw new CommandFailedError("hung fsmonitor", { timedOut: true });
+        }
+      }
+      return original(command, args, options);
+    });
+    const status = await getLocalGitStatusDetailed(worktree, "main", true, {
+      ensureFetched: async () => undefined,
+    });
+    expect(status.changes).toMatchObject([{ path: "new.txt", status: "?" }]);
+    expect(reads).toHaveLength(6);
+    for (const args of reads.slice(0, 3)) {
+      expect(reads).toContainEqual([...GIT_FSMONITOR_DISABLED_ARGS, ...args]);
+    }
+  });
+
+  test("project-home toolbar status retries a timeout with fsmonitor disabled", async () => {
+    const { project } = await createRepositoryWithWorktree();
+    const data = await fs.mkdtemp(path.join(os.tmpdir(), "ork-fsmonitor-data-"));
+    tempDirectories.push(data);
+    const storage = new StorageService(data);
+    await storage.init();
+    const record = await storage.addProject(createProject("remote", project));
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      if (args.includes("status")) {
+        calls.push(args);
+        if (calls.length === 1) throw new CommandFailedError("timeout", { timedOut: true });
+      }
+      return original(command, args, options);
+    });
+    const status = await new ProjectGitService(storage).status(record.id);
+    expect(status.branch).toBe("main");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual([...GIT_FSMONITOR_DISABLED_ARGS, ...calls[0]!]);
+  });
+
+  test("a failed second read is returned without another retry", async () => {
+    const failure = new CommandFailedError("second timeout", { timedOut: true });
+    let calls = 0;
+    await expect(
+      retryGitWithoutFsmonitorOnTimeout(["status"], async () => {
+        calls++;
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(calls).toBe(2);
+  });
+
+  test("cancellation does not start a fallback read", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const run = spyOn(shell, "runCommand").mockImplementation(async () => {
+      controller.abort(reason);
+      throw new CommandFailedError("cancelled", { timedOut: true });
+    });
+    await expect(
+      runGitWithFsmonitorFallback(["status"], { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   test("stopping a daemon that is not running is a quiet no-op", async () => {

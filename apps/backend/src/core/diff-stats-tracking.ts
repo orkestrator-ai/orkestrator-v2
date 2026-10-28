@@ -123,6 +123,7 @@ export class DiffStatsTracking {
   readonly service: DiffStatsService;
   readonly sharedWatchers: SharedWatcherRegistry;
   readonly sharedScans: SharedScanQueue<DiffScanResult>;
+  private readonly ownedWorktreePaths = new Set<string>();
   private syncGeneration = 0;
   private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
@@ -208,6 +209,7 @@ export class DiffStatsTracking {
               request.comparisonRef,
               request.includeUncommitted,
               this.gitFetchScheduler,
+              this.ownedWorktreePaths.has(request.worktreePath!),
             )
           : getContainerGitStatusDetailed(
               request.containerId!,
@@ -242,6 +244,7 @@ export class DiffStatsTracking {
             target.comparisonRef,
             true,
             this.gitFetchScheduler,
+            this.ownedWorktreePaths.has(target.worktreePath!),
           )
         : await getContainerGitStatusDetailed(
             target.containerId!,
@@ -314,6 +317,23 @@ export class DiffStatsTracking {
 
         this.baselineStorage = context;
         this.baselineCandidates.clear();
+        this.ownedWorktreePaths.clear();
+        // A project home may itself be a linked checkout owned by the user.
+        const homePaths = new Set(
+          environments
+            .filter(isProjectHomeEnvironment)
+            .map((environment) => environment.worktreePath),
+        );
+        for (const environment of environments) {
+          if (
+            environment.environmentType === "local" &&
+            environment.worktreePath &&
+            !isProjectHomeEnvironment(environment) &&
+            !homePaths.has(environment.worktreePath)
+          ) {
+            this.ownedWorktreePaths.add(environment.worktreePath);
+          }
+        }
         const live = new Set<string>();
         for (const environment of environments) {
           live.add(environment.id);

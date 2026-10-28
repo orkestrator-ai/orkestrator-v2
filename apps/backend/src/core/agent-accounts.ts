@@ -384,6 +384,24 @@ async function discardNewAccount(context: CommandContext, entry: ActiveLogin): P
   await deleteAccountDirectory(context, entry.platform, entry.accountId);
 }
 
+/** Publish a rejected sign-in only after cleanup and its final error have settled. */
+async function failLogin(
+  context: CommandContext,
+  entry: ActiveLogin,
+  error: unknown,
+): Promise<string> {
+  let message = errorMessage(error);
+  try {
+    await discardNewAccount(context, entry);
+  } catch {
+    message = `${message} Account cleanup failed; retry removing the account directory.`;
+  }
+  entry.error = message;
+  entry.state = "failed";
+  entry.completedAt = new Date().toISOString();
+  return message;
+}
+
 /** Private directory the CLI writes into, including a temporary home for renewals. */
 function loginHome(context: CommandContext, entry: ActiveLogin): string | undefined {
   if (entry.temporaryHome) return entry.temporaryHome;
@@ -532,14 +550,7 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     entry.completedAt = new Date().toISOString();
     announceAccountsChanged(context, platform);
   } catch (error) {
-    entry.state = "failed";
-    entry.completedAt = new Date().toISOString();
-    entry.error = errorMessage(error);
-    try {
-      await discardNewAccount(context, entry);
-    } catch {
-      entry.error = `${entry.error} Account cleanup failed; retry removing the account directory.`;
-    }
+    await failLogin(context, entry, error);
   }
 }
 
@@ -611,15 +622,12 @@ export async function startAgentAccountLogin(
     });
     handle = await beginAgentAccountLogin(platform, command, { spawnImpl: options.spawnImpl });
   } catch (error) {
-    entry.state = "failed";
-    entry.completedAt = new Date().toISOString();
-    entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
-    try {
-      await discardNewAccount(context, entry);
-    } catch {
-      entry.error = `${entry.error} Account cleanup failed.`;
-    }
-    throw new Error(entry.error);
+    const message = await failLogin(
+      context,
+      entry,
+      entry.cancelled ? "The sign-in was cancelled" : error,
+    );
+    throw new Error(message);
   }
   if (entry.cancelled) {
     handle.cancel();
@@ -637,14 +645,7 @@ export async function startAgentAccountLogin(
     .then(
       () => finishLogin(context, entry),
       async (error: unknown) => {
-        entry.state = "failed";
-        entry.completedAt = new Date().toISOString();
-        entry.error = entry.cancelled ? "The sign-in was cancelled" : errorMessage(error);
-        try {
-          await discardNewAccount(context, entry);
-        } catch {
-          entry.error = `${entry.error} Account cleanup failed.`;
-        }
+        await failLogin(context, entry, entry.cancelled ? "The sign-in was cancelled" : error);
       },
     )
     .catch((error: unknown) => {

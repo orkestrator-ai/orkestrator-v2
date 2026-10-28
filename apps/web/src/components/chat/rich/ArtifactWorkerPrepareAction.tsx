@@ -16,8 +16,9 @@ type PrepareState =
 /**
  * "Prepare isolated preview worker": shown when the backend reports that
  * interactive previews have no isolation boundary on this host but it can
- * build (or pull) the container worker. The backend runs Docker with fixed
- * arguments; this only asks it to and reports progress and the outcome.
+ * build (or pull) the container worker, including when a worker prepared
+ * before an upgrade is present but out of date. The backend runs Docker with
+ * fixed arguments; this only asks it to and reports progress and the outcome.
  */
 export function ArtifactWorkerPrepareAction() {
   const capabilities = useTranscriptArtifactCapabilities();
@@ -49,8 +50,9 @@ export function ArtifactWorkerPrepareAction() {
       data-artifact-worker-prepare={state.status === "done" ? state.result.state : state.status}
     >
       <p className="text-muted-foreground">
-        Interactive previews need the isolated container worker, which is not installed on this
-        host.
+        {preparation?.outdated
+          ? "Interactive previews need the isolated container worker. The one on this host was prepared by an earlier version of Orkestrator and is out of date; prepare it again."
+          : "Interactive previews need the isolated container worker, which is not installed on this host."}
         {capabilities?.previewRenderer.interactiveReason
           ? ` ${capabilities.previewRenderer.interactiveReason}.`
           : ""}

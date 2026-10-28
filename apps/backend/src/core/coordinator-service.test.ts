@@ -6,6 +6,7 @@ import {
   describe,
   expect,
   mock,
+  setDefaultTimeout,
   spyOn,
   test as bunTest,
 } from "bun:test";
@@ -29,6 +30,12 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+
+// This slow-tier file drives real repositories, submodules and remotes. Its
+// Git-heavy cases take about 2 s on an idle host and crossed Bun's 5 s default
+// under a busy slow-tier run. Set before any hook registers: Bun captures a
+// hook's budget at registration.
+setDefaultTimeout(30_000);
 
 // Bun abandons a timed-out test body but keeps running it, and kills its child
 // processes. Every test here records its body so cleanup waits for that late

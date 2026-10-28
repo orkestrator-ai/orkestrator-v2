@@ -532,14 +532,17 @@ async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise
     entry.completedAt = new Date().toISOString();
     announceAccountsChanged(context, platform);
   } catch (error) {
-    entry.state = "failed";
-    entry.completedAt = new Date().toISOString();
-    entry.error = errorMessage(error);
+    // Publish the terminal state only once the rejected account's directory is
+    // gone, so a client that sees "failed" never observes it half cleaned up.
+    let message = errorMessage(error);
     try {
       await discardNewAccount(context, entry);
     } catch {
-      entry.error = `${entry.error} Account cleanup failed; retry removing the account directory.`;
+      message = `${message} Account cleanup failed; retry removing the account directory.`;
     }
+    entry.error = message;
+    entry.state = "failed";
+    entry.completedAt = new Date().toISOString();
   }
 }
 

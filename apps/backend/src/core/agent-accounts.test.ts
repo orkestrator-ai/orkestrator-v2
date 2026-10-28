@@ -842,6 +842,25 @@ describe("agent accounts", () => {
     expect(codexAccounts).toEqual([first.accountId!]);
   });
 
+  test("a rejected login reports failure only after its directory is removed", async () => {
+    const first = await addCodexAccount("slow-cleanup@example.com", "slow-cleanup");
+    const codexRoot = path.join(root, "data", "agent-accounts", "codex");
+    const original = fs.rm.bind(fs);
+    // A busy host once removed the rejected directory after the progress poll
+    // had already seen "failed".
+    const spy = spyOn(fs, "rm").mockImplementation(async (file, options) => {
+      if (path.dirname(String(file)) === codexRoot) await Bun.sleep(100);
+      return original(file, options);
+    });
+    try {
+      const second = await addCodexAccount("slow-cleanup@example.com", "slow-cleanup");
+      expect(second.state).toBe("failed");
+      expect(await fs.readdir(codexRoot)).toEqual([first.accountId!]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test("switching changes the launch environment and removal requires switching away", async () => {
     const { accountId } = await addCodexAccount("second@example.com", "acct-2");
     const env: NodeJS.ProcessEnv = {};

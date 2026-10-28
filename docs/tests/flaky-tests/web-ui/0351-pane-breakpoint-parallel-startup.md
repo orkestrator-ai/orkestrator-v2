@@ -70,3 +70,43 @@ The nine-worker `ORKESTRATOR_E2E_PORT=1447 mise run test:logged -- --name browse
 ## Hidden-resume review recurrence — 2026-10-26
 
 The nine-worker component suite repeated the mobile pane-tree `moveBefore` and `appendChild fallback` missing-terminal assertions and the mobile app-shell `moveBefore` missing-projects-drawer assertion, all at five seconds. The complete unchanged file passed with one worker and its own fixture server: `mise run test:logged -- --name pane-owner-final -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --workers=1 --output output/playwright/resume-pane-owner-final` (22.5 s). An earlier owner attempt reused the full suite's server and lost it when that suite ended; its desktop connection refusals are a harness interruption. Exact aggregate counts, commands and evidence are in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). No owning source, assertion, timeout or skip changed; cause remains unconfirmed.
+
+
+## Queued-prompt keyboard review recurrence — 2026-10-28
+
+The same unchanged owner had a different symptom in this preparation:
+mobile `pane tree, appendChild fallback` reached the transcript assertion at
+line 140 but showed `Transcript message 48.` instead of saved
+`Transcript message 49.`. This is an anchor mismatch, not the previously
+recorded missing-terminal symptom; its root cause is not established.
+
+Preparation's `mise run test:browser` ran 1,006 cases using nine workers,
+alongside `mise run test`: 897 passed, 105 skipped and four failed (478.7 s).
+Evidence: `.orkestrator/review-artifacts/review-validation-23a7a6f9-6912-45a3-b66d-327817cf8f1d/validation-05.stdout.txt`.
+
+The complete unchanged pane, tool-group and native branch owners ran
+sequentially with one worker (133.8 s):
+
+```sh
+mise run test:logged -- --name recorded-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts PaneBreakpoint.spec.ts ToolGroupFold.spec.ts --workers=1
+```
+
+All pane and tool-group cases passed. The run reported 49 passed, one skipped
+and the two established native branch failures (`rel` instead of
+`release/2.0`). Compressed evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.t9A9Lw/recorded-browser-owners.log.gz`.
+No pane code, assertion, deadline or skip changed.
+
+
+The exact original browser command was rerun after the queue fixes:
+
+```sh
+mise run test:logged -- --name review-repair-browser -- mise run test:browser
+```
+
+It reported 904 passed, 105 skipped and three failed in 490.7 s with nine
+workers: both known native branch-suggestion cases and the desktop waiting
+tool-group overflow case (704 instead of zero). All new queue regressions
+passed in both viewports; the pane owner passed. The public-site stage was
+not reached because the component suite failed. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.my4kyi/review-repair-browser.log.gz`.

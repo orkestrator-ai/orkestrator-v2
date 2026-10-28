@@ -12343,7 +12343,7 @@ describe("AgentNativeTab", () => {
       },
     );
 
-    test("ArrowUp from the composer reaches every steerable queued prompt", async () => {
+    test("ArrowUp from the composer reaches every actionable queued prompt", async () => {
       seedProjection({
         phase: "running",
         actions: { steer: true },
@@ -12363,6 +12363,9 @@ describe("AgentNativeTab", () => {
       fireEvent.keyDown(input, { key: "ArrowUp" });
       expect(document.activeElement).toBe(head);
       fireEvent.keyDown(head, { key: "ArrowUp" });
+      const edit = screen.getByRole("button", { name: "Edit queued prompt 2 of 3" });
+      expect(document.activeElement).toBe(edit);
+      fireEvent.keyDown(edit, { key: "ArrowUp" });
       const tail = screen.getByRole("button", { name: "Steer queued prompt 3 of 3: Third" });
       expect(document.activeElement).toBe(tail);
       fireEvent.click(tail);
@@ -12371,6 +12374,35 @@ describe("AgentNativeTab", () => {
           expect.objectContaining({ messageId: "tail" }),
         ),
       );
+    });
+
+    test("keyboard Edit loads a queued prompt with the caret at its end", async () => {
+      const text = "Queued task to revise";
+      seedProjection({ queue: { items: [{ id: "queued-1", text }] } });
+      render(<AgentNativeTab tabId="tab-keyboard-edit-caret" data={identity("codex")} isActive />);
+      const input = await screen.findByRole("textbox");
+      const edit = await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" });
+      act(() => {
+        input.focus();
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        range.collapse(true);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+      });
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(edit);
+      fireEvent.keyDown(edit, { key: "Enter" });
+      fireEvent.click(edit);
+      await waitFor(() => expect(input.textContent).toBe(text));
+      await waitFor(() => {
+        expect(document.activeElement).toBe(input);
+        const caret = window.getSelection()!.getRangeAt(0);
+        const before = document.createRange();
+        before.selectNodeContents(input);
+        before.setEnd(caret.startContainer, caret.startOffset);
+        expect(before.toString().length).toBe(text.length);
+      });
     });
 
     test.each([

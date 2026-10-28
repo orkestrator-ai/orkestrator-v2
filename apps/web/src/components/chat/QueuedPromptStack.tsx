@@ -36,7 +36,7 @@ export interface NativeComposeQueueState {
 }
 
 export interface QueuedPromptStackHandle {
-  /** Focus the Steer button nearest the input. False when nothing can be steered. */
+  /** Focus the first action nearest the input. False when no row has actions. */
   enter: () => boolean;
 }
 
@@ -55,6 +55,12 @@ interface PendingFocus {
   /** Prompt ids in run order when the action started. */
   order: string[];
   settled: boolean;
+}
+
+interface OwnedFocus {
+  id: string;
+  element: HTMLElement;
+  order: string[];
 }
 
 const LABEL_PREVIEW_CHARS = 80;
@@ -80,7 +86,7 @@ interface QueuedPromptStackProps {
  * nearest the input. Each strip can steer its own prompt into the running
  * turn, load it back into the composer, or drop it.
  *
- * Steer buttons form one roving tab stop. The composer hands focus in with
+ * Actionable rows form a roving tab stop. The composer hands focus in with
  * ArrowUp from its first line; ArrowUp and ArrowDown move between strips,
  * ArrowDown from the lowest strip or Escape goes back to the input.
  */
@@ -89,21 +95,22 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     const [pending, setPending] = useState(false);
     const [activeId, setActiveId] = useState<string | null>(null);
     const listRef = useRef<HTMLUListElement>(null);
-    const steerButtons = useRef(new Map<string, HTMLButtonElement>());
+    const rows = useRef(new Map<string, HTMLLIElement>());
+    const ownedFocusRef = useRef<OwnedFocus | null>(null);
     const pendingFocusRef = useRef<PendingFocus | null>(null);
     const itemsRef = useRef(queue.items);
     const onExitRef = useRef(onExit);
     const hintId = useId();
     const { items, length } = queue;
     // Run order; index 0 sits nearest the input.
-    const steerable = items.filter((item) => item.onSteer).map((item) => item.id);
+    const actionable = items
+      .filter((item) => item.onSteer || item.onEdit || item.onRemove)
+      .map((item) => item.id);
     const tabStopId =
-      activeId !== null && steerable.includes(activeId)
-        ? activeId
-        : (steerable[0] ?? items[0]?.id ?? null);
+      activeId !== null && actionable.includes(activeId) ? activeId : (actionable[0] ?? null);
 
-    const focusSteer = (id: string | undefined): boolean => {
-      const button = id === undefined ? undefined : steerButtons.current.get(id);
+    const focusRow = (id: string | undefined): boolean => {
+      const button = id === undefined ? undefined : rows.current.get(id)?.querySelector("button");
       if (!button) return false;
       button.focus({ preventScroll: true });
       button.scrollIntoView?.({ block: "nearest" });
@@ -113,7 +120,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     useImperativeHandle(ref, () => ({
       enter: () => {
         pendingFocusRef.current = null;
-        return focusSteer(steerable[0]);
+        return focusRow(actionable[0]);
       },
     }));
 
@@ -126,23 +133,38 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
       const current = itemsRef.current;
       if (current.some((item) => item.id === after.id)) {
         // Still queued once settled: the action failed or the item came back.
-        if (after.settled && focusIsLost()) focusSteer(after.id);
+        if (after.settled && focusIsLost()) focusRow(after.id);
         return;
       }
+      // Edit loads the replacement draft after removing the queue item.
+      if (after.action === "edit" && !after.settled) return;
       pendingFocusRef.current = null;
       if (!focusIsLost()) return;
       if (after.action === "edit") {
         onExitRef.current("end");
         return;
       }
-      const live = new Set(current.filter((item) => item.onSteer).map((item) => item.id));
+      focusSurvivor(after, current);
+    };
+
+    const focusSurvivor = (
+      after: { id: string; order: string[] },
+      current: readonly NativeComposeQueuedPrompt[],
+    ) => {
+      // If only the focused action disappeared, prefer another action on its row.
+      if (focusRow(after.id)) return;
+      const live = new Set(
+        current
+          .filter((item) => item.onSteer || item.onEdit || item.onRemove)
+          .map((item) => item.id),
+      );
       const index = after.order.indexOf(after.id);
       const later = after.order.slice(index + 1).find((id) => live.has(id));
       const earlier = after.order
         .slice(0, index)
         .reverse()
         .find((id) => live.has(id));
-      if (!focusSteer(later ?? earlier)) onExitRef.current("restore");
+      if (!focusRow(later ?? earlier ?? live.values().next().value)) onExitRef.current("restore");
     };
 
     useLayoutEffect(() => {
@@ -152,16 +174,34 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
     const onQueueChange = useEffectEvent(() => {
       const after = pendingFocusRef.current;
       settleFocus();
+      const owned = ownedFocusRef.current;
+      if (!pendingFocusRef.current && owned && !owned.element.isConnected) {
+        ownedFocusRef.current = null;
+        if (focusIsLost()) focusSurvivor(owned, itemsRef.current);
+      }
       // A settled action whose prompt is still here after the queue changed
       // did not take it away; stop tracking it.
       if (after?.settled && pendingFocusRef.current === after) pendingFocusRef.current = null;
     });
-    // Which prompts are queued and steerable, not the array identity, which a
+    // Which prompts and actions are available, not the array identity, which a
     // provider tab rebuilds on every render.
-    const queueSignature = JSON.stringify(items.map((item) => [item.id, Boolean(item.onSteer)]));
+    const queueSignature = JSON.stringify(
+      items.map((item) => [item.id, !!item.onSteer, !!item.onEdit, !!item.onRemove]),
+    );
     useEffect(() => {
       onQueueChange();
     }, [queueSignature]);
+
+    useEffect(() => {
+      const releaseFocus = (event: FocusEvent) => {
+        if (event.target instanceof Node && !listRef.current?.contains(event.target)) {
+          ownedFocusRef.current = null;
+          pendingFocusRef.current = null;
+        }
+      };
+      document.addEventListener("focusin", releaseFocus);
+      return () => document.removeEventListener("focusin", releaseFocus);
+    }, []);
 
     const run = async (item: NativeComposeQueuedPrompt, action: QueuedPromptAction) => {
       const callback = item[ACTION_KEYS[action]];
@@ -195,13 +235,13 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
       }
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
       const row = (event.target as HTMLElement).closest<HTMLElement>("[data-queued-prompt-id]");
-      const index = steerable.indexOf(row?.dataset.queuedPromptId ?? "");
+      const index = actionable.indexOf(row?.dataset.queuedPromptId ?? "");
       if (index === -1) return;
       event.preventDefault();
       pendingFocusRef.current = null;
       if (event.key === "ArrowUp") {
-        focusSteer(steerable[index + 1]);
-      } else if (!focusSteer(steerable[index - 1])) {
+        focusRow(actionable[index + 1]);
+      } else if (!focusRow(actionable[index - 1])) {
         onExit("restore");
       }
     };
@@ -248,6 +288,14 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
           ref={listRef}
           aria-label="Queued prompts"
           onKeyDown={handleKeyDown}
+          onFocusCapture={(event) => {
+            const element = event.target as HTMLElement;
+            const id =
+              element.closest<HTMLElement>("[data-queued-prompt-id]")?.dataset.queuedPromptId;
+            if (!id) return;
+            setActiveId(id);
+            ownedFocusRef.current = { id, element, order: items.map((item) => item.id) };
+          }}
           className="flex max-h-28 flex-col-reverse overflow-y-auto pb-0.5"
         >
           {items.map((item, index) => {
@@ -256,6 +304,10 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
             return (
               <li
                 key={item.id}
+                ref={(row) => {
+                  if (row) rows.current.set(item.id, row);
+                  else rows.current.delete(item.id);
+                }}
                 data-testid="compose-queue-item"
                 data-queued-prompt-id={item.id}
                 className="flex min-w-0 items-center gap-3 px-3 py-1 focus-within:bg-muted/40"
@@ -265,15 +317,10 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                 </span>
                 {item.onSteer ? (
                   <button
-                    ref={(button) => {
-                      if (button) steerButtons.current.set(item.id, button);
-                      else steerButtons.current.delete(item.id);
-                    }}
                     type="button"
                     tabIndex={tabIndex}
                     // A mouse steer keeps focus in the prompt input, as the send button does.
                     onMouseDown={(event) => event.preventDefault()}
-                    onFocus={() => setActiveId(item.id)}
                     onClick={() => void run(item, "steer")}
                     // Not `disabled`: that would drop keyboard focus mid-steer.
                     aria-disabled={pending || undefined}

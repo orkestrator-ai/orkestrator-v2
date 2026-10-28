@@ -12,3 +12,31 @@
 - **Hypothesis:** the fixed delay does not establish lock acquisition under load. The early failure also bypasses `release()` and `await held`, so its still-running holder may cross test cleanup into the next case. The cascade is plausible but has not been reproduced under controlled scheduling. No MCP implementation, assertion, timeout or skip changed; aggregate failures remain reported.
 
 - **Suite result:** the outer 30-minute watchdog stopped the aggregate after a 876.2 s workspace capacity wait. Backend had three failed cases and no final test counts; the aggregate is incomplete, with its observed assertion failures preserved.
+
+
+## Queued-prompt keyboard review recurrence — 2026-10-28
+
+Preparation at `91513d96d` ran `mise run test` alongside the nine-worker
+component browser suite. The workspace reserved six slots (backend four Bun
+workers); root, bridges and protocol reserved one, two and one. Both known
+source-store cases failed: the missing `lockFile` at 22.57 ms and the next
+case's `ENOENT` at 263.87 ms. Backend reported 10,153 passed, 87 skipped and
+six failed; the aggregate failed after 332.2 s. Evidence: `.orkestrator/review-artifacts/review-validation-23a7a6f9-6912-45a3-b66d-327817cf8f1d/validation-04.stdout.txt`.
+
+The complete unchanged source-store and fsmonitor owners passed sequentially
+with one Bun worker (exit 0, 9.8 s):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+The passing logged runner discarded detailed output. No source-store code,
+assertion, timeout or skip changed; the setup-delay hypothesis remains unproven.
+
+The exact original aggregate command then passed (exit 0, 274.7 s):
+
+```sh
+mise run test:logged -- --name review-repair-tests -- mise run test
+```
+
+The successful rerun does not establish a flake fix; this case remains open.

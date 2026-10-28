@@ -123,15 +123,20 @@ function isCaretOnFirstLine(element: HTMLElement): boolean {
   if (!element.contains(range.startContainer)) return false;
   if (extractText(element).slice(0, getCursorOffset(element)).includes("\n")) return false;
   // A long first paragraph soft-wraps; compare against where the text starts.
-  // Without layout (or for an empty line) a collapsed range has no box, and
-  // the paragraph check above is the answer.
+  // An element-boundary range has no text box even in a layout-capable
+  // browser. Measure the first rendered character instead.
   const caret = range.cloneRange();
   caret.collapse(true);
   const start = document.createRange();
-  start.selectNodeContents(element);
-  start.collapse(true);
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let firstText = walker.nextNode();
+  while (firstText && !firstText.textContent?.length) firstText = walker.nextNode();
+  if (!firstText) return true;
+  start.setStart(firstText, 0);
+  start.setEnd(firstText, 1);
   const caretY = caretTop(caret);
   const startY = caretTop(start);
+  // Empty inputs and DOM-only test environments may have no layout.
   if (caretY === null || startY === null) return true;
   const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight) || 16;
   return caretY < startY + lineHeight / 2;

@@ -447,6 +447,8 @@ function NativeComposeFixture() {
   const [queued, setQueued] = useState(queuedComposePrompts);
   const [steered, setSteered] = useState<string[]>([]);
   const [text, setText] = useState("");
+  const [steeringAvailable, setSteeringAvailable] = useState(true);
+  const nonSteerableHead = new URLSearchParams(window.location.search).has("non-steerable-head");
   const dropQueued = (id: string) =>
     setQueued((current) => current.filter((prompt) => prompt.id !== id));
   const inputRef = useRef<MentionableInputRef | null>(null);
@@ -484,13 +486,17 @@ function NativeComposeFixture() {
             onOpen: () => setQueueOpen(true),
             items: queued.map((prompt) => ({
               ...prompt,
-              onSteer: () => {
-                setSteered((current) => [...current, prompt.id]);
-                dropQueued(prompt.id);
-              },
+              onSteer:
+                steeringAvailable && !(nonSteerableHead && prompt.id === "queued-1")
+                  ? () => {
+                      setSteered((current) => [...current, prompt.id]);
+                      dropQueued(prompt.id);
+                    }
+                  : undefined,
               onEdit: () => {
                 setText(prompt.text);
                 dropQueued(prompt.id);
+                inputRef.current?.focusAtEnd(prompt.text);
               },
               onRemove: () => dropQueued(prompt.id),
             })),
@@ -528,6 +534,9 @@ function NativeComposeFixture() {
         />
         <output data-testid="native-send-count">{sentCount}</output>
         <output data-testid="native-steered">{steered.join(",")}</output>
+        <button onClick={() => setSteeringAvailable(false)}>Finish turn</button>
+        <button onClick={() => setQueued([])}>Drain queue</button>
+        <button onClick={() => dropQueued("queued-1")}>Externally remove head</button>
       </section>
       <QueuedPromptsDialog
         open={queueOpen}

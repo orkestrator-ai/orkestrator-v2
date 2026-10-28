@@ -1,4 +1,4 @@
-import { createRef, useState } from "react";
+import { createRef, useLayoutEffect, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NativeComposeBar } from "./NativeComposeBar";
@@ -7,7 +7,7 @@ import type { NativeComposeQueuedPrompt } from "./QueuedPromptStack";
 
 interface HarnessOptions {
   text?: string;
-  prompts?: string[];
+  prompts?: readonly string[];
   steerable?: (id: string) => boolean;
   keyboardMenuOpen?: boolean;
   comboboxExpanded?: boolean;
@@ -27,21 +27,35 @@ function renderHarness({
   const steered: string[] = [];
   const onKeyDown = mock(() => {});
   const onTextAndMentionsChange = mock(() => {});
+  let replaceQueue!: (items: { id: string; text: string }[]) => void;
+  let withdrawSteering!: () => void;
 
   function Harness() {
+    const [draft, setDraft] = useState(text);
+    const [canSteer, setCanSteer] = useState(true);
     const [queued, setQueued] = useState(() =>
       prompts.map((prompt, index) => ({ id: `q${index + 1}`, text: prompt })),
     );
+    useLayoutEffect(() => {
+      replaceQueue = setQueued;
+      withdrawSteering = () => setCanSteer(false);
+    }, []);
     const items: NativeComposeQueuedPrompt[] = queued.map((item) => ({
       ...item,
-      onSteer: steerable(item.id)
-        ? async () => {
-            steered.push(item.id);
-            await Promise.resolve();
-            if (!refuseSteer) setQueued((current) => current.filter((q) => q.id !== item.id));
-          }
-        : undefined,
+      onSteer:
+        canSteer && steerable(item.id)
+          ? async () => {
+              steered.push(item.id);
+              await Promise.resolve();
+              if (!refuseSteer) setQueued((current) => current.filter((q) => q.id !== item.id));
+            }
+          : undefined,
       onRemove: () => setQueued((current) => current.filter((q) => q.id !== item.id)),
+      onEdit: async () => {
+        await Promise.resolve();
+        setDraft(item.text);
+        setQueued((current) => current.filter((q) => q.id !== item.id));
+      },
     }));
     return (
       <NativeComposeBar
@@ -49,7 +63,7 @@ function renderHarness({
         onRemoveAttachment={() => {}}
         inputRef={inputRef}
         inputContainerRef={createRef<HTMLDivElement>()}
-        text={text}
+        text={draft}
         mentions={[]}
         onTextAndMentionsChange={onTextAndMentionsChange}
         onCursorPositionChange={() => {}}
@@ -83,6 +97,8 @@ function renderHarness({
     steerButton,
     placeCaret,
     press,
+    replaceQueue: (items: { id: string; text: string }[]) => act(() => replaceQueue(items)),
+    withdrawSteering: () => act(() => withdrawSteering()),
   };
 }
 
@@ -140,7 +156,7 @@ describe("queued prompt stack", () => {
   test.each([
     ["a menu owns the keyboard", { keyboardMenuOpen: true }],
     ["the completion popup is open", { comboboxExpanded: true }],
-    ["no queued prompt can be steered", { steerable: () => false }],
+    ["no queued prompt has actions", { prompts: [] }],
   ] as const)("ArrowUp stays in the input when %s", (_, options) => {
     const { input, placeCaret, press, onKeyDown } = renderHarness(options);
     placeCaret(0);
@@ -179,16 +195,105 @@ describe("queued prompt stack", () => {
     expect(onTextAndMentionsChange).not.toHaveBeenCalled();
   });
 
-  test("navigation skips prompts that cannot be steered", () => {
+  test("navigation reaches Edit and Remove on non-steerable rows", async () => {
     const { input, steerButton, placeCaret, press } = renderHarness({
       steerable: (id) => id !== "q2",
     });
     placeCaret(0);
     press("ArrowUp", input);
     press("ArrowUp");
+    const remove = screen.getByRole("button", { name: "Remove queued prompt 2 of 3" });
+    const edit = screen.getByRole("button", { name: "Edit queued prompt 2 of 3" });
+    expect(document.activeElement).toBe(edit);
+    expect(remove.tabIndex).toBe(0);
+    press("ArrowUp");
     expect(document.activeElement).toBe(steerButton(3, 3));
     expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+    press("ArrowDown");
+    expect(document.activeElement).toBe(edit);
+    act(() => remove.focus()); // Tab's native focus movement is covered in the browser.
+    expect(press("Enter")).toBe(true);
+    await act(async () => fireEvent.click(remove));
+    expect(document.activeElement).toBe(steerButton(2, 2));
   });
+
+  test("a non-steerable head is reachable before a steerable later row", () => {
+    const { input, steerButton, placeCaret, press } = renderHarness({
+      steerable: (id) => id !== "q1",
+    });
+    placeCaret(4);
+    press("ArrowUp", input);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Edit queued prompt 1 of 3" }),
+    );
+    press("ArrowUp");
+    expect(document.activeElement).toBe(steerButton(2, 3));
+  });
+
+  test("keyboard Edit on a non-steerable head returns to the loaded draft's end", async () => {
+    const { input, inputRef, placeCaret, press } = renderHarness({
+      text: "",
+      steerable: (id) => id !== "q1",
+    });
+    placeCaret(0);
+    press("ArrowUp", input);
+    const edit = screen.getByRole("button", { name: "Edit queued prompt 1 of 3" });
+    expect(document.activeElement).toBe(edit);
+    expect(press("Enter")).toBe(true);
+    await act(async () => fireEvent.click(edit));
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(input.textContent).toBe("First queued");
+    expect(inputRef.current!.getCursorPosition()).toBe("First queued".length);
+  });
+
+  test("external removal of the focused row focuses the next row", () => {
+    const { input, steerButton, placeCaret, press, replaceQueue } = renderHarness();
+    placeCaret(4);
+    press("ArrowUp", input);
+    replaceQueue([{ id: "q2", text: "Second queued" }]);
+    expect(document.activeElement).toBe(steerButton(1, 1));
+  });
+
+  test("withdrawing steering focuses a surviving action on the same row", () => {
+    const { input, placeCaret, press, withdrawSteering } = renderHarness();
+    placeCaret(4);
+    press("ArrowUp", input);
+    withdrawSteering();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Edit queued prompt 1 of 3" }),
+    );
+    press("ArrowDown");
+    expect(document.activeElement).toBe(input);
+  });
+
+  test("externally emptying the queue restores the saved composer offset", () => {
+    const { input, inputRef, placeCaret, press, replaceQueue } = renderHarness();
+    placeCaret(4);
+    press("ArrowUp", input);
+    replaceQueue([]);
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe(4);
+  });
+
+  test.each([false, true])(
+    "external updates preserve focus after leaving the stack (blur: %s)",
+    (blur) => {
+      const { input, placeCaret, press, replaceQueue } = renderHarness();
+      placeCaret(4);
+      press("ArrowUp", input);
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      try {
+        outside.focus();
+        if (blur) outside.blur();
+        const active = document.activeElement;
+        replaceQueue([]);
+        expect(document.activeElement).toBe(active);
+      } finally {
+        outside.remove();
+      }
+    },
+  );
 
   test("Escape returns to the input and is not taken as a stop", () => {
     const { input, inputRef, steerButton, placeCaret, press } = renderHarness();

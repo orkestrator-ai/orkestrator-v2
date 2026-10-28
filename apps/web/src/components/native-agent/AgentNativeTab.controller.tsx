@@ -3303,6 +3303,9 @@ export function SharedNativeAgentController({
         attachments,
         annotations: [],
       });
+      // Queue an end-caret request even if the store replacement has not
+      // reached the editable DOM yet. Plain focus preserves the old offset.
+      inputRef.current?.focusAtEnd(message.text);
     } finally {
       queueEditPendingRef.current = false;
       setQueueEditPending(false);

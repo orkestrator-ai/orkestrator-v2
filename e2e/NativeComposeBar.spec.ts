@@ -1,5 +1,99 @@
 import { expect, test } from "@playwright/test";
 
+test("ArrowUp from a soft-wrapped continuation moves the caret before entering the queue", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  const text = "A paragraph that wraps across several visual lines without any newline. ".repeat(4);
+  await input.fill(text);
+  // Establish real wrapping, rather than assuming the viewport produced it.
+  const before = await input.evaluate((element) => {
+    const first = document.createRange();
+    first.setStart(element.firstChild!, 0);
+    first.setEnd(element.firstChild!, 1);
+    const caret = window.getSelection()!.getRangeAt(0);
+    return {
+      caretTop: caret.getBoundingClientRect().top,
+      firstTop: first.getBoundingClientRect().top,
+      offset: caret.startOffset,
+    };
+  });
+  expect(before.caretTop).toBeGreaterThan(before.firstTop + 20);
+  expect(before.offset).toBe(text.length);
+  await page.keyboard.press("ArrowUp");
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBeLessThan(
+    text.length,
+  );
+  await input.evaluate((element) => {
+    const range = document.createRange();
+    range.setStart(element.firstChild!, 4);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 123:/ })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(4);
+});
+
+test("non-steerable head actions can be reached and activated by keyboard", async ({ page }) => {
+  await page.goto("/native-compose?non-steerable-head");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(
+    page.getByRole("button", { name: "Edit queued prompt 1 of 123", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Remove queued prompt 1 of 123", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 122:/ })).toBeFocused();
+
+  await page.goto("/native-compose?non-steerable-head");
+  await input.focus();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(input).toBeFocused();
+  await expect(input).toContainText("Also run the focused regression");
+  const loaded = await input.innerText();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(
+    loaded.length,
+  );
+  await page.keyboard.type("!");
+  await expect(input).toHaveText(`${loaded}!`);
+});
+
+test("external queue changes recover focus without a local queue action", async ({ page }) => {
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.fill("Draft");
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 123:/ })).toBeFocused();
+  // Simulate external updates without moving focus to the fixture controls.
+  await page
+    .getByRole("button", { name: "Externally remove head", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(page.getByRole("button", { name: /^Steer queued prompt 1 of 122:/ })).toBeFocused();
+  await page
+    .getByRole("button", { name: "Finish turn", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(
+    page.getByRole("button", { name: "Edit queued prompt 1 of 122", exact: true }),
+  ).toBeFocused();
+  await page
+    .getByRole("button", { name: "Drain queue", exact: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(() => window.getSelection()!.getRangeAt(0).startOffset)).toBe(5);
+});
+
 test("compose gallery restores keyboard focus after Escape and the close button", async ({
   page,
 }) => {

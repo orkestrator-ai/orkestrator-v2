@@ -103,14 +103,18 @@ describe("superseded measurements", () => {
     const latest = h.service.projections.selectedMeasurement(key)!;
     // A backlog an older build left: many superseded copies of one owner's diff.
     const backlog = Array.from({ length: 150 }, (_, index) => `m_backlog_${index}`);
-    for (const measurementId of backlog) {
-      ledger.insertMeasurement(
-        { ...latest, measurementId },
-        { kind: "environment", id: "env-backlog" },
-        Array.from({ length: 200 }, (_, index) => fileRecord(`p${index}`)),
-        ledger.nextSequence(),
-      );
-    }
+    // Seed the backlog atomically, as production callers do. Autocommitting
+    // each of the 30,000 file rows makes setup dominate the test under load.
+    ledger.transaction(() => {
+      for (const measurementId of backlog) {
+        ledger.insertMeasurement(
+          { ...latest, measurementId },
+          { kind: "environment", id: "env-backlog" },
+          Array.from({ length: 200 }, (_, index) => fileRecord(`p${index}`)),
+          ledger.nextSequence(),
+        );
+      }
+    });
     const selected = backlog[10]!;
     const restorable = backlog[20]!;
     const pruned = backlog[0]!;

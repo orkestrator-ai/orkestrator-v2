@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -26,7 +27,7 @@ const ALLOWED_DUPLICATES: Record<string, string[]> = {
   ],
 };
 
-function areaFolders(): string[] {
+function areaFolders(todo: string): string[] {
   return readdirSync(todo, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -70,47 +71,153 @@ function folderLinks(index: string): string[] {
   return links;
 }
 
+function checkFolderLinks(todo: string) {
+  const index = readFileSync(path.join(todo, INDEX), "utf8");
+  expect(todoFiles(todo)).toEqual([]);
+  expect(folderLinks(index).sort()).toEqual(areaFolders(todo));
+}
+
+function checkTodoNumbers(todo: string) {
+  const byNumber = new Map<string, string[]>();
+  for (const folder of areaFolders(todo)) {
+    for (const file of todoFiles(path.join(todo, folder))) {
+      const id = file.slice(0, 4);
+      byNumber.set(id, [...(byNumber.get(id) ?? []), `${folder}/${file}`]);
+    }
+  }
+
+  const clashes = [...byNumber]
+    .filter(([id, files]) => {
+      const allowed = new Set(ALLOWED_DUPLICATES[id] ?? []);
+      return files.length > 1 && files.some((file) => !allowed.has(file));
+    })
+    .map(([id, files]) => `${id}: ${files.join(", ")}`);
+
+  expect(clashes).toEqual([]);
+}
+
+function checkAreaIndex(directory: string) {
+  const rows = todoRows(readFileSync(path.join(directory, INDEX), "utf8"));
+  const files = todoFiles(directory);
+
+  expect(rows.map((row) => row.file).sort()).toEqual(files);
+  expect(rows.map((row) => row.rank)).toEqual(rows.map((_, i) => String(i + 1)));
+  for (const row of rows) {
+    expect(CRITICALITY.has(row.criticality), `${row.file} is rated ${row.criticality}`).toBe(true);
+    expect(FINISHED.has(row.finished), `${row.file} has Finished ${row.finished}`).toBe(true);
+  }
+}
+
 describe("todo folders", () => {
   test("the top-level index links every area folder and holds no todo files", () => {
-    const index = readFileSync(path.join(todo, INDEX), "utf8");
-
-    expect(todoFiles(todo)).toEqual([]);
-    expect(folderLinks(index).sort()).toEqual(areaFolders());
+    checkFolderLinks(todo);
   });
 
   test("todo numbers are unique across folders, except the allowlisted duplicates", () => {
-    const byNumber = new Map<string, string[]>();
-    for (const folder of areaFolders()) {
-      for (const file of todoFiles(path.join(todo, folder))) {
-        const id = file.slice(0, 4);
-        byNumber.set(id, [...(byNumber.get(id) ?? []), `${folder}/${file}`]);
-      }
-    }
-
-    const clashes = [...byNumber]
-      .filter(([id, files]) => {
-        const allowed = new Set(ALLOWED_DUPLICATES[id] ?? []);
-        return files.length > 1 && files.some((file) => !allowed.has(file));
-      })
-      .map(([id, files]) => `${id}: ${files.join(", ")}`);
-
-    expect(clashes).toEqual([]);
+    checkTodoNumbers(todo);
   });
 
-  for (const folder of areaFolders()) {
+  for (const folder of areaFolders(todo)) {
     test(`${folder} index has one rated row for every todo file`, () => {
-      const directory = path.join(todo, folder);
-      const rows = todoRows(readFileSync(path.join(directory, INDEX), "utf8"));
-      const files = todoFiles(directory);
-
-      expect(rows.map((row) => row.file).sort()).toEqual(files);
-      expect(rows.map((row) => row.rank)).toEqual(rows.map((_, i) => String(i + 1)));
-      for (const row of rows) {
-        expect(CRITICALITY.has(row.criticality), `${row.file} is rated ${row.criticality}`).toBe(
-          true,
-        );
-        expect(FINISHED.has(row.finished), `${row.file} has Finished ${row.finished}`).toBe(true);
-      }
+      checkAreaIndex(path.join(todo, folder));
     });
   }
+});
+
+const fixtures: string[] = [];
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
+});
+
+function writeFixtureFile(root: string, file: string, body = "") {
+  const target = path.join(root, file);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, body);
+}
+
+function fixture() {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "todo-index-"));
+  fixtures.push(directory);
+  writeFixtureFile(directory, INDEX, "| [Area](area/0000-index.md) | Example |\n");
+  for (const file of ["0001-first.md", "0002-middle.md", "0003-last.md"]) {
+    writeFixtureFile(directory, `area/${file}`);
+  }
+  writeFixtureFile(
+    directory,
+    `area/${INDEX}`,
+    ["0001-first.md", "0002-middle.md", "0003-last.md"]
+      .map((file, i) => `| ${i + 1} | [${file}](${file}) | High | No | Example | Notes |`)
+      .join("\n"),
+  );
+  // Every negative case starts with a valid filesystem and exercises the same
+  // checks as the live documentation above, without modifying the repository.
+  checkFolderLinks(directory);
+  checkTodoNumbers(directory);
+  checkAreaIndex(path.join(directory, "area"));
+  return directory;
+}
+
+describe("todo guard negative fixtures", () => {
+  test.each(["area", "another-area"])("rejects a duplicate number in %s", (area) => {
+    const directory = fixture();
+    writeFixtureFile(directory, `${area}/0001-duplicate.md`);
+    expect(() => checkTodoNumbers(directory)).toThrow();
+  });
+
+  test("rejects an unlisted file added to allowlisted number 0054", () => {
+    const directory = fixture();
+    for (const file of ALLOWED_DUPLICATES["0054"]!) writeFixtureFile(directory, file);
+    checkTodoNumbers(directory);
+    writeFixtureFile(directory, "area/0054-unlisted.md");
+    expect(() => checkTodoNumbers(directory)).toThrow();
+  });
+
+  test("allows deletion of a finished allowlisted duplicate", () => {
+    const directory = fixture();
+    for (const file of ALLOWED_DUPLICATES["0054"]!) writeFixtureFile(directory, file);
+    rmSync(path.join(directory, ALLOWED_DUPLICATES["0054"]![0]!));
+    checkTodoNumbers(directory);
+  });
+
+  test.each([
+    ["missing row", (index: string) => index.split("\n").slice(0, 2).join("\n")],
+    ["stale row", (index: string) => index.replaceAll("0002-middle.md", "0004-stale.md")],
+    ["duplicate row", (index: string) => `${index}\n${index.split("\n")[0]}`],
+    ["rank gap", (index: string) => index.replace("| 2 |", "| 4 |")],
+    ["duplicate rank", (index: string) => index.replace("| 2 |", "| 1 |")],
+    ["moved ranks", (index: string) => index.split("\n").reverse().join("\n")],
+    ["invalid criticality", (index: string) => index.replace("| High |", "| Urgent |")],
+    ["invalid finished value", (index: string) => index.replace("| No |", "| Maybe |")],
+  ] as const)("rejects %s", (_name, mutate) => {
+    const directory = fixture();
+    const index = path.join(directory, "area", INDEX);
+    writeFileSync(index, mutate(readFileSync(index, "utf8")));
+    expect(() => checkAreaIndex(path.dirname(index))).toThrow();
+  });
+
+  test("middle-row deletion requires renumbering the remaining rows", () => {
+    const directory = fixture();
+    const index = path.join(directory, "area", INDEX);
+    rmSync(path.join(directory, "area/0002-middle.md"));
+    const remaining = readFileSync(index, "utf8")
+      .split("\n")
+      .filter((line) => !line.includes("0002-middle.md"))
+      .join("\n");
+    writeFileSync(index, remaining);
+    expect(() => checkAreaIndex(path.dirname(index))).toThrow();
+    writeFileSync(index, remaining.replace("| 3 |", "| 2 |"));
+    checkAreaIndex(path.dirname(index));
+  });
+
+  test("rejects an unlinked area folder", () => {
+    const directory = fixture();
+    writeFixtureFile(directory, `unlinked/${INDEX}`);
+    expect(() => checkFolderLinks(directory)).toThrow();
+  });
+
+  test("rejects a todo file at the top level", () => {
+    const directory = fixture();
+    writeFixtureFile(directory, "0004-misplaced.md");
+    expect(() => checkFolderLinks(directory)).toThrow();
+  });
 });

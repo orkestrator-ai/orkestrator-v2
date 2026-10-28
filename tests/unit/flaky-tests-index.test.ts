@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
@@ -149,7 +150,7 @@ const FROZEN_DUPLICATES: Record<string, string[]> = {
   ],
 };
 
-function groupFolders(): string[] {
+function groupFolders(register: string): string[] {
   return readdirSync(register, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -191,6 +192,21 @@ function groupLinks(index: string): string[] {
   return links;
 }
 
+function checkCaseNumbers(register: string) {
+  const byNumber = new Map<string, string[]>();
+  for (const group of groupFolders(register)) {
+    for (const file of caseFiles(path.join(register, group))) {
+      const id = file.slice(0, 4);
+      byNumber.set(id, [...(byNumber.get(id) ?? []), `${group}/${file}`]);
+    }
+  }
+  const duplicates = Object.fromEntries(
+    [...byNumber].filter(([, files]) => files.length > 1).map(([id, files]) => [id, files.sort()]),
+  );
+
+  expect(duplicates).toEqual(FROZEN_DUPLICATES);
+}
+
 describe("flaky test register", () => {
   test("the top-level index links every group folder and tracks no cases", () => {
     const index = readFileSync(path.join(register, INDEX), "utf8");
@@ -198,27 +214,14 @@ describe("flaky test register", () => {
     expect(index).toMatch(/Do not\s+read every case file/);
     expect(caseRows(index)).toEqual([]);
     expect(caseFiles(register)).toEqual([]);
-    expect(groupLinks(index).sort()).toEqual(groupFolders());
+    expect(groupLinks(index).sort()).toEqual(groupFolders(register));
   });
 
   test("case numbers are unique across and within groups, except the frozen duplicates", () => {
-    const byNumber = new Map<string, string[]>();
-    for (const group of groupFolders()) {
-      for (const file of caseFiles(path.join(register, group))) {
-        const id = file.slice(0, 4);
-        byNumber.set(id, [...(byNumber.get(id) ?? []), `${group}/${file}`]);
-      }
-    }
-    const duplicates = Object.fromEntries(
-      [...byNumber]
-        .filter(([, files]) => files.length > 1)
-        .map(([id, files]) => [id, files.sort()]),
-    );
-
-    expect(duplicates).toEqual(FROZEN_DUPLICATES);
+    checkCaseNumbers(register);
   });
 
-  for (const group of groupFolders()) {
+  for (const group of groupFolders(register)) {
     test(`${group} index lists every case file and stores a status for each row`, () => {
       const folder = path.join(register, group);
       const rows = caseRows(readFileSync(path.join(folder, INDEX), "utf8"));
@@ -236,4 +239,50 @@ describe("flaky test register", () => {
       }
     });
   }
+});
+
+const fixtures: string[] = [];
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
+});
+
+function writeCase(register: string, file: string) {
+  const target = path.join(register, file);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, "");
+}
+
+function fixture() {
+  const register = mkdtempSync(path.join(os.tmpdir(), "flake-index-"));
+  fixtures.push(register);
+  for (const files of Object.values(FROZEN_DUPLICATES)) {
+    for (const file of files) writeCase(register, file);
+  }
+  checkCaseNumbers(register);
+  return register;
+}
+
+describe("flake number guard negative fixtures", () => {
+  test.each(["agent-bridges", "another-group"])(
+    "rejects another file sharing frozen number 0147 in %s",
+    (group) => {
+      const register = fixture();
+      writeCase(register, `${group}/0147-unlisted.md`);
+      expect(() => checkCaseNumbers(register)).toThrow();
+    },
+  );
+
+  test.each(["agent-bridges", "another-group"])("rejects a new duplicate number in %s", (group) => {
+    const register = fixture();
+    writeCase(register, "agent-bridges/9999-first.md");
+    checkCaseNumbers(register);
+    writeCase(register, `${group}/9999-second.md`);
+    expect(() => checkCaseNumbers(register)).toThrow();
+  });
+
+  test("rejects removal of a frozen duplicate", () => {
+    const register = fixture();
+    rmSync(path.join(register, FROZEN_DUPLICATES["0147"]![0]!));
+    expect(() => checkCaseNumbers(register)).toThrow();
+  });
 });

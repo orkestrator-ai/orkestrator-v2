@@ -432,7 +432,7 @@ export class ProjectGitService {
     root: string,
     previous?: ProjectGitStatus,
   ): Promise<ProjectGitStatus> {
-    const [porcelain, head, upstream, operations, branches] = await Promise.all([
+    const [porcelain, head, upstream, upstreamHead, operations, branches] = await Promise.all([
       // The user's own checkout may run an fsmonitor daemon; a hung one is retried past.
       runGitWithFsmonitorFallback(
         ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
@@ -442,6 +442,10 @@ export class ProjectGitService {
         () => ({ stdout: "", stderr: "" }),
       ),
       runCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], {
+        cwd: root,
+        timeoutMs: 10_000,
+      }).catch(() => ({ stdout: "", stderr: "" })),
+      runCommand("git", ["rev-parse", "--verify", "--quiet", "@{upstream}^{commit}"], {
         cwd: root,
         timeoutMs: 10_000,
       }).catch(() => ({ stdout: "", stderr: "" })),
@@ -499,6 +503,7 @@ export class ProjectGitService {
       unborn,
       headCommit: head.stdout.trim() || null,
       upstream: upstreamName,
+      upstreamCommit: upstreamName ? upstreamHead.stdout.trim() || null : null,
       remote,
       ahead: upstreamName ? ahead : null,
       behind: upstreamName ? behind : null,

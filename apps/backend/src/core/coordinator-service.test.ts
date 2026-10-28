@@ -1270,6 +1270,7 @@ describe("project coordinator", () => {
     await runCommand("git", ["branch", "--unset-upstream"], { cwd: checkout });
     expect(await git.fetch(project.id, true)).toMatchObject({
       upstream: null,
+      upstreamCommit: null,
       remote: null,
       remoteState: "fresh",
       lastError: null,
@@ -1300,8 +1301,22 @@ describe("project coordinator", () => {
     await runCommand("git", ["commit", "-m", "remote"], { cwd: publisher });
     await runCommand("git", ["push"], { cwd: publisher });
 
-    expect(await git.fetch(project.id, true)).toMatchObject({ behind: 1, ahead: 0 });
-    expect(await git.sync(project.id)).toMatchObject({ behind: 0, ahead: 0 });
+    expect(baseline.upstreamCommit).toBe(baseline.headCommit);
+    const publishedTip = (
+      await runCommand("git", ["rev-parse", "HEAD"], { cwd: publisher })
+    ).stdout.trim();
+    // The upstream tip is what a declined merge is remembered against.
+    expect(await git.fetch(project.id, true)).toMatchObject({
+      behind: 1,
+      ahead: 0,
+      upstreamCommit: publishedTip,
+    });
+    expect(await git.sync(project.id)).toMatchObject({
+      behind: 0,
+      ahead: 0,
+      headCommit: publishedTip,
+      upstreamCommit: publishedTip,
+    });
     expect(await fs.readFile(path.join(checkout, "remote.txt"), "utf8")).toBe("remote\n");
 
     await runCommand("git", ["switch", "-c", "feature"], { cwd: publisher });

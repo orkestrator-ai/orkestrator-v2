@@ -310,6 +310,7 @@ export function SharedNativeAgentController({
   coordinatorProjectId,
   coordinatorWorkspacePath,
   hiddenByLayout = false,
+  beforeSend,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   const platform = data.platform!;
@@ -2173,12 +2174,51 @@ export function SharedNativeAgentController({
     ],
   );
 
+  /*
+   * A send from the composer itself: Enter, the send button, or send as text.
+   * `beforeSend` may await the user (the coordinator's upstream merge
+   * question), so the latest `submit` is called only once it settles. The
+   * composer is disabled meanwhile, so the draft cannot change under it and a
+   * second Enter cannot start another.
+   */
+  const submitRef = useRef(submit);
+  useLayoutEffect(() => {
+    submitRef.current = submit;
+  });
+  const beforeSendPendingRef = useRef(false);
+  const [preparingSend, setPreparingSend] = useState(false);
+  const sendFromComposer = useCallback(
+    (text: string, options?: { literal: true }) => {
+      if (!beforeSend || (!options?.literal && parseUserCommand(text))) {
+        void submitRef.current(text, undefined, false, undefined, options);
+        return;
+      }
+      if (beforeSendPendingRef.current || submitInFlightRef.current) return;
+      beforeSendPendingRef.current = true;
+      setPreparingSend(true);
+      void beforeSend()
+        .then(
+          () => submitRef.current(text, undefined, false, undefined, options),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setSendError(message);
+            updateDraft(sessionKey, { submissionError: message });
+          },
+        )
+        .finally(() => {
+          beforeSendPendingRef.current = false;
+          setPreparingSend(false);
+        });
+    },
+    [beforeSend, sessionKey, updateDraft],
+  );
+
   useEffect(() => {
     sendAsTextRef.current = () => {
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
-      void submit(current.text, undefined, false, undefined, { literal: true });
+      sendFromComposer(current.text, { literal: true });
     };
-  }, [sessionKey, submit]);
+  }, [sendFromComposer, sessionKey]);
 
   /**
    * Provider entries mapped to the shared picker's neutral row shape. Sorting
@@ -3489,12 +3529,14 @@ export function SharedNativeAgentController({
             }
             if (event.key !== "Enter" || event.shiftKey) return;
             event.preventDefault();
-            void submit(draft.text);
+            sendFromComposer(draft.text);
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
           placeholder={`Message ${label}`}
-          disabled={queueEditPending || isSubmitting || draft.submissionPending === true}
-          isSending={isDispatching || isSubmitting}
+          disabled={
+            queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
+          }
+          isSending={isDispatching || isSubmitting || preparingSend}
           isLoading={isTurnActive}
           menus={
             fileMentionMenuOpen ? (
@@ -3786,9 +3828,7 @@ export function SharedNativeAgentController({
                       : "Add to queue"
                     : "Send"
           }
-          onSend={() => {
-            void submit(draft.text);
-          }}
+          onSend={() => sendFromComposer(draft.text)}
           footer={
             projection?.queue ? (
               <QueuedPromptsDialog

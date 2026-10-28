@@ -50,6 +50,13 @@ export interface AgentNativeTabProps {
       executionProfileId?: string;
     },
   ) => Promise<void>;
+  /**
+   * Runs before a message typed into an assigned conversation's composer is
+   * sent (`!` commands excepted). Resolving sends the composer's current draft;
+   * rejecting keeps the draft and shows the error. The composer stays disabled
+   * while it is pending.
+   */
+  beforeSend?: () => Promise<void>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */
   availablePlatforms?: readonly AgentPlatform[];
   /**

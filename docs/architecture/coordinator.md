@@ -625,6 +625,27 @@ HEAD change, the repository-context revision increments and is supplied before
 the next turn so the agent does not assume its old analysis still describes the
 checkout.
 
+### Merging upstream commits before a message
+
+Before each message to the main coordinator, its first prompt included, the
+panel runs the cooldown-bound fetch (`fetchProjectGit` without `force`, waited
+on for at most five seconds) and asks *"There are N upstream commits … Do you
+wish to merge them?"* when the checkout can merge them: an upstream is
+configured, `behind > 0`, and nothing blocks a fast-forward (no local commits,
+no uncommitted changes, no unfinished repository operation). **Enter** (the
+focused default) fast-forwards with `syncProjectGit`, then sends; a failed
+fast-forward keeps the draft and shows the error. **Escape** or **Don't merge**
+sends without merging.
+
+A decline is remembered per project against the upstream tip it was given for
+(`ProjectGitStatus.upstreamCommit`), in a persisted renderer store whose key is
+per machine (`coordinatorUpstreamDeclineStore`). The question returns as soon as
+the tip changes, and survives a reload. It is not asked for side agents, for `!`
+commands, while any of the coordinator's conversations is running a turn (the
+backend refuses to change the checkout then), or when the checkout is behind but
+blocked; the toolbar already says why that checkout cannot sync. A status from a
+backend that predates `upstreamCommit` cannot match a decline, so it always asks.
+
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
 from anything this page observed, so it is correct after a reload. A worker

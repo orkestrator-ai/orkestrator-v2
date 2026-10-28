@@ -507,6 +507,11 @@ export interface ProjectGitStatus {
   unborn: boolean;
   headCommit: string | null;
   upstream: string | null;
+  /**
+   * Commit the upstream tracking ref points at, as of the last fetch. Absent
+   * from statuses written by backends that predate it.
+   */
+  upstreamCommit?: string | null;
   remote: string | null;
   ahead: number | null;
   behind: number | null;

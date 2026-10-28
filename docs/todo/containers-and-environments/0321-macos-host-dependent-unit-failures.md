@@ -5,9 +5,6 @@ Found on 2026-10-27 while validating branch
 PR #1327). That branch does not touch any of the files below. The failures
 are unrelated to the search change. The aggregate run is recorded in flake case
 [1126](../../tests/flaky-tests/aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md).
-This todo is a sibling of
-[0320](0320-migrate-copy-test-macos-bsdtar.md) (the same pattern for the
-migration helper).
 
 ## Current state
 

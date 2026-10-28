@@ -8,7 +8,9 @@ That branch does not touch `docker/orkestrator-migrate.sh` or
 Finished on 2026-10-28: every item is done. #1365 (`beb1ec4c8`) fixed the
 test, and this file now records the corrected cause and the macOS evidence.
 Keep this file until the branch that records it merges, for its decisions,
-then delete it and remove its index row.
+then delete it, remove its index row, and remove any remaining references to
+it (including in 0321). The stale sibling reference in 0321 has been removed:
+its host-dependent failures have different causes from this fixture-order bug.
 
 ## Current state
 

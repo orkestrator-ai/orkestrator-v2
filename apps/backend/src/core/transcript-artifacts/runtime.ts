@@ -540,6 +540,13 @@ export async function createTranscriptArtifactRuntime(
   });
 
   const owner = previewContainerOwner(options.dataDir);
+  // A crash can leave owned containers behind even when startup now selects
+  // process isolation (for example, after an upgrade makes the image stale).
+  if (dockerAnswered !== false) {
+    const reaped = await reapOrphanPreviewContainers(docker, owner).catch(() => 0);
+    if (reaped > 0)
+      options.logger?.warn(`[transcript-artifacts] removed ${reaped} orphaned preview worker(s)`);
+  }
   const containerRunner = (image: { reference: string; pinned: boolean }) => {
     const seccompProfile =
       env.ORKESTRATOR_ARTIFACT_PREVIEW_SECCOMP?.trim() || resolveSeccompProfile();
@@ -566,10 +573,6 @@ export async function createTranscriptArtifactRuntime(
       "HTML previews are disabled on this host (ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION=disabled)",
     );
   } else if (isolation === "container") {
-    // Startup recovery: a crash can leave this backend's workers behind.
-    const reaped = await reapOrphanPreviewContainers(docker, owner).catch(() => 0);
-    if (reaped > 0)
-      options.logger?.warn(`[transcript-artifacts] removed ${reaped} orphaned preview worker(s)`);
     const image = resolvedImage ?? (await resolveConfiguredImage());
     if (image.warning) options.logger?.warn(`[transcript-artifacts] ${image.warning}`);
     // Only an explicit `container` setting gets here with an outdated image.

@@ -295,7 +295,7 @@ describe("prepare isolated preview worker", () => {
       await screen.findByRole("button", { name: "Prepare isolated preview worker" }),
     ).toBeTruthy();
     expect(screen.getByText(/prepared by an earlier version of Orkestrator/)).toBeTruthy();
-    expect(screen.queryByText(/which is not installed on this host/)).toBeNull();
+    expect(screen.queryByText(/which is not installed on this host/) === null).toBe(true);
   });
 
   test("not offered when interactive previews already have isolation", async () => {

@@ -1,7 +1,9 @@
 # A locally built preview worker outlives an upgrade
 
 Checked against `main` at `863b57821` (2026-10-27). Code items done on
-2026-10-28 against `main` at `6a6009a09`; the live upgrade check is left.
+2026-10-28 against `main` at `6a6009a09`. Packaged upgrade qualification now
+checks startup, rebuilding and restart reuse; successful live rendering is
+blocked by a host container-runtime crash (see qualification).
 
 "Prepare isolated preview worker" (`transcript_artifact_prepare_worker`)
 builds the worker image from the context the backend ships and records its
@@ -39,6 +41,8 @@ bundles just never arrived.
     was prepared by an earlier version.
   - Preparing again switches to `container` without a restart, and the next
     start uses the new image directly.
+  - Startup removes owner-scoped orphan containers before constructing the
+    runner, including when an outdated image selects process isolation.
   - An explicit `container` setting keeps running the outdated image, with a
     warning and the same flag.
   - The shipped context is hashed at most once per start, shared with the
@@ -49,7 +53,12 @@ bundles just never arrived.
   and an unhashable context, all against a fake Docker CLI. `ArtifactPdf.test.tsx`
   covers the card's wording. Without the `runtime.ts` change, three of the
   new backend cases fail.
-- No upgrade of a real packaged install has been run.
+- Review follow-up tests use distinct old/rebuilt image ids and check the
+  preparation result, persisted pin, runner configuration and restart. They
+  also cover replacing an outdated local worker with a matching published
+  pull and clearing `outdated` across restart. A shell contract test executes
+  `build.sh` and the real digest CLI against fake staging/Docker boundaries,
+  checking its context label, pin metadata and temporary-context cleanup.
 
 ## Outstanding work
 
@@ -69,12 +78,41 @@ bundles just never arrived.
 
 ### Qualification
 
-- Upgrade a packaged install whose worker was prepared under the previous
-  version and confirm previews fall back to process isolation with the
-  prepare action offered, then run in the container again after preparing.
-  Because images prepared before this change carry no context label, the
-  first upgrade that includes it should show the prompt even when the worker
-  context did not change. Use a throwaway data directory, not the real one.
+- Reproducible command (after the normal backend build has supplied release
+  assets):
+
+  ```bash
+  mise run test:logged -- --name preview-upgrade-live -- bun scripts/qualify-preview-worker-upgrade.ts
+  ```
+
+  This bundles the current backend into a temporary package with shipped
+  `artifact-runtime/worker-context`, launches its real gateway outside the
+  checkout, and uses a throwaway HOME/data directory, ephemeral ports and a
+  private Docker tag. It seeds a real local worker using the previous
+  version's unlabelled build invocation and pin format. The first upgrade
+  must prompt even if the worker bytes did not change. A Docker wrapper
+  redirects only the default tag to the private tag; Docker inspection,
+  builds, owner recovery and worker execution remain real. Cleanup stops
+  only the backend/container it created and removes its private tag.
+- 2026-10-28 run: startup selected process isolation, capabilities exposed
+  `outdated: true` with preparation available, and the owned orphan was
+  removed. Preparing through the gateway built a different image id,
+  persisted its context digest, and applied the matching image label. A
+  fresh packaged backend reused that pin with container isolation and no
+  outdated flag. Recorded Docker launch vectors used the new id before and
+  after restart. `ArtifactPdf.test.tsx` separately verifies the visible
+  preparation wording.
+- Live rendering **did not pass**: both real Mermaid requests failed with
+  `renderer_unavailable: The preview worker stopped unexpectedly`. Captured
+  Docker stderr shows `runc` receiving `SIGSEGV` in
+  `cyphar.com/go-pathrs/internal/libpathrs._Cfunc_pathrs_reopen`, then
+  `OCI runtime start failed: container process is already dead`. No core
+  entry or OOM-kill evidence was available; the host had about 10 GiB of
+  available memory. This identifies a container-start failure; its underlying
+  cause is not established. The harness keeps rendering as a required
+  assertion, exits nonzero, and still checks restart reuse. Evidence:
+  `/tmp/orkestrator-test-run.0OeJgX`. Rerun on a working container runtime to
+  complete qualification. The desktop installer itself was not exercised.
 
 ## Constraints and rationale
 

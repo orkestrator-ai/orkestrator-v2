@@ -25,6 +25,11 @@ import {
   readPublishedWorkerImage,
   resolvePublishedPinFile,
 } from "./preview-worker-prepare.js";
+import {
+  PREVIEW_CONTAINER_LABEL,
+  PREVIEW_CONTAINER_OWNER_LABEL,
+  previewContainerOwner,
+} from "./preview-supervisor.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
 import {
   DEFAULT_PREVIEW_WORKER_IMAGE,
@@ -32,6 +37,7 @@ import {
   resolveContentListenerConfig,
 } from "./runtime.js";
 
+const OLD_ID = `sha256:${"6".repeat(64)}`;
 const BUILT_ID = `sha256:${"7".repeat(64)}`;
 const DIGEST = `sha256:${"8".repeat(64)}`;
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -56,17 +62,21 @@ function fakeDocker(
   label = "",
   present = false,
   localLabel = "",
+  options: { initialId?: string; orphan?: string; publishedPresent?: boolean } = {},
 ): { cli: string; log: () => string[][] } {
+  const { initialId = BUILT_ID, orphan = "", publishedPresent = present } = options;
   const dir = scratch("ork-fake-docker-");
   const log = path.join(dir, "calls.log");
   const built = path.join(dir, "built");
   const pulled = path.join(dir, "pulled");
   const builtLabel = path.join(dir, "built-label");
+  const imageId = path.join(dir, "image-id");
+  writeFileSync(imageId, initialId);
   writeFileSync(builtLabel, localLabel);
   if (present) {
     writeFileSync(built, "");
-    writeFileSync(pulled, "");
   }
+  if (publishedPresent) writeFileSync(pulled, "");
   const cli = path.join(dir, "docker");
   writeFileSync(
     cli,
@@ -81,6 +91,7 @@ case "$1" in
         ${WORKER_CONTEXT_LABEL}=*) printf '%s' "\${arg#*=}" > '${builtLabel}' ;;
       esac
     done
+    echo '${BUILT_ID}' > '${imageId}'
     touch '${built}'; echo '${BUILT_ID}'; exit 0 ;;
   pull) touch '${pulled}'; exit 0 ;;
   image)
@@ -95,10 +106,11 @@ case "$1" in
           *@sha256:*) echo '${label}' ;;
           *) cat '${builtLabel}'; echo ;;
         esac ;;
-      *) echo '${BUILT_ID}' ;;
+      *) cat '${imageId}' ;;
     esac
     exit 0 ;;
-  ps) exit 0 ;;
+  ps) echo '${orphan}'; exit 0 ;;
+  rm) exit 0 ;;
   *) exit 1 ;;
 esac
 `,
@@ -572,7 +584,7 @@ describe("a locally prepared worker after an upgrade", () => {
   const OTHER_CONTEXT = `sha256:${"9".repeat(64)}`;
 
   /** The data directory pin a preparation by an earlier version left behind. */
-  function preparedEarlier(contextDigest?: string): string {
+  function preparedEarlier(contextDigest?: string, id = BUILT_ID): string {
     const dataDir = scratch("ork-prepared-earlier-");
     const pin = localWorkerPinFile(dataDir);
     mkdirSync(path.dirname(pin), { recursive: true });
@@ -580,7 +592,7 @@ describe("a locally prepared worker after an upgrade", () => {
       pin,
       JSON.stringify({
         tag: DEFAULT_PREVIEW_WORKER_IMAGE,
-        id: BUILT_ID,
+        id,
         ...(contextDigest ? { contextDigest } : {}),
       }),
     );
@@ -599,10 +611,11 @@ describe("a locally prepared worker after an upgrade", () => {
     test(`auto falls back to process isolation and offers preparation again (${name})`, async () => {
       const context = buildContext();
       const contextDigest = await workerContextDigest(context);
-      const docker = fakeDocker("", true, previous ?? "");
+      const orphan = "a".repeat(64);
+      const docker = fakeDocker("", true, previous ?? "", { initialId: OLD_ID, orphan });
       const { logger, warns } = capture();
       const options = {
-        dataDir: preparedEarlier(previous),
+        dataDir: preparedEarlier(previous, OLD_ID),
         env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli },
         workerBuildContext: { context, stageScript: null },
         publishedPinFile: null,
@@ -623,9 +636,22 @@ describe("a locally prepared worker after an upgrade", () => {
         outdated: true,
       });
       expect(warns.join("\n")).toContain("prepared before an upgrade");
+      const recovery = docker.log().filter((args) => args[0] === "ps" || args[0] === "rm");
+      expect(recovery).toEqual([
+        [
+          "ps",
+          "-aq",
+          "--filter",
+          `label=${PREVIEW_CONTAINER_LABEL}=1`,
+          "--filter",
+          `label=${PREVIEW_CONTAINER_OWNER_LABEL}=${previewContainerOwner(options.dataDir)}`,
+        ],
+        ["rm", "-f", orphan],
+      ]);
+
       // The pinned id's own label was read, not the tag's.
       expect(docker.log().map((args) => args.join(" "))).toContain(
-        `image inspect --format {{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}} ${BUILT_ID}`,
+        `image inspect --format {{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}} ${OLD_ID}`,
       );
 
       expect(await upgraded.prepareWorker()).toMatchObject({
@@ -635,6 +661,8 @@ describe("a locally prepared worker after an upgrade", () => {
         isolation: "container",
         interactiveIsolation: "container",
       });
+      expect(upgraded.config.workerImage).toEqual({ reference: BUILT_ID, pinned: true });
+      expect(upgraded.runner.status().workerImage).toEqual({ reference: BUILT_ID, pinned: true });
       expect(upgraded.workerPreparation().outdated).toBeUndefined();
       expect(JSON.parse(readFileSync(localWorkerPinFile(options.dataDir), "utf8"))).toEqual({
         tag: DEFAULT_PREVIEW_WORKER_IMAGE,
@@ -650,9 +678,52 @@ describe("a locally prepared worker after an upgrade", () => {
         isolation: "container",
         workerImage: { reference: BUILT_ID, pinned: true },
       });
+      expect(restarted.runner.status().workerImage).toEqual({ reference: BUILT_ID, pinned: true });
       expect(restarted.workerPreparation().outdated).toBeUndefined();
     });
   }
+
+  test("pulling a matching published replacement clears outdated and survives restart", async () => {
+    const context = buildContext();
+    const contextDigest = await workerContextDigest(context);
+    const docker = fakeDocker(contextDigest, true, OTHER_CONTEXT, {
+      initialId: OLD_ID,
+      publishedPresent: false,
+    });
+    const dataDir = preparedEarlier(OTHER_CONTEXT, OLD_ID);
+    const oldPin = readFileSync(localWorkerPinFile(dataDir), "utf8");
+    const options = {
+      dataDir,
+      env: { ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: docker.cli },
+      workerBuildContext: { context, stageScript: null },
+      publishedPinFile: publishedPin(contextDigest),
+    };
+    const upgraded = await createTranscriptArtifactRuntime(options);
+    cleanups.push(() => upgraded.close());
+    expect(upgraded.config.isolation).toBe("process");
+    expect(upgraded.workerPreparation().outdated).toBe(true);
+    const reference = `ghcr.io/example/artifact-preview-worker@${DIGEST}`;
+    expect(await upgraded.prepareWorker()).toMatchObject({
+      state: "ready",
+      method: "pull",
+      image: reference,
+      isolation: "container",
+    });
+    expect(upgraded.config.workerImage).toEqual({ reference, pinned: true });
+    expect(upgraded.workerPreparation().outdated).toBeUndefined();
+    // Pulling does not rewrite the old local pin; startup must prefer the published pin.
+    expect(readFileSync(localWorkerPinFile(dataDir), "utf8")).toBe(oldPin);
+    await upgraded.close();
+    const restarted = await createTranscriptArtifactRuntime(options);
+    cleanups.push(() => restarted.close());
+    expect(restarted.config).toMatchObject({
+      isolation: "container",
+      workerImage: { reference, pinned: true },
+    });
+    expect(restarted.workerPreparation().outdated).toBeUndefined();
+    expect(docker.log().filter((args) => args[0] === "pull")).toHaveLength(1);
+    expect(docker.log().some((args) => args[0] === "build")).toBe(false);
+  });
 
   test("an explicit container setting keeps running an outdated worker and says so", async () => {
     const { logger, warns } = capture();

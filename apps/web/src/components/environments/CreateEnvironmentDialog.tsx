@@ -1554,8 +1554,9 @@ export function CreateEnvironmentDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        size="4xl"
         className={cn(
-          "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:max-w-[896px] sm:p-0",
+          "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:p-0",
           isDraggingAttachments && "ring-2 ring-primary ring-offset-2 ring-offset-background",
         )}
         onDragEnter={handleAttachmentDragEnter}

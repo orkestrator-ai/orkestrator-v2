@@ -295,7 +295,7 @@ function ProjectCopyDialogBody({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent className="sm:max-w-2xl" data-testid="project-copy-dialog">
+      <DialogContent size="2xl" data-testid="project-copy-dialog">
         <DialogHeader>
           <DialogTitle>
             Copy {projectName}

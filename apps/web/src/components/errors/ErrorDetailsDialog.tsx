@@ -50,7 +50,7 @@ export function ErrorDetailsDialog() {
 
   return (
     <AlertDialog open={error !== null} onOpenChange={(open) => !open && closeError()}>
-      <AlertDialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+      <AlertDialogContent className="max-h-[85vh] flex flex-col">
         <AlertDialogHeader className="flex-shrink-0">
           <AlertDialogTitle className="text-destructive">
             {error?.title ?? "Error"}

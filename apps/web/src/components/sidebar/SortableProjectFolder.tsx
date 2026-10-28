@@ -301,7 +301,7 @@ export function SortableProjectFolder({
       )}
 
       <Dialog open={isRenaming} onOpenChange={setIsRenaming}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="md">
           <DialogHeader>
             <DialogTitle>Rename Folder</DialogTitle>
             <DialogDescription>

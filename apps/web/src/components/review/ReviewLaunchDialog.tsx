@@ -318,7 +318,7 @@ export function ReviewLaunchDialog({
         if (!busy) onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[38rem] sm:p-0">
+      <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 [--modal-max-width:38rem] sm:p-0">
         <DialogHeader className="m-0 shrink-0 border-b border-divider bg-background px-5 pb-4 pt-5 sm:m-0 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">

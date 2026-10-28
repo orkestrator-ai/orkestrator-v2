@@ -1426,7 +1426,7 @@ export function DesignCanvasTab({
           }}
         />
         <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="md">
             <DialogHeader>
               <DialogTitle>Design keyboard shortcuts</DialogTitle>
             </DialogHeader>
@@ -1441,7 +1441,7 @@ export function DesignCanvasTab({
           </DialogContent>
         </Dialog>
         <Dialog open={Boolean(renameFrame)} onOpenChange={(open) => !open && setRenameFrame(null)}>
-          <DialogContent className="sm:max-w-sm">
+          <DialogContent size="sm">
             <DialogHeader>
               <DialogTitle>Rename frame</DialogTitle>
             </DialogHeader>

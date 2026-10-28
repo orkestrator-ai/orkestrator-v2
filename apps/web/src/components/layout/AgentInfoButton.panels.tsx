@@ -391,7 +391,7 @@ function RuntimeNoticeCard({
           <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform group-hover:translate-x-0.5 group-hover:opacity-90" />
         </button>
       </DialogTrigger>
-      <DialogContent className={cn("max-w-xl sm:max-w-xl", appearance.dialog)}>
+      <DialogContent size="xl" className={appearance.dialog}>
         <DialogHeader>
           <DialogTitle>
             {providerLabel} runtime {severity === "error" ? "error" : "notice"}

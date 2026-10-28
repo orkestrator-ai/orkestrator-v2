@@ -230,7 +230,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
     const header = document.querySelector<HTMLElement>('[data-slot="dialog-header"]');
     const dialog = screen.getByRole("dialog");
-    expect(dialog.className).toContain("sm:max-w-[896px]");
+    expect(dialog.className).toContain("[--modal-max-width:56rem]");
     expect(dialog.className).toContain("bg-background");
     expect(dialog.className).toContain("sm:p-0");
     expect(dialog.style.getPropertyValue("--color-background")).toBe("");

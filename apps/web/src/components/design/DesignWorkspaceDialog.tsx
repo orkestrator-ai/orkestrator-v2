@@ -550,7 +550,7 @@ export function DesignWorkspaceDialog({
   const showNameError = nameTouched && nameProblem;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[min(42rem,calc(100%-2rem))]">
+      <DialogContent size="2xl">
         <DialogHeader>
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>

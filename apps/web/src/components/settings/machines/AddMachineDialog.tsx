@@ -30,7 +30,6 @@ import {
   trustNodeHostKey,
 } from "@/lib/backend/command-nodes";
 import { publishConnections } from "@/lib/connections";
-import { cn } from "@/lib/utils";
 import { errorCode } from "./SshRouteDialog";
 import { NODE_STATE_TEXT } from "./machine-list";
 import { FormError, TokenInput, errorText } from "./machine-ui";
@@ -259,10 +258,7 @@ export function AddMachineDialog({
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent
-        className={cn("sm:max-w-lg", Z_FULLSCREEN_DIALOG)}
-        overlayClassName={Z_FULLSCREEN_DIALOG}
-      >
+      <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
         <form onSubmit={(event) => void submit(event)} className="space-y-5">
           <DialogHeader>
             <DialogTitle>Add machine</DialogTitle>

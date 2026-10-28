@@ -150,7 +150,7 @@ interface KanbanTaskDialogProps {
 }
 
 const TASK_DIALOG_CONTENT_CLASS =
-  "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
+  "[--modal-max-width:560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
 const TASK_DIALOG_FOOTER_CLASS = "border-t border-border p-4 sm:p-6";
@@ -819,7 +819,7 @@ export function KanbanTaskDialog({
           if (!open) setPreviewImage(null);
         }}
       >
-        <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
+        <DialogContent className="[--modal-max-width:90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
           <DialogTitle className="sr-only">{previewImage.filename}</DialogTitle>
           <DialogDescription className="sr-only">
             Full-size preview of the attached task image.

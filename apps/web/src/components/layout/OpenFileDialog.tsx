@@ -173,7 +173,8 @@ export function OpenFileDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
-        className="gap-0 overflow-hidden p-0 sm:max-w-[min(42rem,calc(100%-2rem))] sm:p-0"
+        size="2xl"
+        className="gap-0 overflow-hidden p-0 sm:p-0"
         showCloseButton={false}
       >
         <DialogHeader className="m-0 border-b border-divider bg-background px-5 py-4 sm:m-0">

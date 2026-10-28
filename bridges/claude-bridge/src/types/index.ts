@@ -543,6 +543,14 @@ export interface SessionState {
    */
   commandDiscoveryInputs?: { readOnly: boolean; includeLocalSettings: boolean };
   /**
+   * Why the latest read-only turn runs its commands with the CLI's sandbox
+   * off: the probe's reason (`claudeReadOnlyCommandSandbox`). Absent when that
+   * turn had the sandbox, or the latest turn was not read-only. Runtime-only:
+   * the next turn records its own. Served on `GET /session/:id` as
+   * `readOnlyCommandSandbox` and in the reported policy's note.
+   */
+  readOnlyCommandSandboxOff?: string;
+  /**
    * Which saved MCP configuration the most recent query started with, and
    * when. Runtime-only: after a restart no query has started yet, and the
    * next one records its own. Served by `/session/:id/runtime-health`.

@@ -11,7 +11,11 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { claudeWorkspaceCwd } from "./claude-query-config.js";
-import { claudeReadOnlySandbox, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
+import {
+  claudeReadOnlySandbox,
+  isCoordinatorReadOnlyPolicy,
+  processExecutionPolicyIsCoordinator,
+} from "./read-only-policy.js";
 
 /**
  * The paths a read-only turn's commands may not write: the checkout as named
@@ -27,6 +31,64 @@ export function claudeReadOnlyWorkspaces(cwd: string): string[] {
   return [...new Set([cwd, ...(resolved ? [resolved] : [])])];
 }
 
+/** Where the platform has no Linux probe answer to give (Windows). */
+const READ_ONLY_SANDBOX_UNSUPPORTED =
+  "Claude's command sandbox cannot run commands on this host: it needs macOS, or Linux whose bubblewrap can nest a user namespace.";
+
+/**
+ * Whether a read-only turn asks the CLI for its command sandbox, and why not.
+ *
+ * A coordinator's launcher has already probed and says so in
+ * `COORDINATOR_COMMAND_SANDBOX_ENV`; its answer stands, and in a coordinator
+ * process an absent or malformed one reads as `required`, so an older
+ * launcher never turns a missing sandbox into an unsandboxed coordinator
+ * (`claudeSandboxRefusal` refuses a host that cannot give it). An ordinary
+ * bridge has no launcher answer, so a read-only review
+ * turn (Multi Review's reports, plan-mode reviewers) decides from the probe
+ * where the CLI runs, the way the backend qualifies a coordinator: macOS's
+ * Seatbelt always starts, Linux runs the bubblewrap probe, and anything else
+ * has no sandbox. Where it cannot run, asking for it would make the pinned
+ * CLI refuse the whole turn (no bubblewrap or socat, every container) or fail
+ * every command (a bubblewrap that cannot nest the CLI's namespace), so the
+ * turn runs with the sandbox off and the read-only hook and tool allowlist as
+ * its boundary, exactly as an `unavailable` coordinator does.
+ * `reason` is the probe's, for the turn's reported policy and Multi Review.
+ */
+export function claudeReadOnlyCommandSandbox(
+  options: {
+    /** The launcher's answer, as set in `COORDINATOR_COMMAND_SANDBOX_ENV`; absent outside a coordinator. */
+    commandSandbox?: string;
+    /** Whether this bridge is a coordinator process; read from the environment when absent. */
+    coordinatorProcess?: boolean;
+    platform?: NodeJS.Platform;
+    linuxSandbox?: () => ClaudeLinuxSandboxStatus;
+  } = {},
+): { commandSandbox: CoordinatorCommandSandbox; reason?: string } {
+  const launcher =
+    "commandSandbox" in options
+      ? options.commandSandbox
+      : process.env[COORDINATOR_COMMAND_SANDBOX_ENV];
+  if (
+    launcher !== undefined ||
+    (options.coordinatorProcess ?? processExecutionPolicyIsCoordinator())
+  ) {
+    return {
+      commandSandbox: coordinatorCommandSandboxFromEnv({
+        [COORDINATOR_COMMAND_SANDBOX_ENV]: launcher,
+      }),
+    };
+  }
+  const platform = options.platform ?? process.platform;
+  if (platform === "darwin") return { commandSandbox: "required" };
+  if (platform !== "linux") {
+    return { commandSandbox: "unavailable", reason: READ_ONLY_SANDBOX_UNSUPPORTED };
+  }
+  const status = (options.linuxSandbox ?? claudeLinuxSandboxStatus)();
+  return status.available
+    ? { commandSandbox: "required" }
+    : { commandSandbox: "unavailable", reason: status.reason };
+}
+
 /** The sandbox block passed to the SDK for a real turn. */
 export function claudeExecutionSandbox(
   policy: NativeAgentExecutionPolicy | undefined,
@@ -36,7 +98,7 @@ export function claudeExecutionSandbox(
   if (policy && isCoordinatorReadOnlyPolicy(policy)) {
     return claudeReadOnlySandbox(policy, {
       workspaces: claudeReadOnlyWorkspaces(readOnly.cwd ?? claudeWorkspaceCwd()),
-      commandSandbox: readOnly.commandSandbox ?? coordinatorCommandSandboxFromEnv(process.env),
+      commandSandbox: readOnly.commandSandbox ?? claudeReadOnlyCommandSandbox().commandSandbox,
     });
   }
   if (policy?.sandbox !== "provider") return undefined;
@@ -66,10 +128,11 @@ export function claudeExecutionSandbox(
  *
  * Refused: a provider-sandbox policy, and a coordinator whose launcher
  * qualified it on the sandbox (`required`, or any value but `unavailable`).
- * A read-only review turn in an ordinary bridge (no launcher answer) is left
- * as it was: its Read and Grep still work there, and whether it should be
- * refused or run with the hook alone is todo 0190. Only Linux is probed: the
- * nested namespace is a Linux mechanism, and macOS's Seatbelt always starts.
+ * A read-only review turn in an ordinary bridge (no launcher answer) is never
+ * refused: it runs with the sandbox off and the hook as its boundary where the
+ * probe finds none (`claudeReadOnlyCommandSandbox`). Only Linux is
+ * probed: the nested namespace is a Linux mechanism, and macOS's Seatbelt
+ * always starts.
  */
 export function claudeSandboxRefusal(
   policy: NativeAgentExecutionPolicy | undefined,

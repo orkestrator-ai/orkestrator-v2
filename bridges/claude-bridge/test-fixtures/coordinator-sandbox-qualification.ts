@@ -3,15 +3,25 @@ import { expect } from "bun:test";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  executableOnPath,
+  probeClaudeLinuxSandbox,
+} from "@orkestrator/protocol/node/claude-linux-sandbox";
 import {
   scriptedAnthropicEndpoint,
   scriptedClaudeEnv,
 } from "../../../tests/conformance/execution-policy/scripted-anthropic.js";
 import { withPolicyCliFixture } from "../../../tests/conformance/execution-policy/vendor-cli.js";
-import { claudeExecutionSandbox } from "../src/services/claude-execution-sandbox.js";
-import { claudePermissionMode } from "../src/services/claude-query-config.js";
+import {
+  claudeExecutionSandbox,
+  claudeReadOnlyCommandSandbox,
+} from "../src/services/claude-execution-sandbox.js";
+import {
+  claudePermissionMode,
+  READ_ONLY_TURN_POLICY,
+} from "../src/services/claude-query-config.js";
 import {
   claudeReadOnlyAllowedTools,
   coordinatorProcessPolicy,
@@ -37,7 +47,35 @@ export type Scenario =
   | "unavailable-hook-refuses-quoted"
   | "unavailable-hook-refuses-escaped"
   | "unavailable-hook-refuses-glob"
-  | "unavailable-hook-refuses-abbreviation";
+  | "unavailable-hook-refuses-abbreviation"
+  /**
+   * A `readOnly` review turn in an ordinary bridge (todo 0190), on a host
+   * staged without bubblewrap and socat (`PATH` holds only the reading
+   * programs): the bridge's own probe finds no sandbox, so the CLI is not
+   * asked for one, and a reading command runs.
+   */
+  | "read-only-unavailable-reads"
+  /** The same turn: the hook still refuses the writing reader. */
+  | "read-only-unavailable-hook-refuses"
+  /**
+   * Linux only: the block such a turn had before todo 0190 (the sandbox
+   * required) on the same staged host. The CLI refuses the whole turn.
+   */
+  | "read-only-required-refused";
+
+/** Programs a staged host without bubblewrap keeps: the shell and the readers the scenarios run. */
+const STAGED_PROGRAMS = ["sh", "bash", "zsh", "cat", "uniq", "env"] as const;
+
+/** A `PATH` holding only {@link STAGED_PROGRAMS}, so `bwrap` and `socat` are absent. */
+async function stagedPathWithoutSandbox(root: string): Promise<string> {
+  const bin = join(root, "staged-bin");
+  await mkdir(bin);
+  for (const name of STAGED_PROGRAMS) {
+    const target = Bun.which(name);
+    if (target) await symlink(target, join(bin, name));
+  }
+  return bin;
+}
 
 const coordinatorPolicy = coordinatorProcessPolicy({});
 
@@ -47,6 +85,23 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     const cwd = await realpath(fixture.cwd);
     await writeFile(join(cwd, "in.txt"), "a\na\nb\n");
     const unavailable = scenario.startsWith("unavailable-");
+    const readOnlyTurn = scenario.startsWith("read-only-");
+    const stagedPath = readOnlyTurn ? await stagedPathWithoutSandbox(fixture.root) : undefined;
+    // What the bridge decides for this turn, from the real probe run against
+    // the staged PATH, as an ordinary bridge in a container would see it.
+    const readOnlySandbox = stagedPath
+      ? claudeReadOnlyCommandSandbox({
+          commandSandbox: undefined,
+          coordinatorProcess: false,
+          platform: "linux",
+          linuxSandbox: () =>
+            probeClaudeLinuxSandbox({ onPath: (name) => executableOnPath(name, stagedPath) }),
+        })
+      : undefined;
+    if (readOnlySandbox) {
+      expect(readOnlySandbox.commandSandbox).toBe("unavailable");
+      expect(readOnlySandbox.reason).toContain("bubblewrap and socat");
+    }
     const command =
       scenario === "unavailable-hook-refuses-quoted"
         ? "sort '-oout.txt' in.txt"
@@ -58,9 +113,12 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
               ? "sort --out=out.txt in.txt"
               : scenario === "coordinator-sandbox-reads" ||
                   scenario === "apparmor-sandbox-reads" ||
-                  scenario === "unavailable-hook-reads"
+                  scenario === "unavailable-hook-reads" ||
+                  scenario === "read-only-unavailable-reads" ||
+                  scenario === "read-only-required-refused"
                 ? "cat in.txt"
-                : scenario === "coordinator-hook-refuses"
+                : scenario === "coordinator-hook-refuses" ||
+                    scenario === "read-only-unavailable-hook-refuses"
                   ? "uniq in.txt out.txt"
                   : "printf written > out.txt";
     if (scenario === "unavailable-hook-refuses-glob")
@@ -79,6 +137,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     const coordinatorTurn = scenario === "coordinator-hook-refuses" || unavailable;
+    const turnPolicy = readOnlyTurn ? READ_ONLY_TURN_POLICY : coordinatorPolicy;
     const options: Options = {
       cwd,
       ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
@@ -87,13 +146,13 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       persistSession: false,
       settingSources: [],
       abortController: controller,
-      ...(coordinatorTurn
+      ...(coordinatorTurn || readOnlyTurn
         ? {
             // The mode the bridge gives a coordinator turn; the hook decides first.
-            permissionMode: claudePermissionMode(coordinatorPolicy, undefined),
-            allowedTools: claudeReadOnlyAllowedTools({ policy: coordinatorPolicy }),
+            permissionMode: claudePermissionMode(turnPolicy, undefined),
+            allowedTools: claudeReadOnlyAllowedTools({ policy: turnPolicy }),
             hooks: {
-              PreToolUse: [{ hooks: [createCoordinatorReadOnlyHook(coordinatorPolicy, [])] }],
+              PreToolUse: [{ hooks: [createCoordinatorReadOnlyHook(turnPolicy, [])] }],
             },
           }
         : {
@@ -113,10 +172,18 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
               },
               false,
             )
-          : claudeExecutionSandbox(coordinatorPolicy, false, {
-              cwd,
-              commandSandbox: unavailable ? "unavailable" : "required",
-            }),
+          : readOnlySandbox
+            ? claudeExecutionSandbox(READ_ONLY_TURN_POLICY, false, {
+                cwd,
+                commandSandbox:
+                  scenario === "read-only-required-refused"
+                    ? "required"
+                    : readOnlySandbox.commandSandbox,
+              })
+            : claudeExecutionSandbox(coordinatorPolicy, false, {
+                cwd,
+                commandSandbox: unavailable ? "unavailable" : "required",
+              }),
       env: {
         ...scriptedClaudeEnv(fixture, endpoint, join(fixture.root, "claude")),
         // Hides bubblewrap, so the refusals below cannot lean on a sandbox.
@@ -124,6 +191,7 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
         ...(unavailable && scenario !== "unavailable-hook-reads" && process.platform === "linux"
           ? { PATH: fixture.root }
           : {}),
+        ...(stagedPath ? { PATH: stagedPath } : {}),
       },
       ...(unavailable && process.platform === "darwin"
         ? {
@@ -163,8 +231,19 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       clearTimeout(timeout);
       endpoint.stop();
     }
-    expect(failure).toBeUndefined();
     expect(controller.signal.aborted).toBe(false);
+    if (scenario === "read-only-required-refused") {
+      // The reported failure: refused before any model call, with the
+      // CLI's own reason (pinned CLI 2.1.309 on Linux, 2026-10-26).
+      expect(endpoint.modelCalls()).toBe(0);
+      const refusal = JSON.stringify([
+        failure instanceof Error ? failure.message : failure,
+        ...messages.filter((message) => message.type === "result"),
+      ]);
+      expect(refusal).toContain("Sandbox required but unavailable");
+      return { scenario, modelCalls: 0, toolError: false, written: false };
+    }
+    expect(failure).toBeUndefined();
     expect(endpoint.modelCalls()).toBe(2);
     const toolResults = messages.flatMap((message) =>
       message.type === "user" && Array.isArray(message.message.content)
@@ -186,7 +265,11 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       expect(output).toContain("setgroups");
       expect(output).toContain("Permission denied");
       expect(written).toBe(false);
-    } else if (scenario === "coordinator-sandbox-reads" || scenario === "unavailable-hook-reads") {
+    } else if (
+      scenario === "coordinator-sandbox-reads" ||
+      scenario === "unavailable-hook-reads" ||
+      scenario === "read-only-unavailable-reads"
+    ) {
       expect(commandFailure(toolResults[0]!)).toBeUndefined();
       expect(JSON.stringify(toolResults[0]!.content)).toContain("a\\na\\nb");
     } else {
@@ -194,7 +277,10 @@ export async function qualifyCoordinatorSandbox(scenario: Scenario, cliPath?: st
       expect(written).toBe(scenario === "unavailable-hook-refuses-glob");
       if (scenario === "unavailable-hook-refuses-glob")
         expect(await Bun.file(join(cwd, "out.txt")).text()).toBe("sentinel\n");
-      if (scenario === "coordinator-hook-refuses") {
+      if (
+        scenario === "coordinator-hook-refuses" ||
+        scenario === "read-only-unavailable-hook-refuses"
+      ) {
         expect(JSON.stringify(toolResults[0]!.content)).toContain("Coordinator is read-only");
       }
     }

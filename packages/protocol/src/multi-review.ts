@@ -33,6 +33,7 @@ import {
   type ReviewWorktreeSnapshotRecord,
 } from "./review-fanout.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS } from "./native-agent-policy-effects.js";
 
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
@@ -323,6 +324,11 @@ export interface MultiReviewStepRuntime {
   tokenCount?: number;
   /** Cumulative session usage when the step was dispatched; bookkeeping for {@link tokenCount}. */
   tokenBaseline?: number;
+  /**
+   * Why this step's read-only turn (consolidation) ran its commands without
+   * the provider's command sandbox, as its provider reported it.
+   */
+  commandSandboxOff?: string;
 }
 
 export type MultiReviewStepRuntimes = Partial<Record<MultiReviewStepKind, MultiReviewStepRuntime>>;
@@ -801,12 +807,19 @@ function optionalTokenCount(value: unknown): boolean {
 function isStepRuntime(value: unknown): value is MultiReviewStepRuntime {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["startedAt", "completedAt", "tokenCount", "tokenBaseline"]) &&
+    hasOnlyKeys(value, [
+      "startedAt",
+      "completedAt",
+      "tokenCount",
+      "tokenBaseline",
+      "commandSandboxOff",
+    ]) &&
     typeof value.startedAt === "string" &&
     optionalDate(value.startedAt) &&
     optionalDate(value.completedAt) &&
     optionalTokenCount(value.tokenCount) &&
-    optionalTokenCount(value.tokenBaseline)
+    optionalTokenCount(value.tokenBaseline) &&
+    optionalString(value.commandSandboxOff, READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS)
   );
 }
 

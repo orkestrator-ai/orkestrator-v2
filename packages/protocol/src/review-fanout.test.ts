@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS } from "./native-agent.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   isReviewConsolidationSession,
@@ -128,6 +129,24 @@ describe("reviewer records", () => {
       isReviewerRecord(reviewer({ modelSubstitution: { ...modelSubstitution, modelId: "" } })),
     ).toBe(false);
     expect(isReviewerRecord(reviewer({ modelSubstitution: "substituted" as never }))).toBe(false);
+  });
+
+  test("carries a bounded reason its commands ran without the sandbox (todo 0190)", () => {
+    const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+    expect(isReviewerRecord(reviewer({ commandSandboxOff: reason }))).toBe(true);
+    expect(
+      isReviewerRecord(
+        reviewer({ commandSandboxOff: "x".repeat(READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS) }),
+      ),
+    ).toBe(true);
+    expect(
+      isReviewerRecord(
+        reviewer({
+          commandSandboxOff: "x".repeat(READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS + 1),
+        }),
+      ),
+    ).toBe(false);
+    expect(isReviewerRecord(reviewer({ commandSandboxOff: true as never }))).toBe(false);
   });
 
   test("accepts a non-negative token count and rejects malformed usage", () => {

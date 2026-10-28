@@ -19,7 +19,11 @@ import {
   claudeWorkspaceCwd,
   resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
-import { claudeExecutionSandbox, claudeSandboxRefusal } from "./claude-execution-sandbox.js";
+import {
+  claudeExecutionSandbox,
+  claudeReadOnlyCommandSandbox,
+  claudeSandboxRefusal,
+} from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -110,6 +114,16 @@ export async function resolveQueryPlan(
   };
   const settingSources = claudeTurnSettingSources(session, options);
   session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
+  // A read-only turn asks for the CLI's sandbox only where it can run; where
+  // it cannot, the hook is the boundary and the turn says so.
+  const readOnlyCommandSandbox = isCoordinatorReadOnlyPolicy(policy)
+    ? claudeReadOnlyCommandSandbox()
+    : undefined;
+  if (readOnlyCommandSandbox?.reason !== undefined) {
+    session.readOnlyCommandSandboxOff = readOnlyCommandSandbox.reason;
+  } else {
+    delete session.readOnlyCommandSandboxOff;
+  }
   // Load MCP servers and plugins from config files. Both resolutions read
   // the same on-disk config, so they run concurrently and each merges once.
   // A coordinator's inline set is the injected Orkestrator server(s) only:
@@ -248,6 +262,7 @@ export async function resolveQueryPlan(
     policyPermissionMode,
     permissionMode,
     coordinatorReadOnly,
+    readOnlyCommandSandbox,
     allowedTools,
     disallowedTools,
     fastMode,
@@ -305,6 +320,7 @@ export function claudeQueryOptions(
     policyPermissionMode,
     permissionMode,
     coordinatorReadOnly,
+    readOnlyCommandSandbox,
     allowedTools,
     disallowedTools,
     fastMode,
@@ -374,7 +390,12 @@ export function claudeQueryOptions(
     ...(disallowedTools?.length ? { disallowedTools } : {}),
     ...(policy?.sandbox === "provider" || coordinatorReadOnly
       ? {
-          sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options), { cwd }),
+          sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options), {
+            cwd,
+            ...(readOnlyCommandSandbox
+              ? { commandSandbox: readOnlyCommandSandbox.commandSandbox }
+              : {}),
+          }),
         }
       : {}),
     abortController,

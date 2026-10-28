@@ -123,8 +123,34 @@ export const READ_ONLY_TURN_POLICY_NOTE =
  */
 export function readOnlyTurnReportedPolicy(
   turnPolicy: NativeAgentExecutionPolicy,
+  options: {
+    /**
+     * Why the provider's command sandbox cannot run where this turn runs, when
+     * the turn therefore runs its commands without it (Claude on a Linux host
+     * without a working bubblewrap).
+     */
+    commandSandboxOff?: string;
+  } = {},
 ): NativeAgentExecutionPolicy {
-  return appendNativeAgentPolicyNote(turnPolicy, READ_ONLY_TURN_POLICY_NOTE);
+  const reported = appendNativeAgentPolicyNote(turnPolicy, READ_ONLY_TURN_POLICY_NOTE);
+  if (options.commandSandboxOff === undefined) return reported;
+  return appendNativeAgentPolicyNote(
+    // Isolation says what holds now: no OS sandbox. The network stays
+    // restricted because no admitted tool or command can reach it.
+    { ...reported, sandbox: reported.sandbox === "provider" ? "none" : reported.sandbox },
+    readOnlyCommandSandboxOffNote(options.commandSandboxOff),
+  );
+}
+
+/** Bound on a stored reason why a read-only turn's command sandbox was off. */
+export const READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS = 1_024;
+
+/**
+ * What a read-only turn whose commands ran without the provider's command
+ * sandbox says about its boundary, in Agent Info and on a Multi Review step.
+ */
+export function readOnlyCommandSandboxOffNote(reason: string): string {
+  return `Commands run without the command sandbox, so the read-only command filter and tool allowlist are their only boundary. ${reason}`;
 }
 
 /**

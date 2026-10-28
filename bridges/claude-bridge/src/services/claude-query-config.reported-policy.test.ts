@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   READ_ONLY_TURN_POLICY_NOTE,
+  readOnlyCommandSandboxOffNote,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 import { claudeReportedPolicy } from "./claude-query-config.js";
@@ -26,6 +27,34 @@ describe("claudeReportedPolicy", () => {
       projectResources: false,
       note: READ_ONLY_TURN_POLICY_NOTE,
     });
+  });
+
+  test("a read-only turn without the command sandbox reports no sandbox, and why", () => {
+    const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+    const reported = claudeReportedPolicy({
+      executionPolicy: sessionPolicy,
+      status: "running",
+      commandDiscoveryInputs: { readOnly: true, includeLocalSettings: false },
+      readOnlyCommandSandboxOff: reason,
+    });
+    expect(reported).toMatchObject({
+      id: "coordinator-read-only",
+      sandbox: "none",
+      approvals: "deny",
+      networkAccess: "restricted",
+    });
+    expect(reported?.note).toBe(
+      `${READ_ONLY_TURN_POLICY_NOTE} ${readOnlyCommandSandboxOffNote(reason)}`,
+    );
+    // Between turns the session's own policy is reported, as before.
+    expect(
+      claudeReportedPolicy({
+        executionPolicy: sessionPolicy,
+        status: "idle",
+        commandDiscoveryInputs: { readOnly: true, includeLocalSettings: false },
+        readOnlyCommandSandboxOff: reason,
+      }),
+    ).toEqual(sessionPolicy);
   });
 
   test("reports the session's policy between turns and during ordinary turns", () => {

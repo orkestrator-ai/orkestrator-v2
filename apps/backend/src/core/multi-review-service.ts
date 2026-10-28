@@ -436,6 +436,7 @@ function resetReviewerForRestart(
   delete reviewer.tokenCount;
   delete reviewer.cacheReadTokens;
   delete reviewer.usageFinalizationPolls;
+  delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
   delete reviewer.startedAt;
@@ -4068,6 +4069,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
+    // Consolidation is a read-only turn; where its commands ran without the
+    // provider's sandbox, its step says so. Kept once seen.
+    const stepRuntime = workflow.stepRuntimes?.[request.kind];
+    if (
+      request.kind === "consolidate" &&
+      stepRuntime &&
+      observation.commandSandboxOff !== undefined &&
+      stepRuntime.commandSandboxOff !== observation.commandSandboxOff
+    ) {
+      stepRuntime.commandSandboxOff = observation.commandSandboxOff;
+      await this.save(workflow, token);
+    }
     if ((status === "idle" || status === "error") && observation.turnSettled === false) return;
     if (status === "running") {
       if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {

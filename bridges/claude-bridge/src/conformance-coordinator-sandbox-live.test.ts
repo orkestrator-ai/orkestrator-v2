@@ -25,3 +25,23 @@ describe("Claude coordinator sandbox qualification", () => {
     (supported ? test : test.skip)(scenario, () => qualifyCoordinatorSandbox(scenario), 20_000);
   }
 });
+
+/**
+ * A `readOnly` review turn in an ordinary bridge (Multi Review's reports) on a
+ * host without bubblewrap or socat, staged by hiding both on `PATH` the way
+ * the original evidence was gathered (todo 0190). The required case is the
+ * behaviour before the fix, so it is pinned only on Linux, where it was seen.
+ */
+describe("Claude read-only turn without a working sandbox", () => {
+  for (const scenario of [
+    "read-only-unavailable-reads",
+    "read-only-unavailable-hook-refuses",
+  ] as const) {
+    (supported ? test : test.skip)(scenario, () => qualifyCoordinatorSandbox(scenario), 20_000);
+  }
+  (process.platform === "linux" ? test : test.skip)(
+    "read-only-required-refused",
+    () => qualifyCoordinatorSandbox("read-only-required-refused"),
+    20_000,
+  );
+});

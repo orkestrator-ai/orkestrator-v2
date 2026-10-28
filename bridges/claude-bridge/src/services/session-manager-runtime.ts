@@ -40,6 +40,7 @@ import {
   claudeWorkspaceCwd,
   resolveClaudeTurnPlugins,
 } from "./claude-query-config.js";
+import { claudeReadOnlyCommandSandbox } from "./claude-execution-sandbox.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import {
   claudeRuntimeOwnsLiveWork,
@@ -152,8 +153,15 @@ export function claudeLaunchProfile(
         ? { asksForApproval: true }
         : {}),
       // A coordinator's allow-list names the Orkestrator MCP server only when
-      // the turn has one.
-      ...(isCoordinatorReadOnlyPolicy(policy) ? { agentMcp: options?.agentMcp !== undefined } : {}),
+      // the turn has one. Whether the CLI was asked for its sandbox follows the
+      // probe, so a host whose answer changed starts a new CLI
+      // rather than joining one launched under the other boundary.
+      ...(isCoordinatorReadOnlyPolicy(policy)
+        ? {
+            agentMcp: options?.agentMcp !== undefined,
+            commandSandbox: claudeReadOnlyCommandSandbox().commandSandbox,
+          }
+        : {}),
     }),
     outputSchema: options?.outputSchema === undefined ? null : JSON.stringify(options.outputSchema),
     agent: options?.agent,

@@ -70,6 +70,7 @@ import { assertPromptOutcomeKnown, bridgePromptBody } from "./http-bridge-prompt
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import {
   claudeBackgroundObservation,
+  claudeReadOnlySandboxObservation,
   claudeTurnActivityFromPayload,
   normalizeClaudeBackgroundTasks,
 } from "./http-bridge-claude-runtime.js";
@@ -486,6 +487,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { usagePending: true }
         : {}),
       ...claudeBackgroundObservation(body, status),
+      ...claudeReadOnlySandboxObservation(body),
     };
   }
 

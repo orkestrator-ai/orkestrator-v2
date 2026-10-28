@@ -209,6 +209,8 @@ class Provider implements BuildPipelineProvider {
   usagePending = false;
   backgroundWorkLive = false;
   retainedContinuation = false;
+  /** What every session reports as its read-only turn's missing command sandbox. */
+  commandSandboxOff: string | undefined;
   usageFromMessages?: (messages: readonly unknown[]) => NativeAgentContextUsage | undefined;
   usageMessageLimit?: number;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
@@ -300,6 +302,9 @@ class Provider implements BuildPipelineProvider {
       ...(this.retainedContinuation
         ? { retainedContinuationRequestIds: Array.from(this.sends.keys()) }
         : {}),
+      ...(this.commandSandboxOff === undefined
+        ? {}
+        : { commandSandboxOff: this.commandSandboxOff }),
     };
   }
   /**
@@ -11349,6 +11354,58 @@ test("cancelling package preparation stops its fix-model session before settling
       expect((await snapshot(started.id))?.stepRuntimes?.prepare?.completedAt).toBeDefined();
       expect(provider.aborted).toContain(sessionId);
       expect(provider.creates).toHaveLength(1);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("read-only reviewers and consolidation record a missing command sandbox (todo 0190)", async () => {
+  const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+  const provider = new Provider();
+  provider.commandSandboxOff = reason;
+  await withService(
+    "env-sandbox-off",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      // Read back through storage, so the field also passes the record validators.
+      const ready = (await snapshot(started.id))!;
+      expect(ready.reviewers.length).toBeGreaterThan(0);
+      for (const reviewer of ready.reviewers) {
+        expect(reviewer.status).toBe("completed");
+        expect(reviewer.commandSandboxOff).toBe(reason);
+      }
+      expect(ready.stepRuntimes?.consolidate?.commandSandboxOff).toBe(reason);
+      // Preparation is not a read-only turn, so its step never claims one.
+      expect(ready.stepRuntimes?.prepare?.commandSandboxOff).toBeUndefined();
+      // Both turns were sent read-only, which is why the bridge chose the hook.
+      const readOnlySends = Array.from(provider.sends.values()).filter(
+        (send) => send.options.readOnly === true,
+      );
+      expect(readOnlySends.length).toBe(ready.reviewers.length + 1);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("a host with a working sandbox leaves the review's steps without a note", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-sandbox-on",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      for (const reviewer of ready.reviewers) expect(reviewer.commandSandboxOff).toBeUndefined();
+      expect(ready.stepRuntimes?.consolidate?.commandSandboxOff).toBeUndefined();
     },
     { packageFlow: true },
   );

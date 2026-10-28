@@ -1422,6 +1422,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.tokenCount;
   delete reviewer.cacheReadTokens;
   delete reviewer.usageFinalizationPolls;
+  delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
   delete reviewer.startedAt;

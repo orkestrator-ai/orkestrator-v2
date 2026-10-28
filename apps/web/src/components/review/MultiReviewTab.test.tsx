@@ -9,6 +9,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { readOnlyCommandSandboxOffNote } from "@orkestrator/protocol/native-agent";
 import {
   TerminalProvider,
   useTerminalContext,
@@ -1529,6 +1530,43 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(reviewerError.className).toContain("[overflow-wrap:anywhere]");
     expect(reviewerError.className).not.toContain("truncate");
     expect(reviewerError.className).not.toContain("line-clamp");
+  });
+
+  test("says where a read-only step's commands ran without the sandbox (todo 0190)", async () => {
+    const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
+    const ready = readyWorkflow();
+    ready.reviewers[0] = { ...ready.reviewers[0]!, commandSandboxOff: reason };
+    ready.stepRuntimes = {
+      consolidate: {
+        startedAt: "2026-10-28T10:00:00.000Z",
+        completedAt: "2026-10-28T10:05:00.000Z",
+        commandSandboxOff: reason,
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    selectFlowNode("Reviewer 1 ·");
+    const note = await screen.findByTestId("multi-reviewer-sandbox-off-reviewer-1");
+    expect(note.textContent).toBe(readOnlyCommandSandboxOffNote(reason));
+    expect(note.textContent).toContain("read-only command filter");
+    expect(note.getAttribute("title")).toBe(readOnlyCommandSandboxOffNote(reason));
+    // A reviewer whose host had a sandbox says nothing.
+    selectFlowNode("Reviewer 2 ·");
+    await inspector().findByText(/Read only/);
+    expect(screen.queryByTestId("multi-reviewer-sandbox-off-reviewer-2")).toBeNull();
+
+    selectFlowNode("Consolidation");
+    expect((await screen.findByTestId("multi-review-consolidation-sandbox-off")).textContent).toBe(
+      readOnlyCommandSandboxOffNote(reason),
+    );
   });
 
   test("records the handoff and opens its backend-owned session after delivery", async () => {

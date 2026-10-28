@@ -469,20 +469,63 @@ bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
 
-Two consumers use it:
+Three consumers use it:
 
 - the backend's coordinator table, which reports Claude as
-  `provider-configured` with that reason; and
+  `provider-configured` with that reason;
 - the Claude bridge, which runs the probe where the CLI runs (the host, or
   inside a container) and refuses a turn that requires the sandbox: a session
   whose execution policy sets `sandbox: "provider"`, or a coordinator launched
-  as `required`. A read-only review turn in an ordinary bridge is not refused
-  yet: it runs, and only its Bash calls fail
-  ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
-  The prompt route answers 422
+  as `required`. The prompt route answers 422
   `{ kind: "sandbox-unavailable" }` before anything is journaled, and the
   backend shows the reason as the prompt's error
-  (`claudeSandboxRefusal`, `bridges/claude-bridge/src/services/claude-execution-sandbox.ts`).
+  (`claudeSandboxRefusal`, `bridges/claude-bridge/src/services/claude-execution-sandbox.ts`); and
+- a read-only review turn in an ordinary bridge (a prompt with `readOnly`:
+  Multi Review's consolidation and packaged reviewers, plan-mode fan-out
+  reviewers), described next.
+
+#### Read-only review turns without a working sandbox
+
+Such a turn runs under `READ_ONLY_TURN_POLICY`, the coordinator's boundary,
+but no launcher has qualified the host for it. It used to ask the CLI for a
+required sandbox whatever the host, so the pinned CLI refused the whole turn
+before any model call where `bwrap` or `socat` is missing (every container:
+the image ships neither), and under AppArmor's `bwrap-userns-restrict` the
+turn ran and every Bash call failed in `apply-seccomp`.
+
+Now the bridge decides per turn (`claudeReadOnlyCommandSandbox`): a
+coordinator process keeps its launcher's answer (absent reads as `required`);
+otherwise macOS asks for Seatbelt, Linux follows the probe, and any other
+platform has none. Where there is none, the turn runs with
+`enabled: false, failIfUnavailable: false`, the way an `unavailable`
+coordinator does. Everything else that holds the turn is unchanged: the
+PreToolUse command hook, the reading-tool allowlist, the denied tools, the
+`deny` approvals, `allowUnsandboxedCommands: false` and the `denyWrite` list
+(inert without the sandbox, kept as intent). The turn is never refused for
+it. The decision is part of the launch boundary, so a warm CLI launched under
+the other answer is not joined.
+
+The boundary is shown, not silent:
+
+- **Agent Info.** While the turn runs, the reported policy says `sandbox:
+  "none"` and its note adds `readOnlyCommandSandboxOffNote` with the probe's
+  reason (`claudeReportedPolicy`, `readOnlyTurnReportedPolicy`).
+- **Multi Review.** `GET /session/:id` carries `readOnlyCommandSandbox:
+  { state: "off", reason }` until the next non-read-only turn; the backend
+  reads it as `commandSandboxOff` on the session observation and keeps it on
+  the reviewer (`ReviewerRecord.commandSandboxOff`) and on the consolidation
+  step (`stepRuntimes.consolidate.commandSandboxOff`). The reviewer's and the
+  consolidation step's inspector show it as a warning note. A restarted
+  reviewer or step starts without it.
+
+Proved by the bridge's session-manager and route tests with an injected probe
+answer, and by the `read-only-*` cases of
+`conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
+`socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
+case that pins the CLI's own refusal of a required sandbox runs only on Linux.
+Not yet run: a real Multi Review in a container environment and on stock
+Ubuntu
+([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
 `enforced` on such a host, an administrator chooses one of:

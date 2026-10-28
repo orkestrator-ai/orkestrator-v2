@@ -10,9 +10,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: open.
-2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: open (depends on 1).
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: open; the code answers the open question.
+1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
+2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux-only live case is under "Needs verification".
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: open. The "before" run was not done (A10); the code answers the open question.
 
 ### 1. Choose and implement the behaviour
 
@@ -101,56 +101,95 @@ chosen on purpose.
 
 ## Current state
 
-- **Linux without `bwrap` or `socat` (including every container: the image
-  ships neither).** The pinned CLI 2.1.309 refuses the whole turn before any
-  model call: `Sandbox required but unavailable: sandbox is enabled but
-  dependencies are missing … sandbox.failIfUnavailable is set — refusing`
-  (`error_during_execution`, 0 model calls). Run on `omarchy-hp` on
-  2026-10-26 with the managed CLI and `PATH` hiding both programs.
-- **So Multi Review with Claude in a container environment should fail
-  today** (code reading at `863b5782`, not run). Its Claude bridge runs in the
-  container: `bridgeConnection` calls `start_claude_server` for any
-  non-local environment (`apps/backend/src/core/multi-review-service.ts:4992-5020`),
-  which launches `/opt/claude-bridge` without
-  `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX` (`commands-containers.ts:929-950`),
-  so the sandbox reads as `required`. The image's only `apt-get install`
-  lines (`docker/Dockerfile:71-100`, `:469`, both `--no-install-recommends`)
-  install neither `bubblewrap` nor `socat`. Consolidation is always a
-  read-only turn (`multi-review-service.ts:3777`, `:3969`), and so are a
-  packaged review's reviewers (`reviewerMode: "plan"`, `:3414`), so a Claude
-  consolidation model, or a Claude reviewer in a packaged review, would be
-  refused.
-- **Linux whose bubblewrap cannot nest the CLI's namespace (Ubuntu's AppArmor
-  `bwrap-userns-restrict`).** The CLI starts the turn; Read, Grep and Glob
-  work, and every Bash call fails in `apply-seccomp`. 0145's bridge refusal
-  deliberately leaves these turns alone (`claudeSandboxRefusal` refuses only
-  provider-sandbox sessions and coordinators launched as `required`), so this
-  is unchanged.
-- macOS: Seatbelt always starts; not affected.
+Updated 2026-10-28 on branch `todo-0190-claude-read-only-no-sandbox`, based on
+`main` at `1d1f0a87`.
+
+- **Done: option (b).** A `readOnly` turn in an ordinary bridge (no launcher
+  answer) decides per turn whether to ask the CLI for its sandbox
+  (`claudeReadOnlyCommandSandbox`,
+  `bridges/claude-bridge/src/services/claude-execution-sandbox.ts`): macOS
+  asks for Seatbelt, Linux follows the cached bubblewrap probe, any other
+  platform has none, and a coordinator process keeps its launcher's answer
+  (absent still reads as `required`). Where there is none the turn runs with
+  `enabled: false, failIfUnavailable: false`; the hook, the reading-tool
+  allowlist, the denied tools, `deny` approvals,
+  `allowUnsandboxedCommands: false` and `denyWrite` are unchanged. The answer
+  is part of the CLI's launch boundary (`claudeLaunchProfile`), so a warm CLI
+  launched under the other answer is not joined. No read-only turn is refused
+  for it, before or by the CLI.
+- **The boundary is shown.** The bridge keeps the reason on the session
+  (`readOnlyCommandSandboxOff`, set by `resolveQueryPlan`, cleared by the next
+  turn that is not read-only).
+  - Agent Info: while the turn runs, `claudeReportedPolicy` reports
+    `sandbox: "none"` and adds `readOnlyCommandSandboxOffNote(reason)` to the
+    note (`readOnlyTurnReportedPolicy`,
+    `packages/protocol/src/native-agent-policy-effects.ts`).
+  - Multi Review: `GET /session/:id` carries
+    `readOnlyCommandSandbox: { state: "off", reason }`; the backend reads it
+    into `ProviderSessionObservation.commandSandboxOff`
+    (`claudeReadOnlySandboxObservation`, bounded to 1,024 characters), the
+    fan-out keeps it on `ReviewerRecord.commandSandboxOff` and the
+    consolidation observation on `stepRuntimes.consolidate.commandSandboxOff`.
+    The reviewer's and the consolidation step's inspector show it as a warning
+    note (`CommandSandboxOffNote` in `MultiReviewTab.tsx`). A reviewer's new
+    session, a restarted reviewer and a re-run step start without it.
+- **Before this change** (kept for the record): on Linux without `bwrap` or
+  `socat` (every container: the image ships neither) the pinned CLI 2.1.309
+  refused the whole turn before any model call (`Sandbox required but
+  unavailable: … sandbox.failIfUnavailable is set — refusing`, seen on
+  `omarchy-hp` on 2026-10-26 with `PATH` hiding both programs); under
+  Ubuntu's AppArmor `bwrap-userns-restrict` the turn started and every Bash
+  call failed in `apply-seccomp`. A container environment's reviewers run in
+  the container (`bridgeConnection` starts `start_claude_server` for any
+  non-local environment, `apps/backend/src/core/multi-review-service.ts`), so
+  a Claude consolidation model or a Claude reviewer in a packaged review was
+  refused there.
+- macOS: Seatbelt always starts; not affected (the turn still asks for it).
+- Durable description: "Read-only review turns without a working sandbox" in
+  [`docs/architecture/coordinator.md`](../../architecture/coordinator.md).
 
 ## Outstanding work
 
 ### Code
 
-1. **Decide and implement one behaviour for read-only turns where the
-   sandbox cannot run commands.** Options: (a) refuse the turn with the
-   probe's reason (`claudeSandboxRefusal` already has it), as for a
-   provider-sandbox session; (b) run it with the sandbox off and the bridge's
-   read-only hook as the boundary, the way a `provider-configured`
-   coordinator runs; (c) keep the CLI's behaviour. (b) keeps Multi Review
-   working in containers and on Ubuntu, but drops OS containment for those
-   turns, which nothing shows the user today. (a) is fail-closed but makes
-   Multi Review with Claude unusable there. Whichever is chosen, say it where
-   Multi Review shows a reviewer's boundary.
-2. **Test the chosen path** with the probe's injected answer, in
-   `claude-execution-sandbox.test.ts` and the prompt route, and extend
-   `conformance-coordinator-sandbox-live.test.ts` with a `readOnly` turn.
+1. [x] **Decide and implement one behaviour for read-only turns where the
+   sandbox cannot run commands.** Done 2026-10-28: (b), run with the sandbox
+   off and the read-only hook as the boundary, shown in Agent Info and on the
+   Multi Review reviewer and consolidation step (A1 to A9).
+2. [x] **Test the chosen path.** Done 2026-10-28:
+   - `claude-execution-sandbox.test.ts`: the resolver per platform, probe
+     answer, launcher answer and coordinator process without one; the sandbox
+     block differs only in `enabled` and `failIfUnavailable`; read-only turns
+     are never refused.
+   - `session-manager-sandbox-refusal.test.ts`: real query plan with the
+     probe injected (`missing-programs` and `nested-user-namespace`): the CLI
+     gets the sandbox off with the hook, allowlist and denied tools intact,
+     the reported policy says `none` with the reason, the reason outlives the
+     turn and the next ordinary turn clears it; a working probe keeps the
+     sandbox required.
+   - `routes/session.test.ts`: the prompt route accepts a read-only turn on a
+     failing host even in a provider-sandbox session (replacing 0145's "left
+     as it was" assertion); `GET /session/:id` serves `readOnlyCommandSandbox`
+     while running and idle, and drops it once cleared.
+   - `claude-query-config.reported-policy.test.ts`, protocol
+     `review-fanout.test.ts` and `multi-review.test.ts` (bounded record
+     fields), backend `http-bridge-provider.test.ts` (parsing and bounds),
+     `multi-review-service.test.ts` (a packaged review records it on every
+     read-only reviewer and on consolidation, not on preparation; a working
+     host records nothing), web `MultiReviewTab.test.tsx` (the notes).
+   - Live: `conformance-coordinator-sandbox-live.test.ts` gains
+     `read-only-unavailable-reads`, `read-only-unavailable-hook-refuses` and,
+     on Linux only, `read-only-required-refused` (A8). The first two passed on
+     macOS on 2026-10-28 against the pinned CLI and a scripted endpoint.
 
 ### Qualification
 
 - A Multi Review run with a Claude reviewer in a container environment and on
   a stock Ubuntu host, before and after the change. Batch with
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+  The "before" half can no longer be run from this branch; `main` before it
+  merges, or the `read-only-required-refused` live case on Linux, stands in
+  for it (A10).
 
 ## Constraints and rationale
 
@@ -162,16 +201,114 @@ chosen on purpose.
   turned a degraded review on Ubuntu into a failed one without anyone choosing
   that.
 
+## Assumptions and decisions
+
+Made 2026-10-28 while implementing.
+
+- **A1. Behaviour where the sandbox cannot run.** Options: (a) refuse the
+  turn with the probe's reason; (b) run with the sandbox off and the hook as
+  the boundary; (c) keep the CLI's behaviour. **Chosen: (b)**, as the task
+  analysis recommended. Why: Multi Review with Claude keeps working in every
+  container and on Ubuntu, and it reuses the coordinator's `unavailable`
+  path, which the live suite already qualifies. Pros: no failed reviews; no
+  new way to write (same hook, allowlist, denied tools and approvals). Cons:
+  no OS containment for those turns; the hook is a command allowlist, not a
+  kernel boundary, which is why A2 shows it.
+- **A2. Where the boundary is shown.** Options: Agent Info only; Agent Info
+  plus the Multi Review reviewer; plus the consolidation step as well.
+  **Chosen: all three.** Why: consolidation is always a read-only turn, so it
+  is the case users hit most (every Claude consolidation model in a
+  container), and the reviewer card is where a user judges a review. Pros:
+  visible where the report is read. Cons: two new optional record fields
+  (`ReviewerRecord.commandSandboxOff`,
+  `MultiReviewStepRuntime.commandSandboxOff`) and a snapshot field.
+- **A3. How Multi Review learns it.** Options: read the reported policy
+  (present only while the turn runs); a request-scoped field per request id;
+  a session field kept until the next turn that is not read-only.
+  **Chosen: the session field** (`readOnlyCommandSandbox` on
+  `GET /session/:id`, `commandSandboxOff` on the observation). Why: a short
+  turn can finish between two polls, and every turn on a reviewer or
+  consolidation session is read-only. Pros: no new route; any poll sees it;
+  an older bridge simply sends nothing. Cons: on a session that mixes turns
+  it describes the latest read-only one, so the backend records it only on
+  read-only steps (reviewers, `consolidate`) and keeps the first value seen.
+- **A4. Coordinator process without a launcher answer.** Options: probe like
+  an ordinary bridge; keep `required`. **Chosen: keep `required`.** Why: the
+  documented rule that an older launcher must never turn a missing sandbox
+  into an unsandboxed coordinator. Cons: none new; such a host is refused by
+  `claudeSandboxRefusal` only when a launcher value exists, as before.
+- **A5. Platforms other than macOS and Linux (Windows).** Options: keep
+  asking for a required sandbox; treat as no sandbox, like the backend's
+  coordinator table (`defaultCoordinatorHostCapabilities`). **Chosen: no
+  sandbox, with a generic reason.** Why: the pinned CLI's Windows sandbox is
+  off behind a vendor flag, so a required one would refuse the turn just as
+  on Linux; the coordinator already runs hook-only there. Pros: one rule for
+  both read-only paths. Cons: unverified on Windows ("Needs verification").
+- **A6. Reported isolation.** Options: keep `sandbox: "provider"` and only
+  add a note; report `sandbox: "none"`. **Chosen: `none` plus the note.**
+  Why: Agent Info's summary would otherwise say "Provider sandbox" beside a
+  note saying there is none. `networkAccess` stays `restricted`: no admitted
+  tool or command can reach the network. Display only; nothing in the
+  backend decides on it.
+- **A7. Warm CLI reuse.** Options: record the answer at launch and report
+  the launch's; put it in the launch boundary. **Chosen: the launch
+  boundary.** Why: a CLI launched with the sandbox on must not be joined by a
+  turn reported as off, or the reverse, after the probe's 5-minute cache
+  changes its answer. Pros: what is reported is what the CLI runs. Cons: on
+  that rare flip, a runtime that still owes work answers the usual 409 for a
+  launch-only change; an idle one is retired.
+- **A8. Live case.** Options: unit and route tests only; a `readOnly` case
+  in the existing live suite staged by hiding `bwrap` and `socat` on `PATH`.
+  **Chosen: the live case**, as recommended. The staged `PATH` holds only a
+  shell and the readers the scenarios run, the bridge's real probe is run
+  against it (`missing-programs`), and the pinned CLI gets the resulting
+  block. `read-only-required-refused` reproduces the original refusal with
+  the old block and is Linux-only, because that refusal was only ever seen on
+  Linux. Pros: proves the CLI is not asked for a sandbox and that the hook
+  still refuses. Cons: a staged absence, not a real container; the Linux
+  cases have not run (this branch was built on macOS).
+- **A9. Record compatibility.** Options: new optional keys in the strict
+  record validators (`hasOnlyKeys`), as every earlier reviewer field
+  (`cacheReadTokens`, `modelSubstitution`) did; a version handshake; reuse an
+  existing field such as `error`. **Chosen: new optional keys.** Why: there is
+  no handshake, and `error` means failure. Pros: additive and bounded
+  (1,024 characters, truncated by the backend). Cons: an older renderer or a
+  downgraded backend rejects a workflow that carries one, as with the earlier
+  fields; it appears only on hosts where that review used to fail outright.
+- **A10. The "before" container run.** Options: run it now with an isolated
+  profile and `--fixture-environments local,container`; skip it. **Chosen:
+  not run.** Why: it needs the workspace image and a real Claude login in an
+  isolated `dev:test` profile, and this delegation forbids using the user's
+  provider logins; on this branch the code no longer has the old behaviour.
+  The staged live case stands in for the CLI's refusal. Cons: the High
+  rating's container failure is still inferred from code, not observed.
+- **A11. Rating.** Kept High: what is left is qualification of behaviour that
+  is on by default for every Claude read-only turn on Linux and has not run
+  on the real stack.
+
 ## Open questions
 
-- Is Multi Review with Claude reviewers in containers already failing for
-  users today (the container case above), or are its read-only turns always
-  on the host?
+- Answered by the code (2026-10-27): Multi Review's Claude reviewers and
+  consolidation in a container environment run in the container, not on the
+  host, so before this change they were refused there.
 
 ## Needs verification
 
-- The container case on a real environment (the evidence above hid the
-  programs with `PATH` on a host).
+- The container case on a real environment, before (on `main` before this
+  merges) and after: a Multi Review with a Claude consolidation model and a
+  Claude reviewer in a packaged review, in an isolated profile with
+  `--fixture-environments local,container` and a throwaway Claude login. After:
+  the reviews complete, the reviewer and consolidation inspectors show the
+  sandbox note, and Agent Info for a running reviewer says "No sandbox".
+- A stock Ubuntu 24.04 or 26.04 host with AppArmor's `bwrap-userns-restrict`:
+  the probe answers `nested-user-namespace`, the read-only turn runs Bash
+  commands (no `apply-seccomp` failure) and shows the note.
+- The Linux run of the live suite
+  (`bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1`),
+  including `read-only-required-refused` and the staged `PATH` (a shell and
+  `cat`/`uniq` only) on a real Linux host; on macOS only the two
+  `read-only-unavailable-*` cases ran.
+- Windows (A5): that a read-only turn there runs on the hook alone.
 
 ## Related
 

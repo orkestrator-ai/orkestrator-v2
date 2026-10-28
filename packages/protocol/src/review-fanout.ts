@@ -27,6 +27,7 @@ import {
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import {
   isNativeAgentModelSubstitution,
+  READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS,
   type NativeAgentModelSubstitution,
 } from "./native-agent.js";
 
@@ -170,6 +171,13 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   cacheReadTokens?: number;
   /** Bounded terminal polls while a provider reconciles its exact cumulative total. */
   usageFinalizationPolls?: number;
+  /**
+   * Why this reviewer's read-only turn ran its commands without the provider's
+   * command sandbox, as its provider reported it: the sandbox
+   * cannot run where the reviewer runs, so the read-only command filter was
+   * the whole boundary. The reviewer's card says so.
+   */
+  commandSandboxOff?: string;
   startedAt?: string;
   completedAt?: string;
 }
@@ -381,6 +389,7 @@ const REVIEWER_KEYS = [
   "tokenCount",
   "cacheReadTokens",
   "usageFinalizationPolls",
+  "commandSandboxOff",
   "progressAt",
   "progressDigest",
   "stalledSince",
@@ -429,6 +438,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalCount(value.tokenCount) &&
     optionalCount(value.cacheReadTokens) &&
     optionalFinalUsagePollCount(value.usageFinalizationPolls) &&
+    optionalString(value.commandSandboxOff, READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS) &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&

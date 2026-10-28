@@ -236,9 +236,10 @@ export async function ensureEnvironmentImage(
   try {
     await download;
   } catch (error) {
-    // Keeps "No such image" so the lifecycle error is classified as an image problem.
+    // Preserve subprocess metadata so lifecycle reporting can explain disk and timeout failures.
     throw new Error(
-      `No such image: ${imageRef}. Downloading ${releaseImageReference()} failed: ${message(error)}`,
+      `Environment image download failed: ${releaseImageReference()}: ${message(error)}`,
+      { cause: error },
     );
   }
 }

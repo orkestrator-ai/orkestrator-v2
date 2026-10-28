@@ -1,5 +1,5 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { HostMaintenanceSnapshot, HostTask } from "@orkestrator/protocol/host-maintenance";
 import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
 import * as realBackend from "@/lib/backend";
@@ -26,7 +26,30 @@ const runningTask: HostTask = {
   updatedAt: "2026-10-28T00:00:00.000Z",
   completedAt: null,
 };
-const startHostImageUpdate = mock(async () => runningTask);
+const startHostImageUpdate = mock(async () => {
+  imageTask = runningTask;
+  return runningTask;
+});
+
+let poll: () => void;
+let interval: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  const original = globalThis.setInterval;
+  interval = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    delay?: number,
+  ) => {
+    if (delay !== 2_000) return original(callback, delay);
+    poll = callback;
+    return 1 as unknown as ReturnType<typeof setInterval>;
+  }) as typeof setInterval);
+});
+
+async function tick() {
+  await act(async () => {
+    poll();
+  });
+}
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -42,8 +65,19 @@ afterAll(() => {
 
 afterEach(() => {
   cleanup();
+  interval.mockRestore();
   imageTask = undefined;
-  startHostImageUpdate.mockClear();
+  getDockerImageStatus.mockClear();
+  getHostMaintenance.mockReset();
+  getHostMaintenance.mockImplementation(
+    async () =>
+      ({ tasks: imageTask ? { "image-update": imageTask } : {} }) as HostMaintenanceSnapshot,
+  );
+  startHostImageUpdate.mockReset();
+  startHostImageUpdate.mockImplementation(async () => {
+    imageTask = runningTask;
+    return runningTask;
+  });
 });
 
 const { DockerImageStatusPanel } = await import("./DockerImageStatusPanel");
@@ -135,7 +169,7 @@ describe("DockerImageStatusPanel", () => {
       await screen.findByText("Downloading ghcr.io/orkestrator-ai/orkestrator-v2:2.34.0"),
     ).toBeTruthy();
     expect(startHostImageUpdate).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Download image" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download image" }) === null).toBe(true);
   });
 
   test("shows a download an environment create already started", async () => {
@@ -147,8 +181,78 @@ describe("DockerImageStatusPanel", () => {
     expect(
       await screen.findByText("Downloading ghcr.io/orkestrator-ai/orkestrator-v2:2.34.0"),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Download image" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download image" }) === null).toBe(true);
   });
+
+  test("adopts an external download after mounting and refreshes image status on completion", async () => {
+    imageStatus = missingImage;
+    topology = localEngine;
+    render(<DockerImageStatusPanel />);
+    await screen.findByRole("button", { name: "Download image" });
+    imageTask = runningTask;
+    await tick();
+    expect(screen.getByText(runningTask.stage!)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Download image" }) === null).toBe(true);
+    imageStatus = { ...missingImage, state: "compatible", remediation: null };
+    imageTask = { ...runningTask, state: "succeeded" };
+    await tick();
+    expect(await screen.findByText("Compatible")).toBeTruthy();
+    expect(getDockerImageStatus).toHaveBeenCalledTimes(2);
+    await tick();
+    expect(getDockerImageStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test("refreshes when a task both starts and finishes between polls", async () => {
+    imageStatus = missingImage;
+    topology = localEngine;
+    render(<DockerImageStatusPanel />);
+    await screen.findByText("Not downloaded");
+    imageStatus = { ...missingImage, state: "compatible", remediation: null };
+    imageTask = { ...runningTask, state: "succeeded" };
+    await tick();
+    expect(await screen.findByText("Compatible")).toBeTruthy();
+  });
+
+  test("keeps polling after a transient failure, then shows a failed download and retries", async () => {
+    imageStatus = missingImage;
+    topology = localEngine;
+    imageTask = runningTask;
+    render(<DockerImageStatusPanel />);
+    await screen.findByText(runningTask.stage!);
+    getHostMaintenance.mockRejectedValueOnce(new Error("offline"));
+    await tick();
+    expect(screen.getByText(runningTask.stage!)).toBeTruthy();
+    imageTask = { ...runningTask, state: "failed", error: "registry offline" };
+    await tick();
+    expect(await screen.findByText("Download failed: registry offline")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Download image" }));
+    expect(await screen.findByText(runningTask.stage!)).toBeTruthy();
+    expect(startHostImageUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Download failed: registry offline") === null).toBe(true);
+  });
+
+  test.each([false, true])(
+    "a refused start adopts a running task when present=%s",
+    async (busy) => {
+      imageStatus = missingImage;
+      topology = localEngine;
+      startHostImageUpdate.mockImplementationOnce(async () => {
+        if (busy) imageTask = runningTask;
+        throw new Error("start refused");
+      });
+      render(<DockerImageStatusPanel />);
+      fireEvent.click(await screen.findByRole("button", { name: "Download image" }));
+      if (busy) {
+        expect(await screen.findByText(runningTask.stage!)).toBeTruthy();
+        expect(screen.queryByText("start refused") === null).toBe(true);
+      } else {
+        expect(await screen.findByText("start refused")).toBeTruthy();
+        expect(
+          screen.getByRole("button", { name: "Download image" }).hasAttribute("disabled"),
+        ).toBe(false);
+      }
+    },
+  );
 
   test("an unreachable Docker hides the image instead of calling it missing", async () => {
     imageStatus = {
@@ -168,8 +272,8 @@ describe("DockerImageStatusPanel", () => {
     render(<DockerImageStatusPanel />);
 
     expect(await screen.findByText("Not reachable")).toBeTruthy();
-    expect(screen.queryByText("Not downloaded")).toBeNull();
-    expect(screen.queryByText("orkestrator-v2:latest")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Download image" })).toBeNull();
+    expect(screen.queryByText("Not downloaded") === null).toBe(true);
+    expect(screen.queryByText("orkestrator-v2:latest") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Download image" }) === null).toBe(true);
   });
 });

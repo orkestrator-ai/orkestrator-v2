@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Download, Loader2, RefreshCw, XCircle } from "lucide-react";
 import type { HostTask } from "@orkestrator/protocol/host-maintenance";
 import type {
@@ -51,6 +51,11 @@ export function DockerImageStatusPanel() {
   const [error, setError] = useState<string | null>(null);
   // The host's image-update task, which an environment create may also start.
   const [download, setDownload] = useState<HostTask | null>(null);
+  const downloadRef = useRef<HostTask | null>(null);
+  const adoptDownload = useCallback((task: HostTask | null) => {
+    downloadRef.current = task;
+    setDownload(task);
+  }, []);
   const [starting, setStarting] = useState(false);
 
   const fetchStatus = useCallback(
@@ -63,11 +68,11 @@ export function DockerImageStatusPanel() {
         .then(([imageStatus, daemon, maintenance]) => {
           setImage(imageStatus);
           setTopology(daemon);
-          setDownload(maintenance?.tasks["image-update"] ?? null);
+          if (maintenance) adoptDownload(maintenance.tasks["image-update"] ?? null);
         })
         .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setLoading(false)),
-    [],
+    [adoptDownload],
   );
 
   const load = (refresh: boolean) => {
@@ -82,35 +87,51 @@ export function DockerImageStatusPanel() {
 
   const downloading = download?.state === "running";
 
-  // Follow a running download from the authoritative snapshot, then re-read
-  // the image once it finishes.
+  // Reconcile while mounted, including downloads started by another client.
+  // Refresh image identity when an observed task completes.
   useEffect(() => {
-    if (!downloading) return;
     let active = true;
+    let polling = false;
     const timer = setInterval(() => {
+      if (polling) return;
+      polling = true;
       void backend
         .getHostMaintenance()
         .then((maintenance) => {
           if (!active) return;
           const task = maintenance.tasks["image-update"] ?? null;
-          setDownload(task);
-          if (task?.state !== "running") void fetchStatus(false);
+          const previous = downloadRef.current;
+          adoptDownload(task);
+          if (
+            task?.state !== "running" &&
+            (previous?.state === "running" || (task && task.id !== previous?.id))
+          ) {
+            void fetchStatus(false);
+          }
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          polling = false;
+        });
     }, TASK_POLL_MS);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [downloading, fetchStatus]);
+  }, [adoptDownload, fetchStatus]);
 
   const startDownload = () => {
     setStarting(true);
     setError(null);
     void backend
       .startHostImageUpdate()
-      .then(setDownload)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .then(adoptDownload)
+      .catch(async (err: unknown) => {
+        const maintenance = await backend.getHostMaintenance().catch(() => null);
+        const task = maintenance?.tasks["image-update"];
+        if (task?.state === "running") adoptDownload(task);
+        else setError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => setStarting(false));
   };
 

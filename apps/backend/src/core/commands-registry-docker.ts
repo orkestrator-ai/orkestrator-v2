@@ -209,6 +209,11 @@ export function registerDockerCommands(
       assertEnvironmentDeletionNotRequested(environment, environment.id);
       if (environment.containerId) return environment.containerId;
       await ensureEnvironmentImage(context);
+      context.runtime.environments.assertNotDeleting(id);
+      const current = await context.storage.getEnvironment(id);
+      if (!current) throw new Error(`Environment not found: ${id}`);
+      assertEnvironmentDeletionNotRequested(current, id);
+      context.runtime.environments.assertNotDeleting(id);
       const outcome = await runContainerOperation(context, id, "create", identity, async (op) => {
         const runtimeGeneration = nextRuntimeGeneration(environment);
         const image = await resolveOperationImage(context);

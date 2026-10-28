@@ -255,7 +255,14 @@ export async function getImageStatus(
     missingCapabilities: [],
   };
   if (resolved.kind === "missing") {
-    return { ...base, state: "missing", remediation: REMEDIATION.missing };
+    return {
+      ...base,
+      state: "missing",
+      remediation:
+        imageRef === DOCKER_IMAGE
+          ? REMEDIATION.missing
+          : "The configured custom image is missing. Provide or build this image on the Docker host, then retry.",
+    };
   }
   if (resolved.kind === "unavailable") {
     return { ...base, state: "unavailable", remediation: REMEDIATION.unavailable };

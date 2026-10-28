@@ -179,13 +179,14 @@ export function createCommandRegistry(
           // branch inside an environment that can no longer accept the prompt.
           if (!prompt || environment?.status !== "running") return;
           intent = prompt;
-          await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
+          const renamed = await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
           await context.runtime.prMonitor.sync(context);
+          return renamed;
         }),
       )
-      .then(() => {
+      .then((renamed) => {
         pendingEnvironmentRenameRetryAt.delete(environmentId);
-        if (intent) pendingEnvironmentRenameFailures.succeeded(environmentId);
+        if (renamed) pendingEnvironmentRenameFailures.succeeded(environmentId);
       })
       .catch((error) => {
         // Keep the durable intent and bound automatic retries. Authentication or

@@ -15,6 +15,8 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 
+import { ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC } from "./engine/mcp-tool-availability.js";
+
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
@@ -600,7 +602,9 @@ export function codexAppServerConfigOverrides(
         // Ticket tools are useful but must never delay an app-server becoming
         // ready. Codex 0.147 starts optional MCP servers in the background.
         overrides["mcp_servers.orkestrator.required"] = "false";
-        overrides["mcp_servers.orkestrator.startup_timeout_sec"] = "3";
+        overrides["mcp_servers.orkestrator.startup_timeout_sec"] = String(
+          ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
+        );
         if (isCoordinatorReadOnlyEnvironment(env)) {
           // MCP tool calls carry their own approval gate, separate from the
           // command and file approvals answered in `server-request-router.ts`.

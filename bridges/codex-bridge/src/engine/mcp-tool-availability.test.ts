@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   classifyMcpToolAvailability,
+  MCP_TOOL_AVAILABILITY_TIMEOUT_MS,
+  ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
   waitForMcpToolAvailability,
 } from "./mcp-tool-availability.js";
 
@@ -76,6 +78,58 @@ describe("waitForMcpToolAvailability", () => {
     );
     expect(availability).toEqual({ state: "available" });
     expect(calls).toBe(2);
+  });
+
+  test("pins the 15-second Codex startup budget and 20-second default wait", () => {
+    expect(ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC).toBe(15);
+    expect(MCP_TOOL_AVAILABILITY_TIMEOUT_MS).toBe(20_000);
+  });
+
+  test.each(["connected", "failed"])(
+    "observes a definite %s status at the Codex startup deadline",
+    async (status) => {
+      let clock = 0;
+      const budgets: number[] = [];
+      const availability = await waitForMcpToolAvailability(
+        async (timeoutMs) => {
+          budgets.push(timeoutMs);
+          clock += 1_000;
+          return clock < 15_000
+            ? server({ runtimeStatus: "starting" })
+            : server({
+                runtimeStatus: status,
+                tools: status === "connected" ? { [TOOL]: { name: TOOL } } : {},
+              });
+        },
+        "orkestrator",
+        TOOL,
+        { pollMs: 1, now: () => clock },
+      );
+      expect(availability).toEqual(
+        status === "connected" ? { state: "available" } : { state: "missing", reason: "is failed" },
+      );
+      expect(clock).toBe(15_000);
+      expect(budgets).toEqual(Array.from({ length: 15 }, (_, i) => 20_000 - i * 1_000));
+    },
+  );
+
+  test("a server that never settles uses the entire default 20-second window", async () => {
+    let clock = 0;
+    let calls = 0;
+    expect(
+      await waitForMcpToolAvailability(
+        async () => {
+          calls += 1;
+          clock += 1_000;
+          return server({ runtimeStatus: "starting" });
+        },
+        "orkestrator",
+        TOOL,
+        { pollMs: 1, now: () => clock },
+      ),
+    ).toEqual({ state: "unverified" });
+    expect(clock).toBe(20_000);
+    expect(calls).toBe(20);
   });
 
   test("a server still starting at the deadline is unverified, not missing", async () => {

@@ -464,6 +464,29 @@ export class AgentMailInjects {
     });
   }
 
+  /** Expire an unused one-pass steer without disturbing a dispatch or its journal. */
+  async clearAgentMailSteerRequest(
+    environmentId: string,
+    tabId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    return this.store.enqueue(async () => {
+      const store = await this.store.load();
+      const entry = store.pendingInject.find((candidate) => {
+        const mailbox = store.mailboxes[candidate.mailboxId];
+        return (
+          mailbox?.environmentId === environmentId &&
+          mailbox.tabId === tabId &&
+          candidate.messageId === messageId
+        );
+      });
+      if (!entry?.steerRequested || entry.verifyRequestId) return false;
+      delete entry.steerRequested;
+      await this.store.save(store);
+      return true;
+    });
+  }
+
   async listPendingAgentMailInjects(
     limit = 100,
     options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},
@@ -646,7 +669,8 @@ export class AgentMailInjects {
     mailboxId: string,
     messageId: string,
     outcome:
-      | { outcome: "accepted" }
+      /** `via: "steer"`: it landed in the recipient's running turn. */
+      | { outcome: "accepted"; via?: "steer" }
       | { outcome: "held"; reason: string }
       | { outcome: "failed"; reason: "ambiguous" | "rejected" }
       /** Refused before it reached the agent: queue it again after a delay. */
@@ -676,6 +700,7 @@ export class AgentMailInjects {
       if (outcome.outcome === "accepted") {
         message.placement = "injected";
         message.injectedAt = new Date().toISOString();
+        if (outcome.via === "steer") message.injectedVia = "steer";
         delete message.placementReason;
         if (pendingIndex >= 0) store.pendingInject.splice(pendingIndex, 1);
       } else if (outcome.outcome === "held") {

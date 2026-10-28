@@ -280,12 +280,17 @@ describe("send_coordinator_node_mail", () => {
     expect(await associations()).toEqual([]);
   });
 
-  for (const placement of ["stored", "bounced"]) {
+  for (const placement of ["stored", "bounced", "inject-held"]) {
     test(`${placement} remote mail opens no delegation and names a stopped recipient`, async () => {
       const { run, scope, associations } = await setup({
         answers: {
           get_environment: { id: "leaf-env", projectId: "p-leaf", status: "stopped" },
-          deliver_node_mail: { messageId: "m1", toTabId: "startup-agent", placement },
+          deliver_node_mail: {
+            messageId: "m1",
+            toTabId: "startup-agent",
+            placement,
+            placementReason: "hold-reason",
+          },
         },
       });
       const result = await run("send_coordinator_node_mail", {
@@ -296,6 +301,7 @@ describe("send_coordinator_node_mail", () => {
         body: "hello",
       });
       expect(result.coordinatorDelegationOpened).toBe(false);
+      expect(result).toMatchObject({ placement, placementReason: "hold-reason" });
       expect(result.deliveryNote).toContain('start_environment with nodeId "bk_leaf"');
       expect(await associations()).toEqual([]);
     });

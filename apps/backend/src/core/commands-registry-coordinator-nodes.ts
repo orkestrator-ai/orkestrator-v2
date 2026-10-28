@@ -485,6 +485,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           messageId?: string;
           toTabId?: string;
           placement?: string;
+          placementReason?: string;
         }>(
           "deliver_node_mail",
           {
@@ -523,6 +524,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
           toEnvironmentId,
           ...(workerTab ? { toTabId: workerTab } : {}),
+          ...(delivered?.placement ? { placement: delivered.placement } : {}),
+          ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
           coordinatorDelegationOpened,
           // Said plainly, as for a worker here: "pending" alone reads as delivered.
           ...(recipient.status === "stopped"

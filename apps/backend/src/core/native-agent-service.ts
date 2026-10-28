@@ -84,6 +84,7 @@ import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orke
 import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   COORDINATOR_MAIL_ADDRESS,
@@ -974,6 +975,7 @@ export class NativeAgentService {
             `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
             `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
             launchBaseLine +
+            `${COORDINATOR_WORKER_PROMPT_FORMAT_RULE}\n` +
             `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
             `${COORDINATOR_AGENTS_MD_RULE}\n` +
             `${COORDINATOR_ASYNC_CONTRACT}\n`

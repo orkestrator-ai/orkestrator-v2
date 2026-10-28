@@ -18,6 +18,7 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import {
   AgentToolsServer,
+  agentMcpAnnounces,
   consumeAgentMailRateLimit,
   dropInheritedAgentToolConnection,
 } from "./agent-tools.js";
@@ -35,6 +36,7 @@ type RpcResponse = {
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
     content?: Array<{ type: string; text?: string }>;
+    instructions?: string;
   };
   error?: { message?: string };
 };
@@ -230,6 +232,11 @@ describe("agent Kanban tools", () => {
 
     expect(listed.response.status).toBe(200);
     expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(ALL_AGENT_TOOL_NAMES);
+    for (const name of ["send_message", "reply_message"]) {
+      const tool = listed.body.result?.tools?.find((entry) => entry.name === name);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema?.properties).not.toHaveProperty("deliverNow");
+    }
     expect(
       listed.body.result?.tools?.find((tool) => tool.name === "get_ticket")?.annotations,
     ).toMatchObject({ readOnlyHint: true, destructiveHint: false });
@@ -902,9 +909,73 @@ describe("agent Kanban tools", () => {
       throw new Error("per-mailbox instruction read");
     };
 
+    const initialized = await rpc(connection.url, connection.token, "initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "instructions-test", version: "1.0.0" },
+    });
+    expect(initialized.response.status).toBe(200);
+    expect(initialized.body.result?.instructions).toContain(
+      "Your mailbox address is environment env-mail tab agent-a",
+    );
+    expect(directoryReads).toBe(1);
+  });
+
+  test("reads the mailbox directory only for requests whose answer carries instructions", async () => {
+    await addMessagingEnvironment("env-lean", "project-lean", ["agent-a"]);
+    const connection = server.connection("env-lean", "project-lean", "host", "agent-a");
+    const listMailboxes = storage.listAgentMailboxes.bind(storage);
+    let directoryReads = 0;
+    storage.listAgentMailboxes = async (options) => {
+      directoryReads += 1;
+      return listMailboxes(options);
+    };
+
     const listed = await rpc(connection.url, connection.token, "tools/list");
     expect(listed.response.status).toBe(200);
-    expect(directoryReads).toBe(1);
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(ALL_AGENT_TOOL_NAMES);
+    const ticketList = await rpc(connection.url, connection.token, "tools/call", {
+      name: "list_tickets",
+      arguments: {},
+    });
+    expect(ticketList.body.result?.isError).not.toBe(true);
+    expect(directoryReads).toBe(0);
+
+    // A modern client reads the instructions from server/discover instead.
+    const client = new McpClient(
+      { name: "orkestrator-lean-instructions", version: "1.0.0" },
+      { versionNegotiation: { mode: "auto" } },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(connection.url), {
+      requestInit: { headers: { Authorization: `Bearer ${connection.token}` } },
+    });
+    try {
+      await client.connect(transport);
+      expect(client.getProtocolEra()).toBe("modern");
+      expect(client.getInstructions()).toContain(
+        "Your mailbox address is environment env-lean tab agent-a",
+      );
+    } finally {
+      await client.close();
+    }
+    expect(directoryReads).toBeGreaterThan(0);
+  });
+
+  test("classifies which JSON-RPC bodies ask for the server instructions", () => {
+    expect(agentMcpAnnounces({ jsonrpc: "2.0", id: 1, method: "initialize" })).toBe(true);
+    expect(agentMcpAnnounces({ jsonrpc: "2.0", id: 1, method: "server/discover" })).toBe(true);
+    expect(agentMcpAnnounces({ jsonrpc: "2.0", id: 1, method: "tools/list" })).toBe(false);
+    expect(agentMcpAnnounces({ jsonrpc: "2.0", method: "notifications/initialized" })).toBe(false);
+    expect(agentMcpAnnounces({ jsonrpc: "2.0", id: 1, result: {} })).toBe(false);
+    expect(
+      agentMcpAnnounces([
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { jsonrpc: "2.0", id: 2, method: "initialize" },
+      ]),
+    ).toBe(true);
+    // Unexpected shapes keep the old behaviour rather than lose instructions.
+    expect(agentMcpAnnounces(null)).toBe(true);
+    expect(agentMcpAnnounces({ method: 42 })).toBe(true);
   });
 
   test("enforces minute and daily mail limits with per-tab isolation", () => {

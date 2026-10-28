@@ -1626,6 +1626,13 @@ export class StorageService {
        * recipient rather than starting its own.
        */
       coalesceMs?: number;
+      /**
+       * The coordinator's `deliverNow`: if the message is scheduled for
+       * delivery, mark its pending entry `steerRequested`, exactly as Deliver
+       * now does, so a recipient mid-turn has it steered into that turn.
+       * Honoured only for a coordinator sender.
+       */
+      steer?: boolean;
     } = {},
   ): Promise<AgentMailMessage> {
     return this.repos.agentMail.sendAgentMail(sender, input, options);
@@ -1724,6 +1731,14 @@ export class StorageService {
       workerEnvironmentId,
       workerTabId,
     );
+  }
+
+  clearAgentMailSteerRequest(
+    environmentId: string,
+    tabId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    return this.repos.agentMailInjects.clearAgentMailSteerRequest(environmentId, tabId, messageId);
   }
 
   retryAgentMailInject(
@@ -1832,7 +1847,8 @@ export class StorageService {
     mailboxId: string,
     messageId: string,
     outcome:
-      | { outcome: "accepted" }
+      /** `via: "steer"`: it landed in the recipient's running turn. */
+      | { outcome: "accepted"; via?: "steer" }
       | { outcome: "held"; reason: string }
       | { outcome: "failed"; reason: "ambiguous" | "rejected" }
       /** Refused before it reached the agent: queue it again after a delay. */

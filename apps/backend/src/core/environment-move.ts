@@ -12,6 +12,7 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
 import { enqueueEnvironmentLifecycleOperation } from "./commands-environment.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import {
   defaultSessionRelocationHomes,
   relocateAgentSessionState,
@@ -377,8 +378,11 @@ async function quiesceLocalEnvironment(
   context.runtime.diffStats.invalidatePendingSync();
   context.runtime.diffStats.service.pause(environment.id);
   context.runtime.prMonitor.invalidatePendingSync();
-  if (environment.worktreePath)
+  if (environment.worktreePath) {
     context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
+    // A daemon keeps watching the old folder after the move and is never reaped.
+    await stopGitFsmonitorDaemon(environment.worktreePath);
+  }
 }
 
 async function tryGitWorktreeMove(

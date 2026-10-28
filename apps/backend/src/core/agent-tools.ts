@@ -306,6 +306,24 @@ async function scopedTicket(
   return task;
 }
 
+/** JSON-RPC methods whose result carries the server's `instructions`. */
+const INSTRUCTION_METHODS = new Set(["initialize", "server/discover"]);
+
+/**
+ * Whether a request body (one JSON-RPC message or a batch) asks for the
+ * server's instructions. Anything unrecognised counts as asking, so an
+ * unexpected shape only costs the lookup it would have cost before.
+ */
+export function agentMcpAnnounces(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.some((message) => {
+    if (!message || typeof message !== "object") return true;
+    const method = (message as { method?: unknown }).method;
+    if (method === undefined) return false;
+    return typeof method !== "string" || INSTRUCTION_METHODS.has(method);
+  });
+}
+
 async function createAgentToolServer(
   storage: StorageService,
   scope: AgentToolScope,
@@ -315,6 +333,7 @@ async function createAgentToolServer(
   provisionalFindings?: ProvisionalFindingSink | null,
   artifacts?: TranscriptArtifactToolHost | null,
   schedules?: ScheduledJobService | null,
+  { instructions = true }: { instructions?: boolean } = {},
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -359,7 +378,10 @@ async function createAgentToolServer(
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
   const messagingScope = messagingEnabled ? scope : null;
   let messagingInstructions = "";
-  if (messagingEnabled) {
+  // Only `initialize` and `server/discover` answer with the instructions. The
+  // mailbox lookup below parses the whole mail store, so every other request
+  // (each `tools/list` and `tools/call`) skips it; see agentMcpAnnounces.
+  if (messagingEnabled && instructions) {
     const { mailboxes } = await storage.listAgentMailboxes({
       environmentId: scope.environmentId,
       currentEnvironmentId: scope.environmentId,
@@ -1127,6 +1149,7 @@ export class AgentToolsServer {
                 this.provisionalFindingSink,
                 this.transcriptArtifactToolHost,
                 this.scheduledJobs,
+                { instructions: agentMcpAnnounces(body) },
               ),
         { legacy: "stateless" },
       );

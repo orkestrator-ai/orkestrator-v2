@@ -25,6 +25,10 @@ import {
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
+import {
+  coordinatorDeliverNowResult,
+  settleCoordinatorDeliverNow,
+} from "./coordinator-deliver-now.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -345,12 +349,14 @@ export function registerCoordinatorCommands(
         subject,
         body,
         replyToMessageId,
+        deliverNow,
       },
       context,
     ) => {
       const project = asNonBlankString(projectId, "projectId");
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
+      const steer = deliverNow === true;
       const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
       if (!workspace || workspace.projectId !== project || workspace.lifecycleState !== "ready") {
         throw new Error("Coordinator identity is unavailable");
@@ -383,7 +389,13 @@ export function registerCoordinatorCommands(
           ...(typeof subject === "string" ? { subject } : {}),
           ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
         });
-        return { ...message, coordinatorDelegationOpened: false };
+        return {
+          ...message,
+          coordinatorDelegationOpened: false,
+          // A coordinator conversation is never steered: a side agent must not
+          // cut into the main's turn with the user, nor the main into a side's.
+          ...(steer ? coordinatorDeliverNowResult(message) : {}),
+        };
       }
       if (tab.role === "side") {
         throw new Error(
@@ -395,7 +407,9 @@ export function registerCoordinatorCommands(
         throw new Error("Coordinator messages must stay within their project");
       }
       const requestedTabId = typeof toTabId === "string" ? toTabId.trim() : "";
-      return context.storage.withAgentMailWorkerAdmission(destination.id, async () => {
+      const admit = <T>(work: () => Promise<T>) =>
+        context.storage.withAgentMailWorkerAdmission(destination.id, work);
+      const admitted = await admit(async () => {
         // A follow-up to a worker that is still on an earlier request joins
         // that delegation rather than opening a second one. The open delegation
         // does not close while this message is undelivered, so the worker reads
@@ -419,7 +433,7 @@ export function registerCoordinatorCommands(
             ...(typeof subject === "string" ? { subject } : {}),
             ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
           },
-          { newDelegation: !joining },
+          { newDelegation: !joining, steer },
         );
         const destinationTabId = message.toTabId;
         // Asking a worker something is a delegation, so the coordinator is woken
@@ -466,6 +480,13 @@ export function registerCoordinatorCommands(
           ...(deliveryNote ? { deliveryNote } : {}),
         };
       });
+      // Outside the admission lock: the delivery pass may need it.
+      if (!steer) return admitted;
+      return {
+        ...(await settleCoordinatorDeliverNow(context, admitted)),
+        coordinatorDelegationOpened: admitted.coordinatorDelegationOpened,
+        ...(admitted.deliveryNote ? { deliveryNote: admitted.deliveryNote } : {}),
+      };
     },
   );
   register(

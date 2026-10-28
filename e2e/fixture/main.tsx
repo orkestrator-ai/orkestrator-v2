@@ -6,6 +6,7 @@ import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectL
 import { ProjectSearchMachinesFixture } from "../../apps/web/src/test/ProjectSearchMachinesFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
+import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
@@ -1943,6 +1944,8 @@ function fixtureForPath() {
     return <NativeHydratingPreviewFixture />;
   }
   if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
+  if (window.location.pathname === "/native-message-spacing")
+    return <NativeMessageSpacingFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

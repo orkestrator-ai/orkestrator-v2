@@ -392,6 +392,16 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
 ] as const);
 
 /**
+ * How a coordinator lays out the prompt it sends a worker.
+ *
+ * The prompt is shown verbatim in the worker's transcript, and coordinators
+ * otherwise pack a whole brief into one unbroken paragraph. Shared by the
+ * context prompt and every delegation tool's `prompt` field.
+ */
+export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
+  "Worker prompts: the user reads them in the worker's transcript, so write Markdown with line breaks, not one long paragraph. Put the task first, then separate paragraphs or short bulleted sections for context, constraints and the expected report, with a blank line between them.";
+
+/**
  * The launch-selection rule every coordinator is told, verbatim.
  *
  * Coordinators otherwise fill every model and effort field `get_launch_options`

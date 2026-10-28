@@ -300,7 +300,18 @@ outcomes:
 
 There is one steer attempt per press, and any settlement clears the flag. The
 command waits for the drain before it answers, so the banner reports the
-result as soon as the attempt finishes.
+result as soon as the attempt finishes. A message delivered by a steer
+records `injectedVia: "steer"`.
+
+A coordinator asks for the same thing with `deliverNow: true` on
+`send_message`: `sendAgentMail({ steer: true })` sets `steerRequested` on the
+new pending entry, for coordinator senders only and only when the message is
+placed `pending-inject`. After the command's single delivery pass, an unused
+steer request is cleared even if eligibility, paused messaging, or environment
+readiness prevented an attempt. The result carries the settled message fields;
+a completed request-ID replay reports its persisted success without redelivery.
+See
+[`coordinator.md`](coordinator.md#course-corrections-with-delivernow).
 
 **Logs.** The backend logs one `[agent-mail] placed` line per send, one
 `[agent-mail] waiting` line each time the drain's reason for passing over a

@@ -1,6 +1,6 @@
 # Dialog default width branch validation
 
-- **ID:** 1248
+- **ID:** 1251
 - **Status:** open
 - **Date observed:** 2026-10-28
 - **Branch:** `dialog-default-width-f9e00713408e`, rebased on `origin/main`

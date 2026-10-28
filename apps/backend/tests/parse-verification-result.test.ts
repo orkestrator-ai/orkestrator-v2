@@ -52,7 +52,10 @@ describe("structured verification prompt", () => {
     expect(prompt).toContain("origin/release");
   });
 
-  test("allows verification outputs but forbids source edits", () => {
+  test("forbids validation reruns and source edits", () => {
+    expect(verificationPrompt(pipeline(), "", "main")).toContain(
+      "Do not run the test suite, typecheck, lint, build",
+    );
     expect(verificationPrompt(pipeline(), "", "main")).toContain(
       "may write generated artifacts and tool caches",
     );

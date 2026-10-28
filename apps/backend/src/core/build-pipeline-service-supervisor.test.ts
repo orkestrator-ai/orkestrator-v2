@@ -870,7 +870,7 @@ describe("BuildPipelineService", () => {
               },
             ]
           : messages(id);
-      // The verifier finds that target-branch reproduction does not hold.
+      // The diff shows no repair, so the verifier rejects the unproven excuse.
       provider.verificationComplete = false;
       const started = await service.start(startInput());
       for (let pass = 0; pass < 10; pass++) {
@@ -888,10 +888,7 @@ describe("BuildPipelineService", () => {
       );
       expect(dispatch?.prompt).toContain("FALSE CLAIM");
       expect(dispatch?.prompt).toContain(
-        "If an address report falsely claims target-branch reproduction",
-      );
-      expect(dispatch?.prompt).toContain(
-        "establish the evidence yourself even if the address report claims it already did",
+        "The address report is another agent's claim: accept a claimed repair only when the diff shows it",
       );
       await service.advanceNow(started.id);
       const fixing = await pipeline(storage, started.id);

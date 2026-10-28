@@ -17,11 +17,13 @@ Later pipeline stages read that evidence rather than repeating it. Address runs
 targeted checks for the files it edits. It also owns failure triage: it fixes
 recorded failures that relate to the ticket or the branch, and reproduces any
 it believes are unrelated on the target branch. It ends with a validation
-report. Verify is an acceptance judgement over the diff, the recorded package
-and that report (`latestAddressReport` reads only this round's address
-session). It runs no full suite and installs no dependencies. It reproduces a
-failure on the target branch only when no address report covers it, which
-happens when the review found nothing to address.
+report. Verify is a quick acceptance review of the diff, read alongside the
+recorded package and that report (`latestAddressReport` reads only this round's
+address session). It runs no suite, typecheck, lint or build, never builds or tests the
+target branch, and creates no worktrees. A recorded failure in code the branch
+changes blocks it unless the diff shows a repair; that sends the round to Fix,
+which does the reproducing. Verify runs one narrow check only when an acceptance
+criterion cannot be judged by reading the code.
 
 ## Fresh discovery for arbitrary repositories
 

@@ -38,7 +38,7 @@ const COMMIT_ID = /^[0-9a-f]{40,64}$/i;
  * undefined when it allows one. The worktree itself is checked separately.
  */
 export function codeRewindStateBlocker(
-  pipeline: Pick<BuildPipeline, "phase" | "validationRun">,
+  pipeline: Pick<BuildPipeline, "phase" | "validationRun" | "sessions">,
   session: Pick<PipelineSession, "headAtStart">,
 ): string | undefined {
   if (!session.headAtStart) {
@@ -46,6 +46,9 @@ export function codeRewindStateBlocker(
   }
   if (isActiveBuildPhase(pipeline.phase)) {
     return "Pause the pipeline first: a running step could write to the worktree during the reset.";
+  }
+  if (pipeline.sessions.some((entry) => entry.status === "running")) {
+    return "Stopping every agent must be confirmed before rewinding code.";
   }
   if (
     pipeline.validationRun &&
@@ -151,14 +154,47 @@ export async function inspectCodeRewind(
 
 /**
  * Keeps `from` reachable at `backupRef`, then moves the branch and worktree to
- * `to`. The caller has checked that the worktree is clean and HEAD is `from`.
+ * `to` after verifying HEAD and cleanliness through the reset runner. The caller
+ * holds the environment reservation and has durably saved this intent. A retry
+ * recognizes the already-applied reset by its target and matching backup.
  */
 export async function resetWorktreeToCommit(
   git: EnvironmentGit,
   environmentId: string,
   reset: { from: string; to: string; backupRef: string },
 ): Promise<void> {
-  await git(environmentId, ["update-ref", reset.backupRef, reset.from]);
+  const head = (await git(environmentId, ["rev-parse", "HEAD"])).trim();
+  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
+    throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
+  }
+  if (head === reset.to && head !== reset.from) {
+    // A crash after reset but before the final save: prove this intent's backup.
+    const backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
+    if (backup !== reset.from) throw new Error("The pending rewind's backup does not match.");
+    return;
+  }
+  if (head !== reset.from) {
+    throw new Error(
+      "The branch moved since the rewind was previewed. Review the commits it drops again.",
+    );
+  }
+  // Creating a new ref is idempotent, but never replace an unrelated backup.
+  let backup: string | undefined;
+  try {
+    backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
+  } catch {
+    /* Not created yet. */
+  }
+  if (backup && backup !== reset.from)
+    throw new Error("The pending rewind's backup does not match.");
+  if (!backup) await git(environmentId, ["update-ref", reset.backupRef, head, ""]);
+  // Refuse a writer that changed HEAD or files during backup creation as well.
+  if ((await git(environmentId, ["rev-parse", "HEAD"])).trim() !== head) {
+    throw new Error("The branch moved since the rewind was previewed.");
+  }
+  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
+    throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
+  }
   await git(environmentId, ["reset", "--hard", reset.to]);
 }
 
@@ -183,7 +219,7 @@ export function forcePushUpstream(
   return shippedSince ? undefined : code.upstream;
 }
 
-/** Builds the record of a reset that has just been applied. */
+/** Builds reset metadata to journal before changing Git. */
 export function codeRewindRecord(
   reset: { from: string; to: string; backupRef: string },
   inspection: CodeRewindInspection,

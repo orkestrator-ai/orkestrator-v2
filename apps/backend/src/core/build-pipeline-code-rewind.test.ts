@@ -27,14 +27,19 @@ describe("code rewind rules", () => {
 
   test("a running step, running validation or a missing start commit blocks the rewind", () => {
     const recorded = { headAtStart: TARGET };
-    expect(codeRewindStateBlocker({ phase: "complete" }, recorded)).toBeUndefined();
-    expect(codeRewindStateBlocker({ phase: "paused" }, recorded)).toBeUndefined();
-    expect(codeRewindStateBlocker({ phase: "failed" }, {})).toContain("was not recorded");
-    expect(codeRewindStateBlocker({ phase: "verifying" }, recorded)).toContain("Pause");
+    expect(codeRewindStateBlocker({ phase: "complete", sessions: [] }, recorded)).toBeUndefined();
+    expect(codeRewindStateBlocker({ phase: "paused", sessions: [] }, recorded)).toBeUndefined();
+    expect(codeRewindStateBlocker({ phase: "failed", sessions: [] }, {})).toContain(
+      "was not recorded",
+    );
+    expect(codeRewindStateBlocker({ phase: "verifying", sessions: [] }, recorded)).toContain(
+      "Pause",
+    );
     expect(
       codeRewindStateBlocker(
         {
           phase: "paused",
+          sessions: [],
           validationRun: { status: "running" } as never,
         },
         recorded,

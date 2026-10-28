@@ -73,7 +73,6 @@ import {
   codeRewindRecord,
   codeRewindStateBlocker,
   inspectCodeRewind,
-  resetWorktreeToCommit,
 } from "./build-pipeline-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
 
@@ -290,7 +289,10 @@ export class BuildPipelineLifecycle {
           continue;
         }
       }
-      if (this.recovery.needsTerminalReconciliation(pipeline)) {
+      if (
+        pipeline.rewinds?.at(-1)?.code?.pending ||
+        this.recovery.needsTerminalReconciliation(pipeline)
+      ) {
         terminalReconciliations.push(this.stageSupervisor.runLocked(pipeline.id));
       }
     }
@@ -1039,23 +1041,22 @@ export class BuildPipelineLifecycle {
       pipelineId,
       (candidate) => locateSessionStep(candidate, stageId),
       {
+        expectedHead,
         resetCode: async (candidate, session, rewindId) => {
           const blocker = codeRewindStateBlocker(candidate, session);
           if (blocker) return new Error(blocker);
           const target = session.headAtStart!;
-          const worktree = await probeReviewWorktree(
-            (command, args) => this.ctx.invoke(command, args),
-            candidate.environmentId,
-          );
-          if (worktree.status === "unknown") {
-            return new Error(`The worktree could not be read: ${worktree.reason}.`);
-          }
-          if (worktree.head !== expectedHead) {
+          const head = (await git(candidate.environmentId, ["rev-parse", "HEAD"])).trim();
+          if (head !== expectedHead) {
             return new Error(
               "The branch moved since the rewind was previewed. Review the commits it drops again.",
             );
           }
-          if (worktree.status === "dirty") {
+          if (
+            (
+              await git(candidate.environmentId, ["status", "--porcelain", "--untracked-files=all"])
+            ).trim()
+          ) {
             return new Error(
               "The worktree has uncommitted changes, which a reset would destroy. Commit or discard them first.",
             );
@@ -1063,12 +1064,11 @@ export class BuildPipelineLifecycle {
           try {
             const inspection = await inspectCodeRewind(git, candidate.environmentId, target);
             const reset = {
-              from: worktree.head,
+              from: head,
               to: target,
               backupRef: codeRewindBackupRef(candidate.id, rewindId),
             };
-            await resetWorktreeToCommit(git, candidate.environmentId, reset);
-            return codeRewindRecord(reset, inspection);
+            return { ...codeRewindRecord(reset, inspection), pending: true };
           } catch (error) {
             return new Error(`The code could not be rewound: ${errorMessage(error)}`);
           }
@@ -1123,10 +1123,8 @@ export class BuildPipelineLifecycle {
     pipelineId: string,
     locate: (candidate: BuildPipeline) => RestartTarget,
     options: {
-      /**
-       * Resets the worktree after the restart is admitted and before any state
-       * changes, returning the record or why it refused. Only with a named session.
-       */
+      expectedHead?: string;
+      /** Prepares the reset intent. Git changes only after the restart is saved. */
       resetCode?: (
         candidate: BuildPipeline,
         session: PipelineSession,
@@ -1136,7 +1134,7 @@ export class BuildPipelineLifecycle {
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
     let satisfied = false;
-    await this.ctx.mutate(pipelineId, async (candidate) => {
+    const mutation = async (candidate: BuildPipeline) => {
       const target = locate(candidate);
       if (target instanceof Error) {
         rejection = target;
@@ -1151,9 +1149,16 @@ export class BuildPipelineLifecycle {
         // The same request again (a double click, a retried command) names the
         // step the newest rewind just superseded: that restart is already done.
         const latest = candidate.rewinds?.at(-1);
-        if (latest?.id !== named.supersededBy || latest?.sessionKey !== named.sessionKey) {
+        if (
+          latest?.id !== named.supersededBy ||
+          latest?.sessionKey !== named.sessionKey ||
+          (options.resetCode &&
+            (!latest.code ||
+              latest.code.from !== options.expectedHead ||
+              latest.code.to !== named.headAtStart))
+        ) {
           rejection = new Error(
-            "This step belongs to a previous attempt. Restart a step of the current run instead.",
+            "This step belongs to a previous attempt. Review a fresh rewind preview or restart a step of the current run instead.",
           );
         }
         return;
@@ -1172,8 +1177,7 @@ export class BuildPipelineLifecycle {
           rejection = new Error("This pipeline stage is no longer available");
           return;
         }
-        // Before any state changes: a refused or failed reset leaves the
-        // pipeline exactly as it was.
+        // Refused admission leaves the pipeline unchanged. The reset is journaled below.
         const reset = await options.resetCode(candidate, named, rewindId);
         if (reset instanceof Error) {
           rejection = reset;
@@ -1214,7 +1218,7 @@ export class BuildPipelineLifecycle {
           // cannot confirm cancellation. Its id is discarded below.
         }
       }
-      await this.stopCurrentStage(candidate);
+      await this.stopCurrentStage(candidate, Boolean(options.resetCode));
 
       // Old records kept only the latest accepted Verify verdict. Preserve it
       // on its owning session before clearing the live result during rewind.
@@ -1403,6 +1407,16 @@ export class BuildPipelineLifecycle {
       clearStageControlState(candidate);
       candidate.pendingKanbanReactivation = true;
       delete candidate.kanbanReactivationRetryAt;
+    };
+    await this.ctx.mutate(pipelineId, mutation, (candidate) => {
+      const target = locate(candidate);
+      return Boolean(
+        options.resetCode &&
+        !(target instanceof Error) &&
+        target.kind === "session" &&
+        target.session &&
+        !isSupersededPipelineSession(target.session),
+      );
     });
     if (rejection) throw rejection;
     if (!satisfied) await this.stageSupervisor.runLocked(pipelineId);
@@ -1533,9 +1547,10 @@ export class BuildPipelineLifecycle {
   }
 
   /** Stops whatever agent work the current stage has running. Best effort. */
-  private async stopCurrentStage(candidate: BuildPipeline): Promise<void> {
+  private async stopCurrentStage(candidate: BuildPipeline, requireStopped = false): Promise<void> {
     if (candidate.reviewFanout) {
-      await this.agents.abandonReviewFanout(candidate, "idle");
+      const errors = await this.agents.abandonReviewFanout(candidate, "idle");
+      if (requireStopped && errors.length) throw errors[0];
       return;
     }
     const current = sessionForCurrentPhase(candidate);
@@ -1544,7 +1559,8 @@ export class BuildPipelineLifecycle {
       await (
         await this.agents.provider(candidate, sessionAgent(candidate, current))
       ).abort(current.sdkSessionId);
-    } catch {
+    } catch (error) {
+      if (requireStopped) throw error;
       // The pipeline moves to a new session; a failed best-effort abort must
       // not strand the durable request on the obsolete generation.
     }

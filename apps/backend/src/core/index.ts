@@ -169,7 +169,7 @@ import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
-import { createEnvironmentCommandRunner } from "./commands-review.js";
+import { createPipelineEnvironmentGit } from "./commands-review.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -1030,15 +1030,15 @@ export class OrkestratorBackend {
         workflowAdmission: this.workflowAdmission,
         artifactDispatch,
         artifactLedger,
-        environmentGit: async (environmentId, args) => {
-          const environment = await storage.getEnvironment(environmentId);
-          if (!environment) throw new Error("Environment not found");
-          return createEnvironmentCommandRunner(environment, context.runtime.environments.fence)(
-            "git",
-            args,
-            60_000,
-          );
+        environmentFence: context.runtime.environments.fence,
+        assertEnvironmentQuiescent: async (environmentId) => {
+          if (await this.nativeAgents.hasActiveCheckoutWork(environmentId)) {
+            throw new Error(
+              "An agent may still write to this environment. Stop it before rewinding code.",
+            );
+          }
         },
+        environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
       },
     );
     context.buildPipelines = this.buildPipelines;

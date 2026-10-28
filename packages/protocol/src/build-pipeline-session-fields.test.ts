@@ -240,6 +240,18 @@ describe("pipeline rewind fields", () => {
     expect(isBuildPipeline(pipelineWith({ headAtStart: to }))).toBe(true);
     expect(isBuildPipeline(pipelineWith({ headAtStart: "HEAD" }))).toBe(false);
     expect(isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, code }] })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({}),
+        rewinds: [{ ...rewind, code: { ...code, pending: true } }],
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...pipelineWith({}),
+        rewinds: [{ ...rewind, code: { ...code, pending: "yes" } }],
+      }),
+    ).toBe(false);
     const { upstream: _upstream, upstreamCommitsDropped: _dropped, ...local } = code;
     expect(isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, code: local }] })).toBe(
       true,

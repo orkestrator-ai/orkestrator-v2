@@ -1,3 +1,4 @@
+import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
@@ -194,10 +195,24 @@ export type ReviewPreparationFileNote = {
   reason: string;
 };
 
-/** `fence` is the backend's `context.runtime.environments.fence`; local commands hold a mutation on it. */
+/** The build pipeline's Git port always resolves the current environment. */
+export function createPipelineEnvironmentGit(
+  storage: { getEnvironment: (id: string) => Promise<Environment | null> },
+  fence: Pick<EnvironmentMutationFence, "beginMutation">,
+  createRunner = createEnvironmentCommandRunner,
+): EnvironmentGit {
+  return async (environmentId, args) => {
+    const environment = await storage.getEnvironment(environmentId);
+    if (!environment) throw new Error("Environment not found");
+    return createRunner(environment, fence)("git", args, 60_000);
+  };
+}
+
+/** Every command holds the backend environment mutation fence until it exits. */
 export function createEnvironmentCommandRunner(
   environment: Environment,
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
+  execute = runCommand,
 ): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) {
@@ -210,7 +225,7 @@ export function createEnvironmentCommandRunner(
           // `gh` on the host is the backend's resolved copy; inside a
           // container it is the image's own.
           (
-            await runCommand(command === "gh" ? gitHubCli() : command, args, {
+            await execute(command === "gh" ? gitHubCli() : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
               env: command === "gh" ? await gitHubCliEnv(env) : env,
@@ -225,12 +240,20 @@ export function createEnvironmentCommandRunner(
   if (!environment.containerId) {
     throw new Error("Container environment is not available");
   }
-  return async (command, args, timeoutMs = 60_000) =>
-    (
-      await runCommand("docker", ["exec", environment.containerId!, command, ...args], {
-        timeoutMs,
-      })
-    ).stdout;
+  return async (command, args, timeoutMs = 60_000) => {
+    const release = fence.beginMutation(environment.id);
+    try {
+      return (
+        await execute(
+          "docker",
+          ["exec", "-w", "/workspace", environment.containerId!, command, ...args],
+          { timeoutMs },
+        )
+      ).stdout;
+    } finally {
+      release();
+    }
+  };
 }
 
 export function parseReviewPackageId(value: unknown): string {

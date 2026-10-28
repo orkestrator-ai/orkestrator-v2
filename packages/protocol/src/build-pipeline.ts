@@ -151,6 +151,8 @@ export interface PipelineRewind {
  * at {@link backupRef}, so the dropped commits can be recovered.
  */
 export interface PipelineCodeRewind {
+  /** Durable reset intent; cleared only after Git and the restart record agree. */
+  pending?: boolean;
   /** HEAD before the reset. */
   from: string;
   /** The commit the rewound step started from, HEAD after the reset. */
@@ -1700,6 +1702,7 @@ function isCommitId(value: unknown): value is string {
 function isPipelineCodeRewind(value: unknown): value is PipelineCodeRewind {
   return (
     isRecord(value) &&
+    (value.pending === undefined || typeof value.pending === "boolean") &&
     isCommitId(value.from) &&
     isCommitId(value.to) &&
     isNonNegativeInteger(value.droppedCommits) &&

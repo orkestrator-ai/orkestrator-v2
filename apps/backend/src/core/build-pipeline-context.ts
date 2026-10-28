@@ -19,6 +19,7 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
   isBuildPipeline,
+  isActiveBuildPhase,
   BUILD_PIPELINE_VERSION,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
@@ -60,6 +61,8 @@ import {
   type WorkflowArtifactTurnOptions,
 } from "./workflow-artifact-turns.js";
 import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { resetWorktreeToCommit } from "./build-pipeline-code-rewind.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
@@ -98,6 +101,10 @@ export type BuildPipelineServiceOptions = {
    * the pipeline's own checks. Absent, the action reports itself unavailable.
    */
   environmentGit?: EnvironmentGit;
+  /** The backend fence shared by file writes, commands and agent dispatch. */
+  environmentFence?: EnvironmentMutationFence;
+  /** Checks native/background writers while new work is excluded by the fence. */
+  assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
 } & KeyedWorkflowServiceOptions;
 
 export class BuildPipelineContext {
@@ -116,6 +123,8 @@ export class BuildPipelineContext {
 
   /** Elapsed-time gate for reviewer idle/final-usage poll counts. */
   readonly reviewerPollGate = new ElapsedPollGate(BUILD_PIPELINE_PROGRESS_MS);
+
+  private readonly rewindFence = new EnvironmentMutationFence();
 
   readonly locks = new Map<string, Promise<void>>();
 
@@ -412,9 +421,58 @@ export class BuildPipelineContext {
     return saved;
   }
 
+  async withCodeRewindReservation<T>(pipeline: BuildPipeline, run: () => Promise<T>): Promise<T> {
+    const fence = this.options.environmentFence ?? this.rewindFence;
+    return fence.withExclusiveMutation(pipeline.environmentId, [], async () => {
+      // Resolve the path only after moves/replacements are excluded. A write
+      // already in flight on that path makes binding refuse the reservation.
+      const environment = await this.storage.getEnvironment(pipeline.environmentId);
+      if (!environment) throw new Error("Environment not found");
+      fence.bindMovePaths(
+        pipeline.environmentId,
+        environment.worktreePath ? [environment.worktreePath] : [],
+      );
+      for (const record of await this.storage.listAllBuildPipelines()) {
+        const sibling = record.snapshot;
+        if (
+          record.id !== pipeline.id &&
+          isBuildPipeline(sibling) &&
+          sibling.environmentId === pipeline.environmentId &&
+          (isActiveBuildPhase(sibling.phase) ||
+            sibling.sessions.some((session) => session.status === "running"))
+        ) {
+          throw new Error(
+            "Another pipeline may write to this environment. Pause it before rewinding code.",
+          );
+        }
+      }
+      await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
+      return run();
+    });
+  }
+
+  /** Resume an admitted reset before any control or supervisor can start work. */
+  async finishPendingCodeRewind(pipeline: BuildPipeline): Promise<void> {
+    const code = pipeline.rewinds?.at(-1)?.code;
+    if (!code?.pending) return;
+    const git = this.options.environmentGit;
+    if (!git) throw new Error("Rewinding code is not available on this backend.");
+    await this.withCodeRewindReservation(pipeline, async () => {
+      await resetWorktreeToCommit(git, pipeline.environmentId, code);
+      delete code.pending;
+      try {
+        await this.save(pipeline, pipeline.backendRevision);
+      } catch (error) {
+        code.pending = true;
+        throw error;
+      }
+    });
+  }
+
   async mutate(
     pipelineId: string,
     mutation: (pipeline: BuildPipeline) => void | Promise<void>,
+    reserveCodeRewind?: (pipeline: BuildPipeline) => boolean,
   ): Promise<BuildPipeline> {
     const previous = this.locks.get(pipelineId) ?? Promise.resolve();
     let result: BuildPipeline | undefined;
@@ -424,9 +482,15 @@ export class BuildPipelineContext {
         const record = await this.requireRecord(pipelineId);
         const pipeline = record.snapshot as BuildPipeline;
         pipeline.backendRevision = record.revision;
-        await mutation(pipeline);
-        await this.save(pipeline, record.revision);
-        result = pipeline;
+        await this.finishPendingCodeRewind(pipeline);
+        const commit = async () => {
+          await mutation(pipeline);
+          await this.save(pipeline, pipeline.backendRevision);
+          await this.finishPendingCodeRewind(pipeline);
+          result = pipeline;
+        };
+        if (reserveCodeRewind?.(pipeline)) await this.withCodeRewindReservation(pipeline, commit);
+        else await commit();
       })
       .finally(() => {
         if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);

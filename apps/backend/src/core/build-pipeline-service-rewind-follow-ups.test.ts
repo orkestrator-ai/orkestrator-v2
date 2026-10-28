@@ -8,6 +8,7 @@ import type { StructuredOutputResult } from "@orkestrator/protocol/structured-ou
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 import {
@@ -275,7 +276,7 @@ const C3 = "a3".repeat(20);
  */
 function fakeGit() {
   /** The service harness's controls, attached once the harness exists. */
-  const worktree: { controls?: { currentHead: string } } = {};
+  const worktree: { controls?: { currentHead: string; uncommittedPaths?: string[] } } = {};
   const history = [C0, C1, C2, C3];
   const calls: string[][] = [];
   let upstream: string | null = C2;
@@ -302,7 +303,15 @@ function fakeGit() {
         .map((sha, position) => `${sha}\u001fcommit ${history.indexOf(sha)} (${position})`)
         .join("\n");
     }
+    if (command === "status")
+      return (worktree.controls?.uncommittedPaths ?? []).map((p) => `?? ${p}`).join("\n");
     if (command === "rev-parse") {
+      if (rest[0] === "HEAD") return worktree.controls!.currentHead;
+      if (rest[0]?.startsWith("refs/")) {
+        const sha = refs.get(rest[0]);
+        if (!sha) throw new Error("Missing ref");
+        return sha;
+      }
       if (!upstream) throw new Error("fatal: no upstream configured");
       return "origin/build\n";
     }
@@ -348,10 +357,18 @@ async function completedOnC3(
 describe("rewinding the code to a step", () => {
   test("every agent stage records the commit it started from", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
-      const { completed } = await completedOnC3(service, storage, controls);
-      expect(completed.sessions.map((session) => session.headAtStart)).toEqual(
-        completed.sessions.map(() => C0),
+      controls.currentHead = C0;
+      const started = await service.start(startInput());
+      await advanceUntil(service, storage, started.id, (p) => p.sessions.length > 0);
+      controls.currentHead = C1;
+      const completed = await advanceUntil(
+        service,
+        storage,
+        started.id,
+        (p) => p.phase === "complete",
       );
+      expect(completed.sessions[0]?.headAtStart).toBe(C0);
+      expect(completed.sessions.slice(1).every((session) => session.headAtStart === C1)).toBe(true);
       expect(isBuildPipeline(completed)).toBe(true);
     });
   });
@@ -477,6 +494,271 @@ describe("rewinding the code to a step", () => {
         const shipPrompt = provider.sent.find((entry) => entry.sessionId === ship.sdkSessionId);
         expect(shipPrompt?.prompt).toContain("git push --force-with-lease");
         expect(shipPrompt?.prompt).toContain("`origin/build`");
+      },
+      { environmentGit: fake.git },
+    );
+  });
+
+  test("a plain restart invalidates an older code-rewind confirmation", async () => {
+    const fake = fakeGit();
+    await withService(
+      async (service, storage, _provider, _invocations, controls) => {
+        fake.worktree.controls = controls;
+        const { started, build } = await completedOnC3(service, storage, controls);
+        await service.previewCodeRewind(started.id, build.sessionKey);
+        await service.restartStep(started.id, build.sessionKey);
+        await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+          "previous attempt",
+        );
+        expect(fake.calls.some((call) => ["reset", "update-ref"].includes(call[0]!))).toBe(false);
+        expect(controls.currentHead).toBe(C3);
+      },
+      { environmentGit: fake.git },
+    );
+  });
+
+  test("an unconfirmed pause abort prevents a reset", async () => {
+    const fake = fakeGit();
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        fake.worktree.controls = controls;
+        controls.currentHead = C0;
+        provider.runningPhases.add("build");
+        const started = await service.start(startInput());
+        const running = await advanceUntil(
+          service,
+          storage,
+          started.id,
+          (p) => p.sessions.length > 0,
+        );
+        provider.abort = async () => {
+          throw new Error("abort failed");
+        };
+        await expect(service.pause(started.id)).rejects.toThrow("abort failed");
+        expect((await pipeline(storage, started.id)).sessions[0]?.status).toBe("running");
+        await expect(
+          service.rewindCode(started.id, running.sessions[0]!.sessionKey, C0),
+        ).rejects.toThrow("confirmed");
+        expect(fake.calls).toHaveLength(0);
+      },
+      { environmentGit: fake.git },
+    );
+  });
+
+  for (const disagreement of [
+    "head",
+    "dirty",
+    "late-head",
+    "late-dirty",
+    "missing-target",
+    "rewritten-target",
+  ] as const) {
+    test(`refuses a reset on ${disagreement} from the reset runner`, async () => {
+      const fake = fakeGit();
+      let confirming = false;
+      const git: EnvironmentGit = async (id, args) => {
+        if (confirming && args[0] === "rev-parse" && args[1] === "HEAD" && disagreement === "head")
+          return C2;
+        if (confirming && args[0] === "status" && disagreement === "dirty") return "?? new-file";
+        if (confirming && args[0] === "rev-list" && args[2] === `HEAD..${C0}`) {
+          if (disagreement === "missing-target") throw new Error("missing commit");
+          if (disagreement === "rewritten-target") return "1";
+        }
+        const result = await fake.git(id, args);
+        if (confirming && args[0] === "update-ref") {
+          if (disagreement === "late-head") fake.worktree.controls!.currentHead = C2;
+          if (disagreement === "late-dirty")
+            fake.worktree.controls!.uncommittedPaths = ["new-file"];
+        }
+        return result;
+      };
+      await withService(
+        async (service, storage, _provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, build } = await completedOnC3(service, storage, controls);
+          expect(
+            (await service.previewCodeRewind(started.id, build.sessionKey)).blocked,
+          ).toBeUndefined();
+          confirming = true;
+          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow();
+          expect(fake.calls.some((call) => call[0] === "reset")).toBe(false);
+          if (disagreement === "late-head") expect(controls.currentHead).toBe(C2);
+          if (disagreement === "late-dirty")
+            expect(controls.uncommittedPaths).toEqual(["new-file"]);
+        },
+        { environmentGit: git },
+      );
+    });
+  }
+
+  for (const fault of [
+    "before-intent-save",
+    "after-intent-save",
+    "before-final-save",
+    "after-final-save",
+  ] as const) {
+    test(`recovers exactly once after ${fault}`, async () => {
+      const fake = fakeGit();
+      await withService(
+        async (service, storage, provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, build } = await completedOnC3(service, storage, controls);
+          const created = provider.created.length;
+          let fired = false;
+          storage.setBuildPipelineTranscriptFaults({
+            at: async (stage) => {
+              const reset = fake.calls.some((call) => call[0] === "reset");
+              const final = fault.includes("final");
+              const after = fault.startsWith("after");
+              if (
+                !fired &&
+                reset === final &&
+                stage === (after ? "after-control-save" : "before-control-save")
+              ) {
+                fired = true;
+                throw new Error(fault);
+              }
+            },
+          });
+          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(fault);
+          expect(fired).toBe(true);
+          expect(provider.created.length).toBe(created);
+          if (fault === "before-intent-save") {
+            expect(controls.currentHead).toBe(C3);
+            expect((await pipeline(storage, started.id)).rewinds).toBeUndefined();
+          } else {
+            const pending = await pipeline(storage, started.id);
+            expect(pending.rewinds?.at(-1)?.code).toMatchObject({ from: C3, to: C0 });
+            // Startup reconciles the same persisted intent even with auto advance disabled.
+            await service.init();
+          }
+          storage.setBuildPipelineTranscriptFaults(null);
+          const recovered = await service.rewindCode(started.id, build.sessionKey, C3);
+          expect(recovered.rewinds).toHaveLength(1);
+          expect(recovered.rewinds![0]!.code?.pending).toBeUndefined();
+          expect(fake.calls.filter((call) => call[0] === "reset")).toHaveLength(1);
+          expect(controls.currentHead).toBe(C0);
+          expect(provider.created.length).toBe(created + 1);
+        },
+        { environmentGit: fake.git },
+      );
+    });
+  }
+
+  test("workflow closure failure happens before any Git mutation", async () => {
+    const fake = fakeGit();
+    await withService(
+      async (service, storage, _provider, _invocations, controls) => {
+        fake.worktree.controls = controls;
+        const { started, build } = await completedOnC3(service, storage, controls);
+        await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.sessions[0]!.resultTransport = "tool-v1";
+          snapshot.sessions[0]!.structuredRequestId = "test-close-key";
+        });
+        const close = controls.workflowResults!.close.bind(controls.workflowResults);
+        controls.workflowResults!.close = async () => {
+          throw new Error("close failed");
+        };
+        await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+          "close failed",
+        );
+        expect(fake.calls.some((call) => ["reset", "update-ref"].includes(call[0]!))).toBe(false);
+        expect((await pipeline(storage, started.id)).rewinds).toBeUndefined();
+        expect(controls.currentHead).toBe(C3);
+        controls.workflowResults!.close = close;
+        await service.rewindCode(started.id, build.sessionKey, C3);
+        expect(controls.currentHead).toBe(C0);
+      },
+      { environmentGit: fake.git, workflowResultsWithoutTools: true },
+    );
+  });
+
+  test("holds the shared reservation through backup, reset and the restart commit", async () => {
+    const fake = fakeGit();
+    const fence = new EnvironmentMutationFence();
+    let ready!: () => void;
+    let release!: () => void;
+    const backedUp = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const git: EnvironmentGit = async (id, args) => {
+      const done = fence.beginMutation(id);
+      try {
+        const output = await fake.git(id, args);
+        if (args[0] === "update-ref") {
+          ready();
+          await gate;
+        }
+        return output;
+      } finally {
+        done();
+      }
+    };
+    let admissionChecks = 0;
+    await withService(
+      async (service, storage, _provider, _invocations, controls) => {
+        fake.worktree.controls = controls;
+        const { started, build } = await completedOnC3(service, storage, controls);
+        let finalSaveChecked = false;
+        storage.setBuildPipelineTranscriptFaults({
+          at: async (stage) => {
+            if (
+              !finalSaveChecked &&
+              stage === "before-control-save" &&
+              fake.calls.some((args) => args[0] === "reset")
+            ) {
+              finalSaveChecked = true;
+              // The final save still runs while the environment is reserved.
+              expect(fence.isBeingMoved("env-1")).toBe(true);
+            }
+          },
+        });
+        const rewind = service.rewindCode(started.id, build.sessionKey, C3);
+        try {
+          await backedUp;
+          expect(() => fence.beginMutation("env-1")).toThrow();
+          expect(() => fence.beginAgentWork("env-1")).toThrow();
+          expect(() => fence.beginWorktreeMutation("/tmp/build/new-file")).toThrow();
+          expect(controls.currentHead).toBe(C3);
+        } finally {
+          release();
+        }
+        await rewind;
+        expect(finalSaveChecked).toBe(true);
+        expect(fence.isBeingMoved("env-1")).toBe(false);
+        const admitted = admissionChecks;
+        await service.rewindCode(started.id, build.sessionKey, C3);
+        expect(admissionChecks).toBe(admitted); // A duplicate need not stop its own replacement.
+        await expect(service.rewindCode(started.id, build.sessionKey, C2)).rejects.toThrow(
+          "previous attempt",
+        );
+      },
+      {
+        environmentGit: git,
+        environmentFence: fence,
+        assertEnvironmentQuiescent: async () => {
+          admissionChecks += 1;
+        },
+      },
+    );
+  });
+
+  test("a sibling pipeline with a live writer prevents rewind", async () => {
+    const fake = fakeGit();
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        fake.worktree.controls = controls;
+        const { started, build } = await completedOnC3(service, storage, controls);
+        provider.runningPhases.add("build");
+        await service.start(startInput({ taskId: "sibling" }));
+        await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+          "Another pipeline",
+        );
+        expect(fake.calls).toHaveLength(0);
+        expect(controls.currentHead).toBe(C3);
       },
       { environmentGit: fake.git },
     );

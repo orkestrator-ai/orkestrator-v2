@@ -280,6 +280,18 @@ export class BuildPipelineSupervisor {
     const record = await this.ctx.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     pipeline.backendRevision = record.revision;
+    if (pipeline.rewinds?.at(-1)?.code?.pending) {
+      try {
+        await this.ctx.finishPendingCodeRewind(pipeline);
+      } catch (error) {
+        // Keep the durable intent and restart target intact for retry/startup.
+        console.warn(
+          `[build-pipeline] Pending code rewind for ${pipeline.id}:`,
+          errorMessage(error),
+        );
+      }
+      return;
+    }
     if (pipeline.pendingResultConsumptions?.length && this.ctx.options.workflowResults) {
       try {
         for (const resultKey of pipeline.pendingResultConsumptions) {

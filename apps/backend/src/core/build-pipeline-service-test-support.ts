@@ -32,6 +32,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import {
   TEST_REVIEW_PREPARATION,
@@ -203,12 +204,15 @@ export async function withService(
   ) => Promise<void>,
   options: {
     toolMode?: boolean;
+    workflowResultsWithoutTools?: boolean;
     completeEmptyValidation?: boolean;
     /** Defaults to a local worktree environment. */
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     /** Git in the environment worktree, for code-rewind tests. */
     environmentGit?: EnvironmentGit;
+    environmentFence?: EnvironmentMutationFence;
+    assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
@@ -264,7 +268,9 @@ export async function withService(
     currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
     kanbanTasks,
-    ...(options.toolMode ? { workflowResults: new WorkflowResultService(dataDir) } : {}),
+    ...(options.toolMode || options.workflowResultsWithoutTools
+      ? { workflowResults: new WorkflowResultService(dataDir) }
+      : {}),
   };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
@@ -353,16 +359,22 @@ export async function withService(
     ...(controls.workflowResults
       ? {
           workflowResults: controls.workflowResults,
-          resolveAgentToolConnection: () => ({
-            url: "http://127.0.0.1:1234/mcp",
-            token: "test-token",
-          }),
+          ...(options.toolMode
+            ? {
+                resolveAgentToolConnection: () => ({
+                  url: "http://127.0.0.1:1234/mcp",
+                  token: "test-token",
+                }),
+              }
+            : {}),
         }
       : {}),
     ...(options.assertAgentToolsReachable
       ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
-    ...(options.environmentGit ? { environmentGit: options.environmentGit } : {}),
+    environmentGit: options.environmentGit,
+    environmentFence: options.environmentFence,
+    assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,
   });
   try {
     await run(service, storage, provider, invocations, controls);

@@ -1559,6 +1559,15 @@ Two traps when scripting this path:
   cursor once back online. `watchEventStream`
   (`e2e/agent-testing/event-stream-outage.ts`) does both and asserts the
   reconnection.
+- **Read sidebar activity from `data-state`, not colours.** The row's
+  `EnvironmentStatusMarker` carries `data-state` (`working`, `waiting`, `idle`
+  or `inactive`); its colours are a design choice and have changed before,
+  which left a colour-class probe reading `unknown` with no failure. Use
+  `sidebarActivity` (`e2e/agent-testing/sidebar-activity.ts`). It reads
+  `unknown` when the row shows a spinner instead of the marker, so a negative
+  check ("never showed working") also needs a positive reading to mean
+  anything. `EnvironmentItem.test.tsx` and `e2e/SidebarActivityProbe.spec.ts`
+  run the probe against real rows.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

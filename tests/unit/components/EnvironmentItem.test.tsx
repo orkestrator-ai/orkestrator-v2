@@ -122,6 +122,10 @@ import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import { useAppDialogStore } from "../../../apps/web/src/stores/appDialogStore";
+import {
+  environmentMarkerState,
+  sidebarActivityFromMarkerState,
+} from "../../../e2e/agent-testing/idle-observation-live-support";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -1522,5 +1526,72 @@ describe("EnvironmentItem build pipeline naming", () => {
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 
     expect(container.textContent).toContain("Build: checkout-flow");
+  });
+});
+
+// The live agent-testing specs read the sidebar through this probe; a markup
+// change that blinds it must fail here, not in an opt-in live run.
+describe("live-spec sidebar probe", () => {
+  const readRow = (name: string) => sidebarActivityFromMarkerState(environmentMarkerState(name));
+
+  test("reads each row's marker state, not its colours", () => {
+    useAgentActivityStore.getState().replaceActivitySnapshot([
+      {
+        id: "env-working",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      },
+      {
+        id: "env-waiting",
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      },
+    ]);
+    render(
+      <>
+        {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}
+        {itemElement(makeEnvironment({ id: "env-waiting", name: "probe-waiting" }))}
+        {itemElement(
+          makeEnvironment({
+            id: "env-idle",
+            name: "probe-idle",
+            environmentType: "local",
+            containerId: null,
+          }),
+        )}
+        {itemElement(
+          makeEnvironment({ id: "env-stopped", name: "probe-stopped", status: "stopped" }),
+        )}
+      </>,
+    );
+
+    expect(readRow("probe-working")).toBe("working");
+    expect(readRow("probe-waiting")).toBe("waiting");
+    expect(readRow("probe-idle")).toBe("idle");
+    expect(readRow("probe-stopped")).toBe("stopped");
+    expect(readRow("probe-absent")).toBe("unknown");
+  });
+
+  test("a row showing a spinner reads unknown instead of a neighbour's state, and other labels are skipped", () => {
+    useAgentActivityStore.getState().replaceActivitySnapshot([
+      {
+        id: "env-working",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      },
+    ]);
+    render(
+      <>
+        <span id="pane-title">probe-working</span>
+        {itemElement(makeEnvironment({ id: "env-working", name: "probe-working" }))}
+        {itemElement(
+          makeEnvironment({ id: "env-stopping", name: "probe-stopping", status: "stopping" }),
+        )}
+      </>,
+    );
+
+    // A same-named label outside any row is passed over, not read as unknown.
+    expect(readRow("probe-working")).toBe("working");
+    expect(environmentMarkerState("probe-stopping")).toBeNull();
   });
 });

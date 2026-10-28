@@ -50,10 +50,10 @@ import {
   readCadence,
   selectedCases,
   shellOutputContainsMarker,
-  sidebarActivityFromClass,
   type CaseRecord,
   type IdleObservationCase,
 } from "./idle-observation-live-support";
+import { sidebarActivity } from "./sidebar-activity";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -355,23 +355,6 @@ async function openEnvironment(page: Page, projectName: string, environmentName:
   if (await expand.isVisible()) await expand.click();
   await dismissSidebarTooltip(page, projectName);
   await entry.click();
-}
-
-/** The sidebar icon's activity state for one environment row. */
-async function sidebarActivity(page: Page, environmentName: string): Promise<string> {
-  const className = await page
-    .evaluate((name) => {
-      const label = Array.from(document.querySelectorAll("span")).find(
-        (span) => span.textContent === name && span.id,
-      );
-      let node: Element | null = label ?? null;
-      while (node && !node.querySelector("svg.shrink-0.transition-colors")) {
-        node = node.parentElement;
-      }
-      return node?.querySelector("svg.shrink-0.transition-colors")?.getAttribute("class") ?? null;
-    }, environmentName)
-    .catch(() => null);
-  return sidebarActivityFromClass(className);
 }
 
 test.describe("live idle observation", () => {
@@ -1400,13 +1383,15 @@ test.describe("live idle observation", () => {
           const commandsBefore = { ...client.readCommands };
           let sawStop = false;
           let sawWorkingSidebar = false;
+          const sidebarReadings = new Set<string>();
           while (Date.now() - idleStart < DETACH_WAIT_MS) {
             await sleep(15_000);
             if ((await stopButton().count()) > 0) sawStop = true;
-            if ((await sidebarActivity(page(), environmentName)) === "working") {
-              sawWorkingSidebar = true;
-            }
+            const sidebar = await sidebarActivity(page(), environmentName);
+            sidebarReadings.add(sidebar);
+            if (sidebar === "working") sawWorkingSidebar = true;
           }
+          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",")}`);
           const cadence = readCadence(client.readTimes, idleStart + 30_000, Date.now());
           record.timings.idleReadsPerMinute = cadence.perMinute;
           record.timings.idleMaxGapMs = cadence.maxGapMs;
@@ -1445,6 +1430,8 @@ test.describe("live idle observation", () => {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
+          // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
+          expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(true);
           expect(sawWorkingSidebar, "the sidebar never shows working on an idle tab").toBe(false);
           const word = `IDLEQA-REATTACH-${nonce()}`;
           // Reuse the pre-wait IDs: no tab-facing read between observing

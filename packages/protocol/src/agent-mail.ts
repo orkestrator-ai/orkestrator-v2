@@ -314,6 +314,8 @@ export interface AgentMailMessage {
   /** Coordinator delegation whose completion releases this held report. */
   coordinatorDelegationId?: string;
   injectedAt?: string;
+  /** Delivered by steering it into the recipient's running turn (Deliver now). */
+  injectedVia?: "steer";
   injectRequestId?: string;
   ackedAt?: string;
   userSeenAt?: string;

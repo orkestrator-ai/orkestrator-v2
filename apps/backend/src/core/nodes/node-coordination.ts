@@ -331,7 +331,12 @@ export class NodeCoordination {
     // An environment the coordinator talks to reports back to it, until
     // another coordinator contacts it.
     await this.leafMail.recordOrigin(toEnvironmentId, mailbox, { keepOrigin: true });
-    return { messageId: message.id, toTabId: message.toTabId, placement: message.placement };
+    return {
+      messageId: message.id,
+      toTabId: message.toTabId,
+      placement: message.placement,
+      ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+    };
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {

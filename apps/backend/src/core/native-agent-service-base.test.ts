@@ -51,6 +51,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
@@ -3622,6 +3623,8 @@ describe("NativeAgentService", () => {
       // Without this a coordinator fills every model and effort field it is
       // shown, and every worker silently runs a selection the user never chose.
       expect(sent).toContain(COORDINATOR_LAUNCH_DEFAULTS_RULE);
+      // Worker prompts are shown verbatim in the worker transcript.
+      expect(sent).toContain(COORDINATOR_WORKER_PROMPT_FORMAT_RULE);
       // The main coordinator offers to save durable decisions, batched and
       // without re-asking declined ones.
       expect(sent).toContain(COORDINATOR_AGENTS_MD_RULE);

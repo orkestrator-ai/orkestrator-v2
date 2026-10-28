@@ -11,6 +11,7 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -1278,7 +1279,12 @@ export async function createControlMcp(
           .describe(REASONING_ID_DESCRIPTION),
         fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
         baseBranch: (coordinatorScope
           ? z.string().trim().min(1).max(500)
@@ -1496,7 +1502,12 @@ export async function createControlMcp(
         fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         title: z.string().trim().min(1).max(200).optional(),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         nodeId: nodeIdField,
       }),
       annotations: {
@@ -1595,7 +1606,12 @@ export async function createControlMcp(
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         conversationMode: z.enum(["plan", "build"]).optional(),
         nodeId: nodeIdField,
       }),

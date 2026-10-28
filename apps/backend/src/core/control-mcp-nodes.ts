@@ -1,5 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { z } from "zod";
@@ -358,7 +361,12 @@ export function registerNodeTools(
         modelId: z.string().trim().min(1).max(500).optional(),
         reasoningId: z.string().trim().min(1).max(100).optional(),
         conversationMode: z.enum(["plan", "build"]).default("build"),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
         baseBranch: z.string().trim().min(1).max(500),
         baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),
       }),
@@ -433,7 +441,12 @@ export function registerNodeTools(
         nodeId: nodeIdSchema,
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
-        prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
+        prompt: z
+          .string()
+          .trim()
+          .min(1)
+          .max(MAX_PROMPT_LENGTH)
+          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
       }),
       annotations: { ...WRITE, destructiveHint: true },
     },

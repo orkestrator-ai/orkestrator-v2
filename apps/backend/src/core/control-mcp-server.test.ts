@@ -14,6 +14,7 @@ import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-
 import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,
+  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -22,7 +23,12 @@ import {
 
 type RpcBody = {
   result?: {
-    tools?: Array<{ name: string; description?: string; annotations?: Record<string, boolean> }>;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      annotations?: Record<string, boolean>;
+      inputSchema?: { properties?: Record<string, { description?: string }> };
+    }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
   };
@@ -526,6 +532,27 @@ describe("Orkestrator control MCP server", () => {
       scope: { projectId: "project-2" },
     });
     expect(refused.isError).toBe(true);
+  });
+
+  test("publishes the worker prompt format rule on every delegation prompt field", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.error).toBeUndefined();
+    for (const name of [
+      "launch_environment",
+      "launch_job",
+      "send_prompt_to_tab",
+      "launch_node_environment",
+      "send_prompt_to_node_tab",
+    ]) {
+      const tool = listed.body.result?.tools?.find((candidate) => candidate.name === name);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema?.properties?.prompt?.description).toContain(
+        COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+      );
+    }
   });
 
   test("binds coordinator credentials to one project and revokes them", async () => {

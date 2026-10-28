@@ -149,6 +149,7 @@ import {
   imageCapabilities,
   resolveDockerImage,
 } from "./docker-image.js";
+import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
@@ -1321,10 +1322,19 @@ function startContainerRuntime(
   context: CommandContext,
   identity: ContainerMutationIdentity,
 ): Promise<{ containerId: string; replayed: false } | { replayed: true }> {
+  // A missing default image is downloaded first, outside admission.
+  const imageReady = environment.containerId ? Promise.resolve() : ensureEnvironmentImage(context);
   // A bounded number of starts run at once across environments.
-  return withContainerAdmission("start", () =>
-    startContainerRuntimeAdmitted(environment, context, identity),
-  );
+  return imageReady.then(async () => {
+    context.runtime.environments.assertNotDeleting(environment.id);
+    const current = await context.storage.getEnvironment(environment.id);
+    if (!current) throw new Error(`Environment not found: ${environment.id}`);
+    assertEnvironmentDeletionNotRequested(current, environment.id);
+    context.runtime.environments.assertNotDeleting(environment.id);
+    return withContainerAdmission("start", () =>
+      startContainerRuntimeAdmitted(current, context, identity),
+    );
+  });
 }
 
 async function startContainerRuntimeAdmitted(

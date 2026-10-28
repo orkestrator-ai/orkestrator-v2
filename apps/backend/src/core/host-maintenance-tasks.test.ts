@@ -5,16 +5,21 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { gitHubCli, setManagedGitHubCli } from "./github-cli-binary.js";
-import { HostMaintenanceService } from "./host-maintenance.js";
+import { HostMaintenanceError, HostMaintenanceService } from "./host-maintenance.js";
 import {
   applyGhChannel,
+  ensureEnvironmentImage,
   fetchReleasePins,
   installedLatestGh,
   startGhUpdate,
   startImageUpdate,
   startToolchainRepair,
 } from "./host-maintenance-tasks.js";
-import { runCommand } from "./shell.js";
+import {
+  ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
+  environmentLifecycleErrorMessage,
+} from "./commands-error-text.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 
 let dataDir: string;
 let service: HostMaintenanceService;
@@ -204,6 +209,186 @@ test.each(["compatible", "incompatible", "pull-failure", "tag-failure"])(
     }
   },
 );
+
+describe("ensureEnvironmentImage", () => {
+  const compatible = {
+    state: "compatible" as const,
+    imageRef: "release",
+    imageId: "sha256:new",
+    registryDigest: null,
+    architecture: null,
+    manifest: null,
+    missingCapabilities: [],
+    remediation: null,
+  };
+
+  /** An image update whose `docker pull` waits for `release()`. */
+  function gatedDownload(failure?: Error) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[][] = [];
+    const start = mock((target: CommandContext) =>
+      startImageUpdate(target, {
+        run: async (_file, args = []) => {
+          calls.push(args);
+          if (args[0] === "pull") {
+            await gate;
+            if (failure) throw failure;
+          }
+          return { stdout: "", stderr: "" };
+        },
+        status: async () => compatible,
+        read: async () => null,
+        reset: () => undefined,
+      }),
+    );
+    return { start, calls, release };
+  }
+
+  test("downloads a missing default image once for concurrent creates", async () => {
+    const { start, calls, release } = gatedDownload();
+    const resolve = mock(async (imageRef: string) => ({ kind: "missing" as const, imageRef }));
+    const first = ensureEnvironmentImage(context(), { resolve, start });
+    const second = ensureEnvironmentImage(context(), { resolve, start });
+    await until(() => calls.length === 1);
+    release();
+    await Promise.all([first, second]);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(calls.map((args) => args[0])).toEqual(["pull", "tag"]);
+    expect(calls[1]?.[2]).toBe("orkestrator-v2:latest");
+  });
+
+  test("a failed download reports an automatic download failure", async () => {
+    const { start, release } = gatedDownload(new Error("dial tcp: no route to host"));
+    const pending = ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+      start,
+    });
+    release();
+    const error = await pending.catch((error: unknown) => error);
+    expect(error instanceof Error && error.message).toMatch(
+      /^Environment image download failed:.*no route/,
+    );
+    expect(environmentLifecycleErrorMessage(error)).toBe(
+      ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageDownloadFailed,
+    );
+  });
+
+  test("joins a manually started image update", async () => {
+    const { start, calls, release } = gatedDownload();
+    start(context());
+    const unexpectedStart = mock(start);
+    const waiting = ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+      start: unexpectedStart,
+    });
+    let settled = false;
+    void waiting.then(() => {
+      settled = true;
+    });
+    await Bun.sleep(10);
+    expect(settled).toBe(false);
+    release();
+    await waiting;
+    expect(unexpectedStart).not.toHaveBeenCalled();
+    expect(calls.map((args) => args[0])).toEqual(["pull", "tag"]);
+  });
+
+  test("a failed update can be retried", async () => {
+    const failed = gatedDownload(new Error("registry offline"));
+    const first = ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+      start: failed.start,
+    });
+    failed.release();
+    await expect(first).rejects.toThrow("registry offline");
+    const retry = gatedDownload();
+    const second = ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+      start: retry.start,
+    });
+    retry.release();
+    await second;
+    expect(retry.calls.map((args) => args[0])).toEqual(["pull", "tag"]);
+  });
+
+  test.each(["busy", "unsupported"] as const)(
+    "a %s task without a local promise leaves create to report the image",
+    async (code) => {
+      const start = mock(() => {
+        throw new HostMaintenanceError(code, "unavailable");
+      });
+      await ensureEnvironmentImage(context(), {
+        resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+        start,
+      });
+      expect(start).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("propagates an unexpected failure starting the maintenance task", async () => {
+    await expect(
+      ensureEnvironmentImage(context(), {
+        resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+        start: () => {
+          throw new Error("unexpected failure");
+        },
+      }),
+    ).rejects.toThrow("unexpected failure");
+  });
+
+  test("does not download without maintenance or when Docker cannot resolve the image", async () => {
+    const { start } = gatedDownload();
+    const resolve = mock(async (imageRef: string) => ({ kind: "unavailable" as const, imageRef }));
+    await ensureEnvironmentImage({ ...context(), hostMaintenance: undefined }, { resolve, start });
+    expect(resolve).not.toHaveBeenCalled();
+    await ensureEnvironmentImage(context(), { resolve, start });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [new Error("no space left on device"), ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull],
+    [
+      new CommandFailedError("Command failed: docker pull", { timedOut: true }),
+      ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.timedOut,
+    ],
+  ] as const)(
+    "preserves an automatic pull cause for lifecycle classification: %s",
+    async (failure, expected) => {
+      const download = gatedDownload(failure);
+      const pending = ensureEnvironmentImage(context(), {
+        resolve: async (imageRef) => ({ kind: "missing", imageRef }),
+        start: download.start,
+      });
+      download.release();
+      const error = await pending.catch((error: unknown) => error);
+      expect(environmentLifecycleErrorMessage(error)).toBe(expected);
+      expect(error instanceof Error && error.cause === failure).toBe(true);
+    },
+  );
+
+  test("leaves a present image and a custom image alone", async () => {
+    const { start } = gatedDownload();
+    await ensureEnvironmentImage(context(), {
+      resolve: async (imageRef) => ({
+        kind: "present",
+        imageRef,
+        imageId: "sha256:old",
+        registryDigest: null,
+        architecture: null,
+      }),
+      start,
+    });
+    const resolve = mock(async (imageRef: string) => ({ kind: "missing" as const, imageRef }));
+    await ensureEnvironmentImage({ ...context(), dockerImage: "custom:dev" }, { resolve, start });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+});
 
 test.each([false, true])(
   "desktop toolchain repair preserves activation and reports restartRequired=%s",

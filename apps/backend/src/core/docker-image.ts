@@ -232,7 +232,7 @@ export async function cleanupStaleManifestProbes(
 
 const REMEDIATION = {
   missing:
-    "The environment image is not installed. Build it with `mise run docker:build` or pull the release image.",
+    "Docker is running, but the environment image has not been downloaded yet. It downloads automatically when you create a container environment, or download it now.",
   legacy:
     "The environment image predates image manifests. Existing environments keep working; rebuild or pull a current image for new features.",
   incompatible:
@@ -255,7 +255,14 @@ export async function getImageStatus(
     missingCapabilities: [],
   };
   if (resolved.kind === "missing") {
-    return { ...base, state: "missing", remediation: REMEDIATION.missing };
+    return {
+      ...base,
+      state: "missing",
+      remediation:
+        imageRef === DOCKER_IMAGE
+          ? REMEDIATION.missing
+          : "The configured custom image is missing. Provide or build this image on the Docker host, then retry.",
+    };
   }
   if (resolved.kind === "unavailable") {
     return { ...base, state: "unavailable", remediation: REMEDIATION.unavailable };

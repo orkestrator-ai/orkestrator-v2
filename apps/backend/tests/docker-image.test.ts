@@ -182,6 +182,23 @@ esac
     );
   });
 
+  test("missing custom images ask the operator to provide the image", async () => {
+    const dir = await tempDir("ork-custom-image-");
+    cleanup.push(dir);
+    const { context } = memoryLifecycleContext([], dir);
+    await withDockerScript(
+      "#!/bin/sh\nprintf 'No such image: custom:dev\\n' >&2\nexit 1\n",
+      async () => {
+        const status = await getImageStatus({ ...context, dockerImage: "custom:dev" });
+        expect(status.state).toBe("missing");
+        expect(status.remediation).toContain("Provide or build");
+        expect(status.remediation).not.toContain("automatically");
+        const defaultStatus = await getImageStatus(context);
+        expect(defaultStatus.remediation).toContain("downloads automatically");
+      },
+    );
+  });
+
   test("reads the manifest from a never-started probe container and removes it", async () => {
     const dir = await tempDir("ork-image-probe-");
     cleanup.push(dir);
@@ -723,7 +740,11 @@ esac
         expect(gateway).toContain("--network ork-");
         expect(gateway).toContain("--sysctl net.ipv6.conf.all.disable_ipv6=1");
         expect(gateway).not.toContain("github-ranges");
-        expect(gateway).toContain("--add-host host.docker.internal:host-gateway");
+        if (process.platform === "linux") {
+          expect(gateway).toContain("--add-host host.docker.internal:host-gateway");
+        } else {
+          expect(gateway).not.toContain("--add-host host.docker.internal:");
+        }
         expect(gateway).toContain("-p 127.0.0.1:3000:3000/tcp");
         expect(gateway).toContain("-p 127.0.0.1::4097/tcp");
         expect(gateway).toContain("-e NETWORK_MODE=restricted");
@@ -841,9 +862,14 @@ esac
           const create = (await log.read())
             .split("\n")
             .find((line) => line.startsWith("create --name"));
-          expect(create).toContain("--add-host host.docker.internal:10.0.2.2");
+          if (process.platform === "linux") {
+            expect(create).toContain("--add-host host.docker.internal:10.0.2.2");
+            expect(resolved).toHaveLength(1);
+          } else {
+            expect(create).not.toContain("--add-host host.docker.internal:");
+            expect(resolved).toHaveLength(0);
+          }
           expect(create).not.toContain("host-gateway");
-          expect(resolved).toHaveLength(1);
         },
       );
     } finally {

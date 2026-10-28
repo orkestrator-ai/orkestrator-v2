@@ -33,7 +33,10 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   setupScript: "Environment setup script failed.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
-  imageUnavailable: "The environment image is unavailable. Rebuild it and retry.",
+  imageUnavailable:
+    "The environment image is unavailable. Provide or build the configured image and retry.",
+  imageDownloadFailed:
+    "The environment image could not be downloaded. Check your network connection, or build it with `mise run docker:build`, and retry.",
   diskFull: "The host has run out of disk space. Free space and retry.",
   initializationFailed:
     "The container did not finish initializing. Check the container logs, then retry.",
@@ -57,7 +60,11 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
  * message. A timeout in particular is invisible in the text: `execFile` kills
  * the child, leaving only the generic "Command failed: <argv>".
  */
-export function environmentLifecycleErrorMessage(error: unknown): string {
+export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0): string {
+  if (error instanceof Error && error.cause && causeDepth < 8) {
+    const causeMessage = environmentLifecycleErrorMessage(error.cause, causeDepth + 1);
+    if (causeMessage !== ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown) return causeMessage;
+  }
   if (error instanceof CommandFailedError) {
     // Before the generic timeout: a stuck remote fetch is not a container problem.
     if (error instanceof GitRemoteTimeoutError) {
@@ -90,15 +97,18 @@ export function environmentLifecycleErrorMessage(error: unknown): string {
   ) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable;
   }
+  if (/no space left on device/i.test(message)) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull;
+  }
+  if (message.startsWith("Environment image download failed:")) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageDownloadFailed;
+  }
   if (
     /unable to find image|pull access denied|manifest unknown|manifest for .* not found|no such image|repository does not exist/i.test(
       message,
     )
   ) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageUnavailable;
-  }
-  if (/no space left on device/i.test(message)) {
-    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull;
   }
   return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown;
 }

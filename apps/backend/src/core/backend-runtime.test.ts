@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
+import { OrkestratorBackend } from "./index.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -469,6 +472,32 @@ describe("two BackendRuntimes in one process", () => {
     expect(second.containerOom).not.toBe(first.containerOom);
   });
 
+  test("container log followers are per backend and stop with it", async () => {
+    const firstDocker = fakeDockerFollowers();
+    const secondDocker = fakeDockerFollowers();
+    const first = createRuntime({ emit: () => undefined, ...firstDocker.options });
+    const second = createRuntime({ emit: () => undefined, ...secondDocker.options });
+    const firstOpened = first.containerLogs.open("container-1");
+    const secondOpened = second.containerLogs.open("container-1");
+    // The same container followed by two backends is two followers, one each.
+    expect(firstDocker.logs).toHaveLength(1);
+    expect(secondDocker.logs).toHaveLength(1);
+    expect(() =>
+      second.containerLogs.read(firstOpened.subscriptionId, firstOpened.sourceId, 0),
+    ).toThrow("expired");
+    first.shutdown();
+    expect(firstDocker.logs[0]!.child.exitCode).toBe(143);
+    expect(secondDocker.logs[0]!.child.exitCode).toBeNull();
+    expect(
+      second.containerLogs.read(
+        secondOpened.subscriptionId,
+        secondOpened.sourceId,
+        secondOpened.cursor,
+      ),
+    ).toMatchObject({ kind: "records", ended: false });
+    expect(() => first.containerLogs.open("container-2")).toThrow("shutting down");
+  });
+
   test("GitHub and Linear locks, feature builds and public API reconciliations are per backend", async () => {
     const first = createRuntime();
     const second = createRuntime();
@@ -601,6 +630,166 @@ describe("two BackendRuntimes in one process", () => {
       ).toBe(failure);
     } finally {
       await rm(accountsRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+/** A Docker follower child: its output is written by the test. */
+class FakeFollower extends EventEmitter {
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  exitCode: number | null = null;
+  kill() {
+    this.exitCode = 143;
+    this.stdout.end();
+    this.stderr.end();
+    this.emit("close", 143);
+    return true;
+  }
+}
+
+/** Records every follower one backend spawns, by Docker subcommand. */
+function fakeDockerFollowers() {
+  const oom: { args: string[]; child: FakeFollower }[] = [];
+  const logs: { args: string[]; child: FakeFollower }[] = [];
+  const spawnInto =
+    (into: typeof oom) =>
+    (_command: string, args: string[]): never => {
+      const child = new FakeFollower();
+      into.push({ args, child });
+      return child as never;
+    };
+  return {
+    oom,
+    logs,
+    options: { containerOom: { spawn: spawnInto(oom) }, containerLogs: { spawn: spawnInto(logs) } },
+  };
+}
+
+type BackendInternals = {
+  runtime: BackendRuntime;
+  claudeLoginKeeper: {
+    refreshLocalLoginIfDue(): Promise<unknown>;
+    refreshHostIfDue(): Promise<unknown>;
+  } | null;
+  codexLoginRefresher: ((home: string) => Promise<void>) | null;
+};
+
+const OOM_CONTAINER = "a".repeat(64);
+const oomLine = (seconds: number) => `${OOM_CONTAINER}\t${BigInt(seconds) * 1_000_000_000n}\n`;
+
+describe("two OrkestratorBackends in one process (todo 0733)", () => {
+  test("each owns its OOM follower, login refreshers and log followers, and stops only its own", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-two-backends-"));
+    const backends: OrkestratorBackend[] = [];
+    const create = (name: string) => {
+      const docker = fakeDockerFollowers();
+      const dataDir = path.join(root, name);
+      const backend = new OrkestratorBackend({
+        dataDir,
+        toolchainBinDir: "",
+        appRoot: "",
+        resourceRoot: "",
+        emit: () => undefined,
+        transcriptArtifactRuntime: false,
+        agentTools: {
+          connection: () => ({ url: "http://127.0.0.1:1/mcp", token: "test-token" }),
+          revokeEnvironment() {},
+          async start() {},
+          async stop() {},
+        },
+        startupReapers: { localServers: async () => [], claudeTmuxRuntimes: async () => [] },
+        dockerFollowers: docker.options,
+      });
+      backends.push(backend);
+      return { backend, docker, dataDir, owner: backend as unknown as BackendInternals };
+    };
+    try {
+      const first = create("first");
+      const second = create("second");
+      await Promise.all([first.backend.init(), second.backend.init()]);
+
+      // OOM: each backend follows its own owner namespace and counts only its own events.
+      for (const { docker, dataDir } of [first, second]) {
+        expect(docker.oom).toHaveLength(1);
+        expect(docker.oom[0]!.args).toContain(
+          `label=orkestrator-owner=${dockerOwnerNamespace(dataDir)}`,
+        );
+      }
+      expect(dockerOwnerNamespace(first.dataDir)).not.toBe(dockerOwnerNamespace(second.dataDir));
+      first.docker.oom[0]!.child.stdout.write(oomLine(1_000));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(first.owner.runtime.containerOom.count(OOM_CONTAINER)).toBe(1);
+      expect(second.owner.runtime.containerOom.count(OOM_CONTAINER)).toBe(0);
+
+      // Login refreshers: each backend's callers reach its own keeper and Codex refresher.
+      const keepers = [first, second].map(({ owner }) => ({
+        local: spyOn(owner.claudeLoginKeeper!, "refreshLocalLoginIfDue").mockResolvedValue(
+          undefined,
+        ),
+        host: spyOn(owner.claudeLoginKeeper!, "refreshHostIfDue").mockResolvedValue(undefined),
+      }));
+      const codex = [first, second].map(({ owner }) => {
+        const refresh = mock(async (_home: string) => undefined);
+        owner.codexLoginRefresher = refresh;
+        return refresh;
+      });
+      expect(await second.owner.runtime.accounts.refreshLocalClaudeLogin()).toBe(true);
+      expect(await second.owner.runtime.accounts.refreshHostClaudeLogin()).toBe(true);
+      expect(await second.owner.runtime.accounts.refreshLocalCodexLogin("/second-home")).toBe(true);
+      expect(keepers[0]!.local).not.toHaveBeenCalled();
+      expect(keepers[0]!.host).not.toHaveBeenCalled();
+      expect(codex[0]).not.toHaveBeenCalled();
+      expect(keepers[1]!.local).toHaveBeenCalledTimes(1);
+      expect(keepers[1]!.host).toHaveBeenCalledTimes(1);
+      expect(codex[1]).toHaveBeenCalledWith("/second-home");
+
+      // Logs: each backend spawns its own follower for its own subscription.
+      type Opened = { subscriptionId: string; sourceId: string; cursor: number };
+      await first.backend.invoke<Opened>("open_container_logs", { containerId: "container-1" });
+      const opened = await second.backend.invoke<Opened>("open_container_logs", {
+        containerId: "container-1",
+      });
+      expect(first.docker.logs).toHaveLength(1);
+      expect(second.docker.logs).toHaveLength(1);
+      second.docker.logs[0]!.child.stdout.write("still following\n");
+
+      await first.backend.shutdown();
+
+      // The first backend's followers stopped; the second's did not.
+      expect(first.docker.oom[0]!.child.exitCode).toBe(143);
+      expect(first.docker.logs[0]!.child.exitCode).toBe(143);
+      expect(second.docker.oom[0]!.child.exitCode).toBeNull();
+      expect(second.docker.logs[0]!.child.exitCode).toBeNull();
+      expect(first.owner.runtime.containerOom.count(OOM_CONTAINER)).toBeNull();
+      second.docker.oom[0]!.child.stdout.write(oomLine(1_001));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(second.owner.runtime.containerOom.count(OOM_CONTAINER)).toBe(1);
+      await expect(
+        second.backend.invoke("read_container_logs", {
+          subscriptionId: opened.subscriptionId,
+          sourceId: opened.sourceId,
+          cursor: opened.cursor,
+        }),
+      ).resolves.toMatchObject({
+        kind: "records",
+        sourceId: opened.sourceId,
+        records: [{ text: "still following\n" }],
+        ended: false,
+      });
+      // The second backend still refreshes on demand; the first asks nothing.
+      expect(await first.owner.runtime.accounts.refreshLocalClaudeLogin()).toBe(false);
+      expect(await first.owner.runtime.accounts.refreshLocalCodexLogin("/first-home")).toBe(false);
+      expect(await second.owner.runtime.accounts.refreshLocalClaudeLogin()).toBe(true);
+      expect(await second.owner.runtime.accounts.refreshHostClaudeLogin()).toBe(true);
+      expect(await second.owner.runtime.accounts.refreshLocalCodexLogin("/second-home")).toBe(true);
+      expect(keepers[1]!.local).toHaveBeenCalledTimes(2);
+      expect(keepers[1]!.host).toHaveBeenCalledTimes(2);
+      expect(codex[1]).toHaveBeenCalledTimes(2);
+      expect(codex[0]).not.toHaveBeenCalled();
+    } finally {
+      for (const backend of backends) await backend.shutdown().catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

@@ -20,6 +20,11 @@ const RESTART_MAX_MS = 60_000;
 
 type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnParentBoundCommand>;
 
+/** Test seam `BackendRuntime` passes through (`containerOom`). */
+export type ContainerOomEventsOptions = {
+  spawn?: Spawn;
+};
+
 export interface OomCount {
   count: number;
   lastAt: string;

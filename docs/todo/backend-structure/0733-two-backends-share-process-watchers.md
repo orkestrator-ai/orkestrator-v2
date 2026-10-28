@@ -1,6 +1,9 @@
 # Two backends in one process share the OOM watcher, the login refreshers and the container log service
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `863b5782` (2026-10-27). Done on
+`todo-0733-per-backend-watchers-0fc0ebf50061` from `31b9c972`
+(2026-10-28): every item is finished. Kept until the branch merges for its
+decisions, then deleted.
 
 When two `OrkestratorBackend` instances run in one process at the same time,
 the second backend's OOM watcher is never started for its own containers. The
@@ -18,10 +21,13 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Pin the interference with a failing two-backend test**: add cases to `backend-runtime.test.ts` (or `index.test.ts`) that fail today. Status: open.
-2. **Make the OOM watcher per backend**: own it from the backend instance or `BackendRuntime`, not a module variable. Status: open.
-3. **Make the login refreshers per backend**: hold the three refreshers where each backend's callers reach their own. Status: open.
-4. **Make the container log service per backend**: the same pattern, a row 0133 does not list. Status: open.
+1. **Pin the interference with a failing two-backend test**: add cases to `backend-runtime.test.ts` (or `index.test.ts`) that fail today. Status: done (the log-service part failed before the fix; see Current state).
+2. **Make the OOM watcher per backend**: own it from the backend instance or `BackendRuntime`, not a module variable. Status: done by 0133 (#1335, `runtime.containerOom`) before this branch; this branch adds the full-backend test.
+3. **Make the login refreshers per backend**: hold the three refreshers where each backend's callers reach their own. Status: done by 0133 (#1335, `runtime.accounts`) before this branch; this branch adds the full-backend test.
+4. **Make the container log service per backend**: the same pattern, a row 0133 does not list. Status: done (`runtime.containerLogs`).
+
+The analysis below is as written on 2026-10-27, against `863b5782`; its line
+references predate 0133's merge.
 
 ### 1. Pin the interference with a failing two-backend test
 
@@ -103,43 +109,157 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Current state
 
-- Production runs one backend per process: Electron spawns
-  `apps/backend/src/main.ts` (or `backend/main.js`) as a separate `bun`
-  process (`apps/desktop/electron/backend-process.ts:715-716`, `:798`), and
-  `main.ts` constructs one `OrkestratorBackend` (`apps/backend/src/main.ts:87`).
-  The Electron main process imports the backend only as types.
-- `dev:test` (`apps/desktop/scripts/dev-test.ts`) goes through the same
-  Electron launcher, and the qualification scripts
-  (`scripts/qa-command-nodes.ts`, `scripts/qualify-backend-upgrade-rollback.ts`
-  and others) spawn `main.ts` per backend. None runs two backends in one
-  process.
-- Tests construct `OrkestratorBackend` in nine files, one at a time; none
-  overlaps two.
-- The OOM watcher (`container-oom-events.ts:130-147`), the three login
-  refreshers (`agent-accounts-active.ts:285`, `:483`;
-  `agent-accounts-containers.ts:948`) and the container log service
-  (`container-log-service.ts:352-364`) are module state started or set in
-  `init()` and cleared in `shutdown()` (`core/index.ts:1378`, `:1414-1420`,
-  `:2124-2129`).
+- The OOM follower is `runtime.containerOom` (`ContainerOomEvents`) and the
+  three login refreshers are construction options of `runtime.accounts`
+  (`AgentAccountsRuntime`), both from 0133 (#1335), which merged after this
+  file was written. This branch found them already moved and did not change
+  them beyond a `spawn` construction option for the OOM follower.
+- The container log service is `runtime.containerLogs` (`ContainerLogService`,
+  `apps/backend/src/core/backend-runtime.ts`). The module `instance`,
+  `containerLogService()` and `shutdownContainerLogService()` are gone. The
+  four log commands (`open_`, `read_`, `close_`, `stream_container_logs` in
+  `commands-registry-docker.ts`) reach it through `context.runtime`.
+  `BackendRuntime.shutdown()` stops it, and so does the backend's own
+  `shutdown()` next to the OOM follower (`core/index.ts`); both stops are
+  idempotent. Its lease sweep now starts with the first subscription, so
+  building a runtime (every command fixture does) starts no timer.
+- Test seams are construction options: `BackendRuntimeOptions.containerOom`
+  (`spawn`) and `.containerLogs` (`spawn`, `now`), and the backend option
+  `dockerFollowers`, which passes those two to the runtime the backend
+  builds and keeps its refresher wiring.
+- `backend-runtime.test.ts` has two new cases. "two OrkestratorBackends in
+  one process (todo 0733)" starts two real `OrkestratorBackend`s on separate
+  temporary data directories with fake Docker followers, checks each follows
+  its own owner label, counts its own OOM events, refreshes through its own
+  keeper and Codex refresher and spawns its own log follower, then shuts the
+  first down and checks the second's OOM follower and log follower still
+  run, its subscription still reads, and it still refreshes, while the
+  first's refreshers answer "nothing asked". "container log followers are
+  per backend and stop with it" covers the same at runtime level.
+- Before the fix, the full-backend log case failed: after the first backend's
+  shutdown, the second's `read_container_logs` rejected with
+  `ContainerLifecycleError:operation-unknown: The log subscription has
+  expired.` (run on this branch before the code change, with the real
+  `docker logs` spawn because the seam did not exist yet). The OOM and
+  refresher assertions pass on the base commit, since 0133 had moved them.
 
 ## Outstanding work
 
 ### Code
 
-1. Add a two-backend test that starts both, shuts down the first, and
-   asserts the second still follows OOM events for its own owner, still
-   refreshes logins through its own keeper, and keeps its log subscriptions.
-   It fails today.
-2. Move the OOM watcher and the container log service onto `BackendRuntime`
-   (or the backend instance), with readers going through the context.
-3. Move the three login refreshers onto the context and remove the module
-   setters and their test resets.
-4. Update `docs/architecture/backend-runtime.md` (clusters and shutdown) and
-   remove the moved rows from 0133's table.
+1. **Done — Two-backend test.** See Current state.
+2. **Done — OOM watcher and log service on `BackendRuntime`.** The OOM
+   watcher by 0133; the log service here.
+3. **Done — Login refreshers on the context.** By 0133
+   (`AgentAccountsRuntime`); no module setters or test resets remain.
+4. **Done — Docs.** `docs/architecture/backend-runtime.md` lists
+   `containerLogs`, the new test seams and the shutdown behaviour; the log
+   service row is gone from 0390's table (0133's table already listed the
+   OOM and refresher moves).
 
 ### Qualification
 
-- None beyond the tests in Code.
+- None beyond the tests in Code. See Validation evidence.
+
+## Validation evidence
+
+Run on omarchy-hp (Linux) on 2026-10-28.
+
+- `mise run format:check`: passed. `mise run lint`: exit 0, no findings in
+  changed files.
+- `mise run typecheck`: exit 1, from 5 errors in one file this branch does
+  not touch (`apps/backend/tests/commands-environment-image-download.test.ts`,
+  lines 134–180, added by #1391). A clean `origin/main` worktree at
+  `31b9c972` shows the same 5 errors. Every other package and the root, e2e
+  and agent-testing projects typecheck clean.
+- Focused: `backend-runtime.test.ts`, `backend-runtime-wiring.test.ts`,
+  `index.test.ts`, `commands-process-coverage`, `commands-registry-coverage`,
+  `container-benchmarks`, `container-live-network`, `container-log-service`,
+  `container-oom-events`, `container-resources`, `agent-accounts-active`,
+  `agent-accounts-containers` at `--parallel=4`: 302 pass, 6 skip, 0 fail.
+- `mise run test`: FULL_SUITE_RESULT
+
+## Assumptions and decisions
+
+1. **Tasks 2 and 3 were already done; add tests, not code.**
+   - Options: re-do the OOM and refresher moves to this file's plan; leave
+     them untested here; keep 0133's code and add the full-backend test this
+     file asked for.
+   - Chosen: keep 0133's code and add the test.
+   - Why: 0133 (#1335) moved both into `BackendRuntime` exactly as this
+     file recommended (owner on the runtime, construction options, no
+     setters). Its tests were runtime-level, so nothing exercised two real
+     backends' `init()`/`shutdown()`.
+   - Pros: no churn; the wiring in `core/index.ts` is now covered. Cons:
+     those parts of the test passed before this change, so only the log
+     service part was a failing test first.
+2. **The test runs two real `OrkestratorBackend`s (this file's recommended
+   level), plus one runtime-level case.**
+   - Options: two backends; module-level unit tests; runtime-level only.
+   - Chosen: two backends on separate temporary data directories, started
+     together with `Promise.all`, with the startup reapers, agent tools and
+     Docker followers faked. The control MCP binds port 0 under `bun test`,
+     so no fixed port is used. Plus a runtime case alongside the other
+     two-runtime cases.
+   - Pros: tests the wiring where the bug was. Cons: heavier than a
+     runtime case (two full `init()`s and `shutdown()`s).
+3. **The log service is a `BackendRuntime` member, built eagerly, with a
+   lazy lease sweep.**
+   - Options: a lazy getter creating the service on first use (the old
+     module behaviour, per runtime); a module map keyed by owner; an eager
+     member whose constructor starts nothing.
+   - Chosen: eager member; the lease sweep starts on the first `open()`.
+   - Why: matches `containerOom` and the other owners; a lazy getter would
+     need its own "closed" state to avoid recreating the service after
+     shutdown; a module map is still module state.
+   - Pros: no timer for fixtures that never open a log; simple shutdown.
+     Cons: a small behaviour change inside `ContainerLogService` (the sweep
+     no longer runs before the first subscription, when there is nothing
+     to sweep).
+4. **After shutdown, opening a log subscription is refused.**
+   - Options: recreate a fresh service on next use (the old module
+     behaviour); refuse.
+   - Chosen: refuse with the existing `resource-exhausted` "Log following is
+     shutting down." error.
+   - Why: a backend that has shut down should not start Docker followers;
+     the gateway stops accepting commands first, so no client sees this.
+5. **Follower seams are construction options, reached from the backend as
+   `dockerFollowers`.**
+   - Options: `mock.module` on `shell.js`; pass a whole `runtime` to
+     `OrkestratorBackend`; a narrow backend option forwarded to the runtime.
+   - Chosen: `BackendRuntimeOptions.containerOom`/`containerLogs`, and
+     `OrkestratorBackend`'s `dockerFollowers`
+     (`Pick<BackendRuntimeOptions, "containerOom" | "containerLogs">`).
+   - Why: `backend-runtime.md` asks for construction options; a whole
+     `runtime` would drop the backend's own refresher closures, which the
+     test must exercise; `mock.module` leaks across files.
+   - Pros: no real `docker` process in the test. Cons: one more backend
+     test option.
+6. **Isolate every row rather than refuse a second backend per process (the
+   open question).**
+   - Options: make `init()` refuse a second concurrent backend; isolate.
+   - Chosen: isolate.
+   - Why: `backend-runtime.md` states two backends in one process never see
+     each other's state, and the remaining rows are tracked in 0390. A
+     refusal would also stop tests from running two backends.
+   - Pros: consistent with 0011/0066/0133. Cons: the guarantee holds only as
+     far as 0390 is done.
+7. **0133 and 0390 updates.** 0133 is finished and its table already lists
+   the OOM and refresher moves, so only its link to this file now says what
+   was done. 0390's container log service row is removed, with a note
+   pointing here.
+
+## Open questions
+
+- None. The question of refusing a second concurrent `init()` is decision 6.
+
+## Needs verification
+
+- A live backend run showing container logs still follow and stop (not
+  done: this host runs the user's live Orkestrator, and the constraints for
+  this work forbid live runs). Production runs one backend per process, and
+  the change only moves where the one service is held, so no behaviour
+  change is expected.
 
 ## Constraints and rationale
 
@@ -149,18 +269,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   containers.
 - No production path is affected today, which is why this is rated as a
   refactor that removes a latent risk, not as a user-facing bug.
-
-## Open questions
-
-- Should the backend instead refuse a second concurrent `init()` in one
-  process, making "one backend per process" an enforced rule rather than
-  isolating every row? That would contradict the stated goal in
-  `backend-runtime.md` that two backends in one process never see each
-  other's state.
-
-## Needs verification
-
-- None.
 
 ## Related
 

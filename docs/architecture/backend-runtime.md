@@ -8,6 +8,7 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `diff-stats-tracking.ts`, `tmux-runtime.ts`, `agent-accounts-runtime.ts`,
 `agent-accounts-last-usage.ts`, `cursor-sdk-login.ts`,
 `container-usage-sampler.ts`, `container-oom-events.ts`,
+`container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`.
 
@@ -32,6 +33,7 @@ environment operations (`backend-runtime.test.ts`).
 | `containerStates` | `DockerContainerStateCache` | The short-lived `docker ps` snapshot shared by status reads; container creation invalidates it. |
 | `containerUsage` | `ContainerUsageSampler` | The shared container usage sample. It lists only this backend's owner-labelled containers, so it is per backend. |
 | `containerOom` | `ContainerOomEvents` | The `docker events` OOM follower, started by the backend once it knows its Docker owner namespace. |
+| `containerLogs` | `ContainerLogService` | The `docker logs -f` followers behind `open_container_logs`/`read_container_logs`, their replay rings and subscription leases. Constructing it starts nothing; the lease sweep starts with the first subscription. |
 | `dockerCleanupGrants` | `DockerCleanupGrants` | Reviewed Docker cleanup selection tokens (at most eight, ten minutes each, consumed on use). |
 | `integrationLocks` | `IntegrationLocks` | GitHub and Linear completion comments per pipeline, workflow-label setup per repository and status updates per issue. The GitHub client functions take the narrow `GitHubWriteLocks`. |
 | `featureBuilds` | `FeatureBuildTasks` | Feature-build ticket resolutions per request and background title refinements per ticket. |
@@ -68,7 +70,10 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   return `undefined` while no keeper runs, which callers read as "nothing
   was asked".
 - Test seams are construction options, not setters:
-  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, openCodeAgentTools, openCodeLockedStartRetryDelaysMs, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher } })`.
+  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, openCodeAgentTools, openCodeLockedStartRetryDelaysMs, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher }, containerOom: { spawn }, containerLogs: { spawn, now } })`.
+  A test that runs whole backends passes the two Docker follower seams to
+  `OrkestratorBackend` as `dockerFollowers`, which keeps the backend's own
+  refresher wiring (passing a whole `runtime` would replace it).
   A test that simulates a backend restart builds a fresh runtime (or the
   owner class, such as `new AgentAccountLastUsage()`).
   A test that swaps an implementation mid-test keeps the variable in the test
@@ -80,8 +85,14 @@ whether lifecycle work may be admitted and drains it on shutdown, while
 `BackendRuntime.shutdown()` runs once, synchronously, after the gateway stops
 accepting commands: it releases diff-stats watchers, change tracking, every
 terminal and terminal-history timer, the PR monitor's polling timers and
-admission pool, the Claude state polls and interactive pane timers, and the
-OOM follower. tmux sessions themselves outlive the backend and are left
+admission pool, the Claude state polls and interactive pane timers, the OOM
+follower and the container log followers (observers: stopping them never
+touches a container). The backend also stops those two followers explicitly
+in its own `shutdown()`; both stops are idempotent. Only this backend's
+followers stop: two backends in one process each keep their own, and one's
+shutdown leaves the other's OOM counts, log subscriptions and login
+refreshers running (`backend-runtime.test.ts`, "two OrkestratorBackends in
+one process"). tmux sessions themselves outlive the backend and are left
 running. Terminal history collectors stay usable, because the backend's
 awaited `terminals.history.flush(true)` runs later in its shutdown and
 persists their last records and checkpoints. Owned local servers need an awaited, ordered teardown, so the
@@ -112,6 +123,6 @@ at module load, the same for every backend: code wiring, not state.
 
 Further per-backend module state found while doing 0133 (agent-account
 logins and usage caches, container login pushes, the plan-usage cache's
-active account, the GitHub CLI and OpenCode provider logins, the container
-log service and OpenCode command journals) is listed in
+active account, the GitHub CLI and OpenCode provider logins and OpenCode
+command journals) is listed in
 [0390-backend-module-state-beyond-0133.md](../todo/backend-structure/0390-backend-module-state-beyond-0133.md).

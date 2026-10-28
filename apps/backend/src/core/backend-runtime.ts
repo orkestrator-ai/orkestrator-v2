@@ -2,7 +2,8 @@ import {
   AgentAccountsRuntime,
   type AgentAccountsRuntimeOptions,
 } from "./agent-accounts-runtime.js";
-import { ContainerOomEvents } from "./container-oom-events.js";
+import { ContainerLogService, type ContainerLogServiceOptions } from "./container-log-service.js";
+import { ContainerOomEvents, type ContainerOomEventsOptions } from "./container-oom-events.js";
 import { ContainerUsageSampler } from "./container-usage-sampler.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
 import { DockerCleanupGrants } from "./docker-cleanup-grants.js";
@@ -32,6 +33,10 @@ export type BackendRuntimeOptions = {
   tmux?: TmuxRuntimeOptions;
   /** The backend passes its login keeper's refreshers. */
   accounts?: AgentAccountsRuntimeOptions;
+  /** Test seam: the OOM follower's `docker events` spawn. */
+  containerOom?: ContainerOomEventsOptions;
+  /** Test seams: the log followers' `docker logs -f` spawn and lease clock. */
+  containerLogs?: ContainerLogServiceOptions;
 };
 
 /**
@@ -61,7 +66,9 @@ export class BackendRuntime {
   /** This backend's container usage sample (owner-filtered, so not host-wide). */
   readonly containerUsage = new ContainerUsageSampler();
   /** The `docker events` OOM follower, started by the backend once it knows its owner. */
-  readonly containerOom = new ContainerOomEvents();
+  readonly containerOom: ContainerOomEvents;
+  /** `docker logs -f` followers behind the log subscriptions. */
+  readonly containerLogs: ContainerLogService;
   /** Reviewed Docker cleanup selection tokens. */
   readonly dockerCleanupGrants = new DockerCleanupGrants();
   /** GitHub and Linear write serialisation. */
@@ -89,6 +96,11 @@ export class BackendRuntime {
     this.prMonitor = new PrMonitorRuntime(options.prMonitor);
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);
+    this.containerOom = new ContainerOomEvents(options.containerOom?.spawn);
+    this.containerLogs = new ContainerLogService(
+      options.containerLogs?.spawn,
+      options.containerLogs?.now,
+    );
   }
 
   attachChangeTracking(service: ChangeTrackingService): void {
@@ -100,7 +112,8 @@ export class BackendRuntime {
    * shutdown. Owned local servers are terminated by the backend's awaited
    * shutdown through `localServers.shutdown()`, after lifecycle work drains.
    * tmux sessions outlive the backend; only this backend's poll and pane
-   * timers stop.
+   * timers stop. The OOM and log followers are observers: stopping them never
+   * touches a container.
    */
   shutdown(): void {
     this.diffStats.shutdown();
@@ -109,5 +122,6 @@ export class BackendRuntime {
     this.prMonitor.shutdown();
     this.tmux.shutdown();
     this.containerOom.stop();
+    this.containerLogs.shutdown();
   }
 }

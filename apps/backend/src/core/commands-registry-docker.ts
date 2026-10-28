@@ -11,7 +11,6 @@ import {
 } from "./docker-cleanup-inventory.js";
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
-import { containerLogService } from "./container-log-service.js";
 
 /** Largest `get_container_logs` answer, in UTF-8 bytes. */
 const CONTAINER_LOG_TAIL_MAX_BYTES = 512 * 1024;
@@ -344,24 +343,24 @@ export function registerDockerCommands(
   });
   // Follow subscriptions: one shared `docker logs -f` per container, a bounded
   // replay ring, leases and an explicit gap when a client falls behind.
-  register("open_container_logs", ({ containerId }) =>
-    containerLogService().open(asString(containerId, "containerId")),
+  register("open_container_logs", ({ containerId }, context) =>
+    context.runtime.containerLogs.open(asString(containerId, "containerId")),
   );
-  register("read_container_logs", ({ subscriptionId, sourceId, cursor }) =>
-    containerLogService().read(
+  register("read_container_logs", ({ subscriptionId, sourceId, cursor }, context) =>
+    context.runtime.containerLogs.read(
       asString(subscriptionId, "subscriptionId"),
       asString(sourceId, "sourceId"),
       asNumber(cursor, "cursor"),
     ),
   );
-  register("close_container_logs", ({ subscriptionId }) => {
+  register("close_container_logs", ({ subscriptionId }, context) => {
     // Releases the observer only; the container and its processes continue.
-    containerLogService().close(asString(subscriptionId, "subscriptionId"));
+    context.runtime.containerLogs.close(asString(subscriptionId, "subscriptionId"));
   });
   // Legacy adapter: an older client that never closes gets a lease that
   // lapses, so its follower stops instead of living forever.
-  register("stream_container_logs", ({ containerId }) => {
-    const { subscriptionId, sourceId } = containerLogService().open(
+  register("stream_container_logs", ({ containerId }, context) => {
+    const { subscriptionId, sourceId } = context.runtime.containerLogs.open(
       asString(containerId, "containerId"),
     );
     return { subscriptionId, sourceId };

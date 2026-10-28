@@ -9,7 +9,7 @@ import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
-import { createBackendShutdownHandler } from "./shutdown.js";
+import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { TailscaleServeManager } from "./tailscale-serve.js";
@@ -215,11 +215,11 @@ const stop = createBackendShutdownHandler({
   },
   warn: (message) => console.warn(message),
   info: (message) => console.log(message),
-  exit: (code) => {
-    void stopStandaloneBackendLogging(standaloneLogging)
-      .then(() => boundedConsole.flush(2_000))
-      .finally(() => process.exit(code));
-  },
+  exit: createBackendExitHandler({
+    stopLogging: () => stopStandaloneBackendLogging(standaloneLogging),
+    flushConsole: (timeoutMs) => boundedConsole.flush(timeoutMs),
+    exit: (code) => process.exit(code),
+  }),
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));

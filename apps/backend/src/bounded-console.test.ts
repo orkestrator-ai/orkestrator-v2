@@ -9,11 +9,11 @@ import {
 /** A stream whose flushes the test releases by hand, like a reader that may stall. */
 class HeldStream implements BoundedConsoleStream {
   readonly written: string[] = [];
-  private readonly callbacks: Array<() => void> = [];
+  private readonly callbacks: Array<(error?: Error) => void> = [];
 
   write(chunk: string, callback: (error?: Error | null) => void): boolean {
     this.written.push(chunk);
-    this.callbacks.push(() => callback());
+    this.callbacks.push((error) => callback(error));
     return this.callbacks.length === 1;
   }
 
@@ -23,8 +23,8 @@ class HeldStream implements BoundedConsoleStream {
   }
 
   /** Lets the reader drain only the oldest write. */
-  releaseOne(): void {
-    this.callbacks.shift()?.();
+  releaseOne(error?: Error): void {
+    this.callbacks.shift()?.(error);
   }
 
   get held(): number {
@@ -81,7 +81,7 @@ describe("bounded console", () => {
     expect(stdout.written).toHaveLength(3);
     expect(installed!.stats().stdout).toMatchObject({
       pendingBytes: 60,
-      writtenLines: 3,
+      writtenLines: 0,
       droppedLines: 7,
       droppedBytes: 140,
       unreportedDroppedLines: 7,
@@ -118,7 +118,7 @@ describe("bounded console", () => {
     const { stdout, target } = install(1_000);
     const line = "y".repeat(199);
     for (let index = 0; index < 6; index += 1) target.log(line);
-    expect(installed!.stats().stdout).toMatchObject({ writtenLines: 5, droppedLines: 1 });
+    expect(installed!.stats().stdout).toMatchObject({ writtenLines: 0, droppedLines: 1 });
 
     // A slow reader: one write drains, then another line arrives.
     stdout.releaseOne();
@@ -163,16 +163,131 @@ describe("bounded console", () => {
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 
-  test("a stream that throws counts the line as lost instead of leaking pending bytes", () => {
+  test.each(["throw", "callback", "sync-callback"] as const)(
+    "%s failures count lost lines and UTF-8 bytes without marker retries",
+    async (mode) => {
+      const target = fakeConsole();
+      const callbacks: Array<() => void> = [];
+      const writes: string[] = [];
+      const broken: BoundedConsoleStream = {
+        write: (chunk, callback) => {
+          writes.push(chunk);
+          if (mode === "throw") throw new Error("stream destroyed");
+          if (mode === "sync-callback") callback(new Error("stream destroyed"));
+          else callbacks.push(() => callback(new Error("stream destroyed")));
+          return false;
+        },
+      };
+      installed = installBoundedConsole({ stdout: broken, stderr: broken, console: target });
+      target.log("lost é");
+      target.error("lost error");
+      const flush = installed.flush(5_000);
+      for (const callback of callbacks) callback();
+      await flush;
+      expect(installed.stats().stdout).toMatchObject({
+        pendingBytes: 0,
+        writtenLines: 0,
+        failedLines: 1,
+        failedBytes: Buffer.byteLength("lost é\n"),
+        droppedLines: 0,
+        unreportedDroppedLines: 0,
+      });
+      expect(installed.stats().stderr).toMatchObject({
+        pendingBytes: 0,
+        writtenLines: 0,
+        failedLines: 1,
+        failedBytes: Buffer.byteLength("lost error\n"),
+      });
+      expect(writes).toEqual(["lost é\n", "lost error\n"]);
+    },
+  );
+
+  test("pending output is successful only after its callback succeeds", () => {
+    const { stdout, target } = install();
+    target.log("pending");
+    expect(installed!.stats().stdout).toMatchObject({ pendingBytes: 8, writtenLines: 0 });
+    stdout.drain();
+    expect(installed!.stats().stdout).toMatchObject({
+      pendingBytes: 0,
+      writtenLines: 1,
+      failedLines: 0,
+      failedBytes: 0,
+    });
+  });
+
+  test("failed callbacks settle a flush without attempting a gap marker", async () => {
+    const { stdout, target } = install();
+    for (let index = 0; index < 5; index += 1) target.log("x".repeat(19));
+    const flush = installed!.flush(5_000);
+    for (let index = 0; index < 3; index += 1) stdout.releaseOne(new Error("broken"));
+    await flush;
+    expect(stdout.written).toHaveLength(3);
+    expect(installed!.stats().stdout).toMatchObject({
+      pendingBytes: 0,
+      writtenLines: 0,
+      failedLines: 3,
+      failedBytes: 60,
+      droppedLines: 2,
+      unreportedDroppedLines: 2,
+    });
+  });
+
+  test.each(["throw", "callback"] as const)(
+    "a gap marker lost to a %s failure terminates without recursive writes",
+    async (mode) => {
+      const target = fakeConsole();
+      const callbacks: Array<() => void> = [];
+      const writes: string[] = [];
+      const stream: BoundedConsoleStream = {
+        write: (chunk, callback) => {
+          writes.push(chunk);
+          if (chunk.includes("Dropped")) {
+            if (mode === "throw") throw new Error("broken");
+            callback(new Error("broken"));
+          } else callbacks.push(() => callback());
+          return false;
+        },
+      };
+      installed = installBoundedConsole({
+        stdout: stream,
+        stderr: stream,
+        console: target,
+        maxPendingBytes: 64,
+      });
+      for (let index = 0; index < 5; index += 1) target.log("x".repeat(19));
+      const flush = installed.flush(5_000);
+      for (const callback of callbacks) callback();
+      await flush;
+      expect(writes).toHaveLength(4);
+      expect(writes[3]).toContain("Dropped 2 log line(s) (40 bytes)");
+      expect(installed.stats().stdout).toMatchObject({
+        pendingBytes: 0,
+        writtenLines: 3,
+        failedLines: 1,
+        failedBytes: Buffer.byteLength(writes[3]!),
+        droppedLines: 2,
+        unreportedDroppedLines: 0,
+      });
+    },
+  );
+
+  test("a callback followed by a throw settles a write only once", async () => {
     const target = fakeConsole();
     const broken: BoundedConsoleStream = {
-      write: () => {
-        throw new Error("stream destroyed");
+      write: (_chunk, callback) => {
+        callback(new Error("broken"));
+        throw new Error("also throws");
       },
     };
-    installed = installBoundedConsole({ stdout: broken, stderr: broken, console: target });
+    installed = installBoundedConsole({ stdout: broken, console: target });
     target.log("lost");
-    expect(installed.stats().stdout.pendingBytes).toBe(0);
+    await installed.flush(5_000);
+    expect(installed.stats().stdout).toMatchObject({
+      pendingBytes: 0,
+      writtenLines: 0,
+      failedLines: 1,
+      failedBytes: 5,
+    });
   });
 
   test("uninstall restores the original methods", () => {

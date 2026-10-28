@@ -30,8 +30,11 @@ export const BOUNDED_CONSOLE_MAX_PENDING_BYTES = 4 * 1024 * 1024;
 export interface BoundedStreamStats {
   /** Bytes handed to the stream and not yet flushed. */
   pendingBytes: number;
-  /** Lines written since install. */
+  /** Lines successfully flushed since install (including gap markers). */
   writtenLines: number;
+  /** Writes lost to callback errors or synchronous throws, including gap markers. */
+  failedLines: number;
+  failedBytes: number;
   /** Lines dropped since install because the reader was not draining. */
   droppedLines: number;
   droppedBytes: number;
@@ -87,6 +90,8 @@ export function boundedConsoleStats(): BoundedConsoleStats | null {
 class BoundedStream {
   private pendingBytes = 0;
   private writtenLines = 0;
+  private failedLines = 0;
+  private failedBytes = 0;
   private droppedLines = 0;
   private droppedBytes = 0;
   private unreportedLines = 0;
@@ -120,13 +125,22 @@ class BoundedStream {
 
   private send(line: string, bytes: number): void {
     this.pendingBytes += bytes;
-    this.writtenLines += 1;
+    let settled = false;
+    const settle = (failed: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (failed) {
+        this.failedLines += 1;
+        this.failedBytes += bytes;
+      } else {
+        this.writtenLines += 1;
+      }
+      this.flushed(bytes, failed);
+    };
     try {
-      this.stream.write(line, () => this.flushed(bytes));
+      this.stream.write(line, (error) => settle(error != null));
     } catch {
-      // A destroyed stream throws instead of calling back. Nothing can be
-      // written to it again, so this line is lost like a dropped one.
-      this.flushed(bytes);
+      settle(true);
     }
   }
 
@@ -136,9 +150,11 @@ class BoundedStream {
     return new Promise((resolve) => this.drained.push(resolve));
   }
 
-  private flushed(bytes: number): void {
+  private flushed(bytes: number, failed: boolean): void {
     this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
-    if (this.unreportedLines > 0) this.resumeIfDrained();
+    // A failed write is not evidence of a draining reader. Keep failures in
+    // separate counters rather than recursively sending markers to a broken stream.
+    if (!failed && this.unreportedLines > 0) this.resumeIfDrained();
     if (this.pendingBytes === 0) {
       for (const resolve of this.drained.splice(0)) resolve();
     }
@@ -162,6 +178,8 @@ class BoundedStream {
     return {
       pendingBytes: this.pendingBytes,
       writtenLines: this.writtenLines,
+      failedLines: this.failedLines,
+      failedBytes: this.failedBytes,
       droppedLines: this.droppedLines,
       droppedBytes: this.droppedBytes,
       unreportedDroppedLines: this.unreportedLines,

@@ -8,6 +8,7 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
+    "application-menu-electron.spec.ts",
     "electron-main.spec.ts",
     "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",

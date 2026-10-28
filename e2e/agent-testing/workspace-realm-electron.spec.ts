@@ -579,7 +579,16 @@ test("a leaf's workspace opens in the window's central region without moving or 
               const item = Menu.getApplicationMenu()!
                 .items.find((item) => item.label === "View")!
                 .submenu!.items.find((item) => item.label === "Keyboard Shortcuts…")!;
-              item.click({ triggeredByAccelerator: true }, host, host.webContents);
+              item.click(
+                {
+                  triggeredByAccelerator: true,
+                  shiftKey: true,
+                  metaKey: process.platform === "darwin",
+                  ctrlKey: process.platform !== "darwin",
+                },
+                host,
+                host.webContents,
+              );
             });
             await expect(dialog).toHaveCount(0);
             await realmPage.keyboard.press(chord);

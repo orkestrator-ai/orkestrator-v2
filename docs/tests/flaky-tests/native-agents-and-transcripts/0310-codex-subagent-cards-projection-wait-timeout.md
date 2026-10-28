@@ -65,3 +65,11 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name codex-cards-owner -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (0.8 s logged).
 - **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
 - **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.
+
+## Keyboard-shortcut Windows/Linux recurrence — 2026-10-28
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on branch `todo-0325-keyboard-shortcuts-desktop-7ea8707afcbb` (base `6a6009a09`), Bun 1.4.4 on Arch Linux x64. Host load average was about 46, with other worktrees holding the exclusive test lease. The diff touches the desktop menu, the shortcut catalog and tests only; no backend, bridge or projection code.
+- **Failure:** line 170 after 2,833.81 ms. The cold-restart projection's `turn.phase` was `recovering`, expected `idle`.
+- **Owning-file rerun:** `mise run test:logged -- --name rerun-backend -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts ./tests/codex-subagent-cards.test.ts --parallel=2` passed this owner. The storage-writer guard in the same command failed, as it does on `origin/main`; see [1295](../aggregate-validation-runs/1295-keyboard-shortcuts-windows-linux-validation.md).
+- **Evidence:** `/tmp/orkestrator-test-run.HKpv4c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` on omarchy-hp. The aggregate was terminated at its deadline before finalization, so the log is uncompressed.
+- **Assessment:** intermittent recurrence. No owning source, assertion, deadline or skip changed.

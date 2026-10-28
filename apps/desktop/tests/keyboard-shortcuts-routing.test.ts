@@ -121,6 +121,29 @@ describe("native shortcut routing", () => {
     },
   );
 
+  test("Windows/Linux Ctrl+Shift+K toggles once, while AltGr (Ctrl+Alt) reaches the page", () => {
+    const { register, shell, controller } = harness();
+    const source = register(shell.id);
+    const ctrl = { ...chord, meta: false, control: true };
+    const event = { preventDefault: mock(() => {}) };
+    source.emit("before-input-event", event, ctrl);
+    // Electron also delivers rawKeyDown for a Ctrl chord; it is not a second press.
+    source.emit("before-input-event", event, { ...ctrl, type: "rawKeyDown" });
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(shell.send).toHaveBeenCalledTimes(1);
+    expect(shell.send).toHaveBeenLastCalledWith(
+      "orkestrator:event",
+      "menu-keyboard-shortcuts",
+      "toggle",
+    );
+
+    const altGr = { preventDefault: mock(() => {}) };
+    source.emit("before-input-event", altGr, { ...ctrl, alt: true });
+    expect(altGr.preventDefault).not.toHaveBeenCalled();
+    expect(shell.send).toHaveBeenCalledTimes(1);
+    controller.forget(shell.id);
+  });
+
   test.each([42, 999])(
     "preview-owned or unknown contents %s leave input to their own hook",
     (id) => {

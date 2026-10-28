@@ -131,6 +131,15 @@ describe("KeyboardShortcutsDialog", () => {
     const row = await screen.findByTestId("keyboard-shortcut-search-projects");
     expect(row.textContent).toContain("Ctrl");
     expectDomAbsent(screen.queryByTestId("keyboard-shortcut-new-agent-tab"));
+    // Close Tab is ⌘W only: Windows and Linux have no key for it.
+    expectDomAbsent(screen.queryByTestId("keyboard-shortcut-close-tab"));
+    expect(screen.getByTestId("keyboard-shortcut-show-shortcuts").textContent).toBe(
+      "Show keyboard shortcutsCtrlShiftK",
+    );
+    const dialog = screen.getByTestId("keyboard-shortcuts-dialog");
+    // The footer's toggle hint names the Windows/Linux chord, too.
+    expect(dialog.textContent).toContain("CtrlShiftKToggle");
+    expect(dialog.textContent).not.toMatch(/[⌘⌥]/);
   });
 
   test("clears the search when reopened", async () => {

@@ -163,7 +163,8 @@ AppImage. `app-update.yml` is only embedded by the release configs, so local
 
 It checks 30 seconds after launch and every 6 hours, downloads in the
 background, then asks the user to restart. "Later" installs on the next quit.
-**Orkestrator AI → Check for Updates…** runs a check on demand.
+**Orkestrator AI → Check for Updates…** (**Help → Check for Updates…** on
+Windows and Linux) runs a check on demand.
 
 The updater follows the host's update channel, which the Local backend records.
 Stable reads GitHub's "Latest" release. Beta and Unstable scan the releases

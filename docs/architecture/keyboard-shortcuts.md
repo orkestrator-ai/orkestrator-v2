@@ -156,6 +156,41 @@ The latter adapts the event into the callback's third argument. E2E helpers use
 that event-first method and assert an accelerator click closes an already-open
 dialog, so an accidental `open` request cannot pass. See Electron's
 [MenuItem API](https://www.electronjs.org/docs/latest/api/menu-item).
+Electron also sets `triggeredByAccelerator` for Enter-based native menu
+navigation. The callback checks Shift and the platform's Ctrl/Command modifier
+as well, so selecting the item with the keyboard keeps an open dialog open.
+
+## Windows and Linux
+
+The dialog reads `navigator.platform` (falling back to the user agent): macOS
+and iOS show ⌘ caps, and everything else, Windows and Linux included, shows
+`Ctrl`, `Shift` and `Alt` caps and hides the ⌘-only rows. The catalog test
+rejects macOS symbols in any Windows/Linux key cap.
+
+The chord also accepts Super/Windows+Shift+K, because Chromium reports that key
+as `metaKey`. The dialog documents Ctrl+Shift+K because window managers and
+Windows often take Super shortcuts first. AltGr reaches Chromium on Windows as
+Ctrl+Alt, so the chord's Alt exclusion leaves AltGr+Shift+K to the focused
+field.
+
+`createApplicationMenuTemplate` takes `process.platform`. Electron maps the
+`Command` accelerator modifier to Super/Windows outside macOS, and the `hide`,
+`hideOthers`, `unhide` and `zoom` roles do nothing there. Windows and Linux
+therefore get their conventional layout:
+
+| macOS | Windows and Linux |
+| --- | --- |
+| App menu: About, Check for Updates…, Hide, Hide Others, Show All, Quit | No app menu. Quit (Windows: Exit) ends File. Help holds Check for Updates… and About |
+| File › Close Tab `Command+W` | File › Close Tab with no accelerator |
+| Window › Minimize, Zoom, open windows | Window › Minimize, open windows |
+
+Windows/Linux Close Tab has no key, and the catalog lists it as macOS-only.
+`Command+W` would register Super/Windows+W, which window managers and Windows
+own. Ctrl+W is the shell's delete-word. The renderer's ⌘W fallback for the
+browser client still sees Super+W as `metaKey`. New Window, the zoom items and
+Keyboard Shortcuts… use `CmdOrCtrl` and appear as Ctrl+N, Ctrl+=, Ctrl+- and
+Ctrl+0 (all registered) and Ctrl+Shift+K (display-only). The dialog lists the
+same keys.
 
 **Workspace realms:** ownership is resolved from the actual focused
 WebContents, including its preview and artifact children. Menu clicks reach
@@ -213,6 +248,24 @@ Console, Edge for Duplicate Tab); this has not been verified here.
   desktop and phone widths.
 - Electron scenario (`workspace-realm-electron.spec.ts`): ⌘K in a realm's
   composer opens the window's search.
+- Additional unit coverage checks Close Tab and shortcut ownership with live or cleared
+  WebContents focus, per-window remembered focus, dismissal sender gating, preview
+  hook delegation, repeat consumption, reopen/restoration races and expiry.
+  Additional checks cover dismissal, disposal, hidden views, startup
+  forwarding, keyDown/rawKeyDown and immediate second presses. Electron scenarios
+  cover realm preview ownership, search focus and restored typing after keyboard
+  and outside-pointer dismissal, accelerator toggles on already-open dialogs, artifact
+  subframes, and design subframes. Windows/Linux coverage includes the menu
+  layout and accelerators on `linux` and `win32`, Ctrl and AltGr Electron input,
+  platform detection, and Ctrl key caps.
 
 Packaged native OS qualification remains in
 [0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).
+
+`e2e/agent-testing/application-menu-electron.spec.ts` builds the production
+template in a disposable Electron process, checks resolved role labels and
+accelerators, and invokes the built menu callbacks. With
+`ORKESTRATOR_NATIVE_MENU_INPUT=1` on an isolated desktop, it also uses OS input
+to navigate View, checks repeated selection, accelerator registration,
+the real About panel, and resumed typing. The native-menu workflow runs this
+on Linux/Xvfb and Windows and retains menu defaults and About screenshots.

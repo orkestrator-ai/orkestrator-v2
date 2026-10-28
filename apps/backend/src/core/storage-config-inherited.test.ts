@@ -3,7 +3,10 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { InheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
+import {
+  INHERITED_GLOBAL_SETTING_KEYS,
+  type InheritedGlobalSettings,
+} from "@orkestrator/protocol/controller-settings";
 
 import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -159,6 +162,27 @@ describe("settings inherited from a command node", () => {
       expect(stored.global.reviewInstruction).toBe("Leaf review");
       expect(stored.global.allowedDomains).toEqual(["leaf.test"]);
       expect((await storage.loadConfig()).global.terminalScrollback).toBe(9000);
+    });
+  });
+  test("machine-only saves accept a payload without the inherited preferences", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({ ...own.global, codexMaxConcurrentThreads: 7 });
+      storage.inheritedGlobalSettings = () => ({ codexMaxConcurrentThreads: 3 });
+      // The command-node window routes preferences to the command node and
+      // strips them from the leaf's machine save.
+      const machineOnly = { ...own.global, allowedDomains: ["leaf.test"] } as Record<
+        string,
+        unknown
+      >;
+      for (const key of INHERITED_GLOBAL_SETTING_KEYS) delete machineOnly[key];
+      await storage.updateGlobalConfig(machineOnly as unknown as typeof own.global, {
+        preserveInheritedSettings: true,
+      });
+      const stored = await storage.loadOwnConfig();
+      expect(stored.global.allowedDomains).toEqual(["leaf.test"]);
+      expect(stored.global.codexMaxConcurrentThreads).toBe(7);
+      expect((await storage.loadConfig()).global.codexMaxConcurrentThreads).toBe(3);
     });
   });
 });

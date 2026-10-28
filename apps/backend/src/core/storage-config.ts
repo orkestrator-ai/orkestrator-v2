@@ -175,6 +175,21 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+/**
+ * A machine-only save leaves the preferences to the command node, so the
+ * renderer omits them, and the stored values replace whatever arrives. Fill
+ * them with defaults so validation judges only the machine settings.
+ */
+function withDefaultInheritedSettings(global: AppConfig["global"]): AppConfig["global"] {
+  const values = { ...global } as unknown as Record<string, unknown>;
+  const defaults = defaultConfig().global as unknown as Record<string, unknown>;
+  for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+    delete values[key];
+    if (defaults[key] !== undefined) values[key] = defaults[key];
+  }
+  return values as unknown as AppConfig["global"];
+}
+
 export class ConfigRepository {
   constructor(
     private readonly context: StorageContext,
@@ -561,7 +576,9 @@ export class ConfigRepository {
     globalConfig: AppConfig["global"],
     options: { preserveCredentials?: boolean; preserveInheritedSettings?: boolean } = {},
   ): Promise<AppConfig> {
-    const reviewValidated = validateGlobalReviewInstruction(globalConfig);
+    const reviewValidated = validateGlobalReviewInstruction(
+      options.preserveInheritedSettings ? withDefaultInheritedSettings(globalConfig) : globalConfig,
+    );
     const enabledAgentPlatforms = normalizeAgentPlatforms(
       reviewValidated.enabledAgentPlatforms,
       [],

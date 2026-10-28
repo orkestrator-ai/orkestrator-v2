@@ -327,13 +327,21 @@ verified with `quick_check` before it is renamed into place:
   not count. A failed hourly snapshot only logs.
 - The hourly copy and its `quick_check` run in a child process at low
   priority (`copyDatabaseInChildProcess`): on a large database both take
-  minutes of disk I/O and must never block the backend's event loop. The
+  minutes of disk I/O and must never block the backend's event loop. A separate
+  responsive supervisor kills and reaps the copy worker when the backend's pipe
+  closes (including SIGKILL), or the independent two-hour deadline expires. The
   pre-migration snapshot stays in-process, because the open waits for it.
 - An hourly copy is skipped when the disk has less free space than the
-  database plus as much again (at least 2 GiB). Older hourly snapshots give
-  way so all snapshots together stay under 16 GiB; the newest hourly one is
-  always kept. A failed or skipped copy backs off 15 minutes, doubling per
-  consecutive failure up to six hours (`backups/.hourly-backoff.json`, so the
+  compact database estimate plus as much again (at least 2 GiB). The estimate
+  uses live SQLite pages, including committed WAL content, excluding free pages.
+  Older databases without incremental auto-vacuum may remain physically large
+  after pruning; freed pages are reused. Existing snapshots are budgeted on every
+  check, including recent, unchanged and backoff checks. Older hourly snapshots
+  give way after a successful copy so all snapshots together stay under 16 GiB;
+  the newest hourly one is always kept. Space for the incoming copy is checked
+  without first deleting recovery history; a skipped or failed copy does not
+  trigger eviction for incoming bytes. A failed or skipped copy backs off
+  15 minutes, doubling per consecutive failure up to six hours (`backups/.hourly-backoff.json`, so the
   backoff survives a restart).
 - Temporary copies (`.<name>.<pid>.tmp` and their `-journal`, `-wal`, `-shm`)
   left by a process that died mid-copy are removed at start-up and before each

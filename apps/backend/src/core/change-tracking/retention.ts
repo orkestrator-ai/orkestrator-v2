@@ -21,10 +21,10 @@ import type { ObjectStore } from "./object-store.js";
 import type { ChangeTrackingPolicyRegistry } from "./policy-registry.js";
 
 /** Superseded measurements are pruned in batches of at most this many file rows. */
-const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 20_000;
+const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
 const MEASUREMENT_PRUNE_BATCH = 64;
 /** Freed database pages are released in steps of this many 4 KiB pages. */
-const RELEASE_PAGES_PER_STEP = 4096;
+const RELEASE_PAGES_PER_STEP = 128;
 
 /** Lets requests run between bounded batches of database maintenance. */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -127,10 +127,10 @@ export class ChangeRetentionService {
       });
       report.prunedMeasurements += pruned.measurements;
       report.prunedMeasurementFiles += pruned.files;
-      if (pruned.measurements === 0) break;
+      if (pruned.measurements === 0 && pruned.files === 0) break;
       await yieldToEventLoop();
     }
-    if (report.prunedMeasurements === 0) return;
+    if (report.prunedMeasurementFiles === 0 && report.prunedMeasurements === 0) return;
     let previous = Number.POSITIVE_INFINITY;
     while (true) {
       const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);

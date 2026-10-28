@@ -208,6 +208,21 @@ export interface CaptureAttemptRow {
 const now = () => new Date().toISOString();
 
 export class ChangeLedger {
+  private readonly measurementReaders = new Map<string, number>();
+
+  /** Holds a measurement across asynchronous reads, including nested readers. */
+  pinMeasurement(id: string): () => void {
+    this.measurementReaders.set(id, (this.measurementReaders.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = this.measurementReaders.get(id)! - 1;
+      if (remaining) this.measurementReaders.set(id, remaining);
+      else this.measurementReaders.delete(id);
+    };
+  }
+
   constructor(private readonly storage: () => StorageDatabase) {}
 
   private get db(): Database {
@@ -1117,13 +1132,9 @@ export class ChangeLedger {
   }
 
   /**
-   * Deletes measurements nothing reads any more, with their file rows and
-   * diff identities, oldest first. A measurement goes once `keepLatest` newer
-   * ones of the same owner and scope exist, unless a resource still selects
-   * it, an unexpired restore token or a running restore holds it. Readers only
-   * reach measurements through selections (and, briefly, the identity of one
-   * just superseded, which `keepLatest` covers), so a pruned one is never
-   * looked up again; the handoff reports one as "not retained".
+   * Deletes superseded measurements except selections, live restore records
+   * and active readers. Retired identities disappear before partial file-row
+   * deletion, so new requests cannot start reading an incomplete measurement.
    *
    * Every re-measurement stores its whole file list again (an environment's
    * net diff can be thousands of files), so without this the table grows
@@ -1161,7 +1172,9 @@ export class ChangeLedger {
           ...(input.owner ? [input.owner.kind, input.owner.id, input.owner.scope] : []),
         ) as Array<{ id: string }>;
       const deleteFiles = this.db.query(
-        "DELETE FROM change_measurement_files WHERE measurement_id = ?",
+        `DELETE FROM change_measurement_files WHERE measurement_id = ?1 AND ordinal IN (
+           SELECT ordinal FROM change_measurement_files WHERE measurement_id = ?1 LIMIT ?2
+         )`,
       );
       const deleteIdentities = this.db.query(
         "DELETE FROM change_diff_identities WHERE measurement_id = ?",
@@ -1169,9 +1182,19 @@ export class ChangeLedger {
       const deleteMeasurement = this.db.query("DELETE FROM change_measurements WHERE id = ?");
       const pruned = { measurements: 0, files: 0 };
       for (const { id } of candidates) {
+        if (this.measurementReaders.has(id)) continue;
         if (input.maxFileRows !== undefined && pruned.files >= input.maxFileRows) break;
-        pruned.files += deleteFiles.run(id).changes;
         deleteIdentities.run(id);
+        pruned.files += deleteFiles.run(
+          id,
+          Math.max(0, (input.maxFileRows ?? 256) - pruned.files),
+        ).changes;
+        if (
+          this.db
+            .query("SELECT 1 FROM change_measurement_files WHERE measurement_id = ? LIMIT 1")
+            .get(id)
+        )
+          break;
         deleteMeasurement.run(id);
         pruned.measurements += 1;
       }

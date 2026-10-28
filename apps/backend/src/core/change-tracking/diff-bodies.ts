@@ -101,6 +101,18 @@ export class DiffBodyService {
   async getDiff(request: ChangesGetDiffRequest): Promise<ChangesGetDiffResult> {
     const identity = this.deps.ledger.diffIdentity(request.diffIdentityId);
     if (!identity) return err("not-found", request.diffIdentityId);
+    const release = this.deps.ledger.pinMeasurement(identity.measurementId);
+    try {
+      return await this.readPinnedDiff(request, identity);
+    } finally {
+      release();
+    }
+  }
+
+  private async readPinnedDiff(
+    request: ChangesGetDiffRequest,
+    identity: DiffIdentity,
+  ): Promise<ChangesGetDiffResult> {
     const measurement = this.deps.ledger.measurement(identity.measurementId);
     const ignoreWhitespace = request.display?.whitespace === "ignore-for-view";
     const viewIdentityId = ignoreWhitespace ? `${identity.id}:ws-ignore` : identity.id;

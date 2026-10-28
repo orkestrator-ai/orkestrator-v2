@@ -215,6 +215,7 @@ export class ChangeMeasurementService {
           keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
           nowIso: nowIso(),
           maxMeasurements: MEASUREMENTS_PRUNED_PER_PUBLISH,
+          maxFileRows: 256,
         });
       }
       return { measurementId: input.measurement.measurementId, revision, created };

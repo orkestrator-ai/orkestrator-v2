@@ -56,8 +56,9 @@ export const MAX_BACKUP_AGE_MS = 7 * DAY_MS;
 export const BACKUP_FIRST_CHECK_DELAY_MS = 10 * 60 * 1000;
 const GIB = 1024 * 1024 * 1024;
 /**
- * All snapshots together, the next copy included. The oldest hourly copies
- * give way first; the newest hourly one always stays.
+ * Retained snapshots together. A temporary replacement can exceed this
+ * budget while copying, subject to the free-space gate. The oldest hourly
+ * copies give way after success; the newest hourly one always stays.
  */
 export const MAX_BACKUP_BYTES = 16 * GIB;
 /** Free space a copy must leave behind at the least ({@link requiredFreeBytes}). */
@@ -216,21 +217,37 @@ export function removeStaleBackupTemporaries(dataDir: string, now = Date.now()):
  * the whole file; in-process they would block every request for minutes on
  * a large database.
  */
-export function copyDatabaseInChildProcess(source: string, target: string): Promise<boolean> {
+export function copyDatabaseInChildProcess(
+  source: string,
+  target: string,
+  options: { timeoutMs?: number } = {},
+): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["-e", DATABASE_COPY_HELPER, "--", source, target], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        DATABASE_COPY_SUPERVISOR,
+        "--",
+        source,
+        target,
+        String(options.timeoutMs ?? COPY_TIMEOUT_MS),
+        DATABASE_COPY_HELPER,
+      ],
+      {
+        // Only this backend owns the write end. Abrupt death closes it too.
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     try {
       if (child.pid) os.setPriority(child.pid, 10);
     } catch {
       // Best effort: priority only keeps the copy out of the way.
     }
-    // A backend that exits mid-copy takes its copy along.
-    const kill = () => child.kill("SIGKILL");
+    // Ask the responsive supervisor to kill and reap its synchronous worker.
+    const kill = () => child.stdin?.destroy();
     process.once("exit", kill);
-    const timeout = setTimeout(kill, COPY_TIMEOUT_MS);
-    timeout.unref?.();
+
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -240,8 +257,8 @@ export function copyDatabaseInChildProcess(source: string, target: string): Prom
       if (stderr.length < 4096) stderr += chunk.toString();
     });
     const settle = () => {
-      clearTimeout(timeout);
       process.removeListener("exit", kill);
+      child.stdin?.destroy();
     };
     child.once("error", (error) => {
       settle();
@@ -259,6 +276,27 @@ export function copyDatabaseInChildProcess(source: string, target: string): Prom
     });
   });
 }
+
+/**
+ * Stays responsive while SQLite blocks the worker. EOF survives SIGKILL of
+ * the backend; the independent deadline also survives its event-loop stalls.
+ * Waits for worker close before exiting, so no open copy allocation survives.
+ */
+const DATABASE_COPY_SUPERVISOR = String.raw`
+const { spawn } = require("node:child_process");
+const [source, target, timeoutMs, helper] = process.argv.slice(1);
+const worker = spawn(process.execPath, ["-e", helper, "--", source, target], {
+  stdio: ["ignore", "inherit", "inherit"],
+});
+let stopped = false;
+const stop = () => { stopped = true; worker.kill("SIGKILL"); };
+process.stdin.on("end", stop);
+process.stdin.on("error", stop);
+process.stdin.resume();
+const timer = setTimeout(stop, Number(timeoutMs));
+worker.on("error", () => { clearTimeout(timer); process.exit(1); });
+worker.on("close", (code) => { clearTimeout(timer); process.exit(stopped ? 1 : code ?? 1); });
+`;
 
 /** Run by {@link copyDatabaseInChildProcess}: `-- <source> <target>`. Prints `sound` or `unsound`. */
 const DATABASE_COPY_HELPER = String.raw`
@@ -288,19 +326,6 @@ try {
   process.exit(1);
 }
 `;
-
-/** Bytes of the live database: the main file and its WAL. */
-function databaseBytes(file: string): number {
-  let bytes = 0;
-  for (const name of [file, `${file}-wal`]) {
-    try {
-      bytes += fs.statSync(name).size;
-    } catch {
-      // No WAL yet.
-    }
-  }
-  return bytes;
-}
 
 /**
  * Free space a copy of `bytes` needs: the copy itself, plus as much again
@@ -503,6 +528,8 @@ export function snapshotBeforeMigration(
 }
 
 export interface HourlySnapshotOptions {
+  /** Aggregate snapshot budget, defaults to MAX_BACKUP_BYTES. */
+  maxBytes?: number;
   /** Copies and verifies the database; {@link copyDatabaseInChildProcess} by default. */
   copy?: (source: string, target: string) => Promise<boolean>;
   /** Bytes free on the backups' filesystem. */
@@ -536,6 +563,7 @@ export async function takeHourlySnapshotIfDue(
     removeStaleBackupTemporaries(dataDir, at);
     // Purge first: a snapshot past the age bound must not stand in for a new one.
     purgeStorageSnapshots(dataDir, at);
+    enforceBackupBudget(dataDir, 0, options.maxBytes);
     const newest = listStorageSnapshots(dataDir).find((entry) => entry.kind === "hourly");
     if (newest) {
       if (at - newest.takenAt < HOURLY_INTERVAL_MS) return null;
@@ -545,8 +573,7 @@ export async function takeHourlySnapshotIfDue(
     const backoff = readBackoff(directory);
     if (backoff && at < backoff.retryAt) return null;
 
-    const bytes = databaseBytes(database.path);
-    enforceBackupBudget(dataDir, bytes);
+    const bytes = database.livePageBytes();
     const available = availableBytes(directory);
     if (available < requiredFreeBytes(bytes)) {
       const { retryAt } = recordFailure(directory, at);
@@ -572,7 +599,7 @@ export async function takeHourlySnapshotIfDue(
     }
     clearBackoff(directory);
     purgeStorageSnapshots(dataDir, at);
-    enforceBackupBudget(dataDir);
+    enforceBackupBudget(dataDir, 0, options.maxBytes);
     return target;
   } catch (error) {
     const backoff = directory ? recordFailure(directory, now()) : null;

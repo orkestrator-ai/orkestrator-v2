@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { spawn, execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -220,6 +222,195 @@ describe("database snapshots", () => {
     }
     // Success clears the backoff.
     expect(await fs.readdir(path.join(directory, BACKUP_DIRECTORY))).not.toContain(BACKOFF_FILE);
+  });
+
+  test.each(["recent", "unchanged", "backoff"])(
+    "enforces the existing budget on %s checks",
+    async (reason) => {
+      const directory = await dataDir();
+      const database = backend(directory);
+      const at = Date.parse("2026-10-27T12:00:00.000Z");
+      const newest = (await takeHourlySnapshotIfDue(database, directory, () => at))!;
+      const older = newest.replace("12-00-00", "11-00-00");
+      await fs.copyFile(newest, older);
+      const bytes = (await fs.stat(newest)).size;
+      if (reason === "backoff") {
+        database.writeStore("kanban", [{ id: "changed" }]);
+        await fs.writeFile(
+          path.join(directory, BACKUP_DIRECTORY, BACKOFF_FILE),
+          JSON.stringify({ failures: 1, retryAt: at + 10 * HOURLY_INTERVAL_MS }),
+        );
+      }
+      let copies = 0;
+      expect(
+        await takeHourlySnapshotIfDue(
+          database,
+          directory,
+          () => at + (reason === "recent" ? 1 : HOURLY_INTERVAL_MS),
+          {
+            maxBytes: bytes,
+            copy: async () => {
+              copies++;
+              return true;
+            },
+          },
+        ),
+      ).toBeNull();
+      expect(copies).toBe(0);
+      expect(listStorageSnapshots(directory).map((entry) => entry.file)).toEqual([newest]);
+    },
+  );
+
+  test("does not evict recovery history for an incoming copy that is skipped or fails", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    const at = Date.parse("2026-10-27T12:00:00.000Z");
+    const newest = (await takeHourlySnapshotIfDue(database, directory, () => at))!;
+    const older = newest.replace("12-00-00", "11-00-00");
+    await fs.copyFile(newest, older);
+    database.writeStore("kanban", [{ id: "changed" }]);
+    const files = listStorageSnapshots(directory);
+    const budget = 2 * (await fs.stat(newest)).size;
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(
+        await takeHourlySnapshotIfDue(database, directory, () => at + HOURLY_INTERVAL_MS, {
+          maxBytes: budget,
+          availableBytes: () => 0,
+          copy: async () => {
+            throw new Error("copy must not start");
+          },
+        }),
+      ).toBeNull();
+      expect(listStorageSnapshots(directory)).toEqual(files);
+      const retry = at + 2 * HOURLY_INTERVAL_MS;
+      expect(
+        await takeHourlySnapshotIfDue(database, directory, () => retry, {
+          maxBytes: budget,
+          availableBytes: () => Number.MAX_SAFE_INTEGER,
+          copy: async (_source, target) => {
+            await fs.writeFile(target, "unsound");
+            await fs.writeFile(`${target}-wal`, "partial");
+            return false;
+          },
+        }),
+      ).toBeNull();
+      expect(listStorageSnapshots(directory)).toEqual(files);
+      expect(
+        (await fs.readdir(path.join(directory, BACKUP_DIRECTORY))).some((entry) =>
+          entry.includes(".tmp"),
+        ),
+      ).toBe(false);
+      const backoff = JSON.parse(
+        await fs.readFile(path.join(directory, BACKUP_DIRECTORY, BACKOFF_FILE), "utf8"),
+      );
+      expect(backoff.failures).toBe(2);
+      expect(backoff.retryAt).toBe(retry + failureBackoffMs(2));
+      expect(
+        await takeHourlySnapshotIfDue(database, directory, () => retry + HOURLY_INTERVAL_MS, {
+          maxBytes: budget,
+          availableBytes: () => Number.MAX_SAFE_INTEGER,
+        }),
+      ).not.toBeNull();
+      expect(listStorageSnapshots(directory).length).toBeLessThan(files.length + 1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("backs up a hollow legacy database using live pages for headroom", async () => {
+    const directory = await dataDir();
+    const legacy = new Database(path.join(directory, STORAGE_DATABASE_FILE), { create: true });
+    legacy.exec(
+      "CREATE TABLE old_data (body BLOB); INSERT INTO old_data VALUES (zeroblob(8388608)); DELETE FROM old_data;",
+    );
+    legacy.close();
+    const database = backend(directory);
+    expect(database.db.query("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 0 });
+    const allocated = (await fs.stat(database.path)).size;
+    const live = database.livePageBytes();
+    expect(live).toBeLessThan(allocated / 2);
+    expect(database.releaseFreePages()).toBe(0);
+    const file = await takeHourlySnapshotIfDue(database, directory, Date.now, {
+      availableBytes: () => requiredFreeBytes(live) + 1024 * 1024,
+    });
+    expect(file).not.toBeNull();
+    expect((await fs.stat(file!)).size).toBeLessThan(allocated / 2);
+  });
+
+  test("the supervisor kills a blocked SQLite worker at its independent deadline", async () => {
+    const directory = await dataDir();
+    const source = path.join(directory, "locked.sqlite");
+    const locked = new Database(source, { create: true });
+    locked.exec("CREATE TABLE t (v); BEGIN EXCLUSIVE");
+    try {
+      await expect(
+        copyDatabaseInChildProcess(source, path.join(directory, "copy.sqlite"), { timeoutMs: 200 }),
+      ).rejects.toThrow("Database copy failed");
+    } finally {
+      locked.exec("ROLLBACK");
+      locked.close();
+    }
+  });
+
+  test("abrupt backend death terminates the supervisor and its blocked copy before restart cleanup", async () => {
+    const directory = await dataDir();
+    const source = path.join(directory, "locked.sqlite");
+    const locked = new Database(source, { create: true });
+    locked.exec("CREATE TABLE t (v); BEGIN EXCLUSIVE");
+    const target = path.join(directory, BACKUP_DIRECTORY, ".hourly-2026-10-27T12-00-00-000Z.");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const moduleUrl = new URL("./storage-backups.ts", import.meta.url).href;
+    const parent = spawn(
+      process.execPath,
+      [
+        "-e",
+        `import { copyDatabaseInChildProcess } from ${JSON.stringify(moduleUrl)};
+      await copyDatabaseInChildProcess(${JSON.stringify(source)}, ${JSON.stringify(target)} + process.pid + ".tmp");`,
+      ],
+      { stdio: "ignore" },
+    );
+    let descendants: number[] = [];
+    const children = (pid: number) =>
+      execFileSync("ps", ["-axo", "pid=,ppid=,stat="])
+        .toString()
+        .trim()
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/))
+        .filter((parts) => Number(parts[1]) === pid && !parts[2]?.startsWith("Z"))
+        .map((parts) => Number(parts[0]));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const supervisors = children(parent.pid!);
+        descendants = [...supervisors, ...supervisors.flatMap(children)];
+        if (descendants.length === 2) break;
+        await Bun.sleep(20);
+      }
+      expect(descendants).toHaveLength(2);
+      parent.kill("SIGKILL");
+      for (let attempt = 0; attempt < 100 && descendants.some(alive); attempt++)
+        await Bun.sleep(20);
+      expect(descendants.some(alive)).toBe(false);
+      removeStaleBackupTemporaries(directory);
+      expect(await fs.readdir(path.dirname(target))).toEqual([]);
+    } finally {
+      parent.kill("SIGKILL");
+      for (const pid of descendants) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+      locked.exec("ROLLBACK");
+      locked.close();
+    }
   });
 
   test("the backoff doubles per consecutive failure, up to a ceiling", () => {

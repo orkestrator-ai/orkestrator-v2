@@ -846,6 +846,17 @@ export class StorageDatabase {
     }
   }
 
+  /** Estimated compact copy size, including live pages currently in the WAL. */
+  livePageBytes(): number {
+    return this.transaction(() => {
+      const pages = (this.db.query("PRAGMA page_count").get() as { page_count: number }).page_count;
+      const free = (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number })
+        .freelist_count;
+      const size = (this.db.query("PRAGMA page_size").get() as { page_size: number }).page_size;
+      return Math.max(1, pages - free) * size;
+    });
+  }
+
   /**
    * Returns up to `maxPages` free pages to the filesystem (with incremental
    * auto-vacuum; a no-op otherwise) and the number of free pages left. A

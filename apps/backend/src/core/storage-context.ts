@@ -101,11 +101,14 @@ export class StorageContext {
         running = false;
       });
     };
-    const first = setTimeout(check, BACKUP_FIRST_CHECK_DELAY_MS);
-    const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
+    const first = setTimeout(() => {
+      check();
+      const periodic = setInterval(check, BACKUP_CHECK_INTERVAL_MS);
+      periodic.unref?.();
+      this.snapshotTimers.push(periodic);
+    }, BACKUP_FIRST_CHECK_DELAY_MS);
     first.unref?.();
-    periodic.unref?.();
-    this.snapshotTimers = [first, periodic];
+    this.snapshotTimers = [first];
   }
 
   /**

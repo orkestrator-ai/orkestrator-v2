@@ -172,6 +172,9 @@ const SetupRecoveryFixture = lazy(async () => ({
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
 }));
+const SidebarActivityProbeFixture = lazy(async () => ({
+  default: (await import("./SidebarActivityProbeFixture")).SidebarActivityProbeFixture,
+}));
 
 declare global {
   interface Window {
@@ -1930,6 +1933,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/mobile-shell") {
     installMobileAppShellFixture();
     return <MobileAppShellFixture />;
+  }
+  if (window.location.pathname === "/sidebar-activity-probe") {
+    return (
+      <Suspense fallback={null}>
+        <SidebarActivityProbeFixture />
+      </Suspense>
+    );
   }
   if (window.location.pathname === "/environment-settings-drawer") {
     return (

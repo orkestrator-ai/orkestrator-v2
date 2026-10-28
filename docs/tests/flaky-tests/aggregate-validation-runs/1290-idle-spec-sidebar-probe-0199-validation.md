@@ -46,3 +46,32 @@ endpoints only) are outside `mise run test` and were not investigated.
 No implementation, assertion, wait, timeout or skip in these owners changed.
 The aggregate stays non-green. The two timeouts reproduced alone only under
 heavy load, and identically on `origin/main`.
+
+## Review follow-up (2026-10-28)
+
+Preparation passed `mise run format:check`, `mise run lint` and
+`mise run typecheck`; these passing repository-wide checks were not repeated.
+The changed fixtures and specs passed focused lint, both E2E TypeScript
+projects and formatting checks. The dedicated sidebar-probe browser spec
+passed in both Chromium viewport projects (2 tests, 16.9 s), including
+working/waiting/idle updates, stopped and markerless stopping rows, a working
+neighbour, an absent name and an unrelated same-named label. It no longer
+depends on the phone settings drawer (0278).
+
+The exact incomplete preparation command `mise run test` was rerun through
+`test:logged` (`sidebar-review-default`). Root/agent support, bridges and the
+protocol lockfile passed. The workspace group failed; all reported owners are
+unchanged by this branch. Evidence: `/tmp/orkestrator-test-run.3QKeuI/` and
+`/tmp/orkestrator-test-run.dLhC3S/`.
+
+| Owner | Aggregate result | Complete owner rerun |
+| --- | --- | --- |
+| `apps/backend/src/core/storage-writer-guards.test.ts` | 5 s deadline expired at 8,126 ms, as in Run 1. | Still failed at 5,146 ms; not classified as a new flake. Evidence: `/tmp/orkestrator-test-run.J7YiLY/`. |
+| `apps/backend/src/core/native-agent-command-catalogue-scale.test.ts` | Maximal inventories timed out at 6,192 ms; existing [0826](../native-agents-and-transcripts/0826-command-catalogue-maximal-inventories-timeout.md). | Passed unchanged, 6.3 s. |
+| `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Maximal-list filtering failed; existing [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). | Passed unchanged, 11.4 s. |
+| `apps/web/src/lib/chat/rich-conversation-revocation.test.tsx` | Sibling ledger length was 0 instead of 1; existing [0626](../native-agents-and-transcripts/0626-rich-content-sibling-ledger-aggregate.md). | Passed unchanged, 2.2 s. |
+
+The exact browser and isolated-browser preparation commands were also rerun.
+The first browser attempt was invalidated by overlapping fixture-server and
+artifact ownership; it was interrupted and restarted after the focused probe
+finished. Only the subsequent run counts as broad browser evidence.

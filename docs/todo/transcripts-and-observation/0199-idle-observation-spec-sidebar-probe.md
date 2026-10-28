@@ -10,7 +10,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Read the marker's `data-state`**: replace the colour-class probe in `sidebarActivity` and `sidebarActivityFromClass`, and its unit test. Status: done (2026-10-28).
-2. **Rerun the live spec**: run `idle-observation-live.spec.ts` live and confirm the sidebar cases see real states, recording budgets in 0049. Status: open (task 1 landed; needs a credentialed live session, see Qualification).
+2. **Rerun the live spec**: run `idle-observation-live.spec.ts` live and confirm the sidebar cases see real states, recording budgets in 0049. Status: partly done (2026-10-28): Claude and Codex warm-up transitions and missed-final recovery passed; the remaining 0049 fault scenarios are still open.
 
 ### 1. Read the marker's `data-state`
 
@@ -26,7 +26,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - `e2e/agent-testing/sidebar-activity.ts` exports the one `sidebarActivity(page, environmentName)`. Both `idle-observation-live.spec.ts` and `container-claude-terminal-signal.spec.ts` import it; their own copies are gone.
 - The old walk climbed ancestors until one contained *any* marker. A row showing a spinner (starting, stopping, deleting) has no marker, so it could have reported a neighbour's state. The bounded walk reads `unknown` there.
 - The detach case's "the sidebar never shows working on an idle tab" check no longer passes blind. It also requires at least one `idle` reading during the wait, and it records the set of readings in the case notes.
-- Tests: the colour-class unit test is now a `data-state` mapping test (`idle-observation-live-support.test.ts`). A new "live-spec sidebar probe" block in `tests/unit/components/EnvironmentItem.test.tsx` runs the probe against real rendered rows: working, waiting, idle, stopped, absent, a stopping row beside a working one, and a same-named label outside any row. A fixture spec, `e2e/SidebarActivityProbe.spec.ts`, runs `sidebarActivity` through Playwright's serialisation against the real row in the settings-drawer fixture. Before the same-named-label refinement, a mutation check showed both unit tests failing when the probe was swapped back to the retired `svg` selector, or allowed to walk past the row.
+- Tests: the colour-class unit test is now a `data-state` mapping test (`idle-observation-live-support.test.ts`). A new "live-spec sidebar probe" block in `tests/unit/components/EnvironmentItem.test.tsx` runs the probe against real rendered rows: working, waiting, idle, stopped, absent, a stopping row beside a working one, and a same-named label outside any row. A fixture spec, `e2e/SidebarActivityProbe.spec.ts`, runs `sidebarActivity` through Playwright's serialisation against real rows. Its dedicated `/sidebar-activity-probe` route keeps the responsive rows visible in both mobile and desktop projects, without depending on the settings drawer (flake 0278). It drives snapshot updates through working, waiting and idle, then stopped and stopping, and back to working and idle; the stopping row must not borrow its working neighbour's marker. A same-named label outside the row is present throughout. Both browser projects passed in the review follow-up. Before the same-named-label refinement, a mutation check showed both unit tests failing when the probe was swapped back to the retired `svg` selector, or allowed to walk past the row.
 - No web change was needed. The marker already exposes `data-state`, and `EnvironmentStatusMarker.test.tsx:42` pins it for every state.
 - `docs/development/agent-testing.md` (the inactive-environment traps) now says to read sidebar activity from `data-state` through this helper.
 
@@ -36,7 +36,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The spec is opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`, `docs/development/agent-testing.md:505`) and is listed in `e2e/agent-testing/playwright.browser.config.ts:43`. It needs live Claude and Codex turns, plus credentials for any other provider it runs. 0049's 2026-10-23 live check predates the marker change, so its sidebar readings were valid.
 
-**Investigation.** No rerun is recorded since the marker change. Any 0049 live case run before task 1 lands would repeat this blind spot. The rerun goes through `mise run test:agent:browser` against a `dev:test` profile, with `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` narrowing providers.
+**Investigation.** The first credentialed rerun after the marker fix is recorded below. The rerun goes through `mise run test:agent:browser` against a `dev:test` profile, with `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` narrowing providers.
 
 **Decisions.**
 
@@ -64,17 +64,44 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   sidebar show working. Reading `data-state` instead worked at once.
 - Fixed in code on 2026-10-28 (task 1 above). Both live specs now share one
   `data-state` reader, and real-row unit and fixture tests guard it.
-- Not yet observed live: no credentialed run of
-  `idle-observation-live.spec.ts` has happened since the fix (task 2).
+- Observed live on Claude and Codex on 2026-10-28: both warm-ups recorded
+  `working` then `idle` with no `unknown`, and both missed-final cases passed.
+  Remaining fault scenarios are qualification work for 0049.
+
+## Live qualification, 2026-10-28 review follow-up
+
+A disposable `idleqa-0199-review` profile authorized only Claude and Codex.
+Providers ran separately with `ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final`.
+The warm-up now asks for a harmless five-second shell sleep before replying:
+the original immediate reply completed before the two-second activity sweep
+and correctly failed the new positive working-state assertion. Every warm-up
+records `sidebarStates` and requires `working`, a final `idle`, and no
+`unknown`. The local-worktree suite closes the host's Docker connectivity
+notice through its Close button; it does not change firewall settings.
+
+| Provider | Result | Warm-up sidebar states | Missed-final UI / sidebar lag | Follow-up UI / sidebar lag |
+| --- | --- | --- | --- | --- |
+| Claude, default model | passed, 113.8 s | `working`, `idle` | 1,952 / 1,529 ms | 2,491 / 3,450 ms |
+| Codex, `gpt-6.1-sol` | passed, 136.8 s | `working`, `idle` | 9,711 / 102 ms | 470 / 491 ms |
+
+Evidence: `output/agent-testing/idleqa-0199-review-claude/idle-observation-live/claude.json`
+and `output/agent-testing/idleqa-0199-review-codex/idle-observation-live/codex.json`.
+The same budgets are recorded in [0049](0049-native-agent-idle-observation.md).
+Codex's missed-final UI lag exceeded the normal 3 s p95 target, but stayed
+inside the 17.5 s lost-announcement bound. These runs qualify real sidebar
+transitions and missed-final recovery, not the remaining approval, background,
+sub-agent, reconnect, hidden, no-renderer or detach scenarios. The profile was
+stopped and reset after the runs.
 
 ## Outstanding work
 
 ### Qualification
 
-- Rerun `idle-observation-live.spec.ts` against a live profile and confirm the
-  sidebar cases now observe real states. Record any budget results they
-  produce in [0049](0049-native-agent-idle-observation.md). The pass criterion
-  is in task 2. This needs live Claude and Codex turns, so run it on a host
+- Run the remaining `idle-observation-live.spec.ts` scenarios as part of
+  [0049](0049-native-agent-idle-observation.md)'s outstanding provider matrix.
+  Basic working/idle transitions and missed-final recovery are now qualified
+  above. The remaining pass criterion is in task 2. This needs live Claude
+  and Codex turns, so run it on a host
   that allows them, with a disposable profile, one provider at a time:
 
   ```bash
@@ -160,12 +187,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 - **Options.** (a) Run the live spec here. (b) Defer it, and prove the probe
   offline against real rows: the unit DOM and the fixture browser.
-- **Choice: (b).** Live provider runs are not allowed on the host that did
-  task 1.
+- **Choice: (b) for the original task 1 run.** Live provider runs were not
+  available during that implementation. The review follow-up separately
+  attempts credentialed qualification and records its actual result below.
 - **Pros.** The probe's DOM contract and its Playwright serialisation are
   proven without credentials or a profile.
-- **Cons.** Nothing here shows the live sidebar reaching `working` during a
-  real turn; that stays task 2.
+- **Cons at the time.** Offline evidence did not show the live sidebar
+  reaching `working` during a real turn. The review follow-up above now
+  supplies that evidence for Claude and Codex.
 
 ## Constraints and rationale
 

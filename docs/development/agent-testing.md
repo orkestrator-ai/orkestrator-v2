@@ -1545,7 +1545,7 @@ a result that works only while the initiating component stays mounted: live
 SSE/IPC events are incremental hints, and the check must prove a missed event
 can be recovered.
 
-Two traps when scripting this path:
+Traps when scripting this path:
 
 - **Escape is Stop.** While a turn runs, Escape stops it if the chat tab's
   composer has focus or nothing has (`useEscapeToStop`). A test that presses

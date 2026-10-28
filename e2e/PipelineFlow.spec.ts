@@ -288,6 +288,82 @@ test("node actions run from the context menu and the inspector", async ({ page }
   });
 });
 
+test("an expanded previous attempt keeps the live line beside every superseded step", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=rewound-loop");
+  await node(page, "Previous attempt").click();
+  await page.getByTestId("pipeline-inspector").getByRole("button", { name: "Show steps" }).click();
+  // The attempt's own node stays, followed by its steps.
+  const superseded = [
+    "Previous attempt",
+    "Verify · round 1",
+    "Fix · round 2",
+    "Review · round 2",
+    "Verify · round 2",
+  ];
+  for (const title of superseded) await expect(node(page, title)).toBeVisible();
+  if (isWide(page)) {
+    // The wide graph routes the live line over the attempt in one bypass edge.
+    await expect(
+      graph(page).locator('path[data-flow-edge="review->verify-1-rerun"]'),
+    ).toBeAttached();
+    return;
+  }
+  // Stacked: each consecutive superseded step draws its own bypass beside it,
+  // from the step the restart rewound to, without covering the node.
+  const bypasses = page.locator('[data-flow-layout="stacked"] div[data-flow-edge^="bypass-"]');
+  await expect(bypasses).toHaveCount(superseded.length);
+  for (const [index, title] of superseded.entries()) {
+    const nodeBox = (await node(page, title).boundingBox())!;
+    const bypass = bypasses.nth(index);
+    await expect(bypass).toHaveAttribute("data-flow-source", "review");
+    const box = (await bypass.boundingBox())!;
+    // Spans the node's height and runs past its right edge.
+    expect(box.y).toBeLessThanOrEqual(nodeBox.y);
+    expect(box.y + box.height).toBeGreaterThanOrEqual(nodeBox.y + nodeBox.height);
+    expect(box.x + box.width).toBeGreaterThan(nodeBox.x + nodeBox.width);
+  }
+  expect(overlapping(await boxes(page))).toBe(0);
+});
+
+test("rewinding code names the dropped commits before it resets anything", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=code-rewind");
+  await node(page, "Build").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Prepare package again" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.find((entry) => entry.command === "restart_build_pipeline_step"),
+      ),
+    )
+    .toMatchObject({ args: { stageId: "review-package:build" } });
+
+  await node(page, "Build").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rewind code to here…" }).click();
+  const dialog = page.getByTestId("pipeline-code-rewind-dialog");
+  await expect(dialog.getByTestId("pipeline-code-rewind-commits")).toContainText(
+    "fix: address the review",
+  );
+  await expect(dialog).toContainText("origin/flow already has 2 commits");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.some((entry) => entry.command === "rewind_build_pipeline_code"),
+      ),
+    )
+    .toBe(false);
+  await dialog.getByRole("button", { name: "Drop 2 commits and restart" }).click();
+  await expect(dialog).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.find((entry) => entry.command === "rewind_build_pipeline_code"),
+      ),
+    )
+    .toMatchObject({ args: { stageId: "build", expectedHead: "c".repeat(40) } });
+});
+
 test("collapses the graph so the inspector takes the room", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
   const toggle = page.getByRole("button", { name: "Pipeline", exact: true });

@@ -842,6 +842,106 @@ describe("agent accounts", () => {
     expect(codexAccounts).toEqual([first.accountId!]);
   });
 
+  for (const failure of ["duplicate identity", "spawn failure", "CLI rejection"] as const) {
+    for (const cleanupFails of [false, true]) {
+      test(`${failure} publishes failure after cleanup ${cleanupFails ? "rejects" : "succeeds"}`, async () => {
+        const email = "slow-cleanup@example.com";
+        const identity = "slow-cleanup";
+        const first =
+          failure === "duplicate identity" ? await addCodexAccount(email, identity) : undefined;
+        const codexRoot = path.join(root, "data", "agent-accounts", "codex");
+        const cleanupStarted = deferred<string>();
+        const releaseCleanup = deferred<void>();
+        const original = fs.rm.bind(fs);
+        const spy = spyOn(fs, "rm").mockImplementation(async (file, options) => {
+          if (path.dirname(String(file)) === codexRoot) {
+            cleanupStarted.resolve(String(file));
+            await releaseCleanup.promise;
+            if (cleanupFails) throw new Error("cleanup unavailable");
+          }
+          return original(file, options);
+        });
+        let child!: ChildProcess;
+        const spawnImpl: SpawnLike =
+          failure === "duplicate identity"
+            ? fakeCodexLogin(codexAuth(email, identity))
+            : failure === "spawn failure"
+              ? () => {
+                  throw new Error("spawn failed");
+                }
+              : () => {
+                  child = new EventEmitter() as ChildProcess;
+                  const stdout = new PassThrough();
+                  Object.assign(child, {
+                    stdout,
+                    stderr: new PassThrough(),
+                    stdin: new PassThrough(),
+                    exitCode: null,
+                    signalCode: null,
+                    kill: () => true,
+                  });
+                  setTimeout(() => {
+                    stdout.write("https://auth.openai.com/codex/device\nABCD-EFGH1\n");
+                  }, 0);
+                  return child;
+                };
+        // Observe startup rejection immediately, including while cleanup is held.
+        const started = startAgentAccountLogin(context, "codex", {
+          spawnImpl,
+          executable: "codex",
+        }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        try {
+          if (failure === "CLI rejection") {
+            await started;
+            Object.assign(child, { exitCode: 1 });
+            child.emit("exit", 1, null);
+          }
+          const home = await cleanupStarted.promise;
+          expect(agentAccountLoginProgress()).toMatchObject({ state: "pending" });
+          expect(agentAccountLoginProgress().completedAt).toBeUndefined();
+          expect(agentAccountLoginProgress().error).toBeUndefined();
+          expect((await fs.stat(home)).isDirectory()).toBe(true);
+
+          releaseCleanup.resolve();
+          const startupError = await started;
+          const failed = await settledLogin();
+          expect(failed.state).toBe("failed");
+          expect(failed.completedAt).toEqual(expect.any(String));
+          expect(failed.error).toContain(
+            failure === "duplicate identity"
+              ? "already added"
+              : failure === "spawn failure"
+                ? "spawn failed"
+                : "exit code 1",
+          );
+          if (cleanupFails) {
+            expect(failed.error).toEndWith(
+              " Account cleanup failed; retry removing the account directory.",
+            );
+            expect((await fs.stat(home)).isDirectory()).toBe(true);
+          } else {
+            expect(failed.error).not.toContain("cleanup failed");
+            await expect(fs.stat(home)).rejects.toThrow();
+            expect(await fs.readdir(codexRoot)).toEqual(first ? [first.accountId!] : []);
+          }
+          if (failure === "spawn failure") {
+            expect(startupError).toBeInstanceOf(Error);
+            expect((startupError as Error).message).toBe(failed.error!);
+          }
+          expect(agentAccountLoginProgress()).toEqual(failed);
+        } finally {
+          releaseCleanup.resolve();
+          await started;
+          await settledLogin();
+          spy.mockRestore();
+        }
+      });
+    }
+  }
+
   test("switching changes the launch environment and removal requires switching away", async () => {
     const { accountId } = await addCodexAccount("second@example.com", "acct-2");
     const env: NodeJS.ProcessEnv = {};

@@ -3,7 +3,7 @@
  * H08, V03, V06, V09, V10 and V14.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -25,6 +25,13 @@ import {
   type CaptureOutcome,
   type WorktreeTarget,
 } from "./worktree-owner.js";
+
+// This slow-tier file runs real Git and native watchers. V09 waits up to 15 s
+// for scans, and closing a recursive watcher blocks synchronously (about
+// 0.5 s each on an idle macOS host), so a busy run pushed the synchronous
+// teardown past Bun's 5 s default. Set before the hook registers: Bun captures
+// a hook's budget at registration.
+setDefaultTimeout(30_000);
 
 const harnesses: Harness[] = [];
 const directories: string[] = [];

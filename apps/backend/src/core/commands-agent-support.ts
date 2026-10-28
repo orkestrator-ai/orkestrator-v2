@@ -939,7 +939,7 @@ export async function renameEnvironmentFromPrompt(
   prompt: string,
   context: CommandContext,
   expectedPendingPrompt?: string,
-): Promise<void> {
+): Promise<boolean> {
   if (!(await context.storage.getEnvironment(environmentId))) {
     throw new Error(`Environment not found: ${environmentId}`);
   }
@@ -951,7 +951,7 @@ export async function renameEnvironmentFromPrompt(
     expectedPendingPrompt !== undefined &&
     environment.pendingRenamePrompt?.trim() !== expectedPendingPrompt
   ) {
-    return;
+    return false;
   }
   const project = await context.storage.getProject(environment.projectId);
   const siblingEnvironments = (
@@ -959,6 +959,7 @@ export async function renameEnvironmentFromPrompt(
   ).filter((candidate) => candidate.id !== environmentId);
   const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments);
   await renameEnvironmentToName(environment, newName, context, project?.localPath, project?.gitUrl);
+  return true;
 }
 
 /**

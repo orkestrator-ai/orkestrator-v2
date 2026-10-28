@@ -1,14 +1,17 @@
 # Multi Review consolidation on Grok or Pi cannot submit its result
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `863b5782` (2026-10-27). Code fixed 2026-10-28 on
+`main` at `1d1f0a87`; only the live qualification run is left.
 
 A Multi Review consolidation turn is read-only, and Grok and Pi let a
 read-only turn call its own result tools only when the prompt names the
 attempt with both `workflowResultTool` and `workflowResultKey`. The step
-dispatch sends the tool name without the key, so the backend forwards
-neither, the bridge's gate refuses `submit_consolidated_review`, the one
-reminder is refused the same way, and the workflow fails with a missing
-result. Anyone who picks Grok or Pi as the consolidation model is affected.
+dispatch sent the tool name without the key, so the backend forwarded
+neither, the bridge's gate refused `submit_consolidated_review`, the one
+reminder was refused the same way, and the workflow failed with a missing
+result. Anyone who picked Grok or Pi as the consolidation model was affected.
+Every Multi Review step send and Build Pipeline consolidation now declare the
+key.
 Found in the task analysis of
 [0029-multi-review-flow-graph.md](0029-multi-review-flow-graph.md) (its
 task 2).
@@ -19,10 +22,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Pin the refusal with a failing test**: a backend test that a consolidation step's send carries no `workflowResultKey`, plus the bridge-side refusal already pinned. Status: open.
-2. **Declare the attempt on consolidation**: send `workflowResultKey` with `workflowResultTool` on the step dispatch and its attach. Status: open (after 1).
-3. **Build Pipeline consolidation on Grok and Pi**: check whether its plan-mode turn is gated the same way. Status: open.
-4. **Live consolidation on Grok and Pi**: one packaged review per provider with that provider consolidating. Status: open (after 2; batched with 0031).
+1. **Pin the refusal with a failing test**: a backend test that a consolidation step's send carries no `workflowResultKey`, plus the bridge-side refusal already pinned. Status: done 2026-10-28 (failed on the old code, passes on the fix).
+2. **Declare the attempt on consolidation**: send `workflowResultKey` with `workflowResultTool` on the step dispatch and its attach. Status: done 2026-10-28 on the send; the attach deliberately unchanged (see Assumptions and decisions).
+3. **Build Pipeline consolidation on Grok and Pi**: check whether its plan-mode turn is gated the same way. Status: done 2026-10-28: not read-only-gated, but refused under a `deny` or `ask` environment policy; the key is now sent.
+4. **Live consolidation on Grok and Pi**: one packaged review per provider with that provider consolidating. Status: open (unblocked by 2; batched with 0031).
 
 ### 1. Pin the refusal with a failing test
 
@@ -83,7 +86,33 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Whether it is gated depends on the session's read-only flag at create (`:686-688`) and on how each bridge treats plan mode.
 
-**Investigation.** Not settled in this pass: Pi has no plan mode of its own and keeps `state.readOnly` from its last explicit value; ACP keeps the create flag.
+**Investigation.** Not settled in the first pass: Pi has no plan mode of its own and keeps `state.readOnly` from its last explicit value; ACP keeps the create flag.
+
+Settled 2026-10-28 by reading the code (not reproduced live). The session is
+created with `mode: "plan"` and no `readOnly` (`build-pipeline-review-fanout.ts`
+`advanceConsolidation`), and `HttpBridgeProvider.createSession` and
+`bridgePromptBody` both map that to `readOnly: undefined`, so neither bridge
+marks the session read-only: Pi only calls `setSessionReadOnly` for a boolean
+(`bridges/pi-bridge/src/http.ts`, create and prompt) and the ACP bridge only
+for a boolean (`acp-http.ts`). The turn then runs under the environment's
+policy (`resolveEnvironmentExecutionPolicy`, `approvals: "auto-approve"` by
+default):
+
+- Default `auto-approve`: Pi returns `{ block: false }` before any attempt
+  check (`requestToolApproval`), and Grok's `autoApprovedPermissionOption`
+  allows the call. Not gated; it works today.
+- `deny` override: Pi blocks with "The execution policy denies this tool
+  call." and Grok answers `policyDenialOutcome`, because without a declared
+  attempt neither `isOwnWorkflowResultCall` nor
+  `workflowResultPermissionOption` admits the call (both precede the `deny`
+  branch). Gated.
+- `ask` override: the call is parked as a permission request, and Build
+  Pipeline's `UNATTENDED_AGENT_INTERACTION_POLICY` (`authorization:
+  "deny-and-fail"`) denies it. Gated.
+
+With the key declared, both bridges admit the attempt's own tools under every
+approval policy, so Build Pipeline consolidation now also works under `deny`
+and `ask`.
 
 **Decisions.**
 
@@ -115,29 +144,37 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Current state
 
-- Multi Review step dispatch sends `workflowResultTool` without
-  `workflowResultKey` on send (`multi-review-service.ts:3975`) and attach
-  (`:3944-3951`); consolidation is read-only (`:209`, `:3969`).
-- `bridgePromptBody` forwards the pair to Grok and Pi only together
-  (`http-bridge-prompt-body.ts:73-83`).
-- Pi and Grok refuse non-read tools on a read-only turn that declared no
-  attempt (`pi-bridge/src/interactions.ts:72-80`,
-  `acp-bridge/src/acp-session.ts:761-767`; pinned by
-  `acp-workflow-result-permission.test.ts:171`).
-- The step then spends its one reminder and fails with a missing-result error
-  (`multi-review-service.ts:4184-4209`).
-- Not reproduced; confidence high from the code.
+As of 2026-10-28:
+
+- Multi Review step dispatch (`MultiReviewService`, the `provider.send` of the
+  step loop) sends `workflowResultKey: request.requestId` with
+  `workflowResultTool` whenever the step runs on the tool transport, for every
+  step kind (preparation, consolidation, Fix) and for their reminder and
+  restart-continuation turns, which reuse that send with a fresh request id.
+- Build Pipeline consolidation (`build-pipeline-review-fanout.ts`,
+  `advanceConsolidation`) sends `workflowResultKey: consolidation.requestId`
+  the same way, including on its reminder turn.
+- The request id is the prepared slot's `resultKey` and the key named in
+  `workflowResultInstruction`, so the key the bridge checks, the key the model
+  is told to submit under and the slot's key agree.
+- The warm-up attach (`attachAgentBeforeDispatch`) still carries only
+  `agentMcp` and `workflowResultTool`; the bridges never read an attempt from
+  the attach.
+- Pinned by `multi-review-service.test.ts` (the Grok, Cursor, Pi and Codex
+  MCP-tools test, the preparation reminder, the Fix reminder and the
+  restart-continuation tests) and `build-pipeline-result-reminder.test.ts`
+  (consolidation first send and reminder). These failed on the old code.
+- `bridgePromptBody` forwards the pair to Grok and Pi only together, as before
+  (`http-bridge-provider.test.ts`), and the bridge gates are unchanged.
+- Not seen with a real Grok or Pi model.
+- Validation 2026-10-28: format check, lint and typecheck clean; focused
+  Multi Review, Build Pipeline fan-out and HTTP bridge suites pass. The full
+  `mise run test` passed every group except one backend timeout in
+  `public-api/test-support.test.ts`, which also fails alone on a clean
+  `origin/main` clone under the same host load (flake
+  [1245](../../tests/flaky-tests/backend-services-and-tooling/1245-public-api-test-support-harness-timeout-under-load.md)).
 
 ## Outstanding work
-
-### Code
-
-1. Add failing tests that a Multi Review consolidation send and attach on
-   Grok and Pi carry `workflowResultKey` equal to the step's request id.
-2. Pass `workflowResultKey: request.requestId` with `workflowResultTool` on
-   Multi Review step send and attach.
-3. Do the same for Build Pipeline consolidation
-   (`build-pipeline-review-fanout.ts:796-834`).
 
 ### Qualification
 
@@ -159,7 +196,62 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Needs verification
 
-- Whether Build Pipeline consolidation on Grok or Pi is gated today (task 3).
+- Task 4: a packaged Multi Review with Grok, then Pi, consolidating, to see
+  `submit_consolidated_review` accepted live. Needs Grok and Pi credentials
+  in a throwaway `dev:test` profile (with 0031).
+- Build Pipeline consolidation on Grok or Pi under a `deny` or `ask`
+  environment policy, live: the trace in task 3 is from code only.
+
+## Assumptions and decisions
+
+Made 2026-10-28 while implementing.
+
+- **Where does the key go: the send, the attach, or both?**
+  - Options: (a) send only; (b) send and attach, adding `workflowResultKey`
+    to `ProviderPrepareDispatchOptions`; (c) attach only.
+  - Choice: (a) send only.
+  - Why: the Grok and Pi bridges set `state.workflowResultTurn` only from the
+    prompt body (`pi-bridge/src/http.ts`, `acp-bridge/src/acp-http.ts`), and
+    `HttpBridgeProvider.prepareDispatch` posts only `agentMcp` to `/attach`.
+    OpenCode's broker, the one attach consumer of `workflowResultTool`,
+    checks the tool name and capability, not a key. A key on the attach would
+    have no reader. The reviewer path, the reference for this fix, also sends
+    the key on the send only.
+  - Pros: no dead field in the provider contract; same shape as reviewers.
+  - Cons: departs from the letter of the task list ("send and attach"); if a
+    bridge ever arms the gate at attach time, the attach will need the key.
+- **Which step kinds send the key?**
+  - Options: consolidation only; every Multi Review step kind.
+  - Choice: every step kind on the tool transport, as the task analysis
+    recommended.
+  - Why: preparation and Fix are writable today, so the key is harmless there,
+    and one code path covers any step made read-only later.
+  - Pros: one shape; no per-kind branch. Cons: the tests assert it per kind.
+- **Build Pipeline consolidation: trace first or just send the key?**
+  - Options: send the key without tracing; trace each bridge first.
+  - Choice: both: sent the key, and traced the bridges by reading the code
+    (task 3's investigation).
+  - Why: the trace was cheap and answered the "Needs verification" item; it
+    found a real refusal under `deny` and `ask` environment policies, not a
+    read-only gate.
+  - Pros: the doc now states when it failed. Cons: the trace is from code,
+    not a live run.
+- **How to prove the tests pin the gap?**
+  - Choice: ran the new assertions with the two source changes reverted; the
+    Multi Review suite failed 10 tests and the Build Pipeline reminder suite 2,
+    then all passed with the fix.
+  - Pros: shows each assertion bites. Cons: none.
+- **Test location.**
+  - Options: extend existing tests; add new test files.
+  - Choice: extend the existing MCP-tools, reminder and restart tests, and
+    record `workflowResultTool`/`workflowResultKey` in the Build Pipeline
+    fake provider's `sent` log.
+  - Why: those tests already drive each step through the tool transport for
+    Grok and Pi selections; a new file would duplicate the harness.
+  - Pros: small diff; covers reminder and restart turns too. Cons: the
+    Build Pipeline harness runs consolidation on Claude, so its assertion is
+    provider-agnostic (the backend sends the same options for every
+    provider, and `bridgePromptBody` is already tested per agent).
 
 ## Related
 

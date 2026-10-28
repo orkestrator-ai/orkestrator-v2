@@ -21,3 +21,16 @@ in other owners). Aggregate: 790 passed, 103 skipped, five failed; owner batch:
 83 passed, 20 skipped, five failed. Exact commands and artifacts are recorded
 in [1126](../aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md#review-fix-validation-2026-10-27).
 Status remains open; no assertion, timeout, or skip changed.
+
+## Rewind review validation, 2026-10-28
+
+Preparation for the pipeline rewind follow-ups reproduced the mobile gap at
+57 px in `mise run test:browser`. The complete unchanged ToolGroupFold owner
+passed all 38 cases across both viewports with one worker in a combined
+42-case run with AgentLaunchDialog (162.6 s). The two failures in that run
+were the previously established native branch suggestion failure (`rel`
+instead of `release/2.0`), also recorded in aggregate case 0958.
+
+Command: `ORKESTRATOR_E2E_PORT=24982 mise run test:logged -- --name recorded-browser-failures -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/ToolGroupFold.spec.ts --workers=1`.
+Evidence: `orkestrator-test-run.AJChkk/recorded-browser-failures.log.gz` under
+the host temporary directory. No assertion, timeout or skip changed.

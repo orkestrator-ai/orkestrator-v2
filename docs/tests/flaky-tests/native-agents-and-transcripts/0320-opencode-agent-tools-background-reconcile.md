@@ -15,3 +15,26 @@
 ## Local preview discovery review — 2026-10-25
 
 `mise run test:logged -- --name preview-repository -- mise run test` repeated the fixed-wait failure at `commands-agent-tools.test.ts:195`: configuration count was one instead of zero after the 150 ms wait (212.06 ms test duration). The backend used two isolated Bun workers alongside other repository/browser validation on the shared host. The complete unchanged owner passed separately with `mise run test:logged -- --name preview-agent-tools-owner -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures` (exit 0, 2.2 s). No agent-tool implementation, assertion, wait, or skip changed. Evidence: `orkestrator-test-run.0vNQwf/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+
+## Pending rename review — 2026-10-28
+
+Preparation's `mise run test` repeated the count-one failure at line 195 (181.76 ms). Evidence: `.orkestrator/review-artifacts/review-validation-fabbd29e-2cbf-4f6a-94fa-442f4bb48d78/validation-07.stdout.txt`. The unchanged owner passed with `mise run test:logged -- --name recorded-failure-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/change-tracking/measurement-retention.test.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`; after batching the retention fixture, both files passed (26 tests, 5.3 s). No agent-tool implementation, assertion, wait, timeout or skip changed.
+
+## Todo 0732 main merge — 2026-10-28
+
+`mise run test:logged -- --name merge-default-tests -- mise run test`
+merged `d3842173e` into `f521032b1`. Default workspace/root/bridges/protocol
+workers were 6/1/2/1; host admission queued the groups for about 389 s.
+The backend reported 9,967 pass, 87 skip and two failures across 656 files
+(322.08 s). Root, bridges, protocol and the other workspace packages passed;
+the aggregate remained non-green (927.4 s including admission).
+Evidence: `orkestrator-test-run.LxnFHE/summary.json` and
+`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory; outer logged-run artifacts are in
+`orkestrator-test-run.cjGI8A`.
+
+The background reconcile count remained one instead of zero at line 195
+(213.03 ms). The complete unchanged owner passed with
+`mise run test:logged -- --name merge-agent-tools-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`
+(exit 0, 3.4 s). This repeats the fixed-wait race above; no agent-tool
+implementation, assertion, timeout or skip changed.

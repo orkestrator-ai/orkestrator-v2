@@ -664,67 +664,72 @@ describe("renderTurn", () => {
         status: "completed" as const,
       },
     ];
-    const parts = await loadSubagentPartsFromTranscripts(
-      {
-        threadId: "thread-1",
-        turnStartedAt: "2026-07-25T12:00:00.000Z",
-        items,
-      },
-      {
-        createTranscriptMetaLoader: () => async (threadId) => ({
-          id: threadId,
-          updatedAt: "2026-07-25T12:00:00.000Z",
-          transcriptPath: `/transcripts/${threadId}.jsonl`,
-        }),
-        deriveTranscriptParts: async (options) => {
-          expect(options.threadId).toBe("thread-1");
-          expect(options.currentTurnStartedAt).toBe("2026-07-25T12:00:00.000Z");
-          expect(options.fallbackAgentIdsInSpawnOrder).toEqual(["child-1"]);
-          expect(await options.loadSessionMeta("child-1")).toMatchObject({
-            id: "child-1",
-            transcriptPath: "/transcripts/child-1.jsonl",
-          });
-          expect(await options.loadTranscript("/transcripts/child-1.jsonl")).toMatchObject({
-            fileId: "child-1",
+    const accumulator = turn();
+    accumulator.onItemCompleted(items[0]!);
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: (options) =>
+        loadSubagentPartsFromTranscripts(options, {
+          createTranscriptMetaLoader: () => async (threadId) => ({
+            id: threadId,
+            updatedAt: "2026-07-25T12:00:00.000Z",
+            transcriptPath: `/transcripts/${threadId}.jsonl`,
+          }),
+          deriveTranscriptParts: async (options) => {
+            expect(options.threadId).toBe("thread-1");
+            expect(options.currentTurnStartedAt).toBe("2026-07-25T12:00:00.000Z");
+            expect(options.fallbackAgentIdsInSpawnOrder).toEqual(["child-1"]);
+            expect(await options.loadSessionMeta("child-1")).toMatchObject({
+              id: "child-1",
+              transcriptPath: "/transcripts/child-1.jsonl",
+            });
+            expect(await options.loadTranscript("/transcripts/child-1.jsonl")).toMatchObject({
+              fileId: "child-1",
+              records: [],
+            });
+            return [
+              {
+                type: "subagent",
+                content: "child transcript",
+                toolState: "pending",
+                createdAt: "2026-07-25T12:00:02.000Z",
+                toolDurationMs: 15_000,
+                subagentId: "child-1",
+                subagentName: "Ada",
+                subagentRole: "reviewer",
+                subagentPrompt: "transcript prompt",
+                subagentActions: [
+                  {
+                    type: "tool-invocation",
+                    content: "checked files",
+                    toolName: "read",
+                    toolState: "success",
+                  },
+                ],
+                subagentActionCount: 1,
+              },
+            ];
+          },
+          readTranscript: async (path) => ({
+            fileId: path.includes("child-1") ? "child-1" : "other",
+            size: 0,
+            modifiedAtNs: "0",
+            remainder: "",
+            lines: [],
             records: [],
-          });
-          return [
-            {
-              type: "subagent",
-              content: "child transcript",
-              toolState: "pending",
-              subagentId: "child-1",
-              subagentName: "Ada",
-              subagentRole: "reviewer",
-              subagentPrompt: "transcript prompt",
-              subagentActions: [
-                {
-                  type: "tool-invocation",
-                  content: "checked files",
-                  toolName: "read",
-                  toolState: "success",
-                },
-              ],
-              subagentActionCount: 1,
-            },
-          ];
-        },
-        readTranscript: async (path) => ({
-          fileId: path.includes("child-1") ? "child-1" : "other",
-          size: 0,
-          modifiedAtNs: "0",
-          remainder: "",
-          lines: [],
-          records: [],
+          }),
         }),
-      },
-    );
+    });
 
-    expect(parts).toEqual([
+    expect(rendered.parts.filter((part) => part.type === "subagent")).toEqual([
       {
         type: "subagent",
         content: "child transcript",
         toolState: "success",
+        createdAt: "2026-07-25T12:00:02.000Z",
+        toolDurationMs: 15_000,
         subagentId: "child-1",
         subagentName: "Ada",
         subagentRole: "reviewer",

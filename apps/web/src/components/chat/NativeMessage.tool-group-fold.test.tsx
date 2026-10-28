@@ -76,7 +76,10 @@ describe("folded tool group", () => {
         trigger,
     ).toBe(true);
     expect(trigger.textContent).toContain("bun test src/app.test.ts");
-    expect(trigger.textContent).toContain("3 tool calls");
+    // The count shows as the wrench icon and a number, as on agent cards.
+    const count = trigger.querySelector('[title="3 tool calls"]');
+    expect(count?.textContent).toBe("3");
+    expect(count?.querySelector("svg.lucide-wrench")).toBeTruthy();
     // 10:00:00 → 10:00:02 + 1s.
     expect(trigger.textContent).toContain("3s");
     expect(container.querySelector("svg.lucide-layers")).toBeTruthy();

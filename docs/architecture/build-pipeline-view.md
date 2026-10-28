@@ -1,8 +1,10 @@
 # Build pipeline view
 
 Status: Living. Checked against the branch that introduced the pipeline flow
-graph (2026-10-26), the branch that made restarts rewind (2026-10-27), and the
-node-face and live-usage follow-up (2026-10-27).
+graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
+node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
+(code rewind, Address from the round's report, package-only restart;
+2026-10-28).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -169,7 +171,10 @@ Actions sit in each node's context menu and in the inspector: open the session
 (Open Fix session on a Fix node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed
 step (`retry_build_pipeline_stage`), restart from a step
-(`restart_build_pipeline_step`), skip the running step
+(`restart_build_pipeline_step`), prepare the review package again
+("Prepare package again", see [Restarting a step](#restarting-a-step)),
+rewind the code to a step ("Rewind code to here…", see
+[Rewinding the code](#rewinding-the-code)), skip the running step
 (`skip_build_pipeline_step`), view the PR, and pause, resume or cancel the
 pipeline. The header keeps its controls.
 
@@ -200,15 +205,17 @@ in `build-pipeline-rewind.ts`):
   `maxIterations`.
 - **Keeps the code.** The worktree and branch are not reset; the rerun and
   every later step work on the current code, later rounds' commits included.
-  Rewinding the code itself would be a separate, confirmed action
-  ([0405](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md)).
+  Rewinding the code itself is the separate, confirmed action described in
+  [Rewinding the code](#rewinding-the-code).
 - **Invalidates what came after.** Every live session at or after the point
   (same round and later step, or a later round) gets `supersededBy` (the
   `PipelineRewind.id`) and `supersededAt`. A rewind into an earlier round also
   invalidates the review package, validation run, structured review and verdict,
   because they describe later code; a step whose inputs are gone reruns from
   the earliest step of its round that rebuilds them (Review prepares the
-  package again; Address without that round's report reruns Review). Verify
+  package again). Address reruns alone on its round's own accepted report
+  (`roundReviewReports`, below); only when that copy is gone does it rerun
+  Review, or prepare the package first when that is gone too. Verify
   sessions keep their own verdict (`verificationResult`,
   `verificationFeedback`, bounded), so a restarted Fix gets the verdict that
   ended the round before it. Legacy records without that session's verdict use
@@ -244,7 +251,27 @@ in `build-pipeline-rewind.ts`):
 `retry_build_pipeline_review` keep their semantics; restarting the current step
 supersedes only that step's session. Restarting a Build or Fix that also wrote
 the package plan reruns the Build or Fix; the dedicated preparation session
-restarts preparation alone.
+restarts preparation alone. On the single-review path, where the Build or Fix
+wrote the plan and there is no dedicated session, "Prepare package again" on
+that Build or Fix node, or on the Prepare node holding its checks, sends the
+stage ID `review-package:<sessionKey>`: the plan's turn stays live, everything
+from package preparation on is superseded, and a dedicated preparation session
+prepares the package from the turn's result. A repeat while that preparation
+is still pending or running is a no-op; a session that wrote no plan is
+refused.
+
+**Per-round review reports.** `structuredReview` holds only the newest
+accepted report, and the per-session `reviewReport` copies are discarded at the
+next review attempt. So each accepted consolidated report (single review or
+fan-out consolidation) is also kept in `roundReviewReports`, one entry per
+round naming the session that filed it, at most
+`MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES` (1 MiB) of serialized reports in
+total: older rounds' copies give way first, and a report larger than the
+budget is not copied. A copy counts only while its session is the newest live
+review-phase session of its round, so a later retry of that round, a
+retried reviewer that discarded the consolidation, or a rewind that superseded
+the review makes it stale; stale copies are pruned on every rewind and every
+new copy.
 
 **Presentation.** Each rewind's superseded sessions are one greyed, dashed
 "Previous attempt" node (kind `attempt`, column marked `superseded`) where the
@@ -262,6 +289,46 @@ left out of the step count, review-pass numbering, stop placement and the
 followed selection. The record fields are generic (any renderer can group
 sessions by `supersededBy` and read `rewinds`).
 
+### Rewinding the code
+
+"Rewind code to here…" (`rewind_build_pipeline_code`, logic in
+`build-pipeline-code-rewind.ts`) resets the branch to the commit a step started
+from, then restarts the pipeline from that step exactly as "Restart from here"
+does. Every stage session started by the supervisor records `headAtStart`
+(Verify reuses its validation baseline; other stages probe once, best effort);
+fan-out reviewers and consolidation do not, and a step without it has no
+action.
+
+1. **Preview.** Opening the action reads
+   `preview_build_pipeline_code_rewind`: the target commit, the current HEAD,
+   the commits `target..HEAD` drops (newest first, at most 50 with bounded
+   subjects, plus the total), the upstream branch and how many of its commits
+   `target..@{upstream}` the reset leaves behind, the pull request when the
+   pipeline shipped one, and a `blocked` reason when it cannot run.
+2. **Refusals.** It is blocked, and the confirmed request refused, while the
+   pipeline runs a step or validation (pause it first), when the worktree has
+   uncommitted changes (a hard reset would destroy them; the preview names up
+   to 20 paths), when the target is gone or no longer an ancestor of HEAD, when
+   the pull request has merged, and when the backend has no
+   `environmentGit` (the option `index.ts` wires to the environment's command
+   runner; it is deliberately not a backend command a renderer could call).
+3. **Confirm.** The confirmation names the commits and carries the HEAD the
+   preview read (`expectedHead`); a branch that moved since is refused. Inside
+   the pipeline lock, before any state changes, the backend checks again,
+   keeps the old tip at `refs/orkestrator/build-pipeline-rewinds/<pipeline>/<rewind>`
+   (`git update-ref`), and runs `git reset --hard <target>`. A refused or failed
+   reset leaves the record untouched. The rewind then records `code` (from, to,
+   dropped commits, backup ref, upstream and its dropped count), and a repeat of
+   the same request is a no-op like any restart.
+4. **Pushed commits and the pull request.** When the upstream had commits the
+   reset dropped, every Ship until a live Ship completes after the rewind is
+   told to push with `git push --force-with-lease` (never plain `--force`, never
+   pulling the remote commits back) and still updates, or reopens, the same
+   pull request. The pull request then shows the rewound history.
+
+The previous-attempt inspector says the code was reset, from and to which
+commits and how many commits it dropped, and names the backup ref.
+
 `retry_build_pipeline_reviewer` reruns one failed reviewer of the current pass,
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
@@ -278,7 +345,9 @@ under its key; the retry gets `…:attempt-2`.
   runs and the tab is active.
 - New record fields are additive and optional; the pipeline guard accepts
   records without them. Records written before rewinds existed load as before
-  and are superseded by their first restart like any other.
+  and are superseded by their first restart like any other. Sessions written
+  before `headAtStart` existed offer no code rewind; records without
+  `roundReviewReports` rerun Review when an earlier round's Address restarts.
 
 Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
 [0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).

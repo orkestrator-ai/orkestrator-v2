@@ -15,6 +15,8 @@ import {
   ClipboardCheck,
   ExternalLink,
   GitPullRequest,
+  History,
+  PackageCheck,
   Pause,
   Play,
   RefreshCw,
@@ -49,6 +51,7 @@ import { ReviewValidationStatus } from "@/components/review/ReviewValidationStat
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
+  pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
   pipelineSkipAction,
   type PipelineFlowModel,
@@ -62,6 +65,7 @@ import {
   reviewReportSession,
 } from "./PipelineSessionTranscript";
 import { PipelineTicketView } from "./PipelineTicketView";
+import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
 import type { PipelineControls } from "./usePipelineControls";
 
 const NO_CLOCK_SUBSCRIPTION = () => {};
@@ -299,6 +303,8 @@ export function PipelineFlowView({
     });
   };
 
+  const codeRewind = usePipelineCodeRewind(pipeline.id, controls.rewindCode, controls.pending);
+
   const toggleAttempt = (attemptId: string, expanded: boolean) =>
     setAttemptExpanded(pipeline.id, attemptId, expanded);
   /** Selects a step of a previous attempt, expanding the attempt to show it. */
@@ -389,6 +395,26 @@ export function PipelineFlowView({
         icon: RotateCcw,
         disabled,
         onSelect: () => controls.restartStage(node.id),
+      });
+    }
+    const packageRestart = pipelinePackageRestartStageId(pipeline, node);
+    if (packageRestart) {
+      actions.push({
+        key: "restart-package",
+        label: "Prepare package again",
+        icon: PackageCheck,
+        disabled,
+        onSelect: () => controls.restartStage(packageRestart),
+      });
+    }
+    if (node.session?.headAtStart && !node.placeholder && !node.superseded) {
+      const stageId = node.session.sessionKey;
+      actions.push({
+        key: "rewind-code",
+        label: "Rewind code to here…",
+        icon: History,
+        disabled,
+        onSelect: () => codeRewind.open(stageId, node.title),
       });
     }
     const skip = pipelineSkipAction(pipeline, node);
@@ -690,6 +716,7 @@ export function PipelineFlowView({
           </FlowInspectorPanel>
         </div>
       </div>
+      {codeRewind.dialog}
     </div>
   );
 }
@@ -906,8 +933,17 @@ function PreviousAttempt({
           ? `On ${new Date(rewind.at).toLocaleString()} a restart rewound the pipeline from round ${rewind.fromIteration + 1} to ${step} of round ${rewind.iteration + 1}. `
           : "A restart rewound the pipeline to an earlier step. "}
         These steps ran before it. They are kept so their transcripts stay readable, but their
-        results no longer count; the code they committed is still on the branch.
+        results no longer count;{" "}
+        {rewind?.code
+          ? `the code was reset from ${rewind.code.from.slice(0, 7)} to ${rewind.code.to.slice(0, 7)}, dropping ${rewind.code.droppedCommits} commit${rewind.code.droppedCommits === 1 ? "" : "s"}.`
+          : "the code they committed is still on the branch."}
       </p>
+      {rewind?.code ? (
+        <p className="text-xs text-muted-foreground">
+          The dropped commits stay reachable at{" "}
+          <code className="break-all font-mono">{rewind.code.backupRef}</code>.
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-1">
         {node.validationRun && (
           <li>

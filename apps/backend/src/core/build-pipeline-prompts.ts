@@ -700,9 +700,13 @@ export function fixPrompt(
  */
 export function prPrompt(
   targetBranch: string,
-  options: { existingPullRequestUrl?: string } = {},
+  options: { existingPullRequestUrl?: string; forcePushUpstream?: string } = {},
 ): string {
   const existing = options.existingPullRequestUrl?.trim();
+  const upstream = options.forcePushUpstream?.trim().replaceAll("`", "'");
+  const pushStep = upstream
+    ? `3. This branch was rewound on purpose: \`${upstream}\` still has commits that are no longer on it. Push the current branch with \`git push --force-with-lease\`. Never use plain \`--force\`, and never pull, merge or rebase the remote commits back in. If the lease is refused, stop and report it.`
+    : "3. Push the current branch to origin.";
   const createStep = existing
     ? `4. This build already opened a pull request: ${existing}. Do not create another one. Update that pull request: the push above adds the new commits to it; if it was closed, reopen it with \`gh pr reopen\`; then update its title and description with \`gh pr edit\` so they describe the work as it is now.`
     : `4. Create a pull request against \`${targetBranch}\` with \`gh pr create\`, unless one already exists for the current branch (\`gh pr view\`): then do not create another one; the push above updates it, and \`gh pr edit\` updates its description.`;
@@ -710,7 +714,7 @@ export function prPrompt(
 
 1. Inspect git status and diffs. Stage only task-related safe files; never stage secrets, .env files, caches, generated artifacts, or unrelated changes.
 2. Commit any remaining relevant changes using a conventional commit without bypassing hooks.
-3. Push the current branch to origin.
+${pushStep}
 ${createStep}
 5. Report the PR URL.
 

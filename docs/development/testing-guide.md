@@ -191,11 +191,18 @@ those requirements. Install the tools with Homebrew:
 brew install bash coreutils findutils gnu-tar grep gnu-sed flock
 ```
 
-The fixtures that need GNU `tar` or `date` put Homebrew's GNU tool directories
+The fixtures that need GNU `tar`, `date`, `rm` or `du` put Homebrew's GNU tool directories
 (under `/opt/homebrew/opt` or `/usr/local/opt`) ahead of the inherited PATH
 themselves (`tests/unit/gnu-shell-tools.ts`), and skip with the install command
-in the test name when those tools are missing. For everything else, prefer the
-tools for the validation command without changing the global shell
+in the test name when those tools are missing. Staged-input relay tests probe
+the required flags directly and require them on Linux and CI. macOS also runs
+all relay cases using only system tools, with fixture adapters mapping GNU
+`rm --one-file-system` to BSD `rm -x` and GNU `du --apparent-size -B1` to BSD
+`du -A -B1`, converting its 512-byte output blocks to bytes (rounded up). This
+native lane exercises permissions, stale relay removal, revocation, symlinks,
+entry limits and apparent-byte limits even without Homebrew coreutils; it does
+not qualify GNU flag behavior. For everything else, prefer the tools for the
+validation command without changing the global shell
 configuration (use `/usr/local` in place of `/opt/homebrew` on Intel Macs):
 
 ```bash
@@ -339,6 +346,26 @@ says whether one is armed, and `restore()` reports any it drops. The
   fails.
 - Do not swap a sleep for an async query that waits the same wall time, and
   never change a production debounce or retry constant to make a test cheaper.
+
+### Agent CLIs on `PATH`
+
+Default and slow-tier tests must not reach the network or a provider login. A
+backend path that resolves an agent CLI (`resolveCodexBinary` and its siblings
+in `commands-agent-support.ts`) checks the managed copies first
+(`toolchainBinDir`, `<resourceRoot>/bin`, `<appRoot>/binaries`,
+`<appRoot>/bin`) and then falls back to the bare name, so `PATH` decides. CI
+puts the pinned Codex on `PATH`, and a developer's `PATH` usually has a
+signed-in one. Launching an environment with a prompt runs first-prompt naming
+(`codex exec`), so a fixture that can reach it must supply a stub:
+
+- `createPublicApiHarness` (`apps/backend/src/core/public-api/test-support.ts`)
+  writes a slug-writing stub at `<root>/bin/codex` and logs each call;
+  `harness.namingCalls()` returns them.
+- The command fixtures (`apps/backend/tests/command-fixtures.ts`) offer
+  `isolateCodexBinaryLookup`, `withFakeCodex` and `codexSlugScript`.
+
+Do not prepend a stub to `PATH` for the whole suite: tests run in parallel
+workers and some change `PATH` themselves.
 
 `mise run typecheck` covers every location: package tests through each
 package's typecheck script (`tsconfig.test.json` in the backend and desktop),

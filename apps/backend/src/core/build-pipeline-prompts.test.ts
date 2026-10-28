@@ -1008,6 +1008,20 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Push the current branch to origin");
   });
 
+  test("prPrompt force-pushes with lease after a code rewind dropped pushed commits", () => {
+    const prompt = prPrompt("main", {
+      existingPullRequestUrl: "https://github.com/acme/repo/pull/7",
+      forcePushUpstream: "origin/feat`x",
+    });
+
+    expect(prompt).toContain("git push --force-with-lease");
+    expect(prompt).toContain("Never use plain `--force`");
+    // Repository text never closes the code span it is quoted in.
+    expect(prompt).toContain("`origin/feat'x`");
+    expect(prompt).not.toContain("Push the current branch to origin.");
+    expect(prompt).toContain("gh pr edit");
+  });
+
   test("resolveConflictsPrompt identifies the remote target and validation", () => {
     const prompt = resolveConflictsPrompt("develop");
 

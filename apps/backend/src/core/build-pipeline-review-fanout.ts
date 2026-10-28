@@ -124,6 +124,7 @@ import {
   type ArtifactTurnDispatch,
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
+import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -963,7 +964,10 @@ export class BuildPipelineReviewFanout {
             ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
-              ? { workflowResultTool: workflowResultToolName("consolidated-review") }
+              ? {
+                  workflowResultTool: workflowResultToolName("consolidated-review"),
+                  workflowResultKey: consolidation.requestId,
+                }
               : {}),
           },
         );
@@ -1176,6 +1180,7 @@ export class BuildPipelineReviewFanout {
     session.structuredRequestId = consolidation.requestId;
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
+    retainRoundReviewReport(pipeline, session, provenance.report);
     pipeline.structuredReviewRequestId = consolidation.requestId;
     if (consolidation.resultTransport === "tool-v1") {
       pipeline.pendingResultConsumptions = Array.from(

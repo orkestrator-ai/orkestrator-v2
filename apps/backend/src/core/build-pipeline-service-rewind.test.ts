@@ -759,17 +759,13 @@ describe("rewinding to an earlier step", () => {
           restarted.sessions.find((entry) => entry.sessionKey === old.sessionKey)?.supersededBy !==
             undefined,
         ).toBe(phase !== "resolve-conflicts");
-        expect(restarted.structuredReview).toBeUndefined();
+        // Round 0's accepted report was kept, so Address reruns alone on it.
+        if (phase === "address") expect(restarted.structuredReview).toEqual(cleanReview);
+        else expect(restarted.structuredReview).toBeUndefined();
         expect(restarted.verificationResult).toBeUndefined();
         expect(restarted.verificationFeedback).toBeUndefined();
-        if (phase === "address") {
-          expect(restarted.restartRequest).toBeUndefined();
-          expect(restarted.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
-          expect(restarted.reviewPackage).toBeUndefined();
-        } else {
-          expect(restarted.sessions.at(-1)?.phase).toBe(phase);
-          expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
-        }
+        expect(restarted.sessions.at(-1)?.phase).toBe(phase);
+        expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
         const finished = await advanceUntil(
           service,
           storage,

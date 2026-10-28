@@ -212,18 +212,35 @@ export async function conditionalBuildPipelineRead(
         ? stablePrefix(read, cursor.revision)
         : undefined;
     const editedBase = shared !== undefined && shared > 0;
+    let patchedFromBase = exactBase || editedBase;
     if (read.status === "found" && editedBase && shared < tailStart) {
+      const initial = read;
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: shared,
         maxBytes: remaining,
       });
+      // Each store call reloads the manifest. The prefix proven by the first
+      // read cannot be retained if a checkpoint landed before the reread,
+      // even when that checkpoint reused the display revision. One full read
+      // reconciles safely without an unbounded retry loop.
+      if (
+        read.status === "found" &&
+        (read.manifestRevision !== initial.manifestRevision ||
+          read.revision !== initial.revision ||
+          read.substituted !== initial.substituted)
+      ) {
+        patchedFromBase = false;
+        read = await reader.readBuildPipelineTranscript(record.id, session, {
+          fromIndex: 0,
+          maxBytes: remaining,
+        });
+      }
     } else if (read.status === "found" && !exactBase && !editedBase && tailStart > 0) {
       read = await reader.readBuildPipelineTranscript(record.id, session, {
         fromIndex: 0,
         maxBytes: remaining,
       });
     }
-    const patchedFromBase = exactBase || (editedBase && read.status === "found");
     // Without a recorded edit history reaching the client's revision, no
     // prefix can be retained. Reconcile from zero, then page under that
     // revision/count until all committed rows have arrived; never acknowledge
@@ -313,6 +330,7 @@ export async function conditionalBuildPipelineRead(
         page.status !== "found" ||
         page.substituted !== read.substituted ||
         page.revision !== read.revision ||
+        page.manifestRevision !== read.manifestRevision ||
         page.startIndex !== nextIndex
       )
         break;

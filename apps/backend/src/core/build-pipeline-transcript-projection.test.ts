@@ -9,6 +9,7 @@ import {
   BUILD_PIPELINE_PATCH_BUDGET_BYTES,
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,
+  type TranscriptReader,
 } from "./build-pipeline-transcript-projection.js";
 import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
 
@@ -227,6 +228,101 @@ describe("build pipeline transcript projection", () => {
       expect([...first.slice(0, patch.startIndex), ...patch.messages]).toEqual(second);
     });
   });
+
+  for (const intervening of ["earlier edit", "provider replacement", "reused display revision"]) {
+    test(`reconciles when a ${intervening} lands between the tail and prefix reads`, async () => {
+      await withStorage(async (storage) => {
+        const first = messages(50, "build");
+        const initial = await saveSessions(storage, [
+          await referencedSession(storage, "build", first, 1),
+        ]);
+        const second = [...first];
+        second[47] = { id: "late-tool", role: "assistant", text: "updated row 47" };
+        const next = await saveSessions(
+          storage,
+          [await referencedSession(storage, "build", second, 2)],
+          initial.revision,
+        );
+        const authoritative =
+          intervening === "provider replacement" ? messages(50, "replacement") : [...second];
+        authoritative[30] = { id: "earlier-tool", role: "assistant", text: "updated row 30" };
+        const revision = intervening === "reused display revision" ? 2 : 3;
+        const starts: number[] = [];
+        const reader: TranscriptReader = {
+          async readBuildPipelineTranscript(id, session, window) {
+            starts.push(window?.fromIndex ?? 0);
+            const read = await storage.readBuildPipelineTranscript(id, session, window);
+            if (starts.length === 1) {
+              // Commit after the first manifest has answered, before the
+              // projection requests the prefix that manifest proved safe.
+              await saveSessions(
+                storage,
+                [
+                  await referencedSession(
+                    storage,
+                    "build",
+                    authoritative,
+                    revision,
+                    intervening === "provider replacement" ? "sdk-replacement" : "sdk-build",
+                  ),
+                ],
+                next.revision,
+              );
+            }
+            return read;
+          },
+        };
+        const result = await conditionalBuildPipelineRead(reader, next, {
+          knownSessions: { build: { revision: 1, count: first.length } },
+        });
+        if (result.unchanged) throw new Error("expected a patch");
+        const patch = result.messagePatches[0]!;
+        expect(starts).toEqual([49, 47, 0]);
+        expect(patch).toMatchObject({ startIndex: 0, revision });
+        expect(patch.baseRevision).toBeUndefined();
+        expect(patch.baseCount).toBeUndefined();
+        expect([...first.slice(0, patch.startIndex), ...patch.messages]).toEqual(authoritative);
+      });
+    });
+  }
+
+  for (const edit of [49, 50]) {
+    test(`keeps the overlap and acknowledges the base when the first edit is row ${edit}`, async () => {
+      await withStorage(async (storage) => {
+        const first = messages(50, "build");
+        const initial = await saveSessions(storage, [
+          await referencedSession(storage, "build", first, 1),
+        ]);
+        const second = [...first, ...messages(3, "new")];
+        second[edit] = { id: "changed", role: "assistant", text: "late update" };
+        const next = await saveSessions(
+          storage,
+          [await referencedSession(storage, "build", second, 2)],
+          initial.revision,
+        );
+        const starts: number[] = [];
+        const reader: TranscriptReader = {
+          readBuildPipelineTranscript(id, session, window) {
+            starts.push(window?.fromIndex ?? 0);
+            return storage.readBuildPipelineTranscript(id, session, window);
+          },
+        };
+        const result = await conditionalBuildPipelineRead(reader, next, {
+          knownSessions: { build: { revision: 1, count: 50 } },
+        });
+        if (result.unchanged) throw new Error("expected a patch");
+        const patch = result.messagePatches[0]!;
+        expect(starts).toEqual([49]);
+        expect(patch).toMatchObject({
+          startIndex: 49,
+          revision: 2,
+          baseRevision: 1,
+          baseCount: 50,
+        });
+        expect([...first.slice(0, patch.startIndex), ...patch.messages]).toEqual(second);
+      });
+    });
+  }
 
   test("a reader several checkpoints behind is patched from the earliest edit it missed", async () => {
     await withStorage(async (storage) => {

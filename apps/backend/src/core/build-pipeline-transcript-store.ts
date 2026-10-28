@@ -199,6 +199,8 @@ export type TranscriptRead =
       startIndex: number;
       messageCount: number;
       revision: number;
+      /** Store generation, including checkpoints that reuse a display revision. */
+      manifestRevision?: number;
       complete: boolean;
       /**
        * True when the committed manifest is not the revision the reference
@@ -1082,6 +1084,7 @@ export class BuildPipelineTranscriptStore {
       startIndex: fromIndex,
       messageCount: row.messageCount,
       revision: row.displayRevision,
+      manifestRevision: row.revision,
       complete: row.omittedMessages === 0,
       substituted,
       ...(truncated ? { truncated: true as const } : {}),

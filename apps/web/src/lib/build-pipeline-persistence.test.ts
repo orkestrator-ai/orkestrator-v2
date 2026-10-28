@@ -61,12 +61,15 @@ function record(pipeline: BuildPipeline, revision: number): PersistedBuildPipeli
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("build pipeline read model", () => {
@@ -503,6 +506,137 @@ describe("build pipeline read model", () => {
     invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 1 });
     await hydrateBuildPipeline("pipeline-1");
     expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("applies a production patch starting at row 47 of 50 with its acknowledged base", async () => {
+    const held = Array.from({ length: 50 }, (_, index) => ({
+      id: `row-${index}`,
+      content: `body ${index}`,
+    }));
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "session-1",
+      sdkSessionId: "sdk-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+      messageRevision: 3,
+    };
+    const local = {
+      ...snapshot(),
+      currentSessionIndex: 0,
+      sessions: [{ ...session, messages: held }],
+      backendRevision: 7,
+    };
+    useBuildPipelineStore.getState().replacePipeline(local);
+    const authoritative = [...held, { id: "row-50", content: "appended" }];
+    authoritative[47] = { id: "row-47", content: "late result" };
+    invokeMock.mockResolvedValueOnce({
+      unchanged: false,
+      record: record({ ...local, sessions: [{ ...session, messageRevision: 4 }] }, 8),
+      messagePatches: [
+        {
+          sessionKey: "session-1",
+          baseRevision: 3,
+          baseCount: 50,
+          startIndex: 47,
+          revision: 4,
+          messages: authoritative.slice(47),
+        },
+      ],
+    });
+    const restored = await hydrateBuildPipeline("pipeline-1", undefined, { transcripts: true });
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(restored?.sessions[0]?.messages).toEqual(authoritative);
+    expect(restored?.sessions[0]?.messages?.[0]).toBe(held[0]);
+    expect(isBuildPipelineTranscriptStale(restored?.sessions[0])).toBe(false);
+  });
+
+  test("a failed in-flight read rejects its caller while queued callers complete and later reads recover", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    invokeMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const failure = new Error("in-flight read failed");
+    const running = hydrateBuildPipeline("pipeline-1").catch((error: unknown) => error);
+    const queuedA = hydrateBuildPipeline("pipeline-1");
+    const queuedB = hydrateBuildPipeline("pipeline-1");
+    expect(queuedA).toBe(queuedB);
+    first.reject(failure);
+    expect(await running).toBe(failure);
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    second.resolve(record(snapshot(), 2));
+    expect(await queuedA).toMatchObject({ backendRevision: 2 });
+    expect(await queuedB).toMatchObject({ backendRevision: 2 });
+    invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 2 });
+    await hydrateBuildPipeline("pipeline-1");
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("a failed queued read settles all its callers and clears the pipeline entry", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    invokeMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const running = hydrateBuildPipeline("pipeline-1");
+    const queuedA = hydrateBuildPipeline("pipeline-1");
+    const queuedB = hydrateBuildPipeline("pipeline-1");
+    expect(queuedA).toBe(queuedB);
+    const observedA = queuedA.catch((error: unknown) => error);
+    const observedB = queuedB.catch((error: unknown) => error);
+    first.resolve(record(snapshot(), 1));
+    await running;
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    const failure = new Error("queued read failed");
+    second.reject(failure);
+    expect(await observedA).toBe(failure);
+    expect(await observedB).toBe(failure);
+    invokeMock.mockResolvedValueOnce(record(snapshot(), 3));
+    expect(await hydrateBuildPipeline("pipeline-1")).toMatchObject({ backendRevision: 3 });
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("callers arriving during a follow-up share the next read and retain a transcript request", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const third = deferred<unknown>();
+    invokeMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+      .mockImplementationOnce(() => third.promise);
+    const running = hydrateBuildPipeline("pipeline-1");
+    const followUp = hydrateBuildPipeline("pipeline-1");
+    first.resolve(record(snapshot(), 1));
+    await running;
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    const laterA = hydrateBuildPipeline("pipeline-1");
+    const laterB = hydrateBuildPipeline("pipeline-1", undefined, {
+      transcripts: true,
+      prioritySessionKey: "session-1",
+    });
+    expect(laterA).toBe(laterB);
+    second.resolve(record(snapshot(), 2));
+    await followUp;
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 2,
+      knownSessions: {},
+      prioritySessionKey: "session-1",
+    });
+    third.resolve({ unchanged: true, revision: 2 });
+    expect(await laterA).toMatchObject({ backendRevision: 2 });
+    expect(await laterB).toMatchObject({ backendRevision: 2 });
+    invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 2 });
+    await hydrateBuildPipeline("pipeline-1");
+    expect(invokeMock).toHaveBeenCalledTimes(4);
   });
 
   test("a change read patches bodies only while a transcript is on screen", () => {

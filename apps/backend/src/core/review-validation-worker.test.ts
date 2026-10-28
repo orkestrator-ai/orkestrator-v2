@@ -306,7 +306,7 @@ test("waiting for the local command budget reports queue time and clears its rea
       next.results[0]?.status === "running" &&
       next.results[1]?.status === "running" &&
       next.results[2]?.status === "queued" &&
-      next.results[2].queuedMs >= 100,
+      next.results[2].queuedMs! >= 100,
     5000,
   );
   expect(waiting.results[2]!.queueReason).toBe("Waiting for this review's local command budget");
@@ -319,7 +319,7 @@ test("waiting for the local command budget reports queue time and clears its rea
     5000,
   );
   expect(running.results[1]!.status).toBe("running");
-  expect(running.results[2]!.queuedMs).toBeGreaterThanOrEqual(waiting.results[2]!.queuedMs);
+  expect(running.results[2]!.queuedMs).toBeGreaterThanOrEqual(waiting.results[2]!.queuedMs!);
   expect(running.results[2]!.queueReason).toBeUndefined();
   await Promise.all(
     ["second", "third"].map((name) =>
@@ -385,7 +385,7 @@ admission.close(); process.exitCode = result.status ?? 1;`,
         next.results[0]?.status === "running" &&
         next.results[1]?.status === "queued" &&
         next.results[1].queueReason?.includes("Waiting for build") === true &&
-        next.results[1].queuedMs >= 100,
+        next.results[1].queuedMs! >= 100,
       5000,
     );
     await writeFile(path.join(root, ".orkestrator/release-local"), "release");
@@ -396,7 +396,7 @@ admission.close(); process.exitCode = result.status ?? 1;`,
         next.results[0]?.status === "passed" &&
         next.results[1]?.status === "queued" &&
         next.results[1].queueReason?.includes("exclusive resource") === true &&
-        next.results[1].queuedMs >= localWait.results[1]!.queuedMs + 100,
+        next.results[1].queuedMs! >= localWait.results[1]!.queuedMs! + 100,
       5000,
     );
     expect(hostWait.results[1]!.durationMs).toBe(0);
@@ -411,10 +411,10 @@ admission.close(); process.exitCode = result.status ?? 1;`,
     expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
     expect(projection.queuedMs).toBeGreaterThan(0);
     expect(done.results[1]!.queuedMs).toBeGreaterThanOrEqual(
-      localWait.results[1]!.queuedMs + projection.queuedMs,
+      localWait.results[1]!.queuedMs! + projection.queuedMs,
     );
     expect(done.results[1]!.durationMs).toBe(projection.executionMs);
-    expect(done.results[1]!.durationMs).toBeLessThan(done.results[1]!.queuedMs);
+    expect(done.results[1]!.durationMs).toBeLessThan(done.results[1]!.queuedMs!);
     expect(done.results[1]!.queueReason).toBeUndefined();
   } finally {
     scheduler.release(blocker);

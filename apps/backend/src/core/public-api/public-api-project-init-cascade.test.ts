@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { PublicProjectSummary } from "@orkestrator/protocol/public-api-resources";
@@ -14,6 +14,11 @@ import {
   PUBLIC_API_SCHEMA_VERSION,
   PUBLIC_OPERATION_RETENTION,
 } from "@orkestrator/protocol/public-api";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 /**
  * `project.init` (local-only repository, no network) and `project.remove`

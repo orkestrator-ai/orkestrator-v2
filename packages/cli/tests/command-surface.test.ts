@@ -385,37 +385,42 @@ print -l -- \${COMPREPLY[@]}`,
     },
   );
 
-  test.skipIf(!Bun.which("fish"))(
-    "fish parses collisions, equals forms, list/duration values and short flags",
-    () => {
-      const script = completionScript("fish", CLIENT_COMMANDS);
-      const complete = (line: string) => {
-        const run = spawnSync("fish", ["-c", `${script}\ncomplete -C '${line}'`], {
-          encoding: "utf8",
-        });
-        expect(run.status).toBe(0);
-        expect(run.stderr).toBe("");
-        return run.stdout
-          .trim()
-          .split("\n")
-          .map((row) => row.split("\t")[0])
-          .sort();
-      };
-      for (const [line, expected] of [
-        ["orkestrator --profile project session comm", ["command", "commands"]],
-        ["orkestrator --connection=session project rem", ["remove"]],
-        ["orkestrator session --profile command comm", ["command", "commands"]],
-        ["orkestrator session prompt --attach project --enq", ["--enqueue"]],
-        ["orkestrator project remove --timeout session --cas", ["--cascade"]],
-      ] as const) {
-        expect(complete(line)).toEqual([...expected].sort());
-      }
-      // The short flag is offered beside its long form. Completing a finished
-      // `-h` is version-dependent (fish 4 offers `--help`, Ubuntu 24.04's fish
-      // 3.7 offers nothing), so ask for the options of a bare `-`.
-      expect(complete("orkestrator session -")).toEqual(expect.arrayContaining(["-h", "--help"]));
-    },
-  );
+  const fishCompletion = (line: string) => {
+    const script = completionScript("fish", CLIENT_COMMANDS);
+    // Completion qualification must not execute the operator's shell profile,
+    // universal variables or vendor startup snippets.
+    const run = spawnSync("fish", ["--no-config", "-c", `${script}\ncomplete -C '${line}'`], {
+      encoding: "utf8",
+      timeout: 4000,
+    });
+    expect(run.status, run.stderr || run.error?.message).toBe(0);
+    expect(run.stderr).toBe("");
+    return run.stdout
+      .trim()
+      .split("\n")
+      .map((row) => row.split("\t")[0])
+      .sort();
+  };
+
+  // Each independent shell gets its own test deadline instead of sharing five
+  // seconds across six cold process launches.
+  test.skipIf(!Bun.which("fish")).each([
+    ["orkestrator --profile project session comm", ["command", "commands"]],
+    ["orkestrator --connection=session project rem", ["remove"]],
+    ["orkestrator session --profile command comm", ["command", "commands"]],
+    ["orkestrator session prompt --attach project --enq", ["--enqueue"]],
+    ["orkestrator project remove --timeout session --cas", ["--cascade"]],
+  ] as const)("fish parses %s", (line, expected) => {
+    expect(fishCompletion(line)).toEqual([...expected].sort());
+  });
+
+  test.skipIf(!Bun.which("fish"))("fish offers short flags beside their long forms", () => {
+    // Completing a finished -h differs between fish versions; ask for the
+    // options of a bare - to qualify both the short and long flag.
+    expect(fishCompletion("orkestrator session -")).toEqual(
+      expect.arrayContaining(["-h", "--help"]),
+    );
+  });
 });
 
 describe("cascade final CLI results", () => {

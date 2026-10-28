@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Environment } from "./models.js";
@@ -8,6 +8,11 @@ import * as baselineGit from "./diff-baseline.js";
 import * as remoteGit from "./git-noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 const harnesses: PublicApiHarness[] = [];
 afterEach(async () => {

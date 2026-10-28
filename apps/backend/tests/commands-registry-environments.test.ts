@@ -1,4 +1,4 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test, setDefaultTimeout } from "bun:test";
 
 import * as shell from "../src/core/shell";
 
@@ -44,6 +44,11 @@ const {
 } = await createCommandFixtures();
 
 import type { Environment } from "./command-fixtures";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 describe("Electron backend environment lifecycle commands", () => {
   /**

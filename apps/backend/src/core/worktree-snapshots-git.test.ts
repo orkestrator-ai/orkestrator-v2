@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,11 @@ import { DiffStatsService } from "./diff-stats-service.js";
 import { createGitFetchScheduler } from "./diff-stats-tracking.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 /**
  * The shared owner against real Git, a real linked worktree and the real

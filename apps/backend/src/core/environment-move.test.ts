@@ -1,4 +1,14 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  mock,
+  spyOn,
+  setDefaultTimeout,
+} from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -25,6 +35,11 @@ import { parseWorktreeMoveRecord } from "./storage-projects.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { removeFixturesAfterSettlement } from "../../tests/fixture-cleanup.js";
 import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-sweep.js";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 // An Arch Linux sweep (0247) found `ork-env-move-*` roots left by runs whose
 // tests passed; on macOS the file leaves none, so the writer is unproven.

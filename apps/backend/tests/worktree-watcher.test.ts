@@ -285,21 +285,32 @@ describe("startWorktreeWatcher", () => {
 
     if (!watcher.watching) return;
 
-    // Wait for the callback caused by one write rather than generating more
-    // mutations while native events are being delivered.
-    await fs.writeFile(path.join(directory, "created.ts"), "export const value = 1;\n");
-    let timeout: ReturnType<typeof setTimeout>;
-    const deadline = new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, 2_000);
-    });
-    try {
-      await Promise.race([changeObserved, deadline]);
-    } finally {
-      clearTimeout(timeout!);
+    // Native watcher registration may settle after startWorktreeWatcher
+    // returns. Keep producing distinct writes until one is observed. The
+    // production settle window is leading-edge and is not reset by bursts.
+    const deadline = Date.now() + 5000;
+    let attempt = 0;
+    while (changes === 0 && Date.now() < deadline) {
+      await fs.writeFile(
+        path.join(directory, `created-${attempt}.ts`),
+        `export const value = ${attempt};\n`,
+      );
+      attempt++;
+      let timeout: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          changeObserved,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, 100);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout!);
+      }
     }
 
     expect(changes).toBeGreaterThan(0);
-  });
+  }, 10_000);
 });
 
 describe("classifyWorktreeChange", () => {

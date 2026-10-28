@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import {
@@ -48,6 +48,11 @@ const {
 } = await createCommandFixtures();
 
 import type { CommandContext, Environment, RepositoryConfig } from "./command-fixtures";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {

@@ -643,7 +643,19 @@ const listen=()=>{
     );
     expect(link.kind).toBe("unregistered");
     await registry.update(b.serviceId, b.definitionRevision, { applicationPort: moved.port });
-    expect((await registry.refresh(b.serviceId)).endpoint).toMatchObject({
+    // Native process inventories are eventually consistent after spawning a
+    // new terminal. Keep refreshing until attribution catches up, rather than
+    // accepting the transient user-registered fallback as the final result.
+    let movedService = await registry.refresh(b.serviceId);
+    const attributionDeadline = Date.now() + 5000;
+    while (
+      movedService.endpoint.ownership !== "managed-process" &&
+      Date.now() < attributionDeadline
+    ) {
+      await Bun.sleep(20);
+      movedService = await registry.refresh(b.serviceId);
+    }
+    expect(movedService.endpoint).toMatchObject({
       state: "available",
       ownership: "managed-process",
       hostPort: moved.port,

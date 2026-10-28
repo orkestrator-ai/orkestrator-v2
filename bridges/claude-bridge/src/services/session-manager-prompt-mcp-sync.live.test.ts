@@ -4,7 +4,7 @@ import { RESULT_SENTINEL } from "./session-manager-prompt-mcp-sync.live-probe.js
 
 // Runs the pinned Claude CLI for real (no credentials, a loopback model) and
 // proves what `session-manager-prompt-mcp-sync.ts` relies on. Run it with
-// `mise run verify:claude:mcp-live` for a focused rerun; also runs in the default suite and CI.
+// `mise run verify:claude:mcp-live` for a focused rerun; also runs in the slow tier (`mise run test:slow`) and CI.
 test("a running Claude CLI unloads removed and renamed MCP servers", async () => {
   const packageRoot = join(import.meta.dir, "..", "..");
   const probePath = join(import.meta.dir, "session-manager-prompt-mcp-sync.live-probe.ts");

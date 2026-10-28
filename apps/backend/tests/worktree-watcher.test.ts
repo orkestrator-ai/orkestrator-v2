@@ -260,7 +260,12 @@ describe("startWorktreeWatcher", () => {
   // is not available on every platform, so an unwatchable environment is a skip
   // and not a failure - that is the documented degradation.
   test("observes a real file write", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ork-watch-"));
+    // Qualify on the checkout's filesystem. System temporary directories can
+    // have different native watch behavior from real worktrees (Bun on macOS
+    // delivers no events for this host's OS temporary directory).
+    const fixtureParent = path.resolve(import.meta.dir, "../../../output/watch-fixtures");
+    await fs.mkdir(fixtureParent, { recursive: true });
+    const directory = await fs.realpath(await fs.mkdtemp(path.join(fixtureParent, "ork-watch-")));
     // Registered first so it runs after the watcher closes (cleanups unwind LIFO).
     cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
     let changes = 0;
@@ -280,19 +285,32 @@ describe("startWorktreeWatcher", () => {
 
     if (!watcher.watching) return;
 
-    const deadline = Date.now() + 2_000;
+    // Native watcher registration may settle after startWorktreeWatcher
+    // returns. Keep producing distinct writes until one is observed. The
+    // production settle window is leading-edge and is not reset by bursts.
+    const deadline = Date.now() + 5000;
     let attempt = 0;
     while (changes === 0 && Date.now() < deadline) {
       await fs.writeFile(
         path.join(directory, `created-${attempt}.ts`),
         `export const value = ${attempt};\n`,
       );
-      attempt += 1;
-      await Promise.race([changeObserved, new Promise<void>((resolve) => setTimeout(resolve, 75))]);
+      attempt++;
+      let timeout: ReturnType<typeof setTimeout>;
+      try {
+        await Promise.race([
+          changeObserved,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, 100);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout!);
+      }
     }
 
     expect(changes).toBeGreaterThan(0);
-  });
+  }, 10_000);
 });
 
 describe("classifyWorktreeChange", () => {

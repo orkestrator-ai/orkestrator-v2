@@ -143,7 +143,9 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
           "copy-stream",
           join(root, "selected"),
           "1",
-          "ws/a.txt",
+          // Pick a regular member: a.txt may be archived as a hard link to
+          // sub/hard.txt, which a selective extraction would omit.
+          "ws/sub/b.bin",
         ],
         {
           input: archiveOf(root),
@@ -163,7 +165,10 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
       expect(
         readFileSync(join(work, `${missing === "listing" ? "root" : "listing"}.status`), "utf8"),
       ).toBe("done\n");
-      expect(readFileSync(join(work, "extract.status"), "utf8")).toBe("0\n");
+      expect(
+        readFileSync(join(work, "extract.status"), "utf8"),
+        readFileSync(join(work, "extract.err"), "utf8"),
+      ).toBe("0\n");
     },
   );
 

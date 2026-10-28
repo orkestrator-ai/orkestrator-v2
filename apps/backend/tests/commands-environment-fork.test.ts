@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -21,6 +21,11 @@ import {
   environmentForkHooks,
   resolveEnvironmentForkBase,
 } from "../src/core/commands-environment-fork";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 const originalIsContainerRunning = environmentForkHooks.isContainerRunning;
 const originalReadContainerHeadCommit = environmentForkHooks.readContainerHeadCommit;

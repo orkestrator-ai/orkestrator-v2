@@ -61,6 +61,14 @@ const VALUE_FLAGS = new Set(["--preload", "-p", "--timings", "--reporter", "--re
  */
 function testSelectors(script: string): string[] {
   const tokens = script.trim().split(/\s+/);
+  // Package scripts run `bun-test-tier.ts <package> <path...> -- <flags>`; its
+  // paths are the selectors, of which the default tier ignores the slow files.
+  const wrapper = tokens.findIndex((token) => token.endsWith("/bun-test-tier.ts"));
+  if (wrapper !== -1) {
+    const end = tokens.indexOf("--");
+    if (end === -1) throw new Error(`Tier wrapper without "--": ${script}`);
+    return tokens.slice(wrapper + 2, end).map((token) => token.replace(/^\.\//, ""));
+  }
   const start = tokens.indexOf("test");
   if (start === -1) throw new Error(`Not a bun test invocation: ${script}`);
 

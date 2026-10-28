@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,11 @@ import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { updateWorktreeLocations } from "./worktree-locations.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { CoordinatorService } from "./coordinator-service.js";
+
+// This slow-tier file creates real repositories/worktrees and waits for
+// subprocess cleanup. Give that fixture work its own bounded host budget;
+// explicit operation deadlines and shorter test budgets remain unchanged.
+setDefaultTimeout(30_000);
 
 const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];

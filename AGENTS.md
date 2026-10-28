@@ -158,7 +158,7 @@ commands. Never use npm or yarn.
 ```bash
 bun install              # NOT npm install
 mise run <task>          # Repository-level task; NOT npm run
-mise run test            # Default suite; NOT bare root-level `bun test`
+mise run test            # Default (deterministic) suite; NOT bare root-level `bun test`
 bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
@@ -190,21 +190,30 @@ the changed paths can affect instead of always running every suite:
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
-  run `mise run test` (the non-iOS suite). It selects the slow area suites
-  itself from the change's import graph; do not add `mise run test:full` to
-  force them.
+  run `mise run test` (the default, deterministic non-iOS suite).
 - Treat dependency, lockfile, `mise.toml`, Turbo, test-runner, or
   `packages/protocol` changes as wide-reaching even when the diff is small;
   they always need `mise run test`.
+- The slow tier (`scripts/test-tiers.ts`: tests that wait on real Git, tmux,
+  Chromium, agent CLIs, servers, or wall-clock time) is on demand. Do not add
+  `mise run test:slow` or `mise run test:full` to a review plan unless the
+  ticket asks for it or the change edits `scripts/test-tiers.ts` or the
+  aggregate runner. When a changed file's owning test is in the slow tier, run
+  that one file through `test:logged` instead of the whole tier.
 - Add a scenario suite from the testing guide's **Verification by change type**
   table only when the change touches that area: browser-visible renderer flows
-  (`mise run test:browser`, or `mise run test:agent:browser:isolated` for
-  real-stack flows), the design canvas (`mise run test:agent:design:isolated`),
-  Electron main/preload/IPC (`mise run test:agent:electron`), Docker lifecycle
-  (`mise run test:agent:docker`), service preview origins, forwarding and
-  fixtures (`mise run test:preview:browser`), the published CLI
+  (`mise run test:browser`), Electron main/preload/IPC
+  (`mise run test:agent:electron`), Docker lifecycle (`mise run test:agent:docker`),
+  service preview origins, forwarding and fixtures
+  (`mise run test:preview:browser`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
+- The real-stack agent suites (`mise run test:agent:browser:isolated` and
+  `mise run test:agent:design:isolated`) boot a disposable profile and drive
+  live agents for many minutes. Never add them by default, including for
+  renderer or design-canvas changes. Add one only when the ticket or user asks
+  for real-stack qualification, or the change edits the real-stack harness
+  itself (`e2e/agent-testing/**` specs or `apps/desktop/scripts/dev-test*`).
 
 #### Documentation-only merge-conflict resolution
 
@@ -1260,7 +1269,9 @@ root and bridge subset commands below.
 ```bash
 mise run test
 mise run test:changed # Fast affected-only feedback; not final handoff proof.
-mise run test:all # Includes the serial iOS suite when Xcode is available.
+mise run test:slow # Only the slow tier (real processes and wall-clock waits); on demand.
+mise run test:full # Default and slow tiers; what CI runs.
+mise run test:all # Both tiers plus the serial iOS suite when Xcode is available.
 mise run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
 mise run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures
 mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
@@ -1269,7 +1280,10 @@ mise run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend t
 ```
 
 Run each command separately so its exit status maps to one suite. `mise run test`
-is the complete concurrent cross-platform suite; `test:all` adds iOS at the end.
+is the default concurrent cross-platform suite without the slow tier;
+`test:full` adds the slow tier and `test:all` adds iOS at the end. Only one
+complete aggregate run holds the host at a time; another worktree's run queues
+until it finishes.
 The explicit `./tests` path avoids package tests.
 
 When running any test, typecheck, build verification, or smoke suite, always
@@ -1366,8 +1380,10 @@ test failure. A browser pass cannot compensate for a broken static or unit check
 
 #### 2. Start or reuse an isolated real stack
 
-For automated review validation, use `mise run test:agent:browser:isolated`, or
-`mise run test:agent:design:isolated` for design-only changes. These repository-owned
+When review validation does need a real stack (see
+[Choosing validation for a change](#choosing-validation-for-a-change)), use
+`mise run test:agent:browser:isolated`, or `mise run test:agent:design:isolated`
+for design-only changes. These repository-owned
 one-shot tasks start a disposable profile, wait for readiness, run the relevant
 browser suite, and always stop/reset it. Select their exact commands and resources
 from `.orkestrator-test-scheduler.json`; do not construct lifecycle shell wrappers.

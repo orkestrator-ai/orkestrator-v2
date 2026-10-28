@@ -15,8 +15,9 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; runs only the [area suites](#area-suites) the change can reach |
-| Test the repository, every area | `mise run test:full` | What CI runs; every area suite regardless of the change |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers) |
+| Test the slow tier | `mise run test:slow` | On demand only: tests that wait on real processes, servers, or wall-clock time |
+| Test both tiers | `mise run test:full` | What CI runs; default and slow tiers |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
@@ -40,30 +41,42 @@ A normal code implementation loop is:
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
 
-### Area suites
+### Test tiers
 
-A few slow, self-contained test sets are area suites, declared in
-`scripts/test-areas.ts`: the real-Chromium transcript-artifact suites and the
-tmux suites. `mise run test` runs an area only when the change can reach it,
-and prints an `AREA RUN` or `AREA SKIP` line with the reason.
+The default suite is meant to be deterministic: its outcome should not depend
+on how busy the host is. Test files that wait on something outside the test
+process — real Git, tmux, Chromium, agent CLIs, servers, sockets, or
+wall-clock sleeps and long timeouts — form the slow tier, declared in
+`scripts/test-tiers.ts`. `*-live.test.ts`, `*.live.test.ts`, and
+`*.integration.test.ts` files are slow by name.
 
-An area runs when any file in its import graph differs from the merge base
-with local `main`, including uncommitted and untracked files. The graph starts
-at the area's test files and its package's preloads and follows every runtime
-import into workspace packages; type-only imports do not count. Each area also
-lists triggers for inputs an import cannot express, such as fixtures read by
-path. Dependency, lockfile, `bunfig.toml`, `tsconfig`, `mise.toml`, Turbo, and
-test-runner changes run every area, and so does anything uncertain: no merge
-base, a Git failure, or an unreadable graph.
+- `mise run test` runs the default tier and prints how to run the rest.
+- `mise run test:slow` runs only the slow tier. Run it on demand, for example
+  when changing the subsystems those tests drive; for one owning file, run that
+  file directly through `test:logged`.
+- `mise run test:full` (CI) and `mise run test:all` run both tiers.
 
-CI runs `mise run test:full`, which sets `ORKESTRATOR_TEST_AREAS=all`, so a
-coupling the graph cannot see is still caught before merge. `test:all` also
-runs every area. Set `ORKESTRATOR_TEST_AREA_BASE` to compare against a branch
-other than `main`.
+Each package's `test:workspace` or `test:bridge` script calls
+`scripts/bun-test-tier.ts`, which reads `ORKESTRATOR_TEST_TIER`
+(`default`, `slow`, or `all`) and either ignores the package's slow files or
+runs only them.
 
-Add an area only for a slow test set whose import graph is narrow. Measure
-first: an area whose graph reaches shared hubs such as storage or the protocol
-package runs on most changes and saves little.
+Package scripts start the tier wrapper with `bun --no-env-file`, so the wrapper
+does not preload development dotenv values into the test process. Its child
+`bun test` loads `.env.test` with the normal test precedence; explicitly inherited
+environment variables still take priority.
+
+Prefer making a slow test deterministic (fake clocks, in-process fakes) over
+adding it to the slow tier. Add a file to the tier when it genuinely needs real
+processes or time; the list started from files whose median duration was 3 s
+or more across recent aggregate runs.
+
+Only one complete aggregate run (`test`, `test:slow`, `test:full`, `test:all`)
+holds the host at a time. Its groups share a host-wide scheduler resource, so
+another worktree's complete run queues until the first finishes; overlapping
+suites made every run slower and pushed subprocess tests into timeouts.
+`test:changed` is exempt, and `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1` opts a run
+out.
 
 `test:changed` is an optimization, not final proof. It uses Turbo's affected
 package graph and Bun's changes from the local `main` ref. Configuration files,
@@ -242,16 +255,17 @@ or start a production backend.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, including the backend, capped at two while port and deadline-sensitive tests need higher-concurrency qualification |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; ordinary packages get up to two Bun workers. The backend gets up to four in the default tier, and retains its two-worker ceiling in slow/all tiers |
 | Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
 All cooperating runs share a host budget: one worker slot per logical core by
 default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
-memory admission budget of 65% of physical memory. This suite still plans at
-most eight Bun workers of its own, including the backend pool, whose
-Node-preloaded integration suites do not load happy-dom. The larger host budget
+memory admission budget of 65% of physical memory. The ordinary worker plan is
+capped at eight slots. The default tier can add up to two backend workers above
+that plan; slow/all tiers retain the backend's two-worker ceiling. Host admission
+reserves the actual group counts, including those additional workers. The larger host budget
 lets other worktrees and review validations run beside it. The protocol check
 reserves one slot too. Groups run together when they fit; smaller machines queue
 groups instead of spawning extra workers.

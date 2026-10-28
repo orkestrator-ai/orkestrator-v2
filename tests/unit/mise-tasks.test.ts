@@ -71,6 +71,7 @@ const ROOT_COMMAND_SURFACE = [
   "publish:cli",
   "preview",
   "test",
+  "test:slow",
   "test:full",
   "test:all",
   "test:logged",
@@ -169,8 +170,15 @@ function workflowFiles(): string[] {
 }
 
 describe("mise task surface", () => {
-  test.each(["test:full", "test:all"])("%s explicitly runs every test area", (task) => {
-    expect(miseTasks()[task]?.env?.ORKESTRATOR_TEST_AREAS).toBe("all");
+  test.each(["test:full", "test:all"])("%s explicitly runs every test tier", (task) => {
+    expect(miseTasks()[task]?.env?.ORKESTRATOR_TEST_TIER).toBe("all");
+  });
+
+  test("the default suite leaves the slow tier to its own task", () => {
+    const tasks = miseTasks();
+    expect(tasks.test?.env?.ORKESTRATOR_TEST_TIER).toBeUndefined();
+    expect(tasks["test:slow"]?.env?.ORKESTRATOR_TEST_TIER).toBe("slow");
+    expect(tasks["test:slow"]?.run).toBe(tasks.test?.run);
   });
 
   test("every command the repository used to expose as a root script is a mise task", () => {

@@ -34,13 +34,15 @@
         "$TURBO_ROOT$/tests/isolate-git-config.ts",
         "$TURBO_ROOT$/tests/isolate-worktree-dir.ts",
         "$TURBO_ROOT$/tests/temp-sweep.ts",
-        "$TURBO_ROOT$/tests/conformance/**"
+        "$TURBO_ROOT$/tests/conformance/**",
+        "$TURBO_ROOT$/scripts/bun-test-tier.ts",
+        "$TURBO_ROOT$/scripts/test-tiers.ts"
       ],
       "outputs": [],
       "passThroughEnv": [
         "ORKESTRATOR_TEST_WORKERS",
         "ORKESTRATOR_TEST_TIMINGS_DIR",
-        "ORKESTRATOR_BACKEND_TEST_IGNORE",
+        "ORKESTRATOR_TEST_TIER",
         "ORKESTRATOR_BACKEND_TEST_WORKERS"
       ]
     },
@@ -53,10 +55,16 @@
         "$TURBO_ROOT$/tests/isolate-git-config.ts",
         "$TURBO_ROOT$/tests/isolate-worktree-dir.ts",
         "$TURBO_ROOT$/tests/temp-sweep.ts",
-        "$TURBO_ROOT$/tests/conformance/**"
+        "$TURBO_ROOT$/tests/conformance/**",
+        "$TURBO_ROOT$/scripts/bun-test-tier.ts",
+        "$TURBO_ROOT$/scripts/test-tiers.ts"
       ],
       "outputs": [],
-      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
+      "passThroughEnv": [
+        "ORKESTRATOR_TEST_WORKERS",
+        "ORKESTRATOR_TEST_TIMINGS_DIR",
+        "ORKESTRATOR_TEST_TIER"
+      ]
     },
     "dev": {
       "cache": false,

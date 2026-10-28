@@ -2,6 +2,7 @@
   "version": 1,
   "cooperativeCommands": [
     "mise run test",
+    "mise run test:slow",
     "mise run test:full",
     "mise run test:all",
     "mise run test:changed"
@@ -21,19 +22,27 @@
       "noProgressTimeoutMs": 300000
     },
     "mise run test:changed": {
-      "resources": ["workspace:*"]
+      "resources": ["workspace:build-outputs"]
     },
     "mise run test": {
-      "resources": ["workspace:*"],
+      "resources": ["workspace:build-outputs"],
       "covers": ["mise run test:changed"]
     },
+    "mise run test:slow": {
+      "resources": ["workspace:build-outputs"]
+    },
     "mise run test:full": {
-      "resources": ["workspace:*"],
-      "covers": ["mise run test", "mise run test:changed"]
+      "resources": ["workspace:build-outputs"],
+      "covers": ["mise run test", "mise run test:slow", "mise run test:changed"]
     },
     "mise run test:all": {
-      "resources": ["workspace:*"],
-      "covers": ["mise run test:full", "mise run test", "mise run test:changed"]
+      "resources": ["workspace:build-outputs"],
+      "covers": [
+        "mise run test:full",
+        "mise run test",
+        "mise run test:slow",
+        "mise run test:changed"
+      ]
     },
     "mise run format:check": {
       "resources": [],
@@ -45,16 +54,19 @@
       "workers": 1,
       "memoryMiB": 512
     },
+    "mise run typecheck": {
+      "resources": []
+    },
     "mise tasks validate": {
       "resources": [],
       "workers": 1,
       "memoryMiB": 128
     },
     "mise run test:browser": {
-      "resources": ["host:tcp:1422", "workspace:output/playwright"]
+      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"]
     },
     "mise run test:logged -- --name browser -- mise run test:browser": {
-      "resources": ["host:tcp:1422", "workspace:output/playwright"]
+      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"]
     }
   }
 }

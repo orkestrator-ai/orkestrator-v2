@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { EXECUTION_POLICY_NARROWINGS } from "../conformance/execution-policy/narrowings";
 import { POLICY_PLATFORMS, POLICY_SHAPES } from "../conformance/execution-policy/shapes";
+import { slowTestFiles } from "../../scripts/test-tiers";
 
 const root = path.resolve(import.meta.dir, "../..");
 
@@ -49,7 +50,13 @@ describe("execution policy conformance runners", () => {
       const { scripts } = JSON.parse(
         readFileSync(path.join(root, RUNNERS[platform].pkg, "package.json"), "utf8"),
       ) as { scripts: Record<string, string> };
-      expect(scripts[RUNNERS[platform].script]).toMatch(/^bun test .*\bsrc\b/);
+      expect(scripts[RUNNERS[platform].script]).toMatch(
+        /^bun --no-env-file \.\.\/\.\.\/scripts\/bun-test-tier\.ts \S+ (?:\S+ )*src\b.* -- /,
+      );
+      // The default tier must keep it: the slow tier runs only on demand.
+      expect(slowTestFiles(root, RUNNERS[platform].pkg)).not.toContain(
+        path.relative(path.join(root, RUNNERS[platform].pkg), runner),
+      );
     },
   );
 

@@ -96,29 +96,38 @@ export async function createCommandFixtures() {
     localServerHooks.spawn = spawnCommand;
     localServerHooks.terminateProcessTree = terminateProcessTree;
   };
+  const retireLocalServerHooks: Array<() => void> = [];
   const runtimeOptions = (
     emit: CommandContext["emit"],
     options: Omit<BackendRuntimeOptions, "emit"> = {},
-  ): BackendRuntimeOptions => ({
-    ...options,
-    emit,
-    localServers: {
-      spawn: (...args) => localServerHooks.spawn(...args),
-      terminateProcessTree: (...args) => localServerHooks.terminateProcessTree(...args),
-      ...options.localServers,
-    },
-    // As in the backend (`index.ts`), so a merged PR's cleanup runs as in production.
-    prMonitor: {
-      scheduleMergeCleanup: (environmentId, context) =>
-        scheduleMergeCleanupRecovery(environmentId, context),
-      ...options.prMonitor,
-    },
-    // As in the backend, so a local tmux launch exports the active account.
-    tmux: {
-      localClaudeConfigDirectory: (context) => tmuxLocalClaudeConfigDirectory(context),
-      ...options.tmux,
-    },
-  });
+  ): BackendRuntimeOptions => {
+    let hooks = localServerHooks;
+    // A startup may finish its failure cleanup after the bounded drain. Keep
+    // that retired runtime on its test's hooks, especially for fake child PIDs.
+    retireLocalServerHooks.push(() => {
+      hooks = { ...localServerHooks };
+    });
+    return {
+      ...options,
+      emit,
+      localServers: {
+        spawn: (...args) => hooks.spawn(...args),
+        terminateProcessTree: (...args) => hooks.terminateProcessTree(...args),
+        ...options.localServers,
+      },
+      // As in the backend (`index.ts`), so a merged PR's cleanup runs as in production.
+      prMonitor: {
+        scheduleMergeCleanup: (environmentId, context) =>
+          scheduleMergeCleanupRecovery(environmentId, context),
+        ...options.prMonitor,
+      },
+      // As in the backend, so a local tmux launch exports the active account.
+      tmux: {
+        localClaudeConfigDirectory: (context) => tmuxLocalClaudeConfigDirectory(context),
+        ...options.tmux,
+      },
+    };
+  };
   /** A runtime for a hand-built context, released with the fixture's own. */
   const createRuntime = (
     emit: CommandContext["emit"] = () => undefined,
@@ -1522,9 +1531,16 @@ fi
 exit 0
 `;
 
+  // Bun captures a hook's budget when registered. Callers configure their file
+  // timeout only after this factory returns, so give teardown its own budget
+  // for the bounded queue drain and the existing owned-process shutdown grace.
   afterEach(async () => {
     try {
-      await shutdownLocalServers();
+      for (const retire of retireLocalServerHooks.splice(0)) retire();
+      // A test can leave a deliberately blocked lifecycle operation behind.
+      // Bound only its queue drain so owned children are still terminated and
+      // the finally cleanup can release every runtime and fixture directory.
+      await shutdownLocalServers({ operationDrainTimeoutMs: 1_000 });
     } finally {
       setAgentSkillsHomeForTesting(undefined);
       // Commands like set_environment_pr arm PR monitoring as a side effect;
@@ -1538,7 +1554,7 @@ exit 0
       ptySpawn.mockClear();
       ptyProcesses.splice(0);
     }
-  });
+  }, ASYNC_TEST_BUDGET_MS);
 
   afterAll(async () => {
     try {

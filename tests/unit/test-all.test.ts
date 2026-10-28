@@ -19,6 +19,7 @@ import {
   main,
   MAX_AGGREGATE_TEST_WORKERS,
   MAX_BACKEND_TEST_WORKERS,
+  MAX_SLOW_BACKEND_TEST_WORKERS,
   MAX_CONSOLE_TAIL_LINE_CHARS,
   MAX_FAILURE_REPORTS,
   MAX_GROUP_OUTPUT_TAIL_BYTES,
@@ -41,7 +42,7 @@ import {
   type TestAllDependencies,
   type TestGroup,
 } from "../../scripts/test-all";
-import { TEST_AREAS, type AreaDecision } from "../../scripts/test-areas";
+import { SLOW_TESTS, TEST_TIER_ENV } from "../../scripts/test-tiers";
 
 interface Invocation {
   name: string;
@@ -63,8 +64,6 @@ function createDependencies(
     cores?: number;
     /** Blocks the named group until released, to observe concurrency. */
     gate?: { name: string; release: Promise<void> };
-    /** Area decisions; defaults to none so runner tests never inspect Git. */
-    selectAreas?: TestAllDependencies["selectAreas"];
   } = {},
 ): {
   dependencies: TestAllDependencies;
@@ -89,7 +88,6 @@ function createDependencies(
       platform: options.platform ?? "linux",
       root: "/test/repository",
       log: (message) => logs.push(message),
-      selectAreas: options.selectAreas ?? (() => []),
       runGroup: async (group: TestGroup, env): Promise<CommandResult> => {
         started.push(group.name);
         invocations.push({
@@ -227,7 +225,7 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--concurrency=2");
     expect(workspaceGroup.env).toEqual({
       [WORKSPACE_WORKERS_ENV]: "2",
-      [BACKEND_WORKERS_ENV]: "2",
+      [BACKEND_WORKERS_ENV]: "3",
     });
     expect(rootGroup.args).toContain("--parallel=1");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
@@ -270,49 +268,42 @@ describe("scripts/test-all.ts", () => {
     expect(dependencies.env[WORKSPACE_WORKERS_ENV]).toBeUndefined();
   });
 
-  test("leaves unselected area suites out of the workspace group and says why", async () => {
-    const [first, second] = TEST_AREAS as [AreaDecision["area"], AreaDecision["area"]];
-    const seen: NodeJS.ProcessEnv[] = [];
-    const { dependencies, invocations, logs } = createDependencies({
-      selectAreas: (root, env) => {
-        expect(root).toBe("/test/repository");
-        seen.push(env);
-        return [
-          { area: first, run: false, reason: "none of its 3 imported files changed since main" },
-          { area: second, run: true, reason: "apps/backend/src/core/x.ts changed" },
-        ];
-      },
-    });
+  test("the default tier leaves slow root tests out and says how to run them", async () => {
+    const { dependencies, invocations, logs } = createDependencies();
 
     expect(await runAllTests(dependencies)).toBe(0);
-    expect(seen).toEqual([dependencies.env]);
-    expect(logs).toContain(
-      `AREA SKIP ${first.name}: none of its 3 imported files changed since main`,
-    );
-    expect(logs).toContain(`AREA RUN ${second.name}: apps/backend/src/core/x.ts changed`);
-    const ignore = invocations.find((entry) => entry.name === WORKSPACE)!.env
-      .ORKESTRATOR_BACKEND_TEST_IGNORE;
-    for (const pattern of first.tests)
-      expect(ignore).toContain(`--path-ignore-patterns=${pattern}`);
-    for (const pattern of second.tests) expect(ignore).not.toContain(pattern);
-    // Only the package that owns the areas receives the variable.
-    for (const entry of invocations.filter((invocation) => invocation.name !== WORKSPACE)) {
-      expect(entry.env.ORKESTRATOR_BACKEND_TEST_IGNORE).toBeUndefined();
-    }
+    const rootArgs = invocations.find((entry) => entry.name === ROOT)!.args;
+    expect(rootArgs.slice(0, 2)).toEqual(["test", "./tests"]);
+    for (const pattern of SLOW_TESTS["."]!)
+      expect(rootArgs).toContain(`--path-ignore-patterns=${pattern}`);
+    expect(logs.some((line) => line.includes("mise run test:slow"))).toBe(true);
   });
 
-  test("runs every area when selection fails", async () => {
+  test("the slow tier runs only slow root files and skips the protocol check", () => {
+    const groups = buildConcurrentGroups(8, false, undefined, "slow");
+    expect(groups.map((group) => group.name)).not.toContain(PROTOCOL);
+    const rootArgs = groups.find((group) => group.name === ROOT)!.args;
+    expect(rootArgs).not.toContain("./tests");
+    expect(rootArgs).toContain("./tests/unit/firewall-policy.test.ts");
+    expect(rootArgs.some((argument) => argument.startsWith("--path-ignore-patterns"))).toBe(false);
+  });
+
+  test("the full tier runs every root test", () => {
+    const rootArgs = buildConcurrentGroups(8, false, undefined, "all").find(
+      (group) => group.name === ROOT,
+    )!.args;
+    expect(rootArgs.slice(0, 2)).toEqual(["test", "./tests"]);
+    expect(rootArgs.some((argument) => argument.startsWith("--path-ignore-patterns"))).toBe(false);
+  });
+
+  test("an unknown tier fails before any group starts", async () => {
     const { dependencies, invocations, logs } = createDependencies({
-      selectAreas: () => {
-        throw new Error("git exploded");
-      },
+      environment: { [TEST_TIER_ENV]: "quick" },
     });
 
-    expect(await runAllTests(dependencies)).toBe(0);
-    expect(logs).toContain("AREA RUN all: selection failed (git exploded)");
-    expect(
-      invocations.find((entry) => entry.name === WORKSPACE)!.env.ORKESTRATOR_BACKEND_TEST_IGNORE,
-    ).toBeUndefined();
+    expect(await runAllTests(dependencies)).toBe(75);
+    expect(invocations).toHaveLength(0);
+    expect(logs.join("\n")).toContain("ORKESTRATOR_TEST_TIER must be one of");
   });
 
   test("removes ambient bridge diagnostics flags from every aggregate group", async () => {
@@ -426,13 +417,13 @@ describe("scripts/test-all.ts", () => {
     expect(largeUi).toEqual(cappedUi);
   });
 
-  test("the backend package stays capped at two workers on large hosts", async () => {
-    // Keep backend subprocess and port-reservation suites at the two-worker
-    // ceiling even when the host has spare capacity.
+  test("the backend package is capped at four workers on large hosts", async () => {
+    // Its subprocess and wall-clock suites run in the slow tier, so the rest
+    // can use a larger pool without starving port-reservation fixtures.
     expect(planWorkers(4).backend).toBe(planWorkers(4).workspace);
-    expect(MAX_BACKEND_TEST_WORKERS).toBe(2);
+    expect(MAX_BACKEND_TEST_WORKERS).toBe(4);
     expect(planWorkers(8).backend).toBe(2);
-    expect(planWorkers(12).backend).toBe(2);
+    expect(planWorkers(12).backend).toBe(4);
     expect(planWorkers(18).backend).toBe(MAX_BACKEND_TEST_WORKERS);
     expect(planWorkers(64).backend).toBe(MAX_BACKEND_TEST_WORKERS);
 
@@ -451,6 +442,25 @@ describe("scripts/test-all.ts", () => {
       `--parallel=\${${BACKEND_WORKERS_ENV}:-\${${WORKSPACE_WORKERS_ENV}:-2}}`,
     );
   });
+
+  test.each(["slow", "all"] as const)(
+    "%s keeps real-process backend suites within their two-worker ceiling",
+    (tier) => {
+      for (const cores of [1, 4, 8, 12, 18, 64]) {
+        const plan = planWorkers(cores, tier);
+        expect(plan.backend).toBeLessThanOrEqual(MAX_SLOW_BACKEND_TEST_WORKERS);
+        const workspace = buildConcurrentGroups(cores, false, undefined, tier).find(
+          (group) => group.name === WORKSPACE,
+        )!;
+        expect(workspace.env?.[BACKEND_WORKERS_ENV]).toBe(String(plan.backend));
+        expect(workspace.workers).toBe(
+          Math.min(cores, plan.backend + plan.workspace * (plan.workspaceConcurrency - 1)),
+        );
+      }
+      expect(planWorkers(18, tier).backend).toBe(2);
+      expect(planWorkers(18, "default").backend).toBe(4);
+    },
+  );
 
   test("runs bridge suites as cacheable Turbo package tasks", () => {
     const groups = buildConcurrentGroups(8);

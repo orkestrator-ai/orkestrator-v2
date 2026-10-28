@@ -169,6 +169,7 @@ import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
+import { createEnvironmentCommandRunner } from "./commands-review.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -1029,6 +1030,15 @@ export class OrkestratorBackend {
         workflowAdmission: this.workflowAdmission,
         artifactDispatch,
         artifactLedger,
+        environmentGit: async (environmentId, args) => {
+          const environment = await storage.getEnvironment(environmentId);
+          if (!environment) throw new Error("Environment not found");
+          return createEnvironmentCommandRunner(environment, context.runtime.environments.fence)(
+            "git",
+            args,
+            60_000,
+          );
+        },
       },
     );
     context.buildPipelines = this.buildPipelines;

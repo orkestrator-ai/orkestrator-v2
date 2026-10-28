@@ -60,6 +60,7 @@ import {
   type WorkflowArtifactTurnOptions,
 } from "./workflow-artifact-turns.js";
 import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
+import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -91,6 +92,12 @@ export type BuildPipelineServiceOptions = {
   artifactDispatch?: ArtifactTurnDispatch;
   /** Publication ledger; stage transcripts place each publication beside its call. */
   artifactLedger?: ArtifactLedgerSource;
+  /**
+   * Git in an environment's worktree, for "Rewind code to here". Not a backend
+   * command on purpose: a renderer must not be able to reset a branch without
+   * the pipeline's own checks. Absent, the action reports itself unavailable.
+   */
+  environmentGit?: EnvironmentGit;
 } & KeyedWorkflowServiceOptions;
 
 export class BuildPipelineContext {

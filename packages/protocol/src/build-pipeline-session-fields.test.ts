@@ -225,4 +225,34 @@ describe("pipeline rewind fields", () => {
       }),
     ).toBe(false);
   });
+
+  test("start commits and code rewinds are validated commit IDs and backup refs", () => {
+    const from = "c".repeat(40);
+    const to = "a".repeat(64);
+    const code = {
+      from,
+      to,
+      droppedCommits: 3,
+      backupRef: "refs/orkestrator/build-pipeline-rewinds/pipeline-1/rewind-1",
+      upstream: "origin/build",
+      upstreamCommitsDropped: 2,
+    };
+    expect(isBuildPipeline(pipelineWith({ headAtStart: to }))).toBe(true);
+    expect(isBuildPipeline(pipelineWith({ headAtStart: "HEAD" }))).toBe(false);
+    expect(isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, code }] })).toBe(true);
+    const { upstream: _upstream, upstreamCommitsDropped: _dropped, ...local } = code;
+    expect(isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, code: local }] })).toBe(
+      true,
+    );
+    for (const invalid of [
+      { ...code, from: "main" },
+      { ...code, droppedCommits: -1 },
+      { ...code, backupRef: "refs/heads/main" },
+      { ...code, upstreamCommitsDropped: 1.5 },
+    ]) {
+      expect(
+        isBuildPipeline({ ...pipelineWith({}), rewinds: [{ ...rewind, code: invalid }] }),
+      ).toBe(false);
+    }
+  });
 });

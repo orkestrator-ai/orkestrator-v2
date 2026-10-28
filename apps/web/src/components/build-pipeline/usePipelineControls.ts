@@ -86,6 +86,22 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
       }
     });
 
+  /** Resolves true once the backend reset the code and restarted the step. */
+  const rewindCode = async (stageId: string, expectedHead: string): Promise<boolean> => {
+    let rewound = false;
+    await run(async () => {
+      try {
+        replacePipeline(await backend.rewindBuildPipelineCode(pipeline!.id, stageId, expectedHead));
+        rewound = true;
+        onFollow();
+        toast.success("Code rewound and step restarted");
+      } catch (error) {
+        toast.error("Failed to rewind the code", { description: describe(error) });
+      }
+    });
+    return rewound;
+  };
+
   const skipStage = (stageId: string) =>
     run(async () => {
       try {
@@ -115,6 +131,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     restartCurrentStage: (label: string | undefined) => void restartCurrentStage(label),
     retryStage: () => void retryStage(),
     restartStage: (stageId: string) => void restartStage(stageId),
+    rewindCode,
     skipStage: (stageId: string) => void skipStage(stageId),
     retryReviewer: (reviewerId: string) => void retryReviewer(reviewerId),
   };

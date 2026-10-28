@@ -8,6 +8,7 @@
 import { mock } from "bun:test";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import type { BuildPipelineCodeRewindPreview } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { restoreMatchMedia } from "../../../../../tests/mocks/match-media";
@@ -132,6 +133,22 @@ export const retryReviewerMock = mock(
     backendRevision: 16,
   }),
 );
+export const previewCodeRewindMock = mock(
+  async (pipelineId: string, stageId: string): Promise<BuildPipelineCodeRewindPreview> => ({
+    pipelineId,
+    sessionKey: stageId,
+    iteration: 0,
+    commits: [],
+    commitCount: 0,
+  }),
+);
+export const rewindCodeMock = mock(
+  async (pipelineId: string, _stageId: string, _expectedHead: string): Promise<BuildPipeline> => ({
+    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    phase: "building" as const,
+    backendRevision: 18,
+  }),
+);
 export const getBuildPipelineConditionalMock = mock(async (_pipelineId: string) => null as unknown);
 export const stopReviewValidationCommandMock = mock(
   async (_environmentId: string, run: NonNullable<BuildPipeline["validationRun"]>) => run,
@@ -147,6 +164,8 @@ mock.module("@/lib/backend", () => ({
   restartBuildPipelineCurrentStep: restartCurrentStepMock,
   retryBuildPipelineStage: retryStageMock,
   restartBuildPipelineStep: restartStepMock,
+  previewBuildPipelineCodeRewind: previewCodeRewindMock,
+  rewindBuildPipelineCode: rewindCodeMock,
   skipBuildPipelineStep: skipStepMock,
   retryBuildPipelineReviewer: retryReviewerMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,

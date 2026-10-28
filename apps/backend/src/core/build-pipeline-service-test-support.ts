@@ -32,6 +32,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
@@ -206,6 +207,8 @@ export async function withService(
     /** Defaults to a local worktree environment. */
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+    /** Git in the environment worktree, for code-rewind tests. */
+    environmentGit?: EnvironmentGit;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
@@ -359,6 +362,7 @@ export async function withService(
     ...(options.assertAgentToolsReachable
       ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
+    ...(options.environmentGit ? { environmentGit: options.environmentGit } : {}),
   });
   try {
     await run(service, storage, provider, invocations, controls);

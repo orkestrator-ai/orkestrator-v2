@@ -67,7 +67,8 @@ import {
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { carriesFixBaseline } from "./build-pipeline-rewind.js";
+import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { forcePushUpstream } from "./build-pipeline-code-rewind.js";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
@@ -863,6 +864,12 @@ export class BuildPipelineSupervisor {
     );
   }
 
+  /** The worktree HEAD before a stage starts, or undefined when it cannot be read. */
+  private async headAtStageStart(pipeline: BuildPipeline): Promise<string | undefined> {
+    const snapshot = await this.probeWorktreeOnce(pipeline);
+    return snapshot.status === "unknown" ? undefined : snapshot.head;
+  }
+
   /**
    * Content identity of the worktree, or undefined when it cannot be observed.
    *
@@ -1468,6 +1475,9 @@ export class BuildPipelineSupervisor {
             ? originalFix.fixWorktreeFingerprintAtStart
             : await this.worktreeFingerprint(pipeline)
           : undefined;
+      // The commit "Rewind code to here" returns to. Best effort and probed
+      // once: a step without it only loses that action.
+      const headAtStart = validationWorktree?.head ?? (await this.headAtStageStart(pipeline));
       const { agent, model, effort, fastMode, modelSubstitution } = override?.settings
         ? await this.agents.settingsForSelection(pipeline, override.settings)
         : await this.agents.stepSettings(pipeline, sessionPhase);
@@ -1559,6 +1569,7 @@ export class BuildPipelineSupervisor {
         ...(fixWorktreeFingerprint
           ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
           : {}),
+        ...(headAtStart ? { headAtStart } : {}),
       };
       pipeline.sessions.push(session);
       pipeline.currentSessionIndex = pipeline.sessions.length - 1;
@@ -2190,8 +2201,12 @@ export class BuildPipelineSupervisor {
       const existingPullRequestUrl = shippedBefore
         ? ((await this.ctx.storage.getEnvironment(pipeline.environmentId))?.prUrl ?? undefined)
         : undefined;
+      const forcePush = forcePushUpstream(pipeline);
       return {
-        prompt: prPrompt(target, existingPullRequestUrl ? { existingPullRequestUrl } : {}),
+        prompt: prPrompt(target, {
+          ...(existingPullRequestUrl ? { existingPullRequestUrl } : {}),
+          ...(forcePush ? { forcePushUpstream: forcePush } : {}),
+        }),
         images: [],
       };
     }
@@ -2265,6 +2280,7 @@ export class BuildPipelineSupervisor {
     session.reviewReport = report;
     session.reviewIssueCounts = pipelineReviewIssueCounts(report);
     pipeline.structuredReview = report;
+    retainRoundReviewReport(pipeline, session, report);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");

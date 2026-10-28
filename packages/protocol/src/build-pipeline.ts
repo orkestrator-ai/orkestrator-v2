@@ -139,7 +139,86 @@ export interface PipelineRewind {
   validationRun?: ReviewValidationRun;
   /** Replacement generation used to deduplicate current-step validation restarts. */
   replacementValidationRunId?: string;
+  /** Set when the user also reset the worktree to the step's starting commit. */
+  code?: PipelineCodeRewind;
 }
+
+/**
+ * The worktree reset a "Rewind code to here" made alongside its rewind.
+ *
+ * The branch was moved from {@link from} to {@link to} with `git reset --hard`
+ * after the user confirmed the commits it drops. The old tip stays reachable
+ * at {@link backupRef}, so the dropped commits can be recovered.
+ */
+export interface PipelineCodeRewind {
+  /** HEAD before the reset. */
+  from: string;
+  /** The commit the rewound step started from, HEAD after the reset. */
+  to: string;
+  /** Commits between {@link to} and {@link from} that left the branch. */
+  droppedCommits: number;
+  /** A ref under `refs/orkestrator/` that keeps {@link from} reachable. */
+  backupRef: string;
+  /**
+   * The branch's upstream when it had one, and how many of its commits are not
+   * in {@link to}. A non-zero count means the next Ship must force-push (with
+   * lease) to update the existing branch and pull request.
+   */
+  upstream?: string;
+  upstreamCommitsDropped?: number;
+}
+
+/** Commits a code-rewind preview lists; the total is reported separately. */
+export const MAX_CODE_REWIND_PREVIEW_COMMITS = 50;
+/** Uncommitted paths a code-rewind preview names when it refuses a dirty worktree. */
+export const MAX_CODE_REWIND_PREVIEW_PATHS = 20;
+/** Longest commit subject a code-rewind preview carries. */
+export const MAX_CODE_REWIND_COMMIT_SUBJECT_LENGTH = 200;
+
+/** What "Rewind code to here" would do, shown before the user confirms it. */
+export interface BuildPipelineCodeRewindPreview {
+  pipelineId: string;
+  /** The session key of the step the code would rewind to. */
+  sessionKey: string;
+  /** The round the step belongs to. */
+  iteration: number;
+  /** The commit the step started from. */
+  targetCommit?: string;
+  /** The worktree HEAD the preview read; the confirmed rewind must still find it. */
+  head?: string;
+  /** Commits the reset drops, newest first, at most {@link MAX_CODE_REWIND_PREVIEW_COMMITS}. */
+  commits: { sha: string; subject: string }[];
+  commitCount: number;
+  /** The branch's upstream and how many of its commits a force push would remove. */
+  upstream?: { ref: string; droppedCommits: number };
+  /** The environment's pull request, when this pipeline shipped one. */
+  pullRequest?: { url: string; state: string };
+  /** Uncommitted paths that block the reset, at most {@link MAX_CODE_REWIND_PREVIEW_PATHS}. */
+  uncommittedPaths?: string[];
+  /** Why the rewind cannot run now; the confirmation is disabled when set. */
+  blocked?: string;
+}
+
+/**
+ * One round's accepted consolidated review report, kept so restarting that
+ * round's Address can rerun alone after a later round replaced
+ * {@link BuildPipeline.structuredReview}.
+ */
+export interface PipelineRoundReviewReport {
+  iteration: number;
+  /** The review (or consolidation) session that filed the report. */
+  sessionKey: string;
+  report: StructuredReviewReport;
+}
+
+/**
+ * Bytes of serialized reports {@link BuildPipeline.roundReviewReports} may hold
+ * in total. The oldest rounds' copies are dropped first; a report larger than
+ * the budget is not copied, and restarting its Address reruns the review.
+ */
+export const MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES = 1024 * 1024;
+/** Rounds run from 0 to `maxIterations`, so a record has at most this many. */
+export const MAX_PIPELINE_ROUND_REVIEW_REPORTS = 11;
 
 /** The newest rewinds a record keeps; older entries are dropped, their sessions stay superseded. */
 export const MAX_PIPELINE_REWINDS = 50;
@@ -572,6 +651,12 @@ export interface PipelineSession {
   /** When {@link supersededBy} was set. */
   supersededAt?: string;
   /**
+   * The worktree HEAD when this step started, best effort. "Rewind code to
+   * here" resets the branch to it. Absent when the probe failed, for fan-out
+   * reviewers and consolidation, and on records written before it existed.
+   */
+  headAtStart?: string;
+  /**
    * The verdict this verify session returned, kept so a rewind to the fix
    * that followed it can hand that fix its own round's feedback. The pipeline
    * fields hold only the newest verdict. Absent on other phases and on
@@ -979,6 +1064,12 @@ export interface BuildPipeline {
   kanbanReactivationRetryAt?: string;
   /** Restarts that rewound the pipeline, oldest first, at most {@link MAX_PIPELINE_REWINDS}. */
   rewinds?: PipelineRewind[];
+  /**
+   * Accepted consolidated review reports by round, at most one per round and
+   * {@link MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES} in total. A copy counts only
+   * while its session is the newest live review session of its round.
+   */
+  roundReviewReports?: PipelineRoundReviewReport[];
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1323,6 +1414,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.supersededBy === undefined ||
       (isNonBlankString(value.supersededBy) && value.supersededBy.length <= 128)) &&
     (value.supersededAt === undefined || isIsoDate(value.supersededAt)) &&
+    (value.headAtStart === undefined || isCommitId(value.headAtStart)) &&
     (value.verificationResult === undefined ||
       (value.phase === "verify" &&
         (value.verificationResult === "pass" || value.verificationResult === "fail"))) &&
@@ -1596,7 +1688,38 @@ function isPipelineRewind(value: unknown): value is PipelineRewind {
     (value.replacementValidationRunId === undefined ||
       (isNonBlankString(value.replacementValidationRunId) &&
         value.replacementValidationRunId.length <= 512)) &&
-    (value.validationRun === undefined || isReviewValidationRun(value.validationRun))
+    (value.validationRun === undefined || isReviewValidationRun(value.validationRun)) &&
+    (value.code === undefined || isPipelineCodeRewind(value.code))
+  );
+}
+
+function isCommitId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40,64}$/i.test(value);
+}
+
+function isPipelineCodeRewind(value: unknown): value is PipelineCodeRewind {
+  return (
+    isRecord(value) &&
+    isCommitId(value.from) &&
+    isCommitId(value.to) &&
+    isNonNegativeInteger(value.droppedCommits) &&
+    isNonBlankString(value.backupRef) &&
+    value.backupRef.startsWith("refs/orkestrator/") &&
+    value.backupRef.length <= 256 &&
+    (value.upstream === undefined ||
+      (isNonBlankString(value.upstream) && value.upstream.length <= 256)) &&
+    (value.upstreamCommitsDropped === undefined ||
+      isNonNegativeInteger(value.upstreamCommitsDropped))
+  );
+}
+
+function isPipelineRoundReviewReport(value: unknown): value is PipelineRoundReviewReport {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.iteration) &&
+    isNonBlankString(value.sessionKey) &&
+    value.sessionKey.length <= 512 &&
+    isStructuredReviewReport(value.report)
   );
 }
 
@@ -1693,6 +1816,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       (!Array.isArray(value.rewinds) ||
         value.rewinds.length > MAX_PIPELINE_REWINDS ||
         !value.rewinds.every(isPipelineRewind))) ||
+    (value.roundReviewReports !== undefined &&
+      (!Array.isArray(value.roundReviewReports) ||
+        value.roundReviewReports.length > MAX_PIPELINE_ROUND_REVIEW_REPORTS ||
+        !value.roundReviewReports.every(isPipelineRoundReviewReport))) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

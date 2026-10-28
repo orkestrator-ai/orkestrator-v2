@@ -90,7 +90,11 @@ import {
   threadToolHistoryVerdict,
   type ToolHistoryVerdict,
 } from "../sessions/tool-history-guard.js";
-import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
+import {
+  type McpToolAvailability,
+  ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
+  waitForMcpToolAvailability,
+} from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
@@ -1672,7 +1676,7 @@ export class AppServerEngine implements CodexEngine {
                     url: new URL("/design-mcp", config.agentMcp.url).toString(),
                     http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
                     required: false,
-                    startup_timeout_sec: 3,
+                    startup_timeout_sec: ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
                   },
                 }
               : {}),
@@ -1685,7 +1689,7 @@ export class AppServerEngine implements CodexEngine {
                     url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, config.agentMcp.url).toString(),
                     http_headers: { Authorization: `Bearer ${config.agentMcp.artifacts.token}` },
                     required: false,
-                    startup_timeout_sec: 3,
+                    startup_timeout_sec: ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
                     // It serves only the artifact tools, which bypass the
                     // approval policy on every Orkestrator server.
                     default_tools_approval_mode: "approve",
@@ -1696,7 +1700,7 @@ export class AppServerEngine implements CodexEngine {
               url: config.agentMcp.url,
               http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
               required: false,
-              startup_timeout_sec: 3,
+              startup_timeout_sec: ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
               // `approve` bypasses the thread's approval policy, so reserve it
               // for an auto-approved execution mode, the trusted
               // coordinator profile, or a backend-selected tool paired with

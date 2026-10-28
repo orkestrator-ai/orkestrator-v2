@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import {
   classifyMcpToolAvailability,
+  MCP_TOOL_AVAILABILITY_TIMEOUT_MS,
+  ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC,
   waitForMcpToolAvailability,
 } from "./mcp-tool-availability.js";
 
@@ -76,6 +78,33 @@ describe("waitForMcpToolAvailability", () => {
     );
     expect(availability).toEqual({ state: "available" });
     expect(calls).toBe(2);
+  });
+
+  test("the default wait outlasts the handshake budget Codex gives the server", () => {
+    expect(MCP_TOOL_AVAILABILITY_TIMEOUT_MS).toBeGreaterThan(
+      ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC * 1_000,
+    );
+  });
+
+  test("a handshake slowed by host load still ends available within the default wait", async () => {
+    // One second per listing: the server stays `starting` for 10 s, twice the
+    // old 5 s wait and over three times the old 3 s handshake budget.
+    let clock = 0;
+    let calls = 0;
+    const availability = await waitForMcpToolAvailability(
+      async () => {
+        clock += 1_000;
+        calls += 1;
+        return calls <= 10
+          ? server({ runtimeStatus: "starting" })
+          : server({ runtimeStatus: "connected", tools: { [TOOL]: { name: TOOL } } });
+      },
+      "orkestrator",
+      TOOL,
+      { pollMs: 1, now: () => clock },
+    );
+    expect(availability).toEqual({ state: "available" });
+    expect(calls).toBe(11);
   });
 
   test("a server still starting at the deadline is unverified, not missing", async () => {

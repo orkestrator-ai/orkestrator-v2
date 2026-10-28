@@ -170,7 +170,7 @@ export function MessageShell({
             className={cn(
               "min-w-0 break-words",
               isUser
-                ? "rounded-xl border border-border/70 bg-zinc-800/80 px-3.5 py-1.5 shadow-sm [&_.prose_p]:my-0"
+                ? "rounded-xl border border-border/70 bg-zinc-800/80 px-3.5 py-1.5 shadow-sm [&_.prose_p]:my-2 [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0"
                 : "w-full",
               isUser && onUserLongPress && "[-webkit-touch-callout:none]",
             )}

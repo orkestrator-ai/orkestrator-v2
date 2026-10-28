@@ -24,7 +24,10 @@ import {
   renameEnvironmentFromPrompt,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
-import { PendingRenameFailureLog } from "./pending-rename-failure-log.js";
+import {
+  PendingRenameFailureLog,
+  pendingRenameRetryDelayMs,
+} from "./pending-rename-failure-log.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
@@ -189,10 +192,14 @@ export function createCommandRegistry(
         if (renamed) pendingEnvironmentRenameFailures.succeeded(environmentId);
       })
       .catch((error) => {
-        // Keep the durable intent and bound automatic retries. Authentication or
-        // model outages must not spin `codex exec` on the two-second backend sweep.
-        pendingEnvironmentRenameRetryAt.set(environmentId, Date.now() + 30_000);
-        pendingEnvironmentRenameFailures.failed(environmentId, intent, error);
+        // Keep the durable intent and back off automatic retries. A signed-out,
+        // missing or offline Codex must not spawn `codex exec` every 30 seconds
+        // for as long as the environment runs.
+        const failures = pendingEnvironmentRenameFailures.failed(environmentId, intent, error);
+        pendingEnvironmentRenameRetryAt.set(
+          environmentId,
+          Date.now() + pendingRenameRetryDelayMs(failures),
+        );
         throw error;
       })
       .finally(() => {

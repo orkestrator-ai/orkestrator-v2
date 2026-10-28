@@ -34,6 +34,22 @@ export function summarizePendingRenameFailure(error: unknown): PendingRenameFail
   return { reason: "error", error: error instanceof Error ? error.name : typeof error };
 }
 
+/** The first retry after a failed first-prompt rename. */
+export const PENDING_RENAME_RETRY_BASE_MS = 30_000;
+/** The longest wait between retries, so a later sign-in is picked up within it. */
+export const PENDING_RENAME_RETRY_MAX_MS = 30 * 60_000;
+
+/**
+ * How long to wait after the `failures`-th consecutive failure for one intent:
+ * 30 seconds, doubling, capped at 30 minutes. Every failure class backs off
+ * the same way, because a refused login and a transient outage both reach
+ * here as a non-zero `codex exec` exit and cannot be told apart.
+ */
+export function pendingRenameRetryDelayMs(failures: number): number {
+  const doublings = Math.max(0, Math.floor(failures) - 1);
+  return Math.min(PENDING_RENAME_RETRY_BASE_MS * 2 ** doublings, PENDING_RENAME_RETRY_MAX_MS);
+}
+
 function isPowerOfTwo(value: number): boolean {
   return (value & (value - 1)) === 0;
 }
@@ -41,10 +57,11 @@ function isPowerOfTwo(value: number): boolean {
 /**
  * Logs first-prompt naming failures once per environment and intent.
  *
- * A failed rename retries about every 30 seconds while its intent is pending,
- * so a signed-out or offline Codex would otherwise log on every retry. The
- * first failure for an intent is logged in full; later ones only as a count,
- * at the 2nd, 4th, 8th... failure, and once more when a retry succeeds.
+ * A failed rename retries while its intent is pending (see
+ * {@link pendingRenameRetryDelayMs}), so a signed-out or offline Codex would
+ * otherwise log on every retry. The first failure for an intent is logged in
+ * full; later ones only as a count, at the 2nd, 4th, 8th... failure, and once
+ * more when a retry succeeds.
  */
 export class PendingRenameFailureLog {
   private readonly failures = new Map<string, { intent: string; count: number }>();
@@ -53,13 +70,14 @@ export class PendingRenameFailureLog {
     private readonly warn: (...data: unknown[]) => void = (...data) => console.warn(...data),
   ) {}
 
-  failed(environmentId: string, intent: string, error: unknown): void {
+  /** Records a failure and returns how many in a row this intent has had. */
+  failed(environmentId: string, intent: string, error: unknown): number {
     const summary = summarizePendingRenameFailure(error);
     const previous = this.failures.get(environmentId);
     if (previous?.intent !== intent) {
       this.failures.set(environmentId, { intent, count: 1 });
       this.warn(PENDING_RENAME_FAILED_MESSAGE, { environmentId, ...summary });
-      return;
+      return 1;
     }
     previous.count += 1;
     if (isPowerOfTwo(previous.count)) {
@@ -69,6 +87,7 @@ export class PendingRenameFailureLog {
         reason: summary.reason,
       });
     }
+    return previous.count;
   }
 
   succeeded(environmentId: string): void {

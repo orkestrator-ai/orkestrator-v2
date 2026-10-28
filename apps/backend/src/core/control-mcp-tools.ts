@@ -11,6 +11,7 @@ import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
@@ -489,6 +490,10 @@ const OPERATOR_INSTRUCTIONS =
   "When a result is confirmation-required, read its description aloud, get explicit confirmation, then repeat the identical call with confirmToken. " +
   "Report that work started and check back later with run_status rather than waiting. find_actions and describe_action reveal every other action; run_action runs one.";
 
+/** A coordinator's worker prompts ask for commits, never a pull request (see COORDINATOR_PR_RULE). */
+const COORDINATOR_WORKER_PROMPT_NOTE =
+  "Never ask the worker to open a pull request: ask it to commit and report back; the pull request comes from a PR tab after review.";
+
 export async function createControlMcp(
   invoke: ControlMcpInvoker,
   coordinatorScope?: CoordinatorControlScope,
@@ -514,6 +519,8 @@ export async function createControlMcp(
           : "") +
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
+        // Side agents launch nothing, so the PR rule is the main coordinator's.
+        (coordinatorScope?.capabilities.includes("environments") ? ` ${COORDINATOR_PR_RULE}` : "") +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : "") +
         (operator ? ` ${OPERATOR_INSTRUCTIONS}` : ""),
     },
@@ -1288,7 +1295,7 @@ export async function createControlMcp(
         "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
         `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort; advisory selections are pending startup. ` +
         (coordinatorScope
-          ? "Coordinator launches require baseBranch and baseCommit from get_launch_options. "
+          ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. ${COORDINATOR_WORKER_PROMPT_NOTE} `
           : "") +
         "Reuse requestId when retrying.",
       inputSchema: z.object({
@@ -1514,7 +1521,8 @@ export async function createControlMcp(
       title: "Launch a job in an existing environment",
       description:
         "Create a native-agent tab and exactly-once initial turn that can execute commands, modify workspace files, and use configured network access. " +
-        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run.`,
+        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run.` +
+        (coordinatorScope ? ` ${COORDINATOR_WORKER_PROMPT_NOTE}` : ""),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
@@ -1629,7 +1637,8 @@ export async function createControlMcp(
     {
       title: "Send a prompt to an existing agent tab",
       description:
-        "Dispatch an exactly-once prompt to an autonomous coding agent that can execute commands, modify workspace files, and use configured network access.",
+        "Dispatch an exactly-once prompt to an autonomous coding agent that can execute commands, modify workspace files, and use configured network access." +
+        (coordinatorScope ? ` ${COORDINATOR_WORKER_PROMPT_NOTE}` : ""),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),

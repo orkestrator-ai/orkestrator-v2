@@ -32,6 +32,8 @@ import {
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
+import { launchWorkerPr } from "./coordinator-pr.js";
+import { coordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
 import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
@@ -41,8 +43,8 @@ import { editWorkerTab, openLoopedReviewTab, openWorkerBrowserTab } from "./work
 /**
  * Backend commands behind the coordinator's worker surfaces (todo 0142):
  * terminal and tmux launch, browser preview launch and navigation, tab
- * editing, looped review, feature-plan launch, and the request to copy the
- * checkout's uncommitted changes into a worker.
+ * editing, looped review, the PR tab, feature-plan launch, and the request
+ * to copy the checkout's uncommitted changes into a worker.
  *
  * Every command takes the authenticated `scope` the Control MCP server built
  * from the coordinator's credential, revalidates it, and acts only on a
@@ -427,6 +429,46 @@ export function registerCoordinatorSurfaceActions(
       return { workflow: loopedSummary(cancelled) };
     });
   }
+
+  /**
+   * The Create PR button for a worker: the PR tab is the only place a
+   * coordinator's work becomes a pull request, after review. A build
+   * pipeline raises its own while active; forks and terminal leftovers can publish.
+   */
+  register("create_coordinator_pr", async (args, context) => {
+    const caller = await coordinatorCaller(args.scope, context);
+    const input = record(args.input, "the pull request input");
+    const requestId = asNonBlankString(input.requestId, "requestId");
+    const environmentId = asNonBlankString(input.environmentId, "environmentId");
+    const targetBranch = optionalText(input.targetBranch, "targetBranch", 500);
+    const nodeId = optionalText(input.nodeId, "nodeId", 200);
+    // Resolve an explicit self ID just as the other node-qualified tools do.
+    const remote =
+      nodeId && (await context.nodes?.status())?.nodeId !== nodeId
+        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        : undefined;
+    if (remote) await remote.environment(environmentId);
+    else await requireCoordinatorWorker(context, caller, environmentId);
+    return withCoordinatorReceipt(
+      context,
+      caller,
+      { requestId, action: "create-pr", payload: { environmentId, targetBranch, nodeId } },
+      async () => {
+        const launch = {
+          environmentId,
+          projectId: remote?.projectId ?? caller.projectId,
+          targetBranch,
+          requestId: `coordinator-pr:${requestKey(caller, requestId)}`,
+        };
+        if (remote)
+          return {
+            ...(await remote.call<JsonRecord>("create_controller_pr", launch, launch.requestId)),
+            nodeId: remote.nodeId,
+          };
+        return launchWorkerPr(context, dependencies, launch);
+      },
+    );
+  });
 
   register("launch_coordinator_feature_plan", async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);

@@ -76,6 +76,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "start_coordinator_looped_review",
   "get_coordinator_looped_review",
   "cancel_coordinator_looped_review",
+  "create_coordinator_pr",
   "launch_coordinator_feature_plan",
   "get_coordinator_feature_plan",
   "custom_fix_coordinator_multi_review_action",
@@ -123,6 +124,7 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       // framing and presentation are its to give, not a workspace client's.
       "create_controller_environment",
       "start_controller_build_pipeline",
+      "create_controller_pr",
       "launch_controller_multi_review",
       "controller_multi_review_surface",
       "start_controller_multi_review",

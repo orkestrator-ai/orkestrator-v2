@@ -84,6 +84,7 @@ import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orke
 import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_PR_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
@@ -977,6 +978,7 @@ export class NativeAgentService {
             launchBaseLine +
             `${COORDINATOR_WORKER_PROMPT_FORMAT_RULE}\n` +
             `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
+            `${COORDINATOR_PR_RULE}\n` +
             `${COORDINATOR_AGENTS_MD_RULE}\n` +
             `${COORDINATOR_ASYNC_CONTRACT}\n`
           : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;

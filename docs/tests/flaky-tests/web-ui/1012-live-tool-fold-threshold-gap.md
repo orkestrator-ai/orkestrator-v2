@@ -34,3 +34,16 @@ instead of `release/2.0`), also recorded in aggregate case 0958.
 Command: `ORKESTRATOR_E2E_PORT=24982 mise run test:logged -- --name recorded-browser-failures -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/ToolGroupFold.spec.ts --workers=1`.
 Evidence: `orkestrator-test-run.AJChkk/recorded-browser-failures.log.gz` under
 the host temporary directory. No assertion, timeout or skip changed.
+
+## Coordinator PR-tab validation, 2026-10-28
+
+The browser suite on branch `pr-review-process-8b9b35a14ee2-r1` (backend
+coordinator prompts and PR commands; no web or fixture code) had a
+ToolGroupFold failure. With nine workers and five repetitions at load average
+40–86, the merged branch repeated the mobile gap at 57 px, and detached
+`origin/main` `4588fa511` repeated it twice at 57 px in ten repetitions (with
+0793's line-153 case). Command:
+`ORKESTRATOR_E2E_PORT=<free port> bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --repeat-each=10 --workers=9`.
+Evidence: `.orkestrator/fix-validation/r2/baseline-toolgroupfold-2.log` and
+`branch-toolgroupfold.log` in that checkout. No assertion, timeout or skip
+changed.

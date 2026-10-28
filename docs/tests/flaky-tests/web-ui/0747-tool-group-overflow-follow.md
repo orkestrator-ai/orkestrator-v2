@@ -122,3 +122,15 @@ The original component run reported 734 passed, 102 skipped and six failed. The 
   `orkestrator-test-run.vucbt3/merge-native-branch-owner.log.gz` under the same
   host temporary directory. This remains the known non-green native picker
   limitation, not a new confirmed flake.
+
+## Coordinator PR-tab validation, 2026-10-28
+
+- **Recurrence:** with nine workers and five repetitions, detached
+  `origin/main` `4588fa511` failed this case three times (mobile and desktop,
+  704 instead of 0 at line 471); the merged branch
+  `pr-review-process-8b9b35a14ee2-r1`, which changes no web or fixture code,
+  failed it twice the same way.
+- **Evidence:** `.orkestrator/fix-validation/r2/baseline-toolgroupfold.log`
+  and `branch-toolgroupfold.log` in that checkout.
+- **Assessment:** pre-existing on the target branch; no assertion, deadline or
+  skip changed.

@@ -395,6 +395,149 @@ describe("looped review", () => {
   });
 });
 
+describe("create_coordinator_pr", () => {
+  function stubPrLaunch() {
+    const launch = mock(async (args: Record<string, unknown>) => ({
+      status: "accepted",
+      tabId: `pr-tab:${String(args.requestId)}`,
+    }));
+    const watch = mock(async () => ({}));
+    commands.set("launch_native_agent_job", launch as unknown as CommandHandler);
+    commands.set("pr_monitor_watch", watch as unknown as CommandHandler);
+    return { launch, watch };
+  }
+
+  test("opens the worker's PR tab once per request, against the PR base branch", async () => {
+    const { launch, watch } = stubPrLaunch();
+    const input = { requestId: "pr", environmentId: workerId };
+    const result = await call("create_coordinator_pr", { input });
+    expect(result).toMatchObject({
+      environmentId: workerId,
+      status: "launched",
+      tabId: expect.stringMatching(/^pr-tab:coordinator-pr:/),
+      targetBranch: "main",
+    });
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      environmentId: workerId,
+      title: "PR",
+      conversationMode: "build",
+      activateTab: false,
+      prompt: expect.stringContaining("main"),
+    });
+    expect(watch).toHaveBeenCalledWith(
+      { environmentId: workerId, mode: "create-pending" },
+      context,
+    );
+    expect(await call("create_coordinator_pr", { input })).toMatchObject({ replayed: true });
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([undefined, "release/next"])(
+    "uses repository PR defaults and an explicit target %p",
+    async (targetBranch) => {
+      const { launch } = stubPrLaunch();
+      await storage.updateRepositoryConfig(scope.projectId, {
+        defaultBranch: "main",
+        prBaseBranch: "develop",
+      });
+      const result = await call("create_coordinator_pr", {
+        input: { requestId: "branch", environmentId: workerId, targetBranch },
+      });
+      expect(result.targetBranch).toBe(targetBranch ?? "develop");
+      expect(launch.mock.calls[0]![0].prompt).toContain(targetBranch ?? "develop");
+    },
+  );
+
+  test.each(["deleted", "fork", "failed", "complete"])(
+    "allows a worker left by a %s pipeline",
+    async (kind) => {
+      const { launch } = stubPrLaunch();
+      const worker = createEnvironment(scope.projectId, {
+        name: "pipeline-leftover",
+        environmentType: "local",
+        buildPipelineId: "old-pipeline",
+      });
+      await storage.addEnvironment(worker);
+      expect((await storage.getEnvironment(worker.id))?.buildPipelineId).toBe("old-pipeline");
+      if (kind !== "deleted")
+        await storage.saveBuildPipeline(
+          "old-pipeline",
+          scope.projectId,
+          kind === "fork" ? homeId : worker.id,
+          1,
+          { phase: kind === "fork" ? "building" : kind },
+        );
+      expect(
+        await call("create_coordinator_pr", {
+          input: { requestId: "orphan", environmentId: worker.id },
+        }),
+      ).toMatchObject({ status: "launched" });
+      expect(launch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test.each(["rejected", "throw", "pending", "unacknowledged"])(
+    "releases a %s launch receipt and retries the same durable job",
+    async (kind) => {
+      const { launch, watch } = stubPrLaunch();
+      const jobIds = new Set<string>();
+      commands.set("launch_native_agent_job", async (args) => {
+        jobIds.add(String(args.requestId));
+        if (jobIds.size !== 1) throw new Error("duplicate job identity");
+        // Even a lost answer after a job starts must reuse the same job ID.
+        if (launch.mock.calls.length === 0) {
+          await launch(args);
+          if (kind === "throw") throw new Error("lost acknowledgement");
+          return kind === "unacknowledged" ? {} : { status: kind, error: "not ready" };
+        }
+        return launch(args);
+      });
+      const input = { requestId: "retry", environmentId: workerId };
+      await expect(call("create_coordinator_pr", { input })).rejects.toThrow(
+        kind === "throw"
+          ? "lost acknowledgement"
+          : kind === "unacknowledged"
+            ? "did not acknowledge"
+            : "not ready",
+      );
+
+      expect(watch).not.toHaveBeenCalled();
+      expect(await call("create_coordinator_pr", { input })).toMatchObject({ status: "launched" });
+      expect(jobIds.size).toBe(1);
+      expect(await call("create_coordinator_pr", { input })).toMatchObject({ replayed: true });
+      expect(launch).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test("leaves a build pipeline's PR to the pipeline and an existing PR alone", async () => {
+    const { launch } = stubPrLaunch();
+    await expect(
+      call("create_coordinator_pr", { input: { requestId: "home", environmentId: homeId } }),
+    ).rejects.toThrow("project checkout");
+    const pipelineWorker = createEnvironment(scope.projectId, {
+      name: "pipeline-worker",
+      environmentType: "local",
+      buildPipelineId: "pipeline-1",
+    });
+    await storage.addEnvironment(pipelineWorker);
+    await storage.saveBuildPipeline("pipeline-1", scope.projectId, pipelineWorker.id, 1, {
+      phase: "building",
+    });
+    await expect(
+      call("create_coordinator_pr", {
+        input: { requestId: "pipe", environmentId: pipelineWorker.id },
+      }),
+    ).rejects.toThrow("build pipeline");
+    await storage.updateEnvironment(workerId, { prUrl: "https://github.com/acme/repo/pull/7" });
+    expect(
+      await call("create_coordinator_pr", {
+        input: { requestId: "exists", environmentId: workerId },
+      }),
+    ).toMatchObject({ status: "skipped", prUrl: "https://github.com/acme/repo/pull/7" });
+    expect(launch).not.toHaveBeenCalled();
+  });
+});
+
 describe("feature plan launch", () => {
   test("creates a plan and starts planning once per request", async () => {
     const startPlanning = mock(async (args: Record<string, unknown>) => ({

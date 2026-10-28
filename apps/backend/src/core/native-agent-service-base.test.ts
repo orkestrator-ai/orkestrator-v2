@@ -51,6 +51,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_PR_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -3623,6 +3624,8 @@ describe("NativeAgentService", () => {
       // Without this a coordinator fills every model and effort field it is
       // shown, and every worker silently runs a selection the user never chose.
       expect(sent).toContain(COORDINATOR_LAUNCH_DEFAULTS_RULE);
+      // Without this a coordinator asks build workers to raise the PR before review.
+      expect(sent).toContain(COORDINATOR_PR_RULE);
       // Worker prompts are shown verbatim in the worker transcript.
       expect(sent).toContain(COORDINATOR_WORKER_PROMPT_FORMAT_RULE);
       // The main coordinator offers to save durable decisions, batched and

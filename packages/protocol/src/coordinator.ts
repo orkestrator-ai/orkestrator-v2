@@ -331,6 +331,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "cancel_multi_review",
   "cancel_schedule",
   "compare_project_files",
+  "create_pr",
   "create_schedule",
   "create_ticket",
   "custom_fix_multi_review",
@@ -410,6 +411,17 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
   "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+
+/**
+ * Who raises a pull request, told to every main coordinator verbatim.
+ *
+ * Coordinators otherwise ended build instructions with "prepare commit + PR",
+ * so the build worker opened a pull request before any review ran. A pull
+ * request comes only from a PR tab: the Multi Review's auto-PR, a build
+ * pipeline's own PR step, or `create_pr` once the review is settled.
+ */
+export const COORDINATOR_PR_RULE =
+  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";

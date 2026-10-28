@@ -714,6 +714,30 @@ approves a `request_root_changes` request (see
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
+A worker never raises a pull request; a **PR tab** does, after review. In a
+prompt environment the flow is build → review or Multi Review → fix → PR →
+resolve conflicts:
+
+- A Multi Review with auto-fix and auto-PR opens the PR tab itself (see
+  [Status wakes](#status-wakes)).
+- Otherwise the coordinator calls `create_pr` (see
+  [Worker surfaces](#worker-surfaces)) once it has been told the review and
+  its fix finished. Pass `nodeId` for a worker on a connected node; that node
+  validates its project and worker and uses its own PR base branch and agent
+  defaults. Retries reuse the same PR job on that node.
+- A build pipeline, feature builds included, has its own PR step;
+  `create_pr` refuses its own worker while the pipeline can still raise the PR.
+  Forks and workers left by a removed, failed, cancelled or completed pipeline
+  can use `create_pr`.
+
+The main coordinator's context carries this as `COORDINATOR_PR_RULE`
+(`packages/protocol/src/coordinator.ts`), also in the Control MCP
+instructions, and `launch_environment`, `launch_job` and `send_prompt_to_tab`
+repeat it in their descriptions. Every delegation frame tells the worker the
+same (`COORDINATOR_WORKER_NO_PR_INSTRUCTION` in
+`packages/protocol/src/review-evidence-frames.ts`): commit and report, and do
+not open a pull request even if the prompt asks for one.
+
 A coordinator turn ends when it has delegated. It does not wait for the worker,
 so the composer stays open. A prompt typed during a turn is queued and runs
 before any worker mail. While the turn is running the send button reads **Send
@@ -1179,7 +1203,8 @@ environment of the bound project: the backend command
 (`coordinator-surface-actions.ts`) revalidates the credential's scope and
 refuses the project home, the checkout the coordinator may only read. Side
 agents have none of them (their capabilities are `discovery`, `mail` and
-`schedules`). They act on this node only; the `nodeId` variants are in
+`schedules`). `create_pr` accepts `nodeId` to publish on a connected node.
+The other surfaces act on this node only; their `nodeId` variants are in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
 
 | Tool | What it does | Retry with the same `requestId` | What the user sees and can undo |
@@ -1190,6 +1215,7 @@ agents have none of them (their capabilities are `discovery`, `mail` and
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
 | `start_looped_review`, `get_looped_review`, `cancel_looped_review` | The **Looped review** button: one agent reviews, fixes and repeats, then opens a PR. Omitted agent and model use the Review action's saved default. Opens the review's tab in the worker. | Replays; a retry after a crash reattaches to the review that attempt started (created after the receipt) instead of starting another. | The Looped Review tab; Cancel there or `cancel_looped_review`. Commits it made stay. No status wake: the result says to schedule a check. |
+| `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
 

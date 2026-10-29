@@ -13,6 +13,7 @@ import {
 import {
   assertNoDeclaredProvenance,
   isSafeRelativePath,
+  isWebAnnotationEvidence,
   isWebAnnotationTarget,
   sanitizeWebAnnotationUrl,
   validateWebAnnotationBody,
@@ -123,7 +124,7 @@ describe("web annotation capture validation", () => {
     }
   });
 
-  test("a source hint's verification is never taken from a payload", () => {
+  test("stored evidence accepts verified source hints but capture input rejects them", () => {
     const input = fixtureCaptureInput("element");
     const hint = { producer: "vite-dev", path: "src/settings.tsx", line: 42, verified: false };
     const withHint = (verified: boolean) => ({
@@ -131,7 +132,9 @@ describe("web annotation capture validation", () => {
       evidence: { ...input.evidence!, sourceHints: [{ ...hint, verified }] },
     });
     expect(validateWebAnnotationCaptureInput(withHint(false)).ok).toBe(true);
-    expect(validateWebAnnotationCaptureInput(withHint(true))).toEqual({
+    const verifiedInput = withHint(true);
+    expect(isWebAnnotationEvidence(verifiedInput.evidence)).toBe(true);
+    expect(validateWebAnnotationCaptureInput(verifiedInput)).toEqual({
       ok: false,
       error: "Source hint verification is assigned by the receiver",
     });

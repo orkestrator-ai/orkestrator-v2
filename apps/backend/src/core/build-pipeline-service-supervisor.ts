@@ -125,7 +125,7 @@ import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   createDiscoveryPrompt,
   parseReviewPreparationResult,
-} from "./looped-review-prompts.js";
+} from "./review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
@@ -1099,7 +1099,7 @@ export class BuildPipelineSupervisor {
     const round = pipeline.iteration + 1;
     const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
-    const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
+    const generated = await this.ctx.invoke<unknown>("generate_review_package", {
       environmentId: pipeline.environmentId,
       packageId,
       round,
@@ -1144,7 +1144,7 @@ export class BuildPipelineSupervisor {
     const round = pipeline.iteration + 1;
     const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
     const sealingStarted = Date.now();
-    const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
+    const generated = await this.ctx.invoke<unknown>("generate_review_package", {
       environmentId: pipeline.environmentId,
       packageId: run.id,
       round,
@@ -1176,10 +1176,10 @@ export class BuildPipelineSupervisor {
     environmentId: string,
     reviewPackage: ReviewPackageReference,
   ): Promise<ReviewPackageVerification> {
-    const verification = await this.ctx.invoke<ReviewPackageVerification>(
-      "verify_looped_review_package",
-      { environmentId, reviewPackage },
-    );
+    const verification = await this.ctx.invoke<ReviewPackageVerification>("verify_review_package", {
+      environmentId,
+      reviewPackage,
+    });
     if (!verification.valid) {
       throw new Error(
         `Review package integrity verification failed: ${verification.reason ?? "unknown reason"}`,
@@ -1192,7 +1192,7 @@ export class BuildPipelineSupervisor {
     const reviewPackage = pipeline.reviewPackage;
     if (reviewPackage && "kind" in reviewPackage) {
       const verification = await this.ctx.invoke<{ valid: boolean; reason?: string }>(
-        "verify_looped_review_package",
+        "verify_review_package",
         { environmentId: pipeline.environmentId, reviewPackage },
       );
       if (!verification.valid) delete pipeline.reviewPackage;

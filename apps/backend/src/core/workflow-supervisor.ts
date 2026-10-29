@@ -60,7 +60,6 @@ import {
 export const KEYED_SCHEDULING_DOMAINS = [
   "feature-planning",
   "build-pipeline",
-  "looped-review",
   "multi-review",
   "native-queues",
   "backend-activity",
@@ -70,7 +69,7 @@ export type KeyedSchedulingDomain = (typeof KEYED_SCHEDULING_DOMAINS)[number];
 /**
  * Rollback switch. A comma-separated list of domains (or `all`) that return to
  * their previous driver on the next backend start, e.g.
- * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=build-pipeline,looped-review`.
+ * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=build-pipeline,multi-review`.
  * A domain runs exactly one driver: the switch is read once at construction,
  * so the new driver is never started when the old one is selected.
  */

@@ -21,10 +21,21 @@ import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js
  */
 
 const harnesses: PublicApiHarness[] = [];
+const networks: TestNodeNetwork[] = [];
 
 export async function cleanupNodeTopologies(): Promise<void> {
-  for (const harness of harnesses.splice(0)) await harness.cleanup();
-  await cleanupSessionHarnesses();
+  // A running command node keeps invoking the leaf's commands, and closed
+  // storage reopens on use and re-creates its removed data directory, so the
+  // network stops before the harnesses are removed.
+  const stopped = await Promise.allSettled(networks.splice(0).map((network) => network.stop()));
+  const cleaned = await Promise.allSettled([
+    ...harnesses.splice(0).map((harness) => harness.cleanup()),
+    cleanupSessionHarnesses(),
+  ]);
+  const errors = [...stopped, ...cleaned].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (errors.length) throw new AggregateError(errors, "Failed to clean up test node topologies");
 }
 
 function httpsRoute(node: TestNode): NodeRoute {
@@ -37,6 +48,7 @@ function attach(harness: PublicApiHarness, node: TestNode): void {
 
 export async function topology(options: { leafRelay?: boolean } = {}) {
   const network = new TestNodeNetwork();
+  networks.push(network);
   const commandNode = await network.add("command", { forceRegistration: true });
   const leafNode = await network.add("leaf");
   leafNode.publicActionRelay = options.leafRelay ?? true;

@@ -12,8 +12,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
-5. **Record the type-level import cycle**: re-measure and record it here. Status: open.
-6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: open (not in the file's list).
+5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
+6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one.
 7. **Open questions**: where `keyed-record-format.ts` and `pi-model-catalog-seeding.ts` go, and whether `storage` and `native-agent` move before or after their splits. Status: partly done (the 0009/0010 splits have landed).
 
 ### 1. Wave 1 (leaves)
@@ -68,7 +68,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state is still to move into the runtime ([0133](0133-backend-module-state-beyond-0066.md)).
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)).
 
 **Decisions.**
 
@@ -179,9 +179,37 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 - Done: `core/design/` (22 source files, 12 tests) with an `index.ts` that
   exports `DesignService`, `createDesignMcp`, `registerDesignCommandHandlers`
   and `resolveDesignDestination` (#979).
+- Done (task 6, 2026-10-28): `core/nodes/`, `core/change-tracking/`,
+  `core/transcript-artifacts/` and `core/scheduled-jobs/` each have an
+  `index.ts` and both lint patterns, and production importers outside each
+  folder go through it. Six leaf modules are named exceptions in the
+  `apps/backend/src/**` pattern, because routing them through `index.ts` would
+  close a runtime import cycle: `nodes/node-store-format.ts`,
+  `change-tracking/ledger-schema.ts`, `transcript-artifacts/store-layout.ts`
+  and `scheduled-jobs/layout.ts` and `store.ts` (imported by the storage
+  layer), and `scheduled-jobs/tools.ts` (imported by `agent-tools.ts` and
+  `control-mcp-coordinator-tools.ts`). See "Assumptions and decisions".
 - Folders without an `index.ts` or a lint pattern: `core/mcp-management/`
   (19 source files, 18 tests) and `core/public-api/` (27 source files, 6
   tests).
+- Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
+  largest strongly connected component of `core/` holds **292 files** (244 at
+  the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
+  `scheduled-jobs/`, 2 in `transcript-artifacts/`, 1 in `permission-rules/`),
+  plus four small components of 5, 5, 4 and 2 files (308 files in cycles out
+  of 754). With task 6's `index.ts` files the largest component is **300
+  files** (316 in cycles out of 758): the four `index.ts` files join it, and a
+  type import through an `index.ts` now reaches every module that file
+  re-exports, which pulls in four more domain files. That is the intended
+  trade: cross-domain type edges run through `index.ts`, where they are
+  visible. Method: every non-test `.ts` file under `apps/backend/src/core/`
+  (excluding `*test-support*`, `*test-helpers*`, `*test-harness*` and
+  `fixtures/`); an edge for every relative `import … from`/`export … from`,
+  value or `type`, and every `import("…")` type expression; Tarjan's strongly
+  connected components; count the components larger than one file. Without
+  the `import("…")` edges the largest component is 289 (base) and 297 (with
+  task 6). The 2026-10-14 figure of 112 files used an unrecorded method and is
+  not comparable.
 - The `core/` root holds 378 non-test `.ts` files and 299 tests.
 - Prefix counts at the root:
 
@@ -257,7 +285,10 @@ before the busy ones move.
    `terminal-runtime.ts`, `local-server-runtime.ts`,
    `environment-operations.ts`).
 5. **Record the type-level import cycle.** Re-measure the type-level cycle
-   across `core/` (112 files on 2026-10-14) and record it here. It is not
+   across `core/` (112 files on 2026-10-14) and record it here. Baseline
+   recorded 2026-10-28 in "Current state" (292 files; 300 with task 6's
+   `index.ts` files); measure again with the same method when the waves
+   finish. It is not
    expected to reach zero, but cross-domain type cycles should run through
    `index.ts` files, where they are visible. Runtime cycles are already
    blocked by `import/no-cycle` and `tests/unit/module-import-cycles.test.ts`.
@@ -289,6 +320,98 @@ Done when:
 - the `core/` root holds only the shared kernel and `index.ts` (the backend
   composition root);
 - the type-level cycle has been re-measured and recorded.
+
+## Assumptions and decisions
+
+Decisions taken while doing tasks 5 and 6 (2026-10-28). Waves 1 to 4 (tasks 1
+to 4) were left open on purpose: they move many files that other work in
+flight touches.
+
+### Task 6: track the four folders here, as part of wave 1's `index.ts` step
+
+- Chosen: the recommended option. The four folders get the same procedure as
+  `mcp-management/` and `public-api/` (steps 3 to 5, no moves), recorded in
+  this file rather than a new todo.
+- Why: one procedure, one file; the work needs no file moves, so it does not
+  conflict with the open waves.
+
+### Task 6: what each `index.ts` exports
+
+- Chosen: exactly the symbols production code outside the folder imported on
+  `79f3bc97` (step 1 of the procedure), as explicit named re-exports. Types are
+  re-exported with `export type` or inline `type`, so type-only importers add
+  no runtime edge.
+- Not routed through `index.ts`: co-located tests in the `core/` root (the
+  tests-off override already exempts them), `e2e/` specs, and the repository
+  scripts `scripts/benchmark-change-tracking.ts`,
+  `scripts/qualify-preview-worker-upgrade.ts` and
+  `apps/backend/scripts/build.ts` (white-box tools, outside both lint
+  overrides; `build.ts` names worker entry points by path and must keep doing
+  so).
+- Importers that pulled several symbols from one folder now have one import
+  statement per folder, merged from the old per-file imports.
+- `storage.ts`'s type-only import of `ScheduledJobStore` stays on
+  `scheduled-jobs/store.js`, one of the exceptions below, so `storage.ts` is
+  untouched.
+
+### Task 6: named exceptions where an `index.ts` would close a runtime cycle
+
+- Problem found: routing every importer through `index.ts` added 91
+  `import/no-cycle` errors and failed `tests/unit/module-import-cycles.test.ts`.
+  The storage layer (`storage-stores.ts`, `storage-nodes.ts`,
+  `storage-scheduled-jobs.ts`) imports each domain's store layout, migration or
+  store, and each domain's services import storage, so through a barrel
+  storage would depend on the whole domain. Likewise `scheduled-jobs/executor.ts`
+  imports `control-mcp-tools.ts`, which reaches `control-mcp-coordinator-tools.ts`
+  and `agent-tools.ts`, which import `scheduled-jobs/tools.ts`. Each of these
+  had to stay a deep import (checked one at a time: routing any one of them
+  through `index.ts` brings the cycle back).
+- Options: (a) name the six leaf modules as exceptions in the
+  `apps/backend/src/**` lint pattern; (b) keep the deep imports with an
+  `oxlint-disable-next-line` and a reason at each of the seven sites; (c) break
+  the cycles by moving code (for example `coordinatorRoleCapabilities` out of
+  `control-mcp-tools.ts`).
+- Chosen: (a). The exceptions are `nodes/node-store-format.js`,
+  `change-tracking/ledger-schema.js`, `transcript-artifacts/store-layout.js`,
+  `scheduled-jobs/layout.js`, `scheduled-jobs/store.js` and
+  `scheduled-jobs/tools.js`; each `index.ts` header says which files are
+  imported directly and why, and those symbols are not re-exported from
+  `index.ts`. The `tests/unit/**` patterns stay strict (index only).
+- Why: (c) is a behaviour-neutral but non-path edit, outside this file's "pure
+  moves" rule and the narrow scope asked for. (a) keeps the importer files
+  unchanged (smaller diff, easier rebase) and lists every exception in one
+  reviewable place; (b) would scatter the same list over seven files. The
+  exceptions can go when `storage` (wave 3) and `control-mcp` (wave 1) get
+  their own folders and the shared pieces are placed.
+- Cons: six files are part of their domain's surface without being in
+  `index.ts`; a reader has to check the lint pattern or the `index.ts` header
+  to see them.
+
+### Task 6: the `change-tracking` pattern skips the protocol package
+
+- The `**/change-tracking/*` pattern would also match
+  `@orkestrator/protocol/node/change-tracking/*`, which backend files import
+  legitimately. The pattern adds `!@orkestrator/protocol/node/change-tracking/*`.
+  The other three folder names do not collide with any other import path
+  (checked with a probe file: deep imports into all four folders are reported,
+  the exceptions and the protocol path are not).
+
+### Task 6: new domain folders start with an `index.ts`
+
+- Chosen: the recommended option, a line in `docs/development/linting.md`
+  ("Module boundaries").
+- Why: stops the list of unenforced folders growing while the waves run.
+
+### Task 5: a one-off measurement, method in prose
+
+- Chosen: the recommended option. The baseline and the method are in
+  "Current state"; the script used was throwaway, so the method is described
+  precisely enough to repeat.
+- Measured on the base commit (`79f3bc97`) and again with task 6 applied, so
+  the effect of the `index.ts` files is recorded separately from the baseline.
+- The 2026-10-14 figure (112 files) could not be reproduced: its method was not
+  recorded, and no edge set tried here comes close (static imports only give
+  289). It is kept for history but not compared against.
 
 ## Constraints and rationale
 

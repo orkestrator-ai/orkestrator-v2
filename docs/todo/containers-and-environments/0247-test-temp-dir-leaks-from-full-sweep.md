@@ -3,19 +3,24 @@
 Checked against `main` at `ce205ad34` plus the 0247 branch at `8268be981`
 (2026-10-26) and at `0c77d9b46` and `39980f699` (2026-10-27, the
 verification follow-up), and at `4231a3ed2` plus the second follow-up below
-(2026-10-27), and at `4116c6a7d` for the ship verification (2026-10-27).
+(2026-10-27), at `4116c6a7d` for the ship verification (2026-10-27), and
+at `main` `79f3bc97e` plus this branch for the Arch Linux sweep (2026-10-29).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. That revision is older
+than the fix PR `cd5770409` (#1339, merged the same day), so the
+investigation below describes the code before the fixes. Rechecked
+2026-10-29 against `main` at `79f3bc97e`; see
+[Assumptions and decisions](#assumptions-and-decisions) for that pass.
 
 ### Tasks
 
-1. **Remove the listed leaks at source**: fix the twelve owners in Code item 1, or opt their prefixes into `tests/temp-sweep.ts`. Status: open.
-2. **Preview supervisor scratch (Code 2 and Needs verification)**: decide whether `ork-artifact-preview-*` leaks in production or only in tests. Status: partly done (production path read; test source not reproduced).
-3. **Hermetic process-coverage test**: `commands-process-coverage.test.ts` must not read the host's `XDG_STATE_HOME`. Status: done (by `1aabf049`); the file still lists it.
-4. **Repeat the sweep**: rerun the private-`TMPDIR` sweep after the fixes. Status: open (after 1 and 2).
-5. **`TMPDIR` through Turbo (open question)**: whether `mise run test` should pass `TMPDIR` so an aggregate run can be swept. Status: open.
+1. **Remove the listed leaks at source**: fix the twelve owners in Code item 1, or opt their prefixes into `tests/temp-sweep.ts`. Status: done. `cd5770409` fixed the twelve. On 2026-10-29 the Arch sweep proved the `ork-env-move-*` writer (a diff scan still running at teardown) and it was fixed at source. Two new prefixes it found, `ork-public-api-*` and `ork-worktree-location-*`, were fixed too, and so were the last inline removals in `index.test.ts` and four MCP tests.
+2. **Preview supervisor scratch (Code 2 and Needs verification)**: decide whether `ork-artifact-preview-*` leaks in production or only in tests. Status: done. It leaks in production too, off the normal path; scratch is PID-named and swept at backend start (`cd5770409`, Code item 2). The Linux sweep and a direct run of the preview owners left none.
+3. **Hermetic process-coverage test**: `commands-process-coverage.test.ts` must not read the host's `XDG_STATE_HOME`. Status: done (by `1aabf049`, and all four XDG variables by `cd5770409`; Code item 3).
+4. **Repeat the sweep**: rerun the private-`TMPDIR` sweep after the fixes. Status: done on omarchy-hp, 2026-10-29. After the fixes, only by-design entries were left. See [Arch Linux sweep on omarchy-hp](#arch-linux-sweep-on-omarchy-hp-2026-10-29).
+5. **`TMPDIR` through Turbo (open question)**: whether `mise run test` should pass `TMPDIR` so an aggregate run can be swept. Status: done (yes; `globalPassThroughEnv: ["TMPDIR"]` in `turbo.json`, guarded by `tests/unit/monorepo-scripts.test.ts`).
 
 ### 1. Remove the listed leaks at source
 
@@ -128,10 +133,13 @@ sweep then left one Cursor bridge root, and the bridge re-sweep after that
 fix one Codex bridge Git fixture; both are fixed at source, and the bridges
 then left only by-design entries; see
 [the 2026-10-27 sweeps](#verification-sweep-and-repeat-sweep-2026-10-27).
-Qualification still needs
-the original Arch Linux host, where `ork-env-move-*` leaked and macOS never
-reproduced it. The repository-wide test result remains non-green; the recorded
-baseline failures must not be read as a passing acceptance run.
+On 2026-10-29 the sweep ran on the original Arch Linux host. It reproduced
+`ork-env-move-*` and named its writer, and found two more prefixes. All
+three are fixed at source, and the repeat backend sweep then left only
+by-design entries; see
+[Arch Linux sweep on omarchy-hp](#arch-linux-sweep-on-omarchy-hp-2026-10-29).
+The repository-wide `mise run test` was not rerun for this pass, so no green
+aggregate acceptance is claimed.
 
 ## Current state
 
@@ -155,7 +163,7 @@ baseline failures must not be read as a passing acceptance run.
   | `claude-mcp-sync-*` | `run()` in `session-manager-prompt-mcp-sync.live-probe.ts` removed the root right after `control.close()`; the closing CLI then wrote `home/Library/Caches/claude-cli-nodejs/.../mcp-logs-*` into it. | The probe spawns the CLI through `spawnClaudeCodeProcess` and awaits its exit before the removal. | Yes, 5 before, 0 after. |
   | `ork-runtime-*` | `app-server-runtime-test-harness.ts` removed `CODEX_HOME` in `afterEach` while the runtime's dispatch journal still had a write queued (`orkestrator-bridge/dispatch-journal-*.json`). Seen from the lifecycle and prompt files. | The harness records every runtime it builds and `afterEach` awaits `runtime.stop()` (which drains pending work) before the removal. | Yes, 4 before, 0 after (485 tests). |
   | `orkestrator-state-sync-*`, `ork-terminal-history-*`, `ork-command-registry-data`, `ork-commands-io-history-<pid>` | Closing a terminal disposes its history without awaiting it (`TerminalRuntime.explicitlyCloseSession`), and completion, disposal and pruning write `terminal-history/*/manifest.json` after the command returns. The last two were also fixed paths nothing removed. | New `TerminalHistory.settled()`, awaited after `runtime.shutdown()` by `commands-state-sync.test.ts`, `terminal-history.test.ts`, `commands-io-coverage.test.ts`, `commands-registry-coverage.test.ts` and `environment-move.test.ts`. The two fixed paths are now `mkdtemp` directories removed in `afterAll`. | Yes, all four in the baseline sweep; state-sync also directly (2 before, 0 after). |
-  | `ork-env-move-*` | Not established: the file left none on macOS, alone or under host load average 12 to 19, before or after the change. | Defence in depth: the `afterEach` also settles terminal history, and the roots and the template are named through `ownedTempDirPrefix`, so `sweepStaleTempDirs` at the top of the file removes those of dead owners after an hour and legacy names without a PID after a day. | No. |
+  | `ork-env-move-*` | Not established on macOS, which left none (alone, or under host load average 12 to 19). On Arch Linux (2026-10-29) each leftover held only `app/.git/info/exclude`. A diff-stats scan still running after `runtime.shutdown()` (`scanPhysical` → `getLocalGitStatusDetailed` → `addLocalWorkspaceArtifactsToGitExclude`) had resolved the project's exclude path before the removal, then re-created it with `mkdir -p` (stack traces from a temporary probe). | Defence in depth first: the `afterEach` settles terminal history, and the roots are PID-named, so `sweepStaleTempDirs` removes dead owners' roots after an hour and legacy names after a day. Then, 2026-10-29: new `SharedScanQueue.settled()` and `DiffStatsTracking.settled()`, awaited with the terminal history before the removal. | Yes, on omarchy-hp: 4 per run (two runs) before, 0 in three runs after. |
   | `claude-client-session-restart-*`, `claude-dispatch-journal-*`, `claude-metadata-noop-*` (found by the verification sweep, 2026-10-27) | Each held only `.claude/orkestrator/session-preferences/<id>.json` containing `{}`: the turn-in-flight clear write, which a turn queues without waiting (`writeTurnInFlightMark` in `session-manager-turn-interruption.ts`). The session-manager fixtures restored the suite's Claude home and removed their private one straight after the body, while the harness's `afterEach` settled preference writes only later. | New `releaseTemporaryClaudeHome()` in `session-manager-test-harness.ts` restores the home, awaits `settleSessionPreferenceWritesForTesting()` and the terminal-command writes, then removes the directory. `withTemporaryClaudeHome` and the 21 inline removals in five session-manager test files use it. | Evidence is the verification sweep's leftovers (contents above); 18 direct runs of the owning file at load 84, with the old and with the new harness, left none, so the before/after is not reproduced. The full `test:bridge` with the fix left nothing (1,706 pass). |
 | `claude-mcp-calls-*` (found by the verification sweep) | The same as `claude-mcp-sync-*`, in the second probe: `runMcpCallProbe` in `session-manager-prompt-mcp-sync.live-calls.ts` removed its root once the stream ended, while the closing CLI was still writing `Library/Caches/claude-cli-nodejs/.../mcp-logs-*` and its project transcript under it (both in the leftover). | It spawns the CLI through `spawnClaudeCodeProcess` and awaits its exit before the removal, like `run()`. | Not reproduced directly (two direct runs left none before the fix); covered by the sweep after it. |
 | `ork-artifact-preview-*` | The backends `apps/backend/tests/standalone.test.ts` starts (the baseline sweep never ran them: its checkout had no `dist/`). Every backend start runs the preview availability probe, whose worker the runner did not track, so a backend stopping mid-probe exited without cancelling it; and a backend whose Tailscale Serve setup failed exited without `backend.shutdown()`. The `transcript-artifacts` tests themselves (323 pass, real Chromium in process mode) left none. | `TranscriptPreviewRunner.close()` cancels the probe's worker and waits for its verified exit; gateway startup in `main.ts` uses `startGatewayServices` to shut the backend down on failure, even if another cleanup rejects; scratch is PID-named and swept at startup (Code item 2). A third cause, found by the verification sweep (one `ork-artifact-preview-<pid>-*` holding a Chromium profile): a worker killed while Playwright was still launching Chromium orphaned the browser in its own process group, outside the kill; the kill verified, and the browser re-created its profile in the removed scratch. `killTree` now also owns any process whose command line names the job's scratch (Chromium's `--user-data-dir`) and needs a second empty scan (Code item 2). | Yes, 5 before, 1 after the `close()` fix, 0 after the `main.ts` fix (two runs). The third cause: 1 of 3 concurrent `standalone.test.ts` runs, and 7 of 72 direct SIGTERMs of a `dist` backend during its probe (5 of 40, 2 of 32), left one; instrumented, every such case was a verified kill with no browser PID known. After the fix 0 of 48. |
@@ -215,6 +223,28 @@ baseline failures must not be read as a passing acceptance run.
   is awaited after clearing `PI_BRIDGE_STATE_DIR` and before removing the
   directory, in the eight Pi test files that do both, and the change-evidence
   teardown flushes its spool. Each of the four files then left nothing in three runs.
+- `ork-public-api-*` (found by the Arch sweep, 2026-10-29: five, each holding
+  only `data/orkestrator.sqlite`). `topology()` in
+  `apps/backend/src/core/public-api/node-test-support.ts` never stopped its
+  `TestNodeNetwork`, so after cleanup the command node's link kept invoking
+  the leaf's commands. Closed storage reopens on use
+  (`StorageContext.database`), and opening runs
+  `mkdirSync(dataDir, { recursive: true })`, which re-created the removed
+  root. New `TestNodeNetwork.stop()` stops each node's portal and service, and
+  `cleanupNodeTopologies` awaits it first. `public-api-nodes.test.ts` alone
+  left 5 before and 0 in three runs after. Stopping only the portals still
+  left 5; stopping the services is what matters.
+- `ork-worktree-location-*` (found by the Arch sweep, one, holding only
+  `app/.git/info/exclude`): the same diff-scan writer as `ork-env-move-*`, in
+  `commands-environment-worktree-location.test.ts`. Its `afterEach` now awaits
+  `runtime.diffStats.settled()` before the removal. Alone it left 1 in 6 runs
+  before and 0 in 12 after, so the direct before/after is weak; the matching
+  contents and the proven env-move writer are the evidence.
+- Inline removals (2026-10-29, Task analysis item 1): the first two tests in
+  `index.test.ts` and the relocated-home cases in four MCP management tests
+  (`mcp-grok-home-`, `mcp-pi-dir-`, `mcp-xdg-`, `mcp-oc-dir-`) removed their
+  directories only when every assertion passed. They now remove them in
+  `finally`; the MCP cases settle the fixture's service first.
 - `tests/temp-sweep.ts` (`createOwnedTempDir`, `sweepStaleTempDirs`) is the
   fallback for prefixes that cannot be removed at source; `ork-env-move-` and
   `ork-env-move-template-` now opt in.
@@ -305,9 +335,11 @@ baseline failures must not be read as a passing acceptance run.
    (one Cursor and then one Codex bridge root, both fixed and rechecked; the
    bridges then left only by-design entries), not on the original Arch host; see
    [Qualification results](#qualification-results-2026-10-26).
-2. Repeat the same sweep on omarchy-hp (Arch Linux), where `ork-env-move-*`
+2. ~~Repeat the same sweep on omarchy-hp (Arch Linux), where `ork-env-move-*`
    leaked and macOS never reproduced it, and confirm the
-   `ork-artifact-preview-*` fixes there (see Needs verification).
+   `ork-artifact-preview-*` fixes there (see Needs verification).~~ Done
+   2026-10-29; see
+   [Arch Linux sweep on omarchy-hp](#arch-linux-sweep-on-omarchy-hp-2026-10-29).
 
 ## Qualification results (2026-10-26)
 
@@ -564,6 +596,64 @@ plus `orkestrator-test-run.GFT0Q7/review-fixes.log.gz`. No Linux/Windows or
 browser/Electron/Docker/iOS scenario qualification was performed; the existing
 real-container preview case lacked its worker image.
 
+## Arch Linux sweep on omarchy-hp (2026-10-29)
+
+Host: omarchy-hp, Arch Linux x86_64 (kernel 7.2.8), Bun 1.4.4, load average
+1 to 19. Each run used an empty private `TMPDIR` at
+`/tmp/ork0247s.XXXX/tmp` (short, so socket paths are unaffected), outside
+Turbo, after `bunx turbo run build --filter=@orkestrator/backend`. The commands
+were the same as the baseline: the `test:bridge` script in each of
+`bridges/claude-bridge`,
+`bridges/codex-bridge`, `bridges/acp-bridge`, `bridges/pi-bridge`, and
+`bridges/cursor-bridge` (run from that workspace with `mise exec -- bun run`),
+then `mise exec -- bun run --cwd apps/backend test:workspace`.
+
+The baseline predates test tiers. `mise run test` now runs only the default
+tier, which leaves out most of the listed owners (`environment-move`,
+`standalone`, `transcript-artifacts/**`, `index.test.ts`, `terminal-history`,
+`commands-state-sync`, `commands-io-coverage` and others; `SLOW_TESTS` in
+`scripts/test-tiers.ts`). A like-for-like sweep therefore needs
+`ORKESTRATOR_TEST_TIER=all`.
+
+| Run | Revision | Result | Left in the private `TMPDIR` |
+| --- | --- | --- | --- |
+| Default tier (not like-for-like) | `2bed3fe77` | Bridges all passed (acp 440, claude 1,695, codex 2,235, cursor 800, pi 538). Backend 10,159 passed, 89 skipped, 0 failed, 666 files, 138 s. | `ork-public-api-*` 5, plus `jiti`, `node-compile-cache` and `orkestrator-mcp-locks-1000`. |
+| All tiers | `45597dc26` (the `ork-public-api-*` fix) | Bridges all passed (acp 711, claude 1,809, codex 2,511, cursor 820, pi 678). Backend exit 1: 13,022 passed, 154 skipped, 2 failed, 798 files, 683 s. | `ork-env-move-<pid>-*` 5 and `ork-worktree-location-*` 1 (each only `app/.git/info/exclude`), plus `claude-1000`, `jiti`, `node-compile-cache`, `orkestrator-mcp-locks-1000`, two `org.chromium.Chromium.*` and `.bun`. No `ork-artifact-preview-*`. |
+| Backend, all tiers, after the diff-scan fix | `f1fd52100` | 13,025 passed, 154 skipped, 0 failed, 798 files, 422 s. | Only by-design entries: `claude-1000`, `orkestrator-mcp-locks-1000`, two `org.chromium.Chromium.*`, `.bun`. |
+
+The bridges were not swept again after the last two fixes, which change no
+bridge code.
+
+The all-tier run's two failures, both of which passed alone under a private
+`TMPDIR`:
+
+- `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher`:
+  received `["lost"]` instead of `["lost", "ready"]` after 58 ms. Existing
+  case [0946](../../tests/flaky-tests/environments-and-containers/0946-worktree-signal-start-ready-ring.md),
+  recurrence recorded there. The owner passed alone (13 of 13).
+- `raw StorageDatabase writers outside StorageService > name the store they write`:
+  five-second deadline (5,688 ms). This deadline already recurs in aggregate
+  records [1003](../../tests/flaky-tests/aggregate-validation-runs/1003-legacy-migration-0058-validation.md),
+  [1010](../../tests/flaky-tests/aggregate-validation-runs/1010-environment-disk-cleanup-0023-validation.md)
+  and [1166](../../tests/flaky-tests/aggregate-validation-runs/1166-session-titles-0006-validation.md).
+  The owner passed alone (36 of 36).
+
+Separately, `node-read-model.test.ts`'s `named summary due job reconciles
+missed events and stops with the model` fails (expected 32 schedulers,
+received 31) when `src/core/public-api`, `control-mcp-leaf-nodes.test.ts`
+and `src/core/nodes` run in one process. It fails the same way without this
+branch's changes (four of four runs). It passes alone and in
+`test:workspace`. The test counts schedulers in the process-wide
+`recurringDiagnosticsRegistry`, which other files' unstopped read models
+also register in. This grouping is not one any suite runs, so it is recorded
+here rather than registered as a flake.
+
+Nothing was deleted from the shared `/tmp`; these are counts only. Its entry
+count rose from 3,094 to 3,126 during this pass, from other sessions' runs.
+It holds 103 `ork-public-api-*` (8 of them changed during this pass, from
+suites run in checkouts without the fix), 17 `ork-env-move-*` and no
+`ork-artifact-preview-*`. This pass's own private roots were removed.
+
 ## Constraints and rationale
 
 - The same rules as 0023: remove a directory in the test that made it, after
@@ -572,7 +662,8 @@ real-container preview case lacked its worker image.
   its PID is dead and it is past the age limit. Legacy ownerless names need
   an explicit, longer age limit.
 - The `settled()` methods added to production classes (`TerminalHistory`,
-  `McpManagementService`) only wait; they change no state, so production
+  `McpManagementService`, and on 2026-10-29 `SharedScanQueue` and
+  `DiffStatsTracking`) only wait; they change no state, so production
   shutdown order is unchanged.
 - Not leaks (do not "fix"): `orkestrator-test-run.*` (failure logs, kept 7
   days by `scripts/test-all.ts`), `orkestrator-test-scheduler-v1-<uid>` and
@@ -580,7 +671,8 @@ real-container preview case lacked its worker image.
   (the per-user lock directory of `mcp-management/source-store.ts`, by
   design), and other tools' own caches and scratch (`jiti`,
   `node-compile-cache`, `playwright-transform-cache-<uid>`,
-  `org.chromium.Chromium.*`, `claude-<uid>`).
+  `org.chromium.Chromium.*`, `claude-<uid>`, and `.bun`: Bun's own
+  `install/cache`, one `.pile` file of about 10 KB in the Arch sweep).
 - `policy-cli-*` is left only when the live OpenCode research test times out;
   it belongs to flake
   [0785](../../tests/flaky-tests/coordinator-and-multi-review/0785-opencode-research-server-registration-timeout.md).
@@ -686,16 +778,16 @@ verification reported it.
 
 ## Needs verification
 
-- The repeat sweep on omarchy-hp (Qualification item 2). On macOS
-  `ork-env-move-*` was never left, so its Linux writer is unproven. Expected:
-  gone, or, if its writer is something other than terminal history, removed
-  by the next run of the file once its owner has exited and it is over an hour
-  old; legacy names without an owner are eligible after a day. Whether the Linux
-  `ork-artifact-preview-*` leftovers had the same cause as the macOS ones
-  (the untracked probe) is also unproven there.
+- ~~The repeat sweep on omarchy-hp (Qualification item 2).~~ Done
+  2026-10-29. The `ork-env-move-*` writer was a diff scan, not terminal
+  history, and is fixed at source. No `ork-artifact-preview-*` was left, in
+  the sweep or in a direct run of `standalone.test.ts` and the preview owners
+  (42 pass, none skipped, real Chromium). So the old Linux leftovers' cause
+  is consistent with the fixed macOS causes, but it was not reproduced before
+  the fix on this host, because the fixes were already on `main`.
 - The escaped-browser ownership marker is now qualified against Linux procps
   and real Chromium in Docker; see the pinned-review follow-up below. The
-  original Arch-host private-TMPDIR sweep remains outstanding.
+  original Arch-host private-TMPDIR sweep is also done (above).
 - Windows execution of the process-marker regressions remains unqualified.
   The real-Chromium test is collected by the existing transcript-artifacts
   area suite and follows its Chromium availability prerequisite. Windows
@@ -834,6 +926,139 @@ Decisions 1 to 8 were made on 2026-10-26 while working through the file;
     production Git calls under test see and would interact with tests that set
     `GIT_CONFIG_*` themselves; (c) because a retry still races a child that
     can write after it; (d) because the cause was removable.
+
+The subsections below were added on 2026-10-29, when the Task analysis was
+worked through against `main` at `79f3bc97e`.
+
+### Task analysis baseline (all tasks)
+
+The Task analysis says every owner "still creates its prefix" and that none
+"has changed its temp handling since the sweep". That was true at its
+revision, `863b5782`, but `863b5782` is older than the fix PR `cd5770409`
+(#1339). At `79f3bc97e` every listed owner is fixed (leak table above). So
+the decisions were checked against today's code, not redone.
+
+### Task 1: fix at source, not contain the whole run
+
+Chose the recommended option, fix each owner at source. `cd5770409`
+already did this for all twelve owners. The two fixed names (`index.test.ts`
+`ork-backend-interaction-env`, `commands-registry-coverage.test.ts`
+`ork-command-registry-data`) and `ork-commands-io-history` are now
+`mkdtemp` directories, so parallel workers no longer share them. What was
+left of the analysis's point about inline removals:
+`commands-state-sync.test.ts`, the Claude live probe and the MCP fixture's
+`cleanup()` (called from each file's `afterEach`) already remove in
+`finally` or a hook. But the first two tests in `index.test.ts`
+(`ork-backend-activity-stamp-`, `ork-backend-activity-event-`) still shut
+down and removed inline, so a failing assertion skipped both. Those two now
+use `try`/`finally`. The same pattern, a relocated home made with
+`mkdtempSync` and removed inline, was in four MCP management tests
+(`mcp-grok-home-`, `mcp-pi-dir-`, `mcp-xdg-`, `mcp-oc-dir-`). Those now
+remove it in `finally`, after `fixture.cleanup()` has settled the service
+that writes into it (`cleanup()` is idempotent, and the `afterEach` calls it
+again).
+
+The Arch sweep then proved the `ork-env-move-*` writer, a diff scan that
+outlives `runtime.shutdown()`. I fixed it the way decision 2 above did: an
+awaitable hook on the owner (`DiffStatsTracking.settled()`, over a new
+`SharedScanQueue.settled()`) that the teardown awaits. The alternatives were
+cancelling in-flight scans in `shutdown()` or keeping only the `temp-sweep`
+fallback. Cancelling would change production shutdown, while the hook only
+waits. The fallback would leave each root behind for an hour.
+
+The sweep's two new prefixes belonged to this task's rule, so I fixed them
+here instead of opening a new todo. `ork-public-api-*` needed
+`TestNodeNetwork.stop()` (test code only). `ork-worktree-location-*` needed
+the same diff-scan settlement.
+
+No prefix was newly opted into `tests/temp-sweep.ts`, because every cause
+could be removed at source. Not taken: per-group private `TMPDIR` in
+`scripts/test-all.ts`. It would hide leaks rather than fix them, and the
+sweeps keep finding new ones.
+
+### Task 1: review follow-up on cleanup failures and late work (2026-10-29)
+
+Chose nested `finally` blocks for the relocated MCP homes and backend data
+directories, so a rejected fixture cleanup or shutdown still removes the
+directory while surfacing the error. For node topologies, chose to attempt
+every node shutdown and every harness cleanup, then report the collected
+errors. The network marks all nodes offline before waiting, so a late
+transport request cannot reopen removed SQLite storage. These changes stay
+in test helpers; production shutdown behavior is unchanged.
+
+Added regressions for a queued scan pass and a new scan key arriving after
+`SharedScanQueue.settled()` starts waiting, a rejected node stop followed by
+cleanup of other nodes and harnesses, and a late command request after the
+network and real-storage fixtures are removed. The worktree-location test
+holds the real scanner's Git exclude-file write and runs the same cleanup
+function registered with `afterEach`, proving that `DiffStatsTracking.settled()`
+finishes the write before removal. The sweep instructions now name the real
+bridge directories rather than a placeholder parsed by the documentation guard.
+
+The nine focused backend owners passed (125 tests), as did the documentation
+guard, changed-file formatting/lint and backend typechecking. The exact default
+suite rerun passed root, bridges and protocol but failed in five unchanged
+workspace tests; two complete owner reruns passed and three still failed.
+The browser rerun repaired fixture-server ownership but was interrupted after
+18 failures in unchanged UI owners (173 passed, 57 skipped, 5 interrupted,
+785 not run). Full evidence and the credible flakes are recorded in
+[1307](../../tests/flaky-tests/aggregate-validation-runs/1307-temp-directory-cleanup-0247-review-validation.md).
+
+### Task 2: preview scratch leaks in production, and is swept at startup only
+
+It leaks in production as well as in tests, but only off the normal path.
+Cases are a backend killed during a job, a stop while a slot is quarantined,
+and (before `cd5770409`) the untracked availability probe and the escaped
+Chromium. Code item 2 has the evidence. The recommended sweep is in place:
+scratch is named `ork-artifact-preview-<backend pid>-<random>` with a
+`.ork-preview-owner` start identity, and `createTranscriptArtifactsRuntime`
+runs `sweepStalePreviewScratch` at startup in process mode.
+
+I did **not** add the recommendation's second trigger, a sweep "when
+admitting a preview". The code shows it adds nothing worth its cost on the
+admission path:
+
+- this backend's own scratch is never eligible (live owner);
+- its unverified exits are already retried by the runner's reaper;
+- a dead owner's scratch is eligible only after an hour, and the next
+  startup removes it.
+
+The only case it would speed up is another backend sharing the temporary
+directory and dying while this one runs. That leak is bounded by that
+backend's jobs, and the next start removes it.
+
+### Task 3: tick the process-coverage item
+
+Chose the recommended option: mark it done. The code went further than the
+analysis expected. `cd5770409` clears all four XDG variables through a
+shared fixture helper (Code item 3), so the alternative option is already
+covered too.
+
+### Task 4: like-for-like sweep, on omarchy-hp
+
+Chose the recommended option: the same five `test:bridge` runs and the
+backend `test:workspace`, outside Turbo, with an empty private `TMPDIR`
+under `/tmp` and a fresh backend `dist/`. Leftovers are recorded against the
+"Not leaks" list. The root `./tests` group and web were not swept (the
+alternative option). This host is the original Arch Linux host, so the run
+also answers Qualification item 2. I used a short path (`/tmp/ork0247s.XXXX/tmp`)
+so socket-creating tests keep their normal paths (flake registration
+section).
+
+The code showed one correction to "the same commands". Since the baseline,
+`test:workspace` and `test:bridge` select the default test tier, which skips
+most of the listed owners. So like-for-like also needs
+`ORKESTRATOR_TEST_TIER=all`. I kept the default-tier run as a first pass and
+took its result as not like-for-like. After the last fixes I re-swept only
+the backend, because no bridge code changed after the all-tier bridge runs.
+
+### Task 5: pass `TMPDIR` through Turbo
+
+Chose the recommended option, yes: `globalPassThroughEnv`. It is already in
+`turbo.json` (decision 4 above) and guarded by
+`tests/unit/monorepo-scripts.test.ts`, so the open question is answered and
+nothing changed here. The sweep still ran outside Turbo, so that it is
+like-for-like with the recorded baseline.
 
 ## Related
 

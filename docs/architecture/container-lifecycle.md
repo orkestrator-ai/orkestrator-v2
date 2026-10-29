@@ -951,7 +951,8 @@ and the Network section says whether a root terminal can change the rules.
 - **Namespace owner.** Published ports, the firewall report, live edits,
   `--host-ports` and the network endpoint belong to the gateway.
   `container-network-owner.ts` resolves a runtime's owner from its
-  immutable network mode (cached), and `getHostPort`, the network status,
+  immutable network mode (cached, and recorded when the backend creates the
+  runtime, so its first start does not inspect it), and `getHostPort`, the network status,
   `applyEnvironmentAllowedDomains`, `ensureContainerHostServicePorts`, the
   Linux host alias repair and the preview resolver read through it.
 - **Creation.** The gateway is created first, the runtime referencing it by
@@ -962,7 +963,9 @@ and the Network section says whether a root terminal can change the rules.
 - **Start.** `prepareEgressGatewayForStart` (in
   `startContainerWithAgentAccounts` and before a rebuild candidate's start)
   starts a stopped gateway and waits until its firewall reports `applied`;
-  the tmpfs `/run` means an earlier boot's report cannot be read. A `failed`
+  the tmpfs `/run` means an earlier boot's report cannot be read. Each poll
+  is one `docker exec`; the gateway is inspected only when that exec fails,
+  and a running gateway's `applied` report is not read twice. A `failed`
   report, a gateway that stops, or 180 s without a report refuses the start
   (`not-ready`), and a missing gateway is `needs-attention` (rebuild). Docker
   itself refuses to start a runtime whose gateway is not running ("cannot
@@ -1009,7 +1012,7 @@ script and parser:
 | --- | --- | --- |
 | Backend startup (Linux, desktop and backend-only runs) | Throwaway containers of a pinned ~1 MB `busybox` image on the default bridge and on a temporary per-environment style network (both in parallel) | Publishes `container-host-reachability-changed`; the app shows a banner and a fix dialog |
 | Bridge start (`resolveContainerAgentToolConnection`, Cursor/Grok/Pi starts) | `docker exec` in the environment container, after the host alias and network-policy repair | Logged; a result that contradicts the host verdict re-runs the host check (at most once a minute) |
-| Before a tool-mode workflow stage dispatches (Multi Review, Looped Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
+| Before a tool-mode workflow stage dispatches (Multi Review, build pipeline, feature planning) | Same, cached 60 s for success and 10 s for failure | A proven block fails the stage at once with the cause and the fix; an inconclusive probe passes |
 
 The startup check pulls busybox once (`--pull never` on every run afterwards)
 and falls back to the environment image; with neither it reports

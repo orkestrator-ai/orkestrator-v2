@@ -85,7 +85,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
-import { createDiscoveryPrompt } from "./looped-review-prompts.js";
+import { createDiscoveryPrompt } from "./review-prompts.js";
 import { reviewerPanelSection } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,

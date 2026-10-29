@@ -75,7 +75,6 @@ function installBackend(recordRequest: (request: RecoveryRequest) => void) {
             setupScriptsComplete: command === "override_environment_setup",
           } as T;
         }
-        case "list_looped_review_workflows":
         case "list_multi_review_workflows":
         case "get_sessions_by_environment":
           return [] as T;

@@ -17,11 +17,9 @@ import type {
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
-  LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
   ReviewValidationOutput,
   ReviewValidationOutputKnown,
   ReviewValidationRun,
-  StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import {
   isMultiReviewReviewerHistoryPage,
@@ -35,7 +33,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type {
   Environment,
-  PersistedLoopedReviewWorkflow,
+  PersistedWorkflowRecord,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
   PersistedComposeDraft,
@@ -166,84 +164,6 @@ export async function launchNativeAgentJob(input: {
   return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
 }
 
-export async function startLoopedReview(
-  input: StartLoopedReviewInput,
-): Promise<BackendLoopedReviewWorkflow> {
-  return invoke<BackendLoopedReviewWorkflow>("start_looped_review", { ...input });
-}
-
-export async function pauseLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
-  return invoke<BackendLoopedReviewWorkflow>("pause_looped_review", { workflowId });
-}
-
-export async function resumeLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
-  return invoke<BackendLoopedReviewWorkflow>("resume_looped_review", { workflowId });
-}
-
-export async function retryLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
-  return invoke<BackendLoopedReviewWorkflow>("retry_looped_review", { workflowId });
-}
-
-export async function cancelLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
-  return invoke<BackendLoopedReviewWorkflow>("cancel_looped_review", { workflowId });
-}
-
-export async function getLoopedReviewProviderSession(
-  workflowId: string,
-  sessionId?: string,
-): Promise<{ providerSessionId: string } | null> {
-  return invoke("get_looped_review_provider_session", {
-    workflowId,
-    // Only an *absent* session id means "use the active session". A blank one
-    // is a caller bug, and silently substituting the active session would open
-    // the wrong provider transcript rather than reporting it.
-    ...(sessionId === undefined ? {} : { sessionId }),
-  });
-}
-
-export async function getLoopedReviewWorkflow<T = unknown>(
-  workflowId: string,
-): Promise<PersistedLoopedReviewWorkflow<T> | null> {
-  return invoke<PersistedLoopedReviewWorkflow<T> | null>("get_looped_review_workflow", {
-    workflowId,
-  });
-}
-
-export async function listLoopedReviewWorkflows<T = unknown>(
-  environmentId: string,
-): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
-  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>("list_looped_review_workflows", {
-    environmentId,
-  });
-}
-
-export async function saveLoopedReviewWorkflow<T>(
-  workflowId: string,
-  environmentId: string,
-  version: number,
-  snapshot: T,
-  expectedRevision?: number,
-  controllerFence?: { ownerId: string; token: string },
-): Promise<PersistedLoopedReviewWorkflow<T>> {
-  return invoke<PersistedLoopedReviewWorkflow<T>>("save_looped_review_workflow", {
-    workflowId,
-    environmentId,
-    version,
-    snapshot,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
-    ...(controllerFence
-      ? {
-          controllerOwnerId: controllerFence.ownerId,
-          controllerToken: controllerFence.token,
-        }
-      : {}),
-  });
-}
-
-export async function deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
-  return invoke("delete_looped_review_workflow", { workflowId });
-}
-
 // --- Multi Review Workflow Commands ---
 
 export async function startMultiReview(
@@ -349,16 +269,16 @@ export async function unstickMultiReviewReviewer(
 
 export async function getMultiReviewWorkflow<T = unknown>(
   workflowId: string,
-): Promise<PersistedLoopedReviewWorkflow<T> | null> {
-  return invoke<PersistedLoopedReviewWorkflow<T> | null>("get_multi_review_workflow", {
+): Promise<PersistedWorkflowRecord<T> | null> {
+  return invoke<PersistedWorkflowRecord<T> | null>("get_multi_review_workflow", {
     workflowId,
   });
 }
 
 export async function listMultiReviewWorkflows<T = unknown>(
   environmentId: string,
-): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
-  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>("list_multi_review_workflows", {
+): Promise<Array<PersistedWorkflowRecord<T>>> {
+  return invoke<Array<PersistedWorkflowRecord<T>>>("list_multi_review_workflows", {
     environmentId,
   });
 }
@@ -466,10 +386,9 @@ export async function ensureNativeAgentSession(input: {
   reasoningEffort?: string;
   phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
   /**
-   * Overrides the mode the phase would imply.
-   *
-   * Looped-review phases collapse onto `review`, and preparation has to commit
-   * changes — a phase-derived read-only session would fail that round.
+   * Overrides the mode the phase would imply, for a session whose phase-derived
+   * mode does not match what it must do (a review session that has to commit
+   * changes would fail in a phase-derived read-only session).
    */
   sessionMode?: "plan" | "build";
   fastMode?: boolean;

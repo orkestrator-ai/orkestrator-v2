@@ -18,6 +18,8 @@ import {
   resetImageManifestCache,
   resolveDockerImage,
 } from "../src/core/docker-image";
+import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/container-network-owner";
+import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
 import { extractSingleTarFile } from "../src/core/docker-copy-out";
 import { resolveOperationImage } from "../src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";
@@ -36,6 +38,7 @@ import {
 
 const cleanup: string[] = [];
 afterEach(async () => {
+  resetNetworkOwnerCache();
   resetImageManifestCache();
   resetDockerTopologyCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -687,7 +690,6 @@ esac
     );
     const gatewayId = "d".repeat(64);
     const { createDockerContainer } = await import("../src/core/commands-containers");
-    const { resetNetworkOwnerCache } = await import("../src/core/container-network-owner");
     const script = (workloadCreate: string) => `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
@@ -698,6 +700,14 @@ case "$1" in
       *"--entrypoint /usr/local/bin/orkestrator-egress-gateway"*) printf '${gatewayId}\\n' ;;
       *) ${workloadCreate} ;;
     esac ;;
+  inspect)
+    case "$*" in
+      *"{{.Id}}"*) printf '${gatewayId}\\ttrue\\t2026-10-25T10:00:00Z\\towner\\tegress-gateway\\tworkload\\tenv\\n' ;;
+      *"{{.State.Running}}"*) printf 'false\\t2026-10-25T11:00:00Z\\n' ;;
+      *) echo 'Unexpected inspection' >&2; exit 1 ;;
+    esac ;;
+  exec) printf '{"state":"applied"}' ;;
+  ps) case "$*" in *orkestrator-operation-id=*) printf 'reconciled-workload\\t1\\n' ;; esac ;;
   cp) cat '${tar}' ;;
   network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
 esac
@@ -709,6 +719,7 @@ esac
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     try {
       delete process.env.ORKESTRATOR_EGRESS;
+      resetNetworkOwnerCache();
       await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
         expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
           "created-workload",
@@ -763,6 +774,27 @@ esac
         expect(workload).not.toContain("--sysctl");
         expect(workload).not.toContain("--add-host");
         expect(workload).not.toContain("github-ranges");
+        expect(await egressGatewayOf("created-workload")).toBe(gatewayId);
+        expect(await prepareEgressGatewayForStart("created-workload")).toBe("ready");
+        expect(await log.read()).not.toContain("{{.HostConfig.NetworkMode}}");
+      });
+
+      // A lost create reply is reconciled by operation identity and caches the same owner.
+      resetNetworkOwnerCache();
+      await withDockerScript(script("echo 'create reply lost' >&2; exit 1"), async (log) => {
+        expect(
+          await createDockerContainer(environment, context, {
+            imageId: IMAGE_ID,
+            operationId: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            runtimeGeneration: 1,
+          }),
+        ).toBe("reconciled-workload");
+        expect(await egressGatewayOf("reconciled-workload")).toBe(gatewayId);
+        expect(await prepareEgressGatewayForStart("reconciled-workload")).toBe("ready");
+        const calls = await log.read();
+        expect(calls).toContain("orkestrator-operation-id=0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b");
+        expect(calls).not.toContain("{{.HostConfig.NetworkMode}}");
+        expect(calls).not.toContain(`rm -f ${gatewayId}`);
       });
 
       // A workload Docker certainly did not create takes its gateway with it.
@@ -795,6 +827,9 @@ esac
         expect(creates[0]).toContain("--network ork-");
         expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");
         expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
+        expect(await egressGatewayOf("created-workload")).toBeNull();
+        expect(await prepareEgressGatewayForStart("created-workload")).toBe("none");
+        expect(await log.read()).not.toContain("{{.HostConfig.NetworkMode}}");
       });
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);

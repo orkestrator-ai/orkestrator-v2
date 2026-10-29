@@ -80,8 +80,8 @@ function setup(
   const metrics = new RecurringWorkMetrics({ now: time.now });
   const domain = new FakeDomain(time);
   const supervisor = new KeyedWorkflowSupervisor<Obligation>({
-    domain: "looped-review",
-    kind: "looped-review-tick",
+    domain: "multi-review",
+    kind: "multi-review-tick",
     progressIntervalMs: options.progressIntervalMs ?? 1_000,
     discoveryIntervalMs: options.discoveryIntervalMs ?? 30_000,
     discover: () => domain.discover(),
@@ -112,7 +112,7 @@ describe("KeyedWorkflowSupervisor", () => {
     await time.advance(60_000);
     // Discovery ran at start and every 30 s: three enumerations, not sixty.
     expect(domain.discoverCalls).toBe(3);
-    const counters = metrics.snapshot().kinds["looped-review-tick"]!;
+    const counters = metrics.snapshot().kinds["multi-review-tick"]!;
     expect(counters.workUnits["record-scanned"]).toBe(3 * 202);
     // Each active key progressed at its own one-second cadence.
     expect(domain.passesOf("active-1").length).toBeGreaterThanOrEqual(59);
@@ -327,7 +327,7 @@ describe("KeyedWorkflowSupervisor", () => {
       // Nested reviewer work in the same pool uses the pass's own slot.
       await pool.run(
         {
-          kind: "looped-review-tick",
+          kind: "multi-review-tick",
           priority: "progress",
           target: "nested",
           holding: pass.lease ? [pass.lease] : [],
@@ -387,7 +387,7 @@ describe("KeyedWorkflowSupervisor", () => {
     const renewals: number[] = [];
     supervisor.addCriticalJob({
       key: "lease-renewal",
-      kind: "looped-review-lease-renewal",
+      kind: "multi-review-lease-renewal",
       intervalMs: 5_000,
       run: async () => {
         renewals.push(time.now());
@@ -455,9 +455,9 @@ describe("KeyedWorkflowSupervisor", () => {
 
   test("the rollback switch disables one domain at a time", () => {
     expect(keyedSchedulingEnabled("build-pipeline", {})).toBe(true);
-    const env = { [KEYED_SCHEDULING_ROLLBACK_ENV]: "build-pipeline, looped-review" };
+    const env = { [KEYED_SCHEDULING_ROLLBACK_ENV]: "build-pipeline, feature-planning" };
     expect(keyedSchedulingEnabled("build-pipeline", env)).toBe(false);
-    expect(keyedSchedulingEnabled("looped-review", env)).toBe(false);
+    expect(keyedSchedulingEnabled("feature-planning", env)).toBe(false);
     expect(keyedSchedulingEnabled("multi-review", env)).toBe(true);
     expect(keyedSchedulingEnabled("multi-review", { [KEYED_SCHEDULING_ROLLBACK_ENV]: "all" })).toBe(
       false,

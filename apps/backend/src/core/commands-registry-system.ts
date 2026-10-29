@@ -78,7 +78,6 @@ export function registerSystemCommands(
     const owners: [string, KeyedWorkflowOwner | undefined][] = [
       ["feature-planning", context.featurePlanning],
       ["build-pipeline", context.buildPipelines],
-      ["looped-review", context.loopedReviews],
       ["multi-review", context.multiReviews],
       ["native-queues", context.nativeAgents],
     ];

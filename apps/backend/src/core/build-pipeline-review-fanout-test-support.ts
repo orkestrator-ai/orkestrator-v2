@@ -417,14 +417,14 @@ export async function withPipeline(
         fingerprint: worktree.fingerprint,
       } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       packageGeneration.count += 1;
       const generated = testGeneratedReviewPackage(_args);
       const head = String(packageGeneration.count).repeat(40);
       generated.headRef = head;
       return generated as T;
     }
-    if (command === "verify_looped_review_package") {
+    if (command === "verify_review_package") {
       packageGeneration.verificationCount += 1;
       if (packageGeneration.failUnexpectedly) throw new Error("verification service unavailable");
       if (packageGeneration.failVerification) {

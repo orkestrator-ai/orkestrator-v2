@@ -24,8 +24,7 @@ import type {
   PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
 import type { CommandContext } from "../commands-context.js";
-import { NodeUnavailableError } from "../nodes/node-link.js";
-import type { NodeLink } from "../nodes/node-link.js";
+import { NodeUnavailableError, type NodeLink } from "../nodes/index.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
 import { isPublicAuthority, type PublicAuthority } from "./operation-ledger.js";
 

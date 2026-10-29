@@ -3,7 +3,7 @@
 - **ID:** 0711
 - **Status:** environmental
 - **Date observed:** 2026-10-23
-- **Test:** `generateLoopedReviewPackage > refuses a command that ran but names no verified artifacts`
+- **Test:** `generateReviewPackage > refuses a command that ran but names no verified artifacts`
 - **File:** `apps/backend/src/core/commands-review.test.ts`
 - **Original command:** `mise run test:logged -- --name test-final -- mise run test` (complete non-iOS suite) while two live `slash-command-inactive.spec.ts` runs drove a `dev:test` profile and a container on the same host.
 - **Worker configuration:** the runner's default reservations; the workspace group ran backend tests with its default worker count.

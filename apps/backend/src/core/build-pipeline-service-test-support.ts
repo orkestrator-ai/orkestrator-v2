@@ -291,10 +291,10 @@ export async function withService(
         paths: [...controls.uncommittedPaths],
       } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       return testGeneratedReviewPackage(args) as T;
     }
-    if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "verify_review_package") return { valid: true } as T;
     if (command === "cancel_review_validation") {
       const run = args.run as NonNullable<BuildPipeline["validationRun"]>;
       return { ...run, status: "cancelled" } as T;

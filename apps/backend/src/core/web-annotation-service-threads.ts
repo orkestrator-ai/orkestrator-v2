@@ -17,6 +17,7 @@ import {
   isWebAnnotationRequestActive,
   webAnnotationPageKey,
   webAnnotationProducerSource,
+  webAnnotationSourceHintFields,
   webAnnotationUtf8Bytes,
   type WebAnnotation,
   type WebAnnotationArchiveInput,
@@ -459,7 +460,13 @@ export class WebAnnotationThreads {
       page: input.page,
       target: input.target,
       geometry: input.geometry,
-      evidence: input.evidence,
+      // Validation accepts unknown keys in a hint; only the contract's fields are stored.
+      evidence: input.evidence?.sourceHints
+        ? {
+            ...input.evidence,
+            sourceHints: input.evidence.sourceHints.map(webAnnotationSourceHintFields),
+          }
+        : input.evidence,
       assetIds: input.assetIds,
       redaction: input.redaction,
       state: input.stale ? "stale" : "complete",

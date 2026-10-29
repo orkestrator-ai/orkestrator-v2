@@ -53,7 +53,6 @@ async function withCommands<T>(
   options: {
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
-    loopedReviews?: CommandContext["loopedReviews"];
     multiReviews?: CommandContext["multiReviews"];
     nativeAgents?: CommandContext["nativeAgents"];
     nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
@@ -93,7 +92,6 @@ async function withCommands<T>(
     emit: () => undefined,
     storage,
     buildPipelines: options.buildPipelines,
-    loopedReviews: options.loopedReviews,
     multiReviews: options.multiReviews,
     nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
     runtime: new BackendRuntime({ emit: () => undefined }),
@@ -3702,7 +3700,7 @@ describe("agent handoff commands", () => {
   });
 });
 
-describe("native agent and looped-review controller commands", () => {
+describe("native agent controller commands", () => {
   test("uses the real native service for interaction monitor commands", async () => {
     let service: NativeAgentService | undefined;
     await withCommands(
@@ -3783,7 +3781,7 @@ describe("native agent and looped-review controller commands", () => {
       {
         provider: "codex",
         kind: "question",
-        workflowSurface: "looped-review",
+        workflowSurface: "automated-review",
         phase: "discovery",
         firstDetectedAt: 1,
         lastDetectedAt: 1,
@@ -3810,7 +3808,7 @@ describe("native agent and looped-review controller commands", () => {
             environmentId: "e1",
             agent: "codex",
             logicalSessionKey: "env-e1:tab-1",
-            origin: "looped-review",
+            origin: "automated-review",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             title: "Review",
             model: "gpt-test",
@@ -3822,7 +3820,7 @@ describe("native agent and looped-review controller commands", () => {
           environmentId: "e1",
           agent: "codex",
           logicalSessionKey: "env-e1:tab-1",
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: "Review",
           model: "gpt-test",
@@ -3905,7 +3903,7 @@ describe("native agent and looped-review controller commands", () => {
             environmentId: "e1",
             agent: "claude",
             logicalSessionKey: "env-e1:tab-2",
-            origin: "looped-review",
+            origin: "automated-review",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             prompt: "Review this",
             requestId: "request-1",
@@ -3917,7 +3915,7 @@ describe("native agent and looped-review controller commands", () => {
           environmentId: "e1",
           agent: "claude",
           logicalSessionKey: "env-e1:tab-2",
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: undefined,
           model: undefined,
@@ -4193,81 +4191,6 @@ describe("native agent and looped-review controller commands", () => {
     });
   });
 
-  test("claims, validates, and releases a fenced looped-review controller lease", async () => {
-    await withCommands(async (invoke, storage) => {
-      await storage.saveLoopedReviewWorkflow("workflow-1", "e1", 1, {
-        id: "workflow-1",
-        phase: "reviewing",
-        controllerFence: "snapshot-token",
-      });
-
-      const claimed = (await invoke("claim_looped_review_controller", {
-        workflowId: "workflow-1",
-        ownerId: "desktop",
-        leaseMs: 15_000,
-      })) as { granted: boolean; token: string; expiresAt: string };
-      expect(claimed.granted).toBe(true);
-      expect(typeof claimed.token).toBe("string");
-      expect(claimed.token.length).toBeGreaterThan(0);
-      expect(Number.isFinite(Date.parse(claimed.expiresAt))).toBe(true);
-      const rendererWorkflow = (await invoke("get_looped_review_workflow", {
-        workflowId: "workflow-1",
-      })) as { snapshot: Record<string, unknown> };
-      expect(rendererWorkflow).not.toHaveProperty("controllerLease");
-      expect(rendererWorkflow.snapshot).not.toHaveProperty("controllerFence");
-      const listed = (await invoke("list_looped_review_workflows", {
-        environmentId: "e1",
-      })) as Array<Record<string, unknown>>;
-      expect(listed).toHaveLength(1);
-      expect(listed[0]).not.toHaveProperty("controllerLease");
-      expect(listed[0]?.snapshot).not.toHaveProperty("controllerFence");
-      const valid = await invoke("validate_looped_review_controller", {
-        workflowId: "workflow-1",
-        ownerId: "desktop",
-        token: claimed.token,
-      });
-      expect(valid).toBe(true);
-      await expect(
-        invoke("save_looped_review_workflow", {
-          workflowId: "workflow-1",
-          environmentId: "e1",
-          version: 1,
-          snapshot: { id: "workflow-1", phase: "fixing" },
-          expectedRevision: 1,
-          controllerOwnerId: "desktop",
-          controllerToken: claimed.token,
-        }),
-      ).resolves.toMatchObject({
-        revision: 2,
-        snapshot: { id: "workflow-1", phase: "fixing" },
-      });
-      await expect(
-        invoke("save_looped_review_workflow", {
-          workflowId: "workflow-1",
-          environmentId: "e1",
-          version: 1,
-          snapshot: { id: "workflow-1", phase: "stale" },
-          expectedRevision: 2,
-          controllerOwnerId: "desktop",
-        }),
-      ).rejects.toThrow("controllerToken");
-      await expect(
-        invoke("release_looped_review_controller", {
-          workflowId: "workflow-1",
-          ownerId: "desktop",
-          token: claimed.token,
-        }),
-      ).resolves.toBeUndefined();
-      await expect(
-        invoke("validate_looped_review_controller", {
-          workflowId: "workflow-1",
-          ownerId: "desktop",
-          token: claimed.token,
-        }),
-      ).resolves.toBe(false);
-    });
-  });
-
   test("reconciles a pending launch after setup and re-reads authoritative state", async () => {
     const reconcileInitialLaunch = mock(async (_environmentId: string) => undefined);
     const nativeAgents = {
@@ -4403,303 +4326,6 @@ describe("native agent and looped-review controller commands", () => {
   });
 });
 
-describe("looped review commands", () => {
-  const startInput = {
-    environmentId: "e1",
-    projectId: "proj-1",
-    agent: "codex",
-    model: "gpt-5.4",
-    targetBranch: "main",
-    allowance: 6,
-  } as const;
-
-  const workflowSnapshot = (
-    id: string,
-    phase: "preparing" | "cancelled" | "completed" = "preparing",
-  ) => {
-    const timestamp = new Date(0).toISOString();
-    return {
-      version: 2,
-      controller: "backend",
-      id,
-      environmentId: "e1",
-      projectId: "proj-1",
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-      startingAllowance: 6,
-      currentAllowance: 6,
-      currentRound: 1,
-      currentPass: 0,
-      phase,
-      rounds: [
-        {
-          round: 1,
-          allowance: 6,
-          status: phase === "completed" ? "completed" : "preparing",
-          passes: [],
-          startedAt: timestamp,
-        },
-      ],
-      sessions: [],
-      activePool: { issues: [], coverageGaps: [] },
-      archivedPools: [],
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      pr: { status: "pending" },
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      backendRevision: 1,
-    };
-  };
-
-  test("delegates every renderer lifecycle command to the backend supervisor", async () => {
-    const start = mock(async (input: unknown) => ({ operation: "start", input }));
-    const pause = mock(async (id: string) => ({ operation: "pause", id }));
-    const resume = mock(async (id: string) => ({ operation: "resume", id }));
-    const retry = mock(async (id: string) => ({ operation: "retry", id }));
-    const cancel = mock(async (id: string) => ({ operation: "cancel", id }));
-    const providerSession = mock(async (id: string, sessionId?: string) => ({
-      providerSessionId: `${id}:${sessionId ?? "active"}`,
-    }));
-    const supervisor = {
-      start,
-      pause,
-      resume,
-      retry,
-      cancel,
-      providerSession,
-    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
-
-    await withCommands(
-      async (invoke) => {
-        await expect(invoke("start_looped_review", startInput)).resolves.toMatchObject({
-          operation: "start",
-        });
-        await expect(invoke("pause_looped_review", { workflowId: "review-1" })).resolves.toEqual({
-          operation: "pause",
-          id: "review-1",
-        });
-        await expect(invoke("resume_looped_review", { workflowId: "review-1" })).resolves.toEqual({
-          operation: "resume",
-          id: "review-1",
-        });
-        await expect(invoke("retry_looped_review", { workflowId: "review-1" })).resolves.toEqual({
-          operation: "retry",
-          id: "review-1",
-        });
-        await expect(invoke("cancel_looped_review", { workflowId: "review-1" })).resolves.toEqual({
-          operation: "cancel",
-          id: "review-1",
-        });
-        await expect(
-          invoke("get_looped_review_provider_session", {
-            workflowId: "review-1",
-            sessionId: "session-1",
-          }),
-        ).resolves.toEqual({ providerSessionId: "review-1:session-1" });
-        await expect(
-          invoke("get_looped_review_provider_session", {
-            workflowId: "review-1",
-          }),
-        ).resolves.toEqual({ providerSessionId: "review-1:active" });
-
-        expect(start).toHaveBeenCalledWith(startInput);
-        expect(providerSession).toHaveBeenCalledWith("review-1", "session-1");
-        expect(providerSession).toHaveBeenCalledWith("review-1", undefined);
-      },
-      { loopedReviews: supervisor },
-    );
-  });
-
-  test("strips the controller fence from every lifecycle response", async () => {
-    // The supervisor stamps the live lease token onto the workflow it returns,
-    // and the renderer installs these responses straight into its store — in
-    // gateway mode across a network. `get`/`list` already redact it; the
-    // lifecycle commands must not be the hole in that guarantee.
-    const workflow = (operation: string) => ({
-      operation,
-      id: "review-1",
-      phase: "preparing",
-      controllerFence: "secret-fence",
-    });
-    const supervisor = {
-      start: mock(async () => workflow("start")),
-      pause: mock(async () => workflow("pause")),
-      resume: mock(async () => workflow("resume")),
-      retry: mock(async () => workflow("retry")),
-      cancel: mock(async () => workflow("cancel")),
-      providerSession: mock(async () => null),
-    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
-
-    await withCommands(
-      async (invoke) => {
-        const commands: Array<[string, Record<string, unknown>]> = [
-          ["start_looped_review", startInput as unknown as Record<string, unknown>],
-          ["pause_looped_review", { workflowId: "review-1" }],
-          ["resume_looped_review", { workflowId: "review-1" }],
-          ["retry_looped_review", { workflowId: "review-1" }],
-          ["cancel_looped_review", { workflowId: "review-1" }],
-        ];
-        for (const [command, args] of commands) {
-          const result = (await invoke(command, args)) as Record<string, unknown>;
-          expect(result).not.toHaveProperty("controllerFence");
-          // The rest of the snapshot must survive untouched.
-          expect(result.id).toBe("review-1");
-          expect(result.phase).toBe("preparing");
-        }
-      },
-      { loopedReviews: supervisor },
-    );
-  });
-
-  test("validates lifecycle input and rejects renderer writes to version 2", async () => {
-    const supervisor = {
-      start: mock(async () => undefined),
-      pause: mock(async () => undefined),
-      resume: mock(async () => undefined),
-      retry: mock(async () => undefined),
-      cancel: mock(async () => undefined),
-      providerSession: mock(async () => undefined),
-    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
-
-    await withCommands(
-      async (invoke, storage) => {
-        await expect(
-          invoke("start_looped_review", { ...startInput, allowance: 11 }),
-        ).rejects.toThrow("Invalid looped review start request");
-        await expect(invoke("pause_looped_review", { workflowId: " " })).rejects.toThrow(
-          "non-blank string",
-        );
-
-        await storage.saveLoopedReviewWorkflow(
-          "review-1",
-          "e1",
-          2,
-          { id: "review-1", controllerFence: "snapshot-token" },
-          0,
-        );
-        const claim = await storage.claimLoopedReviewController(
-          "review-1",
-          "backend-controller",
-          15_000,
-        );
-        const rendererWorkflow = (await invoke("get_looped_review_workflow", {
-          workflowId: "review-1",
-        })) as { snapshot: Record<string, unknown> };
-        expect(rendererWorkflow).not.toHaveProperty("controllerLease");
-        expect(rendererWorkflow.snapshot).not.toHaveProperty("controllerFence");
-        await expect(
-          invoke("save_looped_review_workflow", {
-            workflowId: "review-1",
-            environmentId: "e1",
-            version: 2,
-            snapshot: { id: "review-1", phase: "paused" },
-            expectedRevision: 1,
-          }),
-        ).rejects.toThrow("only be changed through workflow commands");
-        await expect(
-          invoke("save_looped_review_workflow", {
-            workflowId: "review-1",
-            environmentId: "e1",
-            version: 1,
-            snapshot: { id: "review-1", phase: "paused" },
-            expectedRevision: 1,
-          }),
-        ).rejects.toThrow("only be changed through workflow commands");
-        await expect(
-          invoke("claim_looped_review_controller", {
-            workflowId: "review-1",
-            ownerId: "renderer",
-            leaseMs: 15_000,
-          }),
-        ).rejects.toThrow("not available to renderers");
-        await expect(
-          invoke("validate_looped_review_controller", {
-            workflowId: "review-1",
-            ownerId: "backend-controller",
-            token: claim.token,
-          }),
-        ).rejects.toThrow("not available to renderers");
-        await expect(
-          invoke("release_looped_review_controller", {
-            workflowId: "review-1",
-            ownerId: "backend-controller",
-            token: claim.token,
-          }),
-        ).rejects.toThrow("not available to renderers");
-        expect(
-          await storage.validateLoopedReviewController(
-            "review-1",
-            "backend-controller",
-            claim.token,
-          ),
-        ).toBe(true);
-
-        await expect(
-          invoke("get_looped_review_provider_session", {
-            workflowId: "review-1",
-            sessionId: " ",
-          }),
-        ).rejects.toThrow("non-blank string");
-        await expect(
-          invoke("get_looped_review_provider_session", {
-            workflowId: " ",
-          }),
-        ).rejects.toThrow("non-blank string");
-      },
-      { loopedReviews: supervisor },
-    );
-  });
-
-  test("refuses active deletion and removes terminal backend-owned workflows", async () => {
-    await withCommands(async (invoke, storage) => {
-      await storage.saveLoopedReviewWorkflow(
-        "review-active",
-        "e1",
-        2,
-        workflowSnapshot("review-active"),
-      );
-      await storage.saveLoopedReviewWorkflow(
-        "review-terminal",
-        "e1",
-        2,
-        workflowSnapshot("review-terminal", "completed"),
-      );
-
-      await expect(
-        invoke("delete_looped_review_workflow", {
-          workflowId: "review-active",
-        }),
-      ).rejects.toThrow("must be cancelled before deletion");
-      await expect(
-        invoke("delete_looped_review_workflow", {
-          workflowId: "review-terminal",
-        }),
-      ).resolves.toBeUndefined();
-      expect(await storage.getLoopedReviewWorkflow("review-active")).not.toBeNull();
-      expect(await storage.getLoopedReviewWorkflow("review-terminal")).toBeNull();
-    });
-  });
-
-  test("fails every lifecycle command closed when the supervisor is unavailable", async () => {
-    await withCommands(async (invoke) => {
-      const calls: Array<[string, Record<string, unknown>]> = [
-        ["start_looped_review", startInput],
-        ["pause_looped_review", { workflowId: "review-1" }],
-        ["resume_looped_review", { workflowId: "review-1" }],
-        ["retry_looped_review", { workflowId: "review-1" }],
-        ["cancel_looped_review", { workflowId: "review-1" }],
-        ["get_looped_review_provider_session", { workflowId: "review-1" }],
-      ];
-      for (const [command, args] of calls) {
-        await expect(invoke(command, args)).rejects.toThrow(
-          "Looped review supervisor is unavailable",
-        );
-      }
-    });
-  });
-});
-
 describe("multi review commands", () => {
   const startInput = {
     environmentId: "e1",
@@ -4711,6 +4337,32 @@ describe("multi review commands", () => {
     ],
     fixModel: { agent: "codex", model: "gpt-5.6" },
   } as const;
+
+  test("strips the controller lease and fence from renderer reads", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveMultiReviewWorkflow("workflow-1", "e1", 1, {
+        id: "workflow-1",
+        phase: "reviewing",
+        controllerFence: "snapshot-token",
+      });
+      const claimed = await storage.claimMultiReviewController("workflow-1", "backend", 15_000);
+      expect(claimed.granted).toBe(true);
+      expect((await storage.getMultiReviewWorkflow("workflow-1"))?.controllerLease).toBeDefined();
+
+      const rendererWorkflow = (await invoke("get_multi_review_workflow", {
+        workflowId: "workflow-1",
+      })) as { snapshot: Record<string, unknown> };
+      expect(rendererWorkflow).not.toHaveProperty("controllerLease");
+      expect(rendererWorkflow.snapshot).not.toHaveProperty("controllerFence");
+      expect(rendererWorkflow.snapshot).toMatchObject({ id: "workflow-1", phase: "reviewing" });
+      const listed = (await invoke("list_multi_review_workflows", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).not.toHaveProperty("controllerLease");
+      expect(listed[0]?.snapshot).not.toHaveProperty("controllerFence");
+    });
+  });
 
   test("delegates lifecycle intents and strips the backend controller fence", async () => {
     const workflow = (operation: string) => ({

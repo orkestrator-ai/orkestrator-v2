@@ -173,6 +173,102 @@ describe("AGENTS.md approval dialog", () => {
     expect(diffLines("add")[0]).toBe("+ ## Orkestrator");
   });
 
+  test("entries wrap and grow in a capped textarea but stay one line", async () => {
+    backend();
+    const long = `Keep ${"a long decision ".repeat(20)}on one line.`;
+    render(
+      <AgentsMdApprovalDialog
+        request={{ ...request, agentsMd: { changes: [{ action: "add", text: long }] } }}
+        onSettled={() => {}}
+      />,
+    );
+    await screen.findByTestId("agents-md-diff");
+    const entry = screen.getByRole("textbox", { name: "Entry 1 text" }) as HTMLTextAreaElement;
+    expect(entry.tagName).toBe("TEXTAREA");
+    expect(entry.value).toBe(long);
+    expect(entry.maxLength).toBe(500);
+    expect(entry.getAttribute("wrap")).toBeNull();
+    expect(entry.className).toContain("field-sizing-content");
+    expect(entry.className).toContain("max-h-[calc(8lh+0.75rem+2px)]");
+
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    entry.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    const composing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    entry.dispatchEvent(composing);
+    expect(composing.defaultPrevented).toBe(false);
+
+    await act(async () => {
+      fireEvent.change(entry, { target: { value: "Pasted\nacross\nthree lines" } });
+    });
+    expect(entry.value).toBe("Pasted across three lines");
+    expect(diffLines("add")).toContain("+ - Pasted across three lines");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("entries and diff scroll between a fixed header and footer", async () => {
+    backend();
+    const long = (n: number) => `Decision ${n}: ${"keep this entry readable in full ".repeat(12)}`;
+    render(
+      <AgentsMdApprovalDialog
+        request={{
+          ...request,
+          agentsMd: {
+            changes: [1, 2, 3, 4, 5, 6].map((n) => ({ action: "add" as const, text: long(n) })),
+          },
+        }}
+        onSettled={() => {}}
+      />,
+    );
+    await screen.findByTestId("agents-md-diff");
+    const dialog = screen.getByTestId("agents-md-request");
+    const body = screen.getByTestId("agents-md-body");
+    expect(dialog.className).toContain("flex-col");
+    expect(body.className).toContain("overflow-y-auto");
+    expect(body.className).toContain("min-h-0");
+    expect(body.contains(screen.getByTestId("agents-md-diff"))).toBe(true);
+    expect(screen.getAllByTestId("agents-md-entry")).toHaveLength(6);
+    for (const name of ["Decline", "Approve and open PR"]) {
+      const button = screen.getByRole("button", { name });
+      expect(body.contains(button)).toBe(false);
+      expect(button.closest('[data-slot="dialog-footer"]')?.className).toContain("shrink-0");
+    }
+  });
+
+  test("paste falls back to a normalized selection replacement without an editing command", async () => {
+    backend();
+    render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+    await screen.findByTestId("agents-md-diff");
+    const entry = screen.getByRole("textbox", { name: "Entry 1 text" }) as HTMLTextAreaElement;
+    const original = entry.value;
+    entry.focus();
+    entry.setSelectionRange(0, 6);
+    await act(async () => {
+      fireEvent.paste(entry, {
+        clipboardData: { getData: () => "Save\nthese\u2028decisions" },
+      });
+    });
+    expect(entry.value).toBe(`Save these decisions${original.slice(6)}`);
+    expect(diffLines("add")).toContain(`+ - ${entry.value}`);
+  });
+
+  test("an unchecked row's entry is disabled", async () => {
+    backend();
+    render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+    await screen.findByTestId("agents-md-diff");
+    const entry = screen.getByRole("textbox", { name: "Entry 2 text" }) as HTMLTextAreaElement;
+    expect(entry.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Include entry 2" }));
+    });
+    expect(entry.disabled).toBe(true);
+  });
+
   test("the coordinator request dialog routes AGENTS.md requests here", async () => {
     backend();
     render(

@@ -3,7 +3,11 @@
  * template, or a built-in prompt's text) followed by the locked system
  * contract. The designer's preview (212) and the agent executor (204) both
  * call {@link renderGraphNodePrompt}, so the preview is what the agent gets.
- * Browser-safe.
+ *
+ * A node replicated over lenses whose template never names `lens` still
+ * gets its branch's lens: {@link graphPromptLensText} is appended to the
+ * user part, last, so every branch shares the cached prefix before it
+ * (item 205). Browser-safe.
  */
 import { escapeFramedEvidenceText } from "../review-evidence-frames.js";
 import type {
@@ -27,6 +31,7 @@ import {
 import {
   type GraphPromptDiagnostic,
   GraphPromptDiagnostics,
+  type GraphPromptNode,
   parseGraphPromptTemplate,
   renderGraphPromptTemplate,
 } from "./prompt-template.js";
@@ -88,6 +93,20 @@ export interface GraphNodePromptRender {
   omittedDiagnostics: number;
 }
 
+/** The lens block appended to a template that does not name `lens` itself. */
+export function graphPromptLensText(lens: { label: string; instruction: string }): string {
+  return neutralizeGraphPromptText(`Lens: ${lens.label}\n\n${lens.instruction}`);
+}
+
+/** Whether a template names the `lens` root anywhere. */
+function namesLens(nodes: readonly GraphPromptNode[]): boolean {
+  return nodes.some(
+    (node) =>
+      (node.kind === "variable" || node.kind === "section") &&
+      (node.path[0] === "lens" || (node.kind === "section" && namesLens(node.children))),
+  );
+}
+
 function renderUser(
   input: GraphNodePromptRenderInput,
   scope: GraphPromptScope,
@@ -132,6 +151,10 @@ function renderUser(
     lookup: { aliases, containers: CONTAINERS },
   });
   diagnostics.addAll(rendered.diagnostics);
+  const lens = scope.bound.has("lens") ? input.values.lens : undefined;
+  if (lens && !namesLens(template!.nodes)) {
+    return `${rendered.text.replace(/\s+$/u, "")}\n\n${graphPromptLensText(lens)}\n`;
+  }
   return rendered.text;
 }
 

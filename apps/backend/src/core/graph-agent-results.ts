@@ -18,7 +18,11 @@
  */
 import type { GraphPlanAgentNode, GraphPlanOutputPort } from "@orkestrator/protocol/graphs/compile";
 import type { GraphProvenanceSources } from "@orkestrator/protocol/graphs/provenance";
-import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
+import {
+  graphAcceptedItemIds,
+  type GraphRun,
+  type NodeActivation,
+} from "@orkestrator/protocol/graphs/run";
 import {
   GraphTypeLibrary,
   type GraphTypeDefinition,
@@ -411,23 +415,18 @@ export class GraphAgentResults {
 }
 
 /**
- * Stable item ids of an accepted value whose type has `items`:
- * `<node>[.<branch>][@<iteration>]/<idPrefix>-<n>` (report §5.8, §5.9).
+ * Stable item ids of an accepted value whose type has `items`, from the one
+ * protocol derivation (`graphAcceptedItemIds`, item 205):
+ * `<node>[/iter-<n>][/<branch>]/<idPrefix>-<k>` (report §5.8, §5.9).
  */
 export function graphAgentItemIds(
   definition: GraphTypeDefinition,
   value: unknown,
   activation: Pick<NodeActivation, "nodeId" | "branchKey" | "iteration">,
 ): string[] | undefined {
-  if (!definition.items) return undefined;
-  let list: unknown = value;
-  for (const segment of definition.items.path.split(".")) {
-    list =
-      list && typeof list === "object" ? (list as Record<string, unknown>)[segment] : undefined;
-  }
-  if (!Array.isArray(list) || list.length === 0) return undefined;
-  const tag = `${activation.nodeId}${activation.branchKey ? `.${activation.branchKey}` : ""}${
-    activation.iteration > 1 ? `@${activation.iteration}` : ""
-  }`;
-  return list.map((_, index) => `${tag}/${definition.items!.idPrefix}-${index + 1}`.slice(-128));
+  return graphAcceptedItemIds(definition.items, value, {
+    nodeId: activation.nodeId,
+    iteration: activation.iteration,
+    ...(activation.branchKey !== undefined ? { branchKey: activation.branchKey } : {}),
+  });
 }

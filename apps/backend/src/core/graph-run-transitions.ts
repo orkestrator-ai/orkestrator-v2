@@ -219,7 +219,8 @@ export function settleGraphActivation(
   key: string,
   state: "skipped" | "cancelled" | "failed",
   at: string,
-  failure?: { error: string; cause: GraphErrorCause },
+  /** A cancelled activation may carry an explanation without a cause. */
+  failure?: { error: string; cause?: GraphErrorCause },
 ): GraphRun {
   const replaced = replaceGraphActivation(run, key, (activation) => {
     if (
@@ -232,7 +233,8 @@ export function settleGraphActivation(
       ...activation,
       state,
       finishedAt: at,
-      ...(failure ? { error: boundGraphError(failure.error), errorCause: failure.cause } : {}),
+      ...(failure ? { error: boundGraphError(failure.error) } : {}),
+      ...(failure?.cause ? { errorCause: failure.cause } : {}),
     };
   });
   if (!replaced.ok) throw new GraphRunTransitionError(replaced.message);

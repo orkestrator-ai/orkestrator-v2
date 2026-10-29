@@ -35,12 +35,11 @@
  *   unchanged. A failed activation delivers only its `error` port: the
  *   routed `error@1` artifact, pending while the runtime stores it.
  * - A replicated producer feeding a list port without `zip` (fan-in) is
- *   collected per the port's {@link GraphCollectPolicy}: `all-settled` waits
- *   for every branch, `quorum` and `first` for `count` successes. Fewer than
- *   `minSuccessful` successes fail the port. A fan-in whose branches were
- *   all skipped is absent, so the skip propagates instead. With `zip`,
- *   branch k reads branch k. An unreplicated producer feeds every branch of
- *   a replicated consumer.
+ *   collected per the port's {@link GraphCollectPolicy} (item 205; see
+ *   {@link collectGraphBranches}). A fan-in whose branches were all skipped
+ *   is absent, so the skip propagates instead. With `zip`, branch k reads
+ *   branch k (no fan-in). An unreplicated producer feeds every branch of a
+ *   replicated consumer.
  * - A single-value port takes its (compiler-checked, mutually exclusive)
  *   live producer; a list port concatenates its live producers.
  *
@@ -59,12 +58,29 @@
  * - nothing yet while an input is pending, or while a `when` needs an
  *   artifact value the pass has not loaded (`needValues`).
  *
- * Collect policy gaps left to item 205: `first` cancelling the remaining
- * branches, and `includeFailures` failure markers in the delivered list (the
- * list carries the successful artifacts only).
+ * ## Collect policies (item 205; report §4.4)
+ *
+ * - `all-settled` waits until every branch is terminal and delivers every
+ *   success, in branch order.
+ * - `quorum` delivers once `count` branches succeeded: every success known
+ *   then, in branch order. The other branches keep running; their results
+ *   reach other consumers only.
+ * - `first` delivers the first `count` successes by finish time (branch order
+ *   breaks ties), listed in branch order. The pass then cancels the
+ *   remaining branches when nothing else reads them (`graphSurplusBranches`
+ *   in `graph-run-scheduling.ts`).
+ * - Fewer than `minSuccessful` successes, possible or actual, fail the port.
+ * - `includeFailures` adds each failed branch's failure marker (an `error@1`
+ *   artifact the runtime records as the failed activation's `error` output,
+ *   as for `onFailure: route`) to the list, in branch order; `all-settled`
+ *   waits until the markers are stored, `quorum` and `first` include the
+ *   ones already stored. Markers never count as successes. Merges skip them
+ *   (except `collect`); an agent's prompt shows them as failed branches. Run
+ *   outputs never include markers.
  */
 import { GRAPH_DEFAULT_COLLECT_POLICY } from "@orkestrator/protocol/graphs/compile";
 import type {
+  CompiledGraphPlan,
   GraphPlanEdge,
   GraphPlanInputPort,
   GraphPlanNode,
@@ -74,7 +90,11 @@ import {
   type GraphPredicate,
 } from "@orkestrator/protocol/graphs/predicates";
 import { graphActivationKey, type NodeActivation } from "@orkestrator/protocol/graphs/run";
-import type { GraphEdgeSource, GraphPortRef } from "@orkestrator/protocol/graphs/template";
+import type {
+  GraphCollectPolicy,
+  GraphEdgeSource,
+  GraphPortRef,
+} from "@orkestrator/protocol/graphs/template";
 import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import { graphEdgeNeedsDelivery, planGraphEdgeDelivery } from "./graph-edge-transforms.js";
 import type { GraphRunView } from "./graph-run-view.js";
@@ -82,7 +102,8 @@ import type { GraphRunView } from "./graph-run-view.js";
 /** How one producer, port or node position resolves. */
 export type GraphInputResolution =
   | { kind: "pending" }
-  | { kind: "live"; ids: string[] }
+  /** `markers`: the failure markers among `ids` (`includeFailures`), kept out of edge transforms. */
+  | { kind: "live"; ids: string[]; markers?: string[] }
   | { kind: "absent" }
   | { kind: "failed"; message: string; cause?: GraphErrorCause };
 
@@ -181,43 +202,117 @@ function producerIteration(
   return loopDone(producer.loop) ? view.iteration(producer.loop) : null;
 }
 
-function collect(
+/** A fan-in port's policy with the defaults filled (`all-settled`, 1, include failures). */
+export function graphCollectPolicy(port: GraphPlanInputPort | null): GraphCollectPolicy {
+  return port?.collect ?? GRAPH_DEFAULT_COLLECT_POLICY;
+}
+
+/**
+ * Whether some fan-in reading `nodeId` (an edge without `zip`, or a loop
+ * carry) passes failure markers downstream, so the runtime records one for
+ * each of the node's failed branches.
+ */
+export function graphFailureMarkersWanted(plan: CompiledGraphPlan, nodeId: string): boolean {
+  const port = (target: { node: string; port: string }) =>
+    plan.nodes
+      .find((node) => node.id === target.node)
+      ?.inputs.find((input) => input.name === target.port) ?? null;
+  const wants = (target: { node: string; port: string }) =>
+    graphCollectPolicy(port(target)).includeFailures;
+  return (
+    plan.edges.some(
+      (edge) =>
+        "node" in edge.from &&
+        edge.from.node === nodeId &&
+        edge.from.outlet === undefined &&
+        !edge.zip &&
+        wants(edge.to),
+    ) ||
+    plan.loops.some((loop) =>
+      loop.carry.some((carry) => carry.from.node === nodeId && wants(carry.to)),
+    )
+  );
+}
+
+/**
+ * Collects a replicated producer's branches at one iteration for a fan-in
+ * port (`null`: a run output) per its collect policy (module header).
+ */
+export function collectGraphBranches(
   view: GraphRunView,
   producer: GraphPlanNode,
   producerAt: number,
   source: GraphPortRef,
   port: GraphPlanInputPort | null,
 ): GraphInputResolution {
-  const policy = port?.collect ?? GRAPH_DEFAULT_COLLECT_POLICY;
+  const policy = graphCollectPolicy(port);
+  const includeFailures = port !== null && policy.includeFailures && source.outlet === undefined;
   const branches = view.branchKeysOf(producer);
-  const ids: string[] = [];
+  const successes: { index: number; ids: string[]; finishedAt: string }[] = [];
+  const markers: { index: number; id: string }[] = [];
   let pending = 0;
+  let pendingMarkers = 0;
   let skipped = 0;
-  for (const branchKey of branches) {
+  branches.forEach((branchKey, index) => {
     const latest = view.latestAt(producer.id, producerAt, branchKey);
     if (latest?.state === "skipped") skipped += 1;
     const delivery = graphActivationDelivery(latest, source.port, source.outlet, producer);
-    if (delivery.kind === "live") ids.push(...delivery.ids);
-    else if (delivery.kind === "pending") pending += 1;
-  }
+    if (delivery.kind === "live") {
+      successes.push({ index, ids: delivery.ids, finishedAt: latest?.finishedAt ?? "" });
+    } else if (delivery.kind === "pending") {
+      pending += 1;
+    } else if (includeFailures && latest?.state === "failed") {
+      const marker = latest.outputs[GRAPH_ERROR_PORT];
+      if (marker !== undefined) markers.push({ index, id: marker });
+      // The runtime stores the marker before an `all-settled` fan-in reads it.
+      else if (
+        producer.onFailure === "route" ||
+        graphFailureMarkersWanted(view.plan, producer.id)
+      ) {
+        pendingMarkers += 1;
+      }
+    }
+  });
   // Every branch skipped (an untaken outlet, a false `when`): the skip
   // propagates; the collect policy judges branches that ran.
   if (branches.length > 0 && skipped === branches.length) return ABSENT;
+  const deliver = (taken: typeof successes): GraphInputResolution => {
+    const entries = [
+      ...taken.map((entry) => ({ index: entry.index, ids: entry.ids, marker: false })),
+      ...markers.map((entry) => ({ index: entry.index, ids: [entry.id], marker: true })),
+    ].sort((left, right) => left.index - right.index);
+    const ids = entries.flatMap((entry) => entry.ids);
+    const markerIds = entries.filter((entry) => entry.marker).flatMap((entry) => entry.ids);
+    return { kind: "live", ids, ...(markerIds.length > 0 ? { markers: markerIds } : {}) };
+  };
   // `quorum` and `first` deliver once `count` branches succeeded; `all-settled` waits for all.
   const target =
-    policy.wait === "all-settled" ? null : Math.min(policy.count ?? 1, branches.length);
-  if (target !== null && ids.length >= Math.max(target, policy.minSuccessful)) {
-    return { kind: "live", ids };
+    policy.wait === "all-settled"
+      ? null
+      : Math.max(Math.min(policy.count ?? 1, branches.length), policy.minSuccessful);
+  if (target !== null && successes.length >= target) {
+    if (policy.wait === "quorum") return deliver(successes);
+    // `first`: the earliest finishers; the rest are surplus.
+    const earliest = [...successes]
+      .sort(
+        (left, right) =>
+          left.finishedAt.localeCompare(right.finishedAt) || left.index - right.index,
+      )
+      .slice(0, target);
+    return deliver(earliest);
   }
   if (pending > 0) {
     // Short of the bound even if every pending branch succeeds: fail now.
-    if (ids.length + pending < policy.minSuccessful) {
-      return collectFailure(port, ids.length, branches.length, policy.minSuccessful);
+    if (successes.length + pending < policy.minSuccessful) {
+      return collectFailure(port, successes.length, branches.length, policy.minSuccessful);
     }
     return PENDING;
   }
-  if (ids.length >= policy.minSuccessful) return { kind: "live", ids };
-  return collectFailure(port, ids.length, branches.length, policy.minSuccessful);
+  if (successes.length < policy.minSuccessful) {
+    return collectFailure(port, successes.length, branches.length, policy.minSuccessful);
+  }
+  if (pendingMarkers > 0) return PENDING;
+  return deliver(successes);
 }
 
 function collectFailure(
@@ -277,7 +372,7 @@ export function resolveGraphEdgeSource(
       producer,
     );
   }
-  return collect(view, producer, at, source, options.port);
+  return collectGraphBranches(view, producer, at, source, options.port);
 }
 
 /**
@@ -362,7 +457,15 @@ export function resolveGraphInputPort(
       loopDone,
     });
     if (deliver && resolved.kind === "live" && graphEdgeNeedsDelivery(edge)) {
-      resolved = deliverThroughEdge(view, { node, key: deliver.key }, port, edge.id, resolved.ids);
+      // Failure markers are not values of the edge's type: they bypass its
+      // transforms and follow the delivered values.
+      const markers = resolved.markers ?? [];
+      const values = resolved.ids.filter((id) => !markers.includes(id));
+      const delivered = deliverThroughEdge(view, { node, key: deliver.key }, port, edge.id, values);
+      resolved =
+        delivered.kind === "live" && markers.length > 0
+          ? { kind: "live", ids: [...delivered.ids, ...markers], markers }
+          : delivered;
     }
     sources.push(resolved);
   }
@@ -379,7 +482,7 @@ export function resolveGraphInputPort(
               carry.from.outlet,
               producer,
             )
-          : collect(view, producer, iteration - 1, carry.from, port),
+          : collectGraphBranches(view, producer, iteration - 1, carry.from, port),
       );
     }
   }
@@ -389,7 +492,13 @@ export function resolveGraphInputPort(
     if (failed) return failed;
     if (sources.some((source) => source.kind === "pending")) return PENDING;
     const live = sources.filter((source) => source.kind === "live");
-    return live.length === 0 ? ABSENT : { kind: "live", ids: live.flatMap((source) => source.ids) };
+    if (live.length === 0) return ABSENT;
+    const markers = live.flatMap((source) => source.markers ?? []);
+    return {
+      kind: "live",
+      ids: live.flatMap((source) => source.ids),
+      ...(markers.length > 0 ? { markers } : {}),
+    };
   }
   const live = sources.find((source) => source.kind === "live" && source.ids.length > 0);
   if (live && live.kind === "live") return { kind: "live", ids: [live.ids[0]!] };

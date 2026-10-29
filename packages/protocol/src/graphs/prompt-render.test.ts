@@ -499,3 +499,110 @@ describe("renderGraphNodePrompt", () => {
     }
   });
 });
+
+describe("item ids and failed branches (item 205)", () => {
+  const compiled = compileGraphCapabilities({ spec: { profile: "reviewer" }, environment: host });
+  const REPORT = graphBuiltInType("review-report@1")!.example as {
+    issues: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  const report = (titles: string[]) => ({
+    ...structuredClone(REPORT),
+    issues: titles.map((title) => ({ ...structuredClone(REPORT.issues[0]!), title })),
+  });
+  const marker = {
+    node: "review",
+    cause: "provider-error",
+    code: "provider_error",
+    message: "The provider was unreachable",
+    attempts: 1,
+    retryable: true,
+  };
+  function reportsPort(render: GraphRenderMode): GraphPromptPort {
+    const node = agentNode({
+      inputs: [{ name: "reports", type: "list<review-report@1>", render }],
+    });
+    return graphPromptScope({ node, template: {} }).ports.get("reports")!;
+  }
+  const values: GraphPromptValues = {
+    inputs: { reports: [report(["One", "Two"]), marker, report(["Three"])] },
+    elements: {
+      reports: [
+        { itemIds: ["review/panel.1/issue-1", "review/panel.1/issue-2"] },
+        { failure: true },
+        { itemIds: ["review/panel.3/issue-1"] },
+      ],
+    },
+  };
+
+  test("json-frame: every item carries its sourceId; a failed branch is wrapped", () => {
+    const { text, diagnostics } = renderGraphPromptInput(reportsPort("json-frame"), values);
+    expect(diagnostics).toEqual([]);
+    const body = JSON.parse(framed(text)) as Record<string, unknown>[];
+    expect(
+      (body[0]!.issues as Record<string, unknown>[]).map((issue) => [issue.sourceId, issue.title]),
+    ).toEqual([
+      ["review/panel.1/issue-1", "One"],
+      ["review/panel.1/issue-2", "Two"],
+    ]);
+    // The id comes first, so it reads as the item's name.
+    expect(Object.keys((body[0]!.issues as Record<string, unknown>[])[0]!)[0]).toBe("sourceId");
+    expect(body[1]).toEqual({ branchFailed: marker });
+    expect((body[2]!.issues as Record<string, unknown>[])[0]!.sourceId).toBe(
+      "review/panel.3/issue-1",
+    );
+    // The values themselves are not changed.
+    expect((values.inputs.reports as (typeof REPORT)[])[0]!.issues[0]!.sourceId).toBeUndefined();
+  });
+
+  test("markdown and summary: a Source ids line after each element; failures as a line", () => {
+    for (const mode of ["markdown", "summary"] as const) {
+      const { text } = renderGraphPromptInput(reportsPort(mode), values);
+      const parts = framed(text).split("\n\n---\n\n");
+      expect(parts).toHaveLength(3);
+      expect(
+        parts[0]!.endsWith(
+          "Source ids (one per item, in order): review/panel.1/issue-1, review/panel.1/issue-2",
+        ),
+      ).toBe(true);
+      expect(parts[1]).toBe("Branch failed (provider-error): The provider was unreachable");
+      expect(
+        parts[2]!.endsWith("Source ids (one per item, in order): review/panel.3/issue-1"),
+      ).toBe(true);
+    }
+  });
+
+  test("without runtime element facts (a preview) nothing is added", () => {
+    const { text } = renderGraphPromptInput(reportsPort("json-frame"), {
+      inputs: { reports: [report(["One"])] },
+    });
+    expect(text).not.toContain("sourceId");
+    const single = graphPromptScope({
+      node: agentNode({ inputs: [{ name: "report", type: "review-report@1" }] }),
+      template: {},
+    }).ports.get("report")!;
+    const one = renderGraphPromptInput(single, {
+      inputs: { report: report(["Only"]) },
+      elements: { report: [{ itemIds: ["fix/iter-2/issue-1"] }] },
+    });
+    expect(one.text).toContain('"sourceId":"fix/iter-2/issue-1"');
+  });
+
+  test("a lens the template does not name is appended last; a named lens is not repeated", () => {
+    const lens = { key: "sec", label: "Security", instruction: "Look for holes." };
+    const replicate = { over: "lenses" as const, lenses: [lens] };
+    const render = (template: string) =>
+      renderGraphNodePrompt({
+        node: agentNode({ prompt: { template }, replicate }),
+        template: { types: [NOTE] },
+        compiled,
+        values: { inputs: { note: NOTE.example }, lens, resultKeys: { report: "k" } },
+      }).user;
+    const appended = render("Review.\n\n{{> input.note}}\n");
+    expect(
+      appended.endsWith("</orkestrator-evidence>\n\nLens: Security\n\nLook for holes.\n"),
+    ).toBe(true);
+    const named = render("Review with {{lens.instruction}}\n\n{{> input.note}}\n");
+    expect(named.match(/Look for holes\./g)).toHaveLength(1);
+    expect(named).not.toContain("Lens: Security");
+  });
+});

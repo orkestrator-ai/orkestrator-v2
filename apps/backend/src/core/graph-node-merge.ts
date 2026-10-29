@@ -28,7 +28,8 @@
  *
  * **Item ids.** A T with `items` gives each item a stable id: the producer's
  * recorded `itemIds`, or `<node>[/iter-<n>][/<branch>]/<idPrefix>-<k>` derived
- * from the producing activation (report §5.8). `concat` keeps them all;
+ * from the producing activation (report §5.8; the protocol's
+ * `graphArtifactItemIds`, which the agent executor and prompts share). `concat` keeps them all;
  * `dedupe` keeps the first item of each key group under its id, records
  * every folded id in the artifact's `itemSources`, and, when T's items have a
  * source-id field (`x-orkestrator-sources`, such as a finding's
@@ -44,7 +45,7 @@ import { GRAPH_TEMPLATE_BOUNDS, graphUtf8Bytes } from "@orkestrator/protocol/gra
 import {
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_RUN_LIMIT_CODES,
-  parseGraphActivationKey,
+  graphArtifactItemIds,
   type GraphArtifactProducer,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphMergeStrategy } from "@orkestrator/protocol/graphs/template";
@@ -159,29 +160,13 @@ function uniqueStrings(values: Iterable<string>): string[] {
 
 const MAX_ITEM_ID_CHARS = GRAPH_ARTIFACT_BUDGETS.maxItemIdChars;
 
-/**
- * The stable ids of an artifact's items: the producer's recorded `itemIds`
- * when they match the items, else derived from the producing activation as
- * `<node>[/iter-<n>][/<branch>]/<idPrefix>-<k>` (1-based `k`).
- */
-export function graphArtifactItemIds(
-  source: Pick<GraphMergeSource, "id" | "producer" | "itemIds">,
-  definition: GraphTypeDefinition,
+/** One source's item ids: recorded, else derived (`graphArtifactItemIds`, protocol `run-items.ts`). */
+function sourceItemIds(
+  source: GraphMergeSource,
+  element: GraphTypeDefinition,
   count: number,
 ): string[] {
-  if (source.itemIds && source.itemIds.length === count) return [...source.itemIds];
-  const prefix = definition.items?.idPrefix ?? "item";
-  const parts = parseGraphActivationKey(source.producer.activation);
-  const label = parts
-    ? [
-        parts.nodeId,
-        ...(parts.iteration > 1 ? [`iter-${parts.iteration}`] : []),
-        ...(parts.branchKey !== undefined ? [parts.branchKey] : []),
-      ].join("/")
-    : source.producer.nodeId;
-  const longest = `${label}/${prefix}-${count}`;
-  const base = longest.length <= MAX_ITEM_ID_CHARS ? label : source.id.slice(0, 16);
-  return Array.from({ length: count }, (_, index) => `${base}/${prefix}-${index + 1}`);
+  return graphArtifactItemIds(source, element.items, { count });
 }
 
 /** Makes ids unique in order (`~2`, `~3` …), as the artifact guard requires. */
@@ -226,7 +211,7 @@ function itemsOf(
         message: `The merge would hold more than ${GRAPH_MERGE_MAX_ITEMS} items`,
       };
     }
-    const ids = graphArtifactItemIds(source, element, values.length);
+    const ids = sourceItemIds(source, element, values.length);
     values.forEach((value, index) => items.push({ value, id: ids[index]! }));
   }
   return { items };
@@ -406,7 +391,7 @@ function best(
   return {
     kind: "value",
     value,
-    itemIds: uniqueItemIds(graphArtifactItemIds(chosen.source, element, count)),
+    itemIds: uniqueItemIds(sourceItemIds(chosen.source, element, count)),
   };
 }
 

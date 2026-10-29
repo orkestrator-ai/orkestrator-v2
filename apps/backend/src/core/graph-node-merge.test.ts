@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ArtifactTypeDef } from "@orkestrator/protocol/graphs/artifact-type-def";
+import { graphArtifactItemIds } from "@orkestrator/protocol/graphs/run";
 import type { GraphMergeStrategy } from "@orkestrator/protocol/graphs/template";
 import {
   GraphTypeLibrary,
@@ -8,7 +9,6 @@ import {
   type GraphTypeDefinition,
 } from "@orkestrator/protocol/graphs/types";
 import {
-  graphArtifactItemIds,
   mergeGraphValues,
   type GraphMergeResult,
   type GraphMergeSource,
@@ -106,15 +106,21 @@ const REVIEW_1 = "review#iter=1#branch=panel.1#attempt=1";
 const REVIEW_2 = "review#iter=1#branch=panel.2#attempt=1";
 
 describe("item ids", () => {
-  test("recorded ids win; otherwise they derive from the producing activation", () => {
+  test("merges use the protocol derivation: recorded ids win, else the producing activation", () => {
+    const items = REPORT_TYPE.items;
     const recorded = source("a", "review-report@1", REPORT, REVIEW_1, ["r1/issue-9"]);
-    expect(graphArtifactItemIds(recorded, REPORT_TYPE, 1)).toEqual(["r1/issue-9"]);
-    expect(graphArtifactItemIds(recorded, REPORT_TYPE, 2)).toEqual([
+    expect(graphArtifactItemIds(recorded, items, { count: 1 })).toEqual(["r1/issue-9"]);
+    expect(graphArtifactItemIds(recorded, items, { count: 2 })).toEqual([
       "review/panel.1/issue-1",
       "review/panel.1/issue-2",
     ]);
     const later = source("b", "review-report@1", REPORT, "fix#iter=2#attempt=1");
-    expect(graphArtifactItemIds(later, REPORT_TYPE, 1)).toEqual(["fix/iter-2/issue-1"]);
+    expect(graphArtifactItemIds(later, items, { count: 1 })).toEqual(["fix/iter-2/issue-1"]);
+    // A concat of unrecorded sources carries exactly the derived ids.
+    const result = merge({ kind: "concat" }, REPORT_TYPE, [
+      source("c", "review-report@1", report([issue("A", "a.ts")]), REVIEW_2),
+    ]);
+    expect(result.kind === "value" && result.itemIds).toEqual(["review/panel.2/issue-1"]);
   });
 });
 

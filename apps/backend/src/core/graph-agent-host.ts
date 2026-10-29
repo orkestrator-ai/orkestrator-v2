@@ -21,7 +21,7 @@ import {
   graphOutputResultInstruction,
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
-import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import { GraphTypeLibrary, type GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { ReviewContractValidationIssue } from "@orkestrator/protocol/structured-review";
@@ -44,6 +44,7 @@ import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { graphAgentPolicy } from "./graph-agent-policy.js";
 import {
+  graphInputItemIds,
   loadGraphAgentInputs,
   renderGraphAgentPrompt,
   type GraphAgentInputs,
@@ -213,10 +214,12 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         input.type.startsWith("ticket@"),
       );
       const ticketId = ticketInput ? this.context.run.bindings.inputs[ticketInput.name] : undefined;
+      const library = new GraphTypeLibrary(this.context.run.plan.types);
       for (const id of ticketId ? [...ids, ticketId] : ids) {
         const artifact = await this.context.artifacts.get(this.context.run.id, id);
         if (!artifact) continue;
-        for (const itemId of artifact.itemIds ?? []) sources[itemId] = artifact.type;
+        // The ids the prompt showed (`graphInputItemIds`), recorded or derived.
+        for (const itemId of graphInputItemIds(library, artifact)) sources[itemId] = artifact.type;
         if (!criterionIds && artifact.type.startsWith("ticket@") && "value" in artifact.body) {
           const criteria = (artifact.body.value as { criteria?: unknown })?.criteria;
           if (Array.isArray(criteria)) {

@@ -56,11 +56,12 @@ import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-q
 import { GraphAgentResults, type GraphAgentResultService } from "./graph-agent-results.js";
 import { graphAgentBranch } from "./graph-agent-state.js";
 import { appendGraphAgentProgress, type GraphAgentProgressInbox } from "./graph-agent-tools.js";
-import type {
-  GraphActivationReport,
-  GraphCancelReason,
-  GraphExecutorContext,
-  GraphNodeExecutor,
+import {
+  GRAPH_SURPLUS_BRANCH_ERROR,
+  type GraphActivationReport,
+  type GraphCancelReason,
+  type GraphExecutorContext,
+  type GraphNodeExecutor,
 } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
@@ -227,7 +228,11 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
     }
     return {
       state: "cancelled",
-      ...(reason === "timeout" ? { error: "The step ran past its time limit" } : {}),
+      ...(reason === "timeout"
+        ? { error: "The step ran past its time limit" }
+        : reason === "surplus"
+          ? { error: GRAPH_SURPLUS_BRANCH_ERROR }
+          : {}),
     };
   }
 

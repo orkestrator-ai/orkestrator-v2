@@ -241,7 +241,7 @@ describe("ready set over small plans", () => {
     expect(find(result, "pr").state).toBe("skipped");
   });
 
-  test("a fan-in waits for every branch and collects the successful ones", () => {
+  test("a fan-in waits for every branch and collects successes and failure markers", () => {
     const compiled = compiledPlan(graphTemplateExample("multi-review"));
     let run = runOf(compiled, { panel: 3 });
     run = completeNode(plan(run).run, "plan");
@@ -256,10 +256,25 @@ describe("ready set over small plans", () => {
     ).toBe(false);
     run = settle(run, two, "failed", { error: "lost", errorCause: "provider-error" });
     run = settle(run, three, "complete", { outputs: { report: id("r3") } });
-    const result = plan(run);
-    // Replicated reviewers skip on failure; the collect policy decides.
-    expect(result.failure).toBeUndefined();
-    expect(find(result.run, "consolidate").inputs).toEqual({ reports: [id("r1"), id("r3")] });
+    const first = plan(run);
+    // Replicated reviewers skip on failure; the collect policy decides. The
+    // default policy includes failures: the failed branch's marker is stored
+    // first, and consolidate waits for it.
+    expect(first.failure).toBeUndefined();
+    expect(first.run.activations.some((activation) => activation.nodeId === "consolidate")).toBe(
+      false,
+    );
+    const request = first.needArtifacts.find((entry) => entry.purpose === "error");
+    expect(request?.type).toBe("error@1");
+    expect(request?.producer).toEqual({ nodeId: "review", activation: two, port: "error" });
+    expect(request?.values[0]).toMatchObject({ node: "review", cause: "provider-error" });
+    const outcomes = new Map([[request!.key, { ok: true as const, ids: [id("m2")] }]]);
+    const result = planGraphRun(first.run, { at: AT, values: new Map(), outcomes });
+    expect(find(result.run, "review", 1, "panel.2").outputs).toEqual({ error: id("m2") });
+    // Branch order: the marker sits where the failed branch is.
+    expect(find(result.run, "consolidate").inputs).toEqual({
+      reports: [id("r1"), id("m2"), id("r3")],
+    });
   });
 
   test("a fan-in below `minSuccessful` fails its consumer, and `fail-run` fails the run", () => {

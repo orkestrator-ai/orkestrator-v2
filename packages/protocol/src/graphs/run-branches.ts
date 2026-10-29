@@ -8,11 +8,18 @@
  * `panel.1+lens.tests` for a product, axes in plan order). They appear in
  * activation keys, so they never contain `#` or `=`.
  *
+ * A lens branch runs on its lens's role (the plan fills it with the node's
+ * role); in a product with a panel axis the panel model wins. A node runs at
+ * most 32 branches (`GRAPH_TEMPLATE_BOUNDS.maxBranches`): the compiler
+ * multiplies the axes' bounds, and the runtime refuses a binding that would
+ * exceed it anyway.
+ *
  * `items` replication (one branch per element of a list input) arrives with
  * item 401; the compiler refuses it until then.
  *
  * Browser-safe: the run view draws a replicated node's branches from here.
  */
+import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan, GraphPlanNode } from "./plan.js";
 import { isGraphBranchKey } from "./run-identity.js";
 import type { GraphModelBinding, GraphRunBindings } from "./run-model.js";
@@ -47,7 +54,7 @@ function boundModels(bindings: GraphRunBindings["roles"], role: string): number 
 /**
  * The node's branches in plan order, or `null` when the node is not
  * replicated. Throws {@link GraphBranchError} for `items` replication (item
- * 401) or a key outside the branch grammar.
+ * 401), more than 32 branches, or a key outside the branch grammar.
  */
 export function graphNodeBranches(
   node: GraphPlanNode,
@@ -95,6 +102,11 @@ export function graphNodeBranches(
       }
     }
     branches = next;
+    if (branches.length > GRAPH_TEMPLATE_BOUNDS.maxBranches) {
+      throw new GraphBranchError(
+        `${node.id} would run ${branches.length} branches; a node runs at most ${GRAPH_TEMPLATE_BOUNDS.maxBranches}`,
+      );
+    }
   }
   for (const branch of branches) {
     if (!isGraphBranchKey(branch.key)) {

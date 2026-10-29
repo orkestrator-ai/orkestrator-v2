@@ -26,6 +26,11 @@
  *   records it as the activation's `error` output. Consumers of `error` run
  *   (they wait while it is stored); consumers of the other outputs skip. On
  *   success nothing is emitted on `error`, so the recovery branch skips.
+ *
+ * A replicated node's failed branch (after its retries) also gets an
+ * `error@1` artifact on its `error` output when a fan-in reading the node
+ * passes failure markers on (`includeFailures`, item 205), so the collected
+ * list can say which branch failed and why.
  * 2. **Workspace locks** (D3, §6.7): at most one writing activation per
  *    workspace, and no reader while a writer holds it, across every run on
  *    the environment ({@link GraphWorkspaceLocks}). A blocked writer is not
@@ -60,6 +65,10 @@ import { graphLoopState } from "./graph-run-loops.js";
 import {
   computeGraphReadySet,
   GRAPH_ERROR_PORT,
+  graphActivationDelivery,
+  graphCollectPolicy,
+  graphFailureMarkersWanted,
+  graphPredicatePaths,
   resolveGraphEdgeSource,
 } from "./graph-run-ready-set.js";
 import { isGraphActivationAdmitted } from "./graph-run-transitions.js";
@@ -180,8 +189,13 @@ function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
         },
       };
     }
-    if (node.onFailure !== "route" || activation.outputs[GRAPH_ERROR_PORT] !== undefined) continue;
-    // `route`: the error artifact goes on the `error` port before consumers read it.
+    // `route`, or a replicated node's failed branch some fan-in passes on as a
+    // failure marker (`includeFailures`, item 205): the `error@1` artifact is
+    // recorded as the activation's `error` output before consumers read it.
+    const routed = node.onFailure === "route";
+    const marker =
+      !routed && view.branchesOf(node) !== null && graphFailureMarkersWanted(view.plan, node.id);
+    if ((!routed && !marker) || activation.outputs[GRAPH_ERROR_PORT] !== undefined) continue;
     const key = errorKey(activation);
     const known = view.outcomes.get(key);
     if (known?.ok && known.ids[0] !== undefined) {
@@ -192,7 +206,7 @@ function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
         routed: [],
         requests: [],
         failure: {
-          error: `Node ${node.id} failed and its error could not be routed: ${known.message}`,
+          error: `Node ${node.id} failed and its ${routed ? "error could not be routed" : "failure marker could not be stored"}: ${known.message}`,
           cause: "system-error",
         },
       };
@@ -309,6 +323,69 @@ export function planGraphRun(
   result.needValues = [...needValues];
   result.needArtifacts = [...needArtifacts.values()];
   return { ...result, run: current };
+}
+
+// ---------------------------------------------------------------- surplus branches
+
+/**
+ * Branches a `first` fan-in no longer needs (item 205; report §4.4: "first:
+ * cancel the rest"): the not yet terminal activations of a replicated node at
+ * an iteration, once every reader of the node is a fan-in edge into a port
+ * collecting `first` and each of them has its `count` (and `minSuccessful`)
+ * successes at that iteration. A node also read some other way (a zip edge,
+ * a port waiting for all branches or a quorum, a loop carry, a run output, a
+ * loop's `until`) keeps its branches: that reader wants them. The pass
+ * settles the unadmitted ones `cancelled` and stops the admitted ones with
+ * reason `surplus`.
+ */
+export function graphSurplusBranches(run: GraphRun): NodeActivation[] {
+  const view = new GraphRunView(run);
+  const surplus: NodeActivation[] = [];
+  const open = new Map<string, NodeActivation[]>();
+  for (const activation of view.latestActivations()) {
+    if (activation.branchKey === undefined || isGraphActivationTerminal(activation.state)) continue;
+    const slot = `${activation.nodeId}\u0000${activation.iteration}`;
+    open.set(slot, [...(open.get(slot) ?? []), activation]);
+  }
+  for (const activations of open.values()) {
+    const { nodeId, iteration } = activations[0]!;
+    const node = view.node(nodeId);
+    const branches = view.branchKeysOf(node);
+    const readers = run.plan.edges.filter(
+      (edge) => "node" in edge.from && edge.from.node === nodeId,
+    );
+    if (readers.length === 0) continue;
+    if (run.plan.outputs.some((output) => output.from.node === nodeId)) continue;
+    if (
+      run.plan.loops.some(
+        (loop) =>
+          loop.carry.some((carry) => carry.from.node === nodeId) ||
+          graphPredicatePaths(loop.until).some((path) => path.split(".")[0] === nodeId),
+      )
+    ) {
+      continue;
+    }
+    const satisfied = readers.every((edge) => {
+      const port = view.inputPort(edge.to.node, edge.to.port) ?? null;
+      const policy = graphCollectPolicy(port);
+      if (edge.zip || !edge.fanIn || policy.wait !== "first") return false;
+      const from = edge.from as { node: string; port: string; outlet?: string };
+      let successes = 0;
+      for (const branchKey of branches) {
+        const delivery = graphActivationDelivery(
+          view.latestAt(nodeId, iteration, branchKey),
+          from.port,
+          from.outlet,
+          node,
+        );
+        if (delivery.kind === "live") successes += 1;
+      }
+      const target = Math.max(Math.min(policy.count ?? 1, branches.length), policy.minSuccessful);
+      return successes >= target;
+    });
+    if (satisfied) surplus.push(...activations);
+  }
+  return surplus;
 }
 
 // ---------------------------------------------------------------- outputs

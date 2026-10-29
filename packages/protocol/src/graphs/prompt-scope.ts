@@ -508,6 +508,17 @@ export interface GraphPromptArtifactRef {
   bytes?: number;
 }
 
+/**
+ * What the runtime knows about one artifact of an input (item 205): the
+ * value itself for a single-value port, each list element for a list port.
+ */
+export interface GraphPromptElement {
+  /** The stable ids of the artifact's items (`run-items.ts`), in item order. */
+  itemIds?: readonly string[];
+  /** A failed branch's `error@1` marker in a fan-in list (`includeFailures`). */
+  failure?: boolean;
+}
+
 export const GRAPH_PROMPT_FILE_PATH_MAX_BYTES = 1024;
 export const GRAPH_PROMPT_ARTIFACT_ID_MAX_BYTES = 128;
 
@@ -526,6 +537,12 @@ export interface GraphPromptValues {
   files?: Readonly<Record<string, GraphPromptFileRef>>;
   /** `on-demand` inputs: the artifacts the node may read (one per element for lists). */
   artifacts?: Readonly<Record<string, readonly GraphPromptArtifactRef[]>>;
+  /**
+   * Per input port, one entry per artifact in value order: item ids a
+   * consolidator cites (§5.9) and failed branches' markers. Runtime only;
+   * a preview has none.
+   */
+  elements?: Readonly<Record<string, readonly GraphPromptElement[]>>;
   /** Output port → its result slot's key. */
   resultKeys?: Readonly<Record<string, string>>;
   /** The activation's result capability, when the transport needs one in the prompt. */

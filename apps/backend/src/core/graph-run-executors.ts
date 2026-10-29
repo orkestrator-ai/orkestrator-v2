@@ -100,8 +100,14 @@ export const GRAPH_CANCEL_REASONS = [
   "run-failed",
   /** The activation ran past its node's `timeoutMs`. */
   "timeout",
+  /** A `first` fan-in collected enough branches; this one is no longer needed (item 205). */
+  "surplus",
 ] as const;
 export type GraphCancelReason = (typeof GRAPH_CANCEL_REASONS)[number];
+
+/** The error a surplus branch is cancelled with (a `first` fan-in no longer needs it). */
+export const GRAPH_SURPLUS_BRANCH_ERROR =
+  "Not needed: the fan-in collecting the first results already has them";
 
 /** Facts any report may carry; the pass merges them into the activation. */
 export interface GraphActivationFacts {

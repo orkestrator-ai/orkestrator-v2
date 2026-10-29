@@ -16,6 +16,16 @@
  * markdown template or summary fields renders as `json-frame` (and the linter
  * says so). An optional input with no value renders one line, no frame.
  *
+ * ## Item ids and failed branches (item 205)
+ *
+ * When the runtime supplies {@link GraphPromptValues.elements}, every item of
+ * a type with `items` shows its stable id, so a consolidator can cite it
+ * (§5.9; the provenance check accepts exactly these ids): `json-frame` adds
+ * `"sourceId"` to each item object; `markdown` and `summary` follow each
+ * element with a `Source ids:` line, one id per item in order. A failed
+ * branch's `error@1` marker in a fan-in list (`includeFailures`) renders as
+ * `{"branchFailed": …}` in JSON and as a `Branch failed` line otherwise.
+ *
  * The designer's preview and the agent executor both call these, so a
  * preview is byte for byte what the agent gets, apart from what only the
  * runtime knows (file paths, artifact ids, result keys). Browser-safe.
@@ -29,6 +39,7 @@ import { graphUtf8Bytes } from "./grammar.js";
 import {
   GRAPH_PROMPT_ARTIFACT_ID_MAX_BYTES,
   GRAPH_PROMPT_FILE_PATH_MAX_BYTES,
+  type GraphPromptElement,
   type GraphPromptPort,
   type GraphPromptValues,
 } from "./prompt-scope.js";
@@ -120,25 +131,124 @@ function elementsOf(value: unknown, depth: number): unknown[] {
   return value.flatMap((element) => elementsOf(element, depth - 1));
 }
 
+/** The JSON key an item's stable id is shown under in a `json-frame`. */
+export const GRAPH_PROMPT_SOURCE_ID_KEY = "sourceId";
+/** The JSON key a failed branch's marker is wrapped in. */
+export const GRAPH_PROMPT_BRANCH_FAILED_KEY = "branchFailed";
+
+/** The line after an element whose items have ids. */
+export function graphPromptSourceIdsLine(itemIds: readonly string[]): string {
+  return `Source ids (one per item, in order): ${itemIds.join(", ")}`;
+}
+
+/** The text a failed branch's `error@1` marker renders as outside JSON. */
+export function graphPromptBranchFailedText(marker: unknown): string {
+  const record =
+    marker && typeof marker === "object" && !Array.isArray(marker)
+      ? (marker as Record<string, unknown>)
+      : {};
+  const cause = typeof record.cause === "string" ? record.cause : "failed";
+  const message = typeof record.message === "string" ? record.message : "No result.";
+  return `Branch failed (${cause}): ${message}`;
+}
+
+/**
+ * The runtime's element facts for a port, aligned with its elements, or
+ * undefined when there are none (a preview) or they cannot be aligned (lists
+ * of lists: item ids belong to the innermost artifacts).
+ */
+function elementFacts(
+  port: GraphPromptPort,
+  value: unknown,
+  values: GraphPromptValues,
+): (GraphPromptElement | undefined)[] | undefined {
+  const facts = values.elements?.[port.name];
+  if (!facts || facts.length === 0 || port.listDepth > 1) return undefined;
+  const count = port.listDepth === 0 ? 1 : Array.isArray(value) ? value.length : 0;
+  return Array.from({ length: count }, (_, index) => facts[index]);
+}
+
+/** One element with each item's id added, or the failure wrapper. */
+function decoratedElement(
+  port: GraphPromptPort,
+  element: unknown,
+  facts: GraphPromptElement | undefined,
+): unknown {
+  if (facts?.failure) return { [GRAPH_PROMPT_BRANCH_FAILED_KEY]: element };
+  const ids = facts?.itemIds;
+  const items = port.definition?.items;
+  if (!ids || ids.length === 0 || !items) return element;
+  if (!element || typeof element !== "object" || Array.isArray(element)) return element;
+  const segments = items.path.split(".");
+  const copy = structuredClone(element) as Record<string, unknown>;
+  let holder: Record<string, unknown> | undefined = copy;
+  for (const segment of segments.slice(0, -1)) {
+    const next: unknown = holder?.[segment];
+    holder =
+      next && typeof next === "object" && !Array.isArray(next)
+        ? (next as Record<string, unknown>)
+        : undefined;
+  }
+  const last = segments.at(-1)!;
+  const list = holder?.[last];
+  if (!holder || !Array.isArray(list)) return element;
+  holder[last] = list.map((item, index) => {
+    const id = ids[index];
+    if (id === undefined || !item || typeof item !== "object" || Array.isArray(item)) return item;
+    // The id first, so it reads as the item's name.
+    return { [GRAPH_PROMPT_SOURCE_ID_KEY]: id, ...(item as Record<string, unknown>) };
+  });
+  return copy;
+}
+
+/** The value a `json-frame` serialises: elements decorated when the runtime supplied facts. */
+function decoratedValue(port: GraphPromptPort, value: unknown, values: GraphPromptValues): unknown {
+  const facts = elementFacts(port, value, values);
+  if (!facts) return value;
+  if (port.listDepth === 0) return decoratedElement(port, value, facts[0]);
+  return (value as unknown[]).map((element, index) =>
+    decoratedElement(port, element, facts[index]),
+  );
+}
+
+/** Renders each element, a failed branch as its line and item ids after the element. */
+function perElement(
+  port: GraphPromptPort,
+  value: unknown,
+  values: GraphPromptValues,
+  render: (element: unknown) => string,
+): string {
+  const facts = elementFacts(port, value, values);
+  const parts = elementsOf(value, port.listDepth).map((element, index) => {
+    const fact = facts?.[index];
+    if (fact?.failure) return graphPromptBranchFailedText(element);
+    const text = render(element);
+    return fact?.itemIds && fact.itemIds.length > 0
+      ? `${text}\n\n${graphPromptSourceIdsLine(fact.itemIds)}`
+      : text;
+  });
+  return escapeFramedEvidenceText(parts.join(GRAPH_PROMPT_ELEMENT_SEPARATOR));
+}
+
 function markdownBody(
   port: GraphPromptPort,
   value: unknown,
+  values: GraphPromptValues,
   diagnostics: GraphPromptDiagnostics,
 ): string {
   const template = port.definition!.render!.markdown!;
-  const parts = elementsOf(value, port.listDepth).map((element) => {
+  return perElement(port, value, values, (element) => {
     const rendered = renderGraphPromptSource(template, element);
     for (const diagnostic of rendered.diagnostics) {
       if (diagnostic.severity !== "info") diagnostics.add({ ...diagnostic, port: port.name });
     }
     return rendered.text;
   });
-  return escapeFramedEvidenceText(parts.join(GRAPH_PROMPT_ELEMENT_SEPARATOR));
 }
 
-function summaryBody(port: GraphPromptPort, value: unknown): string {
+function summaryBody(port: GraphPromptPort, value: unknown, values: GraphPromptValues): string {
   const fields = port.definition!.render!.summary!;
-  const parts = elementsOf(value, port.listDepth).map((element) =>
+  return perElement(port, value, values, (element) =>
     fields
       .map((field) => {
         const found = lookupGraphPromptPath([element], field.split("."));
@@ -147,7 +257,6 @@ function summaryBody(port: GraphPromptPort, value: unknown): string {
       })
       .join("\n"),
   );
-  return escapeFramedEvidenceText(parts.join(GRAPH_PROMPT_ELEMENT_SEPARATOR));
 }
 
 function fileBody(
@@ -275,7 +384,9 @@ export function renderGraphPromptInput(
   } else {
     let json: string | undefined;
     try {
-      json = serializeFramedEvidence(value);
+      json = serializeFramedEvidence(
+        mode === "json-frame" ? decoratedValue(port, value, values) : value,
+      );
     } catch {
       json = undefined;
     }
@@ -299,9 +410,9 @@ export function renderGraphPromptInput(
       }
       body =
         mode === "markdown"
-          ? markdownBody(port, value, diagnostics)
+          ? markdownBody(port, value, values, diagnostics)
           : mode === "summary"
-            ? summaryBody(port, value)
+            ? summaryBody(port, value, values)
             : json;
     }
   }

@@ -36,6 +36,7 @@ import {
 import { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import { graphInputItemIds } from "./graph-agent-prompt.js";
 import {
   GraphAgentQuestionError,
   graphAnswerEvidence,
@@ -501,9 +502,12 @@ export class GraphAgentToolHost implements GraphActivationToolHost {
         hint: "The file is in the workspace at the path above; read it there.",
       });
     }
+    // The ids a consolidator cites, as its prompt shows them (item 205).
+    const itemIds = graphInputItemIds(new GraphTypeLibrary(run.plan.types), artifact);
     return response({
       id,
       type: artifact.type,
+      ...(itemIds.length > 0 ? { itemIds } : {}),
       ...readGraphArtifactValue(artifact.body.value, path),
     });
   }

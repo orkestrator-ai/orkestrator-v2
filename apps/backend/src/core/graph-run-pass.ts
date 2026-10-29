@@ -20,7 +20,10 @@
  *    admits under the
  *    workspace locks and the run's limits, saves the record (the journal
  *    point), and starts what it admitted; activations that settle at once
- *    (gates, merges) feed another planning round in the same pass;
+ *    (gates, merges) feed another planning round in the same pass; branches
+ *    a `first` fan-in no longer needs are cancelled (`graphSurplusBranches`,
+ *    item 205): settled when not yet admitted, else stopped with reason
+ *    `surplus`;
  * 5. derives the run's status (`running`, `waiting`, `complete`, `failed`)
  *    and saves once more if anything changed.
  *
@@ -46,6 +49,7 @@ import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphStorageError } from "./graph-run-errors.js";
 import {
+  GRAPH_SURPLUS_BRANCH_ERROR,
   GraphActivationJournalFenceError,
   type GraphActivationFacts,
   type GraphActivationReport,
@@ -58,6 +62,7 @@ import {
   graphRunActivity,
   graphRunSettled,
   graphRunWorkspaceHold,
+  graphSurplusBranches,
   missingGraphRunOutputs,
   planGraphRun,
   selectGraphAdmissions,
@@ -253,6 +258,8 @@ class GraphRunPass {
   private readonly branches = new Map<string, GraphBranch[] | null>();
   /** Tail of the serialized journal writes; never rejects. */
   private journalTail: Promise<void> = Promise.resolve();
+  /** Surplus branches this pass already asked to stop. */
+  private readonly surplusStopped = new Set<string>();
 
   constructor(
     private readonly deps: GraphRunPassDependencies,
@@ -578,12 +585,16 @@ class GraphRunPass {
   private async observeAdmitted(): Promise<void> {
     const now = this.deps.monotonic();
     const calls: Call[] = [];
+    const surplus = new Set(graphSurplusBranches(this.run).map((activation) => activation.key));
     for (const activation of this.run.activations) {
       if (!isGraphActivationAdmitted(activation.state)) continue;
       const node = this.nodeOf(activation.nodeId);
       if (!node) continue;
       if (this.timedOut(node, activation)) {
         calls.push({ activation, node, operation: "cancel", reason: "timeout" });
+      } else if (surplus.has(activation.key)) {
+        this.surplusStopped.add(activation.key);
+        calls.push({ activation, node, operation: "cancel", reason: "surplus" });
       } else if (!this.memory.handled.has(activation.key)) {
         calls.push({ activation, node, operation: "recover" });
       } else if (activation.state === "admitting") {
@@ -608,6 +619,31 @@ class GraphRunPass {
       if (!isGraphActivationAdmitted(activation.state)) continue;
       const node = this.nodeOf(activation.nodeId);
       if (node) calls.push({ activation, node, operation: "cancel", reason });
+    }
+    await this.runCalls(calls);
+  }
+
+  /**
+   * Cancels the branches a `first` fan-in no longer needs: not yet admitted
+   * ones are settled at once, admitted ones are stopped through their
+   * executor (reason `surplus`; retried on later passes until confirmed).
+   */
+  private async cancelSurplus(): Promise<void> {
+    const at = this.at();
+    const calls: Call[] = [];
+    for (const activation of graphSurplusBranches(this.run)) {
+      if (activation.state === "waiting" || activation.state === "ready") {
+        this.run = settleGraphActivation(this.run, activation.key, "cancelled", at, {
+          error: GRAPH_SURPLUS_BRANCH_ERROR,
+        });
+        continue;
+      }
+      if (!isGraphActivationAdmitted(activation.state)) continue;
+      if (this.surplusStopped.has(activation.key)) continue;
+      const node = this.nodeOf(activation.nodeId);
+      if (!node) continue;
+      this.surplusStopped.add(activation.key);
+      calls.push({ activation, node, operation: "cancel", reason: "surplus" });
     }
     await this.runCalls(calls);
   }
@@ -700,6 +736,7 @@ class GraphRunPass {
         this.failRun(planning.failure);
         return;
       }
+      await this.cancelSurplus();
       const environmentId = this.run.environmentId!;
       const decision = selectGraphAdmissions(this.run, {
         others: this.deps.locks.others(environmentId, this.run.id),

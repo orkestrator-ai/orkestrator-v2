@@ -4,7 +4,7 @@
  * (204–208) exist. Test-only.
  *
  * - `agent`: `start` reports `running`; `observe` completes with each output
- *   type's `example` (or stays running while the node is held).
+ *   type's `example` (or stays running while the node or its branch is held).
  * - `system`: completes on `start` with examples.
  * - `gate`: evaluates its branches over the input values and forwards its
  *   inputs on the taken outlet (the real one is `graph-node-gate.ts`).
@@ -52,6 +52,8 @@ export interface FakeExecutorCall {
   nodeId: string;
   key: string;
   reason?: GraphCancelReason;
+  /** The model the activation runs on (agents; the branch's for a replicated node). */
+  binding?: { platform: string; model?: string };
   /** Calls in flight when this one started, this one included. */
   concurrent: number;
   /** In-flight calls of the same provider group when this one started. */
@@ -91,8 +93,12 @@ export class FakeGraphExecutors {
   readonly scripts = new Map<string, (call: FakeScriptCall) => unknown>();
   /** Node id → causes its next starts fail with, in order (one per start). */
   readonly failQueue = new Map<string, ("provider-error" | "invalid-result" | "timeout")[]>();
+  /** `<node>/<branch key>` → causes that branch's next starts fail with, in order. */
+  readonly failBranches = new Map<string, ("provider-error" | "invalid-result" | "timeout")[]>();
   /** Nodes whose agent activations stay running until released. */
   readonly held = new Set<string>();
+  /** `<node>/<branch key>`: one branch of a replicated node stays running until released. */
+  readonly heldBranches = new Set<string>();
   /** Node id → cause: the node's next start fails with it. */
   readonly failStart = new Map<string, "provider-error" | "invalid-result" | "timeout">();
   /** Activation key → outlet a person chose. */
@@ -143,6 +149,14 @@ export class FakeGraphExecutors {
       nodeId: context.node.id,
       key: context.activation.key,
       ...(reason ? { reason } : {}),
+      ...(context.binding
+        ? {
+            binding: {
+              platform: context.binding.platform,
+              ...(context.binding.model !== undefined ? { model: context.binding.model } : {}),
+            },
+          }
+        : {}),
       concurrent: this.inFlight,
       concurrentInGroup: this.inFlightByGroup.get(group)!,
     });
@@ -207,6 +221,15 @@ export class FakeGraphExecutors {
     return values;
   }
 
+  /** Whether the activation's node, or its branch, is held. */
+  private isHeld(context: GraphExecutorContext): boolean {
+    const { nodeId, branchKey } = context.activation;
+    return (
+      this.held.has(nodeId) ||
+      (branchKey !== undefined && this.heldBranches.has(`${nodeId}/${branchKey}`))
+    );
+  }
+
   private async complete(context: GraphExecutorContext): Promise<GraphActivationReport> {
     const node = context.node;
     if (node.kind === "gate") {
@@ -237,7 +260,11 @@ export class FakeGraphExecutors {
             this.failStart.delete(context.node.id);
             return { state: "failed", error: "The fake executor failed", cause };
           }
-          const queued = this.failQueue.get(context.node.id)?.shift();
+          const branchKey = context.activation.branchKey;
+          const queued =
+            (branchKey !== undefined
+              ? this.failBranches.get(`${context.node.id}/${branchKey}`)?.shift()
+              : undefined) ?? this.failQueue.get(context.node.id)?.shift();
           if (queued) return { state: "failed", error: "The fake executor failed", cause: queued };
           if (kind === "agent") {
             this.running.add(context.activation.key);
@@ -271,7 +298,7 @@ export class FakeGraphExecutors {
             if (outlet === undefined) return { state: "unchanged", observeAfterMs: null };
             return { state: "complete", outlet, outputs: this.forwarded(context) };
           }
-          if (this.held.has(context.node.id)) return { state: "unchanged" };
+          if (this.isHeld(context)) return { state: "unchanged" };
           this.running.delete(context.activation.key);
           return this.complete(context);
         }),
@@ -280,7 +307,7 @@ export class FakeGraphExecutors {
           if (context.activation.state === "admitting") {
             return { state: kind === "human" ? "awaiting-human" : "running" };
           }
-          if (kind === "human" || this.held.has(context.node.id)) return { state: "unchanged" };
+          if (kind === "human" || this.isHeld(context)) return { state: "unchanged" };
           this.running.delete(context.activation.key);
           return this.complete(context);
         }),

@@ -9,6 +9,11 @@
  * the locked system contract with the activation's capability statement,
  * the unattended policy and its result tools. The preview in the designer
  * renders through the same function, so it shows what the agent gets.
+ *
+ * Inputs whose type has `items` show each item's stable id (item 205; the
+ * protocol's `graphArtifactItemIds`, recorded or derived), and the same ids
+ * are the provenance sources a `cite`/`accountForAll` port accepts. A failed
+ * branch's `error@1` marker in a fan-in list renders as a failed branch.
  */
 import type {
   CompiledGraphCapabilities,
@@ -28,11 +33,13 @@ import {
   renderGraphNodePrompt,
   type GraphBuiltInPromptId,
   type GraphPromptArtifactRef,
+  type GraphPromptElement,
   type GraphPromptFileRef,
   type GraphPromptValues,
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
 import {
+  graphArtifactItemIds,
   graphNodeBranches,
   type GraphArtifact,
   type GraphRun,
@@ -145,6 +152,31 @@ function bodyValue(artifact: GraphArtifact): unknown {
   return "value" in artifact.body ? artifact.body.value : undefined;
 }
 
+/**
+ * The stable ids of an input artifact's items (recorded at accept time, else
+ * derived from its producer), empty when its type has no `items`. Prompts
+ * show exactly these, and provenance accepts exactly these.
+ */
+export function graphInputItemIds(
+  library: GraphTypeLibrary,
+  artifact: Pick<GraphArtifact, "type" | "producer" | "itemIds" | "body">,
+): string[] {
+  const parts = parseGraphTypeRef(artifact.type);
+  if (!parts || parts.listDepth > 0) return [];
+  const definition = library.definition(parts.name, parts.version);
+  return graphArtifactItemIds(artifact, definition?.items, {
+    value: "value" in artifact.body ? artifact.body.value : undefined,
+  });
+}
+
+/** A failed branch's `error@1` marker on a port that collects something else (`includeFailures`). */
+export function isGraphFailureMarker(portType: string, artifactType: string): boolean {
+  return (
+    parseGraphTypeRef(artifactType)?.name === "error" &&
+    parseGraphTypeRef(portType)?.name !== "error"
+  );
+}
+
 function isTicket(type: string): boolean {
   return parseGraphTypeRef(type)?.name === "ticket";
 }
@@ -216,6 +248,8 @@ export async function loadGraphAgentInputs(
   const consumed: string[] = [];
   const readable = new Map<string, GraphAgentInputArtifact>();
   const sources: Record<string, string> = {};
+  const elements: Record<string, GraphPromptElement[]> = {};
+  const library = new GraphTypeLibrary(run.plan.types);
   let criterionIds: string[] | undefined;
   let inputWorkspace: GraphAgentInputs["inputWorkspace"];
   const loaded = new Map<string, GraphArtifact[]>();
@@ -223,13 +257,23 @@ export async function loadGraphAgentInputs(
     const ids = portIds(activation, port);
     if (ids.length === 0) continue;
     const list: GraphArtifact[] = [];
+    const facts: GraphPromptElement[] = [];
     for (const id of ids) {
       const artifact = await verified(id, port.name);
       list.push(artifact);
       consumed.push(id);
       readable.set(id, { port: port.name, artifact });
-      for (const itemId of artifact.itemIds ?? []) sources[itemId] = artifact.type;
+      const itemIds = graphInputItemIds(library, artifact);
+      for (const itemId of itemIds) sources[itemId] = artifact.type;
+      facts.push(
+        isGraphFailureMarker(port.type, artifact.type)
+          ? { failure: true }
+          : itemIds.length > 0
+            ? { itemIds }
+            : {},
+      );
     }
+    if (facts.some((fact) => fact.failure || fact.itemIds)) elements[port.name] = facts;
     loaded.set(port.name, list);
     const listPort = parseGraphTypeRef(port.type)?.listDepth ? true : ids.length > 1;
     const values = list.map(bodyValue);
@@ -263,6 +307,7 @@ export async function loadGraphAgentInputs(
     ...graphAgentBranchValues(run, node, activation),
     ...(Object.keys(files).length > 0 ? { files } : {}),
     ...(Object.keys(onDemand).length > 0 ? { artifacts: onDemand } : {}),
+    ...(Object.keys(elements).length > 0 ? { elements } : {}),
   };
   const ticketInput = run.plan.inputs.find(
     (input) => isTicket(input.type) && !parseGraphTypeRef(input.type)?.listDepth,
@@ -296,22 +341,30 @@ function builtInInputs(
   const definition = graphBuiltInPrompt(prompt.builtIn);
   if (!definition) throw new GraphAgentPromptError(`There is no built-in prompt ${prompt.builtIn}`);
   const context = promptContext(run, node);
+  const library = context.library;
   const { bound } = graphBuiltInPromptBindings(definition, graphPromptScope(context));
   const result: Record<string, GraphBuiltInPromptInputValue | GraphBuiltInPromptInputValue[]> = {};
   for (const input of definition.inputs) {
     const port = bound.get(input.name);
-    const artifacts = port ? loaded.get(port) : undefined;
+    const portType = node.inputs.find((candidate) => candidate.name === port)?.type ?? "";
+    // Today's builders take the reports themselves: failed branches' markers stay out.
+    const artifacts = port
+      ? loaded.get(port)?.filter((artifact) => !isGraphFailureMarker(portType, artifact.type))
+      : undefined;
     if (!port || !artifacts || artifacts.length === 0) continue;
-    const values = artifacts.map((artifact): GraphBuiltInPromptInputValue => ({
-      port,
-      type: artifact.type,
-      artifactId: artifact.id,
-      ...("value" in artifact.body && artifact.body.value !== undefined
-        ? { value: artifact.body.value }
-        : {}),
-      ...("file" in artifact.body ? { file: { ...artifact.body.file } } : {}),
-      ...(artifact.itemIds ? { itemIds: [...artifact.itemIds] } : {}),
-    }));
+    const values = artifacts.map((artifact): GraphBuiltInPromptInputValue => {
+      const itemIds = graphInputItemIds(library, artifact);
+      return {
+        port,
+        type: artifact.type,
+        artifactId: artifact.id,
+        ...("value" in artifact.body && artifact.body.value !== undefined
+          ? { value: artifact.body.value }
+          : {}),
+        ...("file" in artifact.body ? { file: { ...artifact.body.file } } : {}),
+        ...(itemIds.length > 0 ? { itemIds } : {}),
+      };
+    });
     result[input.name] = input.list ? values : values[0]!;
   }
   return result;

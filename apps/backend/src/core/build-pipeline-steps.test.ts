@@ -104,6 +104,9 @@ class RecordingProvider implements BuildPipelineProvider {
    */
   readonly createdModes: Array<[PipelineSessionPhase, string | undefined]> = [];
   readonly sentModes: Array<string | undefined> = [];
+  /** The read-only mutation boundary each session and turn asked for. */
+  readonly createdReadOnly: Array<[PipelineSessionPhase, boolean | undefined]> = [];
+  readonly sentReadOnly: Array<boolean | undefined> = [];
   /** Session ids this harness was asked to stop, in call order. */
   readonly aborted: string[] = [];
 
@@ -126,6 +129,7 @@ class RecordingProvider implements BuildPipelineProvider {
     const id = `${this.agent}-${phase}-${++this.counter}`;
     this.phases.set(id, phase);
     this.createdModes.push([phase, options.mode]);
+    this.createdReadOnly.push([phase, options.readOnly]);
     this.created.push({
       agent: this.agent,
       phase,
@@ -147,6 +151,7 @@ class RecordingProvider implements BuildPipelineProvider {
     if (error) throw error;
     this.taken.add(options.requestId);
     this.sentModes.push(options.mode);
+    this.sentReadOnly.push(options.readOnly);
     this.sent.push({
       agent: this.agent,
       sessionId,
@@ -1618,7 +1623,7 @@ describe("per-step model placeholders", () => {
 });
 
 describe("per-step execution modes", () => {
-  test("keeps every Codex stage writable for validation", async () => {
+  test("keeps every Codex stage writable for validation except the packaged review", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const codex = providerFor("codex");
       const started = await service.start({
@@ -1637,15 +1642,24 @@ describe("per-step execution modes", () => {
       // the sandbox a stage runs under is one decision in one place.
       expect(codex.createdModes).toEqual([
         ["build", "build"],
-        ["review", "build"],
+        ["review", "plan"],
         ["verify", "build"],
         ["pr", "build"],
       ]);
-      expect(codex.sentModes).toEqual(["build", "build", "build", "build"]);
+      expect(codex.sentModes).toEqual(["build", "plan", "build", "build"]);
+      // The reviewer reads an immutable package, so it is read-only like a
+      // Multi Review reviewer, at session creation and on its turn.
+      expect(codex.createdReadOnly).toEqual([
+        ["build", undefined],
+        ["review", true],
+        ["verify", undefined],
+        ["pr", undefined],
+      ]);
+      expect(codex.sentReadOnly).toEqual([undefined, true, undefined, undefined]);
     });
   });
 
-  test("keeps every Claude stage in build mode", async () => {
+  test("keeps every Claude stage in build mode except the read-only packaged review", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const claude = providerFor("claude");
       const started = await service.start({
@@ -1662,11 +1676,12 @@ describe("per-step execution modes", () => {
 
       expect(claude.createdModes.map(([, mode]) => mode)).toEqual([
         "build",
-        "build",
+        "plan",
         "build",
         "build",
       ]);
-      expect(claude.sentModes).toEqual(["build", "build", "build", "build"]);
+      expect(claude.sentModes).toEqual(["build", "plan", "build", "build"]);
+      expect(claude.sentReadOnly).toEqual([undefined, true, undefined, undefined]);
     });
   });
 
@@ -1754,7 +1769,7 @@ describe("per-step execution modes", () => {
       expect(verifyDispatch?.prompt).toContain(
         "Fixed the off-by-one; reran src/app.test.ts: pass.",
       );
-      expect(codex.sentModes.slice(0, 2)).toEqual(["build", "build"]);
+      expect(codex.sentModes.slice(0, 2)).toEqual(["build", "plan"]);
     });
   });
 });

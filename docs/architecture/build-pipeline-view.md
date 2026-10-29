@@ -4,7 +4,8 @@ Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
-2026-10-28), and the shared review routing (2026-10-29).
+2026-10-28), the shared review routing (2026-10-29), and read-only reviewers
+with the Git guard (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -73,6 +74,16 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
+- **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
+  and the Git-visible paths as they found them. Reviewers and consolidation
+  also run in provider read-only mode, as Multi Review's do. The backend
+  checks at submit time, so an agent can undo a change within its turn, and
+  again when it uses the result; a change fails the step, and the failed node
+  shows the error naming the moved HEAD or the paths
+  ([review preparation](review-preparation.md#read-only-reviewers-and-the-git-guard)).
+  A step whose starting Git state cannot be observed fails before any of its
+  sessions starts. The launcher's Review and Verify cards state exactly this
+  scope.
 - **Stops.** The current session carries a pause, failure or cancellation. A
   stage that failed or paused before its session existed gets a node of its
   own; a fan-out that failed without consolidating carries it on
@@ -302,7 +313,8 @@ sessions by `supersededBy` and read `rewinds`).
 `build-pipeline-code-rewind.ts`) resets the branch to the commit a step started
 from, then restarts the pipeline from that step exactly as "Restart from here"
 does. Every stage session started by the supervisor records `headAtStart`
-(Verify reuses its validation baseline; other stages probe once, best effort);
+(Verify and a packaged single Review reuse their read-only guard baseline;
+other stages probe once, best effort);
 fan-out reviewers and consolidation do not, and a step without it has no
 action.
 
@@ -355,6 +367,9 @@ under its key; the retry gets `…:attempt-2`.
   and are superseded by their first restart like any other. Sessions written
   before `headAtStart` existed offer no code rewind; records without
   `roundReviewReports` rerun Review when an earlier round's Address restarts.
+  Review sessions without a `validationHeadAtStart` and panel passes without
+  `reviewFanout.workspaceBaseline` predate the read-only guard and are not
+  certified against one.
 
 Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
 [0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).

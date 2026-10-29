@@ -118,6 +118,8 @@ export class FanoutProvider implements BuildPipelineProvider {
     requestId: string;
     model?: string;
     fastMode?: boolean;
+    mode?: ProviderSendOptions["mode"];
+    readOnly?: boolean;
     agentMcp?: ProviderSendOptions["agentMcp"];
     artifactGrant?: string;
     workflowResultTool?: string;
@@ -221,6 +223,8 @@ export class FanoutProvider implements BuildPipelineProvider {
       requestId: options.requestId,
       model: options.model,
       fastMode: options.fastMode,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.readOnly !== undefined ? { readOnly: options.readOnly } : {}),
       ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
       ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
       ...(options.workflowResultTool ? { workflowResultTool: options.workflowResultTool } : {}),
@@ -374,7 +378,17 @@ export async function withPipeline(
     provider: FanoutProvider;
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
-    worktree: { head: string; fingerprint: string; fail: boolean };
+    /**
+     * The probed worktree. `failAfterPackage` fails every probe once a review
+     * package exists, which is the moment the panel takes its baseline.
+     */
+    worktree: {
+      head: string;
+      fingerprint: string;
+      fail: boolean;
+      failAfterPackage: boolean;
+      paths: string[];
+    };
     packageGeneration: {
       count: number;
       verificationCount: number;
@@ -426,7 +440,13 @@ export async function withPipeline(
     ["cursor", new FanoutProvider("cursor")],
     ["pi", new FanoutProvider("pi")],
   ]);
-  const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
+  const worktree = {
+    head: HEAD,
+    fingerprint: FINGERPRINT,
+    fail: false,
+    failAfterPackage: false,
+    paths: [] as string[],
+  };
   const packageGeneration = {
     count: 0,
     verificationCount: 0,
@@ -437,10 +457,12 @@ export async function withPipeline(
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
     if (command === "get_environment_uncommitted_paths") {
-      if (worktree.fail) throw new Error("probe failed");
+      if (worktree.fail || (worktree.failAfterPackage && packageGeneration.count > 0)) {
+        throw new Error("probe failed");
+      }
       return {
         head: worktree.head,
-        paths: [],
+        paths: [...worktree.paths],
         fingerprint: worktree.fingerprint,
       } as T;
     }

@@ -227,7 +227,7 @@ describe("BuildLaunchDialog", () => {
     ).toEqual(["build", "review", "address", "verify", "pr", "resolve-conflicts"]);
   });
 
-  test("discloses write access and Git check limits on Review and Verify cards", () => {
+  test("discloses access and Git check limits on Review and Verify cards", () => {
     renderDialog();
 
     const cards = within(screen.getByRole("list", { name: "Build steps" })).getAllByRole(
@@ -237,10 +237,19 @@ describe("BuildLaunchDialog", () => {
       const note = within(card).queryByRole("note");
       const step = card.getAttribute("data-build-step");
       if (step === "review" || step === "verify") {
-        expect(note?.textContent).toContain("Full workspace write access");
-        expect(note?.textContent).toContain("rejects results with source edits or commits");
+        if (step === "review") {
+          expect(note?.textContent).toContain(
+            "Reviewers run read-only where the provider enforces it",
+          );
+          expect(note?.textContent).not.toContain("write access");
+        } else {
+          expect(note?.textContent).toContain("Full workspace write access");
+        }
         expect(note?.textContent).toContain(
-          "Ignored files, .git contents and paths outside the worktree are not checked",
+          "rejects a result if HEAD moved or a Git-visible path appeared or disappeared",
+        );
+        expect(note?.textContent).toContain(
+          "Ignored files, .git contents, paths outside the worktree and edits to files that were already uncommitted are not checked",
         );
       } else {
         expect(note).toBeNull();

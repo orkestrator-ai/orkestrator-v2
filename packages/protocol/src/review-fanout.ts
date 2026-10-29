@@ -25,6 +25,7 @@ import {
   type StructuredReviewReport,
 } from "./structured-review.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import {
   isNativeAgentModelSubstitution,
   READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS,
@@ -275,6 +276,13 @@ export interface ReviewFanoutState {
   consolidation?: ReviewConsolidationSession;
   /** The merged report. Present once consolidation has been certified. */
   report?: StructuredReviewReport;
+  /**
+   * Build pipeline only: the read-only guard's Git baseline for the whole pass,
+   * captured before any reviewer is dispatched. Every reviewer and the
+   * consolidation turn are checked against it. Absent on Multi Review records
+   * and on pipeline passes started before the guard existed.
+   */
+  workspaceBaseline?: WorkspaceGitBaseline;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -647,12 +655,20 @@ export function isReviewPanelOverlap(value: unknown): value is ReviewPanelOverla
 export function isReviewFanoutState(value: unknown): value is ReviewFanoutState {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["reviewers", "snapshot", "snapshotStale", "consolidation", "report"]) &&
+    hasOnlyKeys(value, [
+      "reviewers",
+      "snapshot",
+      "snapshotStale",
+      "consolidation",
+      "report",
+      "workspaceBaseline",
+    ]) &&
     isReviewerRecordList(value.reviewers) &&
     (value.snapshot === undefined || isReviewWorktreeSnapshotRecord(value.snapshot)) &&
     (value.snapshotStale === undefined || typeof value.snapshotStale === "boolean") &&
     (value.consolidation === undefined || isReviewConsolidationSession(value.consolidation)) &&
-    (value.report === undefined || isStructuredReviewReport(value.report))
+    (value.report === undefined || isStructuredReviewReport(value.report)) &&
+    (value.workspaceBaseline === undefined || isWorkspaceGitBaseline(value.workspaceBaseline))
   );
 }
 

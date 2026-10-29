@@ -45,7 +45,6 @@ import {
   withUnattendedPolicy,
   type BuildStepSelection,
   WORKTREE_PROBE_ATTEMPTS,
-  VALIDATION_STAGE_LABELS,
   VERIFICATION_SCHEMA,
   SESSION_LABELS,
   PreSessionStageStartError,
@@ -76,8 +75,8 @@ import {
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
-  type WorkflowResultError,
   type WorkflowResultKind,
   workflowResultInstruction,
   workflowResultToolName,
@@ -133,13 +132,9 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
-import {
-  compareValidationWorktree,
-  hasValidationBaseline,
-  validationWorktreeError,
-  validationWorktreeRefusal,
-} from "./build-pipeline-validation-worktree.js";
-import type { WorkflowResultAttempt } from "./workflow-result-service.js";
+import { sessionWorkspaceBaselineFields } from "./build-pipeline-validation-worktree.js";
+import { BuildPipelineReadOnlyGuard } from "./build-pipeline-read-only-guard.js";
+import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -160,12 +155,24 @@ export class BuildPipelineSupervisor {
 
   private reviewFanoutRunner: BuildPipelineReviewFanout | null = null;
 
+  /**
+   * The read-only guard on Review, consolidation and Verify. The facade
+   * registers its submit-time checks; this supervisor captures baselines
+   * before dispatch and certifies results when it consumes them.
+   */
+  readonly readOnly: BuildPipelineReadOnlyGuard;
+
   constructor(
     private readonly ctx: BuildPipelineContext,
     private readonly agents: BuildPipelineAgents,
     private readonly recovery: BuildPipelineRecovery,
     private readonly interactions: BuildPipelineInteractions,
-  ) {}
+  ) {
+    this.readOnly = new BuildPipelineReadOnlyGuard(
+      ctx.storage,
+      commandWorkspaceProbe((command, args) => ctx.invoke(command, args), WORKTREE_PROBE_ATTEMPTS),
+    );
+  }
 
   reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
@@ -204,6 +211,8 @@ export class BuildPipelineSupervisor {
         agentMcp: (pipeline, resultKey, provider, stage) =>
           this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
         artifactDispatch: this.ctx.options.artifactDispatch,
+        captureWorkspaceBaseline: (pipeline) => this.readOnly.capturePanel(pipeline),
+        workspaceViolation: (pipeline, subject) => this.readOnly.panelViolation(pipeline, subject),
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
@@ -839,33 +848,6 @@ export class BuildPipelineSupervisor {
     }
   }
 
-  /**
-   * Observes the worktree a validation stage is about to run in.
-   *
-   * Addressing can leave uncommitted paths behind. Capturing them before the
-   * verification turn makes the state the pipeline's own evidence and tells
-   * the verifier exactly which paths it must preserve.
-   *
-   * The probe is one command round trip into a container or worktree and can
-   * fail transiently, so it is retried a bounded number of times before the
-   * caller is told the state is unknown. Retries are immediate: the supervisor
-   * tick is not a place to sleep, and the failures this covers — a momentarily
-   * busy daemon, a lost exec — do not need a backoff to clear. A state that is
-   * still unknown afterwards is not survivable, because nothing downstream can
-   * certify a turn whose starting point was never established.
-   */
-  async reviewWorktreeSnapshot(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
-    let last = await this.probeWorktreeOnce(pipeline);
-    for (
-      let attempt = 1;
-      attempt < WORKTREE_PROBE_ATTEMPTS && last.status === "unknown";
-      attempt += 1
-    ) {
-      last = await this.probeWorktreeOnce(pipeline);
-    }
-    return last;
-  }
-
   async probeWorktreeOnce(
     pipeline: BuildPipeline,
     options: ReviewWorktreeProbeOptions = {},
@@ -938,80 +920,35 @@ export class BuildPipelineSupervisor {
   }
 
   /**
-   * Establishes the baseline a validation stage will later be certified against.
+   * Establishes the baseline a guarded stage (Verify, or Review over a package)
+   * will later be certified against.
    *
    * A dirty start is not a failure. The build stage is only *asked* to commit,
-   * the reviewer is told which paths were left behind, and the guard below cares
-   * about what validation itself changed rather than where it began. Only a
+   * the verifier is told which paths were left behind, and the guard cares
+   * about what the stage itself changed rather than where it began. Only a
    * state the backend could not observe at all is fatal, and it is fatal *here*
    * — before the turn is dispatched — because a stage that can never be
    * certified is not worth an agent turn, and failing after the fact would
-   * discard a completed review and report it as a Git error.
+   * discard a completed turn and report it as a Git error.
    */
   async validationBaseline(
     pipeline: BuildPipeline,
     sessionPhase: "review" | "verify",
   ): Promise<ObservedWorktreeSnapshot> {
-    const snapshot = await this.reviewWorktreeSnapshot(pipeline);
-    if (snapshot.status === "unknown") {
-      throw new Error(
-        `${VALIDATION_STAGE_LABELS[sessionPhase]} cannot start because the backend could not establish the environment Git state: ${snapshot.reason}`,
-      );
-    }
-    return snapshot;
+    return this.readOnly.captureSession(pipeline, sessionPhase);
   }
 
   /**
-   * Rejects a validation turn that changed the workspace rather than only
-   * reading it and writing ignored output. See {@link compareValidationWorktree}
-   * for exactly what counts as a change.
+   * Rejects a guarded turn that changed the workspace rather than only reading
+   * it and writing ignored output. See `compareWorkspace` in
+   * `workspace-read-only-guard.ts` for exactly what counts as a change.
    */
   async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
     options: { repairableOnly?: boolean } = {},
   ): Promise<void> {
-    const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
-    // Without a baseline there is nothing to compare, so do not spend a probe.
-    const change = compareValidationWorktree(
-      session,
-      hasValidationBaseline(session)
-        ? await this.reviewWorktreeSnapshot(pipeline)
-        : { status: "unknown", reason: "no baseline" },
-    );
-    if (options.repairableOnly && !validationWorktreeRefusal(change)) return;
-    const error = validationWorktreeError(stage, change);
-    if (error) throw new Error(error);
-  }
-
-  /**
-   * The same comparison, asked by the workflow result service before it
-   * validates or accepts a verification result, so the verifier can undo a
-   * change while its turn is still running instead of the pipeline failing
-   * after it. Only the attempt the pipeline is currently waiting on is judged.
-   */
-  async verificationResultRefusal(
-    attempt: WorkflowResultAttempt,
-  ): Promise<WorkflowResultError | null> {
-    for (const record of await this.ctx.storage.listBuildPipelines(attempt.projectId)) {
-      const pipeline = record.snapshot;
-      if (
-        record.environmentId !== attempt.environmentId ||
-        !isBuildPipeline(pipeline) ||
-        pipeline.phase !== "verifying"
-      ) {
-        continue;
-      }
-      const session = sessionForCurrentPhase(pipeline);
-      if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) {
-        continue;
-      }
-      if (!hasValidationBaseline(session)) return null;
-      return validationWorktreeRefusal(
-        compareValidationWorktree(session, await this.reviewWorktreeSnapshot(pipeline)),
-      );
-    }
-    return null;
+    await this.readOnly.certifySession(pipeline, session, options);
   }
 
   /**
@@ -1467,12 +1404,15 @@ export class BuildPipelineSupervisor {
           comment: "🔨 Build started",
         });
       }
+      // A review over an immutable package runs as a Multi Review reviewer
+      // does: plan mode with the read-only mutation boundary.
+      const readOnlyReview = readsReviewPackage(pipeline, sessionPhase);
       // Probed before the provider session exists so an unestablishable Git state
       // fails the stage without leaving a session behind or spending a turn on a
-      // review that could never be certified.
+      // stage that could never be certified.
       const validationWorktree =
-        !override && sessionPhase === "verify"
-          ? await this.validationBaseline(pipeline, sessionPhase)
+        (!override && sessionPhase === "verify") || readOnlyReview
+          ? await this.validationBaseline(pipeline, readOnlyReview ? "review" : "verify")
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also
       // runs as "fix" but always arrives with an override and never edits code.
@@ -1507,8 +1447,9 @@ export class BuildPipelineSupervisor {
       const mode =
         override?.mode ??
         executionModeOverrideForPhase(phase) ??
-        executionModeForSessionPhase(sessionPhase, agent);
+        (readOnlyReview ? "plan" : executionModeForSessionPhase(sessionPhase, agent));
       const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
+      const policy = await this.ctx.executionPolicy(pipeline);
       // Codex binds model and effort at session creation, Claude and OpenCode at
       // prompt dispatch, so a per-step selection has to be supplied at both.
       const sessionId = await provider.createSession(sessionPhase, label, {
@@ -1516,10 +1457,12 @@ export class BuildPipelineSupervisor {
         effort,
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         mode,
-        policy: await this.ctx.executionPolicy(pipeline),
+        ...(readOnlyReview ? { readOnly: true, reviewerSession: true } : {}),
+        policy,
         interaction: {
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          ...(readOnlyReview ? { reviewerSession: true } : {}),
           phase: sessionPhase,
           workflowId: pipeline.id,
           provider: agent,
@@ -1529,6 +1472,7 @@ export class BuildPipelineSupervisor {
       provider.registerSession?.(sessionId, {
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        ...(readOnlyReview ? { reviewerSession: true } : {}),
         phase: sessionPhase,
         workflowId: pipeline.id,
         provider: agent,
@@ -1577,13 +1521,7 @@ export class BuildPipelineSupervisor {
         schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA
           ? { producedReviewPackagePlan: true as const }
           : {}),
-        validationHeadAtStart: validationWorktree?.head,
-        validationWorktreeStatusAtStart: validationWorktree?.status,
-        validationUncommittedPathsAtStart: validationWorktree
-          ? validationWorktree.status === "dirty"
-            ? [...validationWorktree.paths]
-            : []
-          : undefined,
+        ...sessionWorkspaceBaselineFields(validationWorktree),
         ...(fixWorktreeFingerprint
           ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
           : {}),
@@ -1638,6 +1576,8 @@ export class BuildPipelineSupervisor {
         mode,
         resultTransport,
         agent,
+        readOnlyReview,
+        policy,
       };
     })().catch((error: unknown) => {
       if (error instanceof ProviderUnavailableError) throw error;
@@ -1657,6 +1597,8 @@ export class BuildPipelineSupervisor {
       mode,
       resultTransport,
       agent,
+      readOnlyReview,
+      policy,
     } = dispatch;
     const resultKind = this.ctx.workflowResultKind(phase, schema === REVIEW_VALIDATION_PLAN_SCHEMA);
     if (resultTransport === "tool-v1" && resultKind && this.ctx.options.workflowResults) {
@@ -1719,6 +1661,7 @@ export class BuildPipelineSupervisor {
           effort,
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
+          ...(readOnlyReview ? readOnlyReviewSendOptions(agent, policy) : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
@@ -1951,10 +1894,22 @@ export class BuildPipelineSupervisor {
           }
         : fallbackStep;
     // Re-state the mode the session was opened with so a redispatch cannot land
-    // in a different sandbox. Addressing is a writable, independent session.
+    // in a different sandbox. Addressing is a writable, independent session; a
+    // packaged review stays read-only for repairs, reminders and user messages.
+    const readOnlyReview = sessionPhase ? readsReviewPackage(pipeline, sessionPhase) : false;
     const mode =
       executionModeOverrideForPhase(attempt.phase) ??
-      (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
+      (readOnlyReview
+        ? ("plan" as const)
+        : sessionPhase && step
+          ? executionModeForSessionPhase(sessionPhase, step.agent)
+          : undefined);
+    // Resolved before the dispatch window opens: once it is saved, the next
+    // fallible call must be the send.
+    const reviewPolicy =
+      readOnlyReview && step?.agent === "opencode"
+        ? await this.ctx.executionPolicy(pipeline)
+        : undefined;
     const agentMcp =
       attempt.resultTransport === "tool-v1"
         ? await this.ctx.workflowAgentMcp(
@@ -2001,6 +1956,7 @@ export class BuildPipelineSupervisor {
           images: attempt.useTaskImages ? pipeline.taskSnapshot.images : [],
           schema: attempt.resultTransport === "tool-v1" ? undefined : schema,
           mode,
+          ...(readOnlyReview && step ? readOnlyReviewSendOptions(step.agent, reviewPolicy) : {}),
           model: step?.model,
           effort: step?.effort,
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
@@ -2281,9 +2237,19 @@ export class BuildPipelineSupervisor {
     if (!requestId) throw new Error("Review result key is missing");
     const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
+      try {
+        await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
+      } catch (error) {
+        // A report the read-only guard kept refusing never arrives. Name the
+        // repairable change that blocked it; an unavailable comparison keeps
+        // the original missing-result error.
+        await this.readOnly.certifySession(pipeline, session, { repairableOnly: true });
+        throw error;
+      }
       return;
     }
+    // The report is only usable from the worktree the reviewer was given.
+    await this.readOnly.certifySession(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const parsed = safeParseStructuredReviewReport(result.value, {
@@ -2304,6 +2270,29 @@ export class BuildPipelineSupervisor {
     await this.startStage(pipeline, next.sessionPhase, next.phase);
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
+}
+
+/**
+ * Whether a session of this phase reviews the immutable package: the turn
+ * Multi Review would run as a read-only reviewer.
+ */
+function readsReviewPackage(pipeline: BuildPipeline, sessionPhase: PipelineSessionPhase): boolean {
+  return sessionPhase === "review" && pipeline.reviewPackage !== undefined;
+}
+
+/**
+ * The per-turn read-only boundary for a packaged review, as Multi Review
+ * reviewers send it. OpenCode also gets its constrained reviewer shell, which
+ * it applies only to a session created as a reviewer.
+ */
+function readOnlyReviewSendOptions(
+  agent: BuildPipelineAgent,
+  policy: NativeAgentExecutionPolicy | undefined,
+): { readOnly: true; reviewShellPolicy?: NativeAgentExecutionPolicy } {
+  return {
+    readOnly: true,
+    ...(agent === "opencode" && policy ? { reviewShellPolicy: policy } : {}),
+  };
 }
 
 /** Prompt wording for a result kind, e.g. "review-report" → "review report". */

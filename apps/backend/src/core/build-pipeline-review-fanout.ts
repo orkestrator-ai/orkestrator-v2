@@ -126,6 +126,7 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -191,6 +192,21 @@ export interface BuildPipelineReviewFanoutDeps {
   pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
   /** Reviewer and consolidation turns' artifact grants (`workflow-artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
+  /**
+   * The read-only guard's baseline for a new pass, taken before any reviewer
+   * is dispatched (`build-pipeline-read-only-guard.ts`). Throws when the Git
+   * state cannot be observed, which fails the stage before any turn is spent.
+   */
+  captureWorkspaceBaseline(pipeline: BuildPipeline): Promise<WorkspaceGitBaseline>;
+  /**
+   * The stage error when the worktree no longer matches the pass's baseline,
+   * or null. Asked when reviewer reports arrive and before the consolidated
+   * report is accepted.
+   */
+  workspaceViolation(
+    pipeline: BuildPipeline,
+    subject: "review" | "consolidation",
+  ): Promise<string | null>;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -235,6 +251,9 @@ export class BuildPipelineReviewFanout {
     if (!pipeline.reviewPackage) {
       throw new Error(`${FANOUT_LABEL} cannot start because no immutable review package exists`);
     }
+    // Reviewers and the consolidator share the worktree, so they share one
+    // baseline, taken before the first of them can touch it.
+    const workspaceBaseline = await this.deps.captureWorkspaceBaseline(pipeline);
     // One batch, so the shared environment, config, and model catalogue are
     // read once for the whole fan-out rather than once per reviewer.
     const selections = await this.deps.settingsForSelections(
@@ -245,7 +264,7 @@ export class BuildPipelineReviewFanout {
         effort: config.reasoningEffort,
       })),
     );
-    pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig) };
+    pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig), workspaceBaseline };
     recordEfficiency(this.deps.efficiency, {
       owner: "build-pipeline",
       operation: "launch.duplicate_reviewers",
@@ -273,12 +292,21 @@ export class BuildPipelineReviewFanout {
 
     if (!state.consolidation) {
       const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, targetBranch));
+      const completedBefore = completedReviewerCount(state.reviewers);
       const outcome = await runner.advanceReviewers(state.reviewers);
       // Settled *after* the pass, not inside it: a reviewer's last transcript
       // mirror happens while its provider status is still being read, so the
       // status it ends on — completed, failed, stopped — is only known here.
       // Without this the build tab shows finished reviewers as still running.
       await this.settleReviewerSessions(pipeline, state);
+      // A report is only usable from a worktree the panel left as it found it.
+      // Checked as reports arrive, so a reviewer that committed fails the pass
+      // without waiting for the rest of the panel, and again before
+      // consolidation reads them.
+      if (outcome.kind === "ready" || completedReviewerCount(state.reviewers) > completedBefore) {
+        const violation = await this.deps.workspaceViolation(pipeline, "review");
+        if (violation) return { kind: "failed", error: violation };
+      }
       if (outcome.kind === "working") return { kind: "working" };
       if (outcome.kind === "no-reports") return { kind: "failed", error: outcome.error };
     }
@@ -414,6 +442,10 @@ export class BuildPipelineReviewFanout {
       workflowId: pipeline.id,
       targetBranch,
       label: FANOUT_LABEL,
+      // Reviewers read the immutable package, so they run as Multi Review's do:
+      // provider plan mode with the read-only mutation boundary, on every turn
+      // including repairs. The read-only guard backs this on every provider.
+      reviewerMode: pipeline.reviewPackage ? "plan" : "build",
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
@@ -792,6 +824,7 @@ export class BuildPipelineReviewFanout {
       const providerSessionId = await provider.createSession("review", "Review · Consolidation", {
         clientSessionKey: sessionKey,
         mode: "plan",
+        readOnly: true,
         model: step.model,
         effort: step.effort,
         ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
@@ -957,6 +990,7 @@ export class BuildPipelineReviewFanout {
                 ? undefined
                 : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
             mode: "plan",
+            readOnly: true,
             model: consolidation.model,
             effort: consolidation.reasoningEffort,
             ...(typeof consolidation.fastMode === "boolean"
@@ -1173,6 +1207,10 @@ export class BuildPipelineReviewFanout {
       if (previousUsagePolls !== session.usageFinalizationPolls) await this.save(pipeline);
       return { kind: "working" };
     }
+    // The consolidated report is consumed here. The submit-time check let the
+    // consolidator repair a change within its turn; this one decides.
+    const violation = await this.deps.workspaceViolation(pipeline, "consolidation");
+    if (violation) return { kind: "failed", error: violation };
     state.report = provenance.report;
     session.status = "idle";
     session.reviewReport = provenance.report;
@@ -1455,4 +1493,8 @@ function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
     ...(typeof config.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
     status: "pending",
   };
+}
+
+function completedReviewerCount(reviewers: readonly ReviewerRecord[]): number {
+  return reviewers.filter((reviewer) => reviewer.status === "completed").length;
 }

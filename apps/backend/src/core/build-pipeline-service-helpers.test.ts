@@ -264,6 +264,7 @@ class FakeProvider implements BuildPipelineProvider {
     prompt: string;
     schema?: JsonSchema;
     mode?: "plan" | "build";
+    readOnly?: boolean;
   }> = [];
   readonly created: Array<{
     phase: PipelineSessionPhase;
@@ -294,7 +295,12 @@ class FakeProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: { requestId: string; schema?: JsonSchema; mode?: "plan" | "build" },
+    options: {
+      requestId: string;
+      schema?: JsonSchema;
+      mode?: "plan" | "build";
+      readOnly?: boolean;
+    },
   ): Promise<void> {
     this.sent.push({
       sessionId,
@@ -302,6 +308,7 @@ class FakeProvider implements BuildPipelineProvider {
       prompt,
       schema: options.schema,
       mode: options.mode,
+      ...(options.readOnly !== undefined ? { readOnly: options.readOnly } : {}),
     });
   }
 
@@ -622,7 +629,7 @@ async function startVerifying(
 }
 
 describe("BuildPipelineService", () => {
-  test("builds one immutable package and gives the single reviewer no worktree baseline", async () => {
+  test("builds one immutable package and runs the single reviewer read-only against a baseline", async () => {
     await withService(async (service, storage, provider, invocations) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -638,7 +645,20 @@ describe("BuildPipelineService", () => {
         "filePath" in reviewing.reviewPackage! ? reviewing.reviewPackage.filePath : "",
       ).toContain(".orkestrator/review-artifacts/");
       expect(invocations.some((entry) => entry.command === "generate_review_package")).toBe(true);
-      expect(reviewing.sessions.at(-1)).not.toHaveProperty("validationHeadAtStart");
+      // The read-only guard's baseline, taken before the session existed.
+      expect(reviewing.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        validationHeadAtStart: "1111111111111111111111111111111111111111",
+        validationWorktreeStatusAtStart: "clean",
+        validationUncommittedPathsAtStart: [],
+      });
+      // Read-only like a Multi Review reviewer: plan mode and the mutation
+      // boundary, both when the session is created and when it is prompted.
+      expect(provider.created.at(-1)).toMatchObject({
+        phase: "review",
+        options: { mode: "plan", readOnly: true, reviewerSession: true },
+      });
+      expect(provider.sent.at(-1)).toMatchObject({ mode: "plan", readOnly: true });
       expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range under review");
       expect(provider.sent.at(-1)?.prompt).toContain("Do not modify, create, or delete files");
       expect(provider.sent.at(-1)?.prompt).toContain("Do not rerun the full test suite");
@@ -646,7 +666,7 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("does not fail review when a temporary Git-visible artifact appears", async () => {
+  test("fails the review when the reviewer leaves a Git-visible path, keeping it as evidence", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -654,18 +674,74 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      expect((await pipeline(storage, started.id)).phase).toBe("verifying");
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error:
+          "Review cannot be certified because review left 1 uncommitted path that was not there when it started: coverage/tmp.json",
+      });
+      // Nothing was reset: the worktree change and the review session remain.
+      expect(controls.uncommittedPaths).toEqual(["coverage/tmp.json"]);
+      expect(failed.sessions.at(-1)?.phase).toBe("review");
     });
   });
 
-  test("does not probe the live worktree before dispatching the packaged review", async () => {
+  test("fails the review when the reviewer commits", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      controls.currentHead = "2222222222222222222222222222222222222222";
+
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because review changed the environment HEAD",
+      });
+    });
+  });
+
+  test("fails the packaged review before dispatch when Git state cannot be established", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       controls.failCommands.add("get_environment_uncommitted_paths");
 
       await service.advanceNow(started.id);
 
-      expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error:
+          "Review cannot start because the backend could not establish the environment Git state: probe failed (Error)",
+      });
+      expect(provider.created.some((entry) => entry.phase === "review")).toBe(false);
+    });
+  });
+
+  test("certifies a review session recorded before the guard existed without a probe", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      await mutateStored(storage, started.id, (stored) => {
+        const session = stored.sessions[stored.currentSessionIndex]!;
+        expect(session.phase).toBe("review");
+        delete session.validationHeadAtStart;
+        delete session.validationWorktreeStatusAtStart;
+        delete session.validationUncommittedPathsAtStart;
+      });
+      controls.currentHead = "2222222222222222222222222222222222222222";
+      const probes = invocations.filter(
+        (entry) => entry.command === "get_environment_uncommitted_paths",
+      ).length;
+
+      await service.advanceNow(started.id);
+
+      const verifying = await pipeline(storage, started.id);
+      expect(verifying.phase).toBe("verifying");
+      // One probe: Verify's own baseline. The legacy review spent none.
+      expect(
+        invocations.filter((entry) => entry.command === "get_environment_uncommitted_paths")
+          .length - probes,
+      ).toBe(1);
     });
   });
 
@@ -780,6 +856,51 @@ describe("BuildPipelineService", () => {
         "Verification cannot be certified because validation removed 7 uncommitted paths that were there when it started: notes/0.md, notes/1.md, notes/2.md, notes/3.md, notes/4.md and 2 more",
       );
     });
+  });
+
+  test("refuses a reviewer that committed at submit time and accepts it once repaired within the turn", async () => {
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        const results = controls.workflowResults!;
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        const baseHead = controls.currentHead;
+        // The review is driven by hand so the worktree can change mid-turn.
+        const autoSubmit = provider.send;
+        let reviewKey = "";
+        provider.send = async (sessionId, prompt, options) => {
+          if (provider.phases.get(sessionId) !== "review") {
+            return autoSubmit(sessionId, prompt, options);
+          }
+          reviewKey = options.requestId;
+          return FakeProvider.prototype.send.call(provider, sessionId, prompt, options);
+        };
+        const { started } = await startBuilding(service, storage);
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+        expect(reviewKey).not.toBe("");
+
+        // The reviewer commits.
+        controls.currentHead = "2222222222222222222222222222222222222222";
+        const refused = await results.submit(scope, reviewKey, cleanReview);
+        expect(refused).toMatchObject({
+          ok: false,
+          error: { code: "worktree_changed", nextAction: "correct" },
+        });
+        expect(refused.ok ? "" : refused.error.message).toContain(
+          `HEAD moved from \`${baseHead}\` to \`${controls.currentHead}\` during review`,
+        );
+        // A refusal is not a report: the stage keeps waiting for one.
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+
+        // It puts HEAD back within the same turn and submits again.
+        controls.currentHead = baseHead;
+        expect(await results.submit(scope, reviewKey, cleanReview)).toMatchObject({ ok: true });
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("verifying");
+      },
+      { toolMode: true },
+    );
   });
 
   test("lets the verifier undo a stray path before its verdict is accepted", async () => {
@@ -961,7 +1082,7 @@ describe("BuildPipelineService", () => {
     });
   }
 
-  test("fails closed when Git state cannot be verified after validation", async () => {
+  test("fails closed when Git state cannot be verified after review", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -972,8 +1093,33 @@ describe("BuildPipelineService", () => {
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
         error:
+          "Review cannot be certified because the backend could not verify Git state after review: probe failed (Error)",
+      });
+    });
+  });
+
+  test("fails Verify closed when its starting Git state cannot be established", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      // A review recorded before the guard existed is not probed, so the
+      // first probe after it is Verify's own baseline.
+      await mutateStored(storage, started.id, (stored) => {
+        const session = stored.sessions[stored.currentSessionIndex]!;
+        delete session.validationHeadAtStart;
+        delete session.validationWorktreeStatusAtStart;
+        delete session.validationUncommittedPathsAtStart;
+      });
+      controls.failCommands.add("get_environment_uncommitted_paths");
+
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error:
           "Verification cannot start because the backend could not establish the environment Git state: probe failed (Error)",
       });
+      expect(provider.created.some((entry) => entry.phase === "verify")).toBe(false);
     });
   });
 

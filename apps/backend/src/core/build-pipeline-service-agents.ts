@@ -94,6 +94,10 @@ export class BuildPipelineAgents {
       provider.registerSession?.(session.sdkSessionId, {
         origin: session.origin ?? "build-pipeline",
         interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        // A packaged review runs as a read-only reviewer. A recreated OpenCode
+        // provider needs the marker to restore its constrained reviewer shell,
+        // which it grants only to a session created with reviewer metadata.
+        ...(session.phase === "review" && pipeline.reviewPackage ? { reviewerSession: true } : {}),
         phase: session.phase,
         workflowId: pipeline.id,
         provider: agent,

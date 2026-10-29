@@ -110,6 +110,46 @@ and no duplicate full validation pass. Large successful logs are not injected
 into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
 
+## Read-only reviewers and the Git guard
+
+Reviewers read the sealed package, never write. Multi Review and the Build
+Pipeline run them the same way: when a package exists, every reviewer session
+is created and prompted in provider plan mode with `readOnly: true` (the
+fan-out host's `reviewerMode: "plan"`; for a single pipeline reviewer,
+`startStage` and every redispatch of its session, including repairs, reminders
+and user messages). OpenCode reviewers also get the constrained reviewer shell.
+Consolidation is a report-only turn and is read-only too. How strongly
+read-only is enforced depends on the provider: Claude (with its OS sandbox)
+and Codex enforce it, OpenCode and Cursor configure it, Grok treats it as
+advice.
+
+The Build Pipeline backs this with a read-only Git guard on every provider
+(`workspace-read-only-guard.ts`, applied by `build-pipeline-read-only-guard.ts`
+to Review, consolidation and Verify):
+
+- **Before dispatch** the backend records HEAD and the Git-visible
+  uncommitted paths through `get_environment_uncommitted_paths`, the same
+  probe for local worktrees and containers. A single reviewer keeps the
+  baseline on its session (the `validation*AtStart` fields Verify already
+  used); a panel keeps one on `reviewFanout.workspaceBaseline` for all its
+  reviewers and the consolidator, taken before the first reviewer starts. A
+  state the backend cannot observe fails the stage before any session exists.
+- **At submit time** an acceptance check on `review-report`,
+  `consolidated-review` and `verification-result` refuses a result with a
+  correctable `worktree_changed` error that names the moved HEAD or the paths,
+  so the agent can put the tree back and submit again within its turn. A
+  refusal spends no correction budget.
+- **When the result is consumed** the pipeline compares again: a single
+  review before its report is routed, a panel whenever a reviewer report
+  arrives and again before the consolidated report is accepted. A change
+  fails the stage with the paths or HEAD in the error. Nothing is reset; the
+  worktree is the evidence.
+
+Scope is Git's: ignored files, `.git` internals, paths outside the worktree
+and edits to a path that was already uncommitted are invisible. Guards detect;
+they do not prevent. Review sessions and panel passes recorded before the
+guard existed carry no baseline and are not certified.
+
 ## Lifecycle and visibility
 
 The header's restart control selects the work currently in progress. During a

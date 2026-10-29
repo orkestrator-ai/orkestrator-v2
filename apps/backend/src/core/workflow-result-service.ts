@@ -91,6 +91,11 @@ export interface WorkflowResultAttempt {
  * A workflow's own precondition on its environment, checked before a result of
  * one kind is validated or accepted. Returns the error to hand the model, or
  * null when the result may proceed.
+ *
+ * Several owners may register checks for the same kind (a build pipeline's
+ * review guard and a graph node's guard both judge `review-report`). A check
+ * must therefore return null for every attempt it does not own: another
+ * workflow's key, a superseded attempt, a turn it does not guard.
  */
 export type WorkflowResultAcceptanceCheck = (
   attempt: WorkflowResultAttempt,
@@ -344,7 +349,10 @@ export class WorkflowResultService {
   private heldBytes = 0;
   private readonly deliveryCounters = new Map<string, DeliveryCounters>();
   private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
-  private readonly acceptanceChecks = new Map<WorkflowResultKind, WorkflowResultAcceptanceCheck>();
+  private readonly acceptanceChecks = new Map<
+    WorkflowResultKind,
+    WorkflowResultAcceptanceCheck[]
+  >();
   readonly metrics: WorkflowResultMetrics;
 
   constructor(dataDir: string, metrics: WorkflowResultMetrics = new WorkflowResultMetrics()) {
@@ -768,7 +776,7 @@ export class WorkflowResultService {
   }
 
   /**
-   * Registers the owning workflow's environment precondition for one result kind.
+   * Adds a workflow's environment precondition for one result kind.
    *
    * The contract only sees the payload. A workflow that certifies a result
    * against its environment (verification must leave the worktree as it found
@@ -779,27 +787,47 @@ export class WorkflowResultService {
    * Advisory: a refusal spends no correction budget, a check that throws lets
    * the result through, and the workflow still applies its own check when it
    * reads the accepted result.
+   *
+   * Checks accumulate per kind and run in registration order; the first
+   * refusal wins. Each check skips attempts it does not own (see
+   * {@link WorkflowResultAcceptanceCheck}). Returns a function that removes
+   * this registration.
    */
-  setAcceptanceCheck(kind: WorkflowResultKind, check: WorkflowResultAcceptanceCheck): void {
-    this.acceptanceChecks.set(kind, check);
+  addAcceptanceCheck(kind: WorkflowResultKind, check: WorkflowResultAcceptanceCheck): () => void {
+    const checks = this.acceptanceChecks.get(kind) ?? [];
+    checks.push(check);
+    this.acceptanceChecks.set(kind, checks);
+    return () => {
+      const current = this.acceptanceChecks.get(kind);
+      if (!current) return;
+      const index = current.indexOf(check);
+      if (index >= 0) current.splice(index, 1);
+      if (current.length === 0) this.acceptanceChecks.delete(kind);
+    };
   }
 
   private async runAcceptanceCheck(
     resultKey: string,
     entry: StoredWorkflowResult,
   ): Promise<WorkflowResultError | null> {
-    const check = this.acceptanceChecks.get(entry.kind);
-    if (!check) return null;
-    try {
-      return await check({
-        resultKey,
-        kind: entry.kind,
-        environmentId: entry.environmentId,
-        projectId: entry.projectId,
-      });
-    } catch {
-      return null;
+    const checks = this.acceptanceChecks.get(entry.kind);
+    if (!checks) return null;
+    const attempt: WorkflowResultAttempt = {
+      resultKey,
+      kind: entry.kind,
+      environmentId: entry.environmentId,
+      projectId: entry.projectId,
+    };
+    // Copied: a check may unregister itself (or another) while it runs.
+    for (const check of checks.slice()) {
+      try {
+        const refusal = await check(attempt);
+        if (refusal) return refusal;
+      } catch {
+        // One owner's broken check must not decide another owner's attempt.
+      }
     }
+    return null;
   }
 
   /**

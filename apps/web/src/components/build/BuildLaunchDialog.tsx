@@ -570,9 +570,12 @@ function BuildStepCard({
 
       {(stepKey === "review" || stepKey === "verify") && (
         <p className="mt-2 text-[11px] leading-snug text-zinc-500" role="note">
-          Full workspace write access. The backend rejects results with source edits or commits
-          detected by its Git check. Ignored files, .git contents and paths outside the worktree are
-          not checked.
+          {stepKey === "review"
+            ? "Reviewers run read-only where the provider enforces it. "
+            : "Full workspace write access. "}
+          The backend rejects a result if HEAD moved or a Git-visible path appeared or disappeared
+          during the step. Ignored files, .git contents, paths outside the worktree and edits to
+          files that were already uncommitted are not checked.
         </p>
       )}
     </li>

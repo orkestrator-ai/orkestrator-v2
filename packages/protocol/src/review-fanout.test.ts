@@ -258,6 +258,21 @@ describe("fan-out state", () => {
   test("rejects an unknown field", () => {
     expect(isReviewFanoutState({ reviewers: [reviewer()], phase: "reviewing" })).toBe(false);
   });
+
+  test("accepts a read-only guard baseline and rejects a malformed one", () => {
+    const workspaceBaseline = {
+      head: "1".repeat(40),
+      paths: ["notes/a.md"],
+      capturedAt: new Date(0).toISOString(),
+    };
+    expect(isReviewFanoutState({ reviewers: [reviewer()], workspaceBaseline })).toBe(true);
+    expect(
+      isReviewFanoutState({
+        reviewers: [reviewer()],
+        workspaceBaseline: { ...workspaceBaseline, head: "main" },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("settlement helpers", () => {

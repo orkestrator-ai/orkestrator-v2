@@ -851,13 +851,16 @@ export interface PipelineSession {
    */
   structuredResultStatus?: "pending" | "accepted";
   /**
-   * Immutable Git state captured before a writable verification turn starts.
+   * Immutable Git state captured before a guarded turn starts: a verification
+   * turn, or a single review over an immutable package (the read-only guard,
+   * `apps/backend/src/core/workspace-read-only-guard.ts`).
    *
    * Verification may write ignored compiler output and caches, but its result
    * is certified only if HEAD and the set of Git-visible uncommitted paths stay
    * unchanged. Addressing can leave paths in this baseline; verification must
    * preserve them. Persisting it keeps the guard valid across backend restarts.
-   * Packaged review reads an immutable package and has no live-worktree baseline.
+   * A panel review keeps one baseline for the whole pass on
+   * `reviewFanout.workspaceBaseline` instead.
    */
   validationHeadAtStart?: string;
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";

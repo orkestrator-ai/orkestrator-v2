@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { TiptapMarkdownEditor } from "../../apps/web/src/components/markdown/TiptapMarkdownEditor";
 import { setMermaidRenderer } from "../../apps/web/src/lib/chat/rich-markdown/mermaid-render";
 
@@ -33,15 +34,25 @@ const markdown = [
 ].join("\n");
 
 export function MarkdownEditorDiagramFixture() {
+  const latest = useRef(markdown);
+  const [saved, setSaved] = useState("");
+  const [saveCount, setSaveCount] = useState(0);
   return (
     <main className="min-h-screen bg-background text-foreground">
       <TiptapMarkdownEditor
         markdown={markdown}
         fontFamily="Fira Code"
         fontSize={14}
-        onChange={() => {}}
-        onSave={() => {}}
+        onChange={(value) => {
+          latest.current = value;
+        }}
+        onSave={(override) => {
+          setSaved(override ?? latest.current);
+          setSaveCount((count) => count + 1);
+        }}
       />
+      <output aria-label="Saved Markdown">{saved}</output>
+      <output aria-label="Save count">{saveCount}</output>
     </main>
   );
 }

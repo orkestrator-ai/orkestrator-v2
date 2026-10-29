@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react";
 import { CodeBlock } from "@tiptap/extension-code-block";
 import type { NodeViewRenderer, NodeViewRendererProps } from "@tiptap/core";
 import {
@@ -27,8 +27,11 @@ function diagramLanguage(node: ProseMirrorNode): "mermaid" | "chart" | null {
     : null;
 }
 
-function useSettledValue<T>(value: T, delayMs: number): T {
+function useSettledSource(value: string, delayMs: number): string {
   const [settled, setSettled] = useState(value);
+  // Clearing invalidates the previous preview immediately, including when
+  // another edit arrives before the debounce timer fires.
+  if (!value && settled) setSettled("");
   useEffect(() => {
     const timer = setTimeout(() => setSettled(value), delayMs);
     return () => clearTimeout(timer);
@@ -45,11 +48,27 @@ function useSettledValue<T>(value: T, delayMs: number): T {
  * selection inside it.
  */
 function DiagramCodeBlockView({ node, editor, getPos, selectionInside }: ReactNodeViewProps) {
+  // setEditable emits an update without changing the document, so node-view
+  // props alone do not refresh the editor-owned source control.
+  const editable = useSyncExternalStore(
+    useCallback(
+      (onChange) => {
+        editor.on("update", onChange);
+        return () => {
+          editor.off("update", onChange);
+        };
+      },
+      [editor],
+    ),
+    () => editor.isEditable,
+    () => false,
+  );
   const language = diagramLanguage(node) ?? "mermaid";
-  const source = useSettledValue(node.textContent, PREVIEW_SETTLE_MS);
+  const source = useSettledSource(node.textContent, PREVIEW_SETTLE_MS);
   const blockKey = `markdown-editor:${useId()}`;
   const empty = node.textContent.length === 0;
   const editing = selectionInside || empty;
+  const previewReady = !empty && source === node.textContent;
 
   const editSource = () => {
     const position = getPos();
@@ -64,12 +83,19 @@ function DiagramCodeBlockView({ node, editor, getPos, selectionInside }: ReactNo
   return (
     <NodeViewWrapper data-markdown-diagram={language} className="not-prose relative my-4">
       <div contentEditable={false} data-markdown-diagram-preview="" className="select-none">
-        {empty ? null : language === "mermaid" ? (
-          <MermaidBlock source={source} closed blockKey={blockKey} />
+        {empty ? null : !previewReady ? (
+          <div
+            role="status"
+            className="flex h-80 items-center justify-center text-sm text-muted-foreground"
+          >
+            Updating preview…
+          </div>
+        ) : language === "mermaid" ? (
+          <MermaidBlock source={source} closed blockKey={blockKey} showSourceControl={false} />
         ) : (
           <ChartFenceBlock source={source} closed blockKey={blockKey} />
         )}
-        {editing || !editor.isEditable ? null : (
+        {editing || !editable ? null : (
           <button
             type="button"
             onClick={editSource}
@@ -95,11 +121,21 @@ function DiagramCodeBlockView({ node, editor, getPos, selectionInside }: ReactNo
 }
 
 const renderDiagramCodeBlock = ReactNodeViewRenderer(DiagramCodeBlockView, {
-  // Clicks, drags and keys inside the diagram (pan, zoom, toolbar) belong to
-  // the preview; only the editable source is ProseMirror's.
-  stopEvent: ({ event }) =>
-    event.target instanceof Element &&
-    event.target.closest("[data-markdown-diagram-preview]") !== null,
+  // Preview controls own pan/zoom input, but saving belongs to the editor
+  // even when a canvas or toolbar button has focus.
+  stopEvent: ({ event }) => {
+    if (
+      event instanceof KeyboardEvent &&
+      event.type === "keydown" &&
+      (event.metaKey || event.ctrlKey) &&
+      event.key.toLowerCase() === "s"
+    )
+      return false;
+    return (
+      event.target instanceof Element &&
+      event.target.closest("[data-markdown-diagram-preview]") !== null
+    );
+  },
   // Leaving the diagram languages recreates the node as a plain fence.
   update: ({ newNode, updateProps }) => {
     if (!diagramLanguage(newNode)) return false;

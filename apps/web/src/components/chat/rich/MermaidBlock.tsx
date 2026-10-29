@@ -67,6 +67,8 @@ export interface MermaidBlockProps {
   blockKey: string;
   live?: boolean;
   clipped?: boolean;
+  /** Editors provide their own action to reveal editable fence source. */
+  showSourceControl?: boolean;
 }
 
 type Viewport = NonNullable<RichViewState["viewport"]>;
@@ -418,6 +420,7 @@ export const MermaidBlock = memo(function MermaidBlock({
   blockKey,
   live = false,
   clipped = false,
+  showSourceControl = true,
 }: MermaidBlockProps) {
   const theme = useAppAppearance();
   const [view, setView] = useRichViewField(blockKey, "view", "preview");
@@ -535,7 +538,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 
   const actions = (
     <>
-      {closed ? (
+      {closed && showSourceControl ? (
         <RichToolbarButton
           label="Show source"
           pressed={showSource}
@@ -617,7 +620,7 @@ export const MermaidBlock = memo(function MermaidBlock({
             viewport={viewport}
             onViewportChange={setViewport}
             className="h-80"
-            label={`Mermaid ${shown!.diagramType} diagram. Use Show source for its text.`}
+            label={`Mermaid ${shown!.diagramType} diagram.${showSourceControl ? " Use Show source for its text." : ""}`}
           />
           <RichSearchMirror text={displayText} revealKey={blockKey} />
         </>

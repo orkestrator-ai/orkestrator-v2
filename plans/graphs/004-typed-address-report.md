@@ -120,3 +120,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Address opens a `fix-result` slot; Verify reads the bounded `fixResult` as an evidence frame; marker-based text fallback counted as a compatibility path; inspector shows the report; docs updated. · complete; awaiting PR
+- 2026-10-29 · coordinator · Ticked the Phase 0 exit criterion "Verify reads a typed Address report" in the index, citing this item's tests. · Awaiting PR.

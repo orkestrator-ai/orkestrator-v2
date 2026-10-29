@@ -29,7 +29,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 - [x] The pipeline review is read-only on every provider that supports it. The guard refuses a review that commits.
 - [x] The coordinator cannot request more iterations than the protocol accepts.
 - [x] Clean reports skip Address on both review paths.
-- [ ] Verify reads a typed Address report for new runs, and still reads old runs.
+- [x] Verify reads a typed Address report for new runs, and still reads old runs. (evidence: [004](004-typed-address-report.md); `apps/backend/src/core/build-pipeline-address-report.test.ts`, "an Address submission reaches the Verify prompt as a framed report" and "a pipeline record from before the upgrade still uses the last assistant text")
 - [x] Lenses and per-stage instructions round-trip through launch, record, restart, the coordinator tools and the CLI. Lens presets can be edited in Settings, and editing one leaves recorded reviews unchanged.
   - [x] Lenses: launch, record, restart, coordinator tools and CLI; presets editable in Settings; editing or deleting one leaves recorded reviews unchanged (evidence: [005](005-reviewer-lenses.md) Notes, "Tests").
   - [x] Per-stage instructions through the CLI: `orkestrator build launch --instructions` (evidence: [007](007-cli-build-pipeline-launch.md) Notes, "Tests"; `packages/cli/tests/build-command.test.ts` round trip).

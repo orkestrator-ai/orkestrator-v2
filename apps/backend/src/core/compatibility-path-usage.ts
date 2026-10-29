@@ -27,8 +27,16 @@ export const COMPATIBILITY_PATH_IDS = [
   "bridge-close.upgrade-required",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",
-  /** A history page was served from the joined sync-v1 projection (no v2 page route). */
+  /**
+   * A history page was served from the joined sync-v1 projection while the
+   * session's latest view carried a direct cursor, or no view was read: a
+   * caller paging with a v1 cursor it did not need (0232 item 3).
+   */
   "history.joined-v1-page",
+  /** A joined page for a view whose source has no direct pages (no provider cursor). */
+  "history.joined-v1-page.unpaged-source",
+  /** A joined page for a view whose source pages directly but could name or wrap no cursor. */
+  "history.joined-v1-page.unnamed-cursor",
   /** A runtime-health body had `mcpConfig` but no `mcpConfigReporting` marker. */
   "mcp-report.unmarked-config",
   /** An MCP apply outcome was decided by the older-bridge rule. */

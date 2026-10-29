@@ -37,6 +37,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/migrate-copy.test.ts",
     "tests/unit/pi-bridge-vendor.test.ts",
     "tests/unit/playwright-spec-loading.test.ts",
+    "tests/unit/private-tmpdir-playwright.integration.test.ts",
     "tests/unit/release/release-desktop.test.ts",
     "tests/unit/run-logged.test.ts",
     "tests/unit/runtime-env-wiring.test.ts",

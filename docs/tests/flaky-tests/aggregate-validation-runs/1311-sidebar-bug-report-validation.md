@@ -1,6 +1,6 @@
 # Sidebar bottom bar and Report a bug branch validation
 
-- **ID:** 1305
+- **ID:** 1311
 - **Status:** resolved
 - **Date observed:** 2026-10-29
 - **Command:** `mise run test` on branch `env-list-bottom-6d738241d2a2-r1`
@@ -53,3 +53,7 @@ assertion, timeout or skip was changed. The aggregate result remains failed.
 - Live-provider and Docker qualification remain opt-in; this round adds focused
   deterministic tests for report session authority, briefing/retry and discard
   races, bridge identity/MCP isolation, and filing security/failure paths.
+
+- **Merge register repair (2026-10-29):** renumbered from 1305 to 1311
+  because `main` independently assigned 1305 to the Claude cold-dispatch
+  restart-admission case; all original evidence and status are retained.

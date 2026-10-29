@@ -425,6 +425,45 @@ describe("AgentMailPanel", () => {
     });
   });
 
+  test.each([
+    ["worker on omarchy-hp", undefined, "worker on omarchy-hp"],
+    ["Claude 2 on omarchy-hp", "worker", "worker · Claude 2 on omarchy-hp"],
+  ])(
+    "names node participant %s in the conversation row and header",
+    async (displayName, environmentName, expected) => {
+      const remote: AgentMailParticipant = {
+        key: "node:bk_hp:leaf-env:tab",
+        kind: "agent",
+        displayName,
+        environmentName,
+        agent: null,
+        canReceive: false,
+      };
+      const thread = conversation([agent1, remote], []);
+      listAgentMailConversations.mockImplementation(async () => ({
+        revision: 1,
+        conversations: [
+          {
+            key: thread.key,
+            participants: thread.participants,
+            lastMessage: (({ body: _body, ...rest }) => rest)(mail("stored")),
+            lastPreview: "Remote report",
+            messageCount: 1,
+            attentionCount: 0,
+          },
+        ],
+      }));
+      getAgentMailConversation.mockImplementation(async () => thread);
+      render(<AgentMailPanel />);
+      act(() => useAgentMailStore.getState().openPanel({}));
+      const row = await screen.findByTestId("agent-mail-conversation-row");
+      expect(row.textContent).toContain(expected);
+      expect(row.textContent).not.toContain("worker · worker");
+      fireEvent.click(row);
+      expect(await screen.findByText(expected, { exact: true })).toBeTruthy();
+    },
+  );
+
   test("marks an unseen conversation seen once", async () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation([agent1, user], [mail("stored", { body: "unseen" })]),

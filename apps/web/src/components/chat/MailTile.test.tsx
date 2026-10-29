@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { ChatFindActiveContext } from "./chat-find-context";
 import { MailTile, mailTileTone } from "./MailTile";
 
@@ -37,9 +39,14 @@ function tile(container: HTMLElement): HTMLElement {
 }
 
 describe("MailTile", () => {
+  const initialMail = useAgentMailStore.getState();
+  const initialEnvironments = useEnvironmentStore.getState();
+
   afterEach(() => {
     cleanup();
     useMessagePartExpansionStore.getState().reset();
+    useAgentMailStore.setState(initialMail, true);
+    useEnvironmentStore.setState(initialEnvironments, true);
   });
 
   test("starts collapsed with the body clamped to a few lines", () => {
@@ -232,6 +239,93 @@ describe("MailTile", () => {
     expect(screen.getByText("To Codex 2")).toBeTruthy();
     expect(screen.getByText("waiting to deliver").dataset.mailStatus).toBe("progress");
     expect(mailTileTone({ kind: "message", direction: "out" })).toBe("sent");
+  });
+
+  test("names a recipient tab with its environment, giving way on the environment first", () => {
+    useEnvironmentStore.setState({ environments: [] });
+    const { container } = render(
+      <MailTile
+        mail={mail({
+          direction: "out",
+          sender: "To env-1 · Claude 2",
+          address: { environmentId: "env-1", tabId: "tab-1", tabName: "Claude 2" },
+          status: { label: "delivered", tone: "muted" },
+        })}
+        expansionKey="named"
+      />,
+    );
+    const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
+    expect(sender.textContent).toBe("To env-1 · Claude 2");
+    act(() =>
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            id: "env-1",
+            name: "a-very-long-environment-name-for-the-login-fix",
+            order: 0,
+          } as Environment,
+        ],
+      }),
+    );
+    expect(sender.textContent).toBe("To a-very-long-environment-name-for-the-login-fix · Claude 2");
+    expect(sender.title).toBe(sender.textContent);
+    // Only the environment's name truncates; the tab, status and chevron keep their room.
+    const [prefix, environment, rest] = Array.from(sender.children) as HTMLElement[];
+    expect(prefix!.className).toContain("shrink-0");
+    expect(environment!.className).toContain("truncate");
+    expect(environment!.className).toContain("min-w-0");
+    expect(rest!.className).toContain("shrink-0");
+    expect(rest!.className).toContain("text-ellipsis");
+    expect(sender.className).toContain("min-w-0");
+    expect(screen.getByText("delivered").className).toContain("shrink-0");
+  });
+
+  test.each(["Claude 2", undefined])(
+    "updates a received sender's environment name with tab %s",
+    (tabName) => {
+      useEnvironmentStore.setState({ environments: [] });
+      useAgentMailStore.setState({ mailboxes: new Map() });
+      const environmentId = "acf90d0f-8be8-45ba-b87b-745b54a007e0";
+      const { container } = render(
+        <MailTile
+          mail={mail({
+            sender: `acf90d0f · ${tabName ?? "startup-agent"}`,
+            address: { environmentId, tabId: "startup-agent", tabName },
+          })}
+          expansionKey="received"
+        />,
+      );
+      const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
+      expect(sender.textContent).toBe(`acf90d0f · ${tabName ?? "startup-agent"}`);
+      act(() =>
+        useEnvironmentStore.setState({
+          environments: [{ id: environmentId, name: "worker", order: 0 } as Environment],
+        }),
+      );
+      expect(sender.textContent).toBe(`worker · ${tabName ?? "startup-agent"}`);
+      expect(sender.title).toBe(sender.textContent);
+      expect(sender.textContent).not.toContain("To ");
+    },
+  );
+
+  test("renders a received environment-only address without a tab suffix", () => {
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", name: "worker", order: 0 } as Environment],
+    });
+    const { container } = render(
+      <MailTile
+        mail={mail({
+          sender: "env-1 · worker",
+          address: { environmentId: "env-1", tabId: "startup-agent", tabName: "worker" },
+        })}
+        expansionKey="environment-only"
+      />,
+    );
+    const sender = tile(container).querySelector<HTMLElement>("[data-mail-sender]")!;
+    expect(sender.textContent).toBe("worker");
+    expect(sender.title).toBe("worker");
+    expect(sender.children).toHaveLength(1);
+    expect(sender.firstElementChild!.className).toContain("truncate");
   });
 
   test("opens the conversation between sender and recipient", () => {

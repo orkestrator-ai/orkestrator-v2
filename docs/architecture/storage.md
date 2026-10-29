@@ -77,6 +77,17 @@ by each, or only through transactions; the guard checks that per store. The
 four agent mail classes share one `AgentMailStore`
 (`storage-agent-mail-store.ts`): the `agent-mail.json` lease (`enqueue`), its
 load and its size-checked save, plus the pure helpers on the persisted shape.
+Read-only paths (the directory, inboxes, status, the inject sweep and the UI
+summaries) use `snapshot()` instead of `load()`: one deeply frozen value shared
+between calls and rebuilt only when the store's committed revision moves,
+which any writer in any process bumps. A rebuild reads the serialized rows
+from the connection's revision-validated cache (`loadStoreSerialized`) and
+re-parses only rows whose serialized value changed, so an unchanged store
+costs one revision query and a send re-parses about three rows instead of
+every mailbox. Read-modify-write paths still take a mutable copy with `load()`
+inside `enqueue`. The 32 MiB limit is checked on the serialized rows the save
+writes anyway (`maxBytes` on `saveSensitiveJson`), not by serializing the
+store a second time.
 
 Every repository takes the one `StorageContext` (`this.context`), the
 `StorageFiles` path helpers (`this.files.kanbanFile()`) and the

@@ -23,3 +23,10 @@
 ## Remote host upgrades main merge — 2026-10-26
 
 The aggregate repeated the missing `ready` ring (81.74 ms). The complete unchanged owner passed alone in 72.2 seconds. Commands, worker configuration, counts and evidence are recorded in [1009](../aggregate-validation-runs/1009-remote-host-main-merge-validation.md). No implementation, assertion, deadline or skip changed.
+
+## Arch Linux temp-dir sweep recurrence — 2026-10-29
+
+- **Original command:** `ORKESTRATOR_TEST_TIER=all TMPDIR=<private> mise exec -- bun run --cwd apps/backend test:workspace` on `todo-0247-test-temp-dir-leaks-e39ce75c81ca` at `45597dc26` (test cleanup only; no worktree-signal code), omarchy-hp, Arch Linux x86_64, Bun 1.4.4, load average 3 to 19.
+- **Failure:** the same assertion, now at line 339, received `["lost"]` instead of `["lost", "ready"]` after 58.14 ms.
+- **Suite counts:** backend 13,022 passed, 154 skipped, two failed across 13,178 tests in 798 files (682.75 s). The other failure was the `storage-writer-guards.test.ts` deadline already recorded in aggregate cases 1003, 1010 and 1166.
+- **Isolated rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/container-worktree-signal-install.test.ts` from `apps/backend`, under a private `TMPDIR`, passed 13 of 13. The backend re-sweep at `f1fd52100` passed it too (13,025 passed, 0 failed).

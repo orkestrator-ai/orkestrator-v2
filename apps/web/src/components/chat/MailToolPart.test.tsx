@@ -7,7 +7,13 @@ import {
 import { invoke } from "@/lib/native/backend";
 import type { AgentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { MailToolPart } from "./MailToolPart";
+
+function senderText(): string | null | undefined {
+  return document.querySelector("[data-mail-sender]")?.textContent;
+}
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -82,6 +88,7 @@ function mailbox(revision = 1): AgentMailMailboxSnapshot {
 }
 
 beforeEach(() => {
+  useEnvironmentStore.setState(useEnvironmentStore.getInitialState());
   useAgentMailStore.setState(useAgentMailStore.getInitialState());
   useAgentMailStore.getState().clear();
   invokeMock.mockReset();
@@ -106,7 +113,8 @@ describe("mounted mail tool tiles", () => {
       throw new Error(`Unexpected command ${command}`);
     });
     render(<MailToolPart call={call} expansionKey="old" />);
-    expect(await screen.findByText("To Codex worker")).toBeTruthy();
+    expect(await screen.findByText("Recipient")).toBeTruthy();
+    expect(senderText()).toBe("To Recipient · Codex worker");
     expect(screen.getByText("handled")).toBeTruthy();
     await act(async () => useAgentMailStore.getState().refreshMailbox("recipient", "agent"));
     expect(screen.getByText("handled")).toBeTruthy();
@@ -158,6 +166,37 @@ describe("mounted mail tool tiles", () => {
       />,
     );
     expect(screen.getByText("To Project coordinator")).toBeTruthy();
+  });
+  test("names the recipient's environment from the environment store until its mailbox loads", async () => {
+    invokeMock.mockImplementation(async () => new Promise(() => {}));
+    render(<MailToolPart call={call} expansionKey="loading" />);
+    // Neither name is known yet: the short environment id and the tab id stand in.
+    expect(senderText()).toBe("To recipien · agent");
+    act(() =>
+      useEnvironmentStore
+        .getState()
+        .setEnvironments([{ id: "recipient", name: "fix-login-bug", order: 0 } as Environment]),
+    );
+    expect(senderText()).toBe("To fix-login-bug · agent");
+  });
+  test("names a recipient on another node from the send result, without asking this node", () => {
+    render(
+      <MailToolPart
+        call={{
+          ...call,
+          to: {
+            environmentId: "leaf-env",
+            tabId: "startup-agent",
+            environmentName: "fix-login-bug",
+            tabName: "Claude 2",
+            node: "omarchy-hp",
+          },
+        }}
+        expansionKey="remote"
+      />,
+    );
+    expect(senderText()).toBe("To fix-login-bug · Claude 2 on omarchy-hp");
+    expect(invokeMock.mock.calls.length).toBe(0);
   });
   test.each([
     [{ kind: "user" }, "user", "user"],

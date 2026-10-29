@@ -48,43 +48,49 @@ test("activity transition events name their session and carry the observer stamp
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: { onActivityTransition?: (event: Record<string, unknown>) => void };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: { onActivityTransition?: (event: Record<string, unknown>) => void };
+        };
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "idle",
-    state: "working",
-    agent: "cursor",
-    logicalSessionKey: "env-env-1:tab-1",
-    observation: { generation: "observer-1", revision: 7 },
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "idle",
+      state: "working",
+      agent: "cursor",
+      logicalSessionKey: "env-env-1:tab-1",
+      observation: { generation: "observer-1", revision: 7 },
+    });
 
-  // Additive and content-free: the addressable session and the stamp a client
-  // uses to invalidate exactly that view and to detect a missed transition.
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "idle",
-        state: "working",
-        agent: "cursor",
-        logical_session_key: "env-env-1:tab-1",
-        generation: "observer-1",
-        revision: 7,
+    // Additive and content-free: the addressable session and the stamp a client
+    // uses to invalidate exactly that view and to detect a missed transition.
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "idle",
+          state: "working",
+          agent: "cursor",
+          logical_session_key: "env-env-1:tab-1",
+          generation: "observer-1",
+          revision: 7,
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("activity transition events omit backend-only provider session identifiers", async () => {
@@ -98,36 +104,42 @@ test("activity transition events omit backend-only provider session identifiers"
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: {
-          onActivityTransition?: (event: Record<string, unknown>) => void;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: {
+            onActivityTransition?: (event: Record<string, unknown>) => void;
+          };
         };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "working",
-    state: "idle",
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "working",
+      state: "idle",
+    });
 
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "working",
-        state: "idle",
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "working",
+          state: "idle",
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("probes for an agent-created PR on the backend's own agent-idle edge", async () => {
@@ -497,8 +509,11 @@ test("startup runs the tmux reaper after the PID reaper even when PID reaping fa
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -529,8 +544,11 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1891,8 +1909,11 @@ test("turn-end observation finishes before the same-edge prompt queue drain", as
     resume();
     note.mockRestore();
     drain.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1929,8 +1950,11 @@ test("production activity wiring forwards only worker waiting/working edges and 
     ]);
   } finally {
     note.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1989,8 +2013,11 @@ test("production excerpt wiring looks up the exact session and falls back within
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 }, 10_000);
 
@@ -2037,7 +2064,10 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });

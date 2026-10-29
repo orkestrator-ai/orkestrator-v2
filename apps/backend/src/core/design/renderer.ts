@@ -8,6 +8,7 @@ import {
   type DesignRendererHealth,
   type DesignRendererState,
 } from "@orkestrator/protocol/design-operations";
+import { userDataDirFromArgs, type DesignProfileLedger } from "./browser-profiles.js";
 import { DesignError } from "./errors.js";
 import {
   DesignRenderQueue,
@@ -56,6 +57,8 @@ export interface DesignBrowserHandle {
   browser: Browser;
   /** The browser process, when known (diagnostics and fault tests). */
   pid?: number;
+  /** The temporary profile Playwright made for this browser, when known. */
+  profileDir?: string;
   /** Closes the browser gracefully and ends its process. */
   close(): Promise<void>;
   /** Kills the browser process. */
@@ -79,9 +82,12 @@ export async function launchDesignBrowser(
   const server = await chromium.launchServer({ ...options, host: "127.0.0.1" });
   try {
     const browser = await chromium.connect(server.wsEndpoint(), { timeout: options.timeout });
+    const browserProcess = server.process();
+    const profileDir = userDataDirFromArgs(browserProcess.spawnargs);
     return {
       browser,
-      pid: server.process().pid,
+      pid: browserProcess.pid,
+      ...(profileDir ? { profileDir } : {}),
       close: () => server.close(),
       kill: () => server.kill(),
     };
@@ -93,6 +99,8 @@ export async function launchDesignBrowser(
 
 export interface DesignRendererOptions {
   launchBrowser?: DesignBrowserLauncher;
+  /** Records each browser's profile so a later backend can remove it if this one is killed. */
+  profiles?: DesignProfileLedger;
   executablePath?: () => string | undefined;
   budgets?: Partial<DesignRenderBudgets>;
   maxJobs?: number;
@@ -139,6 +147,8 @@ interface Generation {
   launchTimer?: ReturnType<typeof setTimeout>;
   jobs: Set<Ticket>;
   terminating?: Promise<void>;
+  /** The profile ledger record for this generation's browser. */
+  profileRecord?: Promise<string | null>;
 }
 
 interface Ticket {
@@ -174,6 +184,7 @@ type RuntimeResult = { ok: true; value: unknown } | { ok: false; message: string
  */
 export class DesignRenderer {
   private readonly launchBrowser: DesignBrowserLauncher;
+  private readonly profiles: DesignProfileLedger | undefined;
   private readonly executablePath: () => string | undefined;
   private readonly budgets: DesignRenderBudgets;
   private readonly maxJobs: number;
@@ -194,6 +205,7 @@ export class DesignRenderer {
 
   constructor(options: DesignRendererOptions = {}) {
     this.launchBrowser = options.launchBrowser ?? launchDesignBrowser;
+    this.profiles = options.profiles;
     this.executablePath = options.executablePath ?? resolveDesignChromiumPath;
     this.budgets = { ...DEFAULT_DESIGN_RENDER_BUDGETS, ...options.budgets };
     this.maxJobs = Math.max(1, options.maxJobs ?? DESIGN_LIMITS.renderJobs);
@@ -324,6 +336,14 @@ export class DesignRenderer {
   close(): Promise<void> {
     this.closing ??= this.shutdown();
     return this.closing;
+  }
+
+  /**
+   * Startup recovery: removes the profiles of browsers launched by a backend
+   * that was killed before it could close them. Returns how many it removed.
+   */
+  async sweepStaleProfiles(): Promise<number> {
+    return (await this.profiles?.sweep())?.length ?? 0;
   }
 
   private get admitted(): number {
@@ -537,6 +557,7 @@ export class DesignRenderer {
         if (gen.launchTimer) clearTimeout(gen.launchTimer);
         gen.launchTimer = undefined;
         gen.handle = handle;
+        gen.profileRecord = this.profiles?.record(handle.pid, handle.profileDir);
         const { browser } = handle;
         if (gen.dead) {
           // Launch finished after its deadline or shutdown: this process is ours to end.
@@ -627,6 +648,9 @@ export class DesignRenderer {
       if (!killed) warn("browser-kill-deadline", { generation: gen.id });
     })()
       .catch(() => undefined)
+      // Playwright removes the profile once the browser has exited; a profile
+      // still present keeps its record for startup recovery.
+      .then(async () => this.profiles?.release((await gen.profileRecord) ?? null))
       .finally(() => {
         this.generations.delete(gen);
       });

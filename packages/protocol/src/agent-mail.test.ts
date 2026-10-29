@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  agentMailAddressLabel,
+  formatAgentMailAddressLabel,
   agentMailKind,
   agentMailRouteWakes,
   normalizeAgentMailNotice,
@@ -398,5 +400,31 @@ describe("agent mail protocol", () => {
     expect(agentMailTranscriptTool("mcp__slack__send_message")).toBe(null);
     expect(agentMailTranscriptTool("mcp__orkestrator__check_inbox")).toBe(null);
     expect(agentMailTranscriptTool(undefined)).toBe(null);
+  });
+  test("names an agent tab by its environment as well as the tab", () => {
+    const environmentId = "acf90d0f-8be8-45ba-b87b-745b54a007e0";
+    const named = agentMailAddressLabel({
+      environmentId,
+      environmentName: "fix-login-bug",
+      tabId: "startup-agent",
+      tabName: "Claude 2",
+    });
+    expect(named).toEqual({ environment: "fix-login-bug", tab: "Claude 2" });
+    expect(formatAgentMailAddressLabel(named)).toBe("fix-login-bug · Claude 2");
+    // Until the name loads, a short environment id and the tab id stand in.
+    expect(
+      formatAgentMailAddressLabel(
+        agentMailAddressLabel({ environmentId, environmentName: " ", tabId: "startup-agent" }),
+      ),
+    ).toBe("acf90d0f · startup-agent");
+    // A tab named for its environment is not named twice.
+    expect(
+      agentMailAddressLabel({
+        environmentId,
+        environmentName: "fix-login-bug",
+        tabId: "agent",
+        tabName: "fix-login-bug",
+      }),
+    ).toEqual({ environment: "fix-login-bug" });
   });
 });

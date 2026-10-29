@@ -319,6 +319,31 @@ run indefinitely, and the bridge's appended system prompt states the effective
 limits (`services/background-commands.ts`) and tells Claude to hand longer-lived
 servers to an Orkestrator terminal tab instead.
 
+Each session's preferences file (`services/session-preferences.ts`, under
+`~/.claude/orkestrator/session-preferences`, which a container keeps on a
+provider-state volume) holds the session identity and the durable dispatch
+claims (`dispatchedRequestIds`) that stop a prompt running twice, so writers
+take its `<prefs>.lock` one at a time. The lock records its owner's identity
+(`services/process-identity.ts`): the pid, a per-process instance id and, on
+Linux, the `/proc` start time and boot id. A waiting writer takes over at once
+a lock whose owner is proven dead: a free pid, this process's own pid under
+another instance, or a live pid with another start time or boot id. A bridge
+killed while holding the lock therefore no longer stalls its successor, even
+when a container restart hands the same pid to the new bridge. Unreadable
+metadata, and an older bridge's pid-only lock whose pid is dead, wait out a
+30-second stale window; past it, where `/proc` cannot answer (macOS), the
+recorded start is compared with `ps -o lstart=`. A live owner that matches or
+cannot be checked is never displaced. The owner refreshes the lock every 5 s,
+and a writer gives up after 5 s (`PreferenceLockTimeoutError`). On a prompt's
+claim write that becomes a 503 `unavailable`, which the backend treats as not
+processed and retryable instead of parking the prompt as outcome unknown;
+nothing was written and the claim is rolled back, so the prompt did not run.
+The change-evidence spool claim and the turn-in-flight restart mark use the
+same owner rule. Tests: `process-identity.test.ts`, `session-preferences.test.ts`,
+`session-manager-lifecycle.test.ts` (the 503 refusal) and `routes/session.test.ts`
+([0726](../todo/agent-engines/0726-claude-preference-lock-reused-pid.md)
+tracks the remaining live container qualification).
+
 Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.

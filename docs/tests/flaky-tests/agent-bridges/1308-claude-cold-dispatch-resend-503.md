@@ -1,6 +1,6 @@
 # Claude cold-dispatch restart resend answered 503 under aggregate load
 
-- **ID:** 1304
+- **ID:** 1308
 - **Status:** open
 - **Date observed:** 2026-10-28
 - **Test:** `a restarted Claude bridge answers a cold dispatch from disk without registering the session`

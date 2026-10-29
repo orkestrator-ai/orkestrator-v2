@@ -334,6 +334,42 @@ describe("send_coordinator_node_mail", () => {
     const open = (await associations()).filter((entry) => entry.delegation?.state === "running");
     expect(open).toHaveLength(1);
   });
+  test("names the recipient by what its node reports, or by the environment it read", async () => {
+    const reported = await setup({
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          toEnvironmentName: "fix-login-bug",
+          toTabName: "Claude 2",
+        },
+      },
+    });
+    expect(
+      await reported.run("send_coordinator_node_mail", {
+        scope: reported.scope,
+        nodeId: "bk_leaf",
+        requestId: "named",
+        toEnvironmentId: "leaf-env",
+        body: "Fix it.",
+      }),
+    ).toMatchObject({
+      node: expect.any(String),
+      toEnvironmentName: "fix-login-bug",
+      toTabName: "Claude 2",
+    });
+    // An older node reports no names: the environment it was read as stands in.
+    const older = await setup();
+    const result = await older.run("send_coordinator_node_mail", {
+      scope: older.scope,
+      nodeId: "bk_leaf",
+      requestId: "older",
+      toEnvironmentId: "leaf-env",
+      body: "Fix it.",
+    });
+    expect(result.toEnvironmentName).toBe("leaf-env");
+    expect(result.toTabName).toBeUndefined();
+  });
 });
 
 describe("workflows on a node", () => {

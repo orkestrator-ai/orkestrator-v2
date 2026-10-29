@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,6 +13,7 @@ import {
   legacyTurboArtifacts,
   previewPartitionRows,
   readEnvironments,
+  temporaryBrowserRows,
 } from "../../scripts/disk-report";
 import {
   closeEnvironmentCleanupStorage,
@@ -21,6 +22,7 @@ import {
   type EnvironmentCleanupEntry,
 } from "../../apps/backend/src/core/environment-cleanup-ledger";
 import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { privateTmpdirRoot } from "../private-tmpdir";
 import { defaultRuntimeProfileRoots } from "../../packages/protocol/src/node/runtime-profile-status";
 
 let root: string;
@@ -119,6 +121,18 @@ describe("disk report", () => {
     const report = invoke("--json");
     expect(report.status).toBe(0);
     const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
+    // Exercise collectReport's macOS root branch, including its prefix filter
+    // and the same-root case: no private row is duplicated or mislabelled.
+    const privateRoot = privateTmpdirRoot(os.tmpdir());
+    expect(rows.filter((row) => row.location === `${privateRoot}/ork-test-tmp-*`)).toHaveLength(1);
+    if (privateRoot !== os.tmpdir()) {
+      expect(
+        rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
+      ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
+      expect(
+        rows.some((row) => row.location === `${os.tmpdir()}/playwright_chromiumdev_profile-*`),
+      ).toBe(true);
+    }
     expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(
       "1 files",
     );
@@ -292,5 +306,42 @@ describe("disk report", () => {
     ]).split("\n");
     expect(table[0]).toMatch(/^Location\s+Size\s+Orphaned\s+Owner\s+Cleanup$/);
     expect(table[2]).toMatch(/^\/a\s+1\.0 GB\s+1\s+x\s+y$/);
+  });
+});
+
+describe("temporaryBrowserRows", () => {
+  test("reports browser profiles and the directories holding them, each as its own row", async () => {
+    const now = Date.parse("2026-10-28T12:00:00.000Z");
+    const directories = {
+      "playwright_chromiumdev_profile-Abc123": 50 * 3_600_000,
+      "playwright_chromiumdev_profile-Def456": 2 * 3_600_000,
+      "ork-artifact-preview-123-Ghi789": 5 * 3_600_000,
+    };
+    for (const [name, ageMs] of Object.entries(directories)) {
+      const directory = path.join(root, name);
+      await mkdir(path.join(directory, "Default"), { recursive: true });
+      await writeFile(path.join(directory, "Default", "Preferences"), "x".repeat(4096));
+      const modified = new Date(now - ageMs);
+      await utimes(directory, modified, modified);
+    }
+    // Same prefix, but a file: not counted.
+    await writeFile(path.join(root, "playwright_chromiumdev_profile-file00"), "");
+    const commandLines = `chrome --user-data-dir=${path.join(root, "playwright_chromiumdev_profile-Def456")}`;
+
+    const rows = temporaryBrowserRows(root, now, commandLines);
+
+    expect(rows.map((row) => [row.location, row.orphaned])).toEqual([
+      [`${root}/playwright_chromiumdev_profile-*`, "2 directories (1 in use, oldest 2d)"],
+      [`${root}/ork-artifact-preview-*`, "1 directories (0 in use, oldest 5h)"],
+      [`${root}/ork-test-tmp-*`, "0 directories (0 in use)"],
+    ]);
+    expect(rows[0]!.bytes).toBeGreaterThan(0);
+    expect(rows[0]!.owner).toContain("owner unknown");
+    expect(temporaryBrowserRows(root, now, null)[0]!.orphaned).toBe(
+      "2 directories (in use unknown, oldest 2d)",
+    );
+    // Read-only: nothing was removed.
+    for (const name of Object.keys(directories))
+      expect(existsSync(path.join(root, name))).toBe(true);
   });
 });

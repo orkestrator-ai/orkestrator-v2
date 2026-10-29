@@ -604,6 +604,8 @@ export interface ProviderTranscriptSnapshot {
    * pushed messages out, and details resolve through `transcriptDetail`.
    */
   representation?: "summary";
+  /** Source supports direct history pages, even when this window starts at the first message. */
+  historyPageable?: boolean;
   /**
    * Provider page cursor for history before the first message, scoped to
    * `historyEpoch`. A provider that pages by message rather than by absolute

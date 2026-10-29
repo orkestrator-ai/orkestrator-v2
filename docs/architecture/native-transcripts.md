@@ -294,7 +294,10 @@ serves only peers outside the support window.
   direct pages (the `/messages` fallback below, a bridge without page routes),
   a provider cursor too long to wrap, and an OpenCode view retaining only a
   failed message's inline error row after its main row was byte-omitted. The
-  renderer keeps the mint for those and for backends before 0232.
+  renderer keeps the mint for those and for backends before 0232. Each joined
+  page is counted by why the session's latest view had no direct cursor:
+  `history.joined-v1-page.unpaged-source`, `history.joined-v1-page.unnamed-cursor`,
+  or `history.joined-v1-page` when it had one or none was read.
   [0232](../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md)
   owns removing it.
 - **The `/messages` fallback.** When `/transcript` answers 404 or 405,

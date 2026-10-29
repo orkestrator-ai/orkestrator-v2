@@ -1,9 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
-import { StorageService } from "../src/core/storage.js";
+import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail-bench-fixture.js";
 
 /**
  * What one agent MCP handshake (`initialize` then `tools/list`, as Codex runs
@@ -21,93 +17,21 @@ import { StorageService } from "../src/core/storage.js";
  * compare runs on one host only. Todo 0741 records measured runs.
  */
 
-function option(name: string, fallback: number): number {
-  const index = process.argv.indexOf(`--${name}`);
-  const value = index === -1 ? undefined : Number(process.argv[index + 1]);
-  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
 const environments = Math.max(1, option("environments", 100));
 const tabs = Math.max(1, option("tabs", 6));
 const messages = option("messages", 600);
 const sequential = Math.max(1, option("sequential", 600));
 const concurrent = Math.max(1, option("concurrent", 40));
 
-const dataDir = await mkdtemp(path.join(tmpdir(), "ork-mcp-handshake-bench-"));
-// Console output from storage and mail would otherwise dominate the run.
-const quiet = { log: console.log, info: console.info, warn: console.warn };
-console.log = console.info = console.warn = () => undefined;
-const storage = new StorageService(dataDir);
+const fixture = await createAgentMailBenchFixture({
+  prefix: "ork-mcp-handshake-bench-",
+  environments,
+  tabs,
+  messages,
+});
+const { storage } = fixture;
 let server: AgentToolsServer | null = null;
 try {
-  await storage.init();
-  await storage.addProject({
-    id: "project",
-    name: "project",
-    gitUrl: "https://example.invalid/project.git",
-    localPath: null,
-    addedAt: new Date(0).toISOString(),
-    order: 0,
-  });
-  for (let index = 0; index < environments; index += 1) {
-    const id = `env-${index}`;
-    await storage.addEnvironment({
-      id,
-      projectId: "project",
-      name: id,
-      branch: "main",
-      containerId: null,
-      status: "running",
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-      createdAt: new Date(0).toISOString(),
-      networkAccessMode: "restricted",
-      order: index,
-      environmentType: "local",
-      setupPhase: "ready",
-      setupScriptsComplete: true,
-    });
-    await storage.savePaneLayout(
-      id,
-      {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "pane",
-        root: {
-          kind: "leaf",
-          id: "pane",
-          tabs: Array.from({ length: tabs }, (_, tab) => ({
-            id: `tab-${tab}`,
-            type: "agent-native" as const,
-            displayTitle: `tab ${tab}`,
-            nativeAgentData: { environmentId: id, platform: "claude" as const },
-          })),
-          activeTabId: "tab-0",
-        },
-      },
-      0,
-    );
-  }
-  await storage.synchronizeAgentMailboxes();
-  const body = "m".repeat(1_800);
-  for (let index = 0; index < messages; index += 1) {
-    await storage.sendAgentMail(
-      {
-        kind: "tab",
-        environmentId: `env-${index % environments}`,
-        projectId: "project",
-        tabId: "tab-0",
-      },
-      {
-        requestId: `bench-${index}`,
-        toEnvironmentId: `env-${(index + 1) % environments}`,
-        toTabId: `tab-${index % tabs}`,
-        body,
-      },
-    );
-  }
-
   const tools = new AgentToolsServer(storage, "127.0.0.1");
   server = tools;
   await tools.start();
@@ -165,7 +89,7 @@ try {
       limit: 200,
     });
   }
-  quiet.log(
+  fixture.log(
     JSON.stringify({
       environments,
       tabs,
@@ -185,7 +109,6 @@ try {
   );
 } finally {
   await server?.stop();
-  Object.assign(console, quiet);
-  await rm(dataDir, { recursive: true, force: true });
+  await fixture.dispose();
 }
 process.exit(0);

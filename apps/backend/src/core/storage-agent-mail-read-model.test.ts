@@ -7,7 +7,12 @@ import { agentMailboxId } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentMailStore, PersistedAgentMailStore } from "./storage-agent-mail-store.js";
 import { STORAGE_DATABASE_FILE } from "./storage-database.js";
-import { readStoredValue, seedStore, storageInternals } from "./storage-test-support.js";
+import {
+  deleteStoredValue,
+  readStoredValue,
+  seedStore,
+  storageInternals,
+} from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 const ENVIRONMENTS = ["e1", "e2", "e3", "e4"] as const;
@@ -174,6 +179,198 @@ describe("agent mail read model", () => {
       expect(after).toEqual(await mailStore.load());
     });
   });
+
+  test("falls back to a frozen loaded copy for a document-mode store", async () => {
+    await withWorld(async ({ storage, mailStore, send }) => {
+      await send("e1", "e2");
+      const before = await mailStore.snapshot();
+      const value = await mailStore.load();
+      mailbox(value, "e2").title = "document mailbox";
+      const { database } = storageInternals(storage).context;
+      database.transaction(() => {
+        database.writeRawDocumentInTransaction("agent-mail", JSON.stringify(value));
+      });
+      expect(database.readStoreSerialized("agent-mail")?.mode).toBe("document");
+      const after = await mailStore.snapshot();
+      expect(after).toEqual(await mailStore.load());
+      expect(mailbox(after, "e2").title).toBe("document mailbox");
+      expect(mailbox(before, "e2").title).not.toBe("document mailbox");
+      expect(Object.isFrozen(mailbox(after, "e2").messages[0]!.from)).toBe(true);
+      expect(() => {
+        mailbox(after, "e2").title = "changed";
+      }).toThrow(TypeError);
+    });
+  });
+
+  test.each(["commit", "rollback"] as const)(
+    "reads buffered atomic writes and restores the correct state after %s",
+    async (outcome) => {
+      await withWorld(async ({ dataDir, storage, mailStore, send }) => {
+        await send("e1", "e2");
+        const before = await mailStore.snapshot();
+        const value = await mailStore.load();
+        mailbox(value, "e2").title = "buffered mailbox";
+        const operation = storageInternals(storage).context.atomically(async () => {
+          await mailStore.save(value);
+          const buffered = await mailStore.snapshot();
+          expect(buffered).toEqual(await mailStore.load());
+          expect(mailbox(buffered, "e2").title).toBe("buffered mailbox");
+          expect(Object.isFrozen(mailbox(buffered, "e2").messages[0]!)).toBe(true);
+          expect(() => {
+            mailbox(buffered, "e2").title = "changed";
+          }).toThrow(TypeError);
+          expect(readStoredValue<PersistedAgentMailStore>(dataDir, "agent-mail.json")!).toEqual(
+            before,
+          );
+          if (outcome === "rollback") throw new Error("abort atomic mail");
+        });
+        if (outcome === "rollback") await expect(operation).rejects.toThrow("abort atomic mail");
+        else await operation;
+        const after = await mailStore.snapshot();
+        expect(after).toEqual(outcome === "commit" ? value : before);
+        expect(after).toEqual(await mailStore.load());
+        expect(after).toEqual(
+          readStoredValue<PersistedAgentMailStore>(dataDir, "agent-mail.json")!,
+        );
+        expect(Object.isFrozen(after)).toBe(true);
+        expect(await mailStore.snapshot()).toBe(after);
+        expect(mailbox(before, "e2").title).not.toBe("buffered mailbox");
+      });
+    },
+  );
+
+  test("returns a frozen empty store when absent and observes its recreation", async () => {
+    await withWorld(async ({ dataDir, mailStore, send }) => {
+      await send("e1", "e2");
+      const before = await mailStore.snapshot();
+      deleteStoredValue(dataDir, "agent-mail.json");
+      const empty = await mailStore.snapshot();
+      expect(empty).toEqual(await mailStore.load());
+      expect(empty).toMatchObject({ revision: 0, mailboxes: {}, pendingInject: [] });
+      expect(Object.isFrozen(empty.mailboxes)).toBe(true);
+      expect(Object.isFrozen(empty.pendingInject)).toBe(true);
+      seedStore(dataDir, "agent-mail.json", before);
+      const recreated = await mailStore.snapshot();
+      expect(recreated).toEqual(before);
+      expect(recreated).not.toBe(before);
+      expect(recreated).toEqual(await mailStore.load());
+    });
+  });
+
+  test("invalidates a cached snapshot when deleted and recreated between reads", async () => {
+    await withWorld(async ({ dataDir, mailStore, send }) => {
+      await send("e1", "e2");
+      const before = await mailStore.snapshot();
+      const replacement = await mailStore.load();
+      mailbox(replacement, "e2").title = "recreated mailbox";
+      deleteStoredValue(dataDir, "agent-mail.json");
+      seedStore(dataDir, "agent-mail.json", replacement);
+      const after = await mailStore.snapshot();
+      expect(after).not.toBe(before);
+      expect(mailbox(after, "e2").title).toBe("recreated mailbox");
+      expect(after).toEqual(await mailStore.load());
+      expect(Object.isFrozen(mailbox(after, "e2"))).toBe(true);
+    });
+  });
+
+  test("rebuilds after the database is closed and reopened at the same revision", async () => {
+    await withWorld(async ({ storage, mailStore, send }) => {
+      await send("e1", "e2");
+      const before = await mailStore.snapshot();
+      const { context } = storageInternals(storage);
+      const database = context.database;
+      const revision = database.storeRevision("agent-mail");
+      storage.close();
+      const after = await mailStore.snapshot();
+      expect(context.database).not.toBe(database);
+      expect(context.database.storeRevision("agent-mail")).toBe(revision);
+      expect(after).not.toBe(before);
+      expect(after).toEqual(before);
+      expect(after).toEqual(await mailStore.load());
+      expect(Object.isFrozen(mailbox(after, "e2").messages[0]!)).toBe(true);
+      expect(await mailStore.snapshot()).toBe(after);
+    });
+  });
+
+  test("reuses frozen rows while refreshing retry and pair epochs from an envelope-only commit", async () => {
+    await withWorld(async ({ mailStore, send }) => {
+      const message = await send("e1", "e2");
+      const value = await mailStore.load();
+      mailbox(value, "e2").messages[0]!.placement = "pending-inject";
+      await mailStore.save(value);
+      const before = await mailStore.snapshot();
+      const changed = await mailStore.load();
+      const pending = changed.pendingInject.find((entry) => entry.messageId === message.id)!;
+      Object.assign(pending, {
+        retryAt: "2099-01-01T00:00:00.000Z",
+        retryAttempts: 3,
+        coalescing: true,
+        nextAttemptAt: "2099-01-02T00:00:00.000Z",
+      });
+      changed.pairEpochs = { pair: 7 };
+      await mailStore.save(changed);
+      const parse = spyOn(JSON, "parse");
+      let after: PersistedAgentMailStore;
+      try {
+        after = await mailStore.snapshot();
+        expect(parse.mock.calls).toHaveLength(1);
+      } finally {
+        parse.mockRestore();
+      }
+      expect(after).not.toBe(before);
+      for (const environmentId of ENVIRONMENTS) {
+        expect(mailbox(after, environmentId)).toBe(mailbox(before, environmentId));
+      }
+      expect(after.pendingInject).toEqual(changed.pendingInject);
+      expect(after.pairEpochs).toEqual({ pair: 7 });
+      expect(Object.isFrozen(after.pendingInject[0])).toBe(true);
+      expect(Object.isFrozen(after.pairEpochs)).toBe(true);
+      expect(before.pendingInject[0]!.retryAt).toBeUndefined();
+      expect(before.pairEpochs).toBeUndefined();
+      expect(after).toEqual(await mailStore.load());
+    });
+  });
+
+  test.each(["pending", "interrupted"] as const)(
+    "%s inject callers receive shared frozen messages that reject mutation",
+    async (state) => {
+      await withWorld(async ({ storage, mailStore, send }) => {
+        const config = await storage.loadConfig();
+        await storage.saveConfig({
+          ...config,
+          global: {
+            ...config.global,
+            agentMessaging: { ...config.global.agentMessaging!, defaultInjectPolicy: "idle" },
+          },
+        });
+        const sent = await send("e1", "e2");
+        if (state === "interrupted") {
+          const recipient = mailbox(await mailStore.load(), "e2");
+          await storage.beginAgentMailInject(recipient.mailboxId, sent.id, recipient.incarnationId);
+        }
+        const snapshot = await mailStore.snapshot();
+        const original = structuredClone(snapshot);
+        const listed =
+          state === "pending"
+            ? await storage.listPendingAgentMailInjects()
+            : await storage.listInterruptedAgentMailInjects();
+        expect(listed).toHaveLength(1);
+        const message = listed[0]!.message;
+        expect(message).toBe(mailbox(snapshot, "e2").messages[0]!);
+        expect(Object.isFrozen(message)).toBe(true);
+        expect(Object.isFrozen(message.from)).toBe(true);
+        expect(() => {
+          message.body = "changed";
+        }).toThrow(TypeError);
+        expect(() => {
+          message.from.kind = "user";
+        }).toThrow(TypeError);
+        expect(await mailStore.snapshot()).toBe(snapshot);
+        expect(snapshot).toEqual(original);
+        expect(await mailStore.load()).toEqual(original);
+      });
+    },
+  );
 
   test("reads an unreadable row the way a load does", async () => {
     await withWorld(async ({ dataDir, mailStore, send }) => {

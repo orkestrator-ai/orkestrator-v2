@@ -19,7 +19,6 @@ import {
 import { StorageChanges } from "./storage-changes.js";
 import {
   StoreCorruptError,
-  StoreTooLargeError,
   type RowUpdate,
   type SerializedStore,
   type StorageDatabase,
@@ -191,9 +190,12 @@ export class StorageContext {
         this.database,
         this.dataDir,
         () => {
-          for (const [store, value] of writes) {
-            if (value === DELETED_STORE) this.database.deleteStoreInTransaction(store);
-            else this.database.writeStoreInTransaction(store, value);
+          for (const [store, write] of writes) {
+            if (write === DELETED_STORE) this.database.deleteStoreInTransaction(store);
+            else
+              this.database.writeStoreInTransaction(store, write.value, {
+                maxBytes: write.maxBytes,
+              });
           }
         },
         scope.archiveCleanups,
@@ -237,7 +239,10 @@ export class StorageContext {
     if (scope) {
       const current = this.loadStore(store, fallback);
       const result = mutate(current);
-      scope.writes.set(store, current);
+      scope.writes.set(store, {
+        value: current,
+        maxBytes: bufferedMaxBytes(scope.writes.get(store)),
+      });
       return result;
     }
     recurringWorkMetrics.work("storage-write");
@@ -272,7 +277,7 @@ export class StorageContext {
       else if ("value" in update) records[key] = update.value;
       else return update.result;
       if (options.collection) value[options.collection] = records;
-      scope.writes.set(store, value);
+      scope.writes.set(store, { value, maxBytes: bufferedMaxBytes(scope.writes.get(store)) });
       return update.result;
     }
     recurringWorkMetrics.work("storage-write");
@@ -542,7 +547,7 @@ export class StorageContext {
     const scope = this.openAtomicScope();
     if (scope?.writes.has(store)) {
       const buffered = scope.writes.get(store);
-      return buffered === DELETED_STORE ? fallback() : (structuredClone(buffered) as T);
+      return buffered === DELETED_STORE ? fallback() : (structuredClone(buffered?.value) as T);
     }
     return this.readStoreOr(store, fallback);
   }
@@ -633,7 +638,7 @@ export class StorageContext {
     const scope = this.openAtomicScope();
     if (scope?.writes.has(store)) {
       const buffered = scope.writes.get(store);
-      return buffered === DELETED_STORE ? null : { value: structuredClone(buffered) as T };
+      return buffered === DELETED_STORE ? null : { value: structuredClone(buffered?.value) as T };
     }
     const snapshot = this.database.readStore(store);
     return snapshot ? { value: snapshot.value as T } : null;
@@ -700,7 +705,8 @@ export class StorageContext {
    * {@link saveJson} for stores holding sensitive content: files are written
    * owner-only, and a database store's retired JSON archive is pruned of what
    * the save removes. `maxBytes` (database stores only) refuses the save with
-   * `StoreTooLargeError` when the serialized value would exceed it.
+   * `StoreTooLargeError` when the compact document and row values (UTF-8)
+   * exceed it. Inside {@link atomically}, this is checked at commit.
    */
   async saveSensitiveJson(
     filePath: string,
@@ -755,11 +761,7 @@ export class StorageContext {
     if (store === null) return false;
     const scope = this.openAtomicScope();
     if (scope) {
-      if (maxBytes !== undefined) {
-        const bytes = Buffer.byteLength(JSON.stringify(value), "utf8");
-        if (bytes > maxBytes) throw new StoreTooLargeError(store, bytes);
-      }
-      scope.writes.set(store, structuredClone(value));
+      scope.writes.set(store, { value: structuredClone(value), maxBytes });
       scope.archiveCleanups.push(...cleanups);
       return true;
     }
@@ -881,9 +883,15 @@ const MISSING_PREVIOUS: unique symbol = Symbol("missing previous value");
 /** A present but unreadable store: nothing shows what the save kept. */
 const UNKNOWN_PREVIOUS: unique symbol = Symbol("unknown previous value");
 
+type BufferedStoreWrite = { value: unknown; maxBytes?: number };
+
+function bufferedMaxBytes(write: BufferedStoreWrite | typeof DELETED_STORE | undefined) {
+  return write === DELETED_STORE ? undefined : write?.maxBytes;
+}
+
 type AtomicStorageScope = {
-  /** Buffered new value per store, or {@link DELETED_STORE}. */
-  writes: Map<string, unknown>;
+  /** Buffered new value and its commit limit per store, or {@link DELETED_STORE}. */
+  writes: Map<string, BufferedStoreWrite | typeof DELETED_STORE>;
   announcements: Array<() => void>;
   archiveCleanups: LegacyJsonCleanup[];
   archiveTransforms: Array<() => void>;

@@ -86,6 +86,7 @@ export const GRAPH_BUILT_IN_TYPE_NAMES = [
   "ticket",
   "workspace",
   "validation-plan",
+  "validation-results",
   "review-package",
   "review-report",
   "finding",
@@ -202,6 +203,29 @@ const REVIEW_ISSUE_SCHEMA = (
 /** Rolled-up CI state of `check-summary@1` (D20). */
 export const GRAPH_CHECK_SUMMARY_STATES = ["passed", "failed", "pending", "none"] as const;
 export type GraphCheckSummaryState = (typeof GRAPH_CHECK_SUMMARY_STATES)[number];
+
+/** Outcome of a `run-validation` system node (`validation-results@1`, report §9.4). */
+export const GRAPH_VALIDATION_RESULT_STATES = ["passed", "failed", "incomplete"] as const;
+export type GraphValidationResultState = (typeof GRAPH_VALIDATION_RESULT_STATES)[number];
+/** How a command in `validation-results@1`'s `failures` ended. */
+export const GRAPH_VALIDATION_FAILURE_STATES = ["failed", "incomplete"] as const;
+
+/** The payload of `validation-results@1`. */
+export interface GraphValidationResultsV1 {
+  headRef: string;
+  state: GraphValidationResultState;
+  total: number;
+  passed: number;
+  failures: Array<{
+    id: string;
+    command: string;
+    state: (typeof GRAPH_VALIDATION_FAILURE_STATES)[number];
+    exitCode: number | null;
+    summary: string;
+    output: string;
+  }>;
+  limitations: string[];
+}
 
 /** Check conclusions `check-summary@1` lists as failing. */
 export const GRAPH_FAILING_CHECK_CONCLUSIONS = [
@@ -491,6 +515,63 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
     },
     validator: "validation-plan",
     resultKind: "validation-plan",
+  },
+  {
+    name: "validation-results",
+    version: 1,
+    label: "Validation results",
+    description:
+      "What running a validation plan found, without sealing a package: the commit, the outcome and each failing command with the tail of its output (report §9.4).",
+    family: "report",
+    schema: objectSchema({
+      headRef: stringField("The full commit SHA the commands ran against."),
+      state: {
+        type: "string",
+        enum: [...GRAPH_VALIDATION_RESULT_STATES],
+        description:
+          "passed: no command failed; failed: at least one did; incomplete: stopped before every command finished.",
+      },
+      total: { type: "integer", minimum: 0, description: "Commands in the plan." },
+      passed: { type: "integer", minimum: 0, description: "Commands that passed." },
+      failures: {
+        type: "array",
+        description: "Commands that failed or did not finish, in plan order.",
+        items: objectSchema({
+          id: stringField("The command's id in the validation plan."),
+          command: stringField("The command as run."),
+          state: { type: "string", enum: [...GRAPH_VALIDATION_FAILURE_STATES] },
+          exitCode: nullable({ type: "integer" }),
+          summary: stringField("One line: how the command ended."),
+          output: stringField("The tail of the command's output, stderr after stdout."),
+        }),
+      },
+      limitations: { type: "array", items: { type: "string" } },
+    }),
+    budgets: { maxBytes: VALUE_CAP, maxStringBytes: 32 * KIB, maxItems: 64 },
+    items: { path: "failures", idPrefix: "failure" },
+    render: {
+      markdown:
+        "Validation **{{state}}**: {{passed}} of {{total}} passed at `{{headRef}}`\n\n{{#failures}}- `{{command}}`: {{summary}}\n{{/failures}}",
+      summary: ["state", "passed", "total"],
+    },
+    example: {
+      headRef: SHA_A,
+      state: "failed",
+      total: 2,
+      passed: 1,
+      failures: [
+        {
+          id: "test",
+          command: "bun test src/reports",
+          state: "failed",
+          exitCode: 1,
+          summary: "Exited with code 1",
+          output: "export.test.ts:\n✗ exports every row\n  expected 3 rows, received 2\n",
+        },
+      ],
+      limitations: [],
+    } satisfies GraphValidationResultsV1,
+    validator: "validation-results",
   },
   {
     name: "review-package",

@@ -740,7 +740,14 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
   }
   if (value.code !== undefined) {
     const codePath = joinPath(path, "code");
-    if (checkObject(value.code, codePath, ["headRef", "backupRef"], errors)) {
+    if (
+      checkObject(
+        value.code,
+        codePath,
+        ["headRef", "backupRef", "from", "upstream", "upstreamCommitsDropped"],
+        errors,
+      )
+    ) {
       checkPattern(
         value.code.headRef,
         joinPath(codePath, "headRef"),
@@ -750,6 +757,25 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
         "a full commit SHA",
       );
       checkText(value.code.backupRef, joinPath(codePath, "backupRef"), errors, 256);
+      if (value.code.from !== undefined) {
+        checkPattern(
+          value.code.from,
+          joinPath(codePath, "from"),
+          errors,
+          GRAPH_COMMIT_PATTERN,
+          64,
+          "a full commit SHA",
+        );
+      }
+      checkText(value.code.upstream, joinPath(codePath, "upstream"), errors, 256);
+      checkCount(
+        value.code.upstreamCommitsDropped,
+        joinPath(codePath, "upstreamCommitsDropped"),
+        errors,
+        0,
+        1_000_000,
+        true,
+      );
     }
   }
   return idOk ? (value.id as string) : null;

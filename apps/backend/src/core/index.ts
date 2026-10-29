@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
@@ -178,6 +179,9 @@ import { gitEnvironmentValidator } from "./workflow-result-environment-validator
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphRunService } from "./graph-run-service.js";
+import { GraphNodeSystemExecutor } from "./graph-node-system.js";
+import { createGraphEnvironmentShell } from "./graph-system-environment.js";
+import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -200,6 +204,7 @@ export class OrkestratorBackend {
   private readonly graphTemplates: GraphTemplateService;
   /** Graph runs on the keyed `graph-run` domain (items 202, 203). */
   private readonly graphRuns: GraphRunService;
+  private readonly graphSystemExecutor: GraphNodeSystemExecutor;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1095,11 +1100,37 @@ export class OrkestratorBackend {
     );
     context.multiReviews = this.multiReviews;
     // Node executors (items 204–208) register on `graphRuns.executors`.
+    const invokeCommand = async <T>(command: string, args: Record<string, unknown> = {}) => {
+      const handler = this.commands.get(command);
+      if (!handler) throw new Error(`Unknown backend command: ${command}`);
+      return (await handler(args, context)) as T;
+    };
     this.graphRuns = new GraphRunService(storage, {
       artifacts: new GraphArtifactStore({ storage, fence: context.runtime.environments.fence }),
       workflowAdmission: this.workflowAdmission,
+      provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
     });
     context.graphRuns = this.graphRuns;
+    // System nodes (item 207): backend side effects, journaled per run.
+    this.graphSystemExecutor = new GraphNodeSystemExecutor({
+      storage,
+      invoke: invokeCommand,
+      shell: createGraphEnvironmentShell(context.runtime.environments.fence),
+      prMonitor: {
+        state: (environmentId) =>
+          context.runtime.prMonitor.service
+            .snapshot()
+            .find((entry) => entry.environmentId === environmentId) ?? null,
+        subscribe: (listener) =>
+          context.runtime.prMonitor.onEvent((event) => listener(event.environmentId)),
+        watch: (environmentId) =>
+          invokeCommand<void>("pr_monitor_watch", { environmentId, mode: "normal" }),
+      },
+      requestObservation: (runId, activationKey) =>
+        this.graphRuns.requestObservation(runId, activationKey),
+      owner: `backend-${randomUUID()}`,
+    });
+    this.graphRuns.executors.register(this.graphSystemExecutor);
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -2269,6 +2300,7 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain multi reviews:", error);
         }
+        this.graphSystemExecutor.shutdown();
         try {
           await this.graphRuns.shutdown();
         } catch (error) {

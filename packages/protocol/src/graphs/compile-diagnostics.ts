@@ -91,6 +91,20 @@ export const GRAPH_COMPILE_DIAGNOSTICS = Object.freeze({
     severity: "error",
     summary: "`onFailure: route` needs an `error` output port of type `error@1`.",
   },
+  "system-param-invalid": {
+    severity: "error",
+    summary:
+      "A system node's parameter is unknown to its action, of the wrong type, out of range, missing or contradictory (`detail`: unknown, type, range, format, required, conflict).",
+  },
+  "system-port-unsupported": {
+    severity: "error",
+    summary:
+      "A system node's port carries a type its action does not read or produce, or carries one twice (`detail`).",
+  },
+  "system-input-missing": {
+    severity: "error",
+    summary: "A system node has no input port of a type its action (or its parameters) needs.",
+  },
 
   // Topology and loops.
   "graph-cycle": {

@@ -11,6 +11,7 @@ import { CoordinatorsRepository } from "./storage-coordinators.js";
 import { DraftsRepository } from "./storage-drafts.js";
 import { GraphTemplatesRepository } from "./storage-graph-templates.js";
 import { GraphRunsRepository } from "./storage-graph-runs.js";
+import { GraphEffectsRepository } from "./storage-graph-effects.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
@@ -65,6 +66,7 @@ export class StorageRepositories {
   readonly agentAccounts: AgentAccountsRepository;
   readonly graphTemplates: GraphTemplatesRepository;
   readonly graphRuns: GraphRunsRepository;
+  readonly graphEffects: GraphEffectsRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -94,5 +96,6 @@ export class StorageRepositories {
     this.agentAccounts = new AgentAccountsRepository(context);
     this.graphTemplates = new GraphTemplatesRepository(context);
     this.graphRuns = new GraphRunsRepository(context, this);
+    this.graphEffects = new GraphEffectsRepository(context, this);
   }
 }

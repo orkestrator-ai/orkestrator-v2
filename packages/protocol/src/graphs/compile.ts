@@ -43,6 +43,7 @@ import {
   type GraphCompileOptions,
   resolveGraphCompileOptions,
 } from "./compile-state.js";
+import { checkGraphSystemNodes } from "./compile-system.js";
 import { computeGraphTaint } from "./compile-taint.js";
 import { checkGraphWorkspace } from "./compile-workspace.js";
 import { checkGraphLimits, computeGraphCost } from "./cost.js";
@@ -108,6 +109,7 @@ export function compile(template: unknown, options: GraphCompileOptions = {}): G
   checkGraphReferences(state);
   checkGraphRoles(state);
   checkGraphNodeRules(state);
+  checkGraphSystemNodes(state);
 
   computeGraphTopology(state);
   checkGraphLoopRegions(state);

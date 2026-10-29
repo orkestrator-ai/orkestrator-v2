@@ -774,48 +774,24 @@ function failureDiagnosis(): GraphTemplateV1 {
     ],
     types: [
       {
+        // One element of the built-in validation-results@1's `failures`.
         name: "validation-failure",
         version: 1,
         schema: {
           type: "object",
           properties: {
+            id: { type: "string" },
             command: { type: "string" },
+            state: { type: "string", enum: ["failed", "incomplete"] },
+            exitCode: { anyOf: [{ type: "integer" }, { type: "null" }] },
             summary: { type: "string" },
             output: { type: "string" },
           },
-          required: ["command", "summary", "output"],
+          required: ["id", "command", "state", "exitCode", "summary", "output"],
           additionalProperties: false,
         },
         storage: "value",
         budgets: { maxBytes: 65_536, maxStringBytes: 32_768 },
-      },
-      {
-        name: "validation-results",
-        version: 1,
-        schema: {
-          type: "object",
-          properties: {
-            failures: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  command: { type: "string" },
-                  summary: { type: "string" },
-                  output: { type: "string" },
-                },
-                required: ["command", "summary", "output"],
-                additionalProperties: false,
-              },
-            },
-          },
-          required: ["failures"],
-          additionalProperties: false,
-        },
-        storage: "value",
-        budgets: { maxBytes: 393_216, maxStringBytes: 32_768, maxItems: 64 },
-        items: { path: "failures", idPrefix: "failure" },
-        render: { summary: ["failures"] },
       },
       {
         name: "diagnosis",

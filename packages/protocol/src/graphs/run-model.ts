@@ -337,8 +337,28 @@ export interface GraphRewind {
   requestedBy: GraphRewindRequester;
   /** Exactly what it superseded: the lineage descendants (P2.10). */
   superseded: { activations: string[]; artifacts: string[] };
-  /** A code rewind's target commit and the backup ref it kept. */
-  code?: { headRef: string; backupRef?: string };
+  /** A code rewind's target commit and what it reset (see {@link GraphRewindCode}). */
+  code?: GraphRewindCode;
+}
+
+/**
+ * What a code rewind did to the branch (P2.10). Item 210 records it before
+ * the reset, as `build-pipeline-code-rewind.ts` does for the pipeline. The
+ * upstream fields decide the next push (item 207): a rewind that dropped
+ * commits the upstream already had makes the next push of the run's branch
+ * use `--force-with-lease`, once; every other push is a plain push.
+ */
+export interface GraphRewindCode {
+  /** The commit the branch was reset to. */
+  headRef: string;
+  /** The ref that keeps the old tip reachable. */
+  backupRef?: string;
+  /** The tip the reset moved away from. */
+  from?: string;
+  /** The branch's upstream (`origin/feature`), when it had one. */
+  upstream?: string;
+  /** Commits on the upstream that the reset dropped; above 0 means a forced push is due. */
+  upstreamCommitsDropped?: number;
 }
 
 // ---------------------------------------------------------------- artifacts

@@ -45,7 +45,7 @@ Deletion owns state Orkestrator itself creates and names for an environment:
   terminal histories, OpenCode command-change journals, design canvases, web
   annotations, preview definitions;
 - environment-keyed store records: sessions, looped and multi-review
-  workflows, build pipelines, graph runs and their artifact records, prompt
+  workflows, build pipelines, graph runs with their artifact and effect records, prompt
   queues, agent mail, native agent sessions and their display tails, compose
   and file drafts, handoffs, workflow results, the pane layout;
 - graph runs' reference artifacts in the workspace

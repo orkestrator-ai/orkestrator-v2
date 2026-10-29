@@ -133,14 +133,17 @@ export interface GraphAgentExecutorDependencies {
   /** Per-turn transcript artifact grants for nodes that opt into the artifacts group. */
   artifactDispatch?: ArtifactTurnDispatch;
   /**
-   * Captures a settling turn's transcript (the run view, item 211). Returns
-   * the stored reference for the session, or undefined.
+   * Captures a turn's display transcript (the run view, item 211; see
+   * `graph-run-transcripts.ts`). Called on every observation; the capture
+   * throttles itself and always reads a `settling` turn. Returns the stored
+   * reference for the session, or undefined when nothing new was stored.
    */
   captureTranscript?(input: {
     runId: string;
     activationKey: string;
     providerSessionId: string;
     readTranscript: () => Promise<readonly unknown[]>;
+    settling: boolean;
   }): Promise<GraphActivationSession["transcript"] | undefined>;
   pollGate?: AgentBranchPollGate;
   progressTracker?: MultiReviewProgressTracker;

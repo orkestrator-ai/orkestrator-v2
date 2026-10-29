@@ -66,6 +66,8 @@ export interface GraphAgentWiringInput {
   enforcementHost?(environment: Environment): AgentEnforcementHost;
   projectNotes?(projectId: string): Promise<string | undefined>;
   artifactDispatch?: ArtifactTurnDispatch;
+  /** Stores activation transcripts for the run view (item 211, `graph-run-transcripts.ts`). */
+  captureTranscript?: GraphAgentExecutorDependencies["captureTranscript"];
   /** Tests: provider instances instead of bridges. */
   createProvider?: (
     environment: Environment,
@@ -131,6 +133,7 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     ...(input.enforcementHost ? { enforcementHost: input.enforcementHost } : {}),
     ...(input.projectNotes ? { projectNotes: input.projectNotes } : {}),
     ...(input.artifactDispatch ? { artifactDispatch: input.artifactDispatch } : {}),
+    ...(input.captureTranscript ? { captureTranscript: input.captureTranscript } : {}),
     // The idle-result grace is counted on the run's observation cadence.
     pollGate: (() => {
       const gate = new ElapsedPollGate(GRAPH_RUN_OBSERVATION_MS);

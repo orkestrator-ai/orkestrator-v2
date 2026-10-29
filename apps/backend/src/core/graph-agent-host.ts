@@ -827,12 +827,13 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   ): Promise<void> {
     this.currentBranch = branch;
     const capture = this.dependencies.captureTranscript;
-    if (!capture || !settling || !branch.providerSessionId) return;
+    if (!capture || !branch.providerSessionId) return;
     const reference = await capture({
       runId: this.context.run.id,
       activationKey: this.context.activation.key,
       providerSessionId: branch.providerSessionId,
       readTranscript,
+      settling,
     });
     if (reference) this.input.state.transcript = reference;
   }

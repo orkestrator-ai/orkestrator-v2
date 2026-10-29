@@ -71,6 +71,8 @@ function installBackend() {
     const find = (ref: { scope: string; id?: string }) =>
       all.find((detail) => detail.summary.ref.scope === ref.scope && detail.summary.id === ref.id);
     switch (command) {
+      case "graph_runs_list":
+        return [];
       case "graph_templates_list":
         return listResult(all.map((detail) => detail.summary));
       case "graph_template_get":

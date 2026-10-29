@@ -72,7 +72,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | not-started | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
 | 209 | [209-guards-and-enforcement.md](209-guards-and-enforcement.md) | 2 | in-progress | 001, 106, 204 | Read-only guard on read/none nodes, remote-ref guard on every agent node, GitHub credential withheld, `minEnforcement` checks. |
 | 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | in-progress | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
-| 211 | [211-run-view.md](211-run-view.md) | 2 | not-started | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |
+| 211 | [211-run-view.md](211-run-view.md) | 2 | in-progress | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |
 | 212 | [212-editable-designer.md](212-editable-designer.md) | 2 | in-progress | 107, 109, 110 | Canvas editing with undo, inspector forms, prompt and type editors, live compile, safe save, taint acknowledgement. |
 | 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | not-started | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
 | 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | not-started | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |

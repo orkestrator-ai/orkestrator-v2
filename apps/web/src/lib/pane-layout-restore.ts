@@ -231,6 +231,21 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { id, type, graphDesignerData: selected ? { selected } : {} };
   }
 
+  if (type === "graph-run") {
+    if (!isRecord(value.graphRunData)) return null;
+    const { runId, title } = value.graphRunData;
+    // The run id grammar (`GRAPH_RUN_ID_PATTERN`); the backend refuses anything else.
+    if (typeof runId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(runId)) return null;
+    return {
+      id,
+      type,
+      graphRunData: {
+        runId,
+        ...(typeof title === "string" && title.trim() ? { title: title.slice(0, 200) } : {}),
+      },
+    };
+  }
+
   if (type === "pull-request") {
     if (!isRecord(value.pullRequestData) || !isGitHubPullRequestRef(value.pullRequestData.ref)) {
       return null;

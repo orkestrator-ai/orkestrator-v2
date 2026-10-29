@@ -50,6 +50,7 @@ import { GraphImportDialog } from "./GraphImportDialog";
 import { GraphInspector } from "./GraphInspector";
 import { GraphJsonEditor } from "./GraphJsonEditor";
 import { GraphLibraryList } from "./GraphLibraryList";
+import { GraphRunsList } from "@/components/graph-run/GraphRunsList";
 import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
 import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
 import { GraphEditorContext } from "./graph-editor-context";
@@ -60,7 +61,8 @@ import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
  * canvas, the inspector and the compile panel, with JSON import and export
  * and Duplicate (item 110). User templates, and new ones ("New graph"), are
  * edited on the canvas (item 212): palette, connections, forms, undo, a live
- * browser compile, and Save with compare-and-swap.
+ * browser compile, and Save with compare-and-swap. The environment's graph
+ * runs are listed under the library; a row opens the run's tab (item 211).
  *
  * The tab keeps only the template it shows in the pane layout; everything
  * else is re-read from the backend when it mounts, when a `graph-template`
@@ -500,7 +502,7 @@ export function GraphDesignerTab({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto @4xl:flex-row @4xl:overflow-hidden">
-        <aside className="flex max-h-60 min-h-0 w-full shrink-0 flex-col border-b border-border @4xl:max-h-none @4xl:w-64 @4xl:border-r @4xl:border-b-0">
+        <aside className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border @4xl:max-h-none @4xl:w-64 @4xl:border-r @4xl:border-b-0">
           <GraphLibraryList
             library={library}
             selected={view.selected}
@@ -509,6 +511,10 @@ export function GraphDesignerTab({
             onRefresh={() => void loadLibrary(projectId)}
             onTrust={trust}
             trustBusy={trustBusy}
+          />
+          <GraphRunsList
+            environmentId={environmentId}
+            className="max-h-32 shrink-0 border-t border-border @4xl:max-h-[40%]"
           />
         </aside>
 

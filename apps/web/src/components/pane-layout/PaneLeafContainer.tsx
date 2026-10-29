@@ -43,6 +43,9 @@ const LazyPullRequestPaneTab = lazy(async () => ({
 const LazyGraphDesignerTab = lazy(async () => ({
   default: (await import("@/components/graph-designer/GraphDesignerTab")).GraphDesignerTab,
 }));
+const LazyGraphRunTab = lazy(async () => ({
+  default: (await import("@/components/graph-run/GraphRunTab")).GraphRunTab,
+}));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
@@ -313,6 +316,22 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   tabId={tab.id}
                   environmentId={environmentId}
                   data={tab.graphDesignerData ?? {}}
+                  isActive={isTabActive && isActive}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "graph-run" && tab.graphRunData) {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyGraphRunTab
+                  environmentId={environmentId}
+                  data={tab.graphRunData}
                   isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>

@@ -105,7 +105,11 @@ import type {
   AgentMailSummarySnapshot,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import type {
+  PipelineSession,
+  PipelineTranscriptReference,
+} from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipelinesRepository } from "./storage-build-pipelines.js";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionActionOutcome,
@@ -1317,6 +1321,34 @@ export class StorageService {
     window: TranscriptReadWindow = {},
   ): Promise<TranscriptRead> {
     return this.repos.buildPipelines.readBuildPipelineTranscript(pipelineId, session, window);
+  }
+
+  /** Graph activation transcripts (item 211), in the build-pipeline transcript store. */
+  commitGraphRunTranscript(
+    input: Parameters<BuildPipelinesRepository["commitGraphRunTranscript"]>[0],
+  ): Promise<PipelineTranscriptReference | null> {
+    return this.repos.buildPipelines.commitGraphRunTranscript(input);
+  }
+
+  describeGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+  ): Promise<{ reference: PipelineTranscriptReference; fingerprint: string } | null> {
+    return this.repos.buildPipelines.describeGraphRunTranscript(runId, activationKey);
+  }
+
+  readGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+    reference: PipelineTranscriptReference,
+    window: TranscriptReadWindow = {},
+  ): Promise<TranscriptRead> {
+    return this.repos.buildPipelines.readGraphRunTranscript(
+      runId,
+      activationKey,
+      reference,
+      window,
+    );
   }
 
   migrateBuildPipelineTranscripts(

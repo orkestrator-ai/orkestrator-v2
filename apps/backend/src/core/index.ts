@@ -174,6 +174,7 @@ import {
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
 import { createPipelineEnvironmentGit } from "./commands-review.js";
+import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -1134,6 +1135,13 @@ export class OrkestratorBackend {
     // discovery so nothing that commits during startup is missed. Each wake
     // reaches only the indexed keys of one environment; a durable record the
     // index does not hold yet is found by that owner's discovery instead.
+    // Graph outputs whose type needs the repository (a workspace commit, a
+    // file list) are checked through the same environment Git port.
+    this.workflowResults.setEnvironmentValidator(
+      gitEnvironmentValidator(
+        createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      ),
+    );
     this.workflowResults.onAccepted(({ environmentId }) => {
       this.wakeWorkflows(environmentId, "result-accepted");
     });

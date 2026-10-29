@@ -1204,17 +1204,46 @@ completion: the controller still owns turn settlement, worktree and package
 checks, validation execution, pool application, stage changes, and PR
 verification, and consumes an accepted result exactly once.
 
-A controller can also register an acceptance check for one result kind
-(`WorkflowResultService.setAcceptanceCheck`). The service runs it on
-`validate_workflow_result` and on submission, and a refusal is a
-`worktree_changed` error with `nextAction: "correct"` that spends no correction
+A controller can also register acceptance checks for a result kind
+(`WorkflowResultService.addAcceptanceCheck(kind, check)`, which returns an
+unregister function). Checks accumulate per kind and run in registration
+order; the first refusal wins, and each check returns null for attempts it does
+not own. The service runs them on validation and on submission, and a refusal
+(for example `worktree_changed`, `nextAction: "correct"`) spends no correction
 budget, so the model can repair the environment and retry inside its turn. The
-build pipeline uses this for `verification-result`: the verifier is told which
-Git-visible paths it added or removed, or that HEAD moved, against the baseline
-recorded when the stage started (`build-pipeline-validation-worktree.ts`). The
-check is advisory: one that throws lets the result through, and the supervisor
-still compares the worktree when it reads the result and fails the stage,
-naming the paths, if it changed afterwards.
+build pipeline uses this for its read-only guard on review, consolidation and
+verification (`workspace-read-only-guard.ts`). A check is advisory: one that
+throws lets the result through, and the owner still compares the worktree when
+it reads the result.
+
+**Result kind registry.** Every kind maps to one definition in
+`workflow-result-registry.ts`: its schema, the schema a provider sees, its
+submission and validation tools, and the validators that run at submit time
+(structure, domain checks, final-content placeholder checks, the trusted-context
+check, and an optional environment check). Built-in kinds register themselves
+in `workflow-result-contracts.ts`; `workflowResultJsonSchema` and
+`validateWorkflowResult` delegate to the registry. Acceptance checks and the
+environment hook live on a `WorkflowResultRegistry` instance that each service
+owns. Multi Review consolidation's citation check runs through the generic
+provenance validator (`packages/protocol/src/graphs/provenance.ts`) with its own
+rules and wording, so its diagnostics are unchanged.
+
+**Graph output slots.** The `graph-output` kind takes its contract from the
+slot: `schema` is the port type's schema and `toolName` is `submit_<port>`,
+with `validate_<port>` for dry runs (`graphOutputSlotInput` builds the slot from
+a compiled port). The tool description names the port, its type and the port
+description; `x-orkestrator-sources` annotations are stripped before a provider
+sees the schema. Values go through the type library's full validation (budgets,
+schema, domain validator), the placeholder check of the result kind a built-in
+type maps to, and, for consolidating ports, provenance against the node's input
+items (`cite`, `accountForAll`). `workspace@1` and `file-list@1` values are also
+checked against the environment's repository through the environment hook the
+backend installs (`workflow-result-environment-validator.ts`); without a hook,
+or when the repository cannot be read, the result is refused without spending a
+correction. One activation with several output ports gets one capability
+(`AgentToolsServer.workflowResultActivationConnection`) listing each port's pair
+of tools and one status tool. A slot without a port declaration uses the generic
+`submit_graph_output`, which is also what the OpenCode broker offers.
 
 **Delivery failures that never reach the backend.** A model reaches these tools
 through its client's own wrapper (Cursor's `CallDynamicTool`, for one), and that

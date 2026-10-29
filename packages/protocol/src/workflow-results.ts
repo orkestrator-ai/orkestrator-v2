@@ -1,5 +1,6 @@
 import { wrapSystemInstructions } from "./review-evidence-frames.js";
 import type { JsonSchema, StructuredOutputProvider } from "./structured-output.js";
+import type { WorkflowGraphOutputContext } from "./graphs/output-slots.js";
 import type { ReviewFindingPool, StructuredReviewReport } from "./structured-review.js";
 
 export const WORKFLOW_RESULT_STORE_VERSION = 1;
@@ -23,6 +24,11 @@ export const WORKFLOW_RESULT_KINDS = [
   "fix-result",
   "verification-result",
   "pr-result",
+  /**
+   * A graph output port (plan P1.3). Its schema and submission tool come from
+   * the slot (`schema`, `toolName`), not from the kind.
+   */
+  "graph-output",
 ] as const;
 
 export type WorkflowResultKind = (typeof WORKFLOW_RESULT_KINDS)[number];
@@ -117,7 +123,17 @@ export interface WorkflowResultSlotInput {
   environmentId: string;
   projectId: string;
   provider: StructuredOutputProvider;
+  /**
+   * The contract schema. Built-in kinds own theirs and ignore this; a
+   * `graph-output` slot takes its port type's schema from here.
+   */
   schema?: JsonSchema;
+  /**
+   * `graph-output` only: the port's submission tool, `submit_<port>` (see
+   * `graphs/output-slots.ts`). Its validation tool is `validate_<port>`.
+   * Without it the slot uses the kind's generic tools.
+   */
+  toolName?: string;
   /** Trusted contextual fence for a story-refinement slot. */
   expectedStoryId?: string;
   /** Trusted context needed to reject stale or invented cross-result references. */
@@ -130,7 +146,8 @@ export interface WorkflowResultSlotInput {
     | {
         type: "consolidated-review";
         sources: Record<string, "issue" | "coverage-gap">;
-      };
+      }
+    | WorkflowGraphOutputContext;
 }
 
 export function isWorkflowResultKind(value: unknown): value is WorkflowResultKind {
@@ -148,6 +165,7 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
   "fix-result": "submit_fix_result",
   "verification-result": "submit_verification_result",
   "pr-result": "submit_pr_result",
+  "graph-output": "submit_graph_output",
 };
 
 export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";
@@ -248,8 +266,12 @@ export function workflowResultInstruction(
     capability?: string;
     /** The attempt also takes `report_finding` (a Multi Review reviewer). */
     provisionalFindings?: boolean;
+    /** A slot with its own tools (a graph output port): `submit_<port>` and `validate_<port>`. */
+    tools?: { submit: string; validate: string };
   } = {},
 ): string {
+  const submitTool = options.tools?.submit ?? workflowResultToolName(kind);
+  const validateTool = options.tools?.validate ?? WORKFLOW_RESULT_VALIDATION_TOOL_NAME;
   const capabilityArgument = options.capability
     ? ` and capability ${JSON.stringify(options.capability)}`
     : "";
@@ -258,7 +280,7 @@ export function workflowResultInstruction(
       ? ` While you review, you are encouraged, but not required, to call \`${REPORT_FINDING_TOOL_NAME}\` with the same resultKey${capabilityArgument} and one finding in \`finding\` as soon as you are confident in it, using the fields of one entry of the report's \`issues\`. The user sees these findings as provisional progress while you work. Report each finding once, and carry on if a call is refused. They never replace your report: the report you submit must still list every finding, including the ones you already reported, and only that report counts.`
       : "";
   return wrapSystemInstructions(
-    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\` with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`; validation is read-only. When validation accepts the payload it returns a \`validatedDigest\`: submit that exact payload by calling \`${workflowResultToolName(kind)}\` with the same resultKey${capabilityArgument} and \`validatedDigest\` instead of \`result\`, so the large object is sent only once. Otherwise, when your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with the same resultKey${capabilityArgument} and complete result. When using a generic \`CallDynamicTool\` wrapper, pass \`arguments\` as a raw object, never as a quoted or JSON-stringified object. Emit the arguments as exactly one JSON object with balanced braces and brackets, and keep prose fields concise. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting.${findings} After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
+    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. Never call the submission tool with a probe, placeholder, partial draft, or transport test: the first accepted payload is final and cannot be replaced. If you need to check a completed payload before committing it, call \`${validateTool}\` with resultKey ${JSON.stringify(resultKey)}${capabilityArgument} and the complete ${kind.replaceAll("-", " ")} in \`result\`; validation is read-only. When validation accepts the payload it returns a \`validatedDigest\`: submit that exact payload by calling \`${submitTool}\` with the same resultKey${capabilityArgument} and \`validatedDigest\` instead of \`result\`, so the large object is sent only once. Otherwise, when your work is complete, call the Orkestrator \`${submitTool}\` tool with the same resultKey${capabilityArgument} and complete result. When using a generic \`CallDynamicTool\` wrapper, pass \`arguments\` as a raw object, never as a quoted or JSON-stringified object. Emit the arguments as exactly one JSON object with balanced braces and brackets, and keep prose fields concise. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} If the submission tool rejects the result, correct only the reported contract problems and call it again. Only retry an accepted submission with the exact same payload. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey${capabilityArgument} before resubmitting.${findings} After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
   );
 }
 

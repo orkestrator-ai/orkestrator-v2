@@ -31,6 +31,7 @@ import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-job
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   registerWorkflowResultBrokerTools,
+  registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
@@ -110,6 +111,8 @@ export type AgentToolScope = {
   projectId: string;
   tabId?: string;
   workflowResultKey?: string;
+  /** A graph activation's output slots: one capability for every port (see `workflowResultActivationConnection`). */
+  workflowResultKeys?: string[];
   workflowResultBroker?: boolean;
 };
 
@@ -377,9 +380,41 @@ async function createAgentToolServer(
     registerWorkflowResultTools(
       server,
       workflowResults,
-      { ...callerScope, workflowResultKey: scope.workflowResultKey, kind: binding.kind },
+      {
+        ...callerScope,
+        workflowResultKey: scope.workflowResultKey,
+        kind: binding.kind,
+        ...(binding.slot ? { slot: binding.slot } : {}),
+      },
       provisionalFindings,
     );
+    return server;
+  }
+  if (scope.workflowResultKeys) {
+    const server = new McpServer(
+      { name: "orkestrator-workflow-result", version: "1.0.0" },
+      {
+        instructions:
+          "Use these tools only to submit or check the results assigned to this workflow step: one submission tool per output.",
+      },
+    );
+    if (!workflowResults) throw new Error("Workflow result tools are unavailable");
+    const callerScope = {
+      environmentId: scope.environmentId,
+      projectId: scope.projectId,
+    };
+    const scopes = [];
+    for (const workflowResultKey of scope.workflowResultKeys) {
+      const binding = await workflowResults.binding(callerScope, workflowResultKey);
+      if (!binding) throw new Error("Workflow result capability is unavailable");
+      scopes.push({
+        ...callerScope,
+        workflowResultKey,
+        kind: binding.kind,
+        ...(binding.slot ? { slot: binding.slot } : {}),
+      });
+    }
+    registerWorkflowResultSlotTools(server, workflowResults, scopes);
     return server;
   }
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
@@ -823,6 +858,32 @@ export class AgentToolsServer {
   }
 
   /**
+   * One connection for every output slot of a graph activation (report §5.5):
+   * it lists `submit_<port>` and `validate_<port>` per slot and one status
+   * tool. Slots must be prepared `graph-output` slots of this environment and
+   * project. A single slot uses {@link workflowResultConnection}, which gives
+   * the same per-port tools. Not for the OpenCode broker: OpenCode submits
+   * graph outputs through the broker's generic `submit_graph_output`.
+   */
+  workflowResultActivationConnection(
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKeys: readonly string[],
+  ): AgentToolConnection {
+    if (!this.server || !this.port) throw new Error("Agent tools server is not running");
+    if (!this.workflowResults) throw new Error("Workflow result tools are unavailable");
+    const hostname = target === "container" ? "host.docker.internal" : "127.0.0.1";
+    return {
+      url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
+      token: this.workflowResults.activationCapabilityToken(
+        { environmentId, projectId },
+        resultKeys,
+      ),
+    };
+  }
+
+  /**
    * Issues a container credential that rings `onSignal` and opens nothing
    * else: `/mcp` never accepts it and the request carries no data, so the
    * receiver must read the state it is told about itself. Null before the
@@ -974,7 +1035,11 @@ export class AgentToolsServer {
     if (!token) return null;
     const processScope = this.scopesByDigest.get(credentialDigest(token));
     if (processScope) return processScope;
-    return (await this.workflowResults?.authenticateCapability(token)) ?? null;
+    return (
+      (await this.workflowResults?.authenticateCapability(token)) ??
+      (await this.workflowResults?.authenticateActivationCapability(token)) ??
+      null
+    );
   }
 
   private consumeMailRateLimit(scope: AgentToolScope, kind: AgentMessagingRateLimitKind): void {
@@ -1112,6 +1177,7 @@ export class AgentToolsServer {
       const environment = await this.storage.getEnvironment(scope.environmentId);
       if (
         scope.workflowResultKey ||
+        scope.workflowResultKeys ||
         scope.workflowResultBroker ||
         !environment ||
         environment.projectId !== scope.projectId

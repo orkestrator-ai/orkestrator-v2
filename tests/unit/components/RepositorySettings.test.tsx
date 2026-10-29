@@ -45,6 +45,13 @@ mock.module("@/lib/host-path-picker", () => ({
   pickHostPath: mockOpenDialog,
 }));
 
+const PICKED_ICON = "data:image/png;base64,iVBORw0KGgo=";
+const mockProjectIconFromFile = mock(async (_file: File) => PICKED_ICON);
+mock.module("@/lib/project-icon-image", () => ({
+  PROJECT_ICON_FILE_ACCEPT: "image/*,.ico",
+  projectIconFromFile: mockProjectIconFromFile,
+}));
+
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
   FullscreenSettingsLayout: ({
     open,
@@ -274,6 +281,7 @@ describe("RepositorySettings", () => {
     mockGetCachedOpenCodeModelCatalog.mockReset();
     mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
     mockOpenDialog.mockClear();
+    mockProjectIconFromFile.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -681,6 +689,56 @@ describe("RepositorySettings", () => {
           name: "Use the local clone's origin remote",
         }) === null,
       ).toBe(true);
+    });
+
+    test("a chosen image is previewed and saved as the project icon", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
+      const file = new File(["png"], "logo.png", { type: "image/png" });
+      fireEvent.change(screen.getByLabelText("Icon"), { target: { files: [file] } });
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId("project-icon-preview"))
+            .getByTestId("project-icon")
+            .getAttribute("src"),
+        ).toBe(PICKED_ICON),
+      );
+      expect(mockProjectIconFromFile).toHaveBeenCalledWith(file);
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ id: "project-1", icon: PICKED_ICON }),
+      );
+    });
+
+    test("removing the icon saves the project without one", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", project: { icon: PICKED_ICON }, onUpdateProject });
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ id: "project-1", icon: null }),
+      );
+    });
+
+    test("an image that cannot be used is reported and leaves the icon alone", async () => {
+      mockProjectIconFromFile.mockImplementationOnce(async () => {
+        throw new Error("The image could not be read");
+      });
+      renderSettings({ section: "general" });
+
+      fireEvent.change(screen.getByLabelText("Icon"), {
+        target: { files: [new File(["x"], "broken.png", { type: "image/png" })] },
+      });
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
     });
 
     test("cancel resets edits and closes the dialog", () => {

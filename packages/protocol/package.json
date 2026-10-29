@@ -152,6 +152,7 @@
     "./node/progressive-transcript": "./src/node/progressive-transcript.ts",
     "./node/revised-rows": "./src/node/revised-rows.ts",
     "./project-folders": "./src/project-folders.ts",
+    "./project-icon": "./src/project-icon.ts",
     "./public-api": "./src/public-api.ts",
     "./public-api-inputs": "./src/public-api-inputs.ts",
     "./public-api-inputs-build": "./src/public-api-inputs-build.ts",

@@ -264,7 +264,12 @@ describe("HierarchicalSidebar", () => {
       });
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       act(() => useMachineViewStore.getState().setGrouping("machine"));
-      fireEvent.contextMenu(await screen.findByRole("button", { name: /^Project One/i }));
+      const machineHeading = await screen.findByRole("button", { name: /^Project One/i });
+      // By machine, this window's projects lead with its home too.
+      const machineHome = within(machineHeading).getByTestId("machine-home-icon");
+      expect(machineHome.getAttribute("data-machine-color")).toBe("violet");
+      expect(machineHeading.firstElementChild === machineHome).toBe(true);
+      fireEvent.contextMenu(machineHeading);
       expect(screen.getByText("Add to Folder")).toBeTruthy();
     } finally {
       view?.unmount();

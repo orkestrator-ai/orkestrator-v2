@@ -646,7 +646,11 @@ export class NodeReadModel {
         })),
     };
     try {
-      if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) return;
+      if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) {
+        // Project icons are the bulkiest optional field; the next read brings them back.
+        for (const node of value.nodes) node.projects = node.projects.map(withoutIcon);
+        if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) return;
+      }
       await this.options.persistence.save(value);
     } catch {
       // Last-known state is a convenience; losing it only shows "initializing".
@@ -708,6 +712,12 @@ async function readProjects(
     })
     .sort((a, b) => a.order - b.order);
   return { projects, truncated: list.length > MAX_SUMMARY_PROJECTS };
+}
+
+function withoutIcon(project: NodeProjectSummary): NodeProjectSummary {
+  if (!project.icon) return project;
+  const { icon: _icon, ...rest } = project;
+  return rest;
 }
 
 function safeMessage(error: unknown): string {

@@ -205,6 +205,9 @@ placeholders stay as they are, because Address is never drawn ahead. Update
 - The instructions are stored on the pipeline record, so restarts and rewinds
   reuse them.
 - The UI is a collapsible text field on each step card in `BuildLaunchDialog.tsx`.
+- The CLI round trip (a Phase 0 exit criterion) is delivered by work item
+  [007](graphs/007-cli-build-pipeline-launch.md): no public action launched a
+  Build Pipeline, so it adds `build.*` actions and `orkestrator build` commands.
 
 ### Phase 0 exit criteria
 

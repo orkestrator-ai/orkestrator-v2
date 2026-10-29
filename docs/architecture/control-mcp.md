@@ -165,7 +165,7 @@ beside its schema in `PUBLIC_ACTION_INPUTS`:
   grant that `projects` must not imply, so only the operator's own CLI
   cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`,
-  `pr.create` and `pr.resolve` (both push to the remote), and
+  `build.launch`, `pr.create` and `pr.resolve` (each pushes to the remote), and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).
   Denials, cancels and question answers run directly.
@@ -201,7 +201,8 @@ Everything the public CLI can do except `host.*`, subject to its credential:
 projects, environments, settings, agent sessions, interactions, transcripts,
 changes, runs, exec, Kanban tickets (`ticket.*`), agent mail (`mail.*`),
 scheduled jobs (`schedule.*`), the attention feed (`attention.list`), Multi
-Review (`review.*`), the Create PR and Resolve Conflicts tabs (`pr.create`,
+Review (`review.*`), Build Pipelines (`build.*`, as direct tools such as
+`build_launch`), the Create PR and Resolve Conflicts tabs (`pr.create`,
 `pr.resolve`), and all of it on the leaf nodes of a command node
 ([Leaf nodes](#leaf-nodes)). A schedule a credential creates runs as that
 credential: the action is re-checked against its current capabilities at

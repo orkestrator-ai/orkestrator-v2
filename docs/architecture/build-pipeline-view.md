@@ -5,8 +5,8 @@ graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
-with the Git guard (2026-10-29), per-stage instructions (2026-10-29), and
-reviewer lenses (2026-10-29).
+with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
+reviewer lenses (2026-10-29), and the CLI's `build launch` (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -191,7 +191,8 @@ renderer and stage mapping live in
 `packages/protocol/src/build-pipeline-stage-instructions.ts`
 (`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
 rejects a longer text, so every launch input that carries steps (the launcher,
-feature builds, the coordinator) is bounded by the same check.
+feature builds, the coordinator, the public `build.launch` action) is bounded by
+the same check.
 
 - **Prompt.** A stage with instructions gets one framed section after its own
   contract: "**Additional instructions from the user** for this stage…" and the
@@ -226,6 +227,12 @@ feature builds, the coordinator) is bounded by the same check.
   The Build card notes that Fix uses them too. Instructions belong to one
   launch: the dialog starts empty every time it opens, and saved build defaults
   (action defaults) hold models only.
+- **CLI.** `orkestrator build launch TICKET --instructions STAGE=TEXT` (or
+  `--instructions-file STAGE=PATH`, `N=…` for reviewer row N) sends them
+  through the public `build.launch` action, which layers them over the saved
+  defaults as the coordinator does; `build get` reports each step's
+  `instructionsBytes`, never the text
+  ([public-cli.md](public-cli.md#build-pipelines)).
 
 ## Reviewer lenses
 
@@ -247,8 +254,9 @@ other step and `normalizeReviewPreparation` from the preparation step.
   reviewer's label as `focus`.
 - **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
   saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
-  the Build button, feature and ticket builds and the coordinator start from
-  the same focus as the Multi Review button.
+  the Build button, feature and ticket builds, the coordinator and the CLI's
+  `build launch` start from the same focus as the Multi Review button;
+  `build launch --reviewer … --focus N=TEXT` replaces it per row.
 - **Launcher.** Each reviewer card in `BuildLaunchDialog.tsx` (and the single
   Review card) has a Focus select (`ReviewLensField.tsx`): no focus, a saved
   preset, or custom text. It opens on the position's saved focus; an

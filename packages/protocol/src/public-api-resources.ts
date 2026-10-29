@@ -784,6 +784,64 @@ export interface PublicTicketDetail extends PublicTicketSummary {
   comments: Array<{ id: string; text: string; createdAt: string }>;
 }
 
+// ---------------------------------------------------------------------------
+// Build Pipelines
+
+/**
+ * One Build Pipeline step as the public summaries report it: the selection,
+ * and the size of the user's own text. Instructions and a reviewer's focus are
+ * the caller's content, so only their UTF-8 byte counts leave the backend.
+ */
+export interface PublicBuildStepSummary {
+  agent: string;
+  model: string | null;
+  reasoningEffort: string | null;
+  fastMode: boolean | null;
+  /** UTF-8 bytes of the step's stored instructions; 0 when it has none. */
+  instructionsBytes: number;
+  /** A reviewer's focus by size, or null without one. */
+  lens: { labelBytes: number; instructionBytes: number } | null;
+}
+
+/** `build.list` items and the head of `build.get`. */
+export interface PublicBuildPipelineSummary {
+  id: string;
+  projectId: string;
+  /** Empty until the pipeline's environment exists. */
+  environmentId: string | null;
+  /** The Kanban ticket (or other source's task) the pipeline builds. */
+  taskId: string;
+  source: "kanban" | "linear" | "github" | null;
+  phase: string;
+  iteration: number;
+  maxIterations: number;
+  agent: string;
+  /** Bounded failure or cancellation reason. */
+  error: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  revision: number;
+}
+
+/** `build.get`: the summary plus what each step runs. */
+export interface PublicBuildPipelineDetail extends PublicBuildPipelineSummary {
+  steps: Partial<Record<import("./build-pipeline.js").BuildStepKey, PublicBuildStepSummary>>;
+  /** The review panel's rows; empty for a single-reviewer review step. */
+  reviewers: PublicBuildStepSummary[];
+  reviewPreparation: PublicBuildStepSummary | null;
+}
+
+/** `build.launch` and `build.cancel` results: IDs and states only. */
+export interface PublicBuildPipelineActionResult {
+  pipelineId: string;
+  projectId: string;
+  environmentId: string | null;
+  taskId: string;
+  phase: string;
+  /** `build.launch`: the ticket's active build was returned instead of a new one. */
+  reused?: boolean;
+}
+
 /** `permission.rule.list`: this node's Orkestrator permission rules (todo 0723). */
 export interface PublicPermissionRuleList {
   rules: import("./permission-rules.js").NativeAgentPermissionRule[];

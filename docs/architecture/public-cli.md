@@ -186,6 +186,9 @@ not advertise at its version before sending it.
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
 | `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
+| `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
+| `build list --project P` / `build get BUILD` | `build.list/get` | Build Pipeline storage; each step's selection with the byte size of its instructions and focus, never the text | read |
+| `build cancel BUILD` | `build.cancel` | Build Pipeline supervisor `cancel` (refused once the build ended) | process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
 | `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
@@ -361,6 +364,8 @@ A reconciler (startup pass, environment change events, 15 s sweep, and every
 | queued prompt runs (`--enqueue`) | Still settled from the durable queue and dispatch journal; one restarted before its item was written is `interrupted` |
 | project removal | Succeeds when the project is gone; otherwise its fence is lifted and it is `interrupted` (environments a cascade already deleted stay deleted) |
 | exec | The worker survives; its recorded exit status settles the run |
+| build launch | `partial` with the pipeline's ID when a pipeline holds the launch's admission key (recorded at admission), else `interrupted`; never launched again |
+| build cancel | Succeeds when the pipeline ended (`failed`), else `interrupted` |
 
 ## Environments
 
@@ -603,6 +608,51 @@ it never scans a worktree or reads a transcript or provider. A backend without
 change tracking answers both actions with `capability-unavailable` (exit 8)
 and advertises them as unavailable in `capabilities`. Both are reads: they
 take no request key and leave no receipt.
+
+## Build Pipelines
+
+`build launch TICKET --project P` starts the Kanban ticket's Build Pipeline as
+the Build button does (handler:
+[`actions-builds.ts`](../../apps/backend/src/core/public-api/actions-builds.ts)):
+the ticket's title, description, criteria, comments and images are the task
+snapshot, its source is the ticket, and the pipeline runs build, review,
+address, verify and PR ([build-pipeline-view.md](build-pipeline-view.md)).
+Give exactly one target: `--type local|container` for a new environment
+(optionally pinned with `--base-branch` and `--base-commit`, validated as for
+`environment create`; a container base must be pushed) or `--environment ENV`
+for an existing worker environment of the project (never the project
+checkout). Everything left out runs the saved Build defaults, layered exactly
+as for the coordinator's `start_build_pipeline`
+(`buildPipelineInputWithDefaults`), so a launch from the CLI, the coordinator
+and the app agree.
+
+- `--step STAGE=AGENT[/MODEL[@EFFORT]]` picks one step's agent and model;
+  STAGE is `build`, `review`, `address`, `verify`, `pr`, `resolve-conflicts`
+  or `preparation` (the review panel's preparation and consolidation). A model
+  ID may contain `/`; the effort follows the last `@`.
+- `--instructions STAGE=TEXT` and `--instructions-file STAGE=PATH` (`-` reads
+  stdin) add the user's own instructions to a step
+  ([per-stage instructions](build-pipeline-view.md#per-stage-instructions)),
+  at most 16 KiB each. A step named only this way keeps its saved model. Fix
+  uses Build's.
+- `--reviewer AGENT=MODEL[@EFFORT]` rows replace the saved reviewers; reviewer
+  1 is the review step, so `--step review=` and `--instructions review=` are
+  refused with rows (use `--instructions 1=TEXT`). `N=TEXT` targets reviewer
+  row N, and `--focus`/`--focus-file N=…` set its lens as for `review launch`.
+- `--max-iterations N` is bounded by `MAX_BUILD_PIPELINE_ITERATIONS` (10).
+
+The client refuses malformed flags, over-bound text and a missing target
+before sending anything (exit 2). The backend checks the same bounds (006's
+instructions guard, 005's lens guard, the iteration limit), the project,
+ticket and environment before admission, so a refused launch leaves no
+operation record. The launch runs under the operation: a provisioning that
+outlasts the request leaves it `running` and a backend continuation settles
+it. The receipt and result carry IDs and states only (`pipelineId`,
+`environmentId`, `taskId`, `phase`, `reused`); `build get` reports each step's
+agent, model and effort with `instructionsBytes` and
+`lens: {labelBytes, instructionBytes}`, never the text. A second request key
+for a ticket whose build is still active returns that build with
+`reused: true`; its steps are the ones it started with.
 
 ## Exec
 

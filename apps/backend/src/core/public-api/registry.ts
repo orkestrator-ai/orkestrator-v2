@@ -2,6 +2,7 @@ import { PERMISSION_RULE_HANDLERS } from "./actions-permission-rules.js";
 import type { PublicActionName, PublicCapabilities } from "@orkestrator/protocol/public-api";
 import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
 import { ATTENTION_HANDLERS } from "./actions-attention.js";
+import { BUILD_HANDLERS } from "./actions-builds.js";
 import { CHANGE_HANDLERS } from "./actions-changes.js";
 import { createCapabilitiesHandler, DISCOVERY_HANDLERS } from "./actions-discovery.js";
 import { ENVIRONMENT_HANDLERS } from "./actions-environments.js";
@@ -45,6 +46,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
     ...REVIEW_HANDLERS,
+    ...BUILD_HANDLERS,
     ...ATTENTION_HANDLERS,
     ...TICKET_HANDLERS,
     ...MAIL_HANDLERS,

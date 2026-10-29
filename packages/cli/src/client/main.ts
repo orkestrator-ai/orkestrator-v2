@@ -7,6 +7,7 @@ import {
   type CommandTree,
 } from "./argv.js";
 import { attentionCommands } from "./commands/attention.js";
+import { buildCommands } from "./commands/build.js";
 import { changesCommands } from "./commands/changes.js";
 import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
@@ -42,6 +43,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...sessionCommands,
   ...changesCommands,
   ...workflowCommands,
+  ...buildCommands,
   ...attentionCommands,
   ...ticketCommands,
   ...mailCommands,

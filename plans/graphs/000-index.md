@@ -22,16 +22,17 @@ the item ID (`gh pr list --search "graphs 107"`).
 | 004 | [004-typed-address-report.md](004-typed-address-report.md) | 0 | in-progress | — | Address submits a `fix-result`; Verify reads it instead of the last assistant text, with a fallback for old runs. |
 | 005 | [005-reviewer-lenses.md](005-reviewer-lenses.md) | 0 | in-progress | — | Per-reviewer focus (`lens`) in Multi Review and the pipeline panel; editable presets in Settings. |
 | 006 | [006-pipeline-stage-instructions.md](006-pipeline-stage-instructions.md) | 0 | in-progress | — | `BuildStepConfig.instructions` (≤ 16 KiB) rendered as a framed section in each stage prompt. |
+| 007 | [007-cli-build-pipeline-launch.md](007-cli-build-pipeline-launch.md) | 0 | in-progress | 006 | Public `build.*` actions and `orkestrator build launch\|list\|get\|cancel`, with per-step models, instructions and reviewer lenses. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
 - [x] The pipeline review is read-only on every provider that supports it. The guard refuses a review that commits.
 - [x] The coordinator cannot request more iterations than the protocol accepts.
 - [x] Clean reports skip Address on both review paths.
-- [ ] Verify reads a typed Address report for new runs, and still reads old runs.
-- [ ] Lenses and per-stage instructions round-trip through launch, record, restart, the coordinator tools and the CLI. Lens presets can be edited in Settings, and editing one leaves recorded reviews unchanged.
+- [x] Verify reads a typed Address report for new runs, and still reads old runs. (evidence: [004](004-typed-address-report.md); `apps/backend/src/core/build-pipeline-address-report.test.ts`, "an Address submission reaches the Verify prompt as a framed report" and "a pipeline record from before the upgrade still uses the last assistant text")
+- [x] Lenses and per-stage instructions round-trip through launch, record, restart, the coordinator tools and the CLI. Lens presets can be edited in Settings, and editing one leaves recorded reviews unchanged.
   - [x] Lenses: launch, record, restart, coordinator tools and CLI; presets editable in Settings; editing or deleting one leaves recorded reviews unchanged (evidence: [005](005-reviewer-lenses.md) Notes, "Tests").
-  - [ ] Per-stage instructions through the CLI: no public CLI command launches a build pipeline (see [006](006-pipeline-stage-instructions.md) Notes).
+  - [x] Per-stage instructions through the CLI: `orkestrator build launch --instructions` (evidence: [007](007-cli-build-pipeline-launch.md) Notes, "Tests"; `packages/cli/tests/build-command.test.ts` round trip).
 - [x] `build-pipeline-view.md`, `review-preparation.md` and `coordinator.md` match the new behaviour.
 
 ## Phase 1: model, compiler and read-only designer

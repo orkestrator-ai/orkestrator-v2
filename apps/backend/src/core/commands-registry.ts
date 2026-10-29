@@ -3,8 +3,10 @@ import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
-import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
-import { registerTranscriptArtifactPdfCommands } from "./transcript-artifacts/commands-pdf.js";
+import {
+  registerTranscriptArtifactCommands,
+  registerTranscriptArtifactPdfCommands,
+} from "./transcript-artifacts/index.js";
 import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
 import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import type {

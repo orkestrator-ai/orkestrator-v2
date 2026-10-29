@@ -89,8 +89,7 @@ import {
   imageWritesVolumeStorage,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
-import { seedFilesDir } from "./nodes/node-files.js";
-import { readSeedManifest } from "./nodes/node-seed.js";
+import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,

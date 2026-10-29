@@ -6,10 +6,7 @@ import { addExistingProject } from "./commands-projects.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
-import {
-  listProjectCopyCandidates,
-  listProjectCopyFiles,
-} from "./nodes/node-project-copy-files.js";
+import { listProjectCopyCandidates, listProjectCopyFiles } from "./nodes/index.js";
 import type { StorageService } from "./storage.js";
 
 /**

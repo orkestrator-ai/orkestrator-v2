@@ -1185,7 +1185,10 @@ then moves to a private `TMPDIR` of its own, `ork-test-tmp-<pid>-<random>`
 (`tests/private-tmpdir.ts`, loaded by `tests/isolate-tmpdir.ts` after the
 other isolation preloads). It is made in the process's temporary directory,
 except on macOS, where it goes under `/private/tmp`: inside the 49-character
-per-user directory, test Unix sockets passed the 104-byte limit. Children inherit it, so a Playwright browser profile
+per-user directory, test Unix sockets passed the 104-byte limit. If the shorter
+root denies creation, it retries beneath the existing TMPDIR. If neither root
+allows creation, TMPDIR and its ownership variables stay unchanged. Children
+inherit the selected TMPDIR, so a Playwright browser profile
 (`playwright_chromiumdev_profile-*`, a name with no owner in it) or anything
 else a test leaves lands inside a directory a later run can attribute and
 remove. The preload removes its directory when its `afterAll` runs unless a

@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -45,6 +46,7 @@ export function userDataDirFromArgs(args: readonly string[] | undefined): string
 
 export interface DesignProfileLedgerOptions {
   now?: () => number;
+  inspectProfile?: (profile: string) => Promise<Stats>;
   isProcessAlive?: (pid: number) => boolean;
   processStartIdentity?: (pid: number) => string | null;
   /** Command lines of live processes, or `null` when unreadable (every profile then counts as in use). */
@@ -53,6 +55,7 @@ export interface DesignProfileLedgerOptions {
 
 export class DesignProfileLedger {
   private readonly now: () => number;
+  private readonly inspectProfile: (profile: string) => Promise<Stats>;
   private readonly alive: (pid: number) => boolean;
   private readonly identity: (pid: number) => string | null;
   private readonly commandLines: () => Promise<string | null>;
@@ -63,6 +66,7 @@ export class DesignProfileLedger {
     options: DesignProfileLedgerOptions = {},
   ) {
     this.now = options.now ?? Date.now;
+    this.inspectProfile = options.inspectProfile ?? lstat;
     this.alive = options.isProcessAlive ?? isProcessAlive;
     this.identity = options.processStartIdentity ?? processStartIdentity;
     this.commandLines = options.liveCommandLines ?? readLiveCommandLines;
@@ -109,7 +113,7 @@ export class DesignProfileLedger {
     if (!recordPath) return;
     try {
       const record = parseRecord(await readFile(recordPath, "utf8"));
-      if (record && (await exists(record.profile))) return;
+      if (record && (await this.profileInfo(record.profile))?.isDirectory()) return;
       await rm(recordPath, { force: true });
     } catch {
       // Left for startup recovery.
@@ -145,7 +149,7 @@ export class DesignProfileLedger {
           continue;
         }
         if (this.isAlive(record.backend) || this.isAlive(record.browser)) continue;
-        const info = await lstat(record.profile).catch(() => null);
+        const info = await this.profileInfo(record.profile);
         if (!info || !info.isDirectory()) {
           await rm(recordPath, { force: true });
           continue;
@@ -162,6 +166,17 @@ export class DesignProfileLedger {
       }
     }
     return removed;
+  }
+
+  /** Only confirmed absence permits dropping ownership; other errors retry later. */
+  private async profileInfo(profile: string): Promise<Stats | null> {
+    try {
+      return await this.inspectProfile(profile);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
+      throw error;
+    }
   }
 
   /** A write interrupted before its rename; its profile was never recorded. */
@@ -199,8 +214,4 @@ function parseRecord(text: string): ProfileRecord | null {
   } catch {
     return null;
   }
-}
-
-async function exists(target: string): Promise<boolean> {
-  return (await lstat(target).catch(() => null)) !== null;
 }

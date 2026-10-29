@@ -16,6 +16,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Browser } from "playwright-core";
@@ -95,6 +96,89 @@ describe("DesignProfileLedger", () => {
     rmSync(profile, { recursive: true });
     await target.release(record);
     expect(existsSync(record!)).toBe(false);
+  });
+
+  for (const code of ["EACCES", "EMFILE", "EIO"]) {
+    for (const operation of ["release", "sweep"] as const) {
+      test(`${operation} retains ownership on ${code} and recovers on retry`, async () => {
+        const { ledgerDir, temp } = fixture();
+        const profile = makeProfile(temp);
+        let failInspection = true;
+        const target = ledger(ledgerDir, {
+          inspectProfile: async (candidate) => {
+            if (failInspection) throw Object.assign(new Error(code), { code });
+            return lstat(candidate);
+          },
+        });
+        const record = (await target.record(BROWSER_PID, profile))!;
+        orphan(record);
+        if (operation === "release") await target.release(record);
+        else expect(await target.sweep()).toEqual([]);
+        expect(existsSync(record)).toBe(true);
+        expect(existsSync(profile)).toBe(true);
+        failInspection = false;
+        expect(await target.sweep()).toEqual([profile]);
+        expect(existsSync(record)).toBe(false);
+        expect(existsSync(profile)).toBe(false);
+      });
+    }
+  }
+
+  test("retains a known live owner when its current start identity is unreadable", async () => {
+    const { ledgerDir, temp } = fixture();
+    const profile = makeProfile(temp);
+    const record = (await ledger(ledgerDir).record(BROWSER_PID, profile))!;
+    orphan(record);
+    const target = ledger(ledgerDir, {
+      isProcessAlive: (pid) => pid === BROWSER_PID,
+      processStartIdentity: () => null,
+    });
+    expect(await target.sweep()).toEqual([]);
+    expect(existsSync(record)).toBe(true);
+    expect(existsSync(profile)).toBe(true);
+  });
+
+  for (const operation of ["release", "sweep"] as const) {
+    test(`${operation} drops a non-directory record without removing its target`, async () => {
+      const { ledgerDir, temp } = fixture();
+      const profile = makeProfile(temp);
+      const record = (await ledger(ledgerDir).record(BROWSER_PID, profile))!;
+      orphan(record);
+      rmSync(profile, { recursive: true });
+      writeFileSync(profile, "keep");
+      if (operation === "release") await ledger(ledgerDir).release(record);
+      else expect(await ledger(ledgerDir).sweep()).toEqual([]);
+      expect(existsSync(record)).toBe(false);
+      expect(readFileSync(profile, "utf8")).toBe("keep");
+    });
+  }
+
+  for (const operation of ["release", "sweep"] as const) {
+    test(`${operation} drops a record on confirmed ENOTDIR`, async () => {
+      const { ledgerDir, temp } = fixture();
+      const profile = makeProfile(temp);
+      const record = (await ledger(ledgerDir).record(BROWSER_PID, profile))!;
+      orphan(record);
+      rmSync(temp, { recursive: true });
+      writeFileSync(temp, "parent is now a file");
+      if (operation === "release") await ledger(ledgerDir).release(record);
+      else expect(await ledger(ledgerDir).sweep()).toEqual([]);
+      expect(existsSync(record)).toBe(false);
+      expect(readFileSync(temp, "utf8")).toBe("parent is now a file");
+    });
+  }
+
+  test("removes abandoned partial records while keeping fresh writes and unrelated files", async () => {
+    const { ledgerDir } = fixture();
+    mkdirSync(ledgerDir, { recursive: true });
+    const stale = path.join(ledgerDir, "4000000-4000001-0123abcd.json.89abcdef.tmp");
+    const fresh = path.join(ledgerDir, "4000000-4000001-0123abcd.json.01234567.tmp");
+    const other = path.join(ledgerDir, "unrelated.tmp");
+    for (const file of [stale, fresh, other]) writeFileSync(file, "{partial");
+    const old = new Date(Date.now() - DESIGN_PROFILE_STALE_MS - 60_000);
+    for (const file of [stale, other]) utimesSync(file, old, old);
+    expect(await ledger(ledgerDir).sweep()).toEqual([]);
+    expect(readdirSync(ledgerDir).sort()).toEqual([path.basename(fresh), path.basename(other)]);
   });
 
   test("records nothing that is not a Playwright profile", async () => {

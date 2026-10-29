@@ -22,6 +22,7 @@ import {
   type EnvironmentCleanupEntry,
 } from "../../apps/backend/src/core/environment-cleanup-ledger";
 import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { privateTmpdirRoot } from "../private-tmpdir";
 import { defaultRuntimeProfileRoots } from "../../packages/protocol/src/node/runtime-profile-status";
 
 let root: string;
@@ -120,6 +121,18 @@ describe("disk report", () => {
     const report = invoke("--json");
     expect(report.status).toBe(0);
     const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
+    // Exercise collectReport's macOS root branch, including its prefix filter
+    // and the same-root case: no private row is duplicated or mislabelled.
+    const privateRoot = privateTmpdirRoot(os.tmpdir());
+    expect(rows.filter((row) => row.location === `${privateRoot}/ork-test-tmp-*`)).toHaveLength(1);
+    if (privateRoot !== os.tmpdir()) {
+      expect(
+        rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
+      ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
+      expect(
+        rows.some((row) => row.location === `${os.tmpdir()}/playwright_chromiumdev_profile-*`),
+      ).toBe(true);
+    }
     expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(
       "1 files",
     );

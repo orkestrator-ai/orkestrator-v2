@@ -43,21 +43,35 @@ export function privateTmpdirRoot(parent = tmpdir(), platform = process.platform
  * function that restores it and removes the directory. A process that
  * inherited its parent's private directory keeps using it and owns nothing.
  * Removal keeps a directory that a live process (a browser that outlived its
- * test) still names; the next run's sweep retries it.
+ * test) still names; the next run's sweep retries it. If the preferred root
+ * denies creation, retries in the existing TMPDIR; if that fails, leaves the
+ * environment unchanged. An explicit root is useful for restricted runners.
  */
-export function enterPrivateTestTmpdir(): () => void {
+export function enterPrivateTestTmpdir(root = privateTmpdirRoot()): () => void {
   const inherited = process.env[PRIVATE_TMPDIR_ENV];
   if (inherited && process.env.TMPDIR === inherited && existsSync(inherited)) return () => {};
 
   const parent = tmpdir();
-  const root = privateTmpdirRoot(parent);
+  let directory: string;
+  try {
+    directory = createOwnedTempDir(PRIVATE_TMPDIR_PREFIX, root);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (root === parent || !["EPERM", "EACCES", "EROFS"].includes(code ?? "")) return () => {};
+    try {
+      root = parent;
+      directory = createOwnedTempDir(PRIVATE_TMPDIR_PREFIX, root);
+    } catch {
+      // A restricted environment may allow no new private directory at all.
+      return () => {};
+    }
+  }
   sweepStaleTempDirs({
     prefix: PRIVATE_TMPDIR_PREFIX,
     root,
     maxAgeMs: STALE_AFTER_MS,
     isInUse: namedByLiveProcess(),
   });
-  const directory = createOwnedTempDir(PRIVATE_TMPDIR_PREFIX, root);
   const previous = {
     TMPDIR: process.env.TMPDIR,
     [PRIVATE_TMPDIR_ENV]: process.env[PRIVATE_TMPDIR_ENV],

@@ -53,7 +53,8 @@ export function supervisionDemand(
 ): "none" | "fast" | "observe" {
   // A graph-engine review only projects its run until the run settles (item
   // 301); its run's own changes wake it, so observing is the safety net.
-  if (isGraphEngineProjection(workflow)) return workflow.phase === "cancelling" ? "fast" : "observe";
+  if (isGraphEngineProjection(workflow))
+    return workflow.phase === "cancelling" ? "fast" : "observe";
   if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "fast";
   if (workflow.phase === "cancelling") return "fast";
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {

@@ -48,7 +48,5 @@ export function reviewConsolidationProvenanceFields(): GraphProvenanceField[] {
 export function isReviewConsolidationProvenance(
   plan: Pick<GraphProvenancePlan, "fields">,
 ): boolean {
-  return (
-    JSON.stringify(plan.fields) === JSON.stringify(REVIEW_CONSOLIDATION_PROVENANCE.fields)
-  );
+  return JSON.stringify(plan.fields) === JSON.stringify(REVIEW_CONSOLIDATION_PROVENANCE.fields);
 }

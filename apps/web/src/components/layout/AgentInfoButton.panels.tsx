@@ -847,8 +847,10 @@ function normalizeLabel(label: string): string {
 /**
  * Everything account-scoped, from every provider, as one ordered list.
  *
- * Limits lead because they are the figure a user opens this panel for; the
- * remaining quota windows follow, and the credit balance closes. A window that
+ * Limits and quota windows are listed together in alphanumeric label order,
+ * so the same limits read in the same order on every account and in every
+ * view whatever order the provider reported them in; the credit balance
+ * closes. A window that
  * names the same period as a limit is folded into that limit's row rather than
  * repeated beneath it, so a provider reporting spend alongside a percentage
  * reads as one window with two facts about it.
@@ -936,7 +938,10 @@ function buildAccountRows({
           },
         ];
 
-  return { rows: [...limitRows, ...windowRows, ...creditRow], daily };
+  const periodRows = [...limitRows, ...windowRows].sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }),
+  );
+  return { rows: [...periodRows, ...creditRow], daily };
 }
 
 function formattedUsedPercent(usedPercent: number): string {

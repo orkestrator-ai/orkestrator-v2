@@ -2267,6 +2267,48 @@ describe("AgentInfoButton usage panel", () => {
     expect(within(account).queryByText("$9.99")).toBe(null);
   });
 
+  test("sorts mixed limits and windows after merging and leaves standalone credits last", () => {
+    seedUsage(
+      usage({
+        rateLimits: [
+          { label: "Weekly quota", usedPercent: 25 },
+          { label: "bravo quota", usedPercent: 30 },
+          { label: "10-hour limit", usedPercent: 10 },
+        ],
+        account: [
+          { window: "credits", label: "Credits", creditBalance: "$12.34" },
+          { window: "zulu", label: "Zulu quota", usedPercent: 50 },
+          { window: "weekly", label: " weekly QUOTA ", spendUsd: 1.25 },
+          { window: "two_hour", label: "2-hour limit", usedPercent: 20 },
+          { window: "alpha", label: "Alpha quota", usedPercent: 40 },
+        ],
+      }),
+    );
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(
+      within(account)
+        .getAllByText(/^(?:\d+-hour limit|\w+ quota|Credits)$/)
+        .map((element) => element.textContent),
+    ).toEqual([
+      "2-hour limit",
+      "10-hour limit",
+      "Alpha quota",
+      "bravo quota",
+      "Weekly quota",
+      "Zulu quota",
+      "Credits",
+    ]);
+    expect(
+      within(account).getByRole("progressbar", { name: "Weekly quota: 25% used" }),
+    ).toBeTruthy();
+    const mergedRow = within(account).getByText("Weekly quota").parentElement!.parentElement!;
+    expect(within(mergedRow).getByText("$1.25")).toBeTruthy();
+    expect(within(account).getByText("$12.34")).toBeTruthy();
+  });
+
   test("merges complementary account facts into one matching limit row", () => {
     seedUsage(
       usage({

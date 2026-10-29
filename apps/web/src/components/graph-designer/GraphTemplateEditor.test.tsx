@@ -160,6 +160,8 @@ describe("GraphCompilePanel acknowledgements", () => {
     const readOnly = render(
       <GraphCompilePanel compile={value} status="ready" error={null} onSelect={onSelect} />,
     );
-    expect(readOnly.container.querySelector("[data-graph-pending-acknowledgements]")).toBeNull();
+    expect(readOnly.container.querySelector("[data-graph-pending-acknowledgements]") === null).toBe(
+      true,
+    );
   });
 });

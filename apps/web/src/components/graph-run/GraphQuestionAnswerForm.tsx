@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { CircleHelp, Loader2, Send, X } from "lucide-react";
 import {
   GRAPH_AGENT_QUESTION_BOUNDS,
@@ -14,6 +14,9 @@ import { cn } from "@/lib/utils";
  * question (item 204), and human nodes (item 208) reuse it with their own
  * `onSubmit`. The user picks one of the offered choices, writes an answer,
  * or declines, in which case the agent decides and says what it assumed.
+ * A human node asks for a choice (`requireChoice`: approve or reject, or one
+ * of its options), takes the text as an optional note, and offers no
+ * decline (`allowDecline: false`).
  *
  * Nothing is sent until the user submits; a refusal (a stale question, an
  * answer over the bound) keeps the draft and shows the backend's message.
@@ -34,6 +37,16 @@ export interface GraphQuestionAnswerFormProps {
   /** The run cannot take an answer now (cancelling, finished). */
   disabled?: boolean;
   className?: string;
+  /** Offer "Decline" (default). Human nodes have no decline: rejecting is a choice. */
+  allowDecline?: boolean;
+  /** A choice is required; the text is an optional note. */
+  requireChoice?: boolean;
+  /** The submit button's label (default "Send answer"). */
+  submitLabel?: string;
+  /** The text field's label (default "Answer"). */
+  textLabel?: string;
+  /** Extra content between the question and the controls (an edit form). */
+  children?: ReactNode;
 }
 
 export function GraphQuestionAnswerForm({
@@ -42,6 +55,11 @@ export function GraphQuestionAnswerForm({
   onSubmit,
   disabled = false,
   className,
+  allowDecline = true,
+  requireChoice = false,
+  submitLabel = "Send answer",
+  textLabel,
+  children,
 }: GraphQuestionAnswerFormProps) {
   const headingId = useId();
   const [text, setText] = useState("");
@@ -54,6 +72,10 @@ export function GraphQuestionAnswerForm({
   const submit = async (kind: GraphAgentAnswerKind) => {
     if (sending || disabled || answered) return;
     const trimmed = text.trim();
+    if (kind === "answered" && requireChoice && choice === undefined) {
+      setError("Choose an option first.");
+      return;
+    }
     if (kind === "answered" && !trimmed && choice === undefined) {
       setError("Choose an option or write an answer, or decline.");
       return;
@@ -95,6 +117,7 @@ export function GraphQuestionAnswerForm({
         {answered ? `${asker} asked` : `${asker} asks`}
       </h3>
       <p className="text-sm break-words whitespace-pre-wrap">{question.text}</p>
+      {children}
       {answered ? (
         <p className="text-xs text-muted-foreground" data-graph-question-answer="">
           {answered.kind === "declined"
@@ -129,8 +152,12 @@ export function GraphQuestionAnswerForm({
             maxLength={GRAPH_AGENT_QUESTION_BOUNDS.maxAnswerChars}
             rows={3}
             disabled={disabled || sending !== null}
-            aria-label={choices.length > 0 ? "Answer (optional with a choice)" : "Answer"}
-            placeholder={choices.length > 0 ? "Add details (optional)" : "Write your answer"}
+            aria-label={
+              textLabel ?? (choices.length > 0 ? "Answer (optional with a choice)" : "Answer")
+            }
+            placeholder={
+              requireChoice || choices.length > 0 ? "Add details (optional)" : "Write your answer"
+            }
             className="min-h-0 resize-y text-sm"
           />
           {error ? (
@@ -151,23 +178,25 @@ export function GraphQuestionAnswerForm({
               ) : (
                 <Send className="size-3.5" />
               )}
-              Send answer
+              {submitLabel}
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 gap-1.5 text-xs"
-              disabled={disabled || sending !== null}
-              onClick={() => void submit("declined")}
-            >
-              {sending === "declined" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <X className="size-3.5" />
-              )}
-              Decline
-            </Button>
+            {allowDecline ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 text-xs"
+                disabled={disabled || sending !== null}
+                onClick={() => void submit("declined")}
+              >
+                {sending === "declined" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <X className="size-3.5" />
+                )}
+                Decline
+              </Button>
+            ) : null}
           </div>
         </>
       )}

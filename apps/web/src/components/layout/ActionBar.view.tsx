@@ -946,7 +946,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <RunGraphButton
                     environmentId={selectedEnvironment?.id}
                     projectId={selectedEnvironment?.projectId ?? null}
-                    createTab={createTab}
                     showLabel={isGrid}
                   />
 

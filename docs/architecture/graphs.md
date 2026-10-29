@@ -28,8 +28,11 @@ unless noted:
 | Compiler (107) | `compile.ts` and `compile-*.ts`, `plan.ts`, `cost.ts` | `compile(template, options)` returns diagnostics (located by `nodeId`, `edgeId`, `loopId`, `path`), a hashed plan when there are no errors, and a cost estimate (best and worst agent sessions, peak parallelism). It never throws. |
 | Built-ins (108) | `builtins/` | The three built-in templates, pinned to their engines by tests. Looped Review's engine is retired (`engineStatus: "retired"`). |
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
+| Sharing and review (405) | `sharing.ts`; backend `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graph-sharing.ts`; web `lib/backend/graph-template-sharing.ts`, designer `GraphShareDialogs.tsx`, `GraphTemplateReviewPanel.tsx` | Share bundles (`orkestrator.graph-bundle` v1: the template with its custom types, `graphTemplateDigest`, a whole-content digest, optional Ed25519 signature by the installation's key). A tampered bundle is refused; anything else imports as a user template only after the user confirms its digest, shown with a capability summary. Untrusted and changed project templates are reviewed with that summary and a diff against the last approved copy, then approved or rejected. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
 | Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
+
+| Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
 | Run view (211) | `run-view.ts`; backend `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts`; web `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` | The `graph-run` tab: a run on the shared flow graph with an inspector and controls, rehydrated from revisioned snapshots (below). |
 | Launching (214) | `launch.ts`; backend `graph-run-launch.ts`, `commands-registry-graph-launch.ts`; web `lib/backend/graph-launch.ts`, `components/graph-launch/` | One launch service behind the launch dialog, the designer's Run, the CLI, the coordinator's Control MCP tools and scheduled jobs (below). |
@@ -80,6 +83,8 @@ detected by a guard, and the activation records which (plan P2.9, D4, D12).
   not withhold it yet, and a container's runtime credential stays readable.
 - **The inspector** reads `activation.enforcement`, `enforcementReason` and
   `guards` (`graphActivationEnforcementView` labels them).
+
+| Describe a graph (215) | `describe.ts`, `describe-prompt.ts`; backend `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `graph-describe` store; web `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` | A designer agent drafts a template from the user's description; the `graph-template` result kind checks it with the guard and the compiler; the draft opens unsaved (below). |
 
 ## The Graphs designer (items 110 and 212)
 
@@ -322,7 +327,8 @@ commands, with shapes in `@orkestrator/protocol/graphs/run-view`:
 | `graph_run_retry`, `graph_run_skip` | `{runId, activationKey}` | `{status: "changed", run}` |
 | `graph_run_artifact` | `{runId, artifactId}` | the envelope; the value inline up to 512 KiB (else `valueOmitted: "too-large"`); a reference artifact's file metadata and descriptor, never the file |
 | `graph_run_transcript` | `{runId, activationKey, fromIndex?, maxBytes?}` | one window (default 2 MiB, at most 4 MiB) of the activation's stored transcript, or `none` |
-| `graph_run_answer` | item 204 | answers an agent's `ask_human` question |
+| `graph_run_answer` | item 204: `{runId, activationKey, questionId, kind, text?, choice?}`; item 208: `{runId, activationKey, waitId, decision, outlet?, value?, note?}` | answers an agent's `ask_human` question (`{activationKey, question}`) or a waiting human node (`{activationKey, human}`) |
+| `graph_run_pending` | `{runId}` or `{environmentId}` | `GraphRunPendingInteraction[]`: every open human wait and `ask_human` question of the run (or of the environment's live runs), derived from the stored record |
 
 Refusals throw `GraphRunServiceError` (`invalid-request`, `not-found`,
 `invalid-state`, `disabled`). Snapshots go through `graphRunViewSnapshot`,
@@ -357,8 +363,8 @@ the inspector can show the earlier ones.
 
 **Inspector** (`GraphRunInspector`): Details and Transcript views. Details
 holds the agent's `ask_human` question with `GraphQuestionAnswerForm` (choices,
-free text, decline; reusable by item 208's human nodes), the human node slot
-(`GraphHumanNodePanel`, which item 208 fills with approve, edit and choose),
+free text, decline), the human node's `GraphHumanNodePanel` (item 208; see
+"Human nodes"),
 the error and its cause, the profile, the enforcement tier actually applied and
 `enforcementReason`, the sandbox policy and turn mode, guard results with their
 paths, the session's agent, tokens and times, provisional `report_progress`
@@ -383,9 +389,12 @@ and deleting a run with its environment deletes its transcripts.
 and in the inspector): Retry (a failed position of a live run, as a new
 attempt; `graph_run_retry` records a user `restart` rewind over the lineage
 descendants and the never-started markers derived from the failure), Restart
-from here and Rewind code to here… (item 210's backend, through
-`GraphRunRewindBackend` in `lib/backend/graph-runs.ts`; the rewind opens a
-preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
+from here and Rewind code to here… (item 210's wrappers in
+`lib/backend/graph-run-rewind.ts`, behind `GraphRunRewindBackend` in
+`lib/backend/graph-runs.ts`; offered by 210's `graphRunRestartBlocker`, and
+Rewind code to here stays listed but disabled with `graphRunCodeRewindBlocker`'s
+reason, such as "Pause the run first", when only the code rewind is refused;
+the rewind opens a preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
 `ready` position, held back by a pause, a workspace lock or the run's limits),
 Open session (the agent's provider session in a native tab that refuses to
 start a fresh one), and the run-wide Pause, Resume and Cancel (with a
@@ -474,8 +483,223 @@ repeated}`, launched as `user`.
 no environment deletion will remove. `GraphRunLaunchService.sweep()` (at
 startup and after every launch) keeps at most 20 such terminal runs per
 project and none that ended more than 7 days ago
-(`storage.graphRuns.deleteEnvironmentlessGraphRuns`, which re-checks that each
-stored run has no environment and a terminal status).
+(`storage.graphRuns.deleteEnvironmentlessGraphRun`, shared with item 213, which refuses a
+run with an environment or one still going). Mock runs keep item 213's own
+retention and are skipped.
+
+## Describe a graph (item 215)
+
+The user writes what the graph should do, picks a model and, optionally,
+"Modify the current draft". A designer agent drafts the template; the draft
+opens in the designer **unsaved** and runs only after the user saves it.
+
+**The job is the backend's.** `graph_describe_start {environmentId,
+description, agent, model?, reasoningEffort?, fastMode?, baseDraft?}` stores
+one job per environment (the `graph-describe` store, a row per environment,
+owned by it and deleted with it) and returns at once. `GraphDescribeService`
+advances it on its own timer, one pass at a time per environment, and resumes
+running jobs after a restart. The web reads it with `graph_describe_status`
+on mount, on `graph-describe` change hints (id = environment) and on view
+safety checks, so switching tabs or reloading shows the job where it is;
+`graph_describe_cancel` aborts the turn and closes its slot, and
+`graph_describe_dismiss` forgets a finished job. The job needs a running
+environment (the session runs there) and an agent the result-tool rollout
+admits for `graph-template`.
+
+**The session.** One unattended, read-only (`plan`) branch of the shared agent
+branch runner (`graph-describe-host.ts`), with the environment's
+`automated-review` policy: dispatch journal, proof-based recovery, the result
+reminder and bounded repair turns are the runner's. The prompt
+(`renderGraphDescribePrompt`) explains the template model from the live
+registries (node kinds, built-in types, built-in prompts, system actions with
+their parameters from `GRAPH_SYSTEM_ACTION_SPECS`, predicates, loops,
+replicate, profiles and bounds), quotes the report §9 examples that compile
+today (§9.1 and §9.2; at most 16 KiB), and puts the draft to modify and the
+description in evidence frames.
+
+**The result kind.** `graph-template` (`submit_graph_template`, validated by
+the shared `validate_workflow_result`). Its schema, `graphTemplateJsonSchema()`,
+is a **tool-transport** schema: the template does not fit the strict
+structured-output subset (optional fields everywhere, recursive predicates,
+open type schemas and system parameters), so the schema guides the model and
+stays portable (no `$ref`, bounded depth and size), and the authority is
+`graphTemplateResultIssues`: the template guard's errors, two authoring rules
+(no `acknowledgements`, which only the user gives, and no `engine`), then the
+compiler's errors under the slot's context (`{type: "graph-template",
+providers, ceiling}`: the user's enabled platforms and the project ceiling).
+Warnings are left for the user in the designer.
+
+**Repairs.** A refused submission returns each problem as `{code, path,
+message}` (compiler codes such as `unknown-port`, `input-unbound`), and the
+agent corrects it in the same turn within the slot's rejection budget (4). A
+slot that spends it becomes a contract failure, and the runner sends a repair
+turn with a fresh slot (at most 3), as review reports do.
+
+**Opening the draft.** A completed job carries the template. The first time an
+active designer tab sees it, `GraphDescribeControl` opens it with
+`openDraft(tabId, template, projectId)` (asking first when the editor has
+unsaved edits) and dismisses the job; a tab that was inactive opens it when it
+is shown, and the header keeps an "Open described draft" button until then.
+Nothing is saved on the way, and a run launches only from a saved template
+(`compileForLaunch` refuses an unsaved draft).
+
+**Not for the coordinator (D6).** The `graph_describe_*` commands are app
+commands, not public actions, so neither the CLI, `run_action` nor any Control
+MCP tool reaches them (`graph-describe-coordinator.test.ts`).
+
+## Mock runs (item 213)
+
+A mock run tests a graph's control flow for free (report §7.5): it runs on the
+same scheduler as a real run (admission, retries, `onFailure`, loops, the
+record's bounds; gates and merges are the live executors), but its agent,
+system and human nodes are answered by mock executors registered with
+`{ mock: true }`, and the registry never lets a mock run fall back to a live
+`agent` or `system` executor. `GraphRun.mock` is true and
+`GraphRun.mockOptions` freezes the effective pins and step delay.
+
+**Answers.** Each output port of an agent or system node takes, in order: the
+activation's pin, else the type's `example`, else a value generated from its
+schema (`graphSchemaSample`, deterministic over the 102 subset: `const`, then
+`enum`, the first non-null `anyOf` branch, every object property, one array
+element, name-driven strings so format checks pass, `minimum` or 1, `true`).
+`graphMockValue` fits built-in values to the port (a decision's `choices`, the
+ticket input's criterion ids for a verdict, the run's commit for `headRef`)
+and checks them with `validateGraphArtifactValue`; a generated value that
+fails falls back to the example. Values are stored through the artifact store,
+so they pass the same validation as real ones; a pinned value that does not
+fails the activation with `invalid-result`.
+
+- *Agents* create no session and report no tokens, policy, baseline or guard
+  result: guards are no-ops on mock nodes. A writing agent's `workspace@1`
+  output is a fake commit, `graphMockWorkspace` (a deterministic SHA from the
+  run, activation and port on top of the input commit; nothing touches git).
+  A mock agent never asks a question.
+- *System nodes* never run an action handler. `workspace@1` passes the input
+  commit through, `review-package@2` is an unwritten mock file
+  (`GraphArtifactStore.putMockReference`, which `verify` accepts for mock
+  runs only), `pr-result@1` says no pull request was opened, and
+  `wait-for-checks` answers its pinned or example `check-summary@1` at once.
+  An action with `sideEffect` records "would have run" in the effect journal:
+  state `simulated`, key `would-run:<activation key>`, data
+  `{ wouldRun: GraphMockWouldRun }` (action, label, a one-line summary, the
+  parameters with defaults, facts such as branch, commit, target branch,
+  ticket move or recipient, and the input and output artifact ids).
+  `graph_run_effects {runId}` lists a run's effect rows.
+- *Human nodes* answer by themselves (approve; an `edit` form forwards the
+  value unedited; a `choose` form takes its first option), so a mock run
+  completes unattended. A pin takes another outlet (`{outlet, outputs?}`, the
+  edited value of an `edit` form) or `pause`s: the activation is handed to
+  the live human executor (item 208) and waits for a person; a launch with a
+  `pause` pin is refused while no human executor is registered.
+
+**Pins** (`GraphMockPins`: node id → sequence). The *n*-th activation of a
+node's branch (retries, iterations and restarts counted in record order)
+takes the *n*-th pin; the last repeats. A pin is `"example"`, `"generated"`,
+`{outputs: {port: value | null}}` (custom JSON; `null` leaves an optional port
+unproduced), `{fail: cause, message?}`, or, for human nodes, `{outlet,
+outputs?}` and `"pause"`. Gates and merges take none. Pins are stored on the
+template (`mockPins`, designer data outside the digest, like `layout`) and a
+launch's `pins` replace them node by node; `graphMockPinIssues` checks them
+against the ports (codes `mock-pin-unknown-node`, `mock-pin-node-kind`,
+`mock-pin-form`, `mock-pin-unknown-port`, `mock-pin-required-port`,
+`mock-pin-value`, `mock-pin-outlet`). "Verify: fail, fail, pass" is three
+custom verdicts on `verify`; the loop converges on iteration 3.
+
+**Launching** (`graph_run_mock {ref, projectId, environmentId?, inputs?,
+params?, roles?, pins?, panel?, stepMs?}`, `GraphMockRuns.launch`). The
+stored template is compiled under the project's ceiling; compile errors and
+built-ins (`engine`, duplicate first) are refused, but trust and pending
+acknowledgements are not needed (nothing runs). Unbound roles get
+placeholders (`claude`, model `mock`; panel roles `panel` of them, default
+2), missing run inputs their type's example. Without `environmentId` the run
+is environment-less: it never provisions an environment and starts
+`running`; executors see `environmentId: ""`. With one, it is listed and
+removed with that environment, and still touches nothing. A mock run holds no
+workspace locks (`graphRunLockedWorkspace`), so it never blocks a real run.
+`stepMs` (0–10,000) makes each mock activation report `running` for that long
+first, so the run view shows it moving. Retention: each environment-less
+launch keeps the newest 20 finished environment-less mock runs of the
+project (`deleteEnvironmentlessGraphRun`); a deleted project's are cancelled
+or deleted, and orphans are swept at startup. `usage.agentSessions` still
+counts admitted agent activations (the run's budget), not provider sessions.
+
+**Designer.** The header's **Mock run** button saves an unsaved or new draft
+first, launches the stored template with `stepMs` 1,000 and calls
+`requestGraphRunView({runId, projectId, environmentId, mock: true})`
+(`lib/graph-run-navigation.ts`); the run view (item 211) registers
+`onGraphRunViewRequested` and reads `takePendingGraphRunView()` when it
+mounts. Built-ins are disabled until duplicated. In the inspector, agent nodes
+have a **Mock run** tab and system and human nodes a **Mock run** section:
+the pinned-sequence editor (`GraphMockPinsEditor`), a list of runs, each one
+of example, generated (with a preview), custom JSON (starting from the
+examples), fail (with a cause) or, for human nodes, an outlet or a pause;
+`graphMockPinIssues` messages show under each run. Renaming or deleting a node
+moves or drops its pins.
+
+## Human nodes (item 208)
+
+A person takes part in a run at an explicit point (P2.8, D15, report §6.8).
+Shapes and validation are in `@orkestrator/protocol/graphs/run`
+(`run-human.ts`); the executor and the answers are in
+`apps/backend/src/core/graph-node-human.ts`.
+
+**Forms.** `approve` takes `approved` or `rejected`; `edit` does the same, and
+an approval may carry an edited value of the form's `edit` input; `choose`
+takes one option's outlet. A decided node forwards its single-value inputs as
+its outputs, as a gate does, with an edited value in place of the original.
+
+**The wait.** The executor's first call records `activation.human`
+(`GraphHumanWait {id, form, openedAt, answer?}`, a fresh UUID) and reports the
+activation `awaiting-human`; the pass then makes the run `waiting` when nothing
+else is admitted. The executor is observed only when woken
+(`observeAfterMs: null`), or at the node's deadline. The wait is in the run
+record, so it survives a backend restart (recovery observes it) and any view
+rehydrates it. A restart of the node (item 210) supersedes the activation; its
+wait dies with it.
+
+**Answers.** `graph_run_answer` with a `waitId` goes to `GraphHumanAnswers`,
+which checks `graphHumanAnswerProblem` (the activation waits, the wait id is
+this attempt's, it is unanswered, the decision fits the form, the note and an
+edited value are within bounds), stores an edited value as a new artifact of
+the original's type (validated against it, with the producing port's `choices`
+for `decision@1`; lineage: the original; producer: the human activation on the
+edited port; an unchanged value stores nothing), then records the answer under
+the run's lock through `GraphRunService.updateActivation`, checking again, which
+wakes the run to observe the activation. A refused answer records nothing
+(invariant 10). `ask_human` answers share the command and the locked update.
+
+**Timeouts.** Without `timeoutMs` the run waits indefinitely, paused rather
+than failed. With one, a human node's default `onFailure` is `route`
+(`graphHumanRoutesFailures`), which gives it an implicit `error` port carrying
+`error@1` (`GRAPH_HUMAN_ERROR_PORT`; edges read it as `{node, port: "error"}`
+without an outlet, and the designer draws it as an output). The timeout
+arrives as `cancel(…, "timeout")`; the pass fails the activation with cause
+`timeout`, the planner routes `error@1`, and the outlets' consumers are
+skipped. An answer recorded before the deadline still wins. `onFailure:
+fail-run` opts out of the route.
+
+**Where a wait shows.**
+
+- The run view: the face reads "waiting for you" and the inspector's
+  `GraphHumanNodePanel` renders the shared `GraphQuestionAnswerForm` (choices
+  Approve/Reject or the options, an optional note, no decline) and, for `edit`,
+  `GraphArtifactValueEditor`: the type's form for a flat object schema
+  (strings, enums, numbers, booleans, lists of strings, optionally nullable),
+  else JSON, checked live with `validateGraphArtifactValue`.
+- The sidebar (`graph-run-attention.ts`): the environment's `graph-run`
+  activity source is `working`, `waiting` or `idle`
+  (`graphRunEnvironmentActivity`), and each new wait (human wait or question
+  id) records one content-free attention key (`graph-run:<sha256>`), which
+  lights the unread badge with reason `agent_question` once. It runs on
+  `graph-run` changes (debounced per run) and reconciles every environment at
+  start. `GraphRunAttention.onWaitOpened` reports each wait the first time it
+  is recorded.
+- The coordinator (`graph-run-coordinator-status.ts`, observed by
+  `coordinator-status-wakes.ts` for `graph-run` associations): one notice per
+  wait (the key names the newest open wait and when it opened; a wait is news
+  only when it opened after the last one reported), and one when the run
+  completes, fails or is cancelled. Item 214 records the association when the
+  coordinator launches a run.
 
 ## Canvas library decision (spike, 2026-10-29)
 

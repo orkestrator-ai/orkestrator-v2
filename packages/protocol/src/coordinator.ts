@@ -283,7 +283,7 @@ export interface CoordinatorWorkflowAssociation {
   coordinatorId: string;
   projectId: string;
   conversationId?: string;
-  /** `graph-run`: a saved graph template the coordinator launched (item 214); resourceId is the run id. */
+  /** `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id). */
   kind: "environment" | "build-pipeline" | "multi-review" | "graph-run";
   resourceId: string;
   /**

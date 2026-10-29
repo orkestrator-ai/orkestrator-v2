@@ -52,6 +52,7 @@ import {
   type StartGraphProjectWatch,
 } from "./graph-project-templates.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
+import { GraphTemplateSharing } from "./graph-template-sharing.js";
 import type { AppConfig, Project } from "./models.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
@@ -116,6 +117,8 @@ const MAX_ERROR_SUMMARY = 3;
 
 export class GraphTemplateService {
   readonly projectTemplates: GraphProjectTemplates;
+  /** Share bundles, signing keys and the project template review (item 405). */
+  readonly sharing: GraphTemplateSharing;
   private readonly storage: GraphTemplateServiceStorage;
   private readonly builtinSource: () => readonly GraphTemplateV1[];
   private readonly hostSource: () => AgentEnforcementHost;
@@ -136,6 +139,11 @@ export class GraphTemplateService {
         this.storage.graphTemplates.announceGraphProjectTemplatesChanged(projectId),
       ...(options.startWatch !== undefined ? { startWatch: options.startWatch } : {}),
       ...(options.watchSettleMs !== undefined ? { settleMs: options.watchSettleMs } : {}),
+    });
+    this.sharing = new GraphTemplateSharing({
+      service: this,
+      storage: this.storage.graphTemplates,
+      now: this.now,
     });
     this.stopListening =
       this.storage.addResourceChangeListener?.((change) => {
@@ -369,6 +377,11 @@ export class GraphTemplateService {
     return { ok: true, detail, ...(id !== original ? { renamedFrom: original } : {}) };
   }
 
+  /** The id an import of a template with `id` would get (item 405's preview). */
+  async availableUserTemplateId(id: string): Promise<string> {
+    return uniqueId(id, await this.userIds());
+  }
+
   // ------------------------------------------------------------ trust
 
   async trust(input: {
@@ -415,6 +428,8 @@ export class GraphTemplateService {
       input.projectId,
       { path: file.path, digest: file.digest, approvedAt },
       new Set(scan.files.map((candidate) => candidate.path)),
+      // The approved copy, for item 405's review diff when the file changes.
+      graphTemplateExportText(file.template),
     );
     return {
       projectId: input.projectId,

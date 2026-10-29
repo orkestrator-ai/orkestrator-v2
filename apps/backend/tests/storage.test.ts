@@ -1046,7 +1046,7 @@ describe("Electron StorageService", () => {
         "unknown-source" as never,
       ),
     ).rejects.toThrow(
-      "source must be frontend, claude-terminal, claude-tmux, native-agent, or multi-review",
+      "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, or graph-run",
     );
   });
 

@@ -119,6 +119,12 @@ export type CommandContext = {
   graphLaunches?: import("./graph-run-launch.js").GraphRunLaunchService;
   /** Agent `ask_human` questions and their answers (item 204; `graph_run_answer`). */
   graphQuestions?: import("./graph-agent-questions.js").GraphAgentQuestions;
+  /** "Describe a graph" jobs, one per environment (item 215). */
+  graphDescribe?: import("./graph-describe-service.js").GraphDescribeService;
+  /** Mock run launches and their retention (item 213; `graph_run_mock`). */
+  graphMock?: import("./graph-mock-launch.js").GraphMockRuns;
+  /** Human node answers (item 208; `graph_run_answer`'s human-node form). */
+  graphHumanAnswers?: import("./graph-node-human.js").GraphHumanAnswers;
 };
 
 export type CommandHandler = (

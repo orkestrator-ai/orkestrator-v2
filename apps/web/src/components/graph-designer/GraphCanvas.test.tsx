@@ -273,7 +273,9 @@ describe("GraphCanvas, editable (item 212)", () => {
     expect(incompatible.classList.contains("connectableend")).toBe(false);
     expect(editor.verdict).toHaveBeenCalled();
     fireEvent.mouseUp(document, { clientX: 60, clientY: 60 });
-    await waitFor(() => expect(container.querySelector("[data-graph-connect]")).toBeNull());
+    await waitFor(() =>
+      expect(container.querySelector("[data-graph-connect]") === null).toBe(true),
+    );
   });
 
   test("keyboard: Delete, C, L and Shift+arrows on a focused node", () => {
@@ -324,6 +326,6 @@ describe("GraphCanvas, editable (item 212)", () => {
     expect(review.querySelector("[data-graph-stack]")).not.toBeNull();
     expect(review.querySelector('[data-graph-badge="replication"]')!.textContent).toMatch(/^×/);
     const build = container.querySelector('.react-flow__node[data-id="build"]')!;
-    expect(build.querySelector("[data-graph-stack]")).toBeNull();
+    expect(build.querySelector("[data-graph-stack]") === null).toBe(true);
   });
 });

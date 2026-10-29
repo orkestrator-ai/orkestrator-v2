@@ -1122,7 +1122,7 @@ describe("BuildLaunchDialog step instructions", () => {
       const trigger = screen.getByRole("button", { name: `${title} instructions` });
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
     }
-    expect(screen.queryByRole("textbox", { name: "Build instructions" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Build instructions" }) === null).toBe(true);
 
     toggle("Build");
     expect(
@@ -1245,8 +1245,8 @@ describe("BuildLaunchDialog reviewer focus", () => {
     const { onConfirm } = renderDialog({ pipelineDefaults: fanoutDefaults });
     // Only reviewer cards offer a focus.
     expect(screen.getByRole("combobox", { name: "Reviewer 1 focus" })).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Build focus" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: /preparation.*focus/i })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Build focus" }) === null).toBe(true);
+    expect(screen.queryByRole("combobox", { name: /preparation.*focus/i }) === null).toBe(true);
     fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 2 focus" }), {
       target: { value: "preset:tests-and-coverage" },
     });

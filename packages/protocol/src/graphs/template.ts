@@ -43,6 +43,7 @@ import {
   checkPresent,
   graphUtf8Bytes,
 } from "./grammar.js";
+import { checkGraphMockPins } from "./mock-pins.js";
 import { checkGraphPredicate } from "./predicate-shape.js";
 import { checkGraphEndpoint, checkGraphNode, checkRequiredEnum } from "./template-nodes.js";
 import {
@@ -86,6 +87,7 @@ const TEMPLATE_FIELDS = [
   "limits",
   "layout",
   "acknowledgements",
+  "mockPins",
 ] as const;
 
 // ---------------------------------------------------------------- parameters
@@ -646,6 +648,7 @@ function checkTemplateBody(value: Record<string, unknown>, errors: FieldErrorCol
   );
   checkLimits(value.limits, "limits", errors);
   if (value.layout !== undefined) checkLayout(value.layout, "layout", errors);
+  if (value.mockPins !== undefined) checkGraphMockPins(value.mockPins, "mockPins", errors);
   checkNamedList(
     value.acknowledgements,
     "acknowledgements",

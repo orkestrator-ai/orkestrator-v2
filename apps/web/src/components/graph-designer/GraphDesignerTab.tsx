@@ -9,8 +9,12 @@ import {
   FilePlus2,
   Loader2,
   Network,
+  PackageOpen,
   PencilRuler,
   Play,
+  PlayCircle,
+  Share2,
+  ShieldAlert,
 } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -29,6 +33,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { launchGraphMockRun } from "@/lib/backend/graph-mock";
+import { requestGraphRunView } from "@/lib/graph-run-navigation";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { writeText } from "@/lib/native/clipboard";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
@@ -45,6 +58,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphCanvas } from "./GraphCanvas";
 import { GraphConnectDialog, GraphLoopDialog } from "./GraphCommandDialogs";
+import { GraphDescribeControl } from "./GraphDescribeControl";
 import { GraphCompilePanel } from "./GraphCompilePanel";
 import { GraphEditorToolbar } from "./GraphEditorToolbar";
 import { GraphImportDialog } from "./GraphImportDialog";
@@ -54,7 +68,8 @@ import { GraphLibraryList } from "./GraphLibraryList";
 import { GraphRunsList } from "@/components/graph-run/GraphRunsList";
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
-import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import { GraphShareExportDialog, GraphShareImportDialog } from "./GraphShareDialogs";
+import { GraphTemplateReviewPanel } from "./GraphTemplateReviewPanel";
 import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
 import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
 import { GraphEditorContext } from "./graph-editor-context";
@@ -67,6 +82,8 @@ import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
  * edited on the canvas (item 212): palette, connections, forms, undo, a live
  * browser compile, and Save with compare-and-swap. The environment's graph
  * runs are listed under the library; a row opens the run's tab (item 211).
+ * "Describe a graph" (item 215) drafts one with an agent; the draft opens
+ * here unsaved.
  *
  * The tab keeps only the template it shows in the pane layout; everything
  * else is re-read from the backend when it mounts, when a `graph-template`
@@ -76,6 +93,9 @@ import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
 
 /** Wait this long after the last edit before compiling the draft in the browser. */
 export const GRAPH_DRAFT_COMPILE_DELAY_MS = 250;
+
+/** Each mock activation appears to run this long, so the run view shows the graph moving. */
+export const GRAPH_DESIGNER_MOCK_STEP_MS = 1_000;
 
 function isTextTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
@@ -157,7 +177,10 @@ export function GraphDesignerTab({
   const [importOpen, setImportOpen] = useState(false);
   // "Run" (item 214): the stored template the launch dialog is open for.
   const [launchRef, setLaunchRef] = useState<GraphTemplateRef | null>(null);
-  const createTab = useOptionalTerminalContext()?.createTab ?? null;
+  // Item 405: share bundles and the project template review.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [bundleImportOpen, setBundleImportOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState<string | null>(null);
   // The canvas mounts the first time the tab is shown, so its first fit
@@ -234,6 +257,10 @@ export function GraphDesignerTab({
   const detail = view.detail;
   const summary = detail?.summary ?? null;
   const ceiling = library?.result?.ceiling;
+  const needsReview =
+    library?.result?.templates.filter(
+      (entry) => entry.scope === "project" && entry.trust !== "trusted",
+    ).length ?? 0;
 
   const editor = view.editor;
   const draft = editor?.draft ?? null;
@@ -343,21 +370,55 @@ export function GraphDesignerTab({
     return () => window.removeEventListener("keydown", listener);
   }, [isActive, editingNow]);
 
-  // A stored, launchable template launches; a draft is saved first (the
-  // launch reads the stored revision, never the canvas).
+  // Run (item 214) and Mock run (item 213) launch a stored template: an
+  // unsaved or new draft is saved first (a launch reads the stored revision,
+  // never the canvas). Null when the save did not happen; the editing bar
+  // says why.
+  const storedRef = async (): Promise<GraphTemplateRef | null> => {
+    let ref = view.selected ?? null;
+    if (editor && (editor.isNew || graphDraftDirty(editor))) {
+      const saved = await saveDraft(tabId);
+      if (!saved) return null;
+      persistSelected(saved.summary.ref);
+      ref = saved.summary.ref;
+    }
+    return ref;
+  };
   const launchable =
     compile?.launchable === true && (editor !== null || summary?.launchable === true);
   const runTemplate = () =>
     run("prepare the launch", async () => {
-      let ref = view.selected;
-      if (editor && (editor.isNew || dirty)) {
-        const saved = await saveDraft(tabId);
-        if (!saved) return;
-        persistSelected(saved.summary.ref);
-        ref = saved.summary.ref;
-      }
+      const ref = await storedRef();
       if (ref) setLaunchRef(ref);
     });
+  const mockRun = () =>
+    run("start a mock run", async () => {
+      if (!projectId) return;
+      const ref = await storedRef();
+      if (!ref) return;
+      const result = await launchGraphMockRun({
+        ref,
+        projectId,
+        stepMs: GRAPH_DESIGNER_MOCK_STEP_MS,
+      });
+      const opened = requestGraphRunView({
+        runId: result.run.id,
+        projectId,
+        environmentId,
+        mock: true,
+        ...(summary?.name ? { title: summary.name } : {}),
+      });
+      toast.success("Mock run started", {
+        description: `${opened ? "" : `Run ${result.run.id.slice(0, 8)}. `}No provider sessions, no tokens, no pull requests or ticket changes.`,
+      });
+    });
+  const mockBlocked = !projectId
+    ? "Mock runs need a project"
+    : summary?.engine !== undefined && !editor
+      ? "A built-in runs on its own engine; duplicate it to mock a copy"
+      : !summary && !editor?.isNew
+        ? "Choose a template first"
+        : null;
 
   const duplicate = () =>
     run("duplicate the template", async () => {
@@ -428,6 +489,21 @@ export function GraphDesignerTab({
           </span>
         ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
+          <GraphDescribeControl
+            environmentId={environmentId}
+            projectId={projectId}
+            isActive={isActive}
+            providers={providers}
+            currentTemplate={shownTemplate}
+            onOpenDraft={(template, opened) =>
+              guardDiscard("open the described graph", () => {
+                usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+                openDraft(tabId, template, projectId);
+                setJsonOpen(false);
+                opened();
+              })
+            }
+          />
           <Button variant="ghost" size="sm" onClick={newGraph}>
             <FilePlus2 className="size-3.5" />
             New graph
@@ -454,6 +530,48 @@ export function GraphDesignerTab({
             <ClipboardCopy className="size-3.5" />
             Copy JSON
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-graph-mock-run=""
+            disabled={mockBlocked !== null || busy !== null || editor?.saving === true}
+            title={
+              mockBlocked ??
+              "Run the graph with canned answers (examples or your pins): no provider sessions, no tokens, no pull requests or ticket changes"
+            }
+            onClick={() => void mockRun()}
+          >
+            {busy === "start a mock run" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <PlayCircle className="size-3.5" />
+            )}
+            Mock run
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!summary || busy !== null}
+            onClick={() => setShareOpen(true)}
+          >
+            <Share2 className="size-3.5" />
+            Share…
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setBundleImportOpen(true)}>
+            <PackageOpen className="size-3.5" />
+            Import bundle…
+          </Button>
+          {projectId ? (
+            <Button
+              variant={needsReview > 0 ? "outline" : "ghost"}
+              size="sm"
+              onClick={() => setReviewOpen(true)}
+              data-graph-review-count={needsReview}
+            >
+              <ShieldAlert className={cn("size-3.5", needsReview > 0 && "text-amber-300")} />
+              Review{needsReview > 0 ? ` (${needsReview})` : ""}
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
@@ -706,6 +824,55 @@ export function GraphDesignerTab({
         </AlertDialogContent>
       </AlertDialog>
 
+      <GraphShareExportDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        summary={summary}
+        onDownload={downloadText}
+        onCopy={async (text) => {
+          await writeText(text);
+          toast.success("Copied");
+        }}
+      />
+      <GraphShareImportDialog
+        open={bundleImportOpen}
+        onOpenChange={setBundleImportOpen}
+        projectId={projectId}
+        onImported={(result) => {
+          persistSelected(result.detail.summary.ref);
+          void loadLibrary(projectId);
+          void openTemplate(tabId, result.detail.summary.ref, projectId);
+          toast.success(
+            result.renamedFrom
+              ? `Imported as ${result.detail.summary.id} (${result.renamedFrom} was taken)`
+              : `Imported ${result.detail.summary.name}`,
+          );
+        }}
+      />
+      {projectId ? (
+        <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+          <DialogContent size="4xl">
+            <DialogHeader>
+              <DialogTitle>Review project templates</DialogTitle>
+              <DialogDescription>
+                What each untrusted or changed template in{" "}
+                <span className="font-mono">.orkestrator/graphs</span> would be allowed to do, and
+                what changed since you approved it.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[70vh] overflow-y-auto pr-1">
+              <GraphTemplateReviewPanel
+                projectId={projectId}
+                onDecided={() => {
+                  void loadLibrary(projectId);
+                  void refreshTab(tabId);
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
       <GraphImportDialog
         open={importOpen}
         onOpenChange={setImportOpen}
@@ -731,7 +898,7 @@ export function GraphDesignerTab({
           projectId={projectId}
           template={launchRef}
           environmentId={environmentId}
-          onLaunched={(result) => openLaunchedGraphRun({ result, createTab })}
+          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
         />
       )}
     </div>

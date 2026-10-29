@@ -10,9 +10,10 @@ import { spawnSync } from "node:child_process";
  * rehydrates after switching environments and after a reload.
  * Credential-free: no agent runs.
  *
- * Starting a run, switching away while it finishes and returning to its tab
- * needs a launch path (items 213 and 214); that scenario joins this file
- * when one exists.
+ * The human-node commands answer too (item 208: `graph_run_pending`, and a
+ * refused `graph_run_answer`). Starting a run, switching away while it
+ * finishes (or waits on a person) and returning to its tab needs a launch
+ * path (items 213 and 214); that scenario joins this file when one exists.
  */
 
 test.use({ actionTimeout: 15_000 });
@@ -85,6 +86,17 @@ test("the Graphs designer lists the environment's runs from the backend", async 
     expect(JSON.stringify(missing.body)).toContain("does not exist");
     const malformed = await call("graph_run_get", { runId: "x", extra: true });
     expect(malformed.ok).toBe(false);
+    // Human nodes (item 208): nothing waits in a fresh environment, and an
+    // answer for a run that does not exist is refused, never recorded.
+    expect(await invoke("graph_run_pending", { environmentId: env.id })).toEqual([]);
+    const stale = await call("graph_run_answer", {
+      runId: "no-such-run",
+      activationKey: "check#iter=1#attempt=1",
+      waitId: "33333333-3333-4333-8333-333333333333",
+      decision: "approve",
+    });
+    expect(stale.ok).toBe(false);
+    expect(JSON.stringify(stale.body)).toContain("does not exist");
 
     await page.reload();
     await openEnvironment(page, project.name, env.name);

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Play } from "lucide-react";
-import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
 import { Button } from "@/components/ui/button";
 import { GraphLaunchDialog } from "./GraphLaunchDialog";
 import { openLaunchedGraphRun } from "./open-launched-run";
@@ -14,12 +13,10 @@ import { openLaunchedGraphRun } from "./open-launched-run";
 export function RunGraphButton({
   environmentId,
   projectId,
-  createTab,
   showLabel = false,
 }: {
   environmentId?: string;
   projectId?: string | null;
-  createTab: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null;
   showLabel?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -47,7 +44,7 @@ export function RunGraphButton({
           onOpenChange={setOpen}
           projectId={projectId}
           environmentId={environmentId}
-          onLaunched={(result) => openLaunchedGraphRun({ result, createTab })}
+          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
         />
       )}
     </>

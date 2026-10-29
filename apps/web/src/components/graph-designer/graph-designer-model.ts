@@ -8,6 +8,7 @@ import {
 } from "@orkestrator/protocol/graphs/compile";
 import {
   graphNodeOutlets,
+  graphNodeOutputSpecs,
   isGraphRunInputRef,
   type GraphEdgeSource,
   type GraphEnforcementTier,
@@ -339,8 +340,7 @@ function sourceType(template: GraphTemplateV1, source: GraphEdgeSource): string 
     // An outlet forwards the node's input of that name.
     return node.inputs?.find((input) => input.name === source.port)?.type;
   }
-  const outputs = "outputs" in node ? node.outputs : undefined;
-  return outputs?.find((output) => output.name === source.port)?.type;
+  return graphNodeOutputSpecs(node).find((output) => output.name === source.port)?.type;
 }
 
 interface Endpoint {
@@ -420,8 +420,7 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
     const loopBox = loopId ? layout.loops.get(loopId) : undefined;
     const planNode = planNodes.get(node.id);
     const inputs = (node.inputs ?? []).map((port) => portView("in", port, library));
-    const outputs =
-      "outputs" in node ? (node.outputs ?? []).map((port) => portView("out", port, library)) : [];
+    const outputs = graphNodeOutputSpecs(node).map((port) => portView("out", port, library));
     const outlets = (graphNodeOutlets(node) ?? []).map((name) => ({
       name,
       handleId: `outlet:${name}`,

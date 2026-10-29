@@ -1,34 +1,44 @@
 import type { GraphLaunchResult } from "@orkestrator/protocol/graphs/launch";
 import { toast } from "sonner";
-import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
+import { requestGraphRunView } from "@/lib/graph-run-navigation";
 
 /**
- * Shows a run that was just launched (item 214): the one place every launch
- * surface in the app goes through, so it can later route through item 213's
- * `requestGraphRunView` instead.
+ * Shows a run that was just launched (item 214): every launch surface in the
+ * app goes through here, and here through item 213's `requestGraphRunView`,
+ * the same path Mock run uses.
  *
  * The `graph-run` tab names its run only, so it opens in the environment the
- * launch came from even when the run provisions a new one. A launch with no
- * environment to open a tab in (a Kanban card) says where the run is instead;
- * its environment's Graphs list shows it.
+ * launch came from (`environmentId`), even when the run provisions a new
+ * one; a launch from outside an environment (a Kanban card) targets the
+ * run's own environment when it has one. When that environment is not on
+ * screen the request waits for it, and a toast says where the run is.
  */
 export function openLaunchedGraphRun(input: {
   result: GraphLaunchResult;
-  /** The environment's `createTab`, when the launch came from one. */
-  createTab?: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null;
+  /** The environment the launch came from, when it came from one. */
+  environmentId?: string;
   /** The run's environment name, when it already has one. */
   environmentName?: string;
 }): boolean {
   const { result } = input;
   const title = result.template.name;
-  if (input.createTab) {
-    const opened = input.createTab("graph-run", { graphRun: { runId: result.runId, title } });
-    if (opened) return true;
+  const target = input.environmentId ?? result.environmentId;
+  if (
+    target &&
+    requestGraphRunView({
+      runId: result.runId,
+      projectId: result.projectId,
+      environmentId: target,
+      mock: false,
+      title,
+    })
+  ) {
+    return true;
   }
   toast.success(`Started ${title}`, {
     description: result.environmentId
-      ? `It runs in ${input.environmentName ?? "its environment"}; open it from that environment's Graphs list.`
-      : "It starts in a new environment once that is created.",
+      ? `It runs in ${input.environmentName ?? "its environment"}; its tab opens there.`
+      : "It starts in a new environment once that is created; open it from the Graphs list.",
   });
   return false;
 }

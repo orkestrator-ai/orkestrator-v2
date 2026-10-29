@@ -74,6 +74,8 @@ function installBackend() {
           text: graphTemplateExportText(pipeline.template),
           digest: "d",
         };
+      case "graph_describe_status":
+        return null;
       default:
         throw new Error(`unexpected command ${command}`);
     }
@@ -154,7 +156,7 @@ describe("GraphDesignerTab", () => {
       pipeline.summary.name,
     );
     // A built-in is read-only: no JSON editing, but it can be duplicated.
-    expect(screen.queryByRole("button", { name: "Edit as JSON" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit as JSON" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: /Duplicate/ })).toBeDefined();
   });
 
@@ -184,7 +186,7 @@ describe("GraphDesignerTab", () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Import" }));
     });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     expect(persisted()).toEqual({ selected: broken.summary.ref });
 
     // The imported template opens with its diagnostics pinned to the edge.

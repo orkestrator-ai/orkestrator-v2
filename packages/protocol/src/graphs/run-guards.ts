@@ -79,8 +79,10 @@ import {
   type GraphRun,
   type GraphRunLimitViolation,
 } from "./run-model.js";
+import { checkGraphMockRunOptions } from "./mock-pins.js";
 import { GRAPH_ENFORCEMENT_TIERS } from "./template-model.js";
 import { GRAPH_AGENT_SESSION_FIELDS, checkGraphAgentSessionFields } from "./run-agent-session.js";
+import { checkGraphHumanWait } from "./run-human.js";
 import { GRAPH_ERROR_CAUSES } from "./types.js";
 
 /** Errors reported per guard call. */
@@ -349,6 +351,7 @@ const RUN_FIELDS = [
   "launch",
   "status",
   "mock",
+  "mockOptions",
   "activations",
   "rewinds",
   "loopIterations",
@@ -666,6 +669,7 @@ const ACTIVATION_FIELDS = [
   "outputs",
   "outlet",
   "session",
+  "human",
   "policy",
   "enforcement",
   "enforcementReason",
@@ -726,6 +730,7 @@ function checkActivation(
     );
   }
   if (value.session !== undefined) checkSession(value.session, joinPath(path, "session"), errors);
+  if (value.human !== undefined) checkGraphHumanWait(value.human, joinPath(path, "human"), errors);
   if (value.policy !== undefined && !isNativeAgentExecutionPolicy(value.policy)) {
     errors.add(joinPath(path, "policy"), "type", "Expected a native agent execution policy");
   }
@@ -944,6 +949,13 @@ export function validateGraphRun(
   checkLaunch(value.launch, errors);
   checkEnum(value.status, "status", errors, GRAPH_RUN_STATUSES);
   if (typeof value.mock !== "boolean") errors.add("mock", "type", "Expected a boolean");
+  if (value.mockOptions !== undefined) {
+    if (value.mock !== true) {
+      errors.add("mockOptions", "not_applicable", "Only a mock run carries mock options");
+    } else {
+      checkGraphMockRunOptions(value.mockOptions, "mockOptions", errors);
+    }
+  }
 
   const rewindIds = new Set<string>();
   if (

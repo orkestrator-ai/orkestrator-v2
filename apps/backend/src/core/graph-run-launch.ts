@@ -114,7 +114,7 @@ export interface GraphRunLaunchStorage {
   graphTemplates: Pick<GraphTemplatesStorage, "getGraphLaunchDefaults" | "saveGraphLaunchDefaults">;
   graphRuns: Pick<
     GraphRunsStorage,
-    "getGraphRun" | "listAllGraphRuns" | "deleteEnvironmentlessGraphRuns"
+    "getGraphRun" | "listAllGraphRuns" | "deleteEnvironmentlessGraphRun"
   >;
 }
 
@@ -700,7 +700,8 @@ export class GraphRunLaunchService {
   private async sweepOnce(): Promise<number> {
     const now = this.clock().getTime();
     const runs = (await this.deps.storage.graphRuns.listAllGraphRuns()).filter(
-      (run) => run.environmentId === undefined && isGraphRunTerminal(run.status),
+      // Mock runs have their own retention (item 213).
+      (run) => run.environmentId === undefined && !run.mock && isGraphRunTerminal(run.status),
     );
     const byProject = new Map<string, GraphRun[]>();
     for (const run of runs) {
@@ -721,12 +722,18 @@ export class GraphRunLaunchService {
         }
       });
     }
-    if (expired.length === 0) return 0;
-    const removed = await this.deps.storage.graphRuns.deleteEnvironmentlessGraphRuns(expired);
-    if (removed.length > 0) {
-      console.info(`[graphs] Removed ${removed.length} runs that ended without an environment`);
+    let removed = 0;
+    for (const runId of expired) {
+      try {
+        if (await this.deps.storage.graphRuns.deleteEnvironmentlessGraphRun(runId)) removed += 1;
+      } catch {
+        // It got an environment or was restarted meanwhile: not ours to remove.
+      }
     }
-    return removed.length;
+    if (removed > 0) {
+      console.info(`[graphs] Removed ${removed} runs that ended without an environment`);
+    }
+    return removed;
   }
 
   // ------------------------------------------------------------ helpers

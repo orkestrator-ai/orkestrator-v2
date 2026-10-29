@@ -5,12 +5,12 @@ import {
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_ARTIFACT_FORMAT_VERSION,
   GRAPH_RUN_FORMAT_VERSION,
+  GRAPH_RUN_TERMINAL_STATUSES,
   graphArtifactFootprint,
   graphArtifactLimitViolation,
   graphRunLimitViolation,
   graphRunRecordBytesViolation,
   isGraphRunId,
-  isGraphRunTerminal,
   validateGraphArtifact,
   validateGraphRun,
   verifyGraphArtifactIdentity,
@@ -508,6 +508,61 @@ export class GraphRunsRepository {
   }
 
   /**
+   * Removes one finished run that has no environment, with every artifact and
+   * effect row of it: the retention of environment-less mock runs (item 213),
+   * which environment deletion never reaches. Refuses a run with an
+   * environment (environment deletion owns those) and an unfinished one.
+   * Returns whether a run was removed.
+   */
+  async deleteEnvironmentlessGraphRun(runId: string): Promise<boolean> {
+    if (!isGraphRunId(runId)) return false;
+    const removed = await this.enqueueGraphRunMutation(async () => {
+      const stored = this.context.loadStoreRow(this.graphRunsFile(), runId);
+      if (!isRecord(stored)) return false;
+      if (stored.environmentId !== undefined) {
+        throw new GraphStorageError(
+          "invalid-run",
+          "A run with an environment leaves with its environment",
+        );
+      }
+      if (
+        typeof stored.status !== "string" ||
+        !(GRAPH_RUN_TERMINAL_STATUSES as readonly string[]).includes(stored.status)
+      ) {
+        throw new GraphStorageError("invalid-run", "Only a finished run can be removed");
+      }
+      const rows = this.context.loadStoreRowsByOwner<unknown>(this.graphArtifactsFile(), runId);
+      this.context.database.transaction(() => {
+        for (const row of rows) {
+          if (!isRecord(row) || typeof row.id !== "string") continue;
+          this.context.updateStoreRow<void>(
+            this.graphArtifactsFile(),
+            artifactKey(runId, row.id),
+            () => ({ result: undefined, delete: true }),
+          );
+        }
+        this.context.updateStoreRow<void>(this.graphRunsFile(), runId, () => ({
+          result: undefined,
+          delete: true,
+        }));
+      });
+      this.context.changes.announce(
+        "graph-run",
+        runId,
+        typeof stored.projectId === "string" ? stored.projectId : undefined,
+        undefined,
+        true,
+      );
+      return true;
+    });
+    // Then its activation transcripts (item 211), best-effort as for environment deletion.
+    if (removed) {
+      await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
+    }
+    return removed;
+  }
+
+  /**
    * Environment deletion: removes the environment's runs and every artifact
    * row of those runs. Attributed by the stored environment field alone, so
    * a record this build cannot otherwise read still leaves with its
@@ -547,58 +602,6 @@ export class GraphRunsRepository {
     }
     return removed;
   }
-
-  /**
-   * Removes runs that ended before they had an environment (item 214): a
-   * failed provisioning leaves a run no environment deletion will ever
-   * remove. Each listed run is removed, with its artifact rows, only when
-   * its stored record has no environment and a terminal status; anything
-   * else is left alone. Returns the removed run ids.
-   */
-  async deleteEnvironmentlessGraphRuns(runIds: readonly string[]): Promise<string[]> {
-    const removed = await this.enqueueGraphRunMutation(async () => {
-      const done: string[] = [];
-      for (const runId of runIds) {
-        const stored = this.context.loadStoreRow(this.graphRunsFile(), runId);
-        if (
-          !isRecord(stored) ||
-          stored.environmentId !== undefined ||
-          typeof stored.status !== "string" ||
-          !isGraphRunTerminal(stored.status as GraphRun["status"])
-        ) {
-          continue;
-        }
-        const rows = this.context.loadStoreRowsByOwner<unknown>(this.graphArtifactsFile(), runId);
-        this.context.database.transaction(() => {
-          for (const row of rows) {
-            if (!isRecord(row)) continue;
-            const key = typeof row.id === "string" ? artifactKey(runId, row.id) : runId;
-            this.context.updateStoreRow<void>(this.graphArtifactsFile(), key, () => ({
-              result: undefined,
-              delete: true,
-            }));
-          }
-          this.context.updateStoreRow<void>(this.graphRunsFile(), runId, () => ({
-            result: undefined,
-            delete: true,
-          }));
-        });
-        this.context.changes.announce(
-          "graph-run",
-          runId,
-          typeof stored.projectId === "string" ? stored.projectId : undefined,
-          undefined,
-          true,
-        );
-        done.push(runId);
-      }
-      return done;
-    });
-    for (const runId of removed) {
-      await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
-    }
-    return removed;
-  }
 }
 
 /** The graph-run entry points code outside the storage files calls. */
@@ -616,5 +619,5 @@ export type GraphRunsStorage = Pick<
   | "graphArtifactUsage"
   | "supersedeGraphArtifacts"
   | "deleteGraphRunsByEnvironment"
-  | "deleteEnvironmentlessGraphRuns"
+  | "deleteEnvironmentlessGraphRun"
 >;

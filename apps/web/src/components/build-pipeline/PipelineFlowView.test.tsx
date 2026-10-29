@@ -116,7 +116,7 @@ describe("pipeline inspector controls", () => {
     expect(report.textContent).toContain("and 2 more");
     // A Verify node has no Address report of its own.
     selectNode("Verify");
-    expect(screen.queryByTestId("pipeline-address-report")).toBeNull();
+    expect(screen.queryByTestId("pipeline-address-report") === null).toBe(true);
   });
 
   test("skipped agent sessions show Skipped after snapshot reload", () => {

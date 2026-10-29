@@ -369,7 +369,8 @@ describe("GraphRunTab actions", () => {
       { nodeId: "plan" },
       { inputs: { code: "artifact-target" }, outputs: { code: "artifact-code" } },
     );
-    stored = reviewRun([planDone, act({ nodeId: "package" })]);
+    // Code rewinds need a quiet workspace: the run is paused (item 210).
+    stored = reviewRun([planDone, act({ nodeId: "package" })], { status: "paused" });
     renderTab({ rewindBackend: rewind });
     await screen.findByTestId("graph-run-title");
     fireEvent.click(faceOf("plan"));
@@ -448,7 +449,7 @@ describe("GraphRunTab rehydration", () => {
       expect(screen.getByTestId("graph-run-status").textContent).toBe("Complete"),
     );
     expect(faceOf("plan").getAttribute("data-flow-state")).toBe("complete");
-    expect(screen.queryByRole("button", { name: "Cancel run…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel run…" }) === null).toBe(true);
   });
 
   test("a deleted run says so", async () => {

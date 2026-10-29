@@ -104,7 +104,7 @@ describe("GraphLibraryList", () => {
       ["retired", "Retired engine"],
     ]);
     // Without a project there is no project section.
-    expect(screen.queryByRole("region", { name: "Project templates" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Project templates" }) === null).toBe(true);
   });
 
   test("shows trust state with approve and revoke for project templates", () => {

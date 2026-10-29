@@ -36,6 +36,7 @@ import {
   type GraphRunTemplateRef,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
+import type { GraphMockRunOptions } from "@orkestrator/protocol/graphs/mock";
 import { GraphTypeLibrary, validateGraphArtifactValue } from "@orkestrator/protocol/graphs/types";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphStorageError, isGraphStorageError } from "./graph-run-errors.js";
@@ -46,6 +47,7 @@ import {
   GRAPH_RUN_PROGRESS_MS,
   GraphRunMemory,
   GraphRunPassFencedError,
+  graphRunLockedWorkspace,
   runGraphRunPass,
   type GraphRunPassDependencies,
   type GraphRunPassOptions,
@@ -122,7 +124,10 @@ export interface GraphRunLaunch {
   /** Defaults to a fresh UUID. */
   id?: string;
   projectId: string;
-  /** Absent: the run provisions its environment first (D7, `provisioning`). */
+  /**
+   * Absent: the run provisions its environment first (D7, `provisioning`),
+   * except a mock run, which never provisions one and runs without it.
+   */
   environmentId?: string;
   template: GraphRunTemplateRef;
   /** A plan compiled for this launch; frozen into the run. */
@@ -136,6 +141,8 @@ export interface GraphRunLaunch {
   mock?: boolean;
   /** Who launched it and how (item 214): ids only. */
   launch?: GraphRunLaunchInfo;
+  /** Mock runs only: the effective pins and step delay, frozen on the run. */
+  mockOptions?: GraphMockRunOptions;
 }
 
 export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
@@ -291,7 +298,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       this.resultKeys.note(run);
       // Seed only runs no pass has touched: a pass's own view is newer.
       if (!this.workspaceSeeded && !this.passed.has(run.id)) {
-        this.workspaceLocks.set(run.id, run.environmentId, graphRunWorkspaceHold(run));
+        this.workspaceLocks.set(run.id, graphRunLockedWorkspace(run), graphRunWorkspaceHold(run));
       }
     });
     this.workspaceSeeded = true;
@@ -427,9 +434,13 @@ export class GraphRunService implements KeyedWorkflowOwner {
         params[parameter.key] = parameter.default;
       }
     }
+    if (launch.mockOptions !== undefined && !launch.mock) {
+      throw launchError("Only a mock run takes mock options");
+    }
     const id = launch.id ?? randomUUID();
     const at = this.passDeps.clock().toISOString();
-    const running = launch.environmentId !== undefined;
+    // A mock run never provisions an environment: without one it runs at once.
+    const running = launch.environmentId !== undefined || launch.mock === true;
     const draft: GraphRun = {
       format: GRAPH_RUN_FORMAT,
       formatVersion: GRAPH_RUN_FORMAT_VERSION,
@@ -442,6 +453,9 @@ export class GraphRunService implements KeyedWorkflowOwner {
       ...(launch.launch ? { launch: structuredClone(launch.launch) } : {}),
       status: running ? "running" : "provisioning",
       mock: launch.mock ?? false,
+      ...(launch.mock && launch.mockOptions
+        ? { mockOptions: structuredClone(launch.mockOptions) }
+        : {}),
       activations: [],
       rewinds: [],
       loopIterations: Object.fromEntries(plan.loops.map((loop) => [loop.id, 1])),

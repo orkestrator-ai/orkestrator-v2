@@ -77,6 +77,7 @@ import type {
   GraphActivationBaseline,
   GraphActivationSession,
   GraphGuardResult,
+  GraphHumanWait,
   GraphModelBinding,
   GraphRun,
   NodeActivation,
@@ -124,6 +125,8 @@ export interface GraphActivationFacts {
   baseline?: GraphActivationBaseline;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
+  /** Human nodes (item 208): the wait the activation keeps until a person answers. */
+  human?: GraphHumanWait;
   /** Usage since the previous report; added to the run's usage. */
   usage?: { tokens: number; cacheReadTokens?: number };
   /**
@@ -165,7 +168,10 @@ export interface GraphExecutorContext {
   readonly activation: Readonly<NodeActivation>;
   /** Agent nodes: the model this activation runs on (its branch's panel member or lens role). */
   readonly binding?: GraphModelBinding;
-  /** The run's environment. Every admitted activation has one. */
+  /**
+   * The run's environment. Every admitted activation of a live run has one;
+   * an environment-less mock run (item 213) passes "" to its mock executors.
+   */
   readonly environmentId: string;
   /** Reads (with `verify`/`requireVerified`) and stores this run's artifacts. */
   readonly artifacts: GraphArtifactStore;

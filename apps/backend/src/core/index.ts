@@ -183,6 +183,8 @@ import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
+import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
+import { GraphRunAttention } from "./graph-run-attention.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
 import { launchSettingsTiers } from "./control-shared-actions.js";
@@ -197,6 +199,10 @@ import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
+import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { GraphDescribeService } from "./graph-describe-service.js";
+import { GraphMockRuns } from "./graph-mock-launch.js";
+import { installGraphMockExecutors } from "./graph-mock-provider.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -223,6 +229,12 @@ export class OrkestratorBackend {
   private readonly graphAgents: GraphAgentWiring;
   /** Launches saved templates from every surface (item 214). */
   private readonly graphLaunches: GraphRunLaunchService;
+  private readonly graphDescribe: GraphDescribeService;
+  private readonly graphDescribeProviders: GraphAgentProviders;
+  /** Mock run launches and their retention (item 213). */
+  private readonly graphMock: GraphMockRuns;
+  /** Waiting graph runs in the sidebar: activity and attention (item 208). */
+  private readonly graphRunAttention: GraphRunAttention;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1166,6 +1178,13 @@ export class OrkestratorBackend {
     // Gates and merges are deterministic (item 206); mock runs use them too.
     this.graphRuns.executors.register(createGraphGateExecutor());
     this.graphRuns.executors.register(createGraphMergeExecutor());
+    // Human nodes (item 208): a person approves, edits or chooses; mock runs use it too.
+    this.graphRuns.executors.register(createGraphHumanExecutor());
+    context.graphHumanAnswers = new GraphHumanAnswers({
+      runs: this.graphRuns,
+      artifacts: graphArtifacts,
+    });
+    this.graphRunAttention = new GraphRunAttention(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
@@ -1188,6 +1207,16 @@ export class OrkestratorBackend {
       owner: `backend-${randomUUID()}`,
     });
     this.graphRuns.executors.register(this.graphSystemExecutor);
+    // Mock runs (item 213): mock agent, system and human executors; no
+    // sessions, no side effects. Gates and merges above serve them too.
+    const graphMockOwner = `backend-${randomUUID()}`;
+    installGraphMockExecutors(this.graphRuns.executors, { storage, owner: graphMockOwner });
+    this.graphMock = new GraphMockRuns({
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      storage,
+    });
+    context.graphMock = this.graphMock;
     // Agent nodes run on the shared agent branch runner (item 204).
     this.graphAgents = installGraphAgentExecutor({
       graphRuns: this.graphRuns,
@@ -1245,6 +1274,24 @@ export class OrkestratorBackend {
       host: () => defaultCoordinatorHostCapabilities(),
     });
     context.graphLaunches = this.graphLaunches;
+    // "Describe a graph" (item 215): backend-owned designer agent jobs.
+    this.graphDescribeProviders = new GraphAgentProviders({
+      connection: (environment, agent) =>
+        graphAgentBridgeConnection(invokeCommand, agent, environment),
+      dependencies: { workflowResults: this.workflowResults },
+    });
+    this.graphDescribe = new GraphDescribeService({
+      storage,
+      providers: this.graphDescribeProviders,
+      workflowResults: this.workflowResults,
+      ...(resolveAgentToolConnection
+        ? { agentTools: { workflowResultConnection: resolveAgentToolConnection } }
+        : {}),
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      rollout: this.workflowResultRollout,
+      ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
+    });
+    context.graphDescribe = this.graphDescribe;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -1751,6 +1798,19 @@ export class OrkestratorBackend {
       console.warn(
         "[backend] Failed to sweep graph runs without an environment:",
         error instanceof Error ? error.name : "error",
+      );
+    });
+    await this.graphDescribe.init().catch((error) => {
+      console.warn("[backend] Failed to restore graph describe jobs:", error);
+    });
+    // Environment-less mock runs of deleted projects (item 213); off the startup path.
+    void this.graphMock.sweepOrphans().catch(() => undefined);
+
+    // Waiting runs light the sidebar again after a restart; runs in the background.
+    void this.graphRunAttention.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore graph run attention:",
+        error instanceof Error ? error.message : error,
       );
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
@@ -2388,6 +2448,7 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.graphRunAttention.stop();
     this.agentHumanPrompts.stop();
     // Non-recursive project-template watches: closing them never blocks.
     this.graphTemplates.shutdown();
@@ -2436,8 +2497,15 @@ export class OrkestratorBackend {
         try {
           await this.graphRuns.shutdown();
           this.graphAgents.dispose();
+          this.graphMock.dispose();
         } catch (error) {
           console.warn("[backend] Failed to drain graph runs:", error);
+        }
+        try {
+          await this.graphDescribe.shutdown();
+          this.graphDescribeProviders.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain graph describe jobs:", error);
         }
         try {
           await this.featurePlanning.shutdown();

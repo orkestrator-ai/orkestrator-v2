@@ -402,7 +402,7 @@ describe("idempotency", () => {
         graphRuns: {
           getGraphRun: async (id) => runs.get(id) ?? null,
           listAllGraphRuns: async () => [...runs.values()],
-          deleteEnvironmentlessGraphRuns: async () => [],
+          deleteEnvironmentlessGraphRun: async () => false,
         },
       },
       templates: fixture.service,
@@ -463,7 +463,9 @@ describe("runs that ended without an environment", () => {
       finishedAt: undefined,
     });
     const withEnvironment = make("with-env", 30, { environmentId: "env-1" });
-    for (const run of [old, ...recent, running, withEnvironment]) {
+    // Mock runs keep their own retention (item 213).
+    const mock = make("old-mock", 30, { mock: true });
+    for (const run of [old, ...recent, running, withEnvironment, mock]) {
       await fixture.storage.graphRuns.createGraphRun(run);
     }
     const removed = await service().sweep();
@@ -474,5 +476,6 @@ describe("runs that ended without an environment", () => {
     expect(left).toContain("recent-19");
     expect(left).toContain("still-provisioning");
     expect(left).toContain("with-env");
+    expect(left).toContain("old-mock");
   });
 });

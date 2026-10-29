@@ -31,7 +31,7 @@ import {
   checkPresent,
   parseGraphTypeRef,
 } from "./grammar.js";
-import { checkGraphPredicate } from "./predicates.js";
+import { checkGraphPredicate } from "./predicate-shape.js";
 import {
   GRAPH_CAPABILITIES,
   GRAPH_CAPABILITY_PROFILES,

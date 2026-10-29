@@ -43,7 +43,7 @@ import {
   checkPresent,
   graphUtf8Bytes,
 } from "./grammar.js";
-import { checkGraphPredicate } from "./predicates.js";
+import { checkGraphPredicate } from "./predicate-shape.js";
 import { checkGraphEndpoint, checkGraphNode, checkRequiredEnum } from "./template-nodes.js";
 import {
   GRAPH_ACKNOWLEDGEMENT_KINDS,
@@ -61,7 +61,7 @@ import {
 
 export * from "./template-model.js";
 export type { ArtifactTypeDef } from "./artifact-type-def.js";
-export type { GraphPredicate } from "./predicates.js";
+export type { GraphPredicate } from "./predicate-shape.js";
 
 /** Field errors reported per validation; the rest are counted in `omittedErrors`. */
 export const GRAPH_TEMPLATE_MAX_ERRORS = 50;

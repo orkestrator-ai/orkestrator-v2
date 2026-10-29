@@ -10,7 +10,7 @@
 import type { ActionDefaultKey } from "../action-defaults.js";
 import { NATIVE_AGENT_CAPABILITIES } from "../native-agent.js";
 import type { ArtifactTypeDef } from "./artifact-type-def.js";
-import type { GraphPredicate } from "./predicates.js";
+import type { GraphPredicate } from "./predicate-shape.js";
 
 export const GRAPH_TEMPLATE_FORMAT = "orkestrator.graph";
 export const GRAPH_TEMPLATE_FORMAT_VERSION = 1;

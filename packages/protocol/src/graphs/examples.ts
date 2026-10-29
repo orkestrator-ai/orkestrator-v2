@@ -9,7 +9,7 @@
  * and the designer renders them (110, 212). Each accessor returns a fresh
  * copy, so a caller may mutate what it gets.
  */
-import type { GraphPredicate } from "./predicates.js";
+import type { GraphPredicate } from "./predicate-shape.js";
 import type {
   GraphEdgeSource,
   GraphEdgeSpec,

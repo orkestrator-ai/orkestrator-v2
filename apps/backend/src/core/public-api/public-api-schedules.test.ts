@@ -60,11 +60,17 @@ async function enableMessaging(harness: PublicApiHarness): Promise<void> {
   } as typeof config.global);
 }
 
-function attachScheduler(
+async function enableScheduling(harness: PublicApiHarness): Promise<void> {
+  const config = await harness.storage.loadConfig();
+  await harness.storage.updateGlobalConfig({ ...config.global, experimentalScheduling: true });
+}
+
+async function attachScheduler(
   harness: PublicApiHarness,
   clock: { now: number },
   agentTools?: AgentToolsServer,
 ) {
+  await enableScheduling(harness);
   const handlers = publicActionHandlers();
   const policies = new Map<
     string,
@@ -138,7 +144,7 @@ describe("a schedule fires each action kind", () => {
     const { harness, service: agents, stub } = await setup();
     await enableMessaging(harness);
     const clock = { now: Date.now() };
-    const scheduler = attachScheduler(harness, clock);
+    const scheduler = await attachScheduler(harness, clock);
     const session = await startIdleSession(harness, agents, stub, "mail-target");
     const created = await harness.call<{ scheduleId: string; nextFireAt: string }>(
       "schedule.create",
@@ -177,7 +183,7 @@ describe("a schedule fires each action kind", () => {
   test("prompt to a tab: waits out a busy session, then sends exactly once", async () => {
     const { harness, service: agents, stub } = await setup();
     const clock = { now: Date.now() };
-    const scheduler = attachScheduler(harness, clock);
+    const scheduler = await attachScheduler(harness, clock);
     const session = await startIdleSession(harness, agents, stub, "prompt-target");
     const created = await harness.call<{ scheduleId: string }>(
       "schedule.create",
@@ -215,7 +221,7 @@ describe("a schedule fires each action kind", () => {
   test("environment launch: resolves the base branch's newest commit when it fires", async () => {
     const { harness, stub } = await setup();
     const clock = { now: Date.now() };
-    const scheduler = attachScheduler(harness, clock);
+    const scheduler = await attachScheduler(harness, clock);
     const repository = await harness.createRepository("scheduled-launch");
     const added = await harness.call<{ project: { id: string } }>(
       "project.add",
@@ -268,7 +274,7 @@ describe("schedule.* public actions", () => {
   test("list, get, pause, resume, run and delete; credentials see only their own", async () => {
     const { harness } = await setup();
     const clock = { now: Date.now() };
-    const scheduler = attachScheduler(harness, clock);
+    const scheduler = await attachScheduler(harness, clock);
     scheduler.policies.set("codex-1", {
       id: "codex-1",
       profile: "full",
@@ -398,7 +404,7 @@ describe("schedule.* public actions", () => {
 
   test("refuses reads, schedule actions and invalid inputs before admission", async () => {
     const { harness } = await setup();
-    attachScheduler(harness, { now: Date.now() });
+    await attachScheduler(harness, { now: Date.now() });
     for (const action of [
       { kind: "action", action: "environment.list", input: {} },
       { kind: "action", action: "schedule.delete", input: { scheduleId: "sch_x" } },
@@ -424,6 +430,25 @@ describe("schedule.* public actions", () => {
     );
     expect(!twoTimes.ok && twoTimes.error.code).toBe("invalid-input");
   });
+
+  test("refuses every schedule action while experimental scheduling is off", async () => {
+    const { harness } = await setup();
+    await attachScheduler(harness, { now: Date.now() });
+    const config = await harness.storage.loadConfig();
+    await harness.storage.updateGlobalConfig({ ...config.global, experimentalScheduling: false });
+    const listed = await harness.call("schedule.list", {});
+    expect(!listed.ok && listed.error.code).toBe("capability-unavailable");
+    const created = await harness.call(
+      "schedule.create",
+      { at: "+1h", action: { kind: "action", action: "ticket.comment", input: {} } },
+      { requestId: "while-off" },
+    );
+    expect(!created.ok && created.error.code).toBe("capability-unavailable");
+    expect(created.receipt).toBeUndefined();
+    await expect(harness.commands.get("list_scheduled_jobs")!({}, harness.context)).rejects.toThrow(
+      "Scheduling is experimental",
+    );
+  });
 });
 
 describe("agent schedules", () => {
@@ -432,7 +457,7 @@ describe("agent schedules", () => {
     await enableMessaging(harness);
     const agentTools = new AgentToolsServer(harness.storage);
     const clock = { now: Date.now() };
-    const scheduler = attachScheduler(harness, clock, agentTools);
+    const scheduler = await attachScheduler(harness, clock, agentTools);
     const sender = await startIdleSession(harness, agents, stub, "agent-sender");
     const recipient = await startIdleSession(harness, agents, stub, "agent-recipient");
     await harness.storage.synchronizeAgentMailboxes();
@@ -525,7 +550,7 @@ function interruptSettlement(harness: PublicApiHarness) {
 test("public launch replay after admission uses its original commit after the branch advances", async () => {
   const { harness, stub } = await setup();
   const clock = { now: Date.now() };
-  const scheduler = attachScheduler(harness, clock);
+  const scheduler = await attachScheduler(harness, clock);
   const repository = await harness.createRepository("scheduled-replay");
   const originalCommit = await headCommit(repository.projectPath);
   const added = await harness.call<{ project: { id: string } }>(
@@ -586,7 +611,7 @@ test("environment-wide schedule credentials select a caller mailbox and tab cred
   const { harness, service: agents, stub, projectId } = await setup();
   await enableMessaging(harness);
   const tools = new AgentToolsServer(harness.storage);
-  const scheduler = attachScheduler(harness, { now: Date.now() }, tools);
+  const scheduler = await attachScheduler(harness, { now: Date.now() }, tools);
   const a = await startIdleSession(harness, agents, stub, "claim-a");
   const b = await startIdleSession(harness, agents, stub, "claim-b");
   await harness.storage.synchronizeAgentMailboxes();
@@ -638,7 +663,7 @@ test("scheduled agent tickets and comments replay once after committed effects a
   await enableMessaging(harness);
   const tools = new AgentToolsServer(harness.storage);
   const clock = { now: Date.now() };
-  const scheduler = attachScheduler(harness, clock, tools);
+  const scheduler = await attachScheduler(harness, clock, tools);
   const sender = await startIdleSession(harness, agents, stub, "ticket-owner");
   await harness.storage.synchronizeAgentMailboxes();
   const owner = { kind: "agent", environmentId: "env-1", projectId, tabId: sender.tabId } as const;
@@ -689,7 +714,7 @@ test("agent schedules survive credential teardown but lose authority when their 
   await enableMessaging(harness);
   const tools = new AgentToolsServer(harness.storage);
   const clock = { now: Date.now() };
-  const scheduler = attachScheduler(harness, clock, tools);
+  const scheduler = await attachScheduler(harness, clock, tools);
   const sender = await startIdleSession(harness, agents, stub, "teardown-owner");
   await harness.storage.synchronizeAgentMailboxes();
   const owner = { kind: "agent", environmentId: "env-1", projectId, tabId: sender.tabId } as const;

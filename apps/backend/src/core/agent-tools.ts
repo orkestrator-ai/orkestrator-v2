@@ -382,7 +382,8 @@ async function createAgentToolServer(
     );
     return server;
   }
-  const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
+  const globalConfig = (await storage.loadConfig()).global;
+  const messagingEnabled = globalConfig.agentMessaging?.enabled === true;
   const messagingScope = messagingEnabled ? scope : null;
   let messagingInstructions = "";
   // Only `initialize` and `server/discover` answer with the instructions, so
@@ -439,8 +440,9 @@ async function createAgentToolServer(
   if (messagingScope)
     registerAgentMessagingTools(server, storage, messagingScope, consumeRateLimit);
   // Every action an agent can schedule is mail, so the schedule tools come
-  // with messaging. They act as the caller's own mailbox tab.
-  if (messagingScope && schedules) {
+  // with messaging, and only while experimental scheduling is on. They act
+  // as the caller's own mailbox tab.
+  if (messagingScope && schedules && globalConfig.experimentalScheduling === true) {
     registerScheduleTools(server, "agent", () => agentScheduleBackend(storage, scope, schedules));
   }
   if (annotationTools) {

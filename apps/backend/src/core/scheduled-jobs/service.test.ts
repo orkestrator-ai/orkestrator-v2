@@ -394,6 +394,33 @@ describe("two backends sharing a data directory", () => {
   });
 });
 
+describe("experimental scheduling switch", () => {
+  test("nothing fires while scheduling is off; turning it on catches up within the window", async () => {
+    const dir = await dataDir();
+    const clock = { now: T0 };
+    const storage = new StorageService(dir);
+    await storage.init();
+    storages.push(storage);
+    const executor = new RecordingExecutor();
+    let enabled = false;
+    const service = new ScheduledJobService({
+      store: storage.scheduledJobStore(),
+      executor: executor as unknown as ScheduledJobExecutor,
+      now: () => clock.now,
+      enabled: async () => enabled,
+    });
+    const { job } = await service.create(OPERATOR, { at: "+1m", action: MAIL });
+    clock.now += 120_000;
+    await tick(service);
+    expect(executor.fired).toHaveLength(0);
+    expect(service.get(OPERATOR, job.id).state).toBe("active");
+
+    enabled = true;
+    await tick(service);
+    expect(executor.fired).toHaveLength(1);
+  });
+});
+
 describe("visibility and ownership", () => {
   test("owners see and manage only their own schedules; the operator manages all", async () => {
     const clock = { now: T0 };

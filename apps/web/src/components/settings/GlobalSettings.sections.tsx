@@ -315,6 +315,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setTerminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
+    experimentalScheduling,
+    setExperimentalScheduling,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -2269,7 +2271,24 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderExperimental = () => (
     <div className="max-w-2xl space-y-4">
-      <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Label htmlFor="experimental-scheduling">Scheduling</Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            Schedules run an action, a prompt to an agent tab or an environment launch at a set
+            time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
+            <code>orkestrator schedule</code> commands and the agents&apos; and coordinators&apos;
+            schedule tools. While it is off, saved schedules are kept but do not fire.
+          </p>
+        </div>
+        <Switch
+          id="experimental-scheduling"
+          checked={experimentalScheduling}
+          onCheckedChange={setExperimentalScheduling}
+          aria-label="Enable scheduling"
+        />
+      </div>
+      <div className="border-t border-border/60 pt-5">
         <h3 className="text-sm font-medium text-foreground">Codex Raw Event Logging</h3>
         <p className="text-xs text-muted-foreground mt-1">
           Captures the additional raw Codex bridge events used to validate transcript-derived

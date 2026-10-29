@@ -92,6 +92,12 @@ export interface ScheduledJobServiceOptions {
   executor: ScheduledJobExecutor;
   /** Whether this backend holds the single-writer lease and may fire. */
   isWriter?: () => boolean;
+  /**
+   * Whether scheduling is turned on (it is experimental). Read once per tick;
+   * while it is off nothing is claimed, so due fires wait and then catch up
+   * or are skipped under each schedule's catch-up window.
+   */
+  enabled?: () => boolean | Promise<boolean>;
   now?: () => number;
   defaultTimeZone?: () => string;
   /** Human label of an owner, for lists. */
@@ -111,6 +117,8 @@ export class ScheduledJobService {
   private stopping = false;
   private ticking: Promise<void> | null = null;
   private rerun = false;
+  /** The last tick's reading of `enabled`. */
+  private enabled = true;
   private readonly inFlight = new Map<string, Promise<void>>();
 
   constructor(private readonly options: ScheduledJobServiceOptions) {
@@ -162,6 +170,8 @@ export class ScheduledJobService {
   /** One pass: claim and start everything due. Exposed for tests. */
   async tick(): Promise<void> {
     if (!(this.options.isWriter?.() ?? true)) return;
+    this.enabled = (await this.options.enabled?.()) ?? true;
+    if (!this.enabled) return;
     const now = this.now();
     for (const job of this.options.store.list()) {
       if (this.inFlight.size >= MAX_CONCURRENT_FIRES) break;
@@ -196,7 +206,9 @@ export class ScheduledJobService {
     let delay = SAFETY_TICK_MS;
     const now = this.now();
     const canClaim =
-      (this.options.isWriter?.() ?? true) && this.inFlight.size < MAX_CONCURRENT_FIRES;
+      this.enabled &&
+      (this.options.isWriter?.() ?? true) &&
+      this.inFlight.size < MAX_CONCURRENT_FIRES;
     for (const job of canClaim ? this.options.store.list() : []) {
       if (this.inFlight.has(job.id)) continue;
       const attention = nextAttentionAt(job);

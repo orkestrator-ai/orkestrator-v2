@@ -207,6 +207,14 @@ export function SettingsPage({
   sectionRequest,
 }: SettingsPageProps) {
   const setConfig = useConfigStore((state) => state.setConfig);
+  const schedulingEnabled = useConfigStore(
+    (state) => state.config.global.experimentalScheduling === true,
+  );
+  // Scheduling is experimental: its section exists only while it is on.
+  const menuItems = useMemo(
+    () => (schedulingEnabled ? MENU_ITEMS : MENU_ITEMS.filter((item) => item.id !== "schedules")),
+    [schedulingEnabled],
+  );
   const isLoading = useConfigStore((state) => state.isLoading);
   const setLoading = useConfigStore((state) => state.setLoading);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
@@ -237,7 +245,7 @@ export function SettingsPage({
       open={open}
       onOpenChange={onOpenChange}
       title="Settings"
-      menuItems={MENU_ITEMS}
+      menuItems={menuItems}
       defaultSection={defaultSection}
       sectionRequest={sectionRequest}
       headerStart={
@@ -282,7 +290,7 @@ export function SettingsPage({
                 </div>
               ) : activeSection === "messaging" ? (
                 <MessagingSettings />
-              ) : activeSection === "schedules" ? (
+              ) : activeSection === "schedules" && schedulingEnabled ? (
                 <SchedulesSettings />
               ) : activeSection === "permissions" ? (
                 <PermissionsSettings />

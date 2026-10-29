@@ -170,3 +170,22 @@ test("locked command-node section saves independently loaded command config", as
   expect(writes.some((write) => write.owner === "leaf")).toBe(false);
   await act(async () => {});
 });
+
+test("the Schedules section is offered only while experimental scheduling is on", async () => {
+  const view = mount();
+  await directory("/leaf/projects");
+  expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
+  expect(screen.getAllByRole("button", { name: "Experimental" }).length).toBeGreaterThan(0);
+  view.unmount();
+
+  configs.leaf = {
+    ...configs.leaf!,
+    global: { ...configs.leaf!.global, experimentalScheduling: true },
+  };
+  useConfigStore.setState(initialConfig);
+  mount();
+  await directory("/leaf/projects");
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Schedules" }).length).toBeGreaterThan(0),
+  );
+});

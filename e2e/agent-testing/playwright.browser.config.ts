@@ -13,6 +13,7 @@ export default defineConfig({
     "agent-accounts.spec.ts",
     "permission-rules.spec.ts",
     "design-canvas.spec.ts",
+    "graph-designer.spec.ts",
     "design-container-export.spec.ts",
     "design-live.spec.ts",
     "design-resume-clients-live.spec.ts",

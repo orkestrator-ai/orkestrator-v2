@@ -4,6 +4,7 @@ import type {
   GitHubPullRequestRef,
   GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
+import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import {
   isNativeAgentTabData,
   type NativeAgentTabData as ProtocolNativeAgentTabData,
@@ -141,6 +142,15 @@ export interface MultiReviewTabData {
   isLocal?: boolean;
 }
 
+/**
+ * The Graphs designer tab ("Graphs", D17). Only the template shown is kept
+ * here; the library, the template and its compile result are re-read from
+ * the backend when the tab mounts.
+ */
+export interface GraphDesignerTabData {
+  selected?: GraphTemplateRef;
+}
+
 // Data for in-app GitHub pull request tabs
 export interface PullRequestTabData {
   ref: GitHubPullRequestRef;
@@ -254,6 +264,8 @@ export interface TabInfo {
   /** Data for pull request tabs */
   pullRequestData?: PullRequestTabData;
   designCanvasData?: { canvasId: string };
+  /** Data for the Graphs designer tab. */
+  graphDesignerData?: GraphDesignerTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

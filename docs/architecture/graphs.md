@@ -31,6 +31,72 @@ unless noted:
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
 | Designer (110) | `apps/web/src/components/graph-designer/` | The read-only Graphs designer tab (below). |
 
+## The Graphs designer (read-only, item 110)
+
+**Opening it.** The environment action bar's **Graphs** button (network icon)
+calls `createTab("graph-designer")`; an optional `graphTemplate` ref opens it
+on a template. There is one designer tab per environment: opening it again
+focuses it (`openGraphDesignerTab`, `components/graph-designer/graph-designer-open-tab.ts`).
+The tab chrome reads "Graphs N" (D17). The component is lazy-loaded from
+`PaneLeafContainer`, so React Flow and the compiler stay out of the main bundle.
+
+**State and rehydration.** The pane layout keeps only
+`TabInfo.graphDesignerData = { selected?: GraphTemplateRef }`
+(`pane-layout-restore.ts` restores a shape-checked ref, without importing the
+protocol library). Everything else is a backend snapshot held in
+`stores/graphDesignerStore.ts`: `libraries: Map<projectId, …>` (from
+`graph_templates_list`) and `tabs: Map<tabId, …>` (the template from
+`graph_template_get`, its compile result from `graph_template_compile` with
+`includePlan: true`, the canvas selection, a focus request counter and the JSON
+editor). The tab re-reads both on mount, on `graph-template` resource changes
+and on view safety checks; responses for a template the tab no longer shows
+are dropped (a per-tab request sequence).
+
+**Compiling.** A stored template is compiled by the backend, under the
+project's capability ceiling, enabled providers and probed host. A JSON draft
+is compiled in the browser with the same `compile()` (debounced 250 ms), with
+the ceiling from the library result and the enabled providers from settings;
+the host is the conservative default (no Claude command sandbox).
+
+**Panels** (`components/graph-designer/`):
+
+- `GraphLibraryList`: built-in, user ("Yours") and project sections, compile
+  counts, the engine a built-in runs on (a retired engine is marked), project
+  trust (`trusted`/`untrusted`/`changed`) with Approve (at the digest shown) and
+  Revoke, and the project directory's problems.
+- `GraphCanvas` and `GraphCanvasNodes`: React Flow, read-only
+  (`nodesDraggable`/`nodesConnectable` false, `elementsSelectable` false with
+  selection controlled by the store, `disableKeyboardA11y` with our own keys).
+  The projection is `buildGraphCanvasModel({template, plan, diagnostics})`
+  (`graph-designer-model.ts`): faces with the title, `{role} · {profile}`, an
+  enforcement-floor badge and a replication badge; handles `in:<port>`,
+  `out:<port>` and `outlet:<name>` coloured by `graphTypeFamily`; run inputs and
+  outputs as `$inputs`/`$outputs` pseudo-nodes; each loop a `graph-loop` group
+  ("↻ ≤ N") whose members are children; carries as dashed edges. Positions come
+  from `template.layout` when it places every node, else from
+  `layoutGraphTemplate` (longest-path layers, one band of rows per loop). Nodes
+  and edges with errors are marked (`data-graph-diagnostics="error"`). One tab
+  stop (the selected node, else the first); arrows and Home/End move in the
+  plan's topological order; Enter or Space selects.
+- `GraphInspector`: the template summary, or the selected node (kind, role,
+  profile, prompt, ports with render, collect and delivered types, execution
+  settings, compiled capabilities and the per-provider enforcement matrix from
+  `agentPolicyEnforcementMatrix`), edge (source and delivered types, iterations,
+  transforms) or loop (members, entry, `until`, carries).
+- `GraphCompilePanel`: counts, the cost estimate (best–worst agent sessions and
+  activations, peak parallelism) and every diagnostic; one that names a node,
+  edge or loop selects it and brings it into view.
+- `GraphImportDialog` (paste or file → `graph_template_import`, with the
+  guard's errors on refusal), Export (download) and Copy JSON
+  (`graph_template_export`, canonical text), Duplicate (`graph_template_duplicate`;
+  a project template passes the digest shown), and `GraphJsonEditor` for user
+  templates (Save is `graph_template_save` with compare-and-swap on the revision
+  the edit started from; a lost race keeps the text and offers "Reload latest").
+
+**Tests.** Component and store tests next to the code (happy-dom with the
+React Flow stubs in `react-flow.test-support.ts`); the real-stack path is
+`e2e/agent-testing/graph-designer.spec.ts` in the browser suite.
+
 ## Canvas library decision (spike, 2026-10-29)
 
 **Decision:** the Graphs designer uses React Flow (`@xyflow/react`), pinned

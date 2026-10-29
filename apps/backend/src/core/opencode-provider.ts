@@ -243,6 +243,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       this.researchTools,
       dependencies.ensureCoordinatorResearch,
+      connection.directory,
     );
     this.reviewPermissions = new OpenCodeReviewSessionPermissions(
       this.client,
@@ -250,6 +251,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicy.remember(sessionId, policy),
       this.researchTools,
+      (policy) => this.sessionPolicy.configuredMcpServers(policy),
     );
     this.workflowResults = new OpenCodeWorkflowResultBroker(
       this.client,
@@ -571,7 +573,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.lifecycle.rememberExistingSession(created.sessionId);
         this.registerSession(created.sessionId, options.interaction);
         if (created.policy) {
-          this.sessionPolicy.remember(created.sessionId, created.policy);
+          this.sessionPolicy.remember(
+            created.sessionId,
+            created.policy,
+            created.configuredMcpServers,
+          );
         }
         return created.sessionId;
       } catch (error) {

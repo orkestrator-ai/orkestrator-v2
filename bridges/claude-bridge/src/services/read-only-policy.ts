@@ -8,6 +8,7 @@ import {
   nativeAgentDeniedCapabilities,
   nativeAgentMcpServer,
   nativeAgentPolicyDeniesWebSearch,
+  nativeAgentUserMcpGrant,
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -493,6 +494,8 @@ export function claudeReadOnlyAllowedTools(options: {
   policy?: NativeAgentExecutionPolicy;
   /** Remote research servers the launcher named and the session loaded. */
   researchMcpServerNames?: readonly string[];
+  /** User servers a graph node was granted and the session loaded (item 404). */
+  grantedMcpServerNames?: readonly string[];
   /**
    * The coordinator's mirrored skills (`coordinator-skills.ts`), allowed by
    * exact name. Loading one only adds its text to the conversation: the
@@ -507,6 +510,7 @@ export function claudeReadOnlyAllowedTools(options: {
     ...(options.policy && !nativeAgentPolicyDeniesWebSearch(options.policy) ? ["WebSearch"] : []),
     ...(options.agentMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
     ...(options.researchMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
+    ...(options.grantedMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
   ];
 }
 
@@ -744,6 +748,9 @@ export function createCoordinatorReadOnlyHook(
   const allowedMcpPrefixes = [
     claudeMcpToolPrefix("orkestrator"),
     ...researchMcpServerNames.map(claudeMcpToolPrefix),
+    // A graph node's granted user servers (item 404). The coordinator's own
+    // policy never carries a grant.
+    ...(nativeAgentUserMcpGrant(policy) ?? []).map(claudeMcpToolPrefix),
   ];
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};

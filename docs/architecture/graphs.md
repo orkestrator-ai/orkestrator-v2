@@ -32,6 +32,7 @@ unless noted:
 | Sharing and review (405) | `sharing.ts`; backend `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graph-sharing.ts`; web `lib/backend/graph-template-sharing.ts`, designer `GraphShareDialogs.tsx`, `GraphTemplateReviewPanel.tsx` | Share bundles (`orkestrator.graph-bundle` v1: the template with its custom types, `graphTemplateDigest`, a whole-content digest, optional Ed25519 signature by the installation's key). A tampered bundle is refused; anything else imports as a user template only after the user confirms its digest, shown with a capability summary. Untrusted and changed project templates are reviewed with that summary and a diff against the last approved copy, then approved or rejected. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
 | Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
+| Per-node user MCP servers (404) | `native-agent-capabilities.ts` (`userMcpServers`, `NATIVE_AGENT_USER_MCP_SELECTION`), `capability-profiles.ts`; each bridge's MCP loader; backend `opencode-user-mcp.ts`; designer `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` | A node gets none of the user's own MCP servers unless `mcp:<server>` grants one; each provider loads exactly the granted ones where it can (below). |
 
 | Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
@@ -86,6 +87,51 @@ detected by a guard, and the activation records which (plan P2.9, D4, D12).
   `guards` (`graphActivationEnforcementView` labels them).
 
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts`; backend `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `graph-describe` store; web `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` | A designer agent drafts a template from the user's description; the `graph-template` result kind checks it with the guard and the compiler; the draft opens unsaved (below). |
+
+## Per-node user MCP servers (item 404)
+
+A graph node gets **none** of the user's own MCP servers unless it is granted
+them: `mcp:<server>` in a node's `allow` grants that server for the node's
+session, in `deny` (the node's, the project ceiling's or the environment's)
+removes it, and a denial wins. `compileGraphCapabilities` puts the result on
+every compiled policy as `capabilityPolicy.userMcpServers` (sorted, `[]` for
+none; `CompiledGraphCapabilities.mcpServers` is the same list). The field only
+**selects** among the servers the user configured in each provider's own files
+(the Settings "MCP servers" section); it never carries a definition, so a
+template, including a project template, can name a server but cannot add one
+or change its command, URL, environment or headers. Reserved Orkestrator
+servers are not user servers and are never filtered. Nothing new is logged:
+names only.
+
+How each provider loads exactly the selection (`NATIVE_AGENT_USER_MCP_SELECTION`):
+
+| Provider | Mechanism | Grant delivered on | MCP axis |
+| --- | --- | --- | --- |
+| Claude | inline `mcpServers` filtered to the grant plus `strictMcpConfig: true`, so the CLI reads no MCP file itself and no plugin server loads; granted tools are approved up front unless the policy asks, and a read-only turn's hook admits them | ordinary and read-only turns | provider-configured |
+| Codex | `config/read` lists the effective `mcp_servers`; every other configured server gets `mcp_servers.<name>.enabled = false` on `thread/start`/`resume`/`fork`, a granted one `default_tools_approval_mode = "approve"` unless the policy asks; an unreadable table or an undisableable name refuses the thread | ordinary and read-only turns | provider-configured |
+| Pi | the bridge's own MCP client starts only the granted servers; the read-only gate admits their tools by exact registered name | ordinary and read-only turns | enforced |
+| OpenCode | one shared `opencode serve` per directory: the session's permission rules deny `<server>_*` for every server `mcp.status` lists outside the grant (re-applied when the list changes; an unreadable list refuses the session). The other servers still run | ordinary and read-only turns | provider-configured |
+| Cursor | no settings source (each would load all its servers); the bridge reads `~/.cursor/mcp.json` (and `.cursor/mcp.json` with project resources) and passes the granted servers inline. Such a session also loses the user's and project's Cursor rules and plugins | ordinary turns only; read-only turns load only Orkestrator's server | provider-configured |
+| Grok | none: Grok loads every server in its own configuration and ACP `session/new` can only add | never | advisory |
+
+The MCP axis is secondary: it never lowers the node's tier. The compiler warns
+`capability-mcp-grant` once per enabled provider that cannot deliver a node's
+grant (Grok always, Cursor for a read-only node), and
+`capability-mcp-grant-read-only` when a read-only node is granted a server: an
+MCP server acts with the user's rights, outside the read-only boundary, and
+the workspace guard still checks the workspace afterwards. Bridges older than
+item 404 ignore `userMcpServers` and load every configured server. A Codex
+thread whose selection changes while app-server still has it loaded keeps the
+old configuration until `reloadThread`; graph sessions are new per activation.
+Saves in the MCP servers settings still report graph sessions like any other
+session (the apply plan does not know the selection), so a saved change to an
+ungranted server reads "pending" for one that will never load it.
+
+The designer's capabilities form lists the user-scope servers of every
+provider (`loadConfiguredUserMcpServers`, from the MCP management snapshot
+commands) with Off, Grant and Deny per server and the providers each is
+configured for; a name the node already uses but the user has not configured
+stays listed as "not configured".
 
 ## The Graphs designer (items 110 and 212)
 

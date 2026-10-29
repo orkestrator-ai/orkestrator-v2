@@ -1351,7 +1351,8 @@ defaults). `graph_run_launch` launches as `user`.
   (`graph-run-coordinator-status.ts`, observed by `coordinator-status-wakes.ts`)
   sends one notice per wait for a person and one when the run ends
   ([coordinator.md](coordinator.md)).
-- **Schedules**: a `graph` schedule action holds a launch request, validated
+- **Schedules** (behind the experimental scheduling switch,
+  `global.experimentalScheduling`): a `graph` schedule action holds a launch request, validated
   when the schedule is created, and fires as `schedule` with `requestId`
   `sched:<fireId>`, so a replayed fire finds its run
   ([scheduled-jobs.md](scheduled-jobs.md)). It is created and edited in

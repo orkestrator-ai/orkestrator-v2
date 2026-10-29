@@ -178,7 +178,8 @@ cannot launch.
   it. It cannot create or edit templates. It is told when a run waits for a
   person and when it ends.
 - **Schedules**: a schedule can launch a saved graph at a set time
-  ([scheduled-jobs.md](scheduled-jobs.md)). In Settings → Schedules choose
+  ([scheduled-jobs.md](scheduled-jobs.md)). Scheduling is experimental: turn
+  it on in Settings → Experimental → Scheduling first. In Settings → Schedules choose
   **New schedule**, then the action **Run a graph**: pick the project, a
   template that can be launched, where each run works and its inputs. Leave
   **Use the saved launch defaults** on to give each run the roles and

@@ -57,6 +57,13 @@ export const RESOURCE_KINDS = [
    * only, like `scheduled-job`.
    */
   "permission-rule",
+  /**
+   * A graph template changed (item 109): a user template was saved or
+   * deleted (id `user:<id>`), or a project's templates, trust records or
+   * capability ceiling changed (id `project:<projectId>`). Clients re-read
+   * `graph_templates_list`. A hint only.
+   */
+  "graph-template",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

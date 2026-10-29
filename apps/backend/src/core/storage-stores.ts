@@ -90,6 +90,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "environment-cleanup-sweeps": { kind: "document" },
   "workflow-results": { kind: "envelope", collections: ["entries"] },
   "workflow-result-tools": { kind: "document" },
+  "graph-templates": { kind: "envelope", collections: ["templates", "projects"] },
 };
 
 /**

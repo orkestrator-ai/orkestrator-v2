@@ -787,8 +787,7 @@ file passed in containers at low load earlier the same day.
    Still unproven: a real old bridge, a real older renderer bundle in a
    browser, and an older backend's sync-v1 polling.
 
-   **Which builds count (decided 2026-10-24 by
-   [0034](../cross-cutting/0034-mixed-version-compatibility.md), written in
+   **Which builds count (decided 2026-10-24 by todo 0034, written in
    [`version-compatibility.md`](../../architecture/version-compatibility.md)).**
    The window covers published releases from the floor, which is v2.21.0
    today and moves to the newest Stable release at least 60 days old. Pre-#827
@@ -961,7 +960,8 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
   the legacy-route retirement this matrix gates.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for credentials, profiles and batching with other provider runs.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md).
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)
+  (the support window, from todo 0034, retired on 2026-10-29).
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md),
   [`agent-testing.md`](../../development/agent-testing.md),
   [`testing-guide.md`](../../development/testing-guide.md).

@@ -33,7 +33,9 @@ session input (coordinator authority), `ensureSession` / `adoptSession` /
 (the persisted-steer dispatch it shares with the prompt queue), mail injection
 and turn outcomes, provider teardown and moves. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
-is tracked in, and the turn-outcome retry bookkeeping.
+is tracked in (kept on the service, not the launch reconciler, because the
+projection, interaction monitor, queue drains and launch scan all feed it and
+shutdown drains it), and the turn-outcome retry bookkeeping.
 
 ## Wiring
 
@@ -95,7 +97,8 @@ reads its state through the collaborator's `forTesting()` accessor
 `queueInternals` are shorthands). Tests never read collaborator state through
 fields on the service; the service-level `internals()` casts left in the suites
 reach only the service's own seams (`provider`, `bridgeConnection`,
-`createProviderSession`). New collaborator state gets an entry in that
+`createProviderSession`). `forTesting()` is visible to production code, but
+only tests may call it. New collaborator state gets an entry in that
 collaborator's `forTesting()`, not a field on the service.
 
 `tests/unit/inheritance-chains.test.ts` keeps the class from being split into

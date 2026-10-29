@@ -755,9 +755,9 @@ Code:
   rejecting (`review-fanout.ts` now rethrows; the case fails without it). The
   other two (a recovered `dispatching` request treated as sent without asking
   the provider, and a takeover mid-continuation counting the old restart
-  twice) change dispatch-recovery semantics, stay as `test.todo` cases, and
-  are filed as
-  [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md).
+  twice) changed dispatch-recovery semantics, stayed as `test.todo` cases, and
+  were fixed in todo 0112 (retired on 2026-10-29; see
+  [review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery)).
 - **Measurement (item 5).** `verifyValidationArtifacts` returns the artifacts
   and bytes it hashed; `verifyEnvironmentReviewPackage` returns them as
   `artifacts` and `artifactBytes`; Multi Review's and the Build Pipeline
@@ -1109,20 +1109,19 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
 
 ## Related
 
-- [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md):
-  the two dispatch-recovery bugs the interleaving tests found.
 - [0025-multi-review-panel-value.md](0025-multi-review-panel-value.md): consolidation
   quality, prefix-cache savings, presets and lenses.
 - [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md): owns
   `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the shared scheduling switches.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): support
+- [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window): support
   window for the transcript fallbacks.
 - [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md): CI gates.
 - Flake [0171](../../tests/flaky-tests/coordinator-and-multi-review/0171-multi-review-admission-benchmark-load.md),
   resolved on 2026-10-15: the slow-reviewer benchmark now asserts dispatch
   ordering instead of a wall-clock bound.
 - [`review-preparation.md`](../../architecture/review-preparation.md) covers
-  preparation, sealing and the fan-out budgets. No living doc covers fan-out
+  preparation, sealing, the fan-out budgets and dispatch recovery (the two
+  bugs the interleaving tests found). No living doc covers fan-out
   supervision or consolidation; the rationale above is its only home.
 
 ## Replaces

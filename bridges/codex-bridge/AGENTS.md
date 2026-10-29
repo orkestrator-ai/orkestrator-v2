@@ -228,7 +228,11 @@ rewords it in place through `account.loginKind`, keeping its occurrence.
   anything else, a thread from the Codex CLI included, shows the rollout's
   text. Changing `PLAN_MODE_PREAMBLE` needs the old wording stripped too, or
   every earlier plan-mode turn reloads with it. A fork copies its parent's
-  records before its first replay.
+  records before its first replay. Records are keyed by thread in the bridge
+  state directory, not by tab session, so a resume from any tab finds them.
+  Each matches on the turn id and a sha256 of the sent text, so a steer or
+  identical text in another turn never borrows it. Like rollouts, records
+  are never deleted.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - A thread whose policy denies `github.write` (every graph agent node) gets a

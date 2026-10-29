@@ -290,7 +290,9 @@ reviewer, the preparation turn and the Fix fail at once.
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
 - [0062-pi-chatgpt-login-without-saved-default.md](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md)
   (the same refused first model, for a Pi tab with no saved default at all)
-- [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md)
+- [credentials-and-models.md](../../development/credentials-and-models.md#default-model)
+  ("Default model"): the Pi default-model rule, moved there when todo 0054
+  (the agent-test profile's Pi default) was retired on 2026-10-29.
 
 ## Replaces
 

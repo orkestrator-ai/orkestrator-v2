@@ -334,8 +334,7 @@ rows.
    no supported bridge predates `POST /session/:id/close`. That is true now:
    the support window
    ([`version-compatibility.md`](../../architecture/version-compatibility.md),
-   decided in
-   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md))
+   decided in todo 0034, retired on 2026-10-29)
    covers published releases from v2.21.0, and every bridge in v2.21.0 has
    the close route (#853, 2026-09-26). Only unpublished source builds predate
    it. Before removing, read the `bridge-close.legacy-delete` and
@@ -366,7 +365,8 @@ Live items need provider credentials; batch them with
      with `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_PLATFORMS=cursor,pi` and no
      model override. By then the user had saved `openai/gpt-6.1-sol` as the
      host's Pi default, so the profile started on it
-     ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)). The
+     (todo 0054; see
+     [credentials-and-models.md](../../development/credentials-and-models.md#default-model)). The
      tab closed, stayed closed after a reload, resumed from the list and
      answered the codeword.
    - **Cursor failed** in the same run (1 failed, 1 passed, 2.1 minutes).
@@ -686,9 +686,10 @@ bounded-state occupancy in `/runtime-health`) are decided below.
   the interaction contract behind the dead-generation case.
 - [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md):
   truncated history views.
-- [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md):
-  the Pi model the live run in Qualification item 1 needed (Pi's case passed
-  on 2026-10-23).
+- [credentials-and-models.md](../../development/credentials-and-models.md#default-model):
+  how a Pi tab with no model picks its default, which the live run in
+  Qualification item 1 needed (todo 0054, retired on 2026-10-29; Pi's case
+  passed on 2026-10-23).
 
 ## Replaces
 

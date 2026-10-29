@@ -254,10 +254,11 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
   `verified`) exists in the contract and in validation (at most four per
   capture). `compileWebAnnotationBrief` (`web-annotation-brief.ts`) renders it
   as "candidate location only; verify in the repository". Nothing produces
-  hints, and the backend never sets `verified: true`. Since
-  [0725](0725-annotation-source-hint-client-verified.md), a capture declaring
-  `verified: true` is refused, and hints are stored and briefed with their
-  known fields only.
+  hints, and the backend never sets `verified: true`. Since todo 0725
+  (retired on 2026-10-29; see
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#capture)),
+  a capture declaring `verified: true` is refused, and hints are stored and
+  briefed with their known fields only.
 - iframe and shadow-root targets resolve to their host element with
   `scope: { kind: "unsupported", reason: … }`
   (`browser-preview-anchor-script.ts`). Region mode (`CaptureModePicker.tsx`)
@@ -292,8 +293,7 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
    - Needs a producer that identifies itself and its project root.
    - Before `verified: true`, the backend checks containment and existence.
      Reuse `web-annotation-source-checks.ts`, which checks local worktrees and
-     (since [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md))
-     container workspaces.
+     (since todo 0043) container workspaces.
    - Hints stay candidate locations; the agent still checks the repository.
    - Never depend on private React (or other framework) runtime internals.
 4. Open shadow roots and same-origin iframes.
@@ -360,14 +360,11 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 
 ## Related
 
-- [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md),
-  [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md).
+- [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md).
 - [0046-embedded-service-previews.md](0046-embedded-service-previews.md) (web iframe and
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)
   §"Client capability matrix" and §"Known limitations".
-- [0725-annotation-source-hint-client-verified.md](0725-annotation-source-hint-client-verified.md):
-  the client-declared `verified: true` gap found in task 4.
 - The design canvas renderer is a precedent for a bounded worker only. Its
   isolated authored HTML is not the user's authenticated application session
   ([design-canvas.md](../../architecture/design-canvas.md)).

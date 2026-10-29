@@ -3,7 +3,7 @@
 - **ID:** 0860
 - **Status:** open
 - **Date observed:** 2026-10-25
-- **Change under test:** Pi lists its templates and skills before its session attaches (`bridges/pi-bridge/src/command-preview.ts`), with an additive `attachPending` catalogue field through protocol, backend cache and renderer ([0069](../../../todo/cli-and-slash-commands/0069-pi-commands-before-first-turn.md)).
+- **Change under test:** Pi lists its templates and skills before its session attaches (`bridges/pi-bridge/src/command-preview.ts`), with an additive `attachPending` catalogue field through protocol, backend cache and renderer (todo 0069, retired on 2026-10-29; see [native-agent-commands.md](../../../architecture/native-agent-commands.md#provider-notes)).
 - **Original command:** `mise run test:logged -- --name full-test-0069 -- mise run test`, while a `dev:test` profile was building the container image (`--fixture-environments local,container`) on the same host.
 - **Aggregate result:** failed after 1089.5 s. One failure was the change's own new test (`command-preview.test.ts`, "matches what the attach path's loader lists"): it expected each fixture extension to be imported exactly once by the attach path, which held alone but not in the suite. The assertion now compares the set of loaded extensions, and the pi-bridge suite passes (620 pass). The remaining failures were five-second (or 30 s) timeouts in files the change does not touch:
   - `apps/backend/tests/codex-subagent-cards.test.ts`: `each child keeps one card, its transcript and status across a fresh backend and a cold restart` (31164.83 ms).

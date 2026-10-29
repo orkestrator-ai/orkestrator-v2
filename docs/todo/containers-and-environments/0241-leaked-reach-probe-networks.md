@@ -174,8 +174,7 @@ Made 2026-10-28 while implementing this file together with
 - **Chose:** nothing; left open for the user, as asked. The host's existing
   networks were not touched.
 
-Seen on omarchy-hp while qualifying
-[0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md).
+Seen on omarchy-hp while qualifying todo 0058 (retired on 2026-10-29).
 
 ## Current state
 

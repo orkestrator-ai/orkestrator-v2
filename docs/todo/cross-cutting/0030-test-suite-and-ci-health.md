@@ -718,8 +718,9 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md).
 - [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md):
   the product side of the CI sandbox failure.
-- [0731-ci-backend-test-spawns-real-codex.md](0731-ci-backend-test-spawns-real-codex.md):
-  the schedule tests that run the real Codex naming call, split out.
+- [Testing guide, "Agent CLIs on `PATH`"](../../development/testing-guide.md#agent-clis-on-path):
+  the stub rule for tests that would run the real Codex naming call, moved
+  there when todo 0731 was retired on 2026-10-29.
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test
@@ -736,7 +737,7 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   0724, 0785, 0786, 0790 (three), 0791, 0826 (three), 0947 (four) and 1011;
   the rest have two each. Renumbering means rewriting prose references across
   case files; decided not to renumber. Since
-  [0732](0732-duplicate-todo-numbers-unguarded.md),
+  todo 0732,
   `tests/unit/flaky-tests-index.test.ts` freezes exactly this set and fails on
   any new reuse, and a new case takes the next number after the highest in
   use.

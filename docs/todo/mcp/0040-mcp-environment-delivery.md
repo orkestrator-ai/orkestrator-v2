@@ -99,7 +99,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The README allows correcting existing items.
 
-**Investigation.** The Evidence "Observation, not investigated here" points at [0058](../containers-and-environments/0058-legacy-migration-root-symlink.md); that file now says "Fixed and qualified on 2026-10-26; every item is done" and its index row is Finished: Yes. The remote-run batching gap is described under task 3.
+**Investigation.** The Evidence "Observation, not investigated here" points at todo 0058; that file said "Fixed and qualified on 2026-10-26; every item is done" and was retired on 2026-10-29 (see [`container-lifecycle.md`](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild), "Preserving rebuild"). The remote-run batching gap is described under task 3.
 
 **Decisions.**
 
@@ -310,8 +310,7 @@ remote runs with
   went through a legacy-to-volume **migration** of a container that had
   staged Codex inputs, and the migration refused with `root-symlink` twice.
   C14, which stages no inputs, passes, and a fresh staged container has no
-  symlinks in its homes. This is tracked in
-  [0058-legacy-migration-root-symlink.md](../containers-and-environments/0058-legacy-migration-root-symlink.md).
+  symlinks in its homes. This was tracked in todo 0058.
 - UI (`apps/web/src/components/settings/mcp-servers/`):
   - `McpEnvironmentOverlay.tsx` shows each overlay state with its actions:
     reapply when pending; import or reapply when diverged; keep or use
@@ -519,8 +518,6 @@ None left; both earlier questions are answered in decisions 9 and 10.
   layout and staged inputs, and
   [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)
   for the allowlist and staged-input credentials.
-- [0058-legacy-migration-root-symlink.md](../containers-and-environments/0058-legacy-migration-root-symlink.md)
-  for the migration refusal seen while qualifying this file.
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
   ("Provider state", the provider-state inventory).
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Containers").

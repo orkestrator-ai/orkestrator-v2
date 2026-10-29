@@ -473,7 +473,8 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   (verbosity, live-region timing during nudge bursts, `aria-description` on
   frame titles, Preview-mode frames, rotor and browse-mode navigation). The
   400% zoom layout defect and the other findings were fixed on 2026-10-25 in
-  [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
+  todo 0054 (retired on 2026-10-29; see
+  [design-canvas.md](../../architecture/design-canvas.md#client)).
   Still not done on 2026-10-25: it needs a person listening to VoiceOver
   (macOS) and NVDA (Windows); no automated run stands in for it.
 - **Large-canvas client performance.** Done on 2026-10-22 on one host and
@@ -917,8 +918,7 @@ in the phone project.
   - The spec attaches `ariaSnapshot` captures of the four regions to each run.
 - **Fixed later.** The 400% zoom layout, label-in-name on inspector fields,
   and a silent first Enter on a row whose frame has not rendered were fixed
-  and asserted on 2026-10-25 in
-  [0054](0054-design-canvas-accessibility-findings.md).
+  and asserted on 2026-10-25 in todo 0054.
 
 ### Client performance
 
@@ -1272,12 +1272,13 @@ Made on 2026-10-25 while working this file.
 
 ## Related
 
-- [0037-design-operation-recovery-edges.md](0037-design-operation-recovery-edges.md),
-  [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md) and
-  [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
+- [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
+- [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and
+  "Client"): the operation recovery edges and accessibility fixes, moved there
+  when todos 0037 and 0054 were retired on 2026-10-29.
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
-  for container runs, [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
-  for the support window (its old-binary runs for design are recorded here), and
+  for container runs, [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)
+  for the support window (old-binary runs for design are recorded here), and
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md) for flake triage.
 - [`agent-testing.md`](../../development/agent-testing.md) and
   [`testing-guide.md`](../../development/testing-guide.md).
@@ -1300,8 +1301,7 @@ Made on 2026-10-25 while working this file.
   [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md))
 - `docs/improvements/design-space/plan/00-index.md` (qualification gaps,
   deferred items, non-goals, capability decision, measurements and
-  deviations; the residual edges went to
-  [0037-design-operation-recovery-edges.md](0037-design-operation-recovery-edges.md))
+  deviations; the residual edges went to todo 0037, retired on 2026-10-29)
 - `docs/improvements/design-space/plan/01-preserve-editing-intent.md` (done)
 - `docs/improvements/design-space/plan/04-renderer-scheduling-and-recovery.md`
   (second-worker evaluation)

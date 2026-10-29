@@ -13,7 +13,7 @@
  * resource-only read that runs no extension code, as a `stale` list marked
  * `attachPending` (extension commands arrive on attach); on Pi the case checks
  * that state first, with no refresh and no turn
- * (docs/todo/cli-and-slash-commands/0069-pi-commands-before-first-turn.md). Commands
+ * (docs/architecture/native-agent-commands.md, "Provider notes"). Commands
  * are planted in a disposable host worktree created with the
  * execution-policy override `projectResources: true` (never this repository,
  * never a provider home), or, with `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container`

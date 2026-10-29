@@ -17,7 +17,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** A user signed in to Pi with ChatGPT and no saved default used to start on the catalogue's first model (`openai/gpt-4`), which the ChatGPT backend refuses, so the first prompt failed.
 
-**Context.** Split from [0054](../cross-cutting/0054-agent-test-pi-default-model.md). The file's decision 1 chose option (d): use pi-ai's `openai-codex` catalogue as the list of models the ChatGPT backend serves.
+**Context.** Split from todo 0054. The file's decision 1 chose option (d): use pi-ai's `openai-codex` catalogue as the list of models the ChatGPT backend serves.
 
 **Investigation.** Done and still in place. `lastResortModelId` is at `bridges/pi-bridge/src/models.ts:391`, `chatGptLoginModelIds` at `bridges/pi-bridge/src/models.ts:369`, with the two hard-coded provider ids at `bridges/pi-bridge/src/models.ts:349` and `:355`. It is used by `resolveModel` (`bridges/pi-bridge/src/models.ts:313`, call at `:334`) and `hydrateComposer` (`bridges/pi-bridge/src/models.ts:483`, helper at `:510`). Tests: `bridges/pi-bridge/src/models.test.ts:313` (fake runtime) and `:465` (pinned SDK), `bridges/pi-bridge/src/agent-session-default-model.test.ts:295`. Landed in `f1223e0b` (#1283). The pin is still 1.4.0 (`bridges/pi-bridge/package.json:16-17`), and Pi's private table still names `openai: "gpt-5.5"` and `"openai-codex": "gpt-6.1-sol"` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js:10-16`), so the premise holds. The upgrade runbook asks for a recheck on each Pi bump (`docs/development/upgrade-agents.md`, Pi section).
 
@@ -52,7 +52,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** Nobody has shown that an agent-test profile on an `openai` ChatGPT host with no saved default reaches the fallback and answers.
 
-**Context.** Qualification step 3; depends on [0056](../cross-cutting/0056-agent-test-stale-bridge-builds.md) for a fresh bridge build. The file already allows closing with a caveat if no such host exists.
+**Context.** Qualification step 3; needs a fresh bridge build (todo 0056, retired on 2026-10-29; see [agent-testing.md](../../development/agent-testing.md#bridge-builds)). The file already allows closing with a caveat if no such host exists.
 
 **Investigation.** The agent-test profile hands the host's Pi credential and saved default to the bridge through `applyPiHostCredentialEnvironment` (`apps/backend/src/core/host-agent-credentials.ts:97-114`): `PI_BRIDGE_AUTH_FILE` points at the host's `auth.json` and `PI_BRIDGE_DEFAULT_MODEL` carries any saved default. This host's `settings.json` still saves `openai-codex` / `gpt-5.5`, so a profile here would start on that refused saved default, not on the fallback. `mise run test:agent:coordinator` exists (`mise.toml:271`). Because the profile reads the host file directly, a disposable login cannot be swapped in without changing the host's `~/.pi`, which the constraints forbid.
 
@@ -91,8 +91,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: closes the item without a login.
     - Cons: the backend's refusal list can change server-side; the code reading cannot prove the live outcome.
 
-Split out of the open question left by
-[0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md).
+Split out of the open question left by todo 0054 (retired on 2026-10-29; see
+[credentials-and-models.md](../../development/credentials-and-models.md#default-model)).
 A Pi tab with no explicit model starts on Pi's saved default, then on
 `PI_BRIDGE_DEFAULT_MODEL`, then on a last resort (`defaultModelIds` in
 `bridges/pi-bridge/src/agent-session.ts`, `lastResortModelId` in
@@ -118,7 +118,7 @@ run on an `openai` ChatGPT login, which this host does not have.
   them with `The '<model>' model is not supported when using Codex with a
   ChatGPT account`. Seen live on 2026-10-23: `gpt-4` and `gpt-5.5` were
   refused, and `gpt-6.1-sol` ran
-  ([0054](../cross-cutting/0054-agent-test-pi-default-model.md), runs 1–3).
+  (todo 0054, runs 1–3).
 - A legacy `openai-codex` login no longer starts on a refused model. Pi 1.4.0
   dropped `gpt-5.3-codex-spark` from that catalogue, which now lists
   `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`,
@@ -240,7 +240,7 @@ run on an `openai` ChatGPT login, which this host does not have.
      an `openai` ChatGPT login and no saved default, run
      `mise run test:agent:coordinator --credential-source pi` (rebuild the
      bridges first; see
-     [0056](../cross-cutting/0056-agent-test-stale-bridge-builds.md)) and
+     [agent-testing.md](../../development/agent-testing.md#bridge-builds)) and
      record that the Pi session files show `openai/gpt-6.1-sol`. If no such
      host exists, the bridge-level run in step 2 is the closest evidence;
      record it and close this item with that caveat.
@@ -338,7 +338,6 @@ run on an `openai` ChatGPT login, which this host does not have.
 
 ## Related
 
-- [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md)
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)
 - [0172-multi-review-defaults-ignore-pi-saved-model.md](../coordinator-and-multi-review/0172-multi-review-defaults-ignore-pi-saved-model.md)
   (a Multi Review row resolves an unset Pi model to the catalogue's first

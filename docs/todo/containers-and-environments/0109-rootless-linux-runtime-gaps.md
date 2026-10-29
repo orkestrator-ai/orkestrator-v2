@@ -23,7 +23,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 Rootful CI on GitHub runners, where the runner's uid is not 1000, now exercises decision 2's "rootful host whose user is not UID 1000" case. C20 failed there before the relay (run 40333566613: `cat: /home/node/.codex/auth.json: No such file or directory`) and passed with it (run 40409285999, linux-x64 and linux-arm64).
 
-The same run still failed "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw mount `/codex-home/config.toml` as `node`, and on a non-1000 host that is now correctly unreadable. This is a test bug (see [0058](0058-legacy-migration-root-symlink.md)'s analysis), not a relay bug. No release has the relay yet: `v2.33.0-beta` (`225a91f3`) predates `1aabf049`.
+The same run still failed "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw mount `/codex-home/config.toml` as `node`, and on a non-1000 host that is now correctly unreadable. This is a test bug (found in todo 0058's analysis, retired on 2026-10-29; tracked in [0728](0728-container-ci-c14-assumes-uid-1000.md)), not a relay bug. No release has the relay yet: `v2.33.0-beta` (`225a91f3`) predates `1aabf049`.
 
 **Decisions.** None: the item is done. The C14 precondition belongs to a new todo, as 0058's analysis recommends.
 
@@ -331,9 +331,10 @@ on `main` too.
   (staged inputs and host access).
 - [Container lifecycle](../../architecture/container-lifecycle.md) ("Portable
   inputs", "Environment networks").
-- [0350-rootless-tests-fail-on-macos.md](0350-rootless-tests-fail-on-macos.md):
-  six of this file's unit tests failed on macOS hosts; they now run there
-  with Homebrew's GNU tools, or skip with the reason (finished 2026-10-28).
+- [Testing guide](../../development/testing-guide.md#macos-shell-test-prerequisites)
+  ("macOS shell-test prerequisites"): six of this file's unit tests failed on
+  macOS hosts; since todo 0350 (finished 2026-10-28, retired on 2026-10-29)
+  they run there with Homebrew's GNU tools, or skip with the reason.
 
 ## Replaces
 

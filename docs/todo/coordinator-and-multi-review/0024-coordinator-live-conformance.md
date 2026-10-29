@@ -217,7 +217,8 @@ anything, and (since 2026-10-22) that peer mail between two ordinary
 environments wakes each side with Wake peers on. Its first full runs passed on
 Claude, Codex, OpenCode and Cursor, and (2026-10-23) all four scenarios
 passed on Pi once the agent-test profile started on the host's Pi default
-model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
+model (todo 0054, retired on 2026-10-29; see
+[credentials-and-models.md](../../development/credentials-and-models.md#default-model)).
 Since 2026-10-25 the suite also has a `status` scenario (a coordinator-launched
 Multi Review's `ready` and `fix-done` wakes, and a delegated worker held on an
 approval) and judges every echoed mail carrier through the renderer's tile
@@ -458,7 +459,8 @@ for prerequisites and how to batch them with other provider runs.
   - No coordinator ran `sleep` or called `list_environments` in any async or
     family run; the only `read_messages` calls were the poll turn's five.
     Recorded in [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md)
-    and [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md).
+    and in todo 0028 (retired on 2026-10-29; the poll guard is in
+    [`coordinator.md`](../../architecture/coordinator.md#control-mcp), "Control MCP").
   - Earlier read-only history: first full run 2026-10-16 (Claude and OpenCode
     passed; Codex failed on hosted search and phantom denials, both fixed;
     Pi and Cursor skipped; Grok ended on its first denial, fixed by the
@@ -473,7 +475,7 @@ for prerequisites and how to batch them with other provider runs.
   | Codex | not rerun | not rerun | not rerun | Passed |
   | OpenCode | not rerun | not rerun | not rerun | Passed |
   | Cursor | Passed 3 of 4 (see Verify) | not rerun | not rerun | Passed |
-  | Pi | Failed: profile default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)); passed 2026-10-23 (below) | Passed 2026-10-23 | Passed 2026-10-23 | Passed 2026-10-23 |
+  | Pi | Failed: profile default model (todo 0054); passed 2026-10-23 (below) | Passed 2026-10-23 | Passed 2026-10-23 | Passed 2026-10-23 |
   | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Failed before the skip fix (below) |
 
   - Claude on the final suite: read-only passed with every `Bash` and
@@ -499,13 +501,13 @@ for prerequisites and how to batch them with other provider runs.
   - Pi failed at its first turn: the profile shares only the host's
     `auth.json`, so Pi chose its own default model (`gpt-5.3-codex-spark`),
     which the host's ChatGPT-backed `openai-codex` login cannot use. The host
-    itself defaults to `openai-codex/gpt-5.5`. Harness work is filed as
-    [0054](../cross-cutting/0054-agent-test-pi-default-model.md), and its
+    itself defaults to `openai-codex/gpt-5.5`. Harness work was filed as
+    todo 0054, and its
     code fix landed on 2026-10-23: the bridge starts on Pi's saved default,
     and a profile receives the host's. The 2026-10-23 rerun with a rebuilt
     bridge started on the host's saved default (`openai/gpt-5.5`), but this
     host's ChatGPT-backed `openai` login refuses that model too, so all four
-    scenarios failed at their first turn again. Details in 0054.
+    scenarios failed at their first turn again. Details were in todo 0054.
   - **Pi passed all four on 2026-10-23** (`main` at `459d2944`, every bridge
     rebuilt first, run `qa-coordinator-2026-10-23T12-26-47-009Z`, 1 passed,
     0 failed, 0 skipped, 6.5 minutes). The user had saved
@@ -1046,8 +1048,7 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
 
 ## Related
 
-- [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md) and
-  [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md).
+- [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 - [`coordinator.md`](../../architecture/coordinator.md) ("Worker delegation",
   "Tests that exist today"), [`agent-messaging.md`](../../architecture/agent-messaging.md)

@@ -41,8 +41,8 @@ const SKIPPED_DIRECTORIES = new Set([
  *
  * Entries were pinned exactly, base first. A chain that gains a layer fails as
  * new; a chain that loses one fails as stale. The last entry, the
- * `StorageService` chain, went with
- * `docs/todo/backend-structure/0009-storage-service-repositories.md`: the
+ * `StorageService` chain, went with todo 0009 (see
+ * `docs/architecture/storage.md`, "Code layout"): the
  * service is now a facade over per-store repositories sharing one
  * `StorageContext`. A branch that still carries that entry drops it on rebase
  * rather than restoring it.

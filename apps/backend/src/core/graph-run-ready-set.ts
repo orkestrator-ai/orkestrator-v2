@@ -15,20 +15,32 @@
  *   1 only) or `later` (from iteration 2). The compiler turns a port's
  *   `firstIterationFrom` into exactly such a `first`/`later` split.
  * - A carry (`<loopId>#<index>`) delivers from iteration 2, reading the
- *   producer's previous iteration; on iteration 1 it delivers nothing, so a
- *   loop's later-only entry is skipped there.
+ *   producer's previous iteration (its latest live activation there); on
+ *   iteration 1 it delivers nothing, so a loop's later-only entry is skipped
+ *   there. A carry from a replicated producer collects its branches.
+ * - An edge with transforms, or one the compiler could not prove fits the
+ *   target's budgets (`budgetCheck`), delivers through
+ *   `graph-edge-transforms.ts` once its source values are loaded: the same
+ *   artifacts (filter and limit), new artifacts the pass stores first (pending
+ *   until then), or a failure (`budget-exceeded`, `system-error`).
  * - A producer in the consumer's own loop is read at the same iteration; a
  *   producer inside a loop the consumer is not in is read at the loop's last
  *   iteration, once the loop is done; anything else at iteration 1.
  * - A producer activation that completed delivers its port's artifact; one
  *   that took another gate or human outlet, skipped, was cancelled, or failed
  *   without routing an `error` artifact delivers nothing (absent). One that is
- *   not terminal yet is pending.
+ *   not terminal yet is pending. A taken outlet delivers what the gate or
+ *   human node forwarded on that port, else the input it was given there (a
+ *   list input stays a list). A `collect` merge delivers its input list
+ *   unchanged. A failed activation delivers only its `error` port: the
+ *   routed `error@1` artifact, pending while the runtime stores it.
  * - A replicated producer feeding a list port without `zip` (fan-in) is
  *   collected per the port's {@link GraphCollectPolicy}: `all-settled` waits
  *   for every branch, `quorum` and `first` for `count` successes. Fewer than
- *   `minSuccessful` successes fail the port. With `zip`, branch k reads branch
- *   k. An unreplicated producer feeds every branch of a replicated consumer.
+ *   `minSuccessful` successes fail the port. A fan-in whose branches were
+ *   all skipped is absent, so the skip propagates instead. With `zip`,
+ *   branch k reads branch k. An unreplicated producer feeds every branch of
+ *   a replicated consumer.
  * - A single-value port takes its (compiler-checked, mutually exclusive)
  *   live producer; a list port concatenates its live producers.
  *
@@ -39,8 +51,9 @@
  *   outputs are absent for its consumers, so a whole untaken subtree skips;
  *   a consumer with another live producer (a gate's `clean` outlet beside a
  *   skipped `address`) still runs.
- * - `failed` (cause `system-error`) when a required fan-in port's collect
- *   policy cannot be met; the node's `onFailure` then applies.
+ * - `failed` when a required fan-in port's collect policy cannot be met
+ *   (`system-error`) or a required input's edge delivery fails; the node's
+ *   `onFailure` then applies.
  * - `ready` with its inputs bound when every input is resolved and `when`
  *   holds.
  * - nothing yet while an input is pending, or while a `when` needs an
@@ -62,6 +75,8 @@ import {
 } from "@orkestrator/protocol/graphs/predicates";
 import { graphActivationKey, type NodeActivation } from "@orkestrator/protocol/graphs/run";
 import type { GraphEdgeSource, GraphPortRef } from "@orkestrator/protocol/graphs/template";
+import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import { graphEdgeNeedsDelivery, planGraphEdgeDelivery } from "./graph-edge-transforms.js";
 import type { GraphRunView } from "./graph-run-view.js";
 
 /** How one producer, port or node position resolves. */
@@ -69,7 +84,10 @@ export type GraphInputResolution =
   | { kind: "pending" }
   | { kind: "live"; ids: string[] }
   | { kind: "absent" }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; cause?: GraphErrorCause };
+
+/** The output port `onFailure: route` emits `error@1` on. */
+export const GRAPH_ERROR_PORT = "error";
 
 const PENDING: GraphInputResolution = { kind: "pending" };
 const ABSENT: GraphInputResolution = { kind: "absent" };
@@ -99,23 +117,44 @@ function isListPort(port: GraphPlanInputPort): boolean {
   return port.fanIn || port.type.startsWith("list<");
 }
 
-/** What a terminal (or not) producer activation delivers on one port. */
+function liveIds(ids: string | string[] | undefined): GraphInputResolution {
+  if (ids === undefined) return ABSENT;
+  return { kind: "live", ids: Array.isArray(ids) ? [...ids] : [ids] };
+}
+
+/**
+ * What a terminal (or not) producer activation delivers on one port.
+ * `producer` is the activation's plan node: it decides what a `collect`
+ * merge and a routed failure deliver.
+ */
 export function graphActivationDelivery(
   activation: NodeActivation | undefined,
   port: string,
   outlet?: string,
+  producer?: GraphPlanNode,
 ): GraphInputResolution {
   if (!activation) return PENDING;
   switch (activation.state) {
     case "complete": {
-      if (outlet !== undefined && activation.outlet !== outlet) return ABSENT;
-      const id = activation.outputs[port];
-      return id === undefined ? ABSENT : { kind: "live", ids: [id] };
+      if (outlet !== undefined) {
+        // A taken outlet forwards the node's input on that port (an edited
+        // value when a person changed it, item 208).
+        if (activation.outlet !== outlet) return ABSENT;
+        return liveIds(activation.outputs[port] ?? activation.inputs[port]);
+      }
+      if (producer?.kind === "merge" && producer.strategy.kind === "collect") {
+        const input = producer.inputs[0];
+        return input ? liveIds(activation.inputs[input.name] ?? []) : ABSENT;
+      }
+      return liveIds(activation.outputs[port]);
     }
     case "failed": {
-      // `onFailure: route` delivers its error artifact; nothing else.
-      const id = outlet === undefined ? activation.outputs[port] : undefined;
-      return id === undefined ? ABSENT : { kind: "live", ids: [id] };
+      // `onFailure: route` delivers its `error@1` artifact on `error`; nothing else.
+      if (outlet !== undefined || port !== GRAPH_ERROR_PORT) return ABSENT;
+      const id = activation.outputs[port];
+      if (id !== undefined) return { kind: "live", ids: [id] };
+      // The runtime stores the routed error artifact before consumers read it.
+      return producer?.onFailure === "route" ? PENDING : ABSENT;
     }
     case "skipped":
     case "cancelled":
@@ -153,15 +192,17 @@ function collect(
   const branches = view.branchKeysOf(producer);
   const ids: string[] = [];
   let pending = 0;
+  let skipped = 0;
   for (const branchKey of branches) {
-    const delivery = graphActivationDelivery(
-      view.latestAt(producer.id, producerAt, branchKey),
-      source.port,
-      source.outlet,
-    );
+    const latest = view.latestAt(producer.id, producerAt, branchKey);
+    if (latest?.state === "skipped") skipped += 1;
+    const delivery = graphActivationDelivery(latest, source.port, source.outlet, producer);
     if (delivery.kind === "live") ids.push(...delivery.ids);
     else if (delivery.kind === "pending") pending += 1;
   }
+  // Every branch skipped (an untaken outlet, a false `when`): the skip
+  // propagates; the collect policy judges branches that ran.
+  if (branches.length > 0 && skipped === branches.length) return ABSENT;
   // `quorum` and `first` deliver once `count` branches succeeded; `all-settled` waits for all.
   const target =
     policy.wait === "all-settled" ? null : Math.min(policy.count ?? 1, branches.length);
@@ -221,19 +262,84 @@ export function resolveGraphEdgeSource(
   );
   if (at === null) return PENDING;
   if (view.branchesOf(producer) === null) {
-    return graphActivationDelivery(view.latestAt(producer.id, at), source.port, source.outlet);
+    return graphActivationDelivery(
+      view.latestAt(producer.id, at),
+      source.port,
+      source.outlet,
+      producer,
+    );
   }
   if (options.zip && options.branchKey !== undefined) {
     return graphActivationDelivery(
       view.latestAt(producer.id, at, options.branchKey),
       source.port,
       source.outlet,
+      producer,
     );
   }
   return collect(view, producer, at, source, options.port);
 }
 
-/** Resolves one input port of a node position from its edges and carries. */
+/**
+ * Delivers a live edge source through the edge's transforms or budget check.
+ * Memoised in the pass's outcomes by consumer activation, edge and source
+ * ids; new artifacts are requested from the pass (pending until stored).
+ */
+function deliverThroughEdge(
+  view: GraphRunView,
+  consumer: { node: GraphPlanNode; key: string },
+  port: GraphPlanInputPort,
+  edgeId: string,
+  ids: string[],
+): GraphInputResolution {
+  const key = `delivery\u0000${consumer.key}\u0000${edgeId}\u0000${ids.join(",")}`;
+  const known = view.outcomes.get(key);
+  if (known) {
+    return known.ok
+      ? { kind: "live", ids: [...known.ids] }
+      : { kind: "failed", message: known.message, cause: known.cause };
+  }
+  const sources: { id: string; value: unknown }[] = [];
+  for (const id of ids) {
+    const loaded = view.values.get(id);
+    if (loaded) sources.push({ id, value: loaded.value });
+    else view.missingValues.add(id);
+  }
+  if (sources.length < ids.length) return PENDING;
+  const edge = view.edge(edgeId);
+  const delivery = planGraphEdgeDelivery({ plan: view.plan, edge, port, sources });
+  switch (delivery.kind) {
+    case "forward":
+      view.outcomes.set(key, { ok: true, ids: delivery.ids });
+      return { kind: "live", ids: [...delivery.ids] };
+    case "failed":
+      view.outcomes.set(key, { ok: false, message: delivery.message, cause: delivery.cause });
+      return { kind: "failed", message: delivery.message, cause: delivery.cause };
+    case "store":
+      if (delivery.values.length === 0) {
+        view.outcomes.set(key, { ok: true, ids: [] });
+        return { kind: "live", ids: [] };
+      }
+      view.requests.set(key, {
+        key,
+        purpose: "delivery",
+        producer: { nodeId: consumer.node.id, activation: consumer.key, port: port.name },
+        type: delivery.type,
+        values: delivery.values,
+        inputs: delivery.inputs,
+        edgeId,
+        port: port.name,
+      });
+      return PENDING;
+  }
+}
+
+/**
+ * Resolves one input port of a node position from its edges and carries.
+ * With `deliver`, an edge that needs its values at delivery (transforms, a
+ * budget check) goes through them; without, the raw source ids stand in, so
+ * a position can be judged skipped or waiting before anything is stored.
+ */
 export function resolveGraphInputPort(
   view: GraphRunView,
   node: GraphPlanNode,
@@ -241,33 +347,39 @@ export function resolveGraphInputPort(
   iteration: number,
   branchKey: string | undefined,
   loopDone: GraphLoopDone,
+  deliver?: { key: string },
 ): GraphInputResolution {
   const sources: GraphInputResolution[] = [];
   for (const edgeId of port.edges) {
     const edge = view.edge(edgeId);
     if (!deliversOn(edge, iteration)) continue;
-    sources.push(
-      resolveGraphEdgeSource(view, edge.from, {
-        consumer: node,
-        port,
-        iteration,
-        ...(branchKey !== undefined ? { branchKey } : {}),
-        zip: edge.zip,
-        loopDone,
-      }),
-    );
+    let resolved = resolveGraphEdgeSource(view, edge.from, {
+      consumer: node,
+      port,
+      iteration,
+      ...(branchKey !== undefined ? { branchKey } : {}),
+      zip: edge.zip,
+      loopDone,
+    });
+    if (deliver && resolved.kind === "live" && graphEdgeNeedsDelivery(edge)) {
+      resolved = deliverThroughEdge(view, { node, key: deliver.key }, port, edge.id, resolved.ids);
+    }
+    sources.push(resolved);
   }
   if (iteration > 1) {
     for (const carryId of port.carries) {
       const { carry } = view.carry(carryId);
       const producer = view.node(carry.from.node);
-      const producerBranch = view.branchesOf(producer) === null ? undefined : branchKey;
+      // A carry reads the producer's previous iteration; a replicated producer's branches are collected.
       sources.push(
-        graphActivationDelivery(
-          view.latestAt(producer.id, iteration - 1, producerBranch),
-          carry.from.port,
-          carry.from.outlet,
-        ),
+        view.branchesOf(producer) === null
+          ? graphActivationDelivery(
+              view.latestAt(producer.id, iteration - 1),
+              carry.from.port,
+              carry.from.outlet,
+              producer,
+            )
+          : collect(view, producer, iteration - 1, carry.from, port),
       );
     }
   }
@@ -328,7 +440,7 @@ function activation(
   state: "ready" | "skipped" | "failed",
   inputs: Record<string, string | string[]>,
   at: string,
-  failure?: string,
+  failure?: { message: string; cause: GraphErrorCause },
 ): NodeActivation {
   const attempt = view.nextAttempt(node.id, iteration, branchKey);
   const parts = {
@@ -345,7 +457,7 @@ function activation(
     outputs: {},
     createdAt: at,
     ...(state === "ready" ? {} : { finishedAt: at }),
-    ...(failure !== undefined ? { error: failure, errorCause: "system-error" as const } : {}),
+    ...(failure !== undefined ? { error: failure.message, errorCause: failure.cause } : {}),
   };
 }
 
@@ -366,28 +478,55 @@ export function computeGraphReadySet(
     // A loop that is done creates nothing more at its last iteration.
     for (const branchKey of view.branchKeysOf(node)) {
       if (view.latestAt(node.id, iteration, branchKey)) continue;
-      const inputs: Record<string, string | string[]> = {};
-      let pending = false;
-      let absent = false;
-      let failure: string | undefined;
-      for (const port of node.inputs) {
-        const resolved = resolveGraphInputPort(
-          view,
-          node,
-          port,
-          iteration,
-          branchKey,
-          options.loopDone,
-        );
-        if (resolved.kind === "pending") pending = true;
-        else if (resolved.kind === "failed") {
-          if (port.required) failure ??= resolved.message;
-        } else if (resolved.kind === "absent") {
-          if (port.required) absent = true;
-        } else {
-          inputs[port.name] = isListPort(port) ? resolved.ids : resolved.ids[0]!;
+      const resolvePorts = (deliver?: { key: string }) => {
+        const inputs: Record<string, string | string[]> = {};
+        let pending = false;
+        let absent = false;
+        let failure: { message: string; cause: GraphErrorCause } | undefined;
+        for (const port of node.inputs) {
+          const resolved = resolveGraphInputPort(
+            view,
+            node,
+            port,
+            iteration,
+            branchKey,
+            options.loopDone,
+            deliver,
+          );
+          if (resolved.kind === "pending") pending = true;
+          else if (resolved.kind === "failed") {
+            if (port.required) {
+              failure ??= { message: resolved.message, cause: resolved.cause ?? "system-error" };
+            }
+          } else if (resolved.kind === "absent") {
+            if (port.required) absent = true;
+          } else {
+            inputs[port.name] = isListPort(port) ? resolved.ids : resolved.ids[0]!;
+          }
         }
+        return { inputs, pending, absent, failure };
+      };
+      // Judge the position on its raw sources first; deliver through edge
+      // transforms only once no input is pending or absent, so a node skipped
+      // for an absent input stores nothing. (`when` reads delivered values.)
+      let ports = resolvePorts();
+      if (
+        !ports.absent &&
+        !ports.pending &&
+        ports.failure === undefined &&
+        node.inputs.some((port) =>
+          port.edges.some((edgeId) => graphEdgeNeedsDelivery(view.edge(edgeId))),
+        )
+      ) {
+        const key = graphActivationKey({
+          nodeId: node.id,
+          iteration,
+          attempt: view.nextAttempt(node.id, iteration, branchKey),
+          ...(branchKey !== undefined ? { branchKey } : {}),
+        });
+        ports = resolvePorts({ key });
       }
+      const { inputs, pending, absent, failure } = ports;
       let next: NodeActivation | null = null;
       if (absent) {
         // A definitely absent required input skips the node whatever else is pending.
@@ -428,5 +567,6 @@ export function computeGraphReadySet(
       }
     }
   }
+  view.missingValues.forEach((id) => needValues.add(id));
   return { created, skipReasons, needValues: [...needValues], waiting };
 }

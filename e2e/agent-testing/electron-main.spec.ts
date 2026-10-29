@@ -535,6 +535,12 @@ print("public.tiff")
       await expect(shortcutsDialog).toBeVisible();
       await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
       await expect(shortcutsDialog).toHaveCount(0);
+      // Either modifier is accepted on every platform: on macOS, Control+Shift+K
+      // as well as ⌘⇧K.
+      await window.keyboard.press("Control+Shift+K");
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press("Control+Shift+K");
+      await expect(shortcutsDialog).toHaveCount(0);
 
       // Electron's native input path must claim one press before either the
       // renderer page or the menu key equivalent can toggle a second time.
@@ -550,22 +556,23 @@ print("public.tiff")
           true,
         );
       });
-      const nativeShortcut = () =>
-        app.evaluate(({ BrowserWindow }) => {
+      const nativeShortcut = (modifier: "meta" | "control") =>
+        app.evaluate(({ BrowserWindow }, modifier) => {
           const host = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]!;
           host.focus();
           host.webContents.focus();
-          const modifiers: ("meta" | "control" | "shift")[] = [
-            process.platform === "darwin" ? "meta" : "control",
-            "shift",
-          ];
+          const modifiers: ("meta" | "control" | "shift")[] = [modifier, "shift"];
           host.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
           host.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
-        });
-      await nativeShortcut();
-      await expect(shortcutsDialog).toBeVisible();
-      await nativeShortcut();
-      await expect(shortcutsDialog).toHaveCount(0);
+        }, modifier);
+      for (const modifier of process.platform === "darwin"
+        ? (["meta", "control"] as const)
+        : (["control"] as const)) {
+        await nativeShortcut(modifier);
+        await expect(shortcutsDialog).toBeVisible();
+        await nativeShortcut(modifier);
+        await expect(shortcutsDialog).toHaveCount(0);
+      }
       expect(
         await window.evaluate(
           () =>

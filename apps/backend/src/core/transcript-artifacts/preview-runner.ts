@@ -714,6 +714,7 @@ export class TranscriptPreviewRunner implements PreviewRunner {
         );
       }
       const exits: Promise<unknown>[] = [];
+      const owned: SupervisedJob[] = [];
       for (const ticket of this.running) {
         this.settle(
           ticket,
@@ -724,18 +725,34 @@ export class TranscriptPreviewRunner implements PreviewRunner {
           ),
         );
         ticket.supervised?.cancel();
-        if (ticket.supervised) exits.push(ticket.supervised.exited);
+        if (ticket.supervised) {
+          exits.push(ticket.supervised.exited);
+          owned.push(ticket.supervised);
+        }
       }
       // A probe's worker holds a scratch directory like a job's; the backend
       // must not exit before its verified exit removes it.
       if (this.probeJob) {
         this.probeJob.cancel();
         exits.push(this.probeJob.exited);
+        owned.push(this.probeJob);
       }
       await Promise.race([
         Promise.allSettled(exits),
         new Promise((resolve) => setTimeout(resolve, 10_000)),
       ]);
+      // A worker whose exit was never verified keeps its scratch until the
+      // next backend's startup recovery. Counted, never named, so the logs can
+      // show whether production previews are what leaves scratch behind.
+      const left = owned.filter((job) => {
+        const scratch = job.scratchDir();
+        return scratch !== null && existsSync(scratch);
+      }).length;
+      if (left > 0)
+        this.options.logger?.warn("[artifact-preview] worker scratch left for startup recovery", {
+          count: left,
+          isolation: this.options.isolation,
+        });
     })();
     return this.closing;
   }

@@ -1373,7 +1373,7 @@ describe("paneLayoutStore authoritative cleanup", () => {
   });
 
   test("disposes the portal terminal for removed tab types with no other cleanup", () => {
-    // `file` and `looped-review` match none of the type branches, so the
+    // `file` and `multi-review` match none of the type branches, so the
     // unconditional portal disposal is the only reclaim they get.
     const environmentId = "env-authoritative-plain-types";
     seedPaneTree(
@@ -1382,7 +1382,7 @@ describe("paneLayoutStore authoritative cleanup", () => {
         id: "default",
         tabs: [
           { id: "file-tab", type: "file", fileData: { filePath: "/repo/a.ts" } },
-          { id: "review-tab", type: "looped-review" },
+          { id: "review-tab", type: "multi-review" },
         ],
         activeTabId: "file-tab",
       },

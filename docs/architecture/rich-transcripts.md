@@ -750,7 +750,7 @@ subset (24 nodes) with a full dialog, and a table alternative. **Open live
 workflow** opens a separate `WorkflowLiveInspector` that polls and reacts to
 resource change events, with connecting, live, stale/offline, terminal and
 unavailable states; it never writes into the snapshot. Node links open
-existing Multi Review and Looped Review views; other targets are shown as
+existing Multi Review views; other targets are shown as
 unavailable.
 
 ## Live interactive host scope

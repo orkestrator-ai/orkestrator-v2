@@ -57,7 +57,6 @@ describe("Electron backend command registry", () => {
       getEnvironmentsByProject: mock(async () => []),
       getSessionsByEnvironment: mock(async () => []),
       getPaneLayout: mock(async () => null),
-      listLoopedReviewWorkflows: mock(async () => []),
       listBuildPipelines: mock(async () => []),
       listPromptQueues: mock(async () => []),
       kanban: {
@@ -118,12 +117,6 @@ describe("Electron backend command registry", () => {
         resource: "pane-layout",
         args: { environmentId: "env-1" },
         snapshot: null,
-      },
-      {
-        command: "list_looped_review_workflows",
-        resource: "looped-review",
-        args: { environmentId: "env-1" },
-        snapshot: [],
       },
       {
         command: "list_build_pipelines",

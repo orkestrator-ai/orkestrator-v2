@@ -23,7 +23,7 @@ export interface AgentRegistrySources {
   tmux?: (environmentId: string, tabId: string) => AgentActivityState | undefined;
 }
 
-const WORKFLOW_TAB_TYPES = new Set(["claude-build", "looped-review", "multi-review"]);
+const WORKFLOW_TAB_TYPES = new Set(["claude-build", "multi-review"]);
 
 function tabKind(tab: Record<string, unknown>): AgentRegistryEntry["kind"] | null {
   if (tab.isReviewTab === true || WORKFLOW_TAB_TYPES.has(String(tab.type))) return null;

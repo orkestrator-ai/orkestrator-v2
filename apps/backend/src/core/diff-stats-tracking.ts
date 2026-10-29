@@ -18,7 +18,7 @@ import {
   PhysicalKeyResolver,
   SharedScanQueue,
   SharedWatcherRegistry,
-} from "./change-tracking/shared-physical-work.js";
+} from "./change-tracking/index.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
@@ -461,6 +461,15 @@ export class DiffStatsTracking {
         this.baselineChecks.delete(environmentId);
         if (check.rerun) this.checkBaseline(environmentId);
       });
+  }
+
+  /**
+   * Resolves once no physical scan is running. `shutdown()` does not cancel a
+   * scan already started, and its status read writes the worktree's Git
+   * exclude file. For teardown that removes the worktree.
+   */
+  async settled(): Promise<void> {
+    await this.sharedScans.settled();
   }
 
   /** Releases every diff watcher and timer; called on backend shutdown. */

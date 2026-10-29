@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { WorktreeWatcher, WorktreeWatcherOptions } from "../worktree-watcher.js";
-import { SharedWatcherRegistry } from "./shared-physical-work.js";
+import { SharedScanQueue, SharedWatcherRegistry } from "./shared-physical-work.js";
 
 test("shared watcher releases only the last listener and closes once", () => {
   let starts = 0,
@@ -80,3 +80,76 @@ test("a synchronous watcher startup failure is reported without losing subscribe
   b.close();
   expect(registry.activeWatchers()).toBe(0);
 });
+
+test("settled waits for the running pass and the pass queued behind it, even when one rejects", async () => {
+  const queue = new SharedScanQueue<number>();
+  const releases: Array<() => void> = [];
+  const pass = (result: number) =>
+    new Promise<number>((resolve, reject) => {
+      releases.push(() => (result < 0 ? reject(new Error("scan failed")) : resolve(result)));
+    });
+  expect(await Promise.race([queue.settled().then(() => "settled"), Bun.sleep(0)])).toBe("settled");
+  const running = queue.run("key", () => pass(-1));
+  const queued = queue.run("key", () => pass(2));
+  running.catch(() => undefined);
+  let settled = false;
+  const settlement = queue.settled().then(() => {
+    settled = true;
+  });
+  await Bun.sleep(0);
+  expect(settled).toBe(false);
+  releases[0]!();
+  // The queued pass starts only after the running one ends.
+  while (releases.length < 2) await Bun.sleep(0);
+  expect(settled).toBe(false);
+  releases[1]!();
+  await settlement;
+  expect(await queued).toBe(2);
+  expect(queue.stats().keys).toBe(0);
+});
+
+for (const followupKey of ["key", "new-key"]) {
+  test(`settled includes work queued at ${followupKey} after waiting starts`, async () => {
+    const queue = new SharedScanQueue<void>();
+    let releaseFirst!: () => void;
+    let releaseFollowup!: () => void;
+    let followupStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      followupStarted = resolve;
+    });
+    const first = queue.run(
+      "key",
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    let settled = false;
+    const settlement = queue.settled().then(() => {
+      settled = true;
+    });
+    const followupGate = new Promise<void>((resolve) => {
+      releaseFollowup = resolve;
+    });
+    const followup = queue.run(followupKey, () => {
+      followupStarted();
+      return followupGate;
+    });
+    try {
+      releaseFirst();
+      await first;
+      await started;
+      // Flush the original snapshot's promise reactions while the late work is held.
+      await Bun.sleep(0);
+      expect(settled).toBe(false);
+      releaseFollowup();
+      await settlement;
+      expect(settled).toBe(true);
+      expect(queue.stats().keys).toBe(0);
+    } finally {
+      releaseFirst();
+      releaseFollowup();
+      await Promise.all([first, followup, settlement]);
+    }
+  });
+}

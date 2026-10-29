@@ -100,8 +100,8 @@ async function harness() {
       }
       return run as T;
     }
-    if (name === "generate_looped_review_package") return testGeneratedReviewPackage(args) as T;
-    if (name === "verify_looped_review_package") return { valid: true } as T;
+    if (name === "generate_review_package") return testGeneratedReviewPackage(args) as T;
+    if (name === "verify_review_package") return { valid: true } as T;
     if (name === "get_kanban_tasks") return [] as T;
     return {} as T;
   };
@@ -156,7 +156,7 @@ test("manual discovery hands off once; a replacement controller seals completed 
     expect((await read()).validationRun?.status).toBe("running");
     expect(h.sends).toHaveLength(1);
     expect(h.sends[0]!.options.schema).toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
-    expect(h.calls.some((call) => call.name === "generate_looped_review_package")).toBe(false);
+    expect(h.calls.some((call) => call.name === "generate_review_package")).toBe(false);
     await service.shutdown();
     h.finish();
     service = new MultiReviewService(h.storage, h.invoke, {
@@ -170,7 +170,7 @@ test("manual discovery hands off once; a replacement controller seals completed 
     expect(restored.phase).toBe("reviewing");
     expect(restored.reviewPackage?.id).toBe(restored.validationRun?.id);
     expect(h.calls.filter((call) => call.name === "start_review_validation")).toHaveLength(1);
-    const generated = h.calls.find((call) => call.name === "generate_looped_review_package")!;
+    const generated = h.calls.find((call) => call.name === "generate_review_package")!;
     expect(generated.args.expectedHead).toBe("1".repeat(40));
     expect(h.sends).toHaveLength(1);
   } finally {
@@ -217,9 +217,7 @@ test("pipeline separates implementation from fresh discovery and waits for backe
     h.finish();
     await service.advanceNow(started.id);
     expect((await read()).reviewPackage?.id).toBe((await read()).validationRun?.id);
-    expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
-      1,
-    );
+    expect(h.calls.filter((call) => call.name === "generate_review_package")).toHaveLength(1);
 
     // Restore a verification turn after review/addressing. A failing verdict
     // must not carry the prior run into the next implementation iteration.
@@ -266,9 +264,7 @@ test("pipeline separates implementation from fresh discovery and waits for backe
     h.changeWorktree();
     await service.advanceNow(started.id);
     expect(h.sends.at(-1)!.options.schema).toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
-    expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
-      1,
-    );
+    expect(h.calls.filter((call) => call.name === "generate_review_package")).toHaveLength(1);
   } finally {
     await service.shutdown();
     await h.cleanup();
@@ -557,7 +553,7 @@ test("skipping validation stops the checks and seals their partial results for t
     expect(skipped.skippedValidationRunId).toBe(runId);
     expect(skipped.validationRun).toMatchObject({ id: runId, status: "cancelled" });
     expect(skipped.reviewPackage?.id).toBe(runId);
-    const sealing = h.calls.filter((call) => call.name === "generate_looped_review_package");
+    const sealing = h.calls.filter((call) => call.name === "generate_review_package");
     expect(sealing).toHaveLength(1);
     const preparation = sealing[0]!.args.preparation as {
       validation: Array<{ status: string }>;
@@ -624,9 +620,7 @@ test("a replacement controller recovers a persisted skipped validation run", asy
     expect(recovered.validationRun?.status).toBe("cancelled");
     expect(h.sends).toHaveLength(sendsBeforeRecovery + 1);
     expect(h.sends.at(-1)!.options.schema).not.toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
-    expect(h.calls.filter((call) => call.name === "generate_looped_review_package")).toHaveLength(
-      1,
-    );
+    expect(h.calls.filter((call) => call.name === "generate_review_package")).toHaveLength(1);
   } finally {
     await service.shutdown();
     await restored?.shutdown();

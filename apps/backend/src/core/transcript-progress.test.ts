@@ -4,7 +4,6 @@ import type { ProviderTranscriptSnapshot } from "./agent-provider-contract.js";
 import { MultiReviewProgressTracker, progressFingerprint } from "./multi-review-progress.js";
 import { commitProgressObservation } from "./review-fanout.js";
 import {
-  applyProgressSample,
   compareProgressDigests,
   PROGRESS_SNAPSHOT_TARGET_BYTES,
   PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,
@@ -437,11 +436,7 @@ test("a version-2 tail-only baseline rebases once instead of counting as progres
   provider.revision += 1;
   time.advance(1_000);
   await expect(observe(target.progressDigest)).resolves.toMatchObject({ changed: false });
-  const wait = { progressDigest: versionTwo, progressAt: "2026-01-01T00:00:00.000Z" };
-  expect(applyProgressSample(wait, target.progressDigest!, "2026-01-02T00:00:00.000Z")).toBe(
-    "rebased",
-  );
-  expect(wait.progressAt).toBe("2026-01-01T00:00:00.000Z");
+  expect(compareProgressDigests(versionTwo, target.progressDigest!)).toBe("rebased");
 });
 
 test("providers without a snapshot surface keep the legacy tail digest", async () => {
@@ -517,26 +512,6 @@ test("version-2 digests are fixed-size, content-free and scoped to their base", 
   const legacyB = progressFingerprint([{ id: "b" }]);
   expect(compareProgressDigests(legacyA, legacyB)).toBe("changed");
   expect(compareProgressDigests(legacyA, digest)).toBe("rebased");
-});
-
-test("a tracker-less clock moves only on a first sample or a change", () => {
-  const legacy = progressFingerprint([{ id: "a" }]);
-  const v2 = snapshotProgressDigest({ messages: [{ id: "a" }], historyEpoch: "g:e" });
-  const wait: { progressDigest?: string; progressAt?: string } = {
-    progressDigest: legacy,
-    progressAt: "2026-01-01T00:00:00.000Z",
-  };
-  expect(applyProgressSample(wait, v2, "2026-01-02T00:00:00.000Z")).toBe("rebased");
-  expect(wait).toEqual({ progressDigest: v2, progressAt: "2026-01-01T00:00:00.000Z" });
-  expect(applyProgressSample(wait, v2, "2026-01-03T00:00:00.000Z")).toBe("unchanged");
-  expect(wait.progressAt).toBe("2026-01-01T00:00:00.000Z");
-  const moved = snapshotProgressDigest({ messages: [{ id: "b" }], historyEpoch: "g:e" });
-  expect(applyProgressSample(wait, moved, "2026-01-04T00:00:00.000Z")).toBe("changed");
-  expect(wait).toEqual({ progressDigest: moved, progressAt: "2026-01-04T00:00:00.000Z" });
-
-  const fresh: { progressDigest?: string; progressAt?: string } = {};
-  expect(applyProgressSample(fresh, v2, "2026-01-05T00:00:00.000Z")).toBe("baseline");
-  expect(fresh).toEqual({ progressDigest: v2, progressAt: "2026-01-05T00:00:00.000Z" });
 });
 
 test("only summary samples certify history coverage, including conditional answers", async () => {

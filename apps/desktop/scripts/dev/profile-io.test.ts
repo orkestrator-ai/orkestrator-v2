@@ -30,6 +30,7 @@ import {
   initializeProfile,
   processMatches,
   processStartTime,
+  isRemovedProfileSkeleton,
   readAndValidateSentinel,
   removeProfileState,
   reserveLoopbackPorts,
@@ -249,16 +250,149 @@ describe("development profile lifecycle primitives", () => {
 
     await removeProfileState(profile, false);
 
-    expect(
-      await access(profile.profileRoot).then(
-        () => true,
-        () => false,
-      ),
-    ).toBe(false);
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
     await expect(readFile(path.join(hostKeychains, "login.keychain-db"), "utf8")).resolves.toBe(
       "host-login",
     );
   });
+
+  // Docker Desktop on macOS can refuse every bind under a directory it has
+  // looked up once that directory is deleted and recreated (todo 0200).
+  for (const keepToolchains of [false, true]) {
+    test(`${keepToolchains ? "toolchain-preserving" : "full"} reset keeps the directories on every bind source's path`, async () => {
+      const { roots, profile } = await modelCacheFixture();
+      const inputs = path.join(profile.dataDir, "portable-inputs");
+      const staged = path.join(inputs, "0".repeat(32), "revision-1", "claude-config");
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "settings.json"), "{}");
+      await mkdir(path.join(profile.dataDir, "mcp-environment-overlays"), { recursive: true });
+      await mkdir(path.join(profile.dataDir, "toolchains"), { recursive: true });
+      const kept = [profile.profileRoot, profile.dataDir, inputs];
+      const before = await Promise.all(kept.map(async (directory) => (await stat(directory)).ino));
+
+      await removeProfileState(profile, keepToolchains);
+
+      expect(await Promise.all(kept.map(async (directory) => (await stat(directory)).ino))).toEqual(
+        before,
+      );
+      expect(await readdir(inputs)).toEqual([]);
+      expect((await readdir(profile.dataDir)).sort()).toEqual(
+        keepToolchains ? ["portable-inputs", "toolchains"] : ["portable-inputs"],
+      );
+      expect((await readdir(profile.profileRoot)).sort()).toEqual(
+        keepToolchains ? [".orkestrator-dev-profile", "data", "profile.json"] : ["data"],
+      );
+      expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(!keepToolchains);
+
+      // The same name starts again over what was kept.
+      await initializeProfile(profile);
+      await expect(readAndValidateSentinel(profile, roots)).resolves.toBeTruthy();
+    });
+  }
+
+  for (const keepToolchains of [false, true]) {
+    for (const child of ["data", "portable-inputs"]) {
+      test(`${keepToolchains ? "toolchain-preserving" : "full"} reset unlinks a pre-existing ${child} symlink`, async () => {
+        const { root, profile } = await modelCacheFixture();
+        const outside = path.join(root, "outside");
+        await mkdir(outside, { recursive: true });
+        await writeFile(path.join(outside, "precious.txt"), "unrelated");
+        const target = child === "data" ? profile.dataDir : path.join(profile.dataDir, child);
+        await rm(target, { recursive: true, force: true });
+        await symlink(outside, target);
+
+        await removeProfileState(profile, keepToolchains);
+
+        await expect(readFile(path.join(outside, "precious.txt"), "utf8")).resolves.toBe(
+          "unrelated",
+        );
+        await expect(fs.lstat(target)).rejects.toThrow();
+      });
+    }
+
+    for (const phase of ["checked", "enumerated", "before-delete"] as const) {
+      for (const child of ["data", "portable-inputs"]) {
+        test(`${keepToolchains ? "toolchain-preserving" : "full"} reset aborts when ${child} changes at ${phase}`, async () => {
+          const { root, profile } = await modelCacheFixture();
+          const inputs = path.join(profile.dataDir, "portable-inputs");
+          await mkdir(inputs);
+          await writeFile(path.join(inputs, "precious.txt"), "profile-input");
+          const target = child === "data" ? profile.dataDir : inputs;
+          const outside = path.join(root, "outside");
+          // Mirror the selected names so a traversal through the replacement
+          // would actually delete an external file, including via data's child.
+          const outsideInputs = child === "data" ? path.join(outside, "portable-inputs") : outside;
+          await mkdir(outsideInputs, { recursive: true });
+          await writeFile(path.join(outsideInputs, "precious.txt"), "external-input");
+          let replaced = false;
+
+          await expect(
+            removeProfileState(profile, keepToolchains, {
+              onDirectory: async (directory, currentPhase) => {
+                if (directory !== target || phase !== currentPhase || replaced) return;
+                replaced = true;
+                await rename(target, path.join(root, "original"));
+                await symlink(outside, target);
+              },
+            }),
+          ).rejects.toThrow("symlink");
+
+          expect(replaced).toBe(true);
+          expect(await readFile(path.join(outsideInputs, "precious.txt"), "utf8")).toBe(
+            "external-input",
+          );
+          const originalInput = path.join(
+            root,
+            "original",
+            ...(child === "data" ? ["portable-inputs"] : []),
+            "precious.txt",
+          );
+          expect(await readFile(originalInput, "utf8")).toBe("profile-input");
+        });
+      }
+    }
+
+    for (const replacement of ["symlink", "directory"] as const) {
+      test(`${keepToolchains ? "toolchain-preserving" : "full"} reset detects an ancestor replaced by a ${replacement} during child traversal`, async () => {
+        const { root, profile } = await modelCacheFixture();
+        const inputs = path.join(profile.dataDir, "portable-inputs");
+        await mkdir(inputs);
+        await writeFile(path.join(inputs, "keep"), "original");
+        const outside = path.join(root, "outside");
+        await mkdir(path.join(outside, "portable-inputs"), { recursive: true });
+        await writeFile(path.join(outside, "portable-inputs", "keep"), "external");
+        let replaced = false;
+        await expect(
+          removeProfileState(profile, keepToolchains, {
+            onDirectory: async (directory, phase) => {
+              if (directory !== inputs || phase !== "enumerated") return;
+              replaced = true;
+              await rename(profile.dataDir, path.join(root, "original"));
+              if (replacement === "symlink") await symlink(outside, profile.dataDir);
+              else {
+                await mkdir(path.join(profile.dataDir, "portable-inputs"), { recursive: true });
+                await writeFile(
+                  path.join(profile.dataDir, "portable-inputs", "keep"),
+                  "replacement",
+                );
+              }
+            },
+          }),
+        ).rejects.toThrow(replacement === "symlink" ? "symlink" : "ancestor changed");
+        expect(replaced).toBe(true);
+        expect(await readFile(path.join(root, "original", "portable-inputs", "keep"), "utf8")).toBe(
+          "original",
+        );
+        expect(await readFile(path.join(outside, "portable-inputs", "keep"), "utf8")).toBe(
+          "external",
+        );
+        if (replacement === "directory")
+          expect(
+            await readFile(path.join(profile.dataDir, "portable-inputs", "keep"), "utf8"),
+          ).toBe("replacement");
+      });
+    }
+  }
 
   test("toolchain-preserving reset uses the same symlink-safe deletion path", async () => {
     const { root, profile } = await modelCacheFixture();

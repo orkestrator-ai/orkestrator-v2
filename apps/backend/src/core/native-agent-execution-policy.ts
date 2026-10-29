@@ -40,7 +40,7 @@ export function resolveNativeAgentExecutionPolicy(
   coordinatorWebResearch: CoordinatorWebResearch = "off",
 ): NativeAgentExecutionPolicy {
   const container = environment.environmentType === "containerized";
-  const pipeline = origin === "build-pipeline" || origin === "looped-review";
+  const pipeline = origin === "build-pipeline" || origin === "automated-review";
   const coordinator = origin === "coordinator";
 
   const policy: NativeAgentExecutionPolicy = coordinator

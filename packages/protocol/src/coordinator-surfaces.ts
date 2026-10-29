@@ -38,7 +38,6 @@ export interface CoordinatorActionReceipt {
 export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "launch-terminal",
   "open-browser",
-  "start-looped-review",
   "create-pr",
   "custom-fix",
   "launch-feature-plan",

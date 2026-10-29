@@ -164,7 +164,7 @@ describe("agent interaction request contract", () => {
     expect(
       isAgentInteractionRequest({
         ...request(),
-        origin: "looped-review-v2",
+        origin: "unknown-origin",
       }),
     ).toBe(false);
   });

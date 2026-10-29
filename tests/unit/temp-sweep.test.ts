@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createOwnedTempDir, isProcessAlive, sweepStaleTempDirs } from "../temp-sweep";
+import { spawn } from "node:child_process";
+import {
+  PARENT_TMPDIR_ENV,
+  createOwnedTempDir,
+  isProcessAlive,
+  namedByLiveProcess,
+  sweepStaleTempDirs,
+} from "../temp-sweep";
 
 const PREFIX = "sweep-fixture-";
 const HOUR_MS = 60 * 60 * 1_000;
@@ -136,6 +143,69 @@ describe("sweepStaleTempDirs", () => {
   test("returns nothing rather than throwing when the root is missing", () => {
     const root = path.join(createRoot(), "missing");
     expect(sweep(root)).toEqual([]);
+  });
+  test("keeps a stale directory that a live process still uses", () => {
+    const root = createRoot();
+    const used = createEntry(root, `${PREFIX}${DEAD_PID}-abc123`, 2 * HOUR_MS);
+    const unused = createEntry(root, `${PREFIX}${DEAD_PID}-def456`, 2 * HOUR_MS);
+    const asked: string[] = [];
+    const removed = sweepStaleTempDirs({
+      prefix: PREFIX,
+      maxAgeMs: HOUR_MS,
+      root,
+      now: NOW,
+      isProcessAlive: () => false,
+      isInUse: (directory) => {
+        asked.push(directory);
+        return directory === used;
+      },
+    });
+    expect(removed).toEqual([unused]);
+    expect(existsSync(used)).toBe(true);
+    // Only otherwise-stale directories cost a process scan.
+    expect(asked.toSorted()).toEqual([used, unused].toSorted());
+  });
+
+  test("without a root, sweeps the parent of a private temporary directory too", () => {
+    const parent = createRoot();
+    const stale = createEntry(parent, `${PREFIX}${DEAD_PID}-abc123`, 2 * HOUR_MS);
+    const previous = process.env[PARENT_TMPDIR_ENV];
+    process.env[PARENT_TMPDIR_ENV] = parent;
+    try {
+      const removed = sweepStaleTempDirs({
+        prefix: PREFIX,
+        maxAgeMs: HOUR_MS,
+        now: NOW,
+        isProcessAlive: () => false,
+      });
+      expect(removed).toEqual([stale]);
+    } finally {
+      if (previous === undefined) delete process.env[PARENT_TMPDIR_ENV];
+      else process.env[PARENT_TMPDIR_ENV] = previous;
+    }
+  });
+});
+
+describe("namedByLiveProcess", () => {
+  test("finds a directory on a live process's command line", async () => {
+    const root = createRoot();
+    const named = path.join(root, "playwright_chromiumdev_profile-abc123");
+    const child = spawn(
+      process.execPath,
+      ["--eval", "setInterval(() => {}, 1000)", `--user-data-dir=${named}`],
+      { stdio: "ignore" },
+    );
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    try {
+      expect(child.pid).toBeGreaterThan(1);
+      const inUse = namedByLiveProcess();
+      expect(inUse(named)).toBe(true);
+      expect(inUse(root)).toBe(true);
+      expect(inUse(path.join(root, "playwright_chromiumdev_profile-zzz999"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+      await exited;
+    }
   });
 });
 

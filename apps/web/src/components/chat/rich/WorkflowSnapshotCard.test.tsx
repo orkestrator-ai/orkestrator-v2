@@ -211,10 +211,8 @@ describe("WorkflowSnapshotCard", () => {
       kind: "multi-review",
       workflowId: "wf1",
     });
-    expect(parseWorkflowTargetRef("looped-review:lr1")).toEqual({
-      kind: "looped-review",
-      workflowId: "lr1",
-    });
+    // Looped Review was removed; its old references no longer resolve.
+    expect(parseWorkflowTargetRef("looped-review:lr1")).toBeNull();
     expect(parseWorkflowTargetRef("https://example.com")).toBeNull();
     expect(parseWorkflowTargetRef("multi-review:../etc")).toBeNull();
     expect(parseWorkflowTargetRef("multi-review:wf1:other:x")).toBeNull();

@@ -89,8 +89,7 @@ import {
   imageWritesVolumeStorage,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
-import { seedFilesDir } from "./nodes/node-files.js";
-import { readSeedManifest } from "./nodes/node-seed.js";
+import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,
@@ -99,6 +98,7 @@ import {
   ingressPorts,
 } from "./container-network.js";
 import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js";
+import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   EGRESS_OVERRIDE_ENV,
@@ -678,6 +678,7 @@ export async function createDockerContainer(
       );
     }
   }
+  rememberNetworkOwner(containerId, gatewayId);
   context.runtime.containerStates.invalidate();
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   if (stagedInputs) {

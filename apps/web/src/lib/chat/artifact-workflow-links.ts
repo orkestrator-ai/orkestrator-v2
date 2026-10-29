@@ -9,12 +9,9 @@
  *
  *   multi-review:<workflowId>                      the Multi Review workflow tab
  *   multi-review:<workflowId>:reviewer:<reviewerId> that reviewer's transcript
- *   looped-review:<workflowId>                     the looped-review workflow tab
  */
 
-export type WorkflowLinkTarget =
-  | { kind: "multi-review"; workflowId: string; reviewerId?: string }
-  | { kind: "looped-review"; workflowId: string };
+export type WorkflowLinkTarget = { kind: "multi-review"; workflowId: string; reviewerId?: string };
 
 const SEGMENT = /^[A-Za-z0-9._-]{1,100}$/;
 
@@ -29,18 +26,14 @@ export function parseWorkflowTargetRef(ref: string): WorkflowLinkTarget | null {
     }
     return null;
   }
-  if (parts[0] === "looped-review" && parts.length === 2) {
-    return { kind: "looped-review", workflowId: parts[1]! };
-  }
   return null;
 }
 
 export type CreateWorkflowTab = (
-  type: "multi-review" | "looped-review",
+  type: "multi-review",
   options: {
     multiReviewId?: string;
     multiReviewReviewerId?: string;
-    loopedReviewId?: string;
     displayTitle?: string;
   },
 ) => boolean;
@@ -51,12 +44,9 @@ export function openWorkflowLinkTarget(
   createTab: CreateWorkflowTab,
   displayTitle: string,
 ): boolean {
-  if (target.kind === "multi-review") {
-    return createTab("multi-review", {
-      multiReviewId: target.workflowId,
-      ...(target.reviewerId ? { multiReviewReviewerId: target.reviewerId } : {}),
-      displayTitle,
-    });
-  }
-  return createTab("looped-review", { loopedReviewId: target.workflowId, displayTitle });
+  return createTab("multi-review", {
+    multiReviewId: target.workflowId,
+    ...(target.reviewerId ? { multiReviewReviewerId: target.reviewerId } : {}),
+    displayTitle,
+  });
 }

@@ -34,7 +34,7 @@ import {
   parseReviewPreparationFileNotes,
   verifyEnvironmentPullRequest,
   verifyEnvironmentReviewPackage,
-  generateLoopedReviewPackage,
+  generateReviewPackage,
   mergePullRequestInContainer,
   runStoredEnvironmentMerge,
   validatePrDetectionBranch,
@@ -66,7 +66,7 @@ export function registerPullRequestCommands(
       context,
     ),
   );
-  register("generate_looped_review_package", async (args, context) => {
+  register("generate_review_package", async (args, context) => {
     assertOnlyKeys(
       args,
       [
@@ -79,7 +79,7 @@ export function registerPullRequestCommands(
         "expectedHead",
         "validationPlan",
       ],
-      "generate_looped_review_package",
+      "generate_review_package",
     );
     const { environmentId, packageId, round, targetBranch, preparation, additionalLimitations } =
       args;
@@ -103,7 +103,7 @@ export function registerPullRequestCommands(
     ) {
       throw new Error("Expected additionalLimitations to contain only non-empty strings");
     }
-    return generateLoopedReviewPackage(
+    return generateReviewPackage(
       asString(environmentId, "environmentId"),
       parsedPackageId,
       parseReviewRound(round),
@@ -123,8 +123,8 @@ export function registerPullRequestCommands(
       },
     );
   });
-  register("verify_looped_review_package", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "reviewPackage"], "verify_looped_review_package");
+  register("verify_review_package", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "reviewPackage"], "verify_review_package");
     const { environmentId, reviewPackage } = args;
     if (!isReviewPackageReference(reviewPackage)) {
       throw new Error("Expected reviewPackage to be a valid review package reference");

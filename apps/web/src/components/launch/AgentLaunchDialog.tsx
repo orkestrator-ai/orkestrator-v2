@@ -26,7 +26,7 @@ import {
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
-import { isSafeLoopedReviewTargetBranch } from "@orkestrator/protocol/review-workflow";
+import { isSafeReviewTargetBranch } from "@orkestrator/protocol/review-workflow";
 
 export interface AgentLaunchSelection {
   agent: LaunchAgent;
@@ -141,7 +141,7 @@ export function AgentLaunchDialog({
 
   const chosenBranch = editableTargetBranch ? branch.trim() : targetBranch;
   // The branch is interpolated into the agent's prompt and shell commands.
-  const branchValid = !editableTargetBranch || isSafeLoopedReviewTargetBranch(chosenBranch);
+  const branchValid = !editableTargetBranch || isSafeReviewTargetBranch(chosenBranch);
 
   const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];

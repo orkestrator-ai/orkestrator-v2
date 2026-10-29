@@ -295,6 +295,54 @@ describe("refused-login auth notice", () => {
     },
   );
 
+  test.each(["logout", "generation-change"])(
+    "a refusal after %s uses unknown-kind wording until the new account read answers",
+    async (reason) => {
+      let account: unknown = { account: { type: "apiKey" }, requiresOpenaiAuth: true };
+      let answerRead!: (value: unknown) => void;
+      const h = await harness({
+        "account/read": () => account,
+        "account/logout": () => ({}),
+        "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      });
+      try {
+        await h.engine.readAccount();
+        expect(h.engine.getAccountLoginKind()).toBe("apiKey");
+        if (reason === "logout") await h.engine.logoutAccount();
+        else {
+          h.child().exit(1);
+          await h.engine.getSupervisor().ensureReady();
+          await h.drain();
+        }
+        expect(h.engine.getAccountLoginKind()).toBeUndefined();
+        account = new Promise((resolve) => {
+          answerRead = resolve;
+        });
+        const { sessionId } = h.runtime.createSession({ mode: "build" });
+        await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "req", attachments: [] });
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "failed", error: refusedError("unauthorized") },
+        });
+        await h.drain();
+        expect(h.runtime.getStatus(sessionId)?.authNotice?.message).toBe(
+          CODEX_LOGIN_REFUSED_MESSAGE,
+        );
+        answerRead({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+        await waitUntil(
+          () =>
+            h.runtime.getStatus(sessionId)?.authNotice?.message ===
+            CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
+          "new account read did not name the refused login",
+        );
+        expect(h.engine.getAccountLoginKind()).toBe("chatgpt");
+      } finally {
+        answerRead?.({ account: null, requiresOpenaiAuth: true });
+        await h.runtime.stop();
+      }
+    },
+  );
+
   test.each([
     [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }],
     [{ responseStreamDisconnected: { httpStatusCode: 401 } }],

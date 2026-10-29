@@ -1471,6 +1471,7 @@ export class AppServerEngine implements CodexEngine {
    * `engine.state` so they can mark sessions recovering rather than idle.
    */
   private handleGenerationChange(generation: EngineGeneration, previous: EngineGeneration): void {
+    this.accountLoginKind = undefined;
     this.accountProofTurns.clear();
     // Waiters belong to the dead process; nothing will ever answer them.
     this.rejectAllWaiters();
@@ -2266,6 +2267,7 @@ export class AppServerEngine implements CodexEngine {
   private forgetSignIn(): void {
     this.clearPendingSignIn();
     this.activeLoginId = null;
+    this.accountLoginKind = undefined;
   }
 
   async readAccount(): Promise<unknown> {

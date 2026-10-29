@@ -334,6 +334,21 @@ code did not show the recommended option was wrong.
   thread's notice. Bridge tests proved this
   (`app-server-runtime-account-reload.test.ts`), and so did the 2026-10-29
   live run.
+- **Review follow-up, 2026-10-29.** Forgetting sign-in state and replacing an
+  app-server generation now clear the cached login kind. Runtime tests cover
+  a refusal after logout or generation replacement using generic wording
+  until a new account read answers, and API-key-to-ChatGPT changes through
+  both account switching and stored-login reload, including the consecutive
+  `account.loginKind` and `account.signedIn` events leaving the notice cleared.
+  The strengthened live assertion rejects a missing projection and requires
+  the original session, failed turn and conversation rows after key replacement,
+  as well as the visible 401 row and enabled Send. It passed with
+  `ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` set in disposable profile
+  `codex-refused-review-0235` (36.8 seconds, Codex 0.164.0, two made-up keys).
+  Targeted engine/runtime tests, bridge and agent-testing typechecks, and
+  scoped lint/format checks passed. Preparation's broader test, browser,
+  isolated-browser and Docker failures remain outside this fix; no passing
+  full checks were repeated.
 - **Pros:** an API-key user is no longer pushed into switching account type
   without being told; a ChatGPT user still gets the one-click path.
 - **Cons:** three messages instead of one, and a key from an environment

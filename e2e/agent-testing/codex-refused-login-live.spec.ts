@@ -23,7 +23,9 @@ import {
 } from "./slash-command-live-support";
 
 type Projection = {
+  sessionId?: string;
   turn: { phase: string; error?: string };
+  messages: Array<{ id: string }>;
   notices?: Array<{ kind: string; state?: string; message: string }>;
 };
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-refused-qa";
@@ -113,6 +115,9 @@ test.describe("Codex turn refused for its login", () => {
         })
         .toBe("error");
       const failed = await projection();
+      expect(failed).not.toBeNull();
+      expect(failed!.sessionId).toBeTruthy();
+      expect(failed!.messages.length).toBeGreaterThan(0);
       expect(failed?.turn.error).toContain("401");
       // The login kind can arrive just after the failure and reword the notice.
       await expect
@@ -155,12 +160,27 @@ test.describe("Codex turn refused for its login", () => {
         await openEnvironment(environment.name);
         await expect
           .poll(
-            async () =>
-              ((await projection())?.notices ?? []).some((notice) => notice.kind === "auth"),
+            async () => {
+              const restored = await projection();
+              return restored && { ...restored, notices: restored.notices ?? [] };
+            },
             { timeout: 120_000, intervals: [2_000] },
           )
-          .toBe(false);
+          .toMatchObject({
+            sessionId: failed!.sessionId,
+            turn: failed!.turn,
+            messages: expect.arrayContaining(
+              failed!.messages.map(({ id }) => expect.objectContaining({ id })),
+            ),
+            notices: expect.not.arrayContaining([expect.objectContaining({ kind: "auth" })]),
+          });
         await expect(page.getByText(REFUSED_NOTICE)).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByText(/401 Unauthorized/).first()).toBeVisible();
+        await expect(input).toBeEnabled();
+        await input.fill("Reply with only OK. Do not call tools.");
+        await expect(compose.getByRole("button", { name: "Send", exact: true })).toBeEnabled({
+          timeout: 60_000,
+        });
         await page.screenshot({ path: test.info().outputPath("refused-after-key-replaced.png") });
       }
     } finally {

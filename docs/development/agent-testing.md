@@ -105,7 +105,8 @@ to OpenAI and is refused. The banner names the API key. With
 `ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` set to the profile's own
 `<dataDir>/agent-credentials/codex` (from `dev:status --json`), the spec then
 writes a second made-up key there, as `codex login --with-api-key` would,
-reloads, and checks the notice clears without a sign-in.
+reloads, and checks the original session, failed turn and conversation rows
+remain, the notice clears without a sign-in, and Send is enabled.
 
 ```bash
 mkdir -m 700 /tmp/qa-refused-codex-home   # holds auth.json: {"auth_mode":"apikey","OPENAI_API_KEY":"sk-proj-<made up>"}

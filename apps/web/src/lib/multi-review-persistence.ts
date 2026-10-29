@@ -3,11 +3,11 @@ import {
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { PersistedLoopedReviewWorkflow } from "@/types";
+import type { PersistedWorkflowRecord } from "@/types";
 import * as backend from "@/lib/backend";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 
-function snapshot(entry: PersistedLoopedReviewWorkflow<unknown>): MultiReviewWorkflow | null {
+function snapshot(entry: PersistedWorkflowRecord<unknown>): MultiReviewWorkflow | null {
   if (
     !isMultiReviewWorkflow(entry.snapshot) ||
     entry.snapshot.id !== entry.id ||

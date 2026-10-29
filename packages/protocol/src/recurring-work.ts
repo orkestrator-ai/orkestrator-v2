@@ -59,8 +59,6 @@ export const RECURRING_JOB_KINDS = [
   "scheduled-job-tick",
   // Backend: workflows.
   "build-supervisor-tick",
-  "looped-review-tick",
-  "looped-review-lease-renewal",
   "multi-review-tick",
   "multi-review-lease-renewal",
   "feature-planning-tick",
@@ -341,23 +339,6 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     1_500,
     "per-key-serial",
     "storage-reconcile",
-  ),
-  // Step 08 keyed supervision: per-workflow 1 s passes, 30 s safety discovery.
-  "looped-review-tick": backend(
-    "B15",
-    "interval",
-    "progress",
-    1_000,
-    "per-key-serial",
-    "storage-reconcile",
-  ),
-  "looped-review-lease-renewal": backend(
-    "B15",
-    "lease",
-    "critical",
-    5_000,
-    "unguarded",
-    "lease-expiry",
   ),
   // Step 08 keyed supervision by default (per-workflow due times, 30 s safety
   // discovery); the adaptive due scheduler is its rollback

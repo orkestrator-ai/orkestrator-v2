@@ -1366,6 +1366,7 @@ const RAW_WRITER_EXEMPTIONS = new Map([
     "the legacy import and migrations run in the migration transaction at open, before any writer",
   ],
   ["storage-record-upgrades.ts", "a one-shot upgrade inside a migration at open"],
+  ["storage-retired-features.ts", "a one-shot retirement inside a migration at open"],
 ]);
 
 type RawWrite = { location: string; call: string; store: string | null };

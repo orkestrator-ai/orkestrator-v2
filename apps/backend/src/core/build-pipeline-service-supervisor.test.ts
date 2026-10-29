@@ -32,7 +32,7 @@ import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { DEFAULT_OPENCODE_MODEL_PROVIDERS } from "@orkestrator/protocol/native-agent";
 import {
   normalizeOpenCodeComposerCatalog,
@@ -307,10 +307,10 @@ async function withService(
         paths: [...controls.uncommittedPaths],
       } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       return testGeneratedReviewPackage(args) as T;
     }
-    if (command === "verify_looped_review_package")
+    if (command === "verify_review_package")
       return {
         valid: !controls.reviewPackageIntegrityError,
         reason: controls.reviewPackageIntegrityError ?? undefined,
@@ -809,7 +809,7 @@ describe("BuildPipelineService", () => {
         }
         expect((await pipeline(storage, started.id)).phase).toBe(phase);
         const before = invocations.filter(
-          (call) => call.command === "verify_looped_review_package",
+          (call) => call.command === "verify_review_package",
         ).length;
         // The environment integrity command reports that the package/artifacts
         // were modified after the preceding stage's successful integrity check.
@@ -819,9 +819,9 @@ describe("BuildPipelineService", () => {
         expect(failed.phase).toBe("failed");
         expect(failed.error).toContain("Review package integrity verification failed");
         expect(failed.error).toContain("artifact SHA-256 mismatch");
-        expect(
-          invocations.filter((call) => call.command === "verify_looped_review_package"),
-        ).toHaveLength(before + 1);
+        expect(invocations.filter((call) => call.command === "verify_review_package")).toHaveLength(
+          before + 1,
+        );
         expect(
           provider.sent.some(
             (call) =>
@@ -880,8 +880,7 @@ describe("BuildPipelineService", () => {
       const verifying = await pipeline(storage, started.id);
       expect(verifying.phase).toBe("verifying");
       expect(
-        invocations.find((call) => call.command === "generate_looped_review_package")?.args
-          .preparation,
+        invocations.find((call) => call.command === "generate_review_package")?.args.preparation,
       ).toEqual(provider.preparationResult);
       const dispatch = provider.sent.find(
         (call) => provider.phases.get(call.sessionId) === "verify",
@@ -1617,9 +1616,9 @@ describe("BuildPipelineService", () => {
                 status: "running",
               });
               expect(provider.sent.at(-1)?.schema).toBeDefined();
-              expect(
-                invocations.some(({ command }) => command === "generate_looped_review_package"),
-              ).toBe(false);
+              expect(invocations.some(({ command }) => command === "generate_review_package")).toBe(
+                false,
+              );
             }
           });
         });

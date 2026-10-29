@@ -674,8 +674,8 @@ Generate the reference before making the change; no artifact is committed
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
-  runs the real feature-planning, build-pipeline, looped-review and
-  multi-review supervisors over a temporary store, in rollback and keyed
+  runs the real feature-planning, build-pipeline and multi-review
+  supervisors over a temporary store, in rollback and keyed
   modes, on one manual clock. Rollback is what
   `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,

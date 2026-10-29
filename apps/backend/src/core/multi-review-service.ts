@@ -90,7 +90,7 @@ import {
   parseReviewPreparationResult,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   parseFixResult,
-} from "./looped-review-prompts.js";
+} from "./review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -784,7 +784,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       try {
         const provider = await this.providerInstance(workflow, reviewer);
         provider.registerSession?.(readSessionId, {
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: "review",
           workflowId: workflow.id,
@@ -996,7 +996,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     try {
       const provider = await this.providerInstance(workflow, reviewer);
       provider.registerSession?.(readSessionId, {
-        origin: "looped-review",
+        origin: "automated-review",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         phase: "review",
         workflowId: workflow.id,
@@ -3662,7 +3662,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       allowCancelled: workflow.validationStopRequested === true,
     });
     const sealingStarted = Date.now();
-    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+    const generated = await this.invoke<unknown>("generate_review_package", {
       environmentId: workflow.environmentId,
       packageId: run.id,
       round: 1,
@@ -3784,7 +3784,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
           policy: await this.executionPolicy(workflow),
           interaction: {
-            origin: "looped-review",
+            origin: "automated-review",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             phase: "review",
             workflowId: workflow.id,
@@ -3817,7 +3817,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.save(workflow, token);
     }
     provider.registerSession?.(session.providerSessionId, {
-      origin: "looped-review",
+      origin: "automated-review",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       phase: workflow.phase === "fixing" ? "fix" : "review",
       workflowId: workflow.id,
@@ -4320,7 +4320,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         return;
       }
       const packageId = this.reviewPackageId(workflow);
-      const generated = await this.invoke<unknown>("generate_looped_review_package", {
+      const generated = await this.invoke<unknown>("generate_review_package", {
         environmentId: workflow.environmentId,
         packageId,
         round: 1,
@@ -4870,13 +4870,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     token: string,
   ): Promise<void> {
     const verifyStarted = Date.now();
-    const verification = await this.invoke<ReviewPackageVerification>(
-      "verify_looped_review_package",
-      {
-        environmentId: workflow.environmentId,
-        reviewPackage: workflow.reviewPackage,
-      },
-    );
+    const verification = await this.invoke<ReviewPackageVerification>("verify_review_package", {
+      environmentId: workflow.environmentId,
+      reviewPackage: workflow.reviewPackage,
+    });
     recordEfficiency(this.options.efficiency, {
       owner: "multi-review",
       operation: "evidence.verify",
@@ -4935,7 +4932,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private async executionPolicy(workflow: MultiReviewWorkflow) {
     const environment = await this.storage.getEnvironment(workflow.environmentId);
     if (!environment) throw new Error("Review environment no longer exists");
-    return resolveEnvironmentExecutionPolicy(environment, "looped-review");
+    return resolveEnvironmentExecutionPolicy(environment, "automated-review");
   }
 
   private async provider(

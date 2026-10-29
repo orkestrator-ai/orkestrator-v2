@@ -1348,7 +1348,7 @@ describe("GlobalSettings", () => {
     expect(instruction.className).toContain("focus-visible:ring-[3px]");
     expect(instruction.className).not.toContain("focus-visible:outline-1");
     expect(
-      screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/),
+      screen.getByText(/Applied to normal, Multi Review, and build-pipeline native reviews/),
     ).toBeTruthy();
     expect(screen.getByText(/cannot remove or override the fixed safety rules/)).toBeTruthy();
 

@@ -4,11 +4,9 @@ import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 import { validateWorkflowSnapshot } from "@orkestrator/protocol/workflow-snapshot";
 import {
   BUILD_PIPELINE_STATUS,
-  LOOPED_REVIEW_STATUS,
   MULTI_REVIEW_STATUS,
   REVIEWER_STATUS,
   adaptBuildPipeline,
-  adaptLoopedReview,
   adaptMultiReview,
 } from "./workflow-collector-adapters.js";
 import {
@@ -57,7 +55,7 @@ function multiReview(overrides: Record<string, unknown> = {}) {
 }
 
 function reader(
-  records: Partial<Record<"multi" | "looped" | "build", WorkflowRecord & { projectId?: string }>>,
+  records: Partial<Record<"multi" | "build", WorkflowRecord & { projectId?: string }>>,
   onRead?: (count: number) => void,
 ): WorkflowRecordReader {
   let reads = 0;
@@ -69,7 +67,6 @@ function reader(
   };
   return {
     getMultiReviewWorkflow: (id) => next(records.multi?.id === id ? records.multi : undefined),
-    getLoopedReviewWorkflow: (id) => next(records.looped?.id === id ? records.looped : undefined),
     getBuildPipeline: (id) =>
       next(
         records.build?.id === id
@@ -91,7 +88,6 @@ describe("status adapters", () => {
       failed: "failed",
     });
     expect(REVIEWER_STATUS).toMatchObject({ completed: "succeeded", running: "running" });
-    expect(LOOPED_REVIEW_STATUS["creating-pr"]).toBe("running");
     expect(BUILD_PIPELINE_STATUS.complete).toBe("succeeded");
     const adapted = adaptMultiReview("mr-1", multiReview());
     const r3 = adapted.nodes.find((node) => node.id === "reviewer:r3")!;
@@ -162,22 +158,6 @@ describe("status adapters", () => {
       findingCount: 1,
     });
 
-    const looped = adaptLoopedReview("lr-1", {
-      phase: "reconciling",
-      rounds: [
-        {
-          round: 1,
-          status: "reviewing",
-          passes: [
-            { pass: 1, status: "reconciling", report: { issues: [{}], testCoverageGaps: [] } },
-          ],
-        },
-      ],
-    });
-    expect(looped.nodes.find((node) => node.id === "round-1:pass-1")?.validation).toEqual({
-      state: "unknown",
-    });
-
     const pipeline = (structuredResultStatus?: string) =>
       adaptBuildPipeline("bp-1", {
         phase: "addressing",
@@ -211,61 +191,6 @@ describe("status adapters", () => {
       multiReview({ reviewers: [{ id: "has space", status: "completed", sessionKey: "s" }] }),
     );
     expect(adapted.nodes.find((node) => node.id === "reviewer:has space")?.links).toEqual([]);
-  });
-
-  test("looped review keeps rounds, passes, retries and the PR", () => {
-    const adapted = adaptLoopedReview("lr-1", {
-      phase: "completed",
-      currentRound: 2,
-      rounds: [
-        {
-          round: 1,
-          status: "completed",
-          package: {},
-          startedAt: "2026-10-20T09:00:00Z",
-          passes: [
-            {
-              pass: 1,
-              status: "completed",
-              sessionId: "p1",
-              report: { issues: [{}], testCoverageGaps: [] },
-              startedAt: "2026-10-20T09:00:00Z",
-            },
-          ],
-        },
-        {
-          round: 2,
-          status: "completed",
-          package: {},
-          passes: [{ pass: 1, status: "failed", sessionId: "p2" }],
-        },
-      ],
-      archivedPools: [{ round: 1, fixedAt: "2026-10-20T09:30:00Z", fixSessionId: "f1" }],
-      pr: { status: "created", sessionId: "pr" },
-    });
-    expect(adapted.status).toBe("succeeded");
-    expect(adapted.nodes.map((node) => node.id)).toEqual([
-      "round-1:prepare",
-      "round-1:pass-1",
-      "round-1:fix",
-      "round-2:prepare",
-      "round-2:pass-1",
-      "pr",
-    ]);
-    expect(adapted.edges.find((edge) => edge.to === "round-2:prepare")?.relation).toBe("retry");
-    expect(adapted.nodes.find((node) => node.id === "round-1:pass-1")?.validation).toEqual({
-      state: "accepted",
-      findingCount: 1,
-    });
-    expect(adapted.nodes.find((node) => node.id === "round-2:pass-1")?.validation?.state).toBe(
-      "rejected",
-    );
-    expect(adapted.nodes.find((node) => node.id === "round-1:fix")?.attemptId).toBe("f1");
-    expect(
-      adapted.nodes.every((node) =>
-        node.links.every((link) => link.targetRef === "looped-review:lr-1"),
-      ),
-    ).toBe(true);
   });
 
   test("build pipeline sessions keep attempts and verification acceptance", () => {
@@ -353,18 +278,18 @@ describe("WorkflowSnapshotCollector", () => {
 
   test("a record that changes between reads is never joined", async () => {
     const record = {
-      id: "lr-1",
+      id: "mr-1",
       environmentId: "env-1",
       revision: 1,
-      snapshot: { projectId: "project-1", phase: "fixing", rounds: [] },
+      snapshot: { projectId: "project-1", phase: "reviewing", reviewers: [] },
     };
     const collector = new WorkflowSnapshotCollector(
-      reader({ looped: record }, (count) => {
+      reader({ multi: record }, (count) => {
         if (count === 1) record.revision = 2;
       }),
     );
     await expect(
-      collector.collect(SCOPE, { workflowId: "looped-review", runId: "lr-1" }),
+      collector.collect(SCOPE, { workflowId: "multi-review", runId: "mr-1" }),
     ).rejects.toMatchObject({ error: { code: "revision_conflict" } });
   });
 

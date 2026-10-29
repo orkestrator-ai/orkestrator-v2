@@ -85,6 +85,7 @@
     "./graphs/compile": "./src/graphs/compile.ts",
     "./graphs/examples": "./src/graphs/examples.ts",
     "./graphs/grammar": "./src/graphs/grammar.ts",
+    "./graphs/library": "./src/graphs/library.ts",
     "./graphs/output-slots": "./src/graphs/output-slots.ts",
     "./graphs/predicates": "./src/graphs/predicates.ts",
     "./graphs/provenance": "./src/graphs/provenance.ts",

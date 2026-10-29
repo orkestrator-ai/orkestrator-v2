@@ -1,4 +1,5 @@
 import { registerChangeCommands } from "./commands-registry-changes.js";
+import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
@@ -355,6 +356,7 @@ export function createCommandRegistry(
   registerAgentAccountCommands(register, dependencies);
   registerOpenCodeProviderLoginCommands(register);
   registerWorkflowResultCommands(register);
+  registerGraphTemplateCommands(register);
   registerTeardownCommands(register, dependencies);
   // Last: the public contract composes the commands registered above.
   registerPublicApiCommands(register, dependencies);

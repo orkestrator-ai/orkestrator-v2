@@ -111,6 +111,8 @@ export type CommandContext = {
   scheduledJobs?: import("./scheduled-jobs/index.js").ScheduledJobService;
   /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
+  /** The graph template library: scopes, trust and per-project ceilings (item 109). */
+  graphTemplates?: import("./graph-template-service.js").GraphTemplateService;
 };
 
 export type CommandHandler = (

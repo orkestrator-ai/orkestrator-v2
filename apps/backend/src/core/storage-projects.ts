@@ -390,6 +390,8 @@ export class ProjectsRepository {
         error instanceof Error ? error.name : "unknown",
       );
     }
+    // Its template trust records and capability ceiling (item 109) go with it.
+    this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 

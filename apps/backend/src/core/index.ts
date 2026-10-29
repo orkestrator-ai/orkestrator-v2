@@ -175,6 +175,7 @@ import {
 } from "./environment-cleanup-reconciler.js";
 import { createPipelineEnvironmentGit } from "./commands-review.js";
 import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
+import { GraphTemplateService } from "./graph-template-service.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -194,6 +195,7 @@ export class OrkestratorBackend {
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
   private readonly userCommands: UserCommandService;
+  private readonly graphTemplates: GraphTemplateService;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -559,6 +561,8 @@ export class OrkestratorBackend {
       announce: (environmentId, tabId) => storage.announceUserCommands(environmentId, tabId),
     });
     context.userCommands = this.userCommands;
+    this.graphTemplates = new GraphTemplateService({ storage });
+    context.graphTemplates = this.graphTemplates;
     this.agentHumanPrompts = new AgentHumanPromptMonitor({
       prompts: humanPrompts,
       workingSessions: async () => {
@@ -2201,6 +2205,8 @@ export class OrkestratorBackend {
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
     this.agentHumanPrompts.stop();
+    // Non-recursive project-template watches: closing them never blocks.
+    this.graphTemplates.shutdown();
     // A user's `!` commands end with the backend; their processes must not outlive it.
     const userCommandsStopped = this.userCommands.shutdown().then(
       () => ({ stopped: true as const }),

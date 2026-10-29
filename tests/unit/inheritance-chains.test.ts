@@ -79,11 +79,6 @@ const INTENTIONAL_SUBCLASSES: ReadonlyArray<{
     reason: "Error refinement: an ambiguous dispatch is reported as provider unavailability.",
   },
   {
-    classes: ["ProviderUnavailableError", "MissingProviderSessionError"],
-    reason:
-      "Error refinement: looped review's missing provider session is an unavailable provider.",
-  },
-  {
     classes: ["CommandFailedError", "GitRemoteTimeoutError"],
     reason: "Error refinement: a git remote timeout is a failed command with a timeout cause.",
   },

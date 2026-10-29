@@ -293,7 +293,7 @@ export interface EnsureEnvironmentSetupResult extends StartEnvironmentResult {
   environment: Environment;
 }
 
-export interface PersistedLoopedReviewWorkflow<T = unknown> {
+export interface PersistedWorkflowRecord<T = unknown> {
   version: number;
   id: string;
   environmentId: string;

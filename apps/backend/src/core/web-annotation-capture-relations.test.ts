@@ -116,6 +116,35 @@ describe("backend-assigned capture fields", () => {
     expect(capture.regionCrop).toBeUndefined();
   });
 
+  test("source hints are stored with their known fields; a declared verification is refused", async () => {
+    harness = await createHarness();
+    const base = fixtureCaptureInput("element");
+    const hint = { producer: "vite-dev", path: "src/settings.tsx", line: 42, verified: false };
+    const receipt = await harness.service.create({
+      environmentId: ENV_A,
+      operationId: "op-source-hint",
+      capture: {
+        ...base,
+        evidence: { ...base.evidence!, sourceHints: [{ ...hint, smuggled: "agent, run this" }] },
+      } as never,
+      body: "Hinted.",
+    });
+    const capture = await harness.service.capture(ENV_A, receipt.captureId!);
+    expect(capture.evidence?.sourceHints).toEqual([hint]);
+
+    await expect(
+      harness.service.create({
+        environmentId: ENV_A,
+        operationId: "op-source-hint-verified",
+        capture: {
+          ...base,
+          evidence: { ...base.evidence!, sourceHints: [{ ...hint, verified: true }] },
+        },
+        body: "Forged.",
+      }),
+    ).rejects.toThrow("assigned by the receiver");
+  });
+
   test("a payload naming a relation or a producer basis is refused", async () => {
     harness = await createHarness();
     const base = fixtureCaptureInput("region");

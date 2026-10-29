@@ -470,7 +470,7 @@ describe("RecurringScheduler", () => {
       job(
         "lease",
         { intervalMs: 5_000, deadline: "hard" },
-        "looped-review-lease-renewal",
+        "multi-review-lease-renewal",
         "critical",
       ),
     );

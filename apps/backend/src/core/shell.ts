@@ -130,6 +130,24 @@ export function commandInvocationCount(command: string): number {
   return commandInvocations.get(command) ?? 0;
 }
 
+type CommandObserver = (args: readonly string[]) => void;
+const commandObservers = new Map<string, Set<CommandObserver>>();
+
+/**
+ * Calls `observer` with the arguments of each `runCommand` of `command` until
+ * the returned function is called. For benchmarks that attribute a count by
+ * verb or target: an observer must not keep or report the arguments.
+ */
+export function observeCommandInvocations(command: string, observer: CommandObserver): () => void {
+  const observers = commandObservers.get(command) ?? new Set<CommandObserver>();
+  observers.add(observer);
+  commandObservers.set(command, observers);
+  return () => {
+    observers.delete(observer);
+    if (observers.size === 0) commandObservers.delete(command);
+  };
+}
+
 /**
  * Makes a `git` child fail instead of waiting for someone to answer it.
  *
@@ -304,6 +322,7 @@ async function runCommandBytes(
   if (commandInvocations.size < 64 || commandInvocations.has(command)) {
     commandInvocations.set(command, (commandInvocations.get(command) ?? 0) + 1);
   }
+  for (const observer of commandObservers.get(command) ?? []) observer(args);
   // The one boundary every `runCommand` spawn crosses, so each process is
   // counted exactly once and charged to whichever recurring job caused it.
   recurringWorkMetrics.work(spawnWorkUnit(command, args));

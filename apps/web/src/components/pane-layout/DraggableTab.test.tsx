@@ -8,7 +8,6 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
@@ -17,7 +16,6 @@ import {
   formatPreviewServiceUri,
   type PreviewRegistrySnapshot,
 } from "@orkestrator/protocol/preview-services";
-import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
@@ -96,7 +94,6 @@ describe("DraggableTab title precedence", () => {
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useMultiReviewStore.setState({ workflows: new Map() });
   });
 
@@ -490,47 +487,6 @@ describe("DraggableTab title precedence", () => {
     }
   });
 
-  test("looped-review tabs show their default title and workflow icon", () => {
-    const view = renderTab(
-      {
-        id: "looped-a",
-        type: "looped-review",
-        loopedReviewTabData: {
-          environmentId: "env-1",
-          workflowId: "workflow-1",
-        },
-      },
-      1,
-    );
-
-    expect(screen.getByText("Looped Review 2")).toBeDefined();
-    expect(view.container.querySelector("svg.text-cyan-400")).toBeTruthy();
-  });
-
-  test("looped-review tabs reflect completed workflow state", () => {
-    const workflow = loopedReviewFixture({
-      environmentId: "env-1",
-      projectId: "project-1",
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-      phase: "completed",
-      pr: { status: "created", url: "https://github.com/acme/repo/pull/1" },
-    });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-
-    renderTab({
-      id: "looped-complete",
-      type: "looped-review",
-      loopedReviewTabData: {
-        environmentId: "env-1",
-        workflowId: workflow.id,
-      },
-    });
-
-    expect(screen.getByText("Looped Review ✓")).toBeDefined();
-  });
-
   test("multi-review tabs show a checkmark after an interactive handoff", () => {
     const workflow = {
       version: 1 as const,
@@ -679,7 +635,6 @@ describe("DraggableTab icons", () => {
     useNativeAgentProjectionStore.setState({ projections: new Map() });
     useBuildPipelineStore.setState({ pipelines: new Map() });
     useFileDirtyStore.setState({ dirtyFiles: new Map() });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useMultiReviewStore.setState({ workflows: new Map() });
   });
 
@@ -761,15 +716,6 @@ describe("DraggableTab icons", () => {
         },
       },
       selector: "svg.lucide-hammer.text-yellow-400",
-    },
-    {
-      name: "looped-review",
-      tab: {
-        id: "t",
-        type: "looped-review",
-        loopedReviewTabData: { environmentId: "env-1", workflowId: "w-1" },
-      },
-      selector: "svg.lucide-repeat-2.text-cyan-400",
     },
     {
       name: "plain",

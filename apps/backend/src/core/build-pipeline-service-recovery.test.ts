@@ -343,7 +343,7 @@ async function withService(
     if (command === "get_environment_uncommitted_paths") {
       return CLEAN_GIT_STATE as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       packageGeneration.count += 1;
       if (packageGeneration.error) throw packageGeneration.error;
       const generated = testGeneratedReviewPackage(args);
@@ -351,7 +351,7 @@ async function withService(
       generated.headRef = head;
       return generated as T;
     }
-    if (command === "verify_looped_review_package") {
+    if (command === "verify_review_package") {
       return {
         valid: packageGeneration.verificationValid,
         ...(packageGeneration.verificationValid ? {} : { reason: "artifact is missing" }),
@@ -2081,9 +2081,7 @@ describe("BuildPipelineService retry review", () => {
       const preparing = await snapshot(storage, built.id);
       expect(preparing.phase).toBe("fixing");
       expect(preparing.reviewPackage).toBeUndefined();
-      expect(invocations.some((entry) => entry.command === "verify_looped_review_package")).toBe(
-        true,
-      );
+      expect(invocations.some((entry) => entry.command === "verify_review_package")).toBe(true);
 
       packageGeneration.verificationValid = true;
       await service.advanceNow(built.id);

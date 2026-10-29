@@ -10,11 +10,13 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
-import type { NodeService } from "./nodes/node-service.js";
-import type { NodePortal } from "./nodes/node-portal.js";
-import type { NodeCoordination } from "./nodes/node-coordination.js";
-import { parseNodeFileScope } from "./nodes/node-files.js";
-import { parseNodeActionApproval } from "./nodes/node-action-requests.js";
+import {
+  parseNodeActionApproval,
+  parseNodeFileScope,
+  type NodeCoordination,
+  type NodePortal,
+  type NodeService,
+} from "./nodes/index.js";
 
 function safeInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {

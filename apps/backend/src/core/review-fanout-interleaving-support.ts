@@ -275,7 +275,7 @@ const RESTARTED =
 
 const policy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "full" },
-  "looped-review",
+  "automated-review",
 );
 
 /** The report a reviewer's provider submits; the summary names the reviewer. */

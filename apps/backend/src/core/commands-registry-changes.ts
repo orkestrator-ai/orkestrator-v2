@@ -23,8 +23,7 @@ import {
 } from "@orkestrator/protocol/change-resources";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import type { ChangeTrackingService } from "./change-tracking/service.js";
-import { measureLegacyPayload } from "./change-tracking/legacy-payload.js";
+import { measureLegacyPayload, type ChangeTrackingService } from "./change-tracking/index.js";
 
 const MAX_ID = 512;
 

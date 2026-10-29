@@ -5,7 +5,7 @@ import {
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import type { ClientEnvironment, Environment, PersistedLoopedReviewWorkflow } from "./models.js";
+import type { ClientEnvironment, Environment, PersistedMultiReviewWorkflow } from "./models.js";
 import type {
   EnvironmentSetupStartResult,
   ClientEnvironmentSetupStartResult,
@@ -94,8 +94,8 @@ export function conditionalSnapshot<T>(
     : { unchanged: false, digest, value };
 }
 
-export type RendererLoopedReviewWorkflow = Omit<
-  PersistedLoopedReviewWorkflow,
+export type RendererWorkflowRecord = Omit<
+  PersistedMultiReviewWorkflow,
   "snapshot" | "controllerLease"
 > & { snapshot?: unknown };
 
@@ -105,12 +105,12 @@ export type RendererLoopedReviewWorkflow = Omit<
  * record without them. A record without a snapshot is returned untouched so
  * the response always mirrors the stored shape.
  */
-export function stripLoopedReviewRendererSecrets(
-  workflow: PersistedLoopedReviewWorkflow,
-): RendererLoopedReviewWorkflow {
+export function stripWorkflowRendererSecrets(
+  workflow: PersistedMultiReviewWorkflow,
+): RendererWorkflowRecord {
   const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
   if (workflow.snapshot === undefined) return rendererWorkflow;
-  return { ...rendererWorkflow, snapshot: stripLoopedReviewSnapshotSecrets(workflow.snapshot) };
+  return { ...rendererWorkflow, snapshot: stripWorkflowSnapshotSecrets(workflow.snapshot) };
 }
 
 /**
@@ -120,7 +120,7 @@ export function stripLoopedReviewRendererSecrets(
  * here for the same reason `get`/`list` remove it — the renderer installs these
  * responses straight into its store, and in gateway mode that crosses a network.
  */
-export function stripLoopedReviewSnapshotSecrets<T>(snapshot: T): T {
+export function stripWorkflowSnapshotSecrets<T>(snapshot: T): T {
   if (typeof snapshot !== "object" || snapshot === null) return snapshot;
   const { controllerFence: _controllerFence, ...rest } = snapshot as Record<string, unknown> & {
     controllerFence?: unknown;

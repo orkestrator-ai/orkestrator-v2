@@ -299,7 +299,7 @@ function pendingInteractionSnapshot(
       id: `interaction-${index}`,
       provider: "codex",
       kind,
-      origin: "looped-review",
+      origin: "automated-review",
       sessionId: "provider-session",
       state: "pending",
       revision: 1,
@@ -1045,14 +1045,14 @@ describe("NativeAgentService", () => {
         interactionMonitorMode: "observe-only",
       },
       async ({ storage, service }) => {
-        const logicalSessionKey = "looped-review:workflow:capability:Review";
+        const logicalSessionKey = "automated-review:workflow:capability:Review";
         await storage.adoptNativeAgentSession({
           key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
           environmentId: "env-1",
           agent: "codex",
           logicalSessionKey,
           providerSessionId: "provider-session",
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();

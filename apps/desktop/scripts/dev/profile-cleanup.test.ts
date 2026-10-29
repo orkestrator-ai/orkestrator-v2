@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,7 +24,12 @@ import {
   removeProfileKeychainItem,
   type CommandRunner,
 } from "./profile-cleanup.js";
-import { atomicWriteJson, initializeProfile } from "./profile-io.js";
+import {
+  atomicWriteJson,
+  initializeProfile,
+  isRemovedProfileSkeleton,
+  removeProfileSkeleton,
+} from "./profile-io.js";
 
 let root: string;
 let roots: RuntimeProfileRoots;
@@ -144,7 +150,7 @@ describe("removeProfile", () => {
       ["network", "ls", "-q", "--filter", owner],
       ["network", "rm", "network-one"],
     ]);
-    expect(existsSync(profile.profileRoot)).toBe(false);
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
   });
 
   test("keeps profile state when an owned volume cannot be removed", async () => {
@@ -163,7 +169,7 @@ describe("removeProfile", () => {
     await expect(
       removeProfile(profile, { keepToolchains: false, roots, run: resourceRun }),
     ).rejects.toThrow("volume is in use");
-    expect(existsSync(profile.profileRoot)).toBe(true);
+    expect(existsSync(path.join(profile.profileRoot, "profile.json"))).toBe(true);
   });
 });
 
@@ -194,7 +200,8 @@ describe("profile Keychain item", () => {
       platform: "darwin",
       keychainRoots: roots,
       run: (command, args) => {
-        if (command === "security") stateGoneFirst &&= !existsSync(profile.profileRoot);
+        if (command === "security")
+          stateGoneFirst &&= !existsSync(path.join(profile.profileRoot, "profile.json"));
         return keychainRun(command, args);
       },
     });
@@ -267,7 +274,7 @@ describe("profile Keychain item", () => {
       platform: "darwin",
       run,
     });
-    expect(existsSync(profile.profileRoot)).toBe(false);
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
     expect(result.keychainItemsRemoved).toBe(0);
     expect(result.keychainWarning).toContain("outside the default development root");
     expect(securityCalls).toEqual([]);
@@ -288,7 +295,7 @@ describe("profile Keychain item", () => {
       keychainRoots: roots,
       run: locked,
     });
-    expect(existsSync(profile.profileRoot)).toBe(false);
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
     expect(result.keychainItemsRemoved).toBe(0);
     expect(result.keychainWarning).toBe(
       'Could not remove the login Keychain item "Orkestrator AI — DEV [keychain-locked] Safe Storage" (security exited 51); delete it in Keychain Access.',
@@ -313,6 +320,148 @@ describe("profile Keychain item", () => {
 });
 
 describe("pruneProfiles", () => {
+  const old = new Date("2026-01-01T00:00:00.000Z");
+  const now = () => Date.parse("2026-01-31T00:00:00.000Z");
+
+  async function oldSkeleton(id: string) {
+    const profile = await createProfile(id);
+    await mkdir(path.join(profile.dataDir, "portable-inputs"));
+    await removeProfile(profile, { keepToolchains: false, roots, run, platform: "linux" });
+    await utimes(profile.profileRoot, old, old);
+    return profile;
+  }
+
+  test("age pruning skips same-name startup paused before metadata publication", async () => {
+    const profile = await oldSkeleton("starting");
+    const directories = [
+      profile.profileRoot,
+      profile.dataDir,
+      path.join(profile.dataDir, "portable-inputs"),
+    ];
+    const identities = await Promise.all(
+      directories.map(async (directory) => (await stat(directory)).ino),
+    );
+    let paused = false;
+
+    await initializeProfile(profile, {
+      beforeMetadata: async () => {
+        paused = true;
+        expect(existsSync(path.join(profile.profileRoot, "profile.json"))).toBe(false);
+        // All startup siblings exist but are still empty at this boundary.
+        expect(await readdir(profile.runtimeDir)).toEqual([]);
+        expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(false);
+        await utimes(profile.profileRoot, old, old);
+        expect(await pruneProfiles({ roots, run, olderThanDays: 14, now })).toEqual([
+          { id: profile.id, action: "kept", reason: "initialization or pruning in progress" },
+        ]);
+        expect(
+          await Promise.all(directories.map(async (directory) => (await stat(directory)).ino)),
+        ).toEqual(identities);
+      },
+    });
+
+    expect(paused).toBe(true);
+    expect(
+      JSON.parse(await readFile(path.join(profile.profileRoot, "profile.json"), "utf8")).id,
+    ).toBe(profile.id);
+    expect(existsSync(path.join(profile.profileRoot, DEV_PROFILE_SENTINEL))).toBe(true);
+    // Successful publication releases the lock.
+    await initializeProfile(profile);
+  });
+
+  test("startup cannot enter a skeleton selected by pruning and can retry after removal", async () => {
+    const profile = await oldSkeleton("selected");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: async () => {
+        await expect(initializeProfile(profile)).rejects.toThrow("pruning is in progress");
+      },
+    });
+    expect(actions(outcomes)).toEqual({ selected: "removed" });
+    await initializeProfile(profile);
+    expect(existsSync(path.join(profile.profileRoot, DEV_PROFILE_SENTINEL))).toBe(true);
+  });
+
+  test("skeleton detection rejects empty startup siblings and unexpected data children", async () => {
+    const profile = await oldSkeleton("shape");
+    for (const unexpected of [profile.runtimeDir, path.join(profile.dataDir, "other")]) {
+      await mkdir(unexpected);
+      expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(false);
+      expect(actions(await pruneProfiles({ roots, run, olderThanDays: 14, now }))).toEqual({
+        shape: "kept",
+      });
+      await rm(unexpected, { recursive: true });
+    }
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
+  });
+
+  test("content arriving after skeleton selection refuses rmdir and reports failure", async () => {
+    const profile = await oldSkeleton("late-content");
+    const late = path.join(profile.dataDir, "portable-inputs", "keep");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: () => writeFile(late, "new input"),
+    });
+    expect(actions(outcomes)).toEqual({ "late-content": "failed" });
+    expect(outcomes[0]?.reason).toContain("ENOTEMPTY");
+    expect(await readFile(late, "utf8")).toBe("new input");
+    expect(existsSync(profile.profileRoot)).toBe(true);
+    // Failure also releases the startup lock.
+    await initializeProfile(profile);
+  });
+
+  test("an already removed selected skeleton is a successful prune", async () => {
+    const profile = await oldSkeleton("disappeared");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: (directory) => rm(directory, { recursive: true }),
+    });
+    expect(actions(outcomes)).toEqual({ disappeared: "removed" });
+    expect(existsSync(profile.profileRoot)).toBe(false);
+  });
+
+  test("an unexpected empty sibling appearing after selection blocks skeleton removal", async () => {
+    const profile = await oldSkeleton("late-directory");
+    const unexpected = path.join(profile.profileRoot, "new-state");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: () => mkdir(unexpected),
+    });
+    expect(actions(outcomes)).toEqual({ "late-directory": "failed" });
+    expect(outcomes[0]?.reason).toContain("ENOTEMPTY");
+    expect(existsSync(unexpected)).toBe(true);
+  });
+
+  test("a skeleton descendant disappearing before enumeration is already removed", async () => {
+    const profile = await oldSkeleton("descendant");
+    const inputs = path.join(profile.dataDir, "portable-inputs");
+    const realReaddir = fs.readdir;
+    const enumerate = spyOn(fs, "readdir").mockImplementation((async (
+      ...args: Parameters<typeof fs.readdir>
+    ) => {
+      if (args[0] === inputs) await rm(inputs, { recursive: true, force: true });
+      return realReaddir(...args);
+    }) as typeof fs.readdir);
+    try {
+      await expect(removeProfileSkeleton(profile.profileRoot)).resolves.toBeUndefined();
+    } finally {
+      enumerate.mockRestore();
+    }
+    expect(existsSync(profile.profileRoot)).toBe(false);
+  });
+
   test("removes a stopped profile whose checkout is gone and keeps one that exists", async () => {
     const orphan = await createProfile("orphan", gone());
     await createProfile("current");
@@ -323,7 +472,7 @@ describe("pruneProfiles", () => {
     expect(outcomes.find((entry) => entry.id === "orphan")?.reason).toBe(
       "its checkout no longer exists",
     );
-    expect(existsSync(orphan.profileRoot)).toBe(false);
+    expect(await isRemovedProfileSkeleton(orphan.profileRoot)).toBe(true);
     expect(existsSync(path.join(roots.developmentRoot, "profiles", "current"))).toBe(true);
   });
 
@@ -338,6 +487,7 @@ describe("pruneProfiles", () => {
     const unsigned = await createProfile("unsigned", gone());
     await rm(path.join(unsigned.profileRoot, DEV_PROFILE_SENTINEL));
     await mkdir(path.join(roots.developmentRoot, "profiles", "stray"), { recursive: true });
+    await writeFile(path.join(roots.developmentRoot, "profiles", "stray", "notes.txt"), "mine");
 
     const outcomes = await pruneProfiles({
       roots,
@@ -363,7 +513,7 @@ describe("pruneProfiles", () => {
     const outcomes = await pruneProfiles({ roots, run, dryRun: true });
 
     expect(actions(outcomes)).toEqual({ orphan: "would-remove" });
-    expect(existsSync(orphan.profileRoot)).toBe(true);
+    expect(existsSync(path.join(orphan.profileRoot, "profile.json"))).toBe(true);
     expect(dockerCalls).toEqual([]);
   });
 
@@ -382,7 +532,53 @@ describe("pruneProfiles", () => {
     });
 
     expect(outcomes).toEqual([{ id: "idle", action: "removed", reason: "unused for 30 days" }]);
-    expect(existsSync(idle.profileRoot)).toBe(false);
+    expect(await isRemovedProfileSkeleton(idle.profileRoot)).toBe(true);
+  });
+
+  test("leaves what a removal keeps alone until the age rule deletes it", async () => {
+    const reset = await createProfile("reset");
+    await removeProfile(reset, { keepToolchains: false, roots, run, platform: "linux" });
+    const skeleton = reset.profileRoot;
+    expect(await isRemovedProfileSkeleton(skeleton)).toBe(true);
+    const at = (iso: string) => () => Date.parse(iso);
+    await utimes(
+      skeleton,
+      new Date("2026-01-01T00:00:00.000Z"),
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+
+    // Silent and kept: it is no profile, and its name may start again.
+    expect(await pruneProfiles({ roots, run })).toEqual([]);
+    expect(
+      await pruneProfiles({ roots, run, olderThanDays: 14, now: at("2026-01-10T00:00:00.000Z") }),
+    ).toEqual([]);
+    expect(
+      await pruneProfiles({
+        roots,
+        run,
+        olderThanDays: 14,
+        dryRun: true,
+        now: at("2026-01-31T00:00:00.000Z"),
+      }),
+    ).toEqual([{ id: "reset", action: "would-remove", reason: "emptied 30 days ago" }]);
+    expect(existsSync(skeleton)).toBe(true);
+
+    // A file that appears inside fails the removal instead of being deleted.
+    const late = path.join(reset.dataDir, "late");
+    await mkdir(late);
+    await writeFile(path.join(late, "input"), "staged");
+    expect(await isRemovedProfileSkeleton(skeleton)).toBe(false);
+    await rm(late, { recursive: true });
+    await utimes(
+      skeleton,
+      new Date("2026-01-01T00:00:00.000Z"),
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+
+    expect(
+      await pruneProfiles({ roots, run, olderThanDays: 14, now: at("2026-01-31T00:00:00.000Z") }),
+    ).toEqual([{ id: "reset", action: "removed", reason: "emptied 30 days ago" }]);
+    expect(existsSync(skeleton)).toBe(false);
   });
 
   test("removes exact-owner containers and the development image of a gone checkout", async () => {
@@ -466,7 +662,7 @@ describe("pruneProfiles", () => {
 
     expect(outcomes[0]?.action).toBe("failed");
     expect(outcomes[0]?.reason).toContain("uncommitted changes");
-    expect(existsSync(orphan.profileRoot)).toBe(true);
+    expect(existsSync(path.join(orphan.profileRoot, "profile.json"))).toBe(true);
     expect(existsSync(path.join(tracked, "README.md"))).toBe(true);
     expect(existsSync(path.join(untracked, "notes.txt"))).toBe(true);
     expect(dockerCalls).toEqual([]);
@@ -537,7 +733,7 @@ test("reset and orphan prune preserve linked worktrees without external ownershi
     ).rejects.toThrow("sentinel");
     await pruneProfiles({ roots, run, force: true });
     expect(existsSync(linked)).toBe(true);
-    expect(existsSync(profile.profileRoot)).toBe(true);
+    expect(existsSync(path.join(profile.profileRoot, "profile.json"))).toBe(true);
     expect(git(checkout, "worktree", "list", "--porcelain")).toContain(linked);
     expect(git(checkout, "branch", "--list", id)).toContain(id);
   }

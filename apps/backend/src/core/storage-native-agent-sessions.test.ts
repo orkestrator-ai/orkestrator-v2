@@ -157,57 +157,19 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("migrates legacy looped-review sessions to unattended without replacing the provider", async () => {
-    const legacyInput = {
-      ...input,
-      logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
-    };
-    const legacy = {
-      [input.key]: {
-        ...legacyInput,
-        providerSessionId: "legacy-provider-session",
-        createdAt: new Date(1).toISOString(),
-        updatedAt: new Date(2).toISOString(),
-      },
-    };
-    await withLegacySessions(legacy, async (first, second, dataDir) => {
-      const migrated = await first.getOrCreateNativeAgentSession(
-        {
-          ...legacyInput,
-          origin: "looped-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        },
-        async () => "must-not-be-created",
-      );
-      expect(migrated).toMatchObject({
-        providerSessionId: "legacy-provider-session",
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      });
-      expect(
-        readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)?.[input.key],
-      ).toMatchObject({
-        version: 1,
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      });
-      expect(await second.getNativeAgentSession(input.key)).toEqual(migrated);
-    });
-  });
-
   test("persists unattended origin and policy on newly created logical sessions", async () => {
     await withStorage(async (first) => {
       const saved = await first.getOrCreateNativeAgentSession(
         {
           ...input,
-          origin: "looped-review",
+          origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         },
         async () => "provider-session",
       );
       expect(saved).toMatchObject({
         version: 1,
-        origin: "looped-review",
+        origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
       expect(await first.getNativeAgentSession(input.key)).toEqual(saved);
@@ -243,7 +205,7 @@ describe("StorageService native agent sessions", () => {
           ...input,
           version: 1,
           providerSessionId: "provider-session",
-          origin: "looped-review",
+          origin: "build-pipeline",
           interactionPolicy: { version: 1, mode: "unattended" },
           createdAt: new Date(1).toISOString(),
           updatedAt: new Date(2).toISOString(),
@@ -435,7 +397,7 @@ describe("StorageService native agent sessions", () => {
         first.getOrCreateNativeAgentSession(
           {
             ...input,
-            origin: "looped-review",
+            origin: "build-pipeline",
             interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
           },
           async () => "provider-session",
@@ -457,7 +419,7 @@ describe("StorageService native agent sessions", () => {
       await first.adoptNativeAgentSession({
         ...input,
         providerSessionId: "provider-old",
-        origin: "looped-review",
+        origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
       const replacement = await first.adoptNativeAgentSession({
@@ -467,7 +429,7 @@ describe("StorageService native agent sessions", () => {
       });
       expect(replacement).toMatchObject({
         providerSessionId: "provider-new",
-        origin: "looped-review",
+        origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
     });

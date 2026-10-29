@@ -151,25 +151,30 @@ describe("Grok adapter", () => {
 
   test("Grok: GROK_HOME relocates the native file and the compat switches", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-grok-home-"));
-    await fixture.cleanup();
-    fixture = createFixture({ env: { GROK_HOME: custom } });
-    fixture.write("home/.claude.json", JSON.stringify({ mcpServers: { a: { command: "x" } } }));
-    // The default home's switch no longer applies; the relocated one does.
-    fixture.write("home/.grok/config.toml", `[compat.claude]\nmcps = true\n`);
-    const { remove } = await crud(fixture, "grok", "grok:user");
-    const file = path.join(custom, "config.toml");
-    expect(
-      (Bun.TOML.parse(readFileSync(file, "utf8")) as any).mcp_servers["fixture-b"],
-    ).toBeTruthy();
-    let snapshot = await grokSnapshot("backend");
-    expect(source(snapshot, "grok:user").displayPath).toBe(file);
-    await remove();
-    const text = readFileSync(file, "utf8");
-    Bun.write(file, `${text}\n[compat.claude]\nmcps = false\n`);
-    await Bun.sleep(1);
-    snapshot = await grokSnapshot("backend");
-    expect(entry(snapshot, "grok:compat-claude-user", "a").status).toBe("policy-excluded");
-    rmSync(custom, { recursive: true, force: true });
+    try {
+      await fixture.cleanup();
+      fixture = createFixture({ env: { GROK_HOME: custom } });
+      fixture.write("home/.claude.json", JSON.stringify({ mcpServers: { a: { command: "x" } } }));
+      // The default home's switch no longer applies; the relocated one does.
+      fixture.write("home/.grok/config.toml", `[compat.claude]\nmcps = true\n`);
+      const { remove } = await crud(fixture, "grok", "grok:user");
+      const file = path.join(custom, "config.toml");
+      expect(
+        (Bun.TOML.parse(readFileSync(file, "utf8")) as any).mcp_servers["fixture-b"],
+      ).toBeTruthy();
+      let snapshot = await grokSnapshot("backend");
+      expect(source(snapshot, "grok:user").displayPath).toBe(file);
+      await remove();
+      const text = readFileSync(file, "utf8");
+      Bun.write(file, `${text}\n[compat.claude]\nmcps = false\n`);
+      await Bun.sleep(1);
+      snapshot = await grokSnapshot("backend");
+      expect(entry(snapshot, "grok:compat-claude-user", "a").status).toBe("policy-excluded");
+    } finally {
+      // The fixture's service writes into custom; settle it first.
+      await fixture.cleanup();
+      rmSync(custom, { recursive: true, force: true });
+    }
   });
 
   test("Grok: compat switches come from the user scope and the environment, not the project", async () => {

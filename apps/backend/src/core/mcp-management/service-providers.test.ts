@@ -260,21 +260,26 @@ describe("provider adapters", () => {
 
   test("OpenCode: XDG_CONFIG_HOME relocates the user file", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-xdg-"));
-    await fixture.cleanup();
-    fixture = createFixture({ env: { XDG_CONFIG_HOME: custom } });
-    const read = () =>
-      JSON.parse(readFileSync(path.join(custom, "opencode", "opencode.json"), "utf8"));
-    const { remove } = await crud(fixture, "opencode", "opencode:user-opencode.json");
-    const snapshot = await fixture.service.snapshot({
-      targetId: await targetIdFor(fixture, "opencode", "backend"),
-    });
-    expect(
-      snapshot.sources.find((source) => source.sourceId === "opencode:user-opencode.json")
-        ?.displayPath,
-    ).toBe(`${custom}/opencode/opencode.json`);
-    expect(read().mcp["fixture-b"].type).toBe("local");
-    await remove();
-    expect(read().mcp?.["fixture-b"]).toBeUndefined();
-    rmSync(custom, { recursive: true, force: true });
+    try {
+      await fixture.cleanup();
+      fixture = createFixture({ env: { XDG_CONFIG_HOME: custom } });
+      const read = () =>
+        JSON.parse(readFileSync(path.join(custom, "opencode", "opencode.json"), "utf8"));
+      const { remove } = await crud(fixture, "opencode", "opencode:user-opencode.json");
+      const snapshot = await fixture.service.snapshot({
+        targetId: await targetIdFor(fixture, "opencode", "backend"),
+      });
+      expect(
+        snapshot.sources.find((source) => source.sourceId === "opencode:user-opencode.json")
+          ?.displayPath,
+      ).toBe(`${custom}/opencode/opencode.json`);
+      expect(read().mcp["fixture-b"].type).toBe("local");
+      await remove();
+      expect(read().mcp?.["fixture-b"]).toBeUndefined();
+    } finally {
+      // The fixture's service writes into custom; settle it first.
+      await fixture.cleanup();
+      rmSync(custom, { recursive: true, force: true });
+    }
   });
 });

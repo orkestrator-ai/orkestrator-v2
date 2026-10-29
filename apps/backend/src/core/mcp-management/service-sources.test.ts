@@ -198,83 +198,88 @@ describe("Codex project trust comes from Codex's own settings", () => {
 describe("OpenCode layers match the pinned binary's load order", () => {
   test(".opencode, ~/.opencode, OPENCODE_CONFIG_DIR and inline content stack above project files", async () => {
     const configDir = mkdtempSync(path.join(tmpdir(), "mcp-oc-dir-"));
-    await fixture.cleanup();
-    fixture = createFixture({
-      env: {
-        OPENCODE_CONFIG_DIR: configDir,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({
-          mcp: {
-            inline: {
-              type: "remote",
-              url: "https://inline.example/mcp",
-              headers: { A: "SECRETVALUE" },
+    try {
+      await fixture.cleanup();
+      fixture = createFixture({
+        env: {
+          OPENCODE_CONFIG_DIR: configDir,
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            mcp: {
+              inline: {
+                type: "remote",
+                url: "https://inline.example/mcp",
+                headers: { A: "SECRETVALUE" },
+              },
             },
-          },
-        }),
-      },
-    });
-    const oc = (servers: Record<string, unknown>) => JSON.stringify({ mcp: servers });
-    fixture.write(
-      "home/.config/opencode/opencode.json",
-      oc({ s: { type: "local", command: ["global"] } }),
-    );
-    fixture.write("worktree/opencode.json", oc({ s: { type: "local", command: ["project"] } }));
-    fixture.write(
-      "worktree/.opencode/opencode.jsonc",
-      `{ // dir\n "mcp": { "s": { "type": "local", "command": ["project-dir"] } } }`,
-    );
-    fixture.write(
-      "home/.opencode/opencode.json",
-      oc({ t: { type: "local", command: ["home-dir"] } }),
-    );
-    writeFileSync(
-      path.join(configDir, "opencode.json"),
-      oc({ t: { type: "local", command: ["config-dir"] } }),
-    );
-    const snapshot = await fixture.service.snapshot({
-      targetId: await targetIdFor(fixture, "opencode", "environment"),
-    });
-    const ids = snapshot.sources.map((row) => row.sourceId);
-    expect(ids).toContain("opencode:project-dir-opencode.jsonc");
-    expect(ids).toContain("opencode:home-dir-opencode.json");
-    expect(ids).toContain("opencode:config-dir-opencode.json");
-    // Project `.opencode` beats project files; OPENCODE_CONFIG_DIR beats ~/.opencode.
-    expect(snapshot.effective.s).toBe(
-      entry(snapshot, "opencode:project-dir-opencode.jsonc", "s").entryId,
-    );
-    expect(entry(snapshot, "opencode:project-opencode.json", "s").status).toBe("shadowed");
-    expect(snapshot.effective.t).toBe(
-      entry(snapshot, "opencode:config-dir-opencode.json", "t").entryId,
-    );
-    expect(entry(snapshot, "opencode:home-dir-opencode.json", "t").status).toBe("shadowed");
-    const inline = source(snapshot, "opencode:inline");
-    expect(inline.writable).toBe(false);
-    expect(inline.displayPath).toBe("OPENCODE_CONFIG_CONTENT environment variable");
-    expect(entry(snapshot, "opencode:inline", "inline").status).toBe("effective");
-    expect(entry(snapshot, "opencode:inline", "inline").actions.edit.supported).toBe(false);
-    expect(entry(snapshot, "opencode:inline", "inline").actions.remove.supported).toBe(false);
-    expect(JSON.stringify(snapshot)).not.toContain("SECRETVALUE");
-    // The project `.opencode` file is writable and stays inside the worktree.
-    await fixture.service.mutate(
-      mutation(snapshot.target.targetId, {
-        kind: "add",
-        sourceId: "opencode:project-dir-opencode.jsonc",
-        expectedRevision: revision(snapshot, "opencode:project-dir-opencode.jsonc"),
-        definition: { name: "added", transport: "stdio", command: "x" },
-      }),
-    );
-    expect(fixture.read("worktree/.opencode/opencode.jsonc")).toContain("// dir");
-    await expect(
-      fixture.service.mutate(
+          }),
+        },
+      });
+      const oc = (servers: Record<string, unknown>) => JSON.stringify({ mcp: servers });
+      fixture.write(
+        "home/.config/opencode/opencode.json",
+        oc({ s: { type: "local", command: ["global"] } }),
+      );
+      fixture.write("worktree/opencode.json", oc({ s: { type: "local", command: ["project"] } }));
+      fixture.write(
+        "worktree/.opencode/opencode.jsonc",
+        `{ // dir\n "mcp": { "s": { "type": "local", "command": ["project-dir"] } } }`,
+      );
+      fixture.write(
+        "home/.opencode/opencode.json",
+        oc({ t: { type: "local", command: ["home-dir"] } }),
+      );
+      writeFileSync(
+        path.join(configDir, "opencode.json"),
+        oc({ t: { type: "local", command: ["config-dir"] } }),
+      );
+      const snapshot = await fixture.service.snapshot({
+        targetId: await targetIdFor(fixture, "opencode", "environment"),
+      });
+      const ids = snapshot.sources.map((row) => row.sourceId);
+      expect(ids).toContain("opencode:project-dir-opencode.jsonc");
+      expect(ids).toContain("opencode:home-dir-opencode.json");
+      expect(ids).toContain("opencode:config-dir-opencode.json");
+      // Project `.opencode` beats project files; OPENCODE_CONFIG_DIR beats ~/.opencode.
+      expect(snapshot.effective.s).toBe(
+        entry(snapshot, "opencode:project-dir-opencode.jsonc", "s").entryId,
+      );
+      expect(entry(snapshot, "opencode:project-opencode.json", "s").status).toBe("shadowed");
+      expect(snapshot.effective.t).toBe(
+        entry(snapshot, "opencode:config-dir-opencode.json", "t").entryId,
+      );
+      expect(entry(snapshot, "opencode:home-dir-opencode.json", "t").status).toBe("shadowed");
+      const inline = source(snapshot, "opencode:inline");
+      expect(inline.writable).toBe(false);
+      expect(inline.displayPath).toBe("OPENCODE_CONFIG_CONTENT environment variable");
+      expect(entry(snapshot, "opencode:inline", "inline").status).toBe("effective");
+      expect(entry(snapshot, "opencode:inline", "inline").actions.edit.supported).toBe(false);
+      expect(entry(snapshot, "opencode:inline", "inline").actions.remove.supported).toBe(false);
+      expect(JSON.stringify(snapshot)).not.toContain("SECRETVALUE");
+      // The project `.opencode` file is writable and stays inside the worktree.
+      await fixture.service.mutate(
         mutation(snapshot.target.targetId, {
           kind: "add",
-          sourceId: "opencode:inline",
-          expectedRevision: revision(snapshot, "opencode:inline"),
-          definition: { name: "nope", transport: "stdio", command: "x" },
+          sourceId: "opencode:project-dir-opencode.jsonc",
+          expectedRevision: revision(snapshot, "opencode:project-dir-opencode.jsonc"),
+          definition: { name: "added", transport: "stdio", command: "x" },
         }),
-      ),
-    ).rejects.toThrow("read-only-source");
-    rmSync(configDir, { recursive: true, force: true });
+      );
+      expect(fixture.read("worktree/.opencode/opencode.jsonc")).toContain("// dir");
+      await expect(
+        fixture.service.mutate(
+          mutation(snapshot.target.targetId, {
+            kind: "add",
+            sourceId: "opencode:inline",
+            expectedRevision: revision(snapshot, "opencode:inline"),
+            definition: { name: "nope", transport: "stdio", command: "x" },
+          }),
+        ),
+      ).rejects.toThrow("read-only-source");
+    } finally {
+      // The fixture's service writes into configDir; settle it first.
+      await fixture.cleanup();
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 
   test("OPENCODE_DISABLE_PROJECT_CONFIG excludes project files but keeps them editable", async () => {

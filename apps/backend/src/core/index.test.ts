@@ -48,43 +48,46 @@ test("activity transition events name their session and carry the observer stamp
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: { onActivityTransition?: (event: Record<string, unknown>) => void };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: { onActivityTransition?: (event: Record<string, unknown>) => void };
+        };
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "idle",
-    state: "working",
-    agent: "cursor",
-    logicalSessionKey: "env-env-1:tab-1",
-    observation: { generation: "observer-1", revision: 7 },
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "idle",
+      state: "working",
+      agent: "cursor",
+      logicalSessionKey: "env-env-1:tab-1",
+      observation: { generation: "observer-1", revision: 7 },
+    });
 
-  // Additive and content-free: the addressable session and the stamp a client
-  // uses to invalidate exactly that view and to detect a missed transition.
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "idle",
-        state: "working",
-        agent: "cursor",
-        logical_session_key: "env-env-1:tab-1",
-        generation: "observer-1",
-        revision: 7,
+    // Additive and content-free: the addressable session and the stamp a client
+    // uses to invalidate exactly that view and to detect a missed transition.
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "idle",
+          state: "working",
+          agent: "cursor",
+          logical_session_key: "env-env-1:tab-1",
+          generation: "observer-1",
+          revision: 7,
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("activity transition events omit backend-only provider session identifiers", async () => {
@@ -98,36 +101,39 @@ test("activity transition events omit backend-only provider session identifiers"
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: {
-          onActivityTransition?: (event: Record<string, unknown>) => void;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: {
+            onActivityTransition?: (event: Record<string, unknown>) => void;
+          };
         };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "working",
-    state: "idle",
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "working",
+      state: "idle",
+    });
 
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "working",
-        state: "idle",
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "working",
+          state: "idle",
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("probes for an agent-created PR on the backend's own agent-idle edge", async () => {

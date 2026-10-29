@@ -173,7 +173,7 @@ import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
-import { createPipelineEnvironmentGit } from "./commands-review.js";
+import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
 import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 
@@ -1144,6 +1144,10 @@ export class OrkestratorBackend {
     this.workflowResults.setEnvironmentValidator(
       gitEnvironmentValidator(
         createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        {
+          verifyReviewPackage: (environmentId, reference) =>
+            verifyEnvironmentReviewPackage(environmentId, reference, context),
+        },
       ),
     );
     this.workflowResults.onAccepted(({ environmentId }) => {

@@ -62,7 +62,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 201 | [201-run-record-and-storage.md](201-run-record-and-storage.md) | 2 | not-started | 107 | `GraphRun`, `NodeActivation`, `GraphArtifact`; `graph-runs` and `graph-artifacts` stores; reference artifacts on disk with hashes; bounds. |
+| 201 | [201-run-record-and-storage.md](201-run-record-and-storage.md) | 2 | in-progress | 107 | `GraphRun`, `NodeActivation`, `GraphArtifact`; `graph-runs` and `graph-artifacts` stores; reference artifacts on disk with hashes; bounds. |
 | 202 | [202-supervisor-domain.md](202-supervisor-domain.md) | 2 | not-started | 201 | `graph-run` in `KEYED_SCHEDULING_DOMAINS`, obligation classifier, rollback switch, recovery on start. |
 | 203 | [203-scheduling.md](203-scheduling.md) | 2 | not-started | 202 | Ready set, workspace locks, admission through the shared pool and per-provider caps, run limits, observation cadence. |
 | 204 | [204-agent-node-executor.md](204-agent-node-executor.md) | 2 | not-started | 103, 105, 106, 203 | Extract `AgentBranchRunner` from `review-fanout.ts`; per-activation MCP credential with port tools; opt-in `ask_human`; session modes. |

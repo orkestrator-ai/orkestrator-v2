@@ -153,5 +153,46 @@ describe("git-backed environment validator", () => {
     await expect(
       validate(request("file-list-paths", { files: [{ path: "a.txt", reason: "x" }] }, "missing")),
     ).rejects.toThrow();
+    await expect(
+      validate(request("validation-plan", { headRef: head, commands: [] }, "missing")),
+    ).rejects.toThrow();
+  });
+
+  test("a validation plan must name the workspace HEAD it validates", async () => {
+    const plan = { headRef: head, commands: [], limitations: [] };
+    expect(await validate(request("validation-plan", plan))).toEqual([]);
+    expect(
+      await validate(request("validation-plan", { ...plan, headRef: head.toUpperCase() })),
+    ).toEqual([]);
+    expect(await validate(request("validation-plan", { ...plan, headRef: base }))).toEqual([
+      expect.objectContaining({ path: "$.headRef", code: "head_mismatch" }),
+    ]);
+  });
+
+  test("a review package reference is checked against its sealed package", async () => {
+    const reference = { id: "package-1", filePath: "x", sha256: "a".repeat(64), bytes: 1 };
+    const seen: unknown[] = [];
+    const checked = gitEnvironmentValidator(git, {
+      verifyReviewPackage: async (environmentId, value) => {
+        seen.push([environmentId, value]);
+        return value.bytes === 1
+          ? { valid: true }
+          : { valid: false, reason: "Review package SHA-256 changed" };
+      },
+    });
+    expect(await checked(request("review-package-reference", reference))).toEqual([]);
+    expect(seen).toEqual([["env-1", reference]]);
+    expect(await checked(request("review-package-reference", { ...reference, bytes: 2 }))).toEqual([
+      expect.objectContaining({
+        path: "$",
+        code: "package_changed",
+        message:
+          "The review package no longer matches its reference: Review package SHA-256 changed.",
+      }),
+    ]);
+    // Without the package check installed, the value is refused, never accepted.
+    await expect(validate(request("review-package-reference", reference))).rejects.toThrow(
+      "unavailable",
+    );
   });
 });

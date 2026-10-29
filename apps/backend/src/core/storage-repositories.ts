@@ -10,6 +10,7 @@ import type { StorageContext } from "./storage-context.js";
 import { CoordinatorsRepository } from "./storage-coordinators.js";
 import { DraftsRepository } from "./storage-drafts.js";
 import { GraphTemplatesRepository } from "./storage-graph-templates.js";
+import { GraphRunsRepository } from "./storage-graph-runs.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
@@ -63,6 +64,7 @@ export class StorageRepositories {
   readonly coordinators: CoordinatorsRepository;
   readonly agentAccounts: AgentAccountsRepository;
   readonly graphTemplates: GraphTemplatesRepository;
+  readonly graphRuns: GraphRunsRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -91,5 +93,6 @@ export class StorageRepositories {
     this.coordinators = new CoordinatorsRepository(context, files, this);
     this.agentAccounts = new AgentAccountsRepository(context);
     this.graphTemplates = new GraphTemplatesRepository(context);
+    this.graphRuns = new GraphRunsRepository(context, this);
   }
 }

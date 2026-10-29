@@ -57,12 +57,16 @@ export type WorkflowResultAcceptanceCheck = (
 
 /**
  * Built-in validators that need the environment (report §5.3): a
- * `workspace@1` commit must exist and be reachable from its branch, and the
- * paths of a `file-list@1` must resolve inside the worktree.
+ * `workspace@1` commit must exist and be reachable from its branch, the
+ * paths of a `file-list@1` must resolve inside the worktree, a
+ * `validation-plan@1` must name the workspace HEAD it validates, and a
+ * `review-package@2` reference must still match its sealed package (plan P2.1).
  */
 export const WORKFLOW_RESULT_ENVIRONMENT_VALIDATOR_IDS = [
   "workspace-commit",
   "file-list-paths",
+  "validation-plan",
+  "review-package-reference",
 ] as const;
 export type WorkflowResultEnvironmentValidatorId =
   (typeof WORKFLOW_RESULT_ENVIRONMENT_VALIDATOR_IDS)[number];

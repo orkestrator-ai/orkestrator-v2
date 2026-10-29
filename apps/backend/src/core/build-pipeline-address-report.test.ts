@@ -11,6 +11,7 @@ import { TEST_FIX_RESULT } from "./build-pipeline-test-fixtures.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { resumePromptFor } from "./build-pipeline-service-helpers.js";
+import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const scope = { environmentId: "env-1", projectId: "project-1" };
 
@@ -102,7 +103,9 @@ describe("typed Address report", () => {
           });
           const reminder = provider.sent.at(-1)!;
           expect(reminder.sessionId).toBe(address.sdkSessionId);
-          expect(reminder.requestId).toBe(remindedSession.structuredRequestId);
+          const remindedRequestId = remindedSession.structuredRequestId;
+          if (!remindedRequestId) throw new Error("The reminder opened no result slot");
+          expect(reminder.requestId).toBe(remindedRequestId);
           expect(reminder.prompt).toContain("has not received your fix result");
           expect(reminder.prompt).toContain("submit_fix_result");
           expect(await workflowResults!.status(scope, firstRequestId)).toMatchObject({
@@ -216,10 +219,14 @@ describe("Address sessions from before the typed report", () => {
     await withPipeline(async ({ service, provider, read }) => {
       provider.consolidationFindings = "clean";
       const structured = provider.structured.bind(provider);
-      provider.structured = async (sessionId, requestId) => {
-        const result = await structured(sessionId, requestId);
+      provider.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T> | null> => {
+        const result = await structured<T>(sessionId, requestId);
         if (!result?.ok || !sessionId.includes("review")) return result;
-        return { ...result, value: { ...(result.value as object), issues: [] } as never };
+        // Only an object report reaches here; the copy keeps its shape.
+        return { ...result, value: { ...(result.value as object), issues: [] } as T };
       };
       const started = await service.start(startInput());
       const verifying = await advanceUntil(service, read, started.id, "verifying");

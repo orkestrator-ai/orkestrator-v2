@@ -435,15 +435,13 @@ describe("codexPlanWindows", () => {
     ]);
   });
 
-  test("skips a non-string credits balance or plan type in favor of a later source", () => {
+  test("skips a non-string plan type in favor of a later source", () => {
     const { windows, plan } = codexPlanWindows(
       {
         rate_limits: {
-          credits: { balance: 12 },
           plan_type: 1,
           primary: { used_percent: 9, window_minutes: 300 },
         },
-        credits: { balance: "$3.50" },
         planType: "plus",
       },
       0,
@@ -714,6 +712,28 @@ describe("createPlanUsageReader", () => {
     expect(snapshot.status).toBe("ok");
     expect(snapshot.windows[0]?.usedPercent).toBe(25);
     expect(seen[0]?.["ChatGPT-Account-Id"]).toBe("acct-7");
+  });
+
+  test("reports unavailable when Codex returns only a credit balance", async () => {
+    const now = 1_700_000_000_000;
+    const reader = createPlanUsageReader({
+      fetchImpl: (async () =>
+        jsonResponse({ credits: { balance: "$3.50" } })) as unknown as typeof fetch,
+      now: () => now,
+      credentials: {
+        codex: async () =>
+          JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } }),
+      },
+    });
+
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(snapshot).toEqual({
+      platform: "codex",
+      status: "unavailable",
+      windows: [],
+      message: "Codex did not report plan limits for this account.",
+      fetchedAt: new Date(now).toISOString(),
+    });
   });
 
   test("treats an expired Codex token as a sign-in to refresh", async () => {

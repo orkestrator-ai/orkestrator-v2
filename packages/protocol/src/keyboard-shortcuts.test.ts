@@ -112,6 +112,24 @@ describe("matchAppShortcut", () => {
     );
   });
 
+  test("⌘, and Ctrl+, open settings; the typed comma wins over its key position", () => {
+    const comma = { key: ",", code: "Comma", shiftKey: false };
+    expect(matchAppShortcut(chord({ ...comma, metaKey: true }))).toBe("open-settings");
+    expect(matchAppShortcut(chord({ ...comma, ctrlKey: true }))).toBe("open-settings");
+    // Shift+, types "<" on a US layout: not the settings chord.
+    expect(matchAppShortcut(chord({ ...comma, key: "<", metaKey: true, shiftKey: true }))).toBe(
+      null,
+    );
+    expect(matchAppShortcut(chord({ ...comma, metaKey: true, altKey: true }))).toBeNull();
+    // AZERTY types "," on the M key, and ";" on the Comma key.
+    expect(matchAppShortcut(chord({ ...comma, code: "KeyM", metaKey: true }))).toBe(
+      "open-settings",
+    );
+    expect(matchAppShortcut(chord({ ...comma, key: ";", metaKey: true }))).toBeNull();
+    // A Cyrillic layout types "б" on the Comma key.
+    expect(matchAppShortcut(chord({ ...comma, key: "б", metaKey: true }))).toBe("open-settings");
+  });
+
   test("every catalogued shortcut is reachable, by a unique chord", () => {
     const chords = new Set(APP_SHORTCUTS.map((shortcut) => `${shortcut.key}:${shortcut.shift}`));
     expect(chords.size).toBe(APP_SHORTCUTS.length);
@@ -152,13 +170,14 @@ describe("appClaimsShortcut", () => {
     },
   );
 
-  test("the shortcuts dialog is claimed everywhere with either modifier", () => {
-    for (const platform of ["mac", "other"] as const)
-      for (const focus of ["page", "text", "terminal"] as const)
-        for (const keys of [
-          { metaKey: true, ctrlKey: false },
-          { metaKey: false, ctrlKey: true },
-        ])
-          expect(appClaimsShortcut(dialog, keys, platform, focus)).toBe(true);
+  test("the shortcuts dialog and settings are claimed everywhere with either modifier", () => {
+    for (const shortcut of [dialog, appShortcut("open-settings")])
+      for (const platform of ["mac", "other"] as const)
+        for (const focus of ["page", "text", "terminal"] as const)
+          for (const keys of [
+            { metaKey: true, ctrlKey: false },
+            { metaKey: false, ctrlKey: true },
+          ])
+            expect(appClaimsShortcut(shortcut, keys, platform, focus)).toBe(true);
   });
 });

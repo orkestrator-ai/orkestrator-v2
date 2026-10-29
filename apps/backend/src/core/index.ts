@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import {
+  bugReportReaperEnvironments,
+  updateBugReportBridgeFromEnvironment,
+} from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
@@ -1701,9 +1706,10 @@ export class OrkestratorBackend {
     // pidfile they still hold blocks this instance's app-server ownership.
     const reaperStorage = {
       loadEnvironments: async (): Promise<Environment[]> => {
-        const [environments, workspaces] = await Promise.all([
+        const [environments, workspaces, bugReports] = await Promise.all([
           this.context.storage.loadEnvironments(),
           this.context.storage.coordinators.listCoordinatorWorkspaces(),
+          this.context.storage.bugReports.listBugReports(),
         ]);
         const coordinatorRuntimes = workspaces.flatMap((workspace) =>
           workspace.conversations.flatMap((conversation): Environment[] =>
@@ -1731,9 +1737,14 @@ export class OrkestratorBackend {
                 ],
           ),
         );
-        return [...environments, ...coordinatorRuntimes];
+        const bugReportRuntimes = bugReportReaperEnvironments(bugReports);
+        return [...environments, ...coordinatorRuntimes, ...bugReportRuntimes];
       },
       updateEnvironment: async (environmentId: string, fields: Partial<Environment>) => {
+        const bugReportId = bugReportIdFromRuntimeId(environmentId);
+        if (bugReportId) {
+          return updateBugReportBridgeFromEnvironment(this.context.storage, bugReportId, fields);
+        }
         const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
         const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
         if (!coordinatorId || !conversationId) {

@@ -1,6 +1,7 @@
 export * from "./storage-shared.js";
 export type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 export type { CoordinatorsStorage } from "./storage-coordinators.js";
+export type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.js";
 export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
@@ -21,6 +22,7 @@ import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 import type { CoordinatorsStorage } from "./storage-coordinators.js";
+import type { BugReportsStorage } from "./storage-bug-reports.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
@@ -138,6 +140,7 @@ export class StorageService {
   readonly nodes: NodesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
+  readonly bugReports: BugReportsStorage;
   readonly graphTemplates: GraphTemplatesStorage;
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
@@ -152,6 +155,7 @@ export class StorageService {
     this.nodes = this.repos.nodes;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
+    this.bugReports = this.repos.bugReports;
     this.graphTemplates = this.repos.graphTemplates;
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;

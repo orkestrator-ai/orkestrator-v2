@@ -13,3 +13,5 @@
 - **Evidence:** host temporary artifact `orkestrator-test-run.ePdIio/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `orkestrator-test-run.4IEsqs/review-fix-full-tests.log.gz`. The passing logged owner discarded its detailed output.
 - **Assessment:** confirmed aggregate-only failure in this run; cause unestablished. Concurrent worktree validation was observed. PTY/process scheduling under contention is a hypothesis, not a diagnosis. No owning implementation, assertion, timeout or skip changed.
 - **Next step:** capture which setup completion, PTY termination or fixture cleanup await is pending when the deadline expires.
+
+- **Register repair (2026-10-29):** renumbered from the colliding 1304 to 1306; the original failure evidence and status are unchanged.

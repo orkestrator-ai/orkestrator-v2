@@ -35,6 +35,8 @@ import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
+import { GlobalSettingsHost } from "./GlobalSettingsHost";
+import { BugReportSheet } from "@/components/bug-report/BugReportSheet";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import {
   RealmAgentInfoTrigger,
@@ -227,6 +229,8 @@ export function AppShell({ children }: AppShellProps) {
         <OpenFileDialog />
         <KeyboardShortcutsDialog />
         <AppDialogHost />
+        <GlobalSettingsHost />
+        <BugReportSheet />
         {/* The node's tabs and their mail live here; the messages panel opens over the realm. */}
         <AgentMailPanel />
         <HostPark parkRef={contentParkRef} />
@@ -272,6 +276,8 @@ export function AppShell({ children }: AppShellProps) {
       <KeyboardShortcutsDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />
+      <GlobalSettingsHost />
+      <BugReportSheet />
       <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (

@@ -62,15 +62,7 @@ import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
-import {
-  onGlobalSettingsCloseRequest,
-  onGlobalSettingsRequest,
-  requestGlobalSettings,
-  type GlobalSettingsSection,
-} from "@/lib/settings-navigation";
-import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import type { ResolveLaunchResult } from "./ActionBar.types";
-import { useAccountMachineStore } from "@/components/settings/account-machine";
 
 /**
  * A Create PR launch that has not yet produced a pull request.
@@ -170,11 +162,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [openAppDialog],
   );
   const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
-  const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
-  const [globalSettingsDefaultSection, setGlobalSettingsDefaultSection] =
-    useState<GlobalSettingsSection>();
-  /** Bumped per section request so a repeat request for the same section navigates. */
-  const [globalSettingsSectionRequest, setGlobalSettingsSectionRequest] = useState(0);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -202,34 +189,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
 
-  useEffect(
-    () =>
-      onGlobalSettingsRequest((section) => {
-        setGlobalSettingsDefaultSection(section);
-        setGlobalSettingsSectionRequest((request) => request + 1);
-        setGlobalSettingsOpen(true);
-      }),
-    [],
-  );
-
-  const updateGlobalSettingsOpen = useCallback((open: boolean) => {
-    // Settings belong to the command node: a workspace realm opens its window's.
-    if (open && isWorkspaceRealm()) {
-      requestGlobalSettings("general");
-      return;
-    }
-    setGlobalSettingsOpen(open);
-    if (!open) {
-      setGlobalSettingsDefaultSection(undefined);
-      // The next visit follows the machine on screen again.
-      useAccountMachineStore.getState().choose(undefined);
-    }
-  }, []);
-
-  useEffect(
-    () => onGlobalSettingsCloseRequest(() => updateGlobalSettingsOpen(false)),
-    [updateGlobalSettingsOpen],
-  );
   const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
@@ -2176,10 +2135,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     toggleSidebar,
     repoSettingsProjectId,
     setRepoSettingsProjectId,
-    globalSettingsOpen,
-    globalSettingsDefaultSection,
-    globalSettingsSectionRequest,
-    setGlobalSettingsOpen: updateGlobalSettingsOpen,
     openEnvironmentSettings,
     dockerStatsOpen,
     setDockerStatsOpen,

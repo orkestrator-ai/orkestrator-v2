@@ -2,11 +2,15 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
+import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { SidebarBottomBar } from "../sidebar/SidebarBottomBar";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useBugReportStore } from "@/stores/bugReportStore";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { FullscreenSettingsLayout } from "@/components/settings/FullscreenSettingsLayout";
 import {
   MOBILE_TOOLS_TRIGGER_LABEL,
@@ -20,6 +24,8 @@ const originalGateway = window.orkestratorGateway;
 afterEach(() => {
   cleanup();
   useAppDialogStore.setState({ request: null });
+  useGlobalSettingsStore.setState({ open: false, section: undefined, sectionRequest: 0 });
+  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -530,6 +536,63 @@ describe("MobileAppShellLayout", () => {
     }
   });
 
+  test.each([
+    [
+      "global settings",
+      () => useGlobalSettingsStore.getState().openSection("general"),
+      () => useGlobalSettingsStore.getState().close(),
+    ],
+    [
+      "the bug report sheet",
+      () => useBugReportStore.getState().openSheet(),
+      () => useBugReportStore.getState().closeSheet(),
+    ],
+  ])(
+    "gives way to %s opened from the drawer and returns focus to its trigger",
+    async (_name, open, close) => {
+      const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+      const menuButton = getTitleBarSidebarTrigger(container);
+      // Stands in for the surface `AppShell` hosts, which takes focus.
+      const surfaceControl = document.createElement("button");
+      document.body.append(surfaceControl);
+      try {
+        act(open);
+        surfaceControl.focus();
+        expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(
+          true,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(document.activeElement).toBe(surfaceControl);
+
+        act(close);
+        expect(document.activeElement).toBe(menuButton);
+      } finally {
+        surfaceControl.remove();
+      }
+    },
+  );
+
+  test("returns focus only once the last surface opened from the drawer closes", () => {
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
+    const surfaceControl = document.createElement("button");
+    document.body.append(surfaceControl);
+    try {
+      act(() => useGlobalSettingsStore.getState().openSection("machines"));
+      act(() =>
+        useAppDialogStore.getState().open({ kind: "repository-settings", projectId: "project-1" }),
+      );
+      surfaceControl.focus();
+      act(() => useAppDialogStore.getState().close());
+      // Settings are still open over the workspace.
+      expect(document.activeElement).toBe(surfaceControl);
+      act(() => useGlobalSettingsStore.getState().close());
+      expect(document.activeElement).toBe(menuButton);
+    } finally {
+      surfaceControl.remove();
+    }
+  });
+
   test("returns focus to its trigger past the focus trap of the dialog that closes", async () => {
     // The real fullscreen settings layer, standing in for `AppDialogHost`: its
     // trap would pull focus back if the trigger took it before the layer unmounted.
@@ -707,3 +770,45 @@ for (const action of [
     }
   });
 }
+
+for (const remoteReport of [false, true]) {
+  test(`drawer bottom bar opens ${remoteReport ? "remote" : "local"} bug report and yields the drawer`, async () => {
+    const remote = useRemoteWorkspaceStore.getState();
+    const portal = portalStore.getState();
+    try {
+      portalStore.store.setState({ selfId: "bk_self" as never });
+      useRemoteWorkspaceStore.setState({
+        ...remote,
+        active: remoteReport ? { nodeId: "bk_remote", projectId: "p", environmentId: "e" } : null,
+      });
+      renderLayout({ sidebar: <SidebarBottomBar /> }, { keepInitialDrawerOpen: true });
+      fireEvent.click(screen.getByRole("button", { name: "Report a bug" }));
+      await waitFor(() =>
+        expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
+      );
+      if (remoteReport) {
+        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toMatchObject({
+          bugReport: true,
+          projectId: "p",
+          environmentId: "e",
+        });
+      } else expect(useBugReportStore.getState().sheetOpen).toBe(true);
+    } finally {
+      useRemoteWorkspaceStore.setState(remote, true);
+      portalStore.store.setState(portal, true);
+    }
+  });
+}
+
+test("drawer bottom bar opens global Settings and yields the drawer", async () => {
+  const unsubscribe = onGlobalSettingsRequest((section) =>
+    useGlobalSettingsStore.getState().openSection(section),
+  );
+  renderLayout({ sidebar: <SidebarBottomBar /> }, { keepInitialDrawerOpen: true });
+  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+  await waitFor(() =>
+    expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
+  );
+  expect(useGlobalSettingsStore.getState().open).toBe(true);
+  unsubscribe();
+});

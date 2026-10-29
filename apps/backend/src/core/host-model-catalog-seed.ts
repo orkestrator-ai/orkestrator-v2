@@ -13,6 +13,9 @@ import type {
  */
 export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 30_000;
 
+// Reserved scope for host-only conversations with no project configuration.
+export const HOST_OPENCODE_CATALOG_SCOPE = "host:opencode";
+
 const failedAt = new Map<string, number>();
 const generations = new Map<string, number>();
 const flights = new Map<string, { generation: number; promise: Promise<boolean> }>();
@@ -47,7 +50,7 @@ export async function persistHostCatalog(
   } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
     await storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
   } else {
-    if (!projectId) throw new Error("OpenCode refresh requires a project target");
+    projectId ??= HOST_OPENCODE_CATALOG_SCOPE;
     const discovered = catalog.models.map((model) => ({
       id: model.id,
       name: model.label,
@@ -74,7 +77,7 @@ async function hasCachedModels(
   projectId?: string,
 ): Promise<boolean> {
   if (agent === "opencode") {
-    if (!projectId) return false;
+    projectId ??= HOST_OPENCODE_CATALOG_SCOPE;
     return ((await context.storage.getOpenCodeModelCatalog(projectId))?.models.length ?? 0) > 0;
   }
   const cache = await context.storage.getAgentModelCatalogCache();
@@ -103,7 +106,6 @@ export function seedHostModelCatalogIfMissing(
 
   const run = async (): Promise<boolean> => {
     try {
-      if (agent === "opencode" && !projectId) return false;
       if (await hasCachedModels(context, agent, projectId)) return true;
       const lastFailure = failedAt.get(key);
       if (
@@ -143,8 +145,7 @@ export function seedHostModelCatalogIfMissing(
  * Seed every platform the user has switched on and has no catalogue for.
  *
  * One at a time: each download starts a bridge process, and a first launch
- * should not start six at once. OpenCode is included only when a project is
- * known, because its catalogue is cached per project.
+ * should not start six at once. Projectless OpenCode uses the host scope.
  */
 export async function seedEnabledHostModelCatalogs(
   context: CommandContext,

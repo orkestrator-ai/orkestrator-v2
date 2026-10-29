@@ -237,8 +237,30 @@ test.describe("host path browsing", () => {
                 .first()
                 .click();
             }
-            await page.getByRole("button", { name: "Open tools" }).click();
-            await page.getByRole("button", { name: "Repository settings", exact: true }).click();
+            // Selecting the project can finish after the drawer closes and
+            // collapse an early tools popover. Retry the complete user action
+            // with bounded clicks while that selection settles.
+            await expect(async () => {
+              const repository = page.getByRole("dialog", {
+                name: "Repository Settings",
+                exact: true,
+              });
+              if (!(await repository.isVisible())) {
+                if (
+                  !(await page
+                    .getByRole("button", { name: "Close tools", exact: true })
+                    .isVisible())
+                ) {
+                  await page
+                    .getByRole("button", { name: "Open tools", exact: true })
+                    .click({ timeout: 1_000 });
+                }
+                await page
+                  .getByRole("button", { name: "Repository settings", exact: true })
+                  .click({ timeout: 1_000 });
+              }
+              await expect(repository).toBeVisible({ timeout: 1_000 });
+            }).toPass({ timeout: 15_000 });
           } else {
             await page.getByText(fixture.name, { exact: true }).first().click({ button: "right" });
             await page.getByRole("menuitem", { name: "Repository Settings", exact: true }).click();
@@ -293,8 +315,11 @@ test.describe("host path browsing", () => {
           // Cancel repository edits so the fixture's authoritative local path stays intact.
           await repository.getByRole("button", { name: "Close settings" }).click();
 
+          // On a phone, Settings are in the projects drawer's bottom bar.
           if (viewport.name === "narrow") {
-            await page.getByRole("button", { name: "Open tools" }).click();
+            await page
+              .getByRole("button", { name: "Open projects and environments" })
+              .click({ timeout: 1_000 });
           }
           await page.getByRole("button", { name: "Global settings", exact: true }).click();
           const settings = page.getByRole("dialog", { name: "Settings", exact: true });
@@ -2639,30 +2664,27 @@ for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const openUpdates = async () => {
       const globalSettings = page.getByRole("button", { name: "Global settings", exact: true });
-      if (width < 768 && !(await globalSettings.isVisible())) {
-        const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
-        const closeDrawer = page
-          .getByRole("button", { name: "Close projects and environments" })
-          .first();
-        await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+      if (width < 768) {
+        await expect(
+          page
+            .getByRole("dialog", { name: "Projects and environments", exact: true })
+            .or(page.getByRole("button", { name: "Open projects and environments", exact: true })),
+        ).toBeVisible();
+        // On a phone the sidebar's bottom bar, with Settings, is in the
+        // projects drawer, which may already be open on first load.
         const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
-        if (await drawer.isVisible()) {
-          await drawer.getByRole("button", { name: fixture.name, exact: true }).click();
-          if (await drawer.isVisible())
-            await drawer
-              .getByRole("button", { name: "Close projects and environments" })
-              .first()
-              .click();
-          await expect(drawer).toBeHidden();
-        }
-        // Selecting the project rehydrates its context and closes the tools
-        // popover. Open it after that reconciliation has finished.
         await expect(async () => {
-          if (!(await globalSettings.isVisible())) {
-            await page.getByRole("button", { name: "Open tools", exact: true }).click();
+          if (!(await drawer.isVisible())) {
+            await page
+              .getByRole("button", { name: "Open projects and environments" })
+              .click({ timeout: 1_000 });
           }
-          await globalSettings.click({ timeout: 1_000 });
-          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
+          await drawer
+            .getByRole("button", { name: "Global settings", exact: true })
+            .click({ timeout: 1_000 });
+          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible({
+            timeout: 1_000,
+          });
         }).toPass({ timeout: 15_000 });
       } else {
         await globalSettings.click();

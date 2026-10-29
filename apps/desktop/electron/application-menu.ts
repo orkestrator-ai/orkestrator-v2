@@ -1,6 +1,7 @@
 import type { KeyboardEvent as MenuKeyboardEvent, MenuItemConstructorOptions } from "electron";
 import {
   KEYBOARD_SHORTCUTS_ACCELERATOR,
+  SETTINGS_ACCELERATOR,
   type KeyboardShortcutsRequest,
 } from "@orkestrator/protocol/keyboard-shortcuts";
 
@@ -21,6 +22,8 @@ export type ApplicationMenuActions = {
   zoom(direction: "in" | "out" | "reset"): void;
   /** Show the keyboard shortcuts dialog in the focused window's renderer. */
   showKeyboardShortcuts(request: KeyboardShortcutsRequest): void;
+  /** Open global settings in the focused window's shell renderer. */
+  openSettings(): void;
   /** Present only when this install can update itself. */
   checkForUpdates?(): void;
 };
@@ -78,8 +81,9 @@ function windowMenuItems(actions: ApplicationMenuActions): MenuItemConstructorOp
  *
  * Outside macOS, Electron's `Command` modifier is the Super/Windows key, and
  * the hide, hideOthers, unhide and zoom roles have no action. Windows and
- * Linux therefore get the conventional layout instead: Quit at the end of
- * File, About and updates under Help, and no Command accelerators.
+ * Linux therefore get the conventional layout instead: Settings… and Quit at
+ * the end of File, About and updates under Help, and no Command accelerators.
+ * On macOS Settings… sits in the app menu, where every Mac app keeps it.
  */
 export function createApplicationMenuTemplate(
   actions: ApplicationMenuActions,
@@ -88,6 +92,17 @@ export function createApplicationMenuTemplate(
   const checkForUpdates: MenuItemConstructorOptions[] = actions.checkForUpdates
     ? [{ label: "Check for Updates…", click: actions.checkForUpdates }]
     : [];
+  const settings: MenuItemConstructorOptions = {
+    label: "Settings…",
+    accelerator: SETTINGS_ACCELERATOR,
+    // The key is the `open-settings` app shortcut: each app document's key
+    // router claims it, and main's before-input-event hook takes it from a
+    // native view. Registering it too would deliver one press twice on
+    // Windows and Linux; macOS keeps the menu's key equivalent as the
+    // fallback for a press no page claimed. Opening is idempotent either way.
+    registerAccelerator: false,
+    click: actions.openSettings,
+  };
   return [
     ...(isMac
       ? [
@@ -96,6 +111,8 @@ export function createApplicationMenuTemplate(
             submenu: [
               { role: "about" },
               ...checkForUpdates,
+              { type: "separator" },
+              settings,
               { type: "separator" },
               { role: "hide" },
               { role: "hideOthers" },
@@ -122,7 +139,14 @@ export function createApplicationMenuTemplate(
           ...(isMac ? { accelerator: "Command+W" } : {}),
           click: actions.closeTab,
         },
-        ...(isMac ? [] : [{ type: "separator" } as const, { role: "quit" } as const]),
+        ...(isMac
+          ? []
+          : [
+              { type: "separator" } as const,
+              settings,
+              { type: "separator" } as const,
+              { role: "quit" } as const,
+            ]),
       ],
     },
     {

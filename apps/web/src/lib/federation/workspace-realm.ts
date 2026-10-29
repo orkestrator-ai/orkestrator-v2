@@ -147,6 +147,8 @@ export interface RealmSelectRequest {
   createEnvironmentProjectId?: string;
   /** Open one of the node's dialogs for the selected project or environment. */
   dialog?: RealmDialog;
+  /** Open the node's Report a bug sheet, which runs its agent on that node. */
+  bugReport?: true;
 }
 
 export type ShellToRealmMessage =
@@ -186,6 +188,11 @@ export type RealmToShellMessage =
   | { type: "sidebar"; open: boolean }
   /** Open the window's settings: they belong to the command node. */
   | { type: "settings"; section: string }
+  /**
+   * Open a Report a bug sheet on another machine: the command node's own
+   * (`nodeId` null) or another node's, in that node's realm.
+   */
+  | { type: "bugReport"; nodeId: string | null }
   /** A user dismissed the popover opened by this request. */
   | { type: "panelDismissed"; panel: RealmPanel; seq: number }
   /** A window-owned app shortcut (⌘K search) was typed in the realm; see `APP_SHORTCUTS`. */
@@ -267,6 +274,7 @@ export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): UR
   if (request.createEnvironmentProjectId)
     search.set("createEnvironment", request.createEnvironmentProjectId);
   if (request.dialog) search.set("dialog", request.dialog);
+  if (request.bugReport) search.set("bugReport", "1");
   return search;
 }
 
@@ -282,6 +290,7 @@ export function realmInitialRequest(): RealmSelectRequest | null {
     addProject: search.get("addProject") === "1" ? true : undefined,
     createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
     dialog: search.get("dialog") ?? undefined,
+    bugReport: search.get("bugReport") === "1" ? true : undefined,
   });
   return request?.type === "select" ? request : null;
 }
@@ -328,6 +337,7 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
     ...(message.addProject === true ? { addProject: true as const } : {}),
     ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
     ...(dialog && dialogTarget ? { dialog } : {}),
+    ...(message.bugReport === true ? { bugReport: true as const } : {}),
   };
 }
 
@@ -351,6 +361,11 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
     };
   }
   if (message.type === "ready") return { type: "ready" };
+  if (message.type === "bugReport") {
+    if (message.nodeId === null) return { type: "bugReport", nodeId: null };
+    const nodeId = boundedId(message.nodeId);
+    return nodeId ? { type: "bugReport", nodeId } : null;
+  }
   if (message.type === "sidebar") {
     return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
   }

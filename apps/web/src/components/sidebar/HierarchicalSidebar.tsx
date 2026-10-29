@@ -71,6 +71,7 @@ import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
+import { SidebarBottomBar } from "./SidebarBottomBar";
 import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
@@ -1627,6 +1628,8 @@ export function HierarchicalSidebar() {
           )}
         </div>
       </div>
+
+      <SidebarBottomBar />
 
       {/* Add Project Dialog */}
       <AddProjectDialog

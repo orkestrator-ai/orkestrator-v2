@@ -179,6 +179,34 @@ describe("native shortcut routing", () => {
     expect(shell.send).toHaveBeenCalledTimes(1);
   });
 
+  test.each(["darwin", "linux"] as const)(
+    "%s: ⌘, and Ctrl+, in a native artifact view open the window's settings; app documents route their own",
+    (platform) => {
+      const { register, shell, realm } = harness(platform);
+      const settings = { ...chord, key: ",", code: "Comma", shift: false };
+      const artifact = register(43);
+      const event = { preventDefault: mock(() => {}) };
+      for (const mods of [{ meta: true }, { meta: false, control: true }])
+        artifact.emit("before-input-event", event, { ...settings, ...mods });
+      // Ctrl+, edits no text, so even macOS text editing does not keep it.
+      expect(event.preventDefault).toHaveBeenCalledTimes(2);
+      expect(shell.send).toHaveBeenCalledTimes(2);
+      for (const call of [1, 2])
+        expect(shell.send).toHaveBeenNthCalledWith(
+          call,
+          "orkestrator:event",
+          "app-shortcut",
+          "open-settings",
+        );
+      expect(realm.send).not.toHaveBeenCalled();
+
+      const documentEvent = { preventDefault: mock(() => {}) };
+      for (const id of [1, 2]) register(id).emit("before-input-event", documentEvent, settings);
+      expect(documentEvent.preventDefault).not.toHaveBeenCalled();
+      expect(shell.send).toHaveBeenCalledTimes(2);
+    },
+  );
+
   test("darwin artifact Ctrl+K stays with text editing while Cmd+K reaches the shell", () => {
     const { register, shell } = harness("darwin");
     const source = register(43);

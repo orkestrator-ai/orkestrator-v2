@@ -81,7 +81,9 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { bugReportRuntimeEnvironment } from "./bug-report-runtime.js";
 import type { IncompleteTurnNotice } from "./models.js";
 import {
   isNativeAgentDisplayTail,
@@ -358,7 +360,11 @@ export class NativeAgentSessionsRepository {
   ): Promise<void> {
     const environmentId = options.requireLiveEnvironment;
     this.context.updateStoreRow(this.files.nativeAgentSessionsFile(), key, () => {
-      if (environmentId && !coordinatorIdFromRuntimeId(environmentId)) {
+      if (
+        environmentId &&
+        !coordinatorIdFromRuntimeId(environmentId) &&
+        !bugReportIdFromRuntimeId(environmentId)
+      ) {
         const environment = this.context.database.readStoreRow(
           this.context.storeForFile(this.files.environmentsFile())!,
           environmentId,
@@ -1201,6 +1207,12 @@ export class NativeAgentSessionsRepository {
     environmentId: string,
     label: string,
   ): Promise<Environment> {
+    const bugReportId = bugReportIdFromRuntimeId(environmentId);
+    if (bugReportId) {
+      const report = await this.repos.bugReports.getBugReport(bugReportId);
+      if (!report) throw new Error(`${label} bug report not found: ${bugReportId}`);
+      return bugReportRuntimeEnvironment(environmentId, report);
+    }
     const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
     if (coordinatorId) {
       const workspace = await this.repos.coordinators.getCoordinatorWorkspaceById(coordinatorId);

@@ -39,6 +39,7 @@ import {
 } from "./review-prompts.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 import { graphOutputKindDefinition } from "./workflow-result-graph-output.js";
+import { graphTemplateKindDefinition } from "./workflow-result-graph-template.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES,
   registerWorkflowResultKind,
@@ -505,7 +506,7 @@ const STORY_REFINEMENT_SCHEMA = {
  * shared `validate_workflow_result`. A slot's `schema` is ignored.
  */
 function builtInKind(
-  kind: Exclude<WorkflowResultKind, "graph-output">,
+  kind: Exclude<WorkflowResultKind, "graph-output" | "graph-template">,
   schema: () => JsonSchema,
   checks: Omit<
     WorkflowResultKindDefinition,
@@ -599,6 +600,7 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
 
 for (const definition of BUILT_IN_KINDS) registerWorkflowResultKind(definition);
 registerWorkflowResultKind(graphOutputKindDefinition);
+registerWorkflowResultKind(graphTemplateKindDefinition);
 
 // Every kind the protocol names has a definition; a missing one is a startup bug.
 for (const kind of WORKFLOW_RESULT_KINDS) {

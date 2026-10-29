@@ -185,6 +185,8 @@ import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
+import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { GraphDescribeService } from "./graph-describe-service.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -209,6 +211,8 @@ export class OrkestratorBackend {
   private readonly graphRuns: GraphRunService;
   private readonly graphSystemExecutor: GraphNodeSystemExecutor;
   private readonly graphAgents: GraphAgentWiring;
+  private readonly graphDescribe: GraphDescribeService;
+  private readonly graphDescribeProviders: GraphAgentProviders;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1160,6 +1164,24 @@ export class OrkestratorBackend {
       artifactDispatch,
     });
     context.graphQuestions = this.graphAgents.questions;
+    // "Describe a graph" (item 215): backend-owned designer agent jobs.
+    this.graphDescribeProviders = new GraphAgentProviders({
+      connection: (environment, agent) =>
+        graphAgentBridgeConnection(invokeCommand, agent, environment),
+      dependencies: { workflowResults: this.workflowResults },
+    });
+    this.graphDescribe = new GraphDescribeService({
+      storage,
+      providers: this.graphDescribeProviders,
+      workflowResults: this.workflowResults,
+      ...(resolveAgentToolConnection
+        ? { agentTools: { workflowResultConnection: resolveAgentToolConnection } }
+        : {}),
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      rollout: this.workflowResultRollout,
+      ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
+    });
+    context.graphDescribe = this.graphDescribe;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -1660,6 +1682,9 @@ export class OrkestratorBackend {
     // Non-blocking: the first discovery recovers every run with an obligation.
     await this.graphRuns.init().catch((error) => {
       console.warn("[backend] Failed to restore graph runs:", error);
+    });
+    await this.graphDescribe.init().catch((error) => {
+      console.warn("[backend] Failed to restore graph describe jobs:", error);
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
@@ -2335,6 +2360,12 @@ export class OrkestratorBackend {
           this.graphAgents.dispose();
         } catch (error) {
           console.warn("[backend] Failed to drain graph runs:", error);
+        }
+        try {
+          await this.graphDescribe.shutdown();
+          this.graphDescribeProviders.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain graph describe jobs:", error);
         }
         try {
           await this.featurePlanning.shutdown();

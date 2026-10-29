@@ -72,6 +72,8 @@ function installBackend() {
           text: graphTemplateExportText(pipeline.template),
           digest: "d",
         };
+      case "graph_describe_status":
+        return null;
       default:
         throw new Error(`unexpected command ${command}`);
     }
@@ -131,7 +133,10 @@ describe("GraphDesignerTab", () => {
   test("lists the library for the environment's project and opens a built-in", async () => {
     const { container } = renderTab();
     await screen.findByText(pipeline.summary.name);
-    expect(invokeMock.mock.calls[0]).toEqual(["graph_templates_list", { projectId: "project-1" }]);
+    expect(invokeMock.mock.calls).toContainEqual([
+      "graph_templates_list",
+      { projectId: "project-1" },
+    ]);
     expect(
       screen.getByText("Choose a template from the library, or import one as JSON."),
     ).toBeDefined();

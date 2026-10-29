@@ -85,6 +85,8 @@ function installBackend() {
         userTemplates = [...userTemplates, detail];
         return { ok: true, detail };
       }
+      case "graph_describe_status":
+        return null;
       default:
         throw new Error(`unexpected command ${command}`);
     }

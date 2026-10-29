@@ -1,6 +1,7 @@
 import { wrapSystemInstructions } from "./review-evidence-frames.js";
 import type { JsonSchema, StructuredOutputProvider } from "./structured-output.js";
 import type { WorkflowGraphOutputContext } from "./graphs/output-slots.js";
+import type { GraphTemplateResultContext } from "./graphs/describe.js";
 import type { ReviewFindingPool, StructuredReviewReport } from "./structured-review.js";
 
 export const WORKFLOW_RESULT_STORE_VERSION = 1;
@@ -29,6 +30,12 @@ export const WORKFLOW_RESULT_KINDS = [
    * the slot (`schema`, `toolName`), not from the kind.
    */
   "graph-output",
+  /**
+   * A graph template drafted by the "Describe a graph" agent (item 215). Its
+   * schema is the template schema; the template guard and the compiler are
+   * its validators.
+   */
+  "graph-template",
 ] as const;
 
 export type WorkflowResultKind = (typeof WORKFLOW_RESULT_KINDS)[number];
@@ -147,7 +154,8 @@ export interface WorkflowResultSlotInput {
         type: "consolidated-review";
         sources: Record<string, "issue" | "coverage-gap">;
       }
-    | WorkflowGraphOutputContext;
+    | WorkflowGraphOutputContext
+    | GraphTemplateResultContext;
 }
 
 export function isWorkflowResultKind(value: unknown): value is WorkflowResultKind {
@@ -166,6 +174,7 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
   "verification-result": "submit_verification_result",
   "pr-result": "submit_pr_result",
   "graph-output": "submit_graph_output",
+  "graph-template": "submit_graph_template",
 };
 
 export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";

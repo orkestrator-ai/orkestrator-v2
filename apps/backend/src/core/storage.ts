@@ -4,6 +4,7 @@ export type { CoordinatorsStorage } from "./storage-coordinators.js";
 export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
+export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -23,6 +24,7 @@ import type { CoordinatorsStorage } from "./storage-coordinators.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
+import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -135,6 +137,7 @@ export class StorageService {
   readonly graphTemplates: GraphTemplatesStorage;
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
+  readonly graphDescribe: GraphDescribeStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -148,6 +151,7 @@ export class StorageService {
     this.graphTemplates = this.repos.graphTemplates;
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;
+    this.graphDescribe = this.repos.graphDescribe;
   }
 
   async init(): Promise<void> {

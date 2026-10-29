@@ -8,7 +8,10 @@ import type {
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
-import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
+import type {
+  EnvironmentDiffBaseline,
+  EnvironmentDiffBaseOverride,
+} from "@orkestrator/protocol/diff-stats";
 import type {
   ContainerLifecycleSnapshot,
   EnvironmentContainerLifecycle,
@@ -355,6 +358,11 @@ export interface Environment {
    * `environmentBaselineCommit`. Cleared as an explicit `null`.
    */
   diffBaseline?: EnvironmentDiffBaseline | null;
+  /**
+   * A commit the user chose to measure changes from instead of `diffBaseline`
+   * (`diff-base-override.ts`). Cleared as an explicit `null`.
+   */
+  diffBaseOverride?: EnvironmentDiffBaseOverride | null;
   /** Immutable source selected by a coordinator delegation. */
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;

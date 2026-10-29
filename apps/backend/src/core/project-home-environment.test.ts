@@ -212,3 +212,19 @@ describe("refreshProjectHomeBranch", () => {
     expect(calls.update).toBe(0);
   });
 });
+
+test("a new project-home checkout clears its old comparison base; reuse retains it", async () => {
+  const override = { ref: "refs/heads/main", commit: "a".repeat(40) };
+  const home = {
+    ...createEnvironment(project.id),
+    projectHome: true,
+    worktreePath: "/old",
+    diffBaseOverride: override,
+  };
+  const { storage } = fakeStorage([home]);
+  const replaced = await ensureProjectHomeEnvironment(project.id, dependencies(storage));
+  expect(replaced.environment.diffBaseOverride).toBeNull();
+  await storage.updateEnvironment(home.id, { diffBaseOverride: override });
+  const reused = await ensureProjectHomeEnvironment(project.id, dependencies(storage));
+  expect(reused.environment.diffBaseOverride).toEqual(override);
+});

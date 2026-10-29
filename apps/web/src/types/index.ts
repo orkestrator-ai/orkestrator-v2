@@ -25,7 +25,10 @@ import type {
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
-import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
+import type {
+  EnvironmentDiffBaseline,
+  EnvironmentDiffBaseOverride,
+} from "@orkestrator/protocol/diff-stats";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
@@ -140,6 +143,8 @@ export interface Environment {
   createdFromCommit?: string;
   /** Where the branch now leaves its target branch; see `environmentBaselineCommit`. */
   diffBaseline?: EnvironmentDiffBaseline | null;
+  /** A commit the user chose to measure changes from; wins over `diffBaseline`. */
+  diffBaseOverride?: EnvironmentDiffBaseOverride | null;
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */

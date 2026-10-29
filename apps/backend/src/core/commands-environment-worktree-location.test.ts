@@ -221,10 +221,14 @@ test("start uses and persists both explicit and configured roots; generic reads 
       branch: "feature",
       ...(explicit ? { worktreeBaseDir: selected } : {}),
     });
-    await storage.updateEnvironment(environment.id, { setupOverride: true });
+    await storage.updateEnvironment(environment.id, {
+      setupOverride: true,
+      diffBaseOverride: { ref: "refs/heads/main", commit: "a".repeat(40) },
+    });
     await startEnvironmentOnce(environment.id, context, () => {});
     const persisted = (await storage.getEnvironment(environment.id))!;
     expect(persisted.worktreeBaseDir).toBe(selected);
+    expect(persisted.diffBaseOverride).toBeNull();
     expect(path.dirname(persisted.worktreePath!)).toBe(selected);
     expect(await fs.readFile(path.join(persisted.worktreePath!, "README.md"), "utf8")).toBe(
       "fixture",

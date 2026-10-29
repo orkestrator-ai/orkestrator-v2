@@ -2,12 +2,19 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { X, RefreshCw, GitPullRequest } from "lucide-react";
-import { useFilesPanelStore } from "@/stores";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import type { FilesPanelTab } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { PullRequestStateIcon } from "@/components/pull-requests";
 import { useFilesPanelPullRequestTabs } from "./FilesPanelPullRequests";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
+import { saveDiffBase } from "./DiffBaseDialog";
 
 interface FilesPanelHeaderProps {
   onRefresh: () => void;
@@ -15,6 +22,8 @@ interface FilesPanelHeaderProps {
   changeEnvironmentId?: string | null;
   /** Panel target whose pull request tabs are shown. */
   targetId?: string | null;
+  /** Opens the picker for the commit the Changes tab is measured from. */
+  onChooseDiffBase?: () => void;
 }
 
 const TAB_TRIGGER_CLASS =
@@ -24,7 +33,14 @@ export function FilesPanelHeader({
   onRefresh,
   changeEnvironmentId,
   targetId = null,
+  onChooseDiffBase,
 }: FilesPanelHeaderProps) {
+  const hasDiffBaseOverride = useEnvironmentStore((state) =>
+    changeEnvironmentId
+      ? !!state.environments.find((environment) => environment.id === changeEnvironmentId)
+          ?.diffBaseOverride
+      : false,
+  );
   const closePullRequest = useFilesPanelStore((state) => state.closePullRequest);
   const pullRequestTabs = useFilesPanelPullRequestTabs(targetId);
   const activeTab = useFilesPanelStore((state) => state.activeTab);
@@ -61,17 +77,34 @@ export function FilesPanelHeader({
           segmented control competing with the header band behind it.
         */}
         <TabsList className="h-8 max-w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 [scrollbar-width:none]">
-          <TabsTrigger
-            value="changes"
-            className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
-          >
-            Changes
-            {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
-              <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
-                {changesCount}
+          {/* Right-click, or long-press on touch, picks the commit Changes are measured from. */}
+          <ContextMenu>
+            <ContextMenuTrigger asChild disabled={!changeEnvironmentId || !onChooseDiffBase}>
+              <span className="inline-flex">
+                <TabsTrigger
+                  value="changes"
+                  className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
+                >
+                  Changes
+                  {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
+                    <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
+                      {changesCount}
+                    </span>
+                  )}
+                </TabsTrigger>
               </span>
-            )}
-          </TabsTrigger>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem onSelect={() => onChooseDiffBase?.()}>
+                Compare against…
+              </ContextMenuItem>
+              {hasDiffBaseOverride && changeEnvironmentId && (
+                <ContextMenuItem onSelect={() => void saveDiffBase(changeEnvironmentId, null)}>
+                  Use automatic base
+                </ContextMenuItem>
+              )}
+            </ContextMenuContent>
+          </ContextMenu>
           <TabsTrigger
             value="all-files"
             className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"

@@ -883,6 +883,7 @@ export async function reconcileContainerOperation(
                   setupStartedAt: undefined,
                   setupCompletedAt: undefined,
                   createdFromCommit: undefined,
+                  diffBaseOverride: null,
                   hostEntryPort: undefined,
                 }
               : {}),

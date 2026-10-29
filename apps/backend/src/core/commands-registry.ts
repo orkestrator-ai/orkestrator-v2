@@ -1,4 +1,5 @@
 import { registerChangeCommands } from "./commands-registry-changes.js";
+import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
 import { registerGraphLaunchCommands } from "./commands-registry-graph-launch.js";
 import {
@@ -354,6 +355,7 @@ export function createCommandRegistry(
   registerTerminalCommands(register, dependencies);
   registerUserCommandCommands(register);
   registerChangeCommands(register);
+  registerDiffBaseCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);

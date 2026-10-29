@@ -68,6 +68,7 @@ describe("container lifecycle operations", () => {
     const environment = lifecycleEnvironment({
       containerId: "discarded-container",
       createdFromCommit: "abc123",
+      diffBaseOverride: { ref: "refs/heads/main", commit: "a".repeat(40) },
       setupScriptsComplete: true,
       containerLifecycle: {
         schemaVersion: 1,
@@ -94,6 +95,7 @@ describe("container lifecycle operations", () => {
     const stored = environments.get(environment.id)!;
     expect(stored.containerId).toBeNull();
     expect(stored.createdFromCommit).toBeUndefined();
+    expect(stored.diffBaseOverride).toBeNull();
     expect(stored.setupScriptsComplete).toBe(false);
     expect(record(stored).storage.workspaceGeneration).toBe(2);
   });

@@ -35,7 +35,7 @@ What a profile promises is either enforced by the provider or detected by a guar
 - [x] `minEnforcement` filters pickers at launch and is re-checked at dispatch; a tier that dropped since launch fails the activation before dispatch.
 - Record the applied tier on the activation and show it in the inspector:
   - [x] Recorded on the activation (`enforcement`, `enforcementReason`, `guards`), with `graphActivationEnforcementView` for the inspector.
-  - [ ] Shown in the inspector (item 211 renders it).
+  - [x] Shown in the inspector (item 211 renders it: `GraphRunInspector.tsx`, test "shows the profile, the tier actually enforced and why, guards, usage and errors" in `GraphRunTab.test.tsx`).
 
 ## Tests
 
@@ -182,3 +182,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Guards (read-only, remote-ref, enforcement at dispatch), Claude/Grok credential withholding, launch picker helper, tests, docs, todo 0031 task 10. · Codex/Pi withholding, inspector rendering (211), live conformance (after 214).
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Codex (per-thread `shell_environment_policy`, live-checked on 0.164.0) and Pi (spawn-hooked shell tools, withheld MCP environment) credential withholding; OpenCode/Cursor struck as impossible; per-platform remote-axis reason; docs. · Inspector rendering (211), live conformance (after 214).
+- 2026-10-29 · coordinator · Ticked "Shown in the inspector": 211's inspector renders the applied tier, its reason and guard results (test cited). · Live conformance remains (todo 0031 task 10).

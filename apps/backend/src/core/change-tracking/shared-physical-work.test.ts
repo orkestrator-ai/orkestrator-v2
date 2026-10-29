@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { WorktreeWatcher, WorktreeWatcherOptions } from "../worktree-watcher.js";
-import { SharedWatcherRegistry } from "./shared-physical-work.js";
+import { SharedScanQueue, SharedWatcherRegistry } from "./shared-physical-work.js";
 
 test("shared watcher releases only the last listener and closes once", () => {
   let starts = 0,
@@ -79,4 +79,31 @@ test("a synchronous watcher startup failure is reported without losing subscribe
   a.close();
   b.close();
   expect(registry.activeWatchers()).toBe(0);
+});
+
+test("settled waits for the running pass and the pass queued behind it, even when one rejects", async () => {
+  const queue = new SharedScanQueue<number>();
+  const releases: Array<() => void> = [];
+  const pass = (result: number) =>
+    new Promise<number>((resolve, reject) => {
+      releases.push(() => (result < 0 ? reject(new Error("scan failed")) : resolve(result)));
+    });
+  expect(await Promise.race([queue.settled().then(() => "settled"), Bun.sleep(0)])).toBe("settled");
+  const running = queue.run("key", () => pass(-1));
+  const queued = queue.run("key", () => pass(2));
+  running.catch(() => undefined);
+  let settled = false;
+  const settlement = queue.settled().then(() => {
+    settled = true;
+  });
+  await Bun.sleep(0);
+  expect(settled).toBe(false);
+  releases[0]!();
+  // The queued pass starts only after the running one ends.
+  while (releases.length < 2) await Bun.sleep(0);
+  expect(settled).toBe(false);
+  releases[1]!();
+  await settlement;
+  expect(await queued).toBe(2);
+  expect(queue.stats().keys).toBe(0);
 });

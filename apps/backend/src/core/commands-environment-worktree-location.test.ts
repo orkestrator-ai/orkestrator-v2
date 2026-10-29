@@ -23,7 +23,10 @@ const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];
 
 afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) runtime.shutdown();
+  const finished = runtimes.splice(0);
+  for (const runtime of finished) runtime.shutdown();
+  // A diff scan still running writes the worktree's Git exclude file.
+  await Promise.all(finished.map((runtime) => runtime.diffStats.settled()));
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 

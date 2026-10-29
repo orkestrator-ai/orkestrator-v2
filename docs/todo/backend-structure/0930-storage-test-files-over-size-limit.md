@@ -23,7 +23,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97e`.
 **Decisions.**
 
 - **How to cut it?**
-  - **By source module: `storage-config.test.ts`, `storage-setup-build.test.ts`, `storage-pane-layout.test.ts`, `storage-model-catalogs.test.ts`, and the remainder in `storage.test.ts` (recommended).** Move whole `describe` blocks verbatim, and put the shared temp-directory helpers in a small support module.
+  - **By source module: `storage-shared-config.test.ts`, `storage-setup-build.test.ts`, `storage-pane-layout.test.ts`, `storage-model-catalogs.test.ts`, and the remainder in `storage.test.ts` (recommended).** Move whole `describe` blocks verbatim, and put the shared temp-directory helpers in a small support module. Use `storage-shared-config.test.ts` for the config blocks because `src/core/storage-config.test.ts` already contains a separate StorageService config migration suite.
     - Pros: each file matches the `storage-shared-<topic>.ts` module or repository it tests; the diff moves code without editing it; every file ends up well under 2,000 lines.
     - Cons: `storage-setup-build.test.ts` is about 1,400 lines on its own; one more support module.
   - **Halve the file mechanically.**

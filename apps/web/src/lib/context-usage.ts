@@ -178,6 +178,9 @@ export function extractContextUsage(payload: unknown): ContextUsageSnapshot | nu
 }
 
 export function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000_000) {
+    return `${Number((tokens / 1_000_000_000).toFixed(2))}B`;
+  }
   if (tokens >= 1_000_000) {
     return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`;
   }

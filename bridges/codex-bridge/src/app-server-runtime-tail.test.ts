@@ -11,24 +11,20 @@ import {
   threadPayload,
 } from "./app-server-runtime-test-harness.js";
 
-test("account limits use descriptive duration labels and preserve credit formatting", () => {
+test("account limits use descriptive duration labels", () => {
   expect(
-    accountUsageFromLimits(
-      [
-        {
-          slot: "primary",
-          label: "Primary",
-          usedPercent: 10,
-          windowMinutes: 10_080,
-        },
-        { slot: "secondary", label: "Secondary", usedPercent: 20 },
-      ],
-      { balance: "12.50", hasCredits: true },
-    ),
+    accountUsageFromLimits([
+      {
+        slot: "primary",
+        label: "Primary",
+        usedPercent: 10,
+        windowMinutes: 10_080,
+      },
+      { slot: "secondary", label: "Secondary", usedPercent: 20 },
+    ]),
   ).toEqual([
     { window: "primary", label: "Weekly limit", usedPercent: 10, windowMinutes: 10_080 },
     { window: "secondary", label: "Secondary limit", usedPercent: 20 },
-    { window: "credits", label: "Credits", creditBalance: "12.50" },
   ]);
 });
 
@@ -597,8 +593,7 @@ describe("usage and account rate limits", () => {
 
   /**
    * The regression. `account/rateLimits/updated` is a sparse rolling update: an
-   * update carrying only `secondary` used to erase the primary window, and one
-   * omitting `credits` used to erase the balance.
+   * update carrying only `secondary` used to erase the primary window.
    */
   test("a sparse rate-limit update merges instead of replacing", async () => {
     const { h, sessionId } = await usageSession();
@@ -632,7 +627,6 @@ describe("usage and account rate limits", () => {
         },
         { slot: "secondary", usedPercent: 20 },
       ],
-      credits: { balance: "12.50", hasCredits: true },
       account: [
         {
           window: "primary",
@@ -641,11 +635,10 @@ describe("usage and account rate limits", () => {
           resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
         },
         { window: "secondary", label: "Secondary limit", usedPercent: 20 },
-        { window: "credits", label: "Credits", creditBalance: "12.50" },
       ],
     });
 
-    // A genuinely secondary-only update, with no primary or credits at all.
+    // A genuinely secondary-only update, with no primary at all.
     h.child().notify("account/rateLimits/updated", {
       rateLimits: {
         secondary: { usedPercent: 35 },
@@ -664,8 +657,6 @@ describe("usage and account rate limits", () => {
         },
         { slot: "secondary", usedPercent: 35 },
       ],
-      // Absent metadata does not clear a previously observed value.
-      credits: { balance: "12.50", hasCredits: true },
     });
 
     h.child().notify("account/rateLimits/updated", {
@@ -682,7 +673,7 @@ describe("usage and account rate limits", () => {
     });
   });
 
-  test("a partial credits update merges field by field", async () => {
+  test("the account credit balance is not surfaced", async () => {
     const { h, sessionId } = await usageSession();
     h.child().notify("thread/tokenUsage/updated", {
       threadId: "thread-1",
@@ -693,16 +684,10 @@ describe("usage and account rate limits", () => {
       rateLimits: { credits: { balance: "12.50", hasCredits: true, unlimited: false } },
     });
     await h.drain();
-    h.child().notify("account/rateLimits/updated", {
-      rateLimits: { credits: { balance: "3.00" } },
-    });
-    await h.drain();
 
-    expect(h.runtime.getStatus(sessionId)?.contextUsage?.credits).toEqual({
-      balance: "3.00",
-      hasCredits: true,
-      unlimited: false,
-    });
+    const usage = h.runtime.getStatus(sessionId)?.contextUsage;
+    expect(usage && "credits" in usage).toBe(false);
+    expect(usage?.account?.some((window) => window.window === "credits") ?? false).toBe(false);
   });
 
   /**

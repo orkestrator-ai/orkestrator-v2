@@ -438,5 +438,5 @@ collecting with the first release that carries them.
   item 3: the check that found this, and the `/messages` fallback this
   file's item 4 waits on.
 - [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors).
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md):
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window):
   the support window.

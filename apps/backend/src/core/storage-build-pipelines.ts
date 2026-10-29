@@ -1,4 +1,7 @@
-import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import type {
+  PipelineSession,
+  PipelineTranscriptReference,
+} from "@orkestrator/protocol/build-pipeline";
 import * as shared from "./storage-shared.js";
 import {
   activeBuildAdmissionKey,
@@ -41,6 +44,15 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
+
+/**
+ * The transcript-store owner of a graph run's activation transcripts (item
+ * 211): its own namespace, so no build pipeline id (a UUID) can collide with
+ * it. Each activation's transcript is one session, keyed by activation key.
+ */
+export function graphRunTranscriptOwner(runId: string): string {
+  return `graph-run:${runId}`;
+}
 
 /** Committed control records and the store revision they were read at. */
 interface LoadedBuildPipelines {
@@ -138,13 +150,20 @@ export class BuildPipelinesRepository {
   private buildPipelineTranscriptLimitOverrides: Partial<BuildPipelineTranscriptLimits> | null =
     null;
   private liveBuildPipelineTagCache: { revision: number | null; tags: Set<string> } | null = null;
+  private liveGraphRunTagCache: { revision: number | null; tags: Set<string> } | null = null;
 
   /** Constructed lazily: storage that never runs a build never creates the chunk directory. */
   private buildPipelineTranscriptStore(): BuildPipelineTranscriptStore {
     this.buildPipelineTranscriptStoreInstance ??= new BuildPipelineTranscriptStore({
       directory: this.context.file(BUILD_PIPELINE_TRANSCRIPT_DIRECTORY),
       database: () => this.context.database,
-      isLivePipeline: (pipelineTag) => this.liveBuildPipelineTags()?.has(pipelineTag) ?? true,
+      isLivePipeline: (pipelineTag) => {
+        const pipelines = this.liveBuildPipelineTags();
+        if (!pipelines) return true;
+        if (pipelines.has(pipelineTag)) return true;
+        // Graph runs keep their activation transcripts here too (item 211).
+        return this.liveGraphRunTags()?.has(pipelineTag) ?? true;
+      },
       faults: () => this.buildPipelineTranscriptFaultHooks,
       ...(this.buildPipelineTranscriptLimitOverrides
         ? { limits: this.buildPipelineTranscriptLimitOverrides }
@@ -217,6 +236,39 @@ export class BuildPipelinesRepository {
     }
     const tags = new Set(Object.keys(isRecord(value) ? value : {}).map(transcriptPipelineTag));
     this.liveBuildPipelineTagCache = { revision, tags };
+    return tags;
+  }
+
+  /**
+   * Transcript owner tags of the graph runs that exist, revalidated against
+   * the `graph-runs` store revision; row keys only, never the records.
+   * Synchronous (it runs inside transactions). `null` when the store cannot
+   * be read: nothing may be treated as orphaned then.
+   */
+  private liveGraphRunTags(): Set<string> | null {
+    const store = this.context.storeForFile(this.context.file("graph-runs.json"));
+    if (!store) return null;
+    const revision = this.context.database.storeRevision(store);
+    if (this.liveGraphRunTagCache?.revision === revision) {
+      recurringWorkMetrics.work("storage-stat");
+      return this.liveGraphRunTagCache.tags;
+    }
+    let keys: string[];
+    try {
+      keys =
+        revision === null
+          ? []
+          : this.context.database
+              .rows(store)
+              .list({ values: false })
+              .map((entry) => entry.key);
+    } catch {
+      return null;
+    }
+    const tags = new Set(
+      keys.map((runId) => transcriptPipelineTag(graphRunTranscriptOwner(runId))),
+    );
+    this.liveGraphRunTagCache = { revision, tags };
     return tags;
   }
 
@@ -715,6 +767,77 @@ export class BuildPipelinesRepository {
       );
     }
     return readInlineTranscript(session, window);
+  }
+
+  /**
+   * Stores one graph activation's display transcript (item 211): stages the
+   * chunks, then commits the manifest in its own transaction. A graph run's
+   * record is saved separately, so the manifest commits first and the
+   * record's reference never names uncommitted data; a run save that loses
+   * its race leaves the committed manifest, which a later read substitutes.
+   * Returns the committed reference, or null when the store refused it.
+   */
+  async commitGraphRunTranscript(input: {
+    runId: string;
+    activationKey: string;
+    sdkSessionId: string;
+    messages: readonly unknown[];
+    revision: number;
+    fingerprint: string;
+  }): Promise<PipelineTranscriptReference | null> {
+    const store = this.buildPipelineTranscriptStore();
+    const result = await store.stage({
+      pipelineId: graphRunTranscriptOwner(input.runId),
+      sessionKey: input.activationKey,
+      sdkSessionId: input.sdkSessionId,
+      messages: input.messages,
+      revision: input.revision,
+      fingerprint: input.fingerprint,
+    });
+    if (result.status === "rejected") return null;
+    const staged = result.staged;
+    if (!result.written || !staged) return result.reference;
+    const outcome = this.context.database.transaction(() =>
+      store.commitStagedInTransaction(staged),
+    );
+    if (!outcome.ok) {
+      await store.settleCommitted([], [staged]);
+      await store.discard([staged]);
+      return null;
+    }
+    await store.settleCommitted([staged]);
+    return result.reference;
+  }
+
+  /** The committed manifest and fingerprint of a graph activation's transcript, if any. */
+  describeGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+  ): Promise<{ reference: PipelineTranscriptReference; fingerprint: string } | null> {
+    return this.buildPipelineTranscriptStore().describe(
+      graphRunTranscriptOwner(runId),
+      activationKey,
+    );
+  }
+
+  /** Reads messages `[fromIndex, toIndex)` of a graph activation's stored transcript. */
+  readGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+    reference: PipelineTranscriptReference,
+    window: TranscriptReadWindow = {},
+  ): Promise<TranscriptRead> {
+    return this.buildPipelineTranscriptStore().read(
+      graphRunTranscriptOwner(runId),
+      activationKey,
+      reference,
+      window,
+    );
+  }
+
+  /** Removes a deleted graph run's activation transcripts (manifests and chunks). */
+  async deleteGraphRunTranscripts(runId: string): Promise<void> {
+    await this.deleteBuildPipelineTranscriptsFor(graphRunTranscriptOwner(runId));
   }
 
   /**

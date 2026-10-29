@@ -327,7 +327,7 @@ describe("usage and limits", () => {
     });
   });
 
-  test("normalizes account rate-limit windows and credits", () => {
+  test("normalizes account rate-limit windows", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: {
         limitName: "Five hour",
@@ -343,7 +343,6 @@ describe("usage and limits", () => {
 
     expect(events[0]).toMatchObject({
       kind: "account.rateLimits.updated",
-      credits: { balance: "12.50", hasCredits: true, unlimited: false },
       rateLimits: [
         // `slot` is the merge key: the primary label is the account's plan name
         // and changes independently of which window an update carries.
@@ -484,30 +483,12 @@ describe("usage and limits", () => {
     });
   });
 
-  test("credits carry only the fields the update actually supplied", () => {
-    const partial = reduce("account/rateLimits/updated", {
-      rateLimits: { credits: { balance: "3.00", hasCredits: "yes", unlimited: null } },
-    });
-    expect(
-      (partial[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).credits,
-    ).toEqual({ balance: "3.00" });
-  });
-
-  test("absent credits are omitted so the consumer keeps the last balance", () => {
+  test("the credit balance is not carried", () => {
     const events = reduce("account/rateLimits/updated", {
-      rateLimits: { primary: { usedPercent: 1 } },
-    });
-    expect("credits" in (events[0] as object)).toBe(false);
-
-    const nulled = reduce("account/rateLimits/updated", {
-      rateLimits: { primary: { usedPercent: 1 }, credits: null },
-    });
-    expect("credits" in (nulled[0] as object)).toBe(false);
-  });
-
-  test("an empty credits object is omitted rather than emitted as a clearing update", () => {
-    const events = reduce("account/rateLimits/updated", {
-      rateLimits: { credits: {} },
+      rateLimits: {
+        primary: { usedPercent: 1 },
+        credits: { balance: "3.00", hasCredits: true, unlimited: false },
+      },
     });
     expect("credits" in (events[0] as object)).toBe(false);
   });

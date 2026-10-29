@@ -1,4 +1,5 @@
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { runUserCommand } from "@/lib/backend";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
@@ -313,6 +314,10 @@ export function SharedNativeAgentController({
   beforeSend,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
+  // A bug report's session runs in its own scratch directory, like a
+  // coordinator without an Environment record or pane layout behind it.
+  const isBugReport = bugReportIdFromRuntimeId(data.environmentId) !== null;
+  const hasEnvironmentRecord = !isReadOnlyCoordinator && !isBugReport;
   const platform = data.platform!;
   const adapter = getNativeAgentAdapter(platform);
   const label = adapter.label;
@@ -354,7 +359,7 @@ export function SharedNativeAgentController({
   // ordinary worker setup gate would otherwise classify that absence as
   // permanently pending and its override action cannot target a synthetic ID.
   const setupPending =
-    !isReadOnlyCoordinator && isSetupBlocked({ setupPhase: environment?.setupPhase });
+    hasEnvironmentRecord && isSetupBlocked({ setupPhase: environment?.setupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
@@ -2395,7 +2400,9 @@ export function SharedNativeAgentController({
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: data.containerId ?? null,
-    worktreePath: isReadOnlyCoordinator ? undefined : environment?.worktreePath,
+    worktreePath: isReadOnlyCoordinator
+      ? undefined
+      : (environment?.worktreePath ?? (isBugReport ? coordinatorWorkspacePath : undefined)),
     writeImage: isReadOnlyCoordinator ? writeCoordinatorImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
@@ -3127,7 +3134,7 @@ export function SharedNativeAgentController({
     messageWindow?.truncated === true && !showBytesNotice && !showLoadEarlier;
 
   const resumeDialog =
-    adapter.capabilities.resume && !isReadOnlyCoordinator ? (
+    adapter.capabilities.resume && hasEnvironmentRecord ? (
       <NativeResumeSessionDialog
         open={resumeDialogOpen}
         onOpenChange={(open) => {
@@ -3492,10 +3499,10 @@ export function SharedNativeAgentController({
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       onAnnotationCommentDone={focusComposerAfterAnnotationComment}
       messageActions={
-        adapter.capabilities.fork && !isReadOnlyCoordinator ? renderMessageActions : undefined
+        adapter.capabilities.fork && hasEnvironmentRecord ? renderMessageActions : undefined
       }
       onResumeClick={
-        adapter.capabilities.resume && !isReadOnlyCoordinator
+        adapter.capabilities.resume && hasEnvironmentRecord
           ? () => setResumeDialogOpen(true)
           : undefined
       }

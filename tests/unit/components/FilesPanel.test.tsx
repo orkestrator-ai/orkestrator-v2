@@ -424,11 +424,8 @@ describe("Files panel components", () => {
     });
     expect(useFilesPanelStore.getState().activeTab).toBe("all-files");
 
-    const actionButtons = screen
-      .getAllByRole("button")
-      .filter((button) => button.getAttribute("role") !== "tab");
-    fireEvent.click(actionButtons[0]!);
-    fireEvent.click(actionButtons[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     expect(refreshMock).toHaveBeenCalledTimes(1);
     expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });

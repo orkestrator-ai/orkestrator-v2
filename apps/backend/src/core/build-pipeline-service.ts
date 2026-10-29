@@ -91,11 +91,11 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       this.recovery,
       this.stageSupervisor,
     );
-    // Verification is certified against the worktree it started from. Asking
-    // at submission lets the verifier undo a stray file within its turn.
-    options.workflowResults?.setAcceptanceCheck("verification-result", (attempt) =>
-      this.stageSupervisor.verificationResultRefusal(attempt),
-    );
+    // Review, consolidation and Verify are certified against the worktree they
+    // started from. Asking at submission lets the turn undo a stray change
+    // within its own turn; the supervisor decides again when it consumes the
+    // result (`build-pipeline-read-only-guard.ts`).
+    if (options.workflowResults) this.stageSupervisor.readOnly.register(options.workflowResults);
   }
 
   // -------------------------------------------------------------------------

@@ -5,7 +5,10 @@ import {
   coordinatorWebResearchFromEnv,
 } from "@orkestrator/protocol/coordinator-web-research";
 import {
+  nativeAgentDeniedCapabilities,
+  nativeAgentMcpServer,
   nativeAgentPolicyDeniesWebSearch,
+  nativeAgentUserMcpGrant,
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -41,6 +44,16 @@ const CAPABILITY_TOOLS: ReadonlyMap<NativeAgentCapability, readonly string[]> = 
   // creates scheduled cloud agents.
   ["network", ["WebFetch", "WebSearch", "RemoteTrigger"]],
   ["web.search", ["WebSearch"]],
+  // The CLI's sub-agent tool, under both of its names.
+  ["subagents", ["Task", "Agent"]],
+  // Command rules: Bash stays, and a call matching the pattern as written is
+  // denied in every permission mode. Another spelling (`git -C x push`, a
+  // script) still runs, which is why the enforcement matrix rates these
+  // advisory and the post-hoc guards hold the rest. `gh` goes whole for
+  // `github.write`: no pattern separates its reading commands from its writes.
+  ["git.commit", ["Bash(git commit)", "Bash(git commit *)"]],
+  ["git.push", ["Bash(git push)", "Bash(git push *)"]],
+  ["github.write", ["Bash(gh)", "Bash(gh *)"]],
 ]);
 
 /** Tools a read-only coordinator turn may use, before MCP is added. */
@@ -429,11 +442,20 @@ export function isCoordinatorReadOnlyPolicy(
   return policy?.id === "coordinator-read-only";
 }
 
-/** Provider tool names for the capabilities this policy denies. */
+/**
+ * Provider tool names and rules for the capabilities this policy denies, in
+ * either wire form (`nativeAgentDeniedCapabilities`). A denied `mcp:<server>`
+ * becomes a deny rule for every tool of that server, which the CLI matches on
+ * its normalised name.
+ */
 export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined): string[] {
-  const denied = policy?.capabilityPolicy?.deny ?? [];
   const tools = new Set<string>();
-  for (const capability of denied) {
+  for (const capability of nativeAgentDeniedCapabilities(policy)) {
+    const server = nativeAgentMcpServer(capability);
+    if (server) {
+      tools.add(`${claudeMcpToolPrefix(server)}*`);
+      continue;
+    }
     for (const tool of CAPABILITY_TOOLS.get(capability) ?? []) tools.add(tool);
   }
   if (!nativeAgentPolicyDeniesWebSearch(policy)) tools.delete("WebSearch");
@@ -472,6 +494,8 @@ export function claudeReadOnlyAllowedTools(options: {
   policy?: NativeAgentExecutionPolicy;
   /** Remote research servers the launcher named and the session loaded. */
   researchMcpServerNames?: readonly string[];
+  /** User servers a graph node was granted and the session loaded (item 404). */
+  grantedMcpServerNames?: readonly string[];
   /**
    * The coordinator's mirrored skills (`coordinator-skills.ts`), allowed by
    * exact name. Loading one only adds its text to the conversation: the
@@ -486,6 +510,7 @@ export function claudeReadOnlyAllowedTools(options: {
     ...(options.policy && !nativeAgentPolicyDeniesWebSearch(options.policy) ? ["WebSearch"] : []),
     ...(options.agentMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
     ...(options.researchMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
+    ...(options.grantedMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
   ];
 }
 
@@ -552,41 +577,112 @@ interface CommandVerdict {
   reason?: string;
 }
 
+/**
+ * Who a read-only turn's refusals speak to. A coordinator delegates what it
+ * cannot do to a worker environment; any other read-only turn (a graph
+ * reviewer, a build pipeline review) has no worker to hand work to, and
+ * calling it a coordinator misleads the model about its own role.
+ */
+export type ReadOnlyRefusalRole = "coordinator" | "read-only";
+
+/**
+ * The role a turn's refusals use: a coordinator when this process was
+ * launched as one, or when an ordinary (not `readOnly`) turn runs under the
+ * coordinator policy; every other read-only turn is neutral.
+ */
+export function readOnlyRefusalRole(
+  sessionPolicy: NativeAgentExecutionPolicy | undefined,
+  readOnlyTurn: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): ReadOnlyRefusalRole {
+  if (processExecutionPolicyIsCoordinator(env)) return "coordinator";
+  return !readOnlyTurn && isCoordinatorReadOnlyPolicy(sessionPolicy) ? "coordinator" : "read-only";
+}
+
+/** The refusal sentences, per role. Only the wording differs; the decisions are the same. */
+const REFUSALS = {
+  coordinator: {
+    composition:
+      "Coordinator shells cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+    byPath: (program: string) =>
+      `Coordinator shells run reading programs by name only, so \`${program}\` is not available here. Use the program name, or delegate it to a worker environment.`,
+    gitSandbox:
+      "Coordinator Git commands require the command sandbox because Git configuration can run helpers. Use reading tools or delegate to a worker environment.",
+    unavailable: (described: string) =>
+      `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
+    gitArgument: (described: string) =>
+      `Coordinator is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program. Delegate it to a worker environment.`,
+    argument: (program: string) =>
+      `Coordinator is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program. Delegate it to a worker environment.`,
+    program: (program: string) =>
+      `Coordinator is read-only, so \`${program}\` is not available here. Delegate commands that change the checkout to a worker environment.`,
+    network: (described: string) =>
+      `Coordinator commands have no network access, so \`${described}\` is not available here. Delegate it to a worker environment.`,
+    tool: (tool: string) =>
+      `Coordinator is read-only, so ${tool} is not available. Delegate file changes to a worker environment.`,
+    waiting: (tool: string) =>
+      `Coordinator turns do not wait, so ${tool} is not available. Delegated work reports back by waking this conversation with a message when it finishes; end your turn instead.`,
+    mcp: (tool: string) =>
+      `Coordinator sessions may only use Orkestrator's own tools, so ${tool} is not available.`,
+    unsandboxed: "Coordinator commands may not run outside the sandbox.",
+  },
+  "read-only": {
+    composition:
+      "Shell commands in this session cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
+    byPath: (program: string) =>
+      `This session runs reading programs by name only, so \`${program}\` is not available here. Use the program name.`,
+    gitSandbox:
+      "Git commands in this session require the command sandbox because Git configuration can run helpers. Use reading tools instead.",
+    unavailable: (described: string) =>
+      `This session is read-only, so \`${described}\` is not available here.`,
+    gitArgument: (described: string) =>
+      `This session is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program.`,
+    argument: (program: string) =>
+      `This session is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program.`,
+    program: (program: string) =>
+      `This session is read-only, so \`${program}\` is not available here. It may read the checkout but not change it.`,
+    network: (described: string) =>
+      `Commands in this session have no network access, so \`${described}\` is not available here.`,
+    tool: (tool: string) => `This session is read-only, so ${tool} is not available.`,
+    waiting: (tool: string) =>
+      `This session's turns do not wait, so ${tool} is not available. End your turn instead.`,
+    mcp: (tool: string) =>
+      `This session may only use Orkestrator's own tools and the MCP servers granted to it, so ${tool} is not available.`,
+    unsandboxed: "Commands in this session may not run outside the sandbox.",
+  },
+} as const satisfies Record<ReadOnlyRefusalRole, unknown>;
+
+interface ReadOnlyCommandOptions {
+  commandSandbox?: CoordinatorCommandSandbox;
+  /** Whose refusals these are; default `coordinator`. */
+  role?: ReadOnlyRefusalRole;
+}
+
 /** Whether one shell command only reads. Exported for its own tests. */
 export function isReadOnlyShellCommand(
   command: string,
-  options: { commandSandbox?: CoordinatorCommandSandbox } = {},
+  options: ReadOnlyCommandOptions = {},
 ): CommandVerdict {
+  const refusals = REFUSALS[options.role ?? "coordinator"];
   const trimmed = command.trim();
   if (!trimmed) return { allowed: true };
   if (COMPOSITION_PATTERN.test(trimmed) || /(?:^|\s)~/.test(trimmed)) {
-    return {
-      allowed: false,
-      reason:
-        "Coordinator shells cannot use quotes, escapes, globs, pipes, redirection, substitution or command chaining, because the command that runs would not be the one checked.",
-    };
+    return { allowed: false, reason: refusals.composition };
   }
   const tokens = trimmed.split(/\s+/).filter(Boolean);
   const first = tokens[0] ?? "";
   if (!first) return { allowed: true };
   // `bin/cat` is whatever the checkout put at that path, not `cat`.
   if (first.includes("/") || first.includes("\\")) {
-    return {
-      allowed: false,
-      reason: `Coordinator shells run reading programs by name only, so \`${first}\` is not available here. Use the program name, or delegate it to a worker environment.`,
-    };
+    return { allowed: false, reason: refusals.byPath(first) };
   }
   const program = first;
-  if (NETWORK_COMMANDS.has(program)) return networkRefusal(program);
+  if (NETWORK_COMMANDS.has(program)) return { allowed: false, reason: refusals.network(program) };
   if (program === "git") {
     // Even inspection can invoke repository/ambient helpers (diff.external,
     // textconv, fsmonitor, pagers). Only admit Git behind an OS sandbox.
     if (options.commandSandbox !== "required") {
-      return {
-        allowed: false,
-        reason:
-          "Coordinator Git commands require the command sandbox because Git configuration can run helpers. Use reading tools or delegate to a worker environment.",
-      };
+      return { allowed: false, reason: refusals.gitSandbox };
     }
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
     const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
@@ -596,7 +692,7 @@ export function isReadOnlyShellCommand(
       (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||
         (subcommand === "remote" && args.some((arg) => arg === "show")))
     ) {
-      return networkRefusal(`git ${subcommand}`);
+      return { allowed: false, reason: refusals.network(`git ${subcommand}`) };
     }
     const permitted =
       subcommand !== undefined &&
@@ -604,50 +700,31 @@ export function isReadOnlyShellCommand(
         (CONDITIONAL_GIT_SUBCOMMANDS.get(subcommand)?.(args) ?? false));
     const described = ["git", subcommand].filter(Boolean).join(" ");
     if (!permitted) {
-      return {
-        allowed: false,
-        reason: `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
-      };
+      return { allowed: false, reason: refusals.unavailable(described) };
     }
     if (
       hasFlag(tokens.slice(1), GIT_MUTATING_ARGUMENTS) ||
       hasFlag(args, GIT_SUBCOMMAND_MUTATING_ARGUMENTS.get(subcommand) ?? new Set())
     ) {
-      return {
-        allowed: false,
-        reason: `Coordinator is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program. Delegate it to a worker environment.`,
-      };
+      return { allowed: false, reason: refusals.gitArgument(described) };
     }
     return { allowed: true };
   }
   if (READ_ONLY_COMMANDS.has(program)) {
     const args = tokens.slice(1);
     const mutating = MUTATING_ARGUMENTS.get(program);
-    const options = OPTION_ALLOWLISTS.get(program);
+    const allowedOptions = OPTION_ALLOWLISTS.get(program);
     const limit = POSITIONAL_LIMITS.get(program);
     if (
       (mutating && hasFlag(args, mutating)) ||
-      (options && !optionsAllowed(args, options)) ||
+      (allowedOptions && !optionsAllowed(args, allowedOptions)) ||
       (limit && positionalCount(args, limit.valueOptions, limit.stopAtFirstOperand) > limit.max)
     ) {
-      return {
-        allowed: false,
-        reason: `Coordinator is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program. Delegate it to a worker environment.`,
-      };
+      return { allowed: false, reason: refusals.argument(program) };
     }
     return { allowed: true };
   }
-  return {
-    allowed: false,
-    reason: `Coordinator is read-only, so \`${program}\` is not available here. Delegate commands that change the checkout to a worker environment.`,
-  };
-}
-
-function networkRefusal(described: string): CommandVerdict {
-  return {
-    allowed: false,
-    reason: `Coordinator commands have no network access, so \`${described}\` is not available here. Delegate it to a worker environment.`,
-  };
+  return { allowed: false, reason: refusals.program(program) };
 }
 
 /** Whether every option in `args` is one of `allowed`, each taking a value. */
@@ -702,7 +779,9 @@ function deny(reason: string): HookJSONOutput {
 }
 
 /**
- * The enforcement point for a read-only coordinator turn.
+ * The enforcement point for a read-only turn: a coordinator's, or any
+ * `readOnly` turn (a graph reviewer, a pipeline review). `options.role`
+ * picks only the refusal wording (`readOnlyRefusalRole`).
  *
  * Registered programmatically and never from settings, so a workspace cannot
  * remove it. Hooks run before deny rules, ask rules and the permission mode,
@@ -714,25 +793,31 @@ export function createCoordinatorReadOnlyHook(
   researchMcpServerNames: readonly string[] = coordinatorResearchMcpServersFromEnv(process.env).map(
     (server) => server.name,
   ),
-  options: { commandSandbox?: CoordinatorCommandSandbox } = {},
+  options: ReadOnlyCommandOptions = {},
 ): HookCallback {
+  const refusals = REFUSALS[options.role ?? "coordinator"];
   const deniedTools = new Set(claudeDeniedTools(policy));
+  const deniedMcpPrefixes = [...deniedTools]
+    .filter((tool) => tool.startsWith("mcp__") && tool.endsWith("__*"))
+    .map((tool) => tool.slice(0, -1));
   const allowedMcpPrefixes = [
     claudeMcpToolPrefix("orkestrator"),
     ...researchMcpServerNames.map(claudeMcpToolPrefix),
+    // A graph node's granted user servers (item 404). The coordinator's own
+    // policy never carries a grant.
+    ...(nativeAgentUserMcpGrant(policy) ?? []).map(claudeMcpToolPrefix),
   ];
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const toolName = input.tool_name;
     if (deniedTools.has(toolName)) {
-      return deny(
-        `Coordinator is read-only, so ${toolName} is not available. Delegate file changes to a worker environment.`,
-      );
+      return deny(refusals.tool(toolName));
     }
     if (WAITING_TOOLS.has(toolName)) {
-      return deny(
-        `Coordinator turns do not wait, so ${toolName} is not available. Delegated work reports back by waking this conversation with a message when it finishes; end your turn instead.`,
-      );
+      return deny(refusals.waiting(toolName));
+    }
+    if (deniedMcpPrefixes.some((prefix) => toolName.startsWith(prefix))) {
+      return deny(`This session's policy denies the MCP server behind ${toolName}.`);
     }
     if (toolName.startsWith("mcp__")) {
       // Project MCP servers are arbitrary programs. Only Orkestrator's own
@@ -740,9 +825,7 @@ export function createCoordinatorReadOnlyHook(
       // capabilities the coordinator credential bounds, plus the remote
       // research servers the launcher named.
       if (!allowedMcpPrefixes.some((prefix) => toolName.startsWith(prefix))) {
-        return deny(
-          `Coordinator sessions may only use Orkestrator's own tools, so ${toolName} is not available.`,
-        );
+        return deny(refusals.mcp(toolName));
       }
       return {};
     }
@@ -750,7 +833,7 @@ export function createCoordinatorReadOnlyHook(
       const toolInput = input.tool_input as
         { command?: unknown; dangerouslyDisableSandbox?: unknown } | undefined;
       if (toolInput?.dangerouslyDisableSandbox === true) {
-        return deny("Coordinator commands may not run outside the sandbox.");
+        return deny(refusals.unsandboxed);
       }
       const command = typeof toolInput?.command === "string" ? toolInput.command : "";
       const verdict = isReadOnlyShellCommand(command, options);

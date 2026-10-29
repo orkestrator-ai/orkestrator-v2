@@ -463,8 +463,9 @@ model).
     `resolved: "opencode-go/gpt-5.6-luna"`; start, file assertion,
     follow-up, command listing, refusals and `--literal` passed, then the
     `--attach` prompt settled `unknown` (exit 7) on both runs because it
-    never reached OpenCode. Filed as
-    [0166](0166-opencode-prompt-attachment-never-dispatched.md).
+    never reached OpenCode. Filed as todo 0166 (fixed on 2026-10-26 and
+    retired on 2026-10-29; see
+    [agent-engines.md](../../architecture/agent-engines.md#opencode)).
   - `mise run smoke:cli`: pass, including the new platform config directory
     check (`<tmp>/home/Library/Application Support/orkestrator-cli`).
   - `cli-ui.spec.ts` on `dev:test` profiles (all calls through
@@ -743,8 +744,9 @@ model).
 
 ## Related
 
-- [0166-opencode-prompt-attachment-never-dispatched.md](0166-opencode-prompt-attachment-never-dispatched.md):
-  the OpenCode `--attach` failure found by this file's 2026-10-25 run.
+- [agent-engines.md](../../architecture/agent-engines.md#opencode): how OpenCode
+  attachments are labelled since the `--attach` failure found by this file's
+  2026-10-25 run (todo 0166, retired on 2026-10-29).
 - [0017-cli-command-surface.md](0017-cli-command-surface.md): each new capability adds a
   scenario and, where the UI rehydrates, a `cli-ui.spec.ts` check.
 - [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)

@@ -24,7 +24,9 @@ import {
   type ReviewIssue,
   type StructuredReviewReport,
 } from "./structured-review.js";
+import { isReviewLens, type ReviewLens } from "./review-lens.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import {
   isNativeAgentModelSubstitution,
   READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS,
@@ -46,6 +48,12 @@ export interface ReviewerModelSelection {
   reasoningEffort?: string;
   /** Fast/Normal choice pinned when this durable reviewer was admitted. */
   fastMode?: boolean;
+  /**
+   * This reviewer's focus (`review-lens.ts`). The launcher copies the text, so
+   * the record keeps what the reviewer ran with. Only reviewer rows carry one:
+   * the guards for preparation, consolidation and fix selections refuse it.
+   */
+  lens?: ReviewLens;
 }
 
 export type ReviewerStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -275,6 +283,13 @@ export interface ReviewFanoutState {
   consolidation?: ReviewConsolidationSession;
   /** The merged report. Present once consolidation has been certified. */
   report?: StructuredReviewReport;
+  /**
+   * Build pipeline only: the read-only guard's Git baseline for the whole pass,
+   * captured before any reviewer is dispatched. Every reviewer and the
+   * consolidation turn are checked against it. Absent on Multi Review records
+   * and on pipeline passes started before the guard existed.
+   */
+  workspaceBaseline?: WorkspaceGitBaseline;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -342,14 +357,27 @@ export function isReviewerModelSelectionFields(value: Record<string, unknown>): 
   if (!isAgentPlatform(value.agent) || !nonBlank(value.model)) return false;
   return (
     (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
-    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
+    (value.lens === undefined || isReviewLens(value.lens))
   );
 }
 
+/** A reviewer row: a model selection that may carry the reviewer's lens. */
 export function isReviewerModelSelection(value: unknown): value is ReviewerModelSelection {
-  if (!record(value) || !hasOnlyKeys(value, ["agent", "model", "reasoningEffort", "fastMode"]))
+  if (
+    !record(value) ||
+    !hasOnlyKeys(value, ["agent", "model", "reasoningEffort", "fastMode", "lens"])
+  )
     return false;
   return isReviewerModelSelectionFields(value);
+}
+
+/**
+ * A selection for a single-session step (preparation, consolidation, fix). A
+ * lens means nothing there, so it is refused rather than silently dropped.
+ */
+export function isReviewStepModelSelection(value: unknown): value is ReviewerModelSelection {
+  return isReviewerModelSelection(value) && value.lens === undefined;
 }
 
 const REVIEWER_STATUSES = new Set<ReviewerStatus>([
@@ -365,6 +393,7 @@ const REVIEWER_KEYS = [
   "model",
   "reasoningEffort",
   "fastMode",
+  "lens",
   "id",
   "status",
   "modelUnpinned",
@@ -647,12 +676,20 @@ export function isReviewPanelOverlap(value: unknown): value is ReviewPanelOverla
 export function isReviewFanoutState(value: unknown): value is ReviewFanoutState {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["reviewers", "snapshot", "snapshotStale", "consolidation", "report"]) &&
+    hasOnlyKeys(value, [
+      "reviewers",
+      "snapshot",
+      "snapshotStale",
+      "consolidation",
+      "report",
+      "workspaceBaseline",
+    ]) &&
     isReviewerRecordList(value.reviewers) &&
     (value.snapshot === undefined || isReviewWorktreeSnapshotRecord(value.snapshot)) &&
     (value.snapshotStale === undefined || typeof value.snapshotStale === "boolean") &&
     (value.consolidation === undefined || isReviewConsolidationSession(value.consolidation)) &&
-    (value.report === undefined || isStructuredReviewReport(value.report))
+    (value.report === undefined || isStructuredReviewReport(value.report)) &&
+    (value.workspaceBaseline === undefined || isWorkspaceGitBaseline(value.workspaceBaseline))
   );
 }
 

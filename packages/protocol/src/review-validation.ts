@@ -15,6 +15,34 @@ export interface ReviewValidationPlan {
   limitations: string[];
 }
 
+/** Provider-facing schema for {@link ReviewValidationPlan}; {@link parseReviewValidationPlan} adds the domain checks. */
+export const REVIEW_VALIDATION_PLAN_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["headRef", "commands", "limitations"],
+  properties: {
+    headRef: { type: "string" },
+    commands: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "command", "cwd", "dependsOn", "resources", "weight", "timeoutMs"],
+        properties: {
+          id: { type: "string" },
+          command: { type: "string" },
+          cwd: { type: "string" },
+          dependsOn: { type: "array", items: { type: "string" } },
+          resources: { type: "array", items: { type: "string" } },
+          weight: { type: "integer", enum: [1, 2] },
+          timeoutMs: { type: "integer" },
+        },
+      },
+    },
+    limitations: { type: "array", items: { type: "string" } },
+  },
+};
+
 export interface ReviewValidationResult {
   id: string;
   command: string;

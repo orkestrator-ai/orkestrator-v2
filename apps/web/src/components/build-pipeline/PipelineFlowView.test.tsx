@@ -76,6 +76,49 @@ describe("pipeline inspector controls", () => {
     },
   );
 
+  test("an Address node shows the typed report Verify read", () => {
+    renderPipelineTab(
+      JSON.parse(
+        JSON.stringify(
+          build({
+            phase: "verifying",
+            currentSessionIndex: 3,
+            sessions: [
+              session("build", "work", 0),
+              session("review", "review", 60),
+              session("address", "address", 120, {
+                addressReportKind: "fix-result",
+                fixResult: {
+                  complete: false,
+                  summary: "Fixed the inverted branch.",
+                  filesChanged: ["src/app.ts"],
+                  commandsRun: [
+                    { command: "bun test src/app.test.ts", result: "passed", summary: "Passes." },
+                    { command: "bun run lint", result: "failed", summary: "Pre-existing." },
+                  ],
+                  notes: [],
+                  limitations: ["Lint fails on origin/main too."],
+                  omitted: { filesChanged: 2 },
+                },
+              }),
+              session("verify", "verify", 180, { status: "running", completedAt: undefined }),
+            ],
+          }),
+        ),
+      ),
+    );
+    selectNode("Address");
+    const report = screen.getByTestId("pipeline-address-report");
+    expect(report.textContent).toContain("Address report");
+    expect(report.textContent).toContain("incomplete · 3 files · 2 checks (1 failed)");
+    expect(report.textContent).toContain("Fixed the inverted branch.");
+    expect(report.textContent).toContain("Lint fails on origin/main too.");
+    expect(report.textContent).toContain("and 2 more");
+    // A Verify node has no Address report of its own.
+    selectNode("Verify");
+    expect(screen.queryByTestId("pipeline-address-report") === null).toBe(true);
+  });
+
   test("skipped agent sessions show Skipped after snapshot reload", () => {
     renderPipelineTab(
       JSON.parse(

@@ -25,7 +25,10 @@ function fakeContext(
       getAgentModelCatalogCache: async () => cache,
       cacheAgentModelCatalog,
       loadConfig: async () => ({ global: { enabledAgentPlatforms } }),
-      getOpenCodeModelCatalog: async () => null,
+      getOpenCodeModelCatalog: async (scope: string) => cache[scope] ?? null,
+      cacheOpenCodeModelCatalog: async (scope: string, models: unknown[]) => {
+        cache[scope] = { updatedAt: "t", models };
+      },
     },
   } as unknown as CommandContext;
   return { context, cacheAgentModelCatalog };
@@ -140,10 +143,16 @@ describe("seedHostModelCatalogIfMissing", () => {
     expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(2);
   });
 
-  test("leaves OpenCode alone until a project is known", async () => {
+  test("seeds OpenCode into a host scope without a project", async () => {
     const { context } = fakeContext({}, ["opencode"]);
-    const refresh = mock(async () => ({ agent: "opencode" as const, models: [] }));
+    const refresh = mock(async () => ({
+      agent: "opencode" as const,
+      models: [{ id: "anthropic/sonnet", label: "Sonnet", platform: "opencode" }],
+    }));
     await seedEnabledHostModelCatalogs(context, refresh as never);
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(await context.storage.getOpenCodeModelCatalog("host:opencode")).toMatchObject({
+      models: [{ id: "anthropic/sonnet" }],
+    });
   });
 });

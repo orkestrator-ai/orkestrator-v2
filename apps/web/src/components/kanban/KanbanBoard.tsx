@@ -22,6 +22,8 @@ import {
 } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
+import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
+import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
 import { FeaturesView } from "./FeaturesView";
@@ -60,6 +62,7 @@ function DroppableColumn({
   onClickTask,
   onAddTask,
   onClearTaskStatus,
+  onRunGraph,
   buildPhaseByTaskId,
   environmentNameByTaskId,
 }: {
@@ -68,6 +71,7 @@ function DroppableColumn({
   onClickTask: (task: KanbanTask) => void;
   onAddTask?: () => void;
   onClearTaskStatus: (task: KanbanTask) => void;
+  onRunGraph: (task: KanbanTask) => void;
   buildPhaseByTaskId: Map<string, BuildPhase>;
   environmentNameByTaskId: Map<string, string>;
 }) {
@@ -116,6 +120,7 @@ function DroppableColumn({
                 environmentName={environmentNameByTaskId.get(task.id)}
                 canClearStatus={canClearTaskBuildStatus(task, buildPhase)}
                 onClearStatus={onClearTaskStatus}
+                onRunGraph={onRunGraph}
               />
             );
           })}
@@ -195,6 +200,9 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   }, [projectId, loadTasks]);
 
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
+  // "Run graph…" on a card: the ticket becomes the graph's input (item 214).
+  const [runGraphTask, setRunGraphTask] = useState<KanbanTask | null>(null);
+  const environmentNames = useEnvironmentStore((s) => s.environments);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -314,6 +322,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                       column.id === "backlog" ? () => setCreateDialogOpen(true) : undefined
                     }
                     onClearTaskStatus={handleClearTaskStatus}
+                    onRunGraph={setRunGraphTask}
                     buildPhaseByTaskId={buildPhaseByTaskId}
                     environmentNameByTaskId={environmentNameByTaskId}
                   />
@@ -366,6 +375,27 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
       {/* Task Detail Dialog */}
       <KanbanTaskDialog task={currentSelectedTask} open={dialogOpen} onOpenChange={setDialogOpen} />
+
+      <GraphLaunchDialog
+        open={runGraphTask !== null}
+        onOpenChange={(open) => {
+          if (!open) setRunGraphTask(null);
+        }}
+        projectId={projectId}
+        ticketTaskId={runGraphTask?.id ?? null}
+        onLaunched={(result) =>
+          openLaunchedGraphRun({
+            result,
+            ...(result.environmentId
+              ? {
+                  environmentName: environmentNames.find(
+                    (environment) => environment.id === result.environmentId,
+                  )?.name,
+                }
+              : {}),
+          })
+        }
+      />
 
       {/* Create Task Dialog */}
       <KanbanTaskDialog

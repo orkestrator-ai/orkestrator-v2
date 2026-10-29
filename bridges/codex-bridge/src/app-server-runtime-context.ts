@@ -207,7 +207,6 @@ export class CodexRuntimeContext {
   /** Invalidation only; refreshing exclusions runs outside the stdout loop. */
   projectSkillsRevision = 0;
   accountRateLimits: EngineRateLimitWindow[] = [];
-  accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
   /** Close admission fence shared with lazy thread reattachment. */
   readonly closingSessionIds = new Set<string>();

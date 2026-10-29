@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import {
+  isGraphEngineProjection,
   multiReviewDiscovery,
   multiReviewObligation,
   stableJitterMs,
+  supervisionDemand,
 } from "./multi-review-scheduling.js";
 
 function workflow(fields: Partial<MultiReviewWorkflow>): MultiReviewWorkflow {
@@ -68,6 +70,44 @@ describe("multi review obligations", () => {
       scanned: 3,
       complete: true,
     });
+  });
+});
+
+describe("graph-engine reviews (item 301)", () => {
+  const graph = (fields: Partial<MultiReviewWorkflow> = {}) =>
+    workflow({ engine: "graph", graphRun: { runId: "multi-review-workflow" }, ...fields });
+
+  test("an unsettled graph review only projects its run, in every phase", () => {
+    for (const phase of ["preparing", "reviewing", "ready", "fixing", "completed"] as const) {
+      const record = graph({
+        phase,
+        // Bespoke obligations it carries are the run's, not the service's.
+        autoPrLaunch: { state: "pending", requestId: "pr" },
+        pendingResultConsumptions: ["k"],
+      });
+      expect(isGraphEngineProjection(record)).toBe(true);
+      expect(multiReviewObligation(record, true)).toBe("graph-run");
+      expect(supervisionDemand(record, true)).toBe("observe");
+    }
+    expect(supervisionDemand(graph({ phase: "cancelling" }), true)).toBe("fast");
+  });
+
+  test("a settled graph review and every bespoke record follow the bespoke rules", () => {
+    const settled = graph({
+      phase: "interactive",
+      addressPromptPending: true,
+      graphRun: { runId: "multi-review-workflow", settled: true },
+    });
+    expect(isGraphEngineProjection(settled)).toBe(false);
+    expect(multiReviewObligation(settled, true)).toBe("address-handoff");
+    expect(
+      multiReviewObligation(
+        graph({ phase: "ready", graphRun: { runId: "r", settled: true } }),
+        true,
+      ),
+    ).toBeNull();
+    expect(isGraphEngineProjection(workflow({ phase: "reviewing" }))).toBe(false);
+    expect(multiReviewObligation(workflow({ phase: "reviewing" }), true)).toBe("reviewers");
   });
 });
 

@@ -651,8 +651,8 @@ Findings (all fixed on this branch unless stated):
 
 ### Runs on 2026-10-24 (macOS, node mbp3)
 
-Live implement and discuss per provider, run while closing
-[0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md).
+Live implement and discuss per provider, run while closing todo 0043 (retired
+on 2026-10-29; see [web-page-annotations.md](../../architecture/web-page-annotations.md#known-limitations)).
 It is not a milestone sign-off.
 
 ```text
@@ -1223,8 +1223,7 @@ Made on 2026-10-25 without the user, to be validated.
 
 ## Related
 
-- [0043-web-annotation-known-limitations.md](0043-web-annotation-known-limitations.md),
-  [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md),
+- [0047-web-annotation-extensions.md](0047-web-annotation-extensions.md),
   [0124-web-annotation-commit-cost.md](0124-web-annotation-commit-cost.md).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md): the native-window
   run uses the same Electron harness, and annotations run inside service tabs.

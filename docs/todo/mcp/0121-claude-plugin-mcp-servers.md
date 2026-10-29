@@ -67,7 +67,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** The "Which enablement rule to mirror" row in "Assumptions and decisions" still says, as a con, that turning a plugin off in Claude Code does not show it off here and points to 0151 as "the bridge gap". Since `35081a81` that is no longer true for installs. Separately, once task 1 is done the file is finished and should be retired.
 
-**Context.** The README allows correcting an existing item. The durable behaviour is already in `docs/architecture/mcp-management.md:178-200` ("Claude plugins"). [0151](0151-claude-bridge-plugin-settings.md) is finished and also due for retirement, and this file links to it twice.
+**Context.** The README allows correcting an existing item. The durable behaviour is already in `docs/architecture/mcp-management.md:178-200` ("Claude plugins"). Todo 0151 is finished and was retired on 2026-10-29; its rule is in the same section.
 
 **Investigation.** The "Answers" section of this file (line beginning "`<name>@<marketplace>` entries never apply") was already updated for 0151; only the decision-table con was not. `mcp-management.md` cites this todo by number in its "Claude plugins" section and evidence table, so retiring the file needs those references reworded too.
 
@@ -203,13 +203,12 @@ is left is one container run.
   (`service-claude-plugins.test.ts`, "a container lists the plugins in its own
   home"). It needs the workspace's development image built and a container
   session, which this run did not do; batch it with the container session run
-  in [0040](0040-mcp-environment-delivery.md). Since
-  [0151](0151-claude-bridge-plugin-settings.md) (2026-10-26) the same run
-  should also turn one install off on the host (`claude plugin disable`),
-  rebuild, and confirm the container session does not load it and its row
-  says why; the pieces were each proven in an existing image (0151,
-  "Qualification"), and the real container reader part passes with
-  `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`.
+  in [0040](0040-mcp-environment-delivery.md). Since todo 0151 (2026-10-26)
+  the same run should also turn one install off on the host (`claude plugin
+  disable`), rebuild, and confirm the container session does not load it and
+  its row says why; the pieces were each proven in an existing image (todo
+  0151's "Qualification", now in git history), and the real container reader
+  part passes with `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`.
 
 ## Answers to the open question and rules read from the CLI
 
@@ -230,13 +229,12 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
   `<name>@inline`, compared without case, sets it to `false`; any other value
   enables it. With no entry, `defaultEnabled: false` in the manifest skips it.
 - `<name>@<marketplace>` entries never apply to the `@inline` copy. Since
-  [0151](0151-claude-bridge-plugin-settings.md) (2026-10-26) the bridge passes
-  an install only when that id is `true` in the first loaded layer naming it,
-  so disabling a plugin through Claude Code's own plugin settings does stop
-  Orkestrator's sessions loading it. When the `@inline` copy is off, an
-  installed copy whose exact id is `true` still loads when the CLI can resolve
-  its marketplace (proven live in the first case of
-  `claude-plugin-mcp-live.test.ts`).
+  todo 0151 (2026-10-26) the bridge passes an install only when that id is
+  `true` in the first loaded layer naming it, so disabling a plugin through
+  Claude Code's own plugin settings does stop Orkestrator's sessions loading
+  it. When the `@inline` copy is off, an installed copy whose exact id is
+  `true` still loads when the CLI can resolve its marketplace (proven live in
+  the first case of `claude-plugin-mcp-live.test.ts`).
 - Servers are named `plugin:<plugin>:<server>` and report `scope: "dynamic"`,
   `source: "plugin"`.
 - User settings come from `$CLAUDE_CONFIG_DIR/settings.json` when set.
@@ -246,7 +244,7 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
 | Decision | Options | Choice | Why | Pros | Cons |
 | --- | --- | --- | --- | --- | --- |
 | How the editor uses "the bridge's own plugin set" | (a) backend imports the bridge module; (b) re-implement in the backend with a parity test; (c) move the merge into `@orkestrator/protocol/node` and call it from both | (c), plus a parity test over the real `getPluginsForSdk` | Production backend code never imports a bridge; a shared pure function cannot drift, and the parity test also pins the two sides' reads | One merge, two bounded readers; the bridge keeps its stat-validated cache | The bridge's malformed-input handling changed slightly (non-list `plugins` and bad entries are skipped instead of throwing), and project-off sessions now resolve `~` and de-duplicate like project-on ones |
-| Which enablement rule to mirror | (a) the marketplace id users toggle in Claude Code; (b) the CLI's actual rule for the copy the bridge passes (`<name>@inline`) | (b) | It is what decides whether a session loads the plugin; the live test proves it | Rows match what runs | Surprising: turning a plugin off in Claude Code does not show it off here. The source says so and names the `@inline` key; the bridge gap is [0151](0151-claude-bridge-plugin-settings.md) |
+| Which enablement rule to mirror | (a) the marketplace id users toggle in Claude Code; (b) the CLI's actual rule for the copy the bridge passes (`<name>@inline`) | (b) | It is what decides whether a session loads the plugin; the live test proves it | Rows match what runs | Surprising: turning a plugin off in Claude Code does not show it off here. The source says so and names the `@inline` key; the bridge gap is todo 0151 |
 | Proving the rule | (a) unit tests only; (b) a credential-free probe of the pinned CLI; (c) a real-app session | (b) as an opt-in `mise` task, and (c) once by hand | (b) is repeatable on every SDK upgrade (added to `upgrade-agents.md`); (c) proves the UI and the link | Real behaviour, no tokens for (b) | (b) is opt-in (`RUN_LIVE_CLAUDE_PLUGIN_MCP=1`), so drift is caught at upgrade time, not by CI |
 | Local settings | (a) always include; (b) never; (c) default state plus a note | (c) | Sessions read local settings only with "Include local settings", a per-session toggle | The row matches the default session | A session with the toggle on can differ; the note says how |
 | Settings layers not modelled | managed policy, flag settings, per-account `CLAUDE_CONFIG_DIR` | Not modelled; managed policy named in the docs | Several sources (MDM, server-managed, drop-ins) and per-session account homes the backend cannot see | No guessed state | A managed policy can turn a plugin off without the row saying so |
@@ -266,9 +264,6 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
 ## Related
 
 - [0039-mcp-management.md](0039-mcp-management.md), item 7.
-- [0151-claude-bridge-plugin-settings.md](0151-claude-bridge-plugin-settings.md):
-  the bridge passed plugins Claude Code's own settings turned off (fixed
-  2026-10-26).
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Claude
   plugins").
 

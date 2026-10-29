@@ -5,7 +5,13 @@ import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fi
 
 const CAPTURE_ID = "capture-0f8fad5b-d9cb-469f-a165-70867728950e";
 
-type IpcEvent = { senderFrame: { url: string } | null };
+type IpcEvent = {
+  senderFrame: { url: string } | null;
+  sender?: {
+    id: number;
+    capturePage?(): Promise<{ isEmpty(): boolean; toPNG(): Uint8Array }>;
+  };
+};
 type Handler = (event: IpcEvent, ...args: unknown[]) => unknown;
 
 function createHarness(
@@ -352,6 +358,23 @@ describe("main IPC registration", () => {
       "replacement-token-123456",
       expect.anything(),
     );
+  });
+
+  test("captures the requesting page for a bug report", async () => {
+    const harness = createHarness();
+    const handler = harness.handlers.get("orkestrator:bug-report:capture-window")!;
+    const capture = (image: { isEmpty(): boolean; toPNG(): Uint8Array } | null) =>
+      handler({
+        senderFrame: { url: "file:///app/web/index.html" },
+        sender: { id: 1, ...(image ? { capturePage: async () => image } : {}) },
+      });
+    await expect(
+      capture({ isEmpty: () => false, toPNG: () => new Uint8Array([0x89, 0x50]) }),
+    ).resolves.toBe(Buffer.from([0x89, 0x50]).toString("base64"));
+    await expect(capture({ isEmpty: () => true, toPNG: () => new Uint8Array() })).rejects.toThrow(
+      "empty",
+    );
+    await expect(capture(null)).rejects.toThrow("unavailable");
   });
 
   test("accepts HTTP loopback URLs for the external browser", async () => {

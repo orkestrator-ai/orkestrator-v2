@@ -113,7 +113,7 @@ reports the lost time once and every registered scheduler re-times its due
 work. Durable expiry keeps wall-clock semantics.
 
 **Keyed workflow supervision** (`workflow-supervisor.ts`). Feature planning,
-build pipelines, multi review and native prompt queues keep one
+build pipelines, multi review, graph runs and native prompt queues keep one
 due key per record that owes work, instead of listing the whole store each
 tick. Wakeups come from workflow-result acceptance, environment readiness and
 identity changes, provider transitions, enqueue and turn end, queue
@@ -173,9 +173,11 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, or `all`. A named domain
+  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
   runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`.
+  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
+  disables graph runs (launches are refused, nothing advances; stored runs stay
+  readable and can be cancelled).
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
@@ -200,7 +202,7 @@ the running attempt.
 | B06 | `native-activity-sweep` | `core/index.ts`, `native-agent-launch-activity-reconciler.ts` | Every 2 s, fixed rate; due provider groups only (see the observation broker). Eight workers, retry backoff, no-touch reads. A skipped (backed-off) group counts as a cache hit, a read group as a miss. |
 | B07 | `native-launch-scan`, `native-queue-scan` | `native-agent-queue-scheduling.ts` | Keyed: 2 s while a launch intent or queued dispatch is pending (drain backoff 2 s to 60 s honoured), else a 30 s safety pass; enqueue, turn end and environment changes wake it. |
 | B08 | `native-interaction-observe` | `native-agent-interaction-tracker.ts` | Every 2 s, only when the interaction monitor is `observe-only`. |
-| B09 | `claude-state-reconcile`, `tmux-queue-drain`, `pending-rename-reconcile` | `core/index.ts` (`BackendActivityJobs`) | Each its own named job at 2 s fixed rate, never overlapping. Pending renames drop to a 30 s safety pass when none are pending. A failed first-prompt rename keeps its intent and backs off per environment: 30 s after the first failure, doubling to a 30 min cap (`pendingRenameRetryDelayMs`, `core/pending-rename-failure-log.ts`); a session's first prompt retries at once. |
+| B09 | `claude-state-reconcile`, `tmux-queue-drain`, `pending-rename-reconcile` | `core/index.ts` (`BackendActivityJobs`) | Each its own named job at 2 s fixed rate, never overlapping. Pending renames drop to a 30 s safety pass when none are pending. A failed first-prompt rename keeps its intent and backs off per environment: 30 s after the first failure, doubling to a 30 min cap (`pendingRenameRetryDelayMs`, `core/pending-rename-failure-log.ts`); a session's first prompt retries at once. It never gives up or falls back to a slug cut from the prompt: the backend cannot tell a refused login from an outage or see a later sign-in, and the name becomes a pushed branch, which raw prompt words must not reach. |
 | B10 | `mail-presence`, `mail-injection` | `agent-mail-service.ts` | Resource changes coalesce for 250 ms; 2 s safety jobs. Observed presence lives 4 s, so the 2 s refresh must not be slowed on its own. A stale retained idle reads `unknown`; an `idle`/`unknown` flip does not reset the inject backoff. |
 | B11 | `coordinator-repair`, `mail-retention` | `core/index.ts` | Own elapsed 60 s deadlines. Retention prunes mail older than `agentMessaging.retentionDays` (default 14). |
 | B12 | `activity-lease-expiry` | `core/index.ts`, `protocol/agent-activity.ts` | Every 15 s for a 30 s frontend activity lease. Critical. |
@@ -216,6 +218,7 @@ the running attempt.
 | B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
+| B28 | `graph-run-tick` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts` | Keyed per run with an obligation (`provision`, `cancel`, `observe`, `advance`, `await-human`), 30 s discovery. Running activations are observed every 3 s plus a stable per-run spread of up to 1 s, admitting and provisioning runs every 1 s, a run waiting only for a person every 30 s. An accepted workflow result wakes only the run whose activation owns the slot; a released workspace lock wakes the environment's runs with ready work. Passes hold a `workflow-provider` slot (target: the run's environment) except while provisioning or waiting for a person; executor calls inside a pass are capped at 4 starting, 8 observing and 4 per provider. A pass reads only its run's row and writes only when something changed. |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 

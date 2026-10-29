@@ -5,7 +5,18 @@ import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { useSettingsConfig } from "./settings-config";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
+import {
+  isShippedReviewLensPresetList,
+  resolveReviewLensPresets,
+  type ReviewLensPreset,
+} from "@orkestrator/protocol/review-lens";
+import { reviewLensDraftError } from "@/components/review/ReviewLensField";
+import { reviewLensPresetsError } from "./agent/ReviewLensPresetsEditor";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
+import {
+  MULTI_REVIEW_DEFAULT_ENGINE,
+  type MultiReviewEngine,
+} from "@orkestrator/protocol/multi-review";
 import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
@@ -130,6 +141,10 @@ interface CoreFieldsSnapshot {
   debugLogRetentionDays: number;
   webClientEnabled: boolean;
   reviewInstruction: string;
+  /** Resolved: the shipped five when none are stored. */
+  reviewLensPresets: ReviewLensPreset[];
+  /** Which runtime runs new Multi Reviews (item 301); absent is bespoke. */
+  multiReviewEngine: MultiReviewEngine;
 }
 
 /** The same fields as `CoreFieldsSnapshot`, read from the persisted config. */
@@ -179,6 +194,8 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     webClientEnabled: global.webClientEnabled ?? true,
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
+    reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
+    multiReviewEngine: global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
   };
 }
 
@@ -260,6 +277,8 @@ export function globalFormSignature(global: GlobalConfig): string {
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
+    resolveReviewLensPresets(global.reviewLensPresets),
+    global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
     // Canonical shape, so an edit that only reorders keys is not a change.
     normalizeAgentSettings(global.agentSettings),
   ]);
@@ -366,6 +385,12 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
   );
+  const [reviewLensPresets, setReviewLensPresets] = useState(() =>
+    resolveReviewLensPresets(global.reviewLensPresets),
+  );
+  const [multiReviewEngine, setMultiReviewEngine] = useState<MultiReviewEngine>(
+    global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
+  );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(
@@ -460,6 +485,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
+    setReviewLensPresets(resolveReviewLensPresets(global.reviewLensPresets));
+    setMultiReviewEngine(global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
   }, [global]);
 
   // Entering the web-client section starts a fresh status load, and entering
@@ -637,6 +664,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       debugLogRetentionDays,
       webClientEnabled,
       reviewInstruction,
+      reviewLensPresets,
+      multiReviewEngine,
     }),
     [
       cpuCores,
@@ -670,6 +699,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       debugLogRetentionDays,
       webClientEnabled,
       reviewInstruction,
+      reviewLensPresets,
+      multiReviewEngine,
     ],
   );
   const localCoreSignature = useMemo(() => JSON.stringify(localCoreFields), [localCoreFields]);
@@ -842,6 +873,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         webClientEnabled: boolean;
         notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
         reviewInstruction?: string;
+        reviewLensPresets?: ReviewLensPreset[];
+        multiReviewEngine?: MultiReviewEngine;
       } = {
         containerResources: { cpuCores, memoryGb },
         envFilePatterns: patterns,
@@ -883,10 +916,16 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         notificationSounds: global.notificationSounds,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
+        multiReviewEngine,
       };
 
       if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
         newGlobal.reviewInstruction = reviewInstruction;
+      }
+      // Absent means the shipped presets, so an unedited list is not stored and
+      // later improvements to the shipped text reach it.
+      if (!isShippedReviewLensPresetList(reviewLensPresets)) {
+        newGlobal.reviewLensPresets = reviewLensPresets;
       }
 
       const githubCredentialSourceChanged =
@@ -1053,6 +1092,16 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   };
 
   const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
+  const reviewLensPresetsValidationError = reviewLensPresetsError(reviewLensPresets);
+  // A focus being typed in the Multi Review defaults must not be dropped by a save.
+  const reviewerLensValidationError = (() => {
+    const lenses = agentSettings.multiReview?.reviewerLenses ?? [];
+    for (const [index, lens] of lenses.entries()) {
+      const error = reviewLensDraftError(lens ?? undefined);
+      if (error) return `Reviewer ${index + 1} focus: ${error}`;
+    }
+    return null;
+  })();
   const sshAgentSocketPathValidationError =
     getSshAgentSocketPathValidationError(sshAgentSocketPath);
   const defaultProjectsDirectoryValidationError =
@@ -1136,6 +1185,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
+    reviewLensPresets,
+    setReviewLensPresets,
+    multiReviewEngine,
+    setMultiReviewEngine,
     webClientStatus,
     setWebClientStatus,
     webClientApplyError,
@@ -1232,6 +1285,12 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     if (reviewInstructionValidationError) {
       blockers.push({ section: "review", message: reviewInstructionValidationError });
     }
+    if (reviewLensPresetsValidationError) {
+      blockers.push({ section: "review", message: reviewLensPresetsValidationError });
+    }
+    if (reviewerLensValidationError) {
+      blockers.push({ section: "review", message: reviewerLensValidationError });
+    }
     if (sshAgentSocketPathValidationError) {
       blockers.push({ section: "general", message: sshAgentSocketPathValidationError });
     }
@@ -1248,6 +1307,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     terminalHistoryRetentionDays,
     debugLogRetentionDays,
     reviewInstructionValidationError,
+    reviewLensPresetsValidationError,
+    reviewerLensValidationError,
     sshAgentSocketPathValidationError,
     defaultProjectsDirectoryValidationError,
   ]);

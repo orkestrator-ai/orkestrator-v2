@@ -16,6 +16,7 @@ function menuActions(overrides: Partial<ApplicationMenuActions> = {}): Applicati
     selectWindow: () => {},
     zoom: () => {},
     showKeyboardShortcuts: () => {},
+    openSettings: () => {},
     ...overrides,
   };
 }
@@ -110,6 +111,8 @@ describe("desktop application menu on macOS", () => {
     const template = createApplicationMenuTemplate(menuActions());
     expect(itemNames(submenu(template[0]!))).toEqual([
       "about",
+      "separator",
+      "Settings…",
       "separator",
       "hide",
       "hideOthers",
@@ -226,6 +229,27 @@ describe("desktop application menu on macOS", () => {
     expect(windowRadioItems(template).every((item) => item.checked === false)).toBe(true);
   });
 
+  test("the app menu offers Settings… with ⌘, after the update check, shown but owned by the routers", () => {
+    const openSettings = mock(() => {});
+    const template = createApplicationMenuTemplate(
+      menuActions({ openSettings, checkForUpdates: () => {} }),
+    );
+    expect(itemNames(submenu(template[0]!)).slice(0, 4)).toEqual([
+      "about",
+      "Check for Updates…",
+      "separator",
+      "Settings…",
+    ]);
+    const item = menuItem(template, "Orkestrator AI", "Settings…")!;
+    expect(item.accelerator).toBe("CmdOrCtrl+,");
+    // The app shortcut routers own the key; the menu only labels it, so a
+    // press is never delivered twice.
+    expect(item.registerAccelerator).toBe(false);
+    (item.click as () => void)();
+    expect(openSettings).toHaveBeenCalledTimes(1);
+    expect(allItems(template).filter((entry) => entry.label === "Settings…")).toHaveLength(1);
+  });
+
   test("View offers Keyboard Shortcuts… with its chord, shown but owned by native input", () => {
     const zoom = mock((_direction: "in" | "out" | "reset") => {});
     const showKeyboardShortcuts = mock((_request: "open" | "toggle") => {});
@@ -275,6 +299,8 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
       "New Window",
       "separator",
       "Close Tab",
+      "separator",
+      "Settings…",
       "separator",
       "quit",
     ]);
@@ -335,6 +361,10 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
     expect(menuItem(template, "View", "Zoom In")?.accelerator).toBe("CmdOrCtrl+=");
     expect(menuItem(template, "View", "Zoom Out")?.accelerator).toBe("CmdOrCtrl+-");
     expect(menuItem(template, "View", "Actual Size")?.accelerator).toBe("CmdOrCtrl+0");
+
+    const settings = menuItem(template, "File", "Settings…")!;
+    expect(settings.accelerator).toBe("CmdOrCtrl+,");
+    expect(settings.registerAccelerator).toBe(false);
 
     const shortcuts = menuItem(template, "View", "Keyboard Shortcuts…")!;
     expect(shortcuts.accelerator).toBe("CmdOrCtrl+Shift+K");

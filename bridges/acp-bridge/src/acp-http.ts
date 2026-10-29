@@ -604,7 +604,12 @@ export async function route(
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
     let selectedCommand = commandFields.command;
-    const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+    const workflowResult = parseWorkflowResultTurn(
+      body.workflowResultTool,
+      body.workflowResultKey,
+      body.workflowResultSlots,
+      body.workflowResultExtraTools,
+    );
     if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
       return json(response, 400, {

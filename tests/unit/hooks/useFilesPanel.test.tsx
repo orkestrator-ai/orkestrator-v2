@@ -1015,6 +1015,50 @@ describe("useFilesPanel", () => {
     expect(result.current.fileActionPending).toBeNull();
   });
 
+  test("setting and clearing a comparison override retargets snapshots and file reverts", async () => {
+    const created = "c".repeat(40);
+    const advanced = "d".repeat(40);
+    const chosen = "e".repeat(40);
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+      createdFromCommit: created,
+      diffBaseline: { createdFromCommit: created, commit: advanced },
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    const { result } = renderHook(() => useFilesPanel());
+    await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
+    act(() =>
+      useEnvironmentStore.getState().updateEnvironment(environment.id, {
+        diffBaseOverride: { ref: "refs/heads/main", commit: chosen },
+      }),
+    );
+    await waitFor(() =>
+      expect(mockGetLocalGitStatusSnapshot).toHaveBeenCalledWith(
+        "/tmp/worktree",
+        chosen,
+        expect.any(String),
+      ),
+    );
+    await act(async () => {
+      await result.current.revertFile("src/App.tsx");
+    });
+    expect(mockRevertLocalFile).toHaveBeenLastCalledWith(environment.id, "src/App.tsx", chosen);
+    act(() =>
+      useEnvironmentStore.getState().updateEnvironment(environment.id, { diffBaseOverride: null }),
+    );
+    await waitFor(() => expect(useFilesPanelStore.getState().targetBranch).toBe(advanced));
+    await act(async () => {
+      await result.current.revertFile("src/App.tsx");
+    });
+    expect(mockGetLocalGitStatus).toHaveBeenLastCalledWith("/tmp/worktree", advanced, true);
+    expect(mockRevertLocalFile).toHaveBeenLastCalledWith(environment.id, "src/App.tsx", advanced);
+  });
+
   test("reverts local files against the comparison ref and refreshes both snapshots", async () => {
     const environment = createMockEnvironment({
       id: "env-local",

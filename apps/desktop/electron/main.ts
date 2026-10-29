@@ -775,6 +775,13 @@ function createMenu(): void {
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
     // The dialog belongs to the focused renderer, which may be a realm.
     showKeyboardShortcuts: (request) => keyboardShortcuts.request(focusedShortcutTarget(), request),
+    // Settings belong to the window's shell (a realm forwards them there), so
+    // the menu item takes the same path as ⌘, typed in a native view.
+    openSettings: () => {
+      const context = focusedContext();
+      if (context && !context.window.isDestroyed())
+        requestAppShortcut(context.window.webContents, "open-settings");
+    },
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

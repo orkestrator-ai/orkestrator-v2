@@ -258,7 +258,9 @@ export async function createFeatureBuild(
  */
 function withVerifyFromAddress(steps: BuildStepConfigs): BuildStepConfigs {
   if (steps.verify || !steps.address) return steps;
-  return { ...steps, verify: { ...steps.address } };
+  // Only the model selection: Address's instructions are about fixing findings.
+  const { instructions: _addressInstructions, ...selection } = steps.address;
+  return { ...steps, verify: selection };
 }
 
 async function normalizeFeatureImages(

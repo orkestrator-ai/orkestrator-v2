@@ -34,8 +34,6 @@ import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { KanbanTask } from "@/lib/backend";
-import { useAccountMachineStore } from "@/components/settings/account-machine";
-import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
   CLICK_SUPPRESSION_MS,
   restoreLongPressTimingsForTests,
@@ -1178,9 +1176,9 @@ describe("ActionBar grid presentation", () => {
     expect(toolbar).toBeTruthy();
     expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
 
-    const globalSettings = screen.getByRole("button", { name: "Global settings" });
+    const docker = screen.getByRole("button", { name: "Docker configuration" });
     const native = screen.getByRole("button", { name: "New native agent tab" });
-    expect(globalSettings.lastElementChild?.textContent).toBe("Global settings");
+    expect(docker.lastElementChild?.textContent).toBe("Docker");
     expect(native.lastElementChild?.textContent).toBe("New agent");
     expect(
       screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent,
@@ -1198,9 +1196,8 @@ describe("ActionBar grid presentation", () => {
     currentSelectedEnvironmentId = null;
     render(<ActionBar presentation="grid" />);
 
-    expect(screen.getByRole("button", { name: "Global settings" }).hasAttribute("disabled")).toBe(
-      false,
-    );
+    // Global settings live in the sidebar's bottom bar, not in the tools.
+    expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
     expect(
       screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -2119,15 +2116,12 @@ describe("ActionBar editor and run commands", () => {
 });
 
 describe("ActionBar toolbar interactions", () => {
-  test("opens global, Docker, repository, and environment settings", async () => {
+  test("opens Docker, repository, and environment settings", async () => {
     const asyncDialogOptions = { timeout: 10_000 };
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-    expect(screen.getByRole("status", { name: "Loading global settings…" })).toBeTruthy();
-    expect(
-      await screen.findByText("Global settings dialog", undefined, asyncDialogOptions),
-    ).toBeTruthy();
+    // Global settings render in `GlobalSettingsHost` (its own test), not here.
+    expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
     expect(
@@ -2156,32 +2150,6 @@ describe("ActionBar toolbar interactions", () => {
       environmentId: "env-1",
     });
   }, 60_000);
-
-  test("opens a requested global settings section from another tree", async () => {
-    render(<ActionBar />);
-
-    act(() => requestGlobalSettings("cursor"));
-
-    expect(await screen.findByText("Default settings section: cursor")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
-    expect(screen.queryByText("Global settings dialog") === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-    expect(await screen.findByText("Global settings dialog")).toBeTruthy();
-    expect(screen.queryByText(/Default settings section:/) === null).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
-
-    act(() => requestGlobalSettings("grok"));
-    expect(await screen.findByText("Default settings section: grok")).toBeTruthy();
-    const firstRequest = screen.getByText(/Settings section request:/).textContent;
-
-    // Asking again for the same section is a new request, so the open page
-    // can return to it after the user moved elsewhere.
-    act(() => requestGlobalSettings("grok"));
-    await waitFor(() =>
-      expect(screen.getByText(/Settings section request:/).textContent).not.toBe(firstRequest),
-    );
-  });
 
   test("closes Docker configuration and preserves local controls when Docker stops", async () => {
     const renderActionBar = (available: boolean) => (
@@ -2311,15 +2279,15 @@ describe("ActionBar toolbar interactions", () => {
 
   test("suppresses native menus while preserving custom menus and non-HTML targets", () => {
     const { container } = render(<ActionBar presentation="grid" />);
-    const globalSettings = screen.getByRole("button", { name: "Global settings" });
-    const globalSettingsIcon = globalSettings.querySelector("svg")!;
+    const repositorySettings = screen.getByRole("button", { name: "Repository settings" });
+    const repositorySettingsIcon = repositorySettings.querySelector("svg")!;
     const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
     const nativeLabel = Array.from(nativeButton.querySelectorAll("span")).find(
       (element) => element.textContent === "New agent",
     )!;
 
-    expect(fireEvent.contextMenu(globalSettings)).toBe(false);
-    expect(fireEvent.contextMenu(globalSettingsIcon)).toBe(true);
+    expect(fireEvent.contextMenu(repositorySettings)).toBe(false);
+    expect(fireEvent.contextMenu(repositorySettingsIcon)).toBe(true);
     fireEvent.contextMenu(nativeLabel);
 
     expect(screen.getByRole("button", { name: "Claude Tmux Tab" })).toBeTruthy();
@@ -2348,10 +2316,10 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
-    const globalSettings = screen.getByRole("button", { name: "Global settings" });
+    const docker = screen.getByRole("button", { name: "Docker configuration" });
     // "First toolbar item": the toggle precedes the other left-side controls.
     expect(
-      panelToggle.compareDocumentPosition(globalSettings) & Node.DOCUMENT_POSITION_FOLLOWING,
+      panelToggle.compareDocumentPosition(docker) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(panelToggle);
@@ -8040,16 +8008,4 @@ describe("ActionBar error dialogs", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
   });
-});
-
-test("closing Settings resets an explicit account machine choice for the next visit", async () => {
-  render(<ActionBar />);
-  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-  await screen.findByText("Global settings dialog");
-  act(() => useAccountMachineStore.getState().choose(null));
-  fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
-  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
-  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-  await screen.findByText("Global settings dialog");
-  expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });

@@ -2,8 +2,7 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md),
-[0037-design-operation-recovery-edges.md](../todo/design-canvas/0037-design-operation-recovery-edges.md)
+[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md)
 and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
@@ -103,9 +102,12 @@ Edits are **recoverable operations** (`design/service.ts`,
    replays (a pending token, or the stored receipt through
    `submit_operation`); the same id with a different descriptor fails
    `invalid-input` ("already used for a different edit", `details.token`,
-   retry `never`) and runs nothing. A receipt settled before digests were
-   kept is compared on the fields it carries (kind, preconditions, gesture
-   and client ids).
+   retry `never`) and runs nothing; `conflict` would mean "refresh and
+   retry" and loop on the same id. A receipt settled before digests were
+   kept (before v2.21.0) never matches, so even an identical retry is refused;
+   `operation_status` still answers from it. The intent digest is kept apart
+   from the token's digest, which execute re-verifies: changing that one
+   would invalidate pending entries across an upgrade.
 2. **Execute** runs a token once. The computation reads an immutable snapshot;
    Chromium work happens with no lock held. The result is re-verified against
    the latest record (revisions, structure identity, deletion) under the
@@ -214,7 +216,11 @@ Each generation's browser is a Playwright browser server on loopback
 process. Retiring a generation, including one whose connection dropped while
 its server may still run, closes the server within the cleanup deadline;
 a close that hangs or fails is followed by `BrowserServer.kill()`, also
-bounded. The endpoint's path is a random GUID that the renderer never logs. The fault
+bounded. The endpoint's path is a random GUID that the renderer never logs;
+a local process that learned it could drive the browser, whose contexts hold
+no credentials and abort every request. A supervised render worker process
+was rejected: it would add a supervision protocol and IPC for the same
+result. The fault
 test in `renderer.test.ts` stops a real browser with `SIGSTOP` and checks that
 shutdown kills it.
 
@@ -291,7 +297,8 @@ The canvas renders only frames near the viewport with at most eight live
 iframes (pinned frames never cull mid-gesture; the rest show placeholders).
 Iframe HTML is replaced only when content identity changes; geometry updates
 move chrome only. The layer tree is lazy, paged (≤200 nodes/128 KiB per page,
-cursors bound to structure) and virtualized.
+cursors bound to structure) and virtualized, always keeping the focused and
+selected rows mounted so keyboard focus survives scrolling.
 
 Navigation: Fit all (Shift+1), Zoom to selection (Shift+2), 100% (Ctrl/⌘+0),
 pointer-anchored wheel/pinch zoom, Shift+wheel and middle-drag pan, keyboard

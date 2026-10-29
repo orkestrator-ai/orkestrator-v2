@@ -13,6 +13,7 @@ The app-level shortcuts are:
 | --- | --- | --- |
 | ⌘K / Ctrl+K | Search projects and environments (sidebar) | the window's shell |
 | ⌘⇧K / Ctrl+Shift+K | The keyboard shortcuts dialog | the focused app document (shell or realm) |
+| ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
 
 Either modifier is accepted on every platform, but not both, and not with Alt.
 
@@ -23,9 +24,10 @@ Either modifier is accepted on every platform, but not both, and not with Alt.
 | Catalog the dialog lists | `apps/web/src/lib/keyboard-shortcuts.ts` (app-level entries take their keys from `APP_SHORTCUTS`) |
 | Search | `apps/web/src/components/sidebar/ProjectSearchBar.tsx` |
 | Dialog | `apps/web/src/components/layout/KeyboardShortcutsDialog.tsx` (mounted once per renderer by `AppShell`) |
+| Settings | `apps/web/src/components/layout/GlobalSettingsHost.tsx` (mounted once per renderer by `AppShell`) |
 | Realm → window message | `apps/web/src/lib/federation/workspace-realm.ts` (`{ type: "shortcut" }`), handled in `RemoteWorkspaceRegion.tsx` |
 | Design frame relay | `packages/protocol/src/design-runtime.ts`, `apps/web/src/components/design/frame-bridge.ts` |
-| View menu item | `apps/desktop/electron/application-menu.ts` |
+| View › Keyboard Shortcuts… and Settings… menu items | `apps/desktop/electron/application-menu.ts` |
 | Native input wiring and remembered menu focus | `apps/desktop/electron/keyboard-shortcuts-routing.ts` |
 | Native ownership, focus restoration, `requestAppShortcut` | `apps/desktop/electron/keyboard-shortcuts-menu.ts` |
 | Realm → window focus handoff | `apps/desktop/electron/workspace-views.ts` (`post`) |
@@ -81,9 +83,9 @@ The key press reaches `requestAppShortcut` from one of these entry points:
 Only `keyDown` triggers; `rawKeyDown` is not a second delivery. The Electron
 API documents this event as `keyDown`/`keyUp`.
 
-**Layouts:** a Latin `event.key` decides the letter, preserving Dvorak
-mappings. For anything else (Cyrillic, Greek, a control character) the
-physical `KeyK` position decides.
+**Layouts:** a printable ASCII `event.key` decides, preserving Dvorak
+mappings and AZERTY's `,` on the M key. For anything else (Cyrillic, Greek, a
+control character) the physical position (`KeyK`, `Comma`) decides.
 
 ## What a focused surface keeps
 
@@ -130,6 +132,11 @@ key:
   document renders its own dialog, which restores focus into that realm's
   native preview and artifact views; that path is already tested. The search
   lives in the window's sidebar; a realm has none. (`AppShortcut.owner`.)
+- **⌘, opens Settings everywhere, previews included, and never toggles.** It
+  is every Mac app's settings key, edits no text (`ctrlEditsText: false`), and
+  web pages rarely bind it. Settings are window-owned like search: a realm
+  forwards ⌘, to its window, whose command node owns them. A repeat while
+  Settings are open leaves them on the section shown.
 - **Ctrl+Shift+K opens the dialog on macOS too.** Users coming from another
   platform press it, and Ctrl+Shift+K edits nothing there.
 - **An app document's DOM router, not main, routes ⌘K there.** Main cannot
@@ -149,6 +156,14 @@ equivalent as a fallback. Native input interception prevents page/menu double
 handling. The renderer's router remains available for browser and synthetic
 input, but physical input consumed by main never reaches it.
 There is no elapsed-time echo window: a distinct second press always toggles.
+
+Settings… (macOS app menu, after Check for Updates…; File on Windows and Linux)
+displays `CmdOrCtrl+,` with `registerAccelerator: false` too. Its click sends
+the `open-settings` app shortcut to the focused window's shell renderer over
+`app-shortcut`, the path ⌘, typed in an artifact view takes. The key itself is
+the app routers' (point 1 and 3 above); macOS keeps the menu's key equivalent
+for a press no page claimed. Opening is idempotent, so no delivery can close
+Settings.
 
 Electron distinguishes the template callback (`click(menuItem, window, event)`)
 from the built item's method (`menuItem.click(event, window, webContents)`).
@@ -180,7 +195,7 @@ therefore get their conventional layout:
 
 | macOS | Windows and Linux |
 | --- | --- |
-| App menu: About, Check for Updates…, Hide, Hide Others, Show All, Quit | No app menu. Quit (Windows: Exit) ends File. Help holds Check for Updates… and About |
+| App menu: About, Check for Updates…, Settings…, Hide, Hide Others, Show All, Quit | No app menu. Settings… then Quit (Windows: Exit) end File. Help holds Check for Updates… and About |
 | File › Close Tab `Command+W` | File › Close Tab with no accelerator |
 | Window › Minimize, Zoom, open windows | Window › Minimize, open windows |
 
@@ -189,7 +204,7 @@ Windows/Linux Close Tab has no key, and the catalog lists it as macOS-only.
 own. Ctrl+W is the shell's delete-word. The renderer's ⌘W fallback for the
 browser client still sees Super+W as `metaKey`. New Window, the zoom items and
 Keyboard Shortcuts… use `CmdOrCtrl` and appear as Ctrl+N, Ctrl+=, Ctrl+- and
-Ctrl+0 (all registered) and Ctrl+Shift+K (display-only). The dialog lists the
+Ctrl+0 (all registered) and Ctrl+Shift+K and Ctrl+, (display-only). The dialog lists the
 same keys.
 
 **Workspace realms:** ownership is resolved from the actual focused
@@ -240,7 +255,11 @@ Console, Edge for Duplicate Tab); this has not been verified here.
 - Electron main: ⌘K and non-macOS Ctrl+K from an artifact view reach the window's
   shell, macOS artifact Ctrl+K stays with the surface; preview routing follows
   `fromPreviews`; app documents, previews and unknown contents keep unclaimed
-  keys; Ctrl+Shift+K toggles like ⌘⇧K; a visible realm's `shortcut` message focuses its window.
+  keys; Ctrl+Shift+K toggles like ⌘⇧K; ⌘, and Ctrl+, from an artifact view reach the
+  window's shell on macOS and Linux; a visible realm's `shortcut` message focuses its window.
+- Settings: `GlobalSettingsHost.test.tsx` (⌘,, Ctrl+, and the menu's request open
+  Settings and leave an open page where it is), the menu template on all three
+  platforms, and the mobile drawer giving way to Settings and the bug report sheet.
 - Browser fixture (`e2e/KeyboardShortcuts.spec.ts`): ⌘K from the composer,
   Ctrl+K reaching xterm's shell, ⌘K from a design frame and from a same-origin
   realm frame; real search above fullscreen settings and the shortcuts dialog,

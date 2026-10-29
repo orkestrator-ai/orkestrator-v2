@@ -451,8 +451,9 @@ Done on 2026-10-24 (results below):
 - A live Grok/ACP session through v2 summary, detail and page.
 - The Claude native case of `transcript-paging-live.spec.ts` re-run with the
   held-place fixes, and a tool-only Codex native case. The backend checks
-  passed; the browser held-place check did not, so that defect is tracked in
-  [0090](0090-held-place-drift-with-folded-tool-runs.md).
+  passed; the browser held-place check did not, so that defect was tracked in
+  todo 0090 (fixed, and retired on 2026-10-29; see
+  [transcript-scroll.md](../../architecture/transcript-scroll.md#semantic-anchors-and-history)).
 - Browser long-task, input-latency and heap profiling at an 8 MiB retained
   history (the item 7 gate), for a visible document.
 - Activity-sweep p50/p95 for 1, 10 and 100 sessions against real bridges.
@@ -717,7 +718,7 @@ in `output/agent-testing/qa-0050-paging/evidence/`.
 
 | Case | Rows | Live window | History pages | Stops | Browser |
 | --- | --- | --- | --- | --- | --- |
-| Claude Haiku | 152 | 100, `truncated`, cursor, 52 omitted | 12 + 40 to the prompt, `complete` | all 150 in order; stop 2's deferred detail resolved (13,267 B) | reader's row moved 124 px on the first click (limit 8): [0090](0090-held-place-drift-with-folded-tool-runs.md) |
+| Claude Haiku | 152 | 100, `truncated`, cursor, 52 omitted | 12 + 40 to the prompt, `complete` | all 150 in order; stop 2's deferred detail resolved (13,267 B) | reader's row moved 124 px on the first click (limit 8): todo 0090 |
 | Codex GPT-6-Luna, tool-only, unpatched bridge | 6 | 6, not truncated | none | all 150, in 6 rows | not reached (`rows > 100` failed) |
 | Codex GPT-6-Luna, tool-only, this change | 152 | 100, `truncated`, cursor, 52 omitted | 12 + 40 to the prompt, `complete` | all 150 in order; deferred detail resolved (13,261 B) | same 124 px drift as Claude |
 
@@ -1282,7 +1283,7 @@ All three checked on 2026-10-24.
   read side of idle native sessions.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): the
   container file-tree watcher deferred from the file-tree cache work.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): retiring
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window): retiring
   the sync-v1 fallback.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).

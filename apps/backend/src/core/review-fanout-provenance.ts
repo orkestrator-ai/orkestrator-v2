@@ -68,6 +68,7 @@ export function consolidationReports(
         reviewerId: reviewer.id,
         agent: reviewer.agent,
         model: reviewer.model,
+        ...(reviewer.lens ? { focus: reviewer.lens.label } : {}),
         report: {
           ...reviewer.report,
           issues: reviewer.report.issues.map((issue, findingIndex) => ({

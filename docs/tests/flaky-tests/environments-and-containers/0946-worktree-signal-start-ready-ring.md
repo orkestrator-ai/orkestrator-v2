@@ -30,4 +30,3 @@ The aggregate repeated the missing `ready` ring (81.74 ms). The complete unchang
 - **Failure:** the same assertion, now at line 339, received `["lost"]` instead of `["lost", "ready"]` after 58.14 ms.
 - **Suite counts:** backend 13,022 passed, 154 skipped, two failed across 13,178 tests in 798 files (682.75 s). The other failure was the `storage-writer-guards.test.ts` deadline already recorded in aggregate cases 1003, 1010 and 1166.
 - **Isolated rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/container-worktree-signal-install.test.ts` from `apps/backend`, under a private `TMPDIR`, passed 13 of 13. The backend re-sweep at `f1fd52100` passed it too (13,025 passed, 0 failed).
-

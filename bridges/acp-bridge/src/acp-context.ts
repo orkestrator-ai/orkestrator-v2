@@ -13,6 +13,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import {
   nativeAgentPolicyDeniesNetwork,
+  nativeAgentWithholdsGitHubCredential,
   type NativeAgentComposerState,
   type NativeAgentMcpServer,
   type NativeAgentRuntimeSummary,
@@ -41,6 +42,7 @@ import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-met
 import {
   loadAcpProviderConfig,
   providerArgv,
+  emptyGhConfigDir,
   providerEnv,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
@@ -1096,7 +1098,12 @@ export class AcpProcess {
       this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
         () => undefined,
       );
-      const env = providerEnv(providerConfig, { trustProject });
+      const env = providerEnv(providerConfig, {
+        trustProject,
+        ...(nativeAgentWithholdsGitHubCredential(policy)
+          ? { withholdGitHub: { ghConfigDir: emptyGhConfigDir() } }
+          : {}),
+      });
       if (providerConfig.id === "grok") {
         this.questionTimeout = grokQuestionTimeoutAtLaunch(env, {
           userConfig: grokMcpConfigFiles({ env, cwd: workingDirectory }).user,

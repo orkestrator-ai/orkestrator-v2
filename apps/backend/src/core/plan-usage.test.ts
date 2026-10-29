@@ -237,7 +237,7 @@ describe("claudePlanWindows", () => {
 });
 
 describe("codexPlanWindows", () => {
-  test("maps both limit slots, the plan name and a credit balance", () => {
+  test("maps both limit slots and the plan name, leaving the credit balance out", () => {
     const { windows, plan } = codexPlanWindows(
       {
         rate_limits: {
@@ -266,7 +266,6 @@ describe("codexPlanWindows", () => {
         resetsAt: new Date(1_779_826_837_000).toISOString(),
         windowMinutes: 10_080,
       },
-      { window: "credits", label: "Credits", creditBalance: "$4.20" },
     ]);
   });
 
@@ -317,7 +316,6 @@ describe("codexPlanWindows", () => {
         resetsAt: new Date(1_758_000_000_000).toISOString(),
         windowMinutes: 300,
       },
-      { window: "credits", label: "Credits", creditBalance: "$0" },
     ]);
   });
 
@@ -331,7 +329,7 @@ describe("codexPlanWindows", () => {
       },
       0,
     );
-    expect(windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(windows.map((window) => window.label)).toEqual(["Weekly limit"]);
     expect(windows[0]?.usedPercent).toBe(18);
   });
 
@@ -437,15 +435,13 @@ describe("codexPlanWindows", () => {
     ]);
   });
 
-  test("skips a non-string credits balance or plan type in favor of a later source", () => {
+  test("skips a non-string plan type in favor of a later source", () => {
     const { windows, plan } = codexPlanWindows(
       {
         rate_limits: {
-          credits: { balance: 12 },
           plan_type: 1,
           primary: { used_percent: 9, window_minutes: 300 },
         },
-        credits: { balance: "$3.50" },
         planType: "plus",
       },
       0,
@@ -453,7 +449,6 @@ describe("codexPlanWindows", () => {
     expect(plan).toBe("plus");
     expect(windows).toEqual([
       { window: "primary", label: "5-hour limit", usedPercent: 9, windowMinutes: 300 },
-      { window: "credits", label: "Credits", creditBalance: "$3.50" },
     ]);
   });
 
@@ -687,7 +682,7 @@ describe("createPlanUsageReader", () => {
     });
     const snapshot = await reader(contextWithGlobal(), "codex", { force: true });
     expect(snapshot.status).toBe("ok");
-    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit"]);
     expect(snapshot.windows[0]?.usedPercent).toBe(18);
   });
 
@@ -717,6 +712,28 @@ describe("createPlanUsageReader", () => {
     expect(snapshot.status).toBe("ok");
     expect(snapshot.windows[0]?.usedPercent).toBe(25);
     expect(seen[0]?.["ChatGPT-Account-Id"]).toBe("acct-7");
+  });
+
+  test("reports unavailable when Codex returns only a credit balance", async () => {
+    const now = 1_700_000_000_000;
+    const reader = createPlanUsageReader({
+      fetchImpl: (async () =>
+        jsonResponse({ credits: { balance: "$3.50" } })) as unknown as typeof fetch,
+      now: () => now,
+      credentials: {
+        codex: async () =>
+          JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } }),
+      },
+    });
+
+    const snapshot = await reader(contextWithGlobal(), "codex");
+    expect(snapshot).toEqual({
+      platform: "codex",
+      status: "unavailable",
+      windows: [],
+      message: "Codex did not report plan limits for this account.",
+      fetchedAt: new Date(now).toISOString(),
+    });
   });
 
   test("treats an expired Codex token as a sign-in to refresh", async () => {

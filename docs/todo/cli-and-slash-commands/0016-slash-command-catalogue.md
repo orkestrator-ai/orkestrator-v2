@@ -186,8 +186,9 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
 
 1. **Retire the legacy catalogue surface.** Done 2026-10-24.
    - Support window: the original path-specific decision (decision 1) is
-     now covered by the shared window decided in
-     [0034](../cross-cutting/0034-mixed-version-compatibility.md): published
+     now covered by the shared window decided in todo 0034 (retired on
+     2026-10-29; see
+     [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)): published
      releases from v2.21.0 today. Pre-#599 and pre-#827 peers are outside it.
    - The 404 fallback is gone: a 404 reads `unavailable` with
      `outdated-bridge` (`http-bridge-catalog.ts`). Tests:
@@ -259,9 +260,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   Keyboard order passed on all three: arrows followed the rendered order
   across group boundaries and clamped at both ends. Found on the way: a new Pi
   tab lists no provider commands until its session attaches (first turn, or
-  the menu's "Refresh commands"); tracked as
-  [0069](0069-pi-commands-before-first-turn.md), fixed on 2026-10-25 (it now
-  lists its templates and skills before attach). Not batched with the
+  the menu's "Refresh commands"); tracked as todo 0069, fixed on 2026-10-25
+  (it now lists its templates and skills before attach). Not batched with the
   inactive-environment scenario in 0015 (decision 11).
 - **Before deleting a legacy route.** Done as far as this machine allows
   (decisions 1 and 12): no production counts exist (none are collected
@@ -560,13 +560,11 @@ Assumptions:
 
 - [0015-slash-command-qualification.md](0015-slash-command-qualification.md)
   for live probes, browser scenarios and performance.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
-  for the shared support-window policy and other compatibility paths awaiting
-  retirement.
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)
+  for the shared support-window policy (from todo 0034, retired on
+  2026-10-29) and the register of compatibility paths awaiting retirement.
 - [0017-cli-command-surface.md](0017-cli-command-surface.md) for selected
   commands from the CLI.
-- [0069-pi-commands-before-first-turn.md](0069-pi-commands-before-first-turn.md)
-  for the Pi gap the picker run found.
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md#provider-support)
   for the per-provider support, unavailable-command and literal-suppression
   tables, and the catalogue lifecycle.

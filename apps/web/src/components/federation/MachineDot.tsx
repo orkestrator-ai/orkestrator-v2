@@ -1,5 +1,6 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { House } from "lucide-react";
+import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import {
   machineColorLabel,
   machineDotClass,
@@ -65,28 +66,70 @@ export function MachineDot({
 }
 
 /**
- * A home in the owning machine's colour, leading a repository group's member
- * row: the row is that machine's copy of the repository. The same colour rules
- * as `MachineDot` apply.
+ * A project's own icon, chosen in its settings. The image may come from
+ * another machine, so anything but a bounded raster data URL draws nothing.
+ */
+export function ProjectIconImage({ src, className }: { src: string; className?: string }) {
+  const icon = normalizeProjectIcon(src);
+  if (!icon) return null;
+  return (
+    <img
+      data-testid="project-icon"
+      src={icon}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      className={cn("h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover", className)}
+    />
+  );
+}
+
+/**
+ * A home in the owning machine's colour, leading a project row in a list that
+ * names its machines. A project with its own icon shows that instead, marked
+ * with a dot in the machine's colour. The same colour rules as `MachineDot`
+ * apply.
  */
 export function MachineHomeIcon({
   colorToken,
   machineName,
   status,
+  projectIcon,
 }: {
   colorToken: string | undefined;
   machineName: string;
   status?: string;
+  /** The project's own icon, shown in place of the home. */
+  projectIcon?: string | null;
 }) {
+  const icon = normalizeProjectIcon(projectIcon);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <House
-          data-testid="machine-home-icon"
-          data-machine-color={colorToken ?? "neutral"}
-          aria-hidden="true"
-          className={cn("h-3.5 w-3.5 shrink-0", machineTextClass(colorToken))}
-        />
+        {icon ? (
+          <span
+            data-testid="machine-project-icon"
+            data-machine-color={colorToken ?? "neutral"}
+            aria-hidden="true"
+            className="relative inline-flex shrink-0"
+          >
+            <ProjectIconImage src={icon} />
+            <span
+              className={cn(
+                "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-background",
+                "forced-colors:bg-[CanvasText]",
+                machineDotClass(colorToken),
+              )}
+            />
+          </span>
+        ) : (
+          <House
+            data-testid="machine-home-icon"
+            data-machine-color={colorToken ?? "neutral"}
+            aria-hidden="true"
+            className={cn("h-3.5 w-3.5 shrink-0", machineTextClass(colorToken))}
+          />
+        )}
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={6}>
         <span className="font-medium">{machineName}</span>

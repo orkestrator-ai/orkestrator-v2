@@ -8,6 +8,12 @@ import {
   defaultCoordinatorHostCapabilities,
 } from "./coordinator-providers.js";
 import {
+  agentPolicyEnforcement,
+  compileGraphCapabilities,
+  coordinatorEnforcementPolicy,
+} from "@orkestrator/protocol/graphs/capability-profiles";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import {
   CLAUDE_LINUX_SANDBOX_PROGRAMS,
   probeClaudeLinuxSandbox,
 } from "@orkestrator/protocol/node/claude-linux-sandbox";
@@ -208,5 +214,35 @@ describe("coordinator provider qualification", () => {
         enabledPlatforms: everyPlatform,
       }),
     ).toMatchObject({ tier: "enforced", available: true });
+  });
+
+  test("the tier is the shared enforcement matrix's, for the coordinator and read-only profiles", () => {
+    for (const host of [
+      sandboxed,
+      unsandboxed,
+      { claudeSandbox: false, claudeSandboxReason: "x." },
+    ]) {
+      for (const platform of everyPlatform) {
+        const qualification = coordinatorProviderQualification(platform, {
+          host,
+          tierSetting: "advisory",
+          enabledPlatforms: everyPlatform,
+        });
+        const judged = agentPolicyEnforcement(coordinatorEnforcementPolicy(), platform, host);
+        expect(qualification.tier).toBe(judged.tier);
+        if (judged.reason) expect(qualification.reason).toStartWith(judged.reason);
+        // A reviewer node is held exactly as strongly as a coordinator.
+        const reviewer = compileGraphCapabilities({
+          spec: { profile: "reviewer" },
+          environment: resolveNativeAgentExecutionPolicy(
+            { environmentType: "local", networkAccessMode: "full" },
+            "build-pipeline",
+          ),
+        });
+        expect(agentPolicyEnforcement(reviewer.policy, platform, host).tier as string).toBe(
+          qualification.tier,
+        );
+      }
+    }
   });
 });

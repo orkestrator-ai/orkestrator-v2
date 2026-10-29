@@ -8,6 +8,8 @@ import {
   Paintbrush,
   Terminal as TerminalIcon,
   Hammer,
+  Network,
+  Workflow,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
@@ -252,6 +254,10 @@ export function DraggableTab({
         : `Multi Review ${tabNumber}`;
     }
     if (tab.type === "design-canvas") return `Design ${tabNumber}`;
+    if (tab.type === "graph-designer") return `Graphs ${tabNumber}`;
+    if (tab.type === "graph-run") {
+      return `${tab.graphRunData?.title?.trim() || "Graph run"} ${tabNumber}`;
+    }
     if (tab.type === "browser") return `${serviceLabel || "Browser"} ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
@@ -264,6 +270,9 @@ export function DraggableTab({
     }
     if (tab.type === "design-canvas")
       return <Paintbrush className="h-3 w-3 shrink-0 text-violet-400" />;
+    if (tab.type === "graph-designer")
+      return <Network className="h-3 w-3 shrink-0 text-indigo-400" />;
+    if (tab.type === "graph-run") return <Workflow className="h-3 w-3 shrink-0 text-indigo-400" />;
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }

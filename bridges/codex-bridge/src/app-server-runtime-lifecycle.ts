@@ -809,16 +809,12 @@ export class CodexRuntimeLifecycle {
        * replacement: the generated protocol says clients must merge available
        * values into the last full snapshot, and that absent nullable metadata
        * "does not clear a previously observed value". Assigning wholesale meant
-       * an update carrying only `secondary` erased the primary window, and one
-       * omitting `credits` erased the balance.
+       * an update carrying only `secondary` erased the primary window.
        */
       this.ctx.accountRateLimits = mergeRateLimitWindows(
         this.ctx.accountRateLimits,
         event.rateLimits,
       );
-      if (event.credits) {
-        this.ctx.accountCredits = { ...this.ctx.accountCredits, ...event.credits };
-      }
       for (const [threadId, usage] of this.ctx.usageByThread) {
         const sessionIds = this.ctx.sessionIdsForThread(threadId);
         // A thread nobody can address any more still has an entry here only until
@@ -828,10 +824,9 @@ export class CodexRuntimeLifecycle {
         const merged = {
           ...usage,
           rateLimits: this.ctx.accountRateLimits,
-          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             usage.account,
-            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits),
           ),
           updatedAt: new Date(this.ctx.now()).toISOString(),
         };
@@ -988,10 +983,9 @@ export class CodexRuntimeLifecycle {
           ...(this.ctx.accountRateLimits.length > 0
             ? { rateLimits: this.ctx.accountRateLimits }
             : {}),
-          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             previous?.account,
-            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits),
           ),
         };
         this.ctx.usageByThread.set(threadId, usage);

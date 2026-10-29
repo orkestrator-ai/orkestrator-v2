@@ -1,4 +1,5 @@
 import { DesignLaunchButton } from "@/components/design/DesignLaunchButton";
+import { RunGraphButton } from "@/components/graph-launch/RunGraphButton";
 import {
   cloneElement,
   createContext,
@@ -49,11 +50,11 @@ import {
   ListChecks,
   Loader2,
   MessagesSquare,
+  Network,
   PanelLeft,
   Play,
   Plus,
   Shield,
-  SlidersHorizontal,
   StickyNote,
   Terminal as TerminalIcon,
   Trash2,
@@ -99,9 +100,6 @@ import { formatObservedAt, hydrationFreshnessNotice } from "@/lib/view-freshness
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
-}));
-const LazySettingsPage = lazy(async () => ({
-  default: (await import("@/components/settings/SettingsPage")).SettingsPage,
 }));
 
 const ToolbarTooltipsEnabledContext = createContext(true);
@@ -246,10 +244,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     sidebarOpen,
     toggleSidebar,
     setRepoSettingsProjectId,
-    globalSettingsOpen,
-    globalSettingsDefaultSection,
-    globalSettingsSectionRequest,
-    setGlobalSettingsOpen,
     openEnvironmentSettings,
     dockerStatsOpen,
     setDockerStatsOpen,
@@ -394,24 +388,31 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   );
   const additionalReviewerDefaults =
     config.global.agentSettings?.multiReview?.additionalReviewers ?? [];
+  const reviewerLensDefaults = config.global.agentSettings?.multiReview?.reviewerLenses ?? [];
+  const reviewerRowDefaults = (index: number) => {
+    if (index === 0) return reviewLaunchDefaults;
+    if (index === 1) return review2LaunchDefaults ?? reviewLaunchDefaults;
+    const entry =
+      additionalReviewerDefaults[index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT] ?? undefined;
+    if (!entry?.platform || !enabledAgents.has(entry.platform)) return reviewLaunchDefaults;
+    // Built from this reviewer's own entry over the platform defaults, not
+    // over Reviewer 1's. Layering it on Review's preferences would hand this
+    // reviewer Review's model, reasoning level and speed whenever the two
+    // name the same platform.
+    return launchDialogDefaultsFromResolved({
+      agent: entry.platform,
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+      ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+    });
+  };
   const multiReviewReviewerDefaults = Array.from(
     { length: multiReviewReviewerCount },
     (_, index) => {
-      if (index === 0) return reviewLaunchDefaults;
-      if (index === 1) return review2LaunchDefaults ?? reviewLaunchDefaults;
-      const entry =
-        additionalReviewerDefaults[index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT] ?? undefined;
-      if (!entry?.platform || !enabledAgents.has(entry.platform)) return reviewLaunchDefaults;
-      // Built from this reviewer's own entry over the platform defaults, not
-      // over Reviewer 1's. Layering it on Review's preferences would hand this
-      // reviewer Review's model, reasoning level and speed whenever the two
-      // name the same platform.
-      return launchDialogDefaultsFromResolved({
-        agent: entry.platform,
-        ...(entry.model ? { model: entry.model } : {}),
-        ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
-        ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
-      });
+      const row = reviewerRowDefaults(index);
+      // Each position carries its own saved focus, never a neighbour's.
+      const lens = reviewerLensDefaults[index];
+      return lens ? { ...row, lens } : row;
     },
   );
 
@@ -705,19 +706,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </ToolbarTooltipTrigger>
               )}
 
-              <ToolbarTooltipTrigger tooltip="Global settings">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setGlobalSettingsOpen(true)}
-                  aria-label="Global settings"
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  {isGrid && <span className="truncate text-xs">Global settings</span>}
-                </Button>
-              </ToolbarTooltipTrigger>
-
               <ToolbarTooltipTrigger
                 tooltip={dockerAvailable ? "Docker configuration" : "Docker is not running"}
               >
@@ -909,6 +897,35 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     disabled={!canCreateTab}
                     tabCount={tabCount}
                     createTab={createTab}
+                  />
+
+                  <ToolbarTooltipTrigger
+                    tooltip={
+                      <>
+                        <p>Graphs</p>
+                        <p className="text-xs text-muted-foreground">
+                          Browse, inspect and import graph templates
+                        </p>
+                      </>
+                    }
+                  >
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => createTab?.("graph-designer")}
+                      disabled={!selectedEnvironment}
+                      aria-label="Graphs"
+                    >
+                      <Network className="h-4 w-4" />
+                      {isGrid && <span className="truncate text-xs">Graphs</span>}
+                    </Button>
+                  </ToolbarTooltipTrigger>
+
+                  <RunGraphButton
+                    environmentId={selectedEnvironment?.id}
+                    projectId={selectedEnvironment?.projectId ?? null}
+                    showLabel={isGrid}
                   />
 
                   <ToolbarTooltipTrigger
@@ -1634,19 +1651,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onConfirm={(selection) => void handleConfiguredResolve(selection)}
       />
 
-      {/* Settings Dialogs */}
-      {globalSettingsOpen && (
-        <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading global settings…" />}
-        >
-          <LazySettingsPage
-            open={globalSettingsOpen}
-            onOpenChange={setGlobalSettingsOpen}
-            defaultSection={globalSettingsDefaultSection}
-            sectionRequest={globalSettingsSectionRequest}
-          />
-        </LazyLoadBoundary>
-      )}
+      {/*
+        Settings Dialogs. Global settings open from the sidebar and ⌘, and
+        render in `GlobalSettingsHost`, which `AppShell` mounts.
+      */}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
       {repoSettingsProject && (

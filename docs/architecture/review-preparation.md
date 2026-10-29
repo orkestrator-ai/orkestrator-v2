@@ -16,14 +16,62 @@ preparation stage owns the final full validation pass.
 Later pipeline stages read that evidence rather than repeating it. Address runs
 targeted checks for the files it edits. It also owns failure triage: it fixes
 recorded failures that relate to the ticket or the branch, and reproduces any
-it believes are unrelated on the target branch. It ends with a validation
-report. Verify is a quick acceptance review of the diff, read alongside the
-recorded package and that report (`latestAddressReport` reads only this round's
-address session). It runs no suite, typecheck, lint or build, never builds or tests the
+it believes are unrelated on the target branch. It ends by submitting a typed
+fix result ([below](#the-address--verify-handoff)). Verify is a quick
+acceptance review of the diff, read alongside the recorded package and that
+result. It runs no suite, typecheck, lint or build, never builds or tests the
 target branch, and creates no worktrees. A recorded failure in code the branch
 changes blocks it unless the diff shows a repair; that sends the round to Fix,
 which does the reproducing. Verify runs one narrow check only when an acceptance
 criterion cannot be judged by reading the code.
+
+## The Address → Verify handoff
+
+Address is a typed stage like Review and Verify. Its turn opens a `fix-result`
+workflow result slot, the same kind Multi Review's fix step submits
+(`build-pipeline-context.ts` `workflowResultKind`), over the tool transport
+(`submit_fix_result`) or, where the rollout keeps it off, the provider-enforced
+schema. The prompt (`addressValidationInstruction`) says what goes where:
+`summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
+and their commits in `notes`, and every finding left unaddressed and every
+excused failure, with its target-branch reproduction or environmental evidence,
+in `limitations`. The contract's own rule holds: `complete` is true only when
+no check still fails and `limitations` is empty.
+
+- **Missing or malformed.** A turn that ends without an accepted result gets
+  the stage's one reminder and then fails the stage, as Review and Verify do
+  (`awaitStructuredResult`, `remindMissingStageResult`). A structured-output
+  result the contract rejects fails the stage with the contract's error. The
+  tool rejects it at submit time instead, so the model corrects it in its turn.
+- **Accepted.** `finishAddress` (`build-pipeline-service-recovery.ts`) copies
+  the result onto the Address session as `fixResult`, bounded by
+  `PIPELINE_FIX_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-report.ts`:
+  4,000-character summary, 48 files, 20 checks with failed checks kept first,
+  10 notes, 10 limitations, cut entries counted in `omitted`), opens Verify and
+  consumes the slot. An incomplete result (`complete: false`) still goes to
+  Verify, which judges the round.
+- **Verify reads it** (`verificationAddressReport` in
+  `build-pipeline-address-report.ts`) as an untrusted JSON evidence frame
+  (`<address-fix-result-json>`, framed by `ADDRESS_FIX_RESULT_FRAME_INSTRUCTION`
+  from `review-evidence-frames.ts`), as another agent's claim to check against
+  the diff. Only this round's live Address session after its latest review
+  counts. A round whose clean review went straight to Verify, or whose Address
+  was skipped or never had a result accepted, has no report and Verify says so.
+- **Older sessions.** `addressReportKind: "fix-result"` on the session is the
+  recorded marker of a typed Address turn. An Address session without it was
+  started before the typed handoff (or by a path with no result transport): it
+  advances to Verify on idle as before, a resume sends it no result slot, and
+  Verify reads its last assistant text, at most 16,000 characters, as it always
+  did. That fallback is a counted compatibility path
+  (`build-pipeline.address-text-report`,
+  [version compatibility](version-compatibility.md#register)).
+- **Downgrade.** An older backend ignores `addressReportKind` and `fixResult`
+  and advances an idle Address session to Verify without reading the result. A
+  pending tool-mode Address dispatch it cannot bind fails the stage with "lost
+  its result-slot binding", which a retry restarts.
+
+The pipeline inspector shows an Address session's report above its transcript
+(`PipelineAddressReport.tsx`).
 
 ## Fresh discovery for arbitrary repositories
 
@@ -110,6 +158,46 @@ and no duplicate full validation pass. Large successful logs are not injected
 into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
 
+## Read-only reviewers and the Git guard
+
+Reviewers read the sealed package, never write. Multi Review and the Build
+Pipeline run them the same way: when a package exists, every reviewer session
+is created and prompted in provider plan mode with `readOnly: true` (the
+fan-out host's `reviewerMode: "plan"`; for a single pipeline reviewer,
+`startStage` and every redispatch of its session, including repairs, reminders
+and user messages). OpenCode reviewers also get the constrained reviewer shell.
+Consolidation is a report-only turn and is read-only too. How strongly
+read-only is enforced depends on the provider: Claude (with its OS sandbox)
+and Codex enforce it, OpenCode and Cursor configure it, Grok treats it as
+advice.
+
+The Build Pipeline backs this with a read-only Git guard on every provider
+(`workspace-read-only-guard.ts`, applied by `build-pipeline-read-only-guard.ts`
+to Review, consolidation and Verify):
+
+- **Before dispatch** the backend records HEAD and the Git-visible
+  uncommitted paths through `get_environment_uncommitted_paths`, the same
+  probe for local worktrees and containers. A single reviewer keeps the
+  baseline on its session (the `validation*AtStart` fields Verify already
+  used); a panel keeps one on `reviewFanout.workspaceBaseline` for all its
+  reviewers and the consolidator, taken before the first reviewer starts. A
+  state the backend cannot observe fails the stage before any session exists.
+- **At submit time** an acceptance check on `review-report`,
+  `consolidated-review` and `verification-result` refuses a result with a
+  correctable `worktree_changed` error that names the moved HEAD or the paths,
+  so the agent can put the tree back and submit again within its turn. A
+  refusal spends no correction budget.
+- **When the result is consumed** the pipeline compares again: a single
+  review before its report is routed, a panel whenever a reviewer report
+  arrives and again before the consolidated report is accepted. A change
+  fails the stage with the paths or HEAD in the error. Nothing is reset; the
+  worktree is the evidence.
+
+Scope is Git's: ignored files, `.git` internals, paths outside the worktree
+and edits to a path that was already uncommitted are invisible. Guards detect;
+they do not prevent. Review sessions and panel passes recorded before the
+guard existed carry no baseline and are not certified.
+
 ## Lifecycle and visibility
 
 The header's restart control selects the work currently in progress. During a
@@ -167,6 +255,86 @@ Fix attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
 later Fix; that Fix's changes need a manual PR update. `autoPr` without `autoFix`
 means a PR after a Fix the user (or `address_multi_review`) starts. The PR
 session pushes the branch and opens the pull request; nothing merges.
+
+The built-in Multi Review graph template (`@orkestrator/protocol/graphs/builtins`,
+plan item 108) describes these rules: `multiReviewAutoFixDue`,
+`queueCleanReviewAutoPr`, `queueAutoPr` and `fixResultCompletes` in
+`multi-review-auto-pr.ts` decide the route, and `multi-review-steps.ts` holds
+each step's result kind and turn (`MULTI_REVIEW_STEP_TURNS`,
+`MULTI_REVIEW_INTERACTIVE_FIX`). `graph-builtin-templates.test.ts` pins the
+template to them. The template cannot express a Fix the user starts by hand
+after an `autoPr`-only launch; that stays an engine behaviour.
+
+## The engine setting (item 301)
+
+Multi Review can run on the graph runtime instead of its own engine (plan
+Phase 3, D5). The app setting `multiReviewEngine` (Settings → Review →
+Multi Review runtime; `"bespoke"` or `"graph"`, absent is bespoke) picks the
+engine of each new review; `ORKESTRATOR_MULTI_REVIEW_ENGINE=graph|bespoke`
+overrides it for testing. The default stays `bespoke` until the graph runtime
+has soaked and the user decides to flip it; the bespoke service is not
+retired. A running review keeps the engine it started on.
+
+Every launch surface (the dialog, `launch_multi_review` and
+`start_multi_review`, the CLI's `review launch`) still calls
+`MultiReviewService.start`, so all of them follow the setting. On `graph` the
+service records `engine: "graph"` and `graphRun.runId`
+(`multi-review-<workflow id>`), and its first pass launches a graph run of the
+built-in Multi Review template inlined as a copy
+(`multi-review-graph-template.ts`): `engine` dropped, `targetBranch` and
+`reviewInstruction` added as parameters, and the target branch written onto the
+package and pull request system nodes. Roles are bound from the review's own
+input: the preparer is `reviewModel` (else `fixModel`), the reviewer panel is
+the reviewers in order with their lenses, the consolidator is
+`consolidationModel` (else the preparer), the fixer is `fixModel`, and the
+pull request describer takes the saved `pr` default. `autoFix` and `autoPr`
+are the run's parameters. The review instruction is the run's optional
+`reviewInstruction` input (`markdown@1`, up to 128 KiB encoded); a longer one
+refuses the start while the graph engine is selected, and never switches
+engines.
+
+The record stays the read model. Each supervision pass reads the run by id and,
+when its revision moved, projects it onto the record under the controller lease
+(`multi-review-graph-projection.ts`): the `plan` activation becomes
+`preparationSession`, `package` the sealed `reviewPackage`, each `review`
+branch `panel.N` reviewer N (status, session, report attributed by the backend,
+`report_progress` issues as provisional findings), `consolidate` the
+`reviewSession`, `consolidatedReport` and `consolidationOverlap`, `fix` the
+`fixSession` and `fixResult`, and `describe-pr`/`pr` the `autoPrLaunch`. The
+consolidated report's graph source ids (`review/panel.2/issue-3`,
+`review/panel.2/coverage-gap-1`) are translated to `reviewer-2/issue-3` by the
+position of the report they name, so provenance and overlap are computed by the
+same functions as for a bespoke review. The run's saves wake the review, so the
+record follows within a pass. Once the run ends the record is marked
+`graphRun.settled` and is an ordinary settled review from then on.
+
+What differs on the graph engine:
+
+- The automatic Fix is an unattended graph agent node that submits a fix
+  result (it may `ask_human`), not the interactive Fix tab: the review shows
+  `fixing`, then `completed`, or `failed` when the result is incomplete, as a
+  structured bespoke Fix does. The pull request is the `open-pull-request`
+  system node after a `describe-pr` agent; only a complete Fix result or a clean
+  report reaches them, the same rule as above.
+- Step controls (restart, stop, pause, resume, nudge, retry) are refused on a
+  graph-engine review, live or settled, and the review tabs do not offer them;
+  they belong to the graph run view, which the tab links to ("Open graph
+  run"). The manual Fix (`address`, custom Fix) waits until the run settles,
+  then runs as the ordinary interactive handoff, and its completion can still
+  queue the automatic PR. The status texts (`get_multi_review`, status wakes,
+  the tab's PR step) say the graph run's pull request step opened the pull
+  request, not a PR session.
+- Validation progress (`validationRun`) is not projected: the graph's
+  `package` system node runs and seals the plan in one activation, and its
+  progress shows in the graph run view.
+- Between two saves of the run, the record shows what the bespoke engine
+  would at that point: a consolidation with findings under auto-fix reads
+  `fixing` (never a transient `ready`), and an authorized pull request reads
+  `pending` from the save that authorizes it, so no status wake reports an end
+  the bespoke engine never shows.
+
+Parity evidence for each Phase 3 checklist item, with the test names, is
+recorded in `plans/graphs/301-multi-review-on-graph-runtime.md`.
 
 ## Performance boundary and verification
 
@@ -355,6 +523,91 @@ crash leave a send on the wire to land later, and must deduplicate it. Without a
 ever attempted for fails the seed, and the fake provider starts half of all
 continuations late, so the status read still shows the restart they continue.
 
+## Reviewer lenses
+
+A reviewer in a panel can have a focus, a lens: `lens?: { label, instruction }`
+on `ReviewerModelSelection`
+([`review-fanout.ts`](../../packages/protocol/src/review-fanout.ts)). The
+guard, presets and prompt section live in
+[`review-lens.ts`](../../packages/protocol/src/review-lens.ts)
+(`@orkestrator/protocol/review-lens`).
+
+- **Bounds.** The label is one line of at most 64 characters
+  (`REVIEW_LENS_LABEL_MAX_CHARS`, counted in code points); the instruction is
+  at most 4 KiB of UTF-8 (`REVIEW_LENS_INSTRUCTION_MAX_BYTES`). Both must be
+  non-blank. `isReviewerModelSelection` and `isReviewerRecord` check a lens
+  when one is present. Only reviewer rows take one: the preparation,
+  consolidation and fix selections use `isReviewStepModelSelection`
+  (`isMultiReviewModelSelection`), which refuses it.
+- **Prompt.** The lens is the reviewer's own text, so it goes after the panel
+  position (`reviewerPanelTail` in `multi-review-prompts.ts`): the packaged and
+  live-worktree Multi Review prompts and the Build Pipeline fan-out prompt end
+  with the panel section and then a framed "**Review focus**" section with the
+  label and instruction inside `<reviewer-focus>` … `</reviewer-focus>`
+  (`reviewLensSection`, framed like the per-stage instructions, markers in the
+  text escaped). The preamble asks for depth in the area without narrowing the
+  review: critical issues outside the focus must still be reported, and the
+  result format, permissions and rules are unchanged. A Build Pipeline
+  reviewer's own instructions follow the lens. Everything before the panel
+  section is byte-identical across a panel whatever lenses it uses, and a
+  reviewer without a lens gets the prompt it got before lenses. Per
+  [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification),
+  Claude caches only up to a message boundary, so the shared prefix is kept
+  for providers that cache inside one message and for future multi-block
+  prompts; the lens does not change what Claude can cache today. A
+  single-reviewer Build Pipeline review renders the review step's lens after
+  its contract and before the step's instructions.
+- **Consolidation.** Each reviewer entry in the compact evidence carries its
+  lens label as `focus` (`buildConsolidationEvidence`); the instruction is not
+  sent. A label is at most 64 characters, so it is required content and never
+  removed by the budget reductions. When any reviewer has a focus, the prompt
+  adds one paragraph: coverage differs by design, and a finding is never
+  dropped or downgraded for lying outside a reviewer's focus. A panel without
+  lenses gets the same consolidation prompt as before. Overlap counts and
+  provenance read source IDs and are unchanged.
+- **Record and restart.** A launch copies the text onto the reviewer record
+  (Multi Review trims it in `start`; the Build Pipeline stores it on
+  `reviewers` / `steps.review` and copies it onto each fan-out record). A
+  restarted or retried reviewer, a fresh pipeline pass, a rewind and a backend
+  restart all render the stored text. Editing or deleting the preset it came
+  from changes nothing that already started.
+- **Presets.** The app setting `reviewLensPresets` (config.json `global`) is a
+  list of at most 20 `{ id, label, instruction }` (`REVIEW_LENS_PRESETS_MAX`)
+  with the lens bounds and distinct ids. Absent means the five shipped presets
+  (`SHIPPED_REVIEW_LENS_PRESETS`: `security`, `performance`,
+  `tests-and-coverage`, `api-and-compatibility`, `maintainability`), so an
+  improvement to their text reaches anyone who never edited them; a stored
+  list, even an empty one, is the user's own. `updateGlobalConfig` refuses an
+  invalid list; a hand-edited file keeps its valid presets when read. A command
+  node passes the setting to its leaves with the other inherited preferences.
+  Settings → Review edits it beside the Multi Review defaults
+  (`ReviewLensPresetsEditor.tsx`): edit, delete, reorder, add, and restore the
+  shipped five (they return first, with their text; the user's own presets are
+  kept). The public CLI's `settings` commands cover project and environment
+  settings only, so this app setting has no CLI flag.
+- **Launchers.** Each reviewer row in `MultiReviewLaunchDialog.tsx` and each
+  reviewer card in `BuildLaunchDialog.tsx` has a Focus select
+  (`ReviewLensField.tsx`): no focus, a preset, or custom text (label and
+  instruction). Choosing a preset copies its text; Custom starts from the
+  chosen preset's text. An incomplete custom focus blocks the launch. Rows on
+  one model with different lenses are not reported as duplicates.
+- **Saved defaults.** `MultiReviewAgentSettings.reviewerLenses` keeps a lens
+  (or null) per reviewer position from Reviewer 1, additional reviewers
+  included, edited on each row of the Multi Review defaults. The Multi Review
+  button, the Build launcher's reviewer rows and coordinator launches that omit
+  their rows start from them.
+- **Callers.** The coordinator's `launch_multi_review`, `start_multi_review`
+  and `start_build_pipeline` accept `lens` on reviewer rows and report it as
+  `{ label, instructionBytes }`. The public `review.launch` action accepts it on
+  `reviewers`, and `orkestrator review launch` sets it with `--focus N=TEXT` or
+  `--focus-file N=PATH` ([public CLI](public-cli.md)).
+- **Compatibility.** Records without lenses read as before. A Build Pipeline
+  backend that predates lenses ignores the field. The Multi Review launch
+  guards were already strict about keys, so an older backend refuses a launch
+  whose reviewer row carries a lens instead of ignoring it; rows without a
+  focus send no `lens` key and launch as before. An older backend cannot read a
+  record written with a lens.
+
 ## Panel value measurements
 
 Three content-free measurements show what each reviewer adds and whether the
@@ -369,7 +622,8 @@ reviewer IDs.
   report keeps model labels, not source IDs. Multi Review stores it as
   `consolidationOverlap` beside `consolidatedReport` and clears both together.
   A Build Pipeline stores it as `reviewOverlap` on its Consolidation session,
-  because the fan-out record is dropped once addressing starts, and keeps it
+  because the fan-out record is dropped once the next stage (Address, or
+  Verify for a clean report) starts, and keeps it
   when report copies are discarded. Per run it counts the reviewers, the
   source findings, the source findings that were cited (the rest were
   dropped), the consolidated findings, and those only one reviewer

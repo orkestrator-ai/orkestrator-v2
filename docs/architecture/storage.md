@@ -36,14 +36,18 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 The area fields are `kanban` (`KanbanStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
-`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`) and
-`agentAccounts` (`AgentAccountsStorage`). Each area type is declared next to
+`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
+`agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
+(`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`) and `graphEffects`
+(`GraphEffectsStorage`). Each area type is declared next to
 its repository and re-exported from `storage.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
 `{ coordinators: Pick<CoordinatorsStorage, …> }` beside facade methods) rather
 than the whole service. New areas follow the same shape; the remaining
-forwarders move to areas as their callers are narrowed. The facade itself only
+forwarders move to areas as their callers are narrowed. Forwarders are written
+out, never generated at run time: the writer guard reads them and the area
+`Pick`s as its entry points, and the surface stays greppable. The facade itself only
 opens and closes the database, runs the start-up steps (`init`) and exposes
 the change journal.
 
@@ -69,6 +73,10 @@ the change journal.
 | `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
 | `CoordinatorsRepository` | `storage-coordinators.ts` | Coordinator workspaces and workflow associations |
 | `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
+| `GraphTemplatesRepository` | `storage-graph-templates.ts` | `graph-templates`: user graph templates (one row each, revision compare-and-swap inside the row's transaction) and per-project trust records and capability ceilings; a project's row is deleted with the project. Item 405 adds `sharing` (one row: the installation's share-bundle signing key, whose private half no command returns, and the trusted public keys) and `approvals` (one row per project: approved template copies for review diffs, bounded per template and per project, and rejected digests), deleted with the project too |
+| `GraphRunsRepository` | `storage-graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets); run writes and deletions announce the `graph-run` resource. Runs leave with their environment; an environment-less mock run (item 213) is removed by `deleteEnvironmentlessGraphRun` (mock-run retention) |
+| `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
+| `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
 
@@ -266,6 +274,12 @@ that holds a `StorageContext` without the facade reaching it, a scanned class
 that uses `this.context` as a value outside a constructor, a scanned class
 that extends another, and any backend code outside the storage files that
 names `StorageContext` or a repository.
+
+The guard is static and test-only on purpose. A run-time lease assertion
+would see only the paths tests exercise and could only tell that *some* lease
+is held; the scan sees every call site and checks that every writer of a store
+holds the same one. Likewise a mixed-writer store is rejected by the scan
+rather than detected in production by revision checks on save.
 
 Engines with stores of their own (workflow results, the cleanup ledger,
 display tails, web annotations, transcript artifacts, usage history, design

@@ -46,12 +46,27 @@ import {
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
 import type { BuildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
+import {
+  BuildStepInstructionsField,
+  buildStepInstructionsTooLong,
+} from "./BuildStepInstructionsField";
+import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
+import {
+  ReviewLensField,
+  launchedReviewLens,
+  reviewLensDraftError,
+  useReviewLensPresets,
+} from "@/components/review/ReviewLensField";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /** The user's own instructions for this step, trimmed; absent when blank. */
+  instructions?: string;
+  /** Review step and reviewer rows only: the reviewer's focus, copied from a preset or typed. */
+  lens?: ReviewLens;
 }
 
 export interface BuildLaunchSelection {
@@ -434,6 +449,28 @@ function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]
   );
 }
 
+/**
+ * Each reviewer's starting focus: the saved lens of its Multi Review position
+ * (`pipelineDefaults.reviewers`), or the review step's for a single reviewer.
+ */
+function initialLenses(
+  pipelineDefaults: BuildPipelineConfiguredDefaults | undefined,
+): Array<ReviewLens | undefined> {
+  const configured = pipelineDefaults?.reviewers?.length
+    ? pipelineDefaults.reviewers
+    : [pipelineDefaults?.steps.review];
+  return configured.map((reviewer) => (reviewer?.lens ? { ...reviewer.lens } : undefined));
+}
+
+/** Instructions are keyed by card: a step key, `reviewer:N` or `reviewPreparation`. */
+type InstructionsKey = Exclude<BuildStepKey, "review"> | `reviewer:${number}` | "reviewPreparation";
+
+/** Trimmed instructions for a submitted selection, or nothing when blank. */
+function instructionsField(value: string | undefined): { instructions?: string } {
+  const instructions = value?.trim();
+  return instructions ? { instructions } : {};
+}
+
 function BuildStepCard({
   number,
   stepKey,
@@ -441,6 +478,10 @@ function BuildStepCard({
   title,
   description,
   icon,
+  instructions,
+  instructionsHint,
+  onInstructionsChange,
+  lens,
   state,
   resolved,
   models,
@@ -460,6 +501,15 @@ function BuildStepCard({
   title: string;
   description: string;
   icon: React.ReactNode;
+  instructions: string;
+  instructionsHint?: string;
+  onInstructionsChange: (value: string) => void;
+  /** A reviewer card's Focus field. */
+  lens?: {
+    value: ReviewLens | undefined;
+    presets: readonly ReviewLensPreset[];
+    onChange: (value: ReviewLens | undefined) => void;
+  };
   state: StepState;
   resolved: ResolvedStep;
   models: AgentModel[];
@@ -568,13 +618,34 @@ function BuildStepCard({
         </p>
       )}
 
+      {lens && (
+        <ReviewLensField
+          id={`${controlId.replace(/-model$/, "")}-focus`}
+          reviewerLabel={title}
+          value={lens.value}
+          presets={lens.presets}
+          onChange={lens.onChange}
+        />
+      )}
+
       {(stepKey === "review" || stepKey === "verify") && (
         <p className="mt-2 text-[11px] leading-snug text-zinc-500" role="note">
-          Full workspace write access. The backend rejects results with source edits or commits
-          detected by its Git check. Ignored files, .git contents and paths outside the worktree are
-          not checked.
+          {stepKey === "review"
+            ? "Reviewers run read-only where the provider enforces it. "
+            : "Full workspace write access. "}
+          The backend rejects a result if HEAD moved or a Git-visible path appeared or disappeared
+          during the step. Ignored files, .git contents, paths outside the worktree and edits to
+          files that were already uncommitted are not checked.
         </p>
       )}
+
+      <BuildStepInstructionsField
+        id={`${controlId.replace(/-model$/, "")}-instructions`}
+        stepTitle={title}
+        value={instructions}
+        hint={instructionsHint}
+        onChange={onInstructionsChange}
+      />
     </li>
   );
 }
@@ -653,6 +724,11 @@ export function BuildLaunchDialog({
     ),
   );
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
+  // Per launch: instructions are never saved as defaults, so every open starts empty.
+  const [instructions, setInstructions] = useState<Partial<Record<InstructionsKey, string>>>({});
+  // Each reviewer opens on its position's saved focus; edits are per launch.
+  const lensPresets = useReviewLensPresets();
+  const [lenses, setLenses] = useState(() => initialLenses(pipelineDefaults));
   const wasOpenRef = useRef(false);
   const touchedRef = useRef(new Set<string>());
   const environmentGroupId = useId();
@@ -715,6 +791,8 @@ export function BuildLaunchDialog({
         return defaultEnvironmentType;
       });
       setIncludeComments(commentContext?.defaultIncluded ?? true);
+      setInstructions({});
+      setLenses(initialLenses(pipelineDefaults));
       resetLaunchState();
       return;
     }
@@ -816,6 +894,22 @@ export function BuildLaunchDialog({
     setReviewers((current) => current.map((row, i) => (i === index ? next : row)));
   };
 
+  const updateInstructions = (key: InstructionsKey, value: string) =>
+    setInstructions((current) => ({ ...current, [key]: value }));
+  const instructionsKeyFor = (key: BuildStepKey): InstructionsKey =>
+    key === "review" ? "reviewer:0" : key;
+  const instructionsTooLong = Object.values(instructions).some(
+    (value) => value !== undefined && buildStepInstructionsTooLong(value),
+  );
+  const visibleLenses = lenses.slice(0, Math.max(1, reviewers.length));
+  const lensError = visibleLenses.some((lens) => reviewLensDraftError(lens) !== null);
+  const updateLens = (index: number, value: ReviewLens | undefined) =>
+    setLenses((current) => {
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
+
   const commentContextLabel = commentContext
     ? `Include ${commentContext.count} comment${commentContext.count === 1 ? "" : "s"} in build context`
     : "";
@@ -840,7 +934,8 @@ export function BuildLaunchDialog({
             Configure build
           </DialogTitle>
           <DialogDescription>
-            Choose the workspace, then assign a model to every stage of the pipeline.
+            Choose the workspace, then assign a model to every stage of the pipeline. Any stage can
+            also take your own instructions, and each reviewer a focus.
           </DialogDescription>
         </DialogHeader>
 
@@ -849,7 +944,7 @@ export function BuildLaunchDialog({
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy) return;
+            if (busy || instructionsTooLong || lensError) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             const selectedSteps = Object.fromEntries(
@@ -864,6 +959,8 @@ export function BuildLaunchDialog({
                     reasoningEffort:
                       resolvedStep.effort === "default" ? undefined : resolvedStep.effort,
                     fastMode: resolvedStep.fastMode,
+                    ...instructionsField(instructions[instructionsKeyFor(key)]),
+                    ...(key === "review" ? launchedReviewLens(lenses[0]) : {}),
                   },
                 ];
               }),
@@ -871,12 +968,21 @@ export function BuildLaunchDialog({
             const submittedReviewers =
               reviewers.length > 1
                 ? reviewers.map((reviewer, index) =>
-                    index === 0 ? selectedSteps.review : cleanStep(reviewer, catalog),
+                    index === 0
+                      ? selectedSteps.review
+                      : {
+                          ...cleanStep(reviewer, catalog),
+                          ...instructionsField(instructions[`reviewer:${index}`]),
+                          ...launchedReviewLens(lenses[index]),
+                        },
                   )
                 : undefined;
             const submittedPreparation =
               reviewers.length > 1 && reviewPreparation
-                ? cleanStep(reviewPreparation, catalog)
+                ? {
+                    ...cleanStep(reviewPreparation, catalog),
+                    ...instructionsField(instructions.reviewPreparation),
+                  }
                 : undefined;
             onConfirm({
               environmentType,
@@ -1001,6 +1107,10 @@ export function BuildLaunchDialog({
                           title={card.title}
                           description={card.description}
                           icon={card.icon}
+                          instructions={instructions.reviewPreparation ?? ""}
+                          onInstructionsChange={(value) =>
+                            updateInstructions("reviewPreparation", value)
+                          }
                           state={reviewPreparation}
                           resolved={resolvedReviewPreparation}
                           models={models}
@@ -1030,6 +1140,15 @@ export function BuildLaunchDialog({
                           title={card.title}
                           description={card.description}
                           icon={card.icon}
+                          instructions={instructions[`reviewer:${card.index}`] ?? ""}
+                          onInstructionsChange={(value) =>
+                            updateInstructions(`reviewer:${card.index}`, value)
+                          }
+                          lens={{
+                            value: lenses[card.index],
+                            presets: lensPresets,
+                            onChange: (value) => updateLens(card.index, value),
+                          }}
                           state={state}
                           resolved={resolvedReviewers[card.index] ?? resolved.review}
                           models={models}
@@ -1053,6 +1172,11 @@ export function BuildLaunchDialog({
                         title={card.title}
                         description={card.description}
                         icon={card.icon}
+                        instructions={instructions[card.key] ?? ""}
+                        instructionsHint={
+                          card.key === "build" ? "The fix stage uses them too." : undefined
+                        }
+                        onInstructionsChange={(value) => updateInstructions(card.key, value)}
                         state={steps[card.key]}
                         resolved={resolved[card.key]}
                         models={models}
@@ -1086,6 +1210,8 @@ export function BuildLaunchDialog({
               type="submit"
               disabled={
                 busy ||
+                instructionsTooLong ||
+                lensError ||
                 (environmentType === "containerized" && !dockerAvailable) ||
                 (environmentType === "local" && !localEnvironmentAvailable)
               }

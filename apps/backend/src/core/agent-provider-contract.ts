@@ -37,6 +37,7 @@ import type {
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { NativeAgentBridgeCommandInvocation } from "@orkestrator/protocol/agent-command-catalogue";
 import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
+import type { WorkflowResultTurnSlot } from "@orkestrator/protocol/workflow-results";
 import type { PromptAttachment } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "blocked" | "idle" | "error" | "missing";
@@ -442,7 +443,10 @@ export interface ProviderSendOptions {
    * Resupplied on dispatch, but applied only to a durably marked reviewer.
    */
   reviewShellPolicy?: NativeAgentExecutionPolicy;
-  /** Exact workflow-result MCP tool to expose for this turn, when present. */
+  /**
+   * Exact workflow-result MCP tool to expose for this turn, when present: a
+   * kind's tool, or a graph output port's own `submit_<port>`.
+   */
   workflowResultTool?: string;
   /**
    * Artifact-only `scopeCapability` for this turn, for providers whose
@@ -452,10 +456,24 @@ export interface ProviderSendOptions {
   artifactGrant?: string;
   /**
    * The result key of the attempt `workflowResultTool` belongs to. Bridges that
-   * gate tools themselves (Grok, Pi) let that attempt's tools through a
-   * read-only turn only for calls naming this key.
+   * gate tools themselves (Claude, Cursor, Grok, Pi; Codex checks the tools are
+   * listed) let that attempt's tools through a read-only turn only for calls
+   * naming this key.
    */
   workflowResultKey?: string;
+  /**
+   * Every output slot of a graph activation turn (1 to 16, distinct keys).
+   * `workflowResultTool` / `workflowResultKey` are its first entry, so a
+   * bridge that predates slots still sees one. A slot's tool is a port's own
+   * `submit_<port>`, or on OpenCode the shared `submit_graph_output`.
+   */
+  workflowResultSlots?: WorkflowResultTurnSlot[];
+  /**
+   * The graph activation tools this turn's credential lists beside its slots:
+   * a subset of `GRAPH_ACTIVATION_EXTRA_TOOLS` (`report_progress`,
+   * `read_artifact`, `ask_human`).
+   */
+  workflowResultExtraTools?: string[];
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];
@@ -516,6 +534,10 @@ export type ProviderPrepareDispatchOptions = {
   agentMcp?: ProviderSendOptions["agentMcp"];
   /** Exact workflow-result MCP tool this turn will expose, when present. */
   workflowResultTool?: string;
+  /** A graph activation's result slots; see `ProviderSendOptions`. */
+  workflowResultSlots?: ProviderSendOptions["workflowResultSlots"];
+  /** A graph activation's extra tools; see `ProviderSendOptions`. */
+  workflowResultExtraTools?: ProviderSendOptions["workflowResultExtraTools"];
 };
 
 export interface ProviderInteractiveSnapshot {

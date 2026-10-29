@@ -34,7 +34,9 @@ import type {
 import { WorkflowResultService } from "./workflow-result-service.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { WorkspaceWriters } from "./workspace-writers.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -163,7 +165,9 @@ export class FakeProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -213,6 +217,8 @@ export async function withService(
     environmentGit?: EnvironmentGit;
     environmentFence?: EnvironmentMutationFence;
     assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
+    /** D3 across engines: the shared workspace-holder projection. */
+    workspaceWriters?: (storage: StorageService) => WorkspaceWriters;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
@@ -380,6 +386,7 @@ export async function withService(
     environmentGit: options.environmentGit,
     environmentFence: options.environmentFence,
     assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,
+    ...(options.workspaceWriters ? { workspaceWriters: options.workspaceWriters(storage) } : {}),
   });
   try {
     await run(service, storage, provider, invocations, controls);

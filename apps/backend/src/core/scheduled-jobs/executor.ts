@@ -25,6 +25,13 @@ import type {
   ScheduleOwner,
   ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
+import type {
+  GraphLaunchOptions,
+  GraphLaunchOrigin,
+  GraphLaunchRequest,
+  GraphLaunchResult,
+} from "@orkestrator/protocol/graphs/launch";
+import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import type { CoordinatorControlScope } from "../control-mcp-tools.js";
 import { coordinatorRoleCapabilities } from "../control-mcp-tools.js";
 import type { InProcessToolInfo, InProcessToolResult } from "../mcp-in-process.js";
@@ -82,6 +89,16 @@ export interface ScheduledJobRuntime {
       args: Record<string, unknown>,
     ): Promise<InProcessToolResult>;
     listCoordinatorTools(scope: CoordinatorControlScope): Promise<InProcessToolInfo[]>;
+  };
+  /** The graph launch service (item 214), for `graph` actions. */
+  graphs?: {
+    launch(request: GraphLaunchRequest, origin: GraphLaunchOrigin): Promise<GraphLaunchResult>;
+    options(input: {
+      ref: GraphTemplateRef;
+      projectId: string;
+      environmentId?: string;
+      create?: "worktree" | "container";
+    }): Promise<GraphLaunchOptions>;
   };
   agentTools?: {
     callTool(
@@ -183,8 +200,19 @@ function publicCall(
       };
     case "launch":
       return { action: "environment.launch", input: launchInput(action) };
+    case "graph":
+      // A graph launch goes through the graph launch service, not `public_action`.
+      return null;
   }
 }
+
+const GRAPH_OWNER_REFUSAL =
+  "Only the app and the CLI schedule a graph action; a coordinator schedules its own launch_graph tool";
+
+/** Graph launch refusals that mean the target is gone. */
+const GRAPH_TARGET_GONE = new Set(["not-found"]);
+/** Graph launch refusals a later attempt can outgrow. */
+const GRAPH_RETRYABLE = new Set(["disabled"]);
 
 function launchInput(action: Extract<ScheduleAction, { kind: "launch" }>): Record<string, unknown> {
   return {
@@ -214,6 +242,10 @@ export class ScheduledJobExecutor {
    */
   async validate(owner: ScheduleOwner, action: ScheduleAction): Promise<void> {
     if (isReminderToSelf(owner, action)) return;
+    if (action.kind === "graph") {
+      await this.validateGraph(owner, action);
+      return;
+    }
     switch (owner.kind) {
       case "operator":
       case "control-mcp": {
@@ -253,6 +285,76 @@ export class ScheduledJobExecutor {
         this.assertToolSchedulable(tools, tool);
         return;
       }
+    }
+  }
+
+  /**
+   * A `graph` action is the operator's (the app, the CLI): it runs through the
+   * graph launch service as `requestedBy: "schedule"`. A coordinator schedules
+   * its own `launch_graph` tool instead (`type: "tool"`), so the run is its
+   * own and it gets the run's status wakes. The template must resolve and be
+   * launchable now: trusted, not an engine template, compiling cleanly.
+   * Never authoring.
+   */
+  private async validateGraph(
+    owner: ScheduleOwner,
+    action: Extract<ScheduleAction, { kind: "graph" }>,
+  ): Promise<void> {
+    if (owner.kind !== "operator") {
+      throw new ScheduleAuthorityError(GRAPH_OWNER_REFUSAL);
+    }
+    if (!this.runtime.graphs) throw new ScheduleAuthorityError("Graph launches are unavailable");
+    let options: GraphLaunchOptions;
+    try {
+      options = await this.runtime.graphs.options({
+        ref: action.request.ref,
+        projectId: action.request.projectId,
+        ...(action.request.environment.kind === "existing"
+          ? { environmentId: action.request.environment.environmentId }
+          : { create: action.request.environment.create }),
+      });
+    } catch (error) {
+      throw new ScheduleAuthorityError(`This graph cannot be launched: ${errorMessage(error)}`);
+    }
+    if (!options.launchable) {
+      throw new ScheduleAuthorityError(
+        `This graph cannot be launched: ${options.blockedReason ?? "it is not launchable"}`,
+      );
+    }
+  }
+
+  /** The operator's scheduled graph launch, through the launch service. */
+  private async runGraph(job: ScheduledJob, fire: ScheduleFire): Promise<FireResult> {
+    if (job.action.kind !== "graph") throw new Error("Not a graph launch");
+    if (!this.runtime.graphs) {
+      return {
+        ok: false,
+        error: { code: "unavailable", message: "Graph launches are unavailable" },
+        retry: true,
+      };
+    }
+    try {
+      const launched = await this.runtime.graphs.launch(
+        { ...job.action.request, requestId: fireRequestId(fire) },
+        { requestedBy: "schedule", scheduleId: job.id },
+      );
+      return {
+        ok: true,
+        outcome: {
+          runId: launched.runId,
+          ...(launched.environmentId ? { environmentId: launched.environmentId } : {}),
+          summary: `graph run ${launched.repeated ? "already launched" : "launched"} (${launched.status})`,
+        },
+      };
+    } catch (error) {
+      const code =
+        isRecord(error) && typeof error.code === "string" ? error.code : "graph-launch-failed";
+      return {
+        ok: false,
+        error: { code, message: errorMessage(error) },
+        retry: GRAPH_RETRYABLE.has(code),
+        ...(GRAPH_TARGET_GONE.has(code) ? { pause: "target-deleted" as const } : {}),
+      };
     }
   }
 
@@ -327,6 +429,10 @@ export class ScheduledJobExecutor {
         }
       }
       if (isReminderToSelf(job.owner, job.action)) return await this.remind(job, fire);
+      if (job.action.kind === "graph" && job.owner.kind === "operator") {
+        return await this.runGraph(job, fire);
+      }
+      if (job.action.kind === "graph") throw new ScheduleAuthorityError(GRAPH_OWNER_REFUSAL);
       switch (job.owner.kind) {
         case "operator":
           return await this.runPublic(job, fire, "operator", undefined, persistBase);
@@ -501,6 +607,8 @@ export class ScheduledJobExecutor {
     if (action.kind === "action") {
       tool = ownerTool(action);
       args = { ...action.input, requestId };
+    } else if (action.kind === "graph") {
+      throw new ScheduleAuthorityError(GRAPH_OWNER_REFUSAL);
     } else if (action.kind === "prompt") {
       tool = "send_prompt_to_tab";
       args = {

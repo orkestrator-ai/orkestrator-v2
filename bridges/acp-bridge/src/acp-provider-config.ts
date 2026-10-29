@@ -1,4 +1,10 @@
-import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  withheldGitHubCredentialEnvironment,
+  type AgentConversationMode,
+} from "@orkestrator/protocol/native-agent";
 
 export interface AcpProviderConfig {
   id: string;
@@ -167,18 +173,35 @@ function projectTrust(config: AcpProviderConfig, trustProject: boolean | undefin
     : undefined;
 }
 
-/** The environment a provider child is spawned with. */
+let withheldGhConfigDir: string | undefined;
+
+/** An empty `gh` configuration directory, created once per bridge process. */
+export function emptyGhConfigDir(): string {
+  withheldGhConfigDir ??= mkdtempSync(path.join(tmpdir(), "orkestrator-gh-withheld-"));
+  return withheldGhConfigDir;
+}
+
+/**
+ * The environment a provider child is spawned with. Each session runs its own
+ * child, so `withholdGitHub` (a policy that denies `github.write`, every
+ * graph agent node; item 209) strips the GitHub credential from that child
+ * alone: token variables, `gh`'s stored login (`ghConfigDir` is an empty
+ * directory) and Git's credential helpers.
+ */
 export function providerEnv(
   config: AcpProviderConfig,
-  options: { trustProject?: boolean },
+  options: { trustProject?: boolean; withholdGitHub?: { ghConfigDir: string } },
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...base,
     ...config.env,
     ...(Object.hasOwn(POLICY_ENV, config.id) ? POLICY_ENV[config.id] : {}),
     ...projectTrust(config, options.trustProject)?.env,
   };
+  return options.withholdGitHub
+    ? (withheldGitHubCredentialEnvironment(env, options.withholdGitHub) as NodeJS.ProcessEnv)
+    : env;
 }
 
 export function providerArgv(

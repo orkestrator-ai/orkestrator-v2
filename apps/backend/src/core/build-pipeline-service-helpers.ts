@@ -15,6 +15,7 @@ import type {
   PipelineSessionPhase,
   ResumableBuildPhase,
   StartBuildPipelineInput,
+  VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   BUILD_STEP_KEYS,
@@ -23,20 +24,28 @@ import {
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { StructuredReviewFindings } from "@orkestrator/protocol/structured-review";
 import {
   AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_SUMMARY_VERSION,
   type AgentInteractionOutcome,
   type AgentInteractionRequest,
   type AgentInteractionWorkflowSummary,
+  UNATTENDED_POLICY_INSTRUCTION,
+  withUnattendedPolicy,
 } from "@orkestrator/protocol/agent-interactions";
 import {
   nativeAgentCapabilities,
   type AgentModel,
   type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
-import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { normalizeBuildStepInstructions } from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { AppConfig } from "./models.js";
+import {
+  BUILD_PIPELINE_SESSION_LABELS,
+  sessionPhaseForBuildPhase,
+} from "./build-pipeline-stages.js";
 import {
   type BuildPipelineProvider,
   type ProviderExecutionMode,
@@ -68,15 +77,9 @@ export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>
 // and its type guard from one field list, so neither can drift from the other.
 export const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 
-export const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
-  build: "Build Session",
-  review: "Review Session",
-  address: "Address Issues Session",
-  verify: "Verification Session",
-  fix: "Fix Session",
-  pr: "PR Creation Session",
-  "resolve-conflicts": "Conflict Resolution Session",
-};
+/** Each session phase's label, from the stage table (`build-pipeline-stages.ts`). */
+export const SESSION_LABELS: Readonly<Record<PipelineSessionPhase, string>> =
+  BUILD_PIPELINE_SESSION_LABELS;
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -161,6 +164,22 @@ export function discardSessionReviewReports(pipeline: BuildPipeline): void {
   for (const session of pipeline.sessions) {
     if (session.phase === "review") delete session.reviewReport;
   }
+}
+
+/**
+ * The stage an accepted review hands over to. A report with issues or test
+ * coverage gaps goes to Address; a clean one has nothing to address and goes
+ * straight to Verify. The single reviewer's report and a reviewer panel's
+ * consolidated report follow this one rule.
+ */
+export function stageAfterReview(
+  report: StructuredReviewFindings,
+):
+  | { sessionPhase: "address"; phase: "addressing" }
+  | { sessionPhase: "verify"; phase: "verifying" } {
+  return report.issues.length > 0 || report.testCoverageGaps.length > 0
+    ? { sessionPhase: "address", phase: "addressing" }
+    : { sessionPhase: "verify", phase: "verifying" };
 }
 
 /**
@@ -376,6 +395,12 @@ export function stepModel(
   return trimmed;
 }
 
+/** A step's instructions, trimmed, kept only when there are some. */
+function instructionsField(value: string | undefined): { instructions?: string } {
+  const instructions = normalizeBuildStepInstructions(value);
+  return instructions ? { instructions } : {};
+}
+
 /**
  * Drops empty selections so a step that only pinned a harness does not also pin
  * a placeholder as a model id or the string "default" as a reasoning effort.
@@ -393,6 +418,9 @@ export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepCo
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
+      ...instructionsField(step.instructions),
+      // Only a reviewer has a focus; any other step's lens would be dormant.
+      ...(key === "review" ? reviewLensField(step.lens) : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -418,6 +446,8 @@ export function normalizeReviewers(
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
+      ...instructionsField(reviewer.instructions),
+      ...reviewLensField(reviewer.lens),
     };
   });
 }
@@ -425,30 +455,14 @@ export function normalizeReviewers(
 export function normalizeReviewPreparation(
   selection: BuildStepConfig | undefined,
 ): BuildStepConfig | undefined {
-  return selection ? normalizeSteps({ review: selection })?.review : undefined;
+  if (!selection) return undefined;
+  // Preparation and consolidation are not reviewers, so a lens is dropped.
+  const { lens: _lens, ...step } = selection;
+  return normalizeSteps({ review: step })?.review;
 }
 
 export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {
-  switch (phase) {
-    case "building":
-      return "build";
-    case "reviewing":
-      return "review";
-    case "addressing":
-      return "address";
-    case "verifying":
-      return "verify";
-    case "fixing":
-      return "fix";
-    case "creating-pr":
-      return "pr";
-    case "resolving-conflicts":
-      return "resolve-conflicts";
-    case "creating-environment":
-    case "starting-environment":
-    case "waiting-for-setup":
-      return null;
-  }
+  return sessionPhaseForBuildPhase(phase);
 }
 
 export function executionModeOverrideForPhase(
@@ -457,14 +471,21 @@ export function executionModeOverrideForPhase(
   return phase === "addressing" ? "build" : undefined;
 }
 
-export function resumePromptFor(phase: ResumableBuildPhase): string | null {
+/**
+ * @param options.addressResult The Address session submits a typed fix result
+ *   (`addressReportKind`); an older Address session ends with prose instead.
+ */
+export function resumePromptFor(
+  phase: ResumableBuildPhase,
+  options: { addressResult?: boolean } = {},
+): string | null {
   switch (phase) {
     case "building":
       return `Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "reviewing":
       return "Resume the build pipeline review from where you left off. Continue reviewing the current changes against the original ticket and target branch, incorporate any messages sent while the pipeline was paused, and finish with the required structured review result. Use ordinary prose for interim progress and make the final assistant message the only structured report. Do not ask questions; make sensible assumptions.";
     case "addressing":
-      return "Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate. Do not ask questions; make sensible assumptions.";
+      return `Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate.${options.addressResult ? " Commit every fix, then finish with the required fix result: the files you changed, the checks you ran with their results, the failures you fixed, and anything you left with its evidence." : ""} Do not ask questions; make sensible assumptions.`;
     case "verifying":
       return "Resume verification from where you left off. Re-check the current codebase against the original ticket and incorporate any messages sent while the pipeline was paused. Use ordinary prose for interim progress, never emit a provisional verdict, and make the final assistant message the only JSON object required by the verification instructions.";
     case "fixing":
@@ -480,11 +501,34 @@ export function resumePromptFor(phase: ResumableBuildPhase): string | null {
   }
 }
 
+/** The states pull request detection reports. */
+export const PULL_REQUEST_DETECTION_STATES = ["open", "merged", "closed"] as const;
+
 export type PullRequestDetection = {
   url: string;
-  state: "open" | "merged" | "closed";
+  state: (typeof PULL_REQUEST_DETECTION_STATES)[number];
   hasMergeConflicts: boolean | null;
 };
+
+/**
+ * After Ship: GitHub reports merge conflicts, so conflict resolution runs. An
+ * unknown answer (null, still computing) is not a conflict.
+ */
+export function pullRequestNeedsConflictResolution(
+  detection: Pick<PullRequestDetection, "hasMergeConflicts">,
+): boolean {
+  return detection.hasMergeConflicts === true;
+}
+
+/**
+ * A verdict passes when it is complete and no acceptance criterion failed;
+ * a passing verdict ships, any other starts another round or fails the run.
+ */
+export function verificationPassed(
+  verdict: Pick<VerificationVerdict, "complete" | "acceptanceCriteria">,
+): boolean {
+  return verdict.complete && !verdict.acceptanceCriteria?.some((item) => item.status === "failed");
+}
 
 /**
  * How long a pipeline may stay in reconnect before it is failed.
@@ -533,14 +577,9 @@ export const MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS = 3;
 export const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 export const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
 export const DEFAULT_INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
-export const UNATTENDED_POLICY_INSTRUCTION =
-  "This is a non-interactive build session: no user can answer a provider input request. " +
-  "If input is unavailable or declined, choose the safest likely assumption yourself, " +
-  "state that assumption, and continue. Never treat the absence of a person as authorization.";
-
-export function withUnattendedPolicy(prompt: string): string {
-  return `${prompt}\n\n${wrapSystemInstructions(UNATTENDED_POLICY_INSTRUCTION)}`;
-}
+// The policy text is shared with graph agent nodes (item 105), so it lives in
+// the protocol; re-exported for the pipeline's callers.
+export { UNATTENDED_POLICY_INSTRUCTION, withUnattendedPolicy };
 
 /**
  * The content-bearing change key a transcript snapshot used to persist:

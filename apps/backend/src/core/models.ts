@@ -8,7 +8,10 @@ import type {
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
-import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
+import type {
+  EnvironmentDiffBaseline,
+  EnvironmentDiffBaseOverride,
+} from "@orkestrator/protocol/diff-stats";
 import type {
   ContainerLifecycleSnapshot,
   EnvironmentContainerLifecycle,
@@ -48,6 +51,11 @@ export interface Project {
    * `@orkestrator/protocol/project-folders`.
    */
   folder?: string | null;
+  /**
+   * Sidebar icon: a small raster image as a base64 data URL, or absent for
+   * the default. See `@orkestrator/protocol/project-icon`.
+   */
+  icon?: string | null;
 }
 
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
@@ -355,6 +363,11 @@ export interface Environment {
    * `environmentBaselineCommit`. Cleared as an explicit `null`.
    */
   diffBaseline?: EnvironmentDiffBaseline | null;
+  /**
+   * A commit the user chose to measure changes from instead of `diffBaseline`
+   * (`diff-base-override.ts`). Cleared as an explicit `null`.
+   */
+  diffBaseOverride?: EnvironmentDiffBaseOverride | null;
   /** Immutable source selected by a coordinator delegation. */
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;
@@ -964,6 +977,11 @@ export interface AppConfig {
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
     /**
+     * Which runtime runs new Multi Reviews (item 301). Absent means
+     * `bespoke`; `ORKESTRATOR_MULTI_REVIEW_ENGINE` overrides it for testing.
+     */
+    multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
+    /**
      * Weakest read-only guarantee a coordinator conversation may run under.
      *
      * Absent means `provider-configured`: platforms whose boundary the
@@ -1070,6 +1088,11 @@ export interface AppConfig {
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
+    /**
+     * Reviewer focus presets the launchers offer (`review-lens.ts`). Absent
+     * means the shipped five; a stored list, even an empty one, is the user's.
+     */
+    reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal

@@ -1,3 +1,4 @@
+import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
@@ -55,6 +56,7 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { coordinatorProviderAllowed } from "./coordinator-providers.js";
+import { bugReportIdFromRuntimeId, isBugReportAgent } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -80,6 +82,7 @@ import {
 import {
   persistHostCatalog,
   seedEnabledHostModelCatalogs,
+  HOST_OPENCODE_CATALOG_SCOPE,
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
@@ -418,19 +421,26 @@ export function registerProjectCommands(
   });
 
   register("get_projects", async (args, { storage }) => {
+    // Periodic node-summary reads have a shared icon budget; ordinary project reads stay full.
+    const summaryIcons =
+      args.summaryIcons === undefined
+        ? false
+        : asRequiredBoolean(args.summaryIcons, "summaryIcons");
     const includeDefaultBranch =
       args.includeDefaultBranch === undefined
         ? false
         : asRequiredBoolean(args.includeDefaultBranch, "includeDefaultBranch");
-    if (!includeDefaultBranch) {
+    if (!includeDefaultBranch && !summaryIcons) {
       return conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects());
     }
     // Each project's default branch lives in the app config, whose changes
     // do not move the project manifest revision, so this form is never conditional.
     if (args.knownManifestGeneration !== undefined || args.knownResourceRevision !== undefined) {
-      throw new Error("includeDefaultBranch cannot be combined with a conditional read");
+      throw new Error("Summary enrichment cannot be combined with a conditional read");
     }
-    const projects = await storage.loadProjects();
+    const stored = await storage.loadProjects();
+    const projects = summaryIcons ? boundSummaryIcons(stored) : stored;
+    if (!includeDefaultBranch) return projects;
     try {
       return withDefaultBranches(projects, await storage.loadConfig());
     } catch {
@@ -597,8 +607,14 @@ export function registerProjectCommands(
     const environment = await storage.getEnvironment(id);
     let cache = await storage.getAgentModelCatalogCache();
     if (!environment) {
-      const coordinator = await resolveCoordinatorRuntime(storage, id);
-      if (coordinator.status === "not-coordinator") {
+      // A bug report, like a coordinator, has no environment row; it belongs
+      // to no project and offers only the bug-report agents.
+      const bugReportId = bugReportIdFromRuntimeId(id);
+      if (bugReportId && !(await storage.bugReports.getBugReport(bugReportId))) {
+        throw new Error("This bug report was discarded");
+      }
+      const coordinator = bugReportId ? null : await resolveCoordinatorRuntime(storage, id);
+      if (coordinator?.status === "not-coordinator") {
         throw new Error(`Environment not found: ${id}`);
       }
       // An unassigned conversation is exactly when this catalogue matters
@@ -610,27 +626,34 @@ export function registerProjectCommands(
         ? await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId)
         : null;
       if (
-        coordinator.status === "unavailable" &&
+        coordinator?.status === "unavailable" &&
         (!workspace || coordinator.reason !== "unassigned")
       ) {
         throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
       }
-      const projectId =
-        coordinator.status === "ready" ? coordinator.workspace.projectId : workspace!.projectId;
+      const projectId = !coordinator
+        ? undefined
+        : coordinator.status === "ready"
+          ? coordinator.workspace.projectId
+          : workspace!.projectId;
+      const openCodeScope = projectId ?? HOST_OPENCODE_CATALOG_SCOPE;
       const config = await storage.loadConfig();
+      const enabledPlatforms = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
       const qualified = new Set(
-        normalizeAgentPlatforms(config.global.enabledAgentPlatforms).filter((platform) =>
-          coordinatorProviderAllowed(platform, {
-            tierSetting: config.global.coordinatorProviderTiers,
-            enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
-          }),
+        enabledPlatforms.filter((platform) =>
+          bugReportId
+            ? isBugReportAgent(platform)
+            : coordinatorProviderAllowed(platform, {
+                tierSetting: config.global.coordinatorProviderTiers,
+                enabledPlatforms,
+              }),
         ),
       );
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
       let openCodeSnapshot = qualified.has("opencode")
-        ? await storage.getOpenCodeModelCatalog(projectId)
+        ? await storage.getOpenCodeModelCatalog(openCodeScope)
         : null;
       let coordinatorSeedFailed = false;
       const hostSeeded =
@@ -644,15 +667,18 @@ export function registerProjectCommands(
       if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
         const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
         const seeded = await waitForFirstUseSeed(
-          seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
-            projectId,
-          }),
+          seedHostModelCatalogIfMissing(
+            context,
+            ensureAgent,
+            refreshHostModelCatalog,
+            projectId ? { projectId } : {},
+          ),
           deadline,
         );
         coordinatorSeedFailed = seeded !== true;
         cache = await storage.getAgentModelCatalogCache();
         if (ensureAgent === "opencode") {
-          openCodeSnapshot = await storage.getOpenCodeModelCatalog(projectId);
+          openCodeSnapshot = await storage.getOpenCodeModelCatalog(openCodeScope);
         }
       }
       const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>

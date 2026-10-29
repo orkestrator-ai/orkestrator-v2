@@ -45,9 +45,15 @@ Deletion owns state Orkestrator itself creates and names for an environment:
   terminal histories, OpenCode command-change journals, design canvases, web
   annotations, preview definitions;
 - environment-keyed store records: sessions, looped and multi-review
-  workflows, build pipelines, prompt queues, agent mail, native agent sessions
-  and their display tails, compose and file drafts, handoffs, workflow
-  results, the pane layout.
+  workflows, build pipelines, graph runs with their artifact and effect records, prompt
+  queues, agent mail, native agent sessions and their display tails, compose
+  and file drafts, handoffs, workflow results, the pane layout;
+- graph runs' reference artifacts in the workspace
+  (`.orkestrator/graph-artifacts/<run-id>/`);
+- isolated graph branches' worktrees in the workspace
+  (`.orkestrator/graph-branches/<run-id>/`) and their Git branches
+  (`orkestrator-graph/<run-id>/…`, in the shared repository for a local
+  environment).
 
 On a merged PR it also deletes the remote head branch through the GitHub API.
 
@@ -110,14 +116,23 @@ Inside the local-server queue:
    throws and can be retried; it never removes a worktree a process is still
    writing into.
 6. Delete terminal histories and, on a merged PR, the remote branch.
-7. Clean up claude-tmux sessions while the container and worktree still exist.
+7. Remove the environment's graph runs' reference artifact directories
+   (`removeEnvironmentGraphArtifactFiles`), on the host through the
+   pinned-root remover and in a running container through the pinned
+   in-container remover, so they also go from a worktree deletion keeps. Then
+   remove the isolated branch worktrees and branches of every run that had
+   isolated nodes (`removeEnvironmentGraphBranchWorktrees`, item 403): a local
+   environment's branches live in the shared repository and would outlive the
+   worktree otherwise. Then clean up claude-tmux sessions while the container
+   and worktree still exist.
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then run the `worktree` step and, only if it
    succeeded, the `branch` step. The `worktree` step first stops the
    worktree's git fsmonitor daemon, if any
    ([git-scan-caches.md](git-scan-caches.md#stopping-daemons)).
-10. Delete environment-keyed records, design canvases and web annotations;
+10. Delete environment-keyed records (graph runs together with their artifact
+    rows), design canvases and web annotations;
     delete the schedules its agents own and pause other owners' schedules
     aimed at it ([scheduled-jobs.md](scheduled-jobs.md#when-the-owner-or-the-target-goes-away));
     delete its environment-scoped permission rules and their application

@@ -170,6 +170,11 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         description: "Search projects and environments",
         keywords: ["command palette", "switch", "jump"],
       }),
+      appShortcutEntry("open-settings", {
+        description: "Open settings",
+        // Also the app menu's Settings… item in the desktop app.
+        keywords: ["preferences", "global settings", "options", "configure"],
+      }),
       {
         id: "open-file",
         description: "Open a file in the environment",

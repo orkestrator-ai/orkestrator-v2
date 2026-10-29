@@ -12,6 +12,7 @@ import {
 import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
@@ -163,7 +164,18 @@ export async function stopLocalServerUnlocked(
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
-  if (coordinatorId) {
+  const bugReportId = bugReportIdFromRuntimeId(environmentId);
+  if (bugReportId) {
+    // A report keeps one bridge identity, for its own agent; stopping any
+    // other kind has nothing to clear.
+    const report = await context.storage.bugReports.getBugReport(bugReportId);
+    if (report?.agent === kind) {
+      await context.storage.bugReports.mutateBugReport(bugReportId, (current) => {
+        const { bridgePort: _port, bridgePid: _pid, ...rest } = current;
+        return rest;
+      });
+    }
+  } else if (coordinatorId) {
     const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
     const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
     if (conversationId) {

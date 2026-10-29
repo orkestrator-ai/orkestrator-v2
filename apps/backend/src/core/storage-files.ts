@@ -93,6 +93,10 @@ export class StorageFiles {
     return this.file("coordinators.json");
   }
 
+  bugReportsFile(): string {
+    return this.file("bug-reports.json");
+  }
+
   kanbanFile(): string {
     return this.file("kanban.json");
   }

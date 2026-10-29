@@ -57,6 +57,82 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(layout)).not.toContain("must not enter layout");
   });
 
+  test("Graphs designer tabs restore only a well-formed template reference", () => {
+    const tab = (id: string, graphDesignerData: unknown) => ({
+      id,
+      type: "graph-designer",
+      graphDesignerData,
+    });
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          tab("a", { selected: { scope: "builtin", id: "build-pipeline" }, draft: "dropped" }),
+          tab("b", {
+            selected: {
+              scope: "project",
+              projectId: "project-1",
+              path: ".orkestrator/graphs/review.graph.json",
+            },
+          }),
+          tab("c", { selected: { scope: "project", projectId: "p", path: "../escape.json" } }),
+          tab("d", { selected: { scope: "user", id: "Not An Id" } }),
+          { id: "e", type: "graph-designer" },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        {
+          id: "a",
+          type: "graph-designer",
+          graphDesignerData: { selected: { scope: "builtin", id: "build-pipeline" } },
+        },
+        {
+          id: "b",
+          graphDesignerData: {
+            selected: {
+              scope: "project",
+              projectId: "project-1",
+              path: ".orkestrator/graphs/review.graph.json",
+            },
+          },
+        },
+        { id: "c", graphDesignerData: {} },
+        { id: "d", graphDesignerData: {} },
+        { id: "e", graphDesignerData: {} },
+      ],
+    });
+    expect(JSON.stringify(layout)).not.toContain("dropped");
+  });
+
+  test("graph run tabs restore their run id and a bounded title", () => {
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          { id: "a", type: "graph-run", graphRunData: { runId: "run-1", title: "Multi Review" } },
+          { id: "b", type: "graph-run", graphRunData: { runId: "run-2", title: "  " } },
+          { id: "c", type: "graph-run", graphRunData: { runId: "../escape" } },
+          { id: "d", type: "graph-run" },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        { id: "a", type: "graph-run", graphRunData: { runId: "run-1", title: "Multi Review" } },
+        { id: "b", type: "graph-run", graphRunData: { runId: "run-2" } },
+      ],
+    });
+    expect(JSON.stringify(layout)).not.toContain("escape");
+  });
+
   test("rejects primitive and other non-object persisted roots", () => {
     for (const root of [null, undefined, true, 0, "leaf", []]) {
       expect(reconcilePersistedLayout(saved(root), context), String(root)).toBeNull();

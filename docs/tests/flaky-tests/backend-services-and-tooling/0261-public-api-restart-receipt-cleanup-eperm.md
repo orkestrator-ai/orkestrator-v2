@@ -85,3 +85,12 @@ passed all four groups (exit 0, 282.3 seconds).
 - **Confirmation:** `mise run test:logged -- --name merge-full-confirm -- mise run test`
   passed all four groups, exit 0 in 432.6 seconds, with the final prompt and
   test wording held steady throughout the run.
+
+## Graphs audit fixes recurrence — 2026-10-29
+
+- **Command:** `mise run test:logged -- --name backend-all -- bash -c 'cd apps/backend && bun test ./src --parallel=8 --only-failures'`
+- **Failure:** the same replay case failed with `EPERM` during fixture cleanup (15.69 ms).
+- **Counts:** 12,046 passed, one failed across 12,101 tests in 760 files (169.73 s).
+- **Owning-file rerun:** `bun test ./src/core/public-api/public-api-projects.test.ts` from `apps/backend` passed unchanged three times (25 pass each).
+- **Evidence:** `orkestrator-test-run.l1gskT/backend-all.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the recorded cleanup flake; the branch touches no public API code.

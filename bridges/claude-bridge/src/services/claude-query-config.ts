@@ -16,6 +16,9 @@
  */
 import type { Options, SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import {
+  nativeAgentDeniedCapabilities,
+  nativeAgentPolicyForBridge,
+  nativeAgentUserMcpGrant,
   readOnlyTurnReportedPolicy,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -62,8 +65,36 @@ export function claudeTurnPolicy(
 ): NativeAgentExecutionPolicy | undefined {
   // Process authority is applied last: a coordinator keeps its launcher-approved
   // research exception, while an ordinary read-only review keeps search denied.
-  return effectiveExecutionPolicy(
-    readOnly ? structuredClone(READ_ONLY_TURN_POLICY) : sessionPolicy,
+  return effectiveExecutionPolicy(readOnly ? readOnlyTurnPolicy(sessionPolicy) : sessionPolicy);
+}
+
+/**
+ * The fixed read-only policy, plus whatever else the session's own policy
+ * denies (a graph node without a shell, sub-agents or an MCP server). Only
+ * denials carry over, so the turn is never wider than either policy; the
+ * session's search exception does not, so search stays off as before. The
+ * session's user MCP selection carries over too (item 404): the fixed policy
+ * loads no configured server, and a graph node's grant is the one exception.
+ */
+export function readOnlyTurnPolicy(
+  sessionPolicy: NativeAgentExecutionPolicy | undefined,
+): NativeAgentExecutionPolicy {
+  const policy = structuredClone(READ_ONLY_TURN_POLICY);
+  const base = policy.capabilityPolicy?.deny ?? [];
+  const extra = nativeAgentDeniedCapabilities(sessionPolicy).filter(
+    (capability) => !base.includes(capability),
+  );
+  const userMcpServers = nativeAgentUserMcpGrant(sessionPolicy);
+  if (extra.length === 0 && !userMcpServers) return policy;
+  return nativeAgentPolicyForBridge(
+    {
+      ...policy,
+      capabilityPolicy: {
+        deny: [...base, ...extra],
+        ...(userMcpServers ? { userMcpServers } : {}),
+      },
+    },
+    "claude",
   );
 }
 

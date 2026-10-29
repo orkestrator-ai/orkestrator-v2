@@ -8,8 +8,8 @@ bridge until it restarts. And a backend can open a data directory another
 version wrote. This document sets how long each side must cope with an older
 other side (the **support window**), how compatibility code is written and
 counted, and lists every compatibility path with its owner and removal
-condition. Decided on 2026-10-24 in
-[0034-mixed-version-compatibility.md](../todo/cross-cutting/0034-mixed-version-compatibility.md).
+condition. Decided on 2026-10-24 in todo 0034 (retired on 2026-10-29; git history
+keeps it).
 
 ## The support window
 
@@ -34,6 +34,16 @@ A compatibility path that exists for peers older than version X may be removed
 once the floor is at or above X: that is, 60 days after the first Stable
 release at or above X was published. For anything older than v2.21.0 that is
 already true.
+
+Why this shape: releases ship several times a week, so a count of releases
+would last days, while hosts update on their own schedule, a remote backend
+can sit unattended and a container keeps its bridge until it restarts.
+Anchoring on a Stable release ties the floor to what the "everyone" channel
+installs. 30 days was judged too short for unattended hosts and long-lived
+containers, 90 days would keep about three months of paths; the usage counters
+are the evidence for revising the figure. One window covers every pairing
+because they all ride the same release train, and separate windows would
+multiply the conditions owners must check.
 
 ### What must work across the window
 
@@ -116,6 +126,7 @@ supported peer already has the newer behaviour.
 | Bridges older than the MCP configuration report: `mcpConfig` without `mcpConfigReporting` still counts as reporting, and a body with neither gets the older-bridge apply outcome | `bridgeReportsMcpConfig` (`http-bridge-runtime-health.ts`), `olderBridgeOutcome` (`mcp-management/evidence.ts`) | `mcp-report.unmarked-config`, `mcp-report.older-bridge-outcome` (counts evaluations) | Bridges before #1025; the Claude, Cursor, Pi and ACP bridges in v2.21.0 send the marker | The window allows it now for those bridges. Confirm first how Codex reaches this rule: its bridge sends no marker | [0039](../todo/mcp/0039-mcp-management.md) |
 | Legacy preview loopback route `/__orkestrator/browser/loopback/<port>/` and the shared per-window preview partition | `GatewayProxy.proxyToTarget` (`gateway-proxy.ts`); `browserPreviewPartitionForWindow` (`desktop-window-lifecycle.ts`) | `preview.legacy-loopback-route` (counts requests) | Every desktop today: the legacy route is still the default, and legacy URL tabs persist in layouts | The desktop default has flipped to service previews, the floor is at or above the first Stable release with that default, and stored legacy tabs have a migration (0042 item 5) | [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md) item 6 |
 | Backends without the built-in container resource default: Settings disables "Built-in default" and says none applies when `get_docker_capacity` has no `builtInDefault` | `legacyBackend` (`ContainerResourceLimitsSettings.tsx`) | None (renderer side) | Backends before the default (todo 0022, 2026-10-25) | The floor is a release with `builtInDefault` | [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md) |
+| Build Pipeline Address sessions without the typed report marker: Verify reads the session's last assistant text instead of its `fix-result` | `verificationAddressReport` (`build-pipeline-address-report.ts`); `finishAddress` (`build-pipeline-service-recovery.ts`) advances such a session without reading a result | `build-pipeline.address-text-report` (counts Verify prompts built for such a session) | Pipeline records whose Address session started before the typed handoff (graphs item 004, 2026-10-29) and is still resumed or restarted from Verify | The floor is at or above the first Stable release with 004 and the counter is quiet. A record from before then may take a safe, explicit outcome instead: Verify told no Address report is available | [004](../../plans/graphs/004-typed-address-report.md) |
 | Live prompt-queue claim state (`outstandingClaim`) | `restoreLegacyPromptQueueClaims`, queue mutation and reservation guards | None (read normalization) | Claim-writing backends through v2.28.0-beta, including external callers | Claim-writing peers can no longer share the database; retain exclusion until settlement or expiry meanwhile | [0078](../todo/cross-cutting/0078-legacy-prompt-queue-claim-state.md) |
 
 Not governed by the window (listed so nobody waits on it):

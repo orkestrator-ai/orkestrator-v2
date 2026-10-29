@@ -41,7 +41,13 @@ describe("sendPrompt MCP source scope", () => {
     const prompt = sendPrompt(session.id, "Plan the work");
     const call = await nextQueryCall();
 
-    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(cwd(), process.env, undefined, "none");
+    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(
+      cwd(),
+      process.env,
+      undefined,
+      "none",
+      undefined,
+    );
     // The CLI loads nothing itself for a coordinator, so the inline set is the
     // whole MCP surface.
     expect(call.options.settingSources).toEqual([]);
@@ -57,7 +63,13 @@ describe("sendPrompt MCP source scope", () => {
     const prompt = sendPrompt(session.id, "Just look", { readOnly: true });
     const call = await nextQueryCall();
 
-    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(cwd(), process.env, undefined, "none");
+    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(
+      cwd(),
+      process.env,
+      undefined,
+      "none",
+      undefined,
+    );
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await prompt;
@@ -69,7 +81,58 @@ describe("sendPrompt MCP source scope", () => {
     const prompt = sendPrompt(session.id, "Work normally");
     const call = await nextQueryCall();
 
-    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(cwd(), process.env, undefined, "all");
+    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(
+      cwd(),
+      process.env,
+      undefined,
+      "all",
+      undefined,
+    );
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+});
+
+describe("sendPrompt user MCP selection (graphs item 404)", () => {
+  test("a graph node's grant filters the configured servers and makes the inline set strict", async () => {
+    const session = createSession("graph node mcp");
+    track(session.id);
+    session.executionPolicy = {
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+      capabilityPolicy: { deny: [], userMcpServers: ["docs"] },
+    };
+    mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({
+      servers: { docs: { type: "http", url: "https://docs.example.test/mcp" } },
+      names: new Set(["docs"]),
+      revision: MOCK_MCP_CONFIG_REVISION,
+    }));
+    const prompt = sendPrompt(session.id, "Research");
+    const call = await nextQueryCall();
+
+    const args = mockGetMcpRuntimeConfig.mock.calls.at(-1) as unknown[];
+    expect(args[3]).toBe("user");
+    const allow = args[4] as (name: string) => boolean;
+    expect(typeof allow).toBe("function");
+    expect([allow("docs"), allow("linear")]).toEqual([true, false]);
+    expect(call.options.strictMcpConfig).toBe(true);
+    expect(call.options.allowedTools).toContain("mcp__docs__*");
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("an ordinary session is not strict and gets no filter", async () => {
+    const session = createSession("ordinary mcp");
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Work");
+    const call = await nextQueryCall();
+    expect((mockGetMcpRuntimeConfig.mock.calls.at(-1) as unknown[])[4]).toBeUndefined();
+    expect(call.options.strictMcpConfig).toBeUndefined();
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await prompt;

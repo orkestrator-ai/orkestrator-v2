@@ -159,8 +159,7 @@ Coordinator capabilities that were deliberately kept off the platform-parity
 path. They are features, not provider adapters: every qualified platform
 already inspects, delegates, wakes and queues through the same interface
 ([`coordinator.md`](../../architecture/coordinator.md)). Moved here from
-[0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md),
-whose parity gaps are all closed.
+todo 0028 (retired on 2026-10-29), whose parity gaps are all closed.
 
 ## Current state
 
@@ -366,14 +365,12 @@ stack with a real provider yet.
 
 ## Related
 
-- [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md)
-  (where these were listed before) and
-  [`control-mcp.md`](../../architecture/control-mcp.md) for tool tiers and
+- [`control-mcp.md`](../../architecture/control-mcp.md) for tool tiers and
   authority.
 - [0395-coordinator-worker-surfaces-follow-ups.md](0395-coordinator-worker-surfaces-follow-ups.md)
   for the follow-ups.
 
 ## Replaces
 
-- The "Product surfaces kept off the parity path" section of
-  [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md).
+- The "Product surfaces kept off the parity path" section of todo 0028
+  (retired on 2026-10-29).

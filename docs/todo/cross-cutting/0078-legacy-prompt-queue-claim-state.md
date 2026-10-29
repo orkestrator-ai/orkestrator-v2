@@ -24,7 +24,7 @@ an older backend produces.
 **Context.** The claim commands (`claim_prompt_queue_head`,
 `acknowledge_prompt_queue_claim`, `reject_prompt_queue_claim`,
 `requeue_prompt_queue_message`) were removed on 2026-10-24 by
-[0034](0034-mixed-version-compatibility.md) (`a3111c7c6`, #1207). An external
+todo 0034 (`a3111c7c6`, #1207). An external
 caller of an older backend's command can still hold a prompt, so a live lease
 keeps excluding other writers until it settles or expires. The register row in
 [version-compatibility.md](../../architecture/version-compatibility.md#register)
@@ -204,7 +204,6 @@ moved into Current state.
 
 ## Related
 
-- [0034-mixed-version-compatibility.md](0034-mixed-version-compatibility.md)
 - [version-compatibility.md](../../architecture/version-compatibility.md)
 - [storage.md](../../architecture/storage.md#migrations)
 

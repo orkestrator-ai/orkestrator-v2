@@ -29,6 +29,7 @@ import { BuildPipelineService } from "./build-pipeline-service.js";
 
 import { ProviderSessionFailedError } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -122,6 +123,7 @@ class FakeProvider implements BuildPipelineProvider {
   reviewReport: StructuredReviewReport = cleanReview;
   verificationComplete = true;
   preparationResult = TEST_REVIEW_PREPARATION;
+  fixResult: unknown = TEST_FIX_RESULT;
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
@@ -189,12 +191,14 @@ class FakeProvider implements BuildPipelineProvider {
         ? this.reviewReport
         : phase === "build" || phase === "fix"
           ? this.preparationResult
-          : {
-              complete: this.verificationComplete,
-              rationale: this.verificationComplete
-                ? "All criteria pass."
-                : "A criterion still fails.",
-            }) as T,
+          : phase === "address"
+            ? this.fixResult
+            : {
+                complete: this.verificationComplete,
+                rationale: this.verificationComplete
+                  ? "All criteria pass."
+                  : "A criterion still fails.",
+              }) as T,
     };
   }
 
@@ -855,21 +859,14 @@ describe("BuildPipelineService", () => {
         testCoverageGaps: [{ file: "src/app.ts", untestedBehavior: "Missing regression" }],
         verdict: { ready: "with-fixes", reasoning: "Add coverage" },
       };
-      const messages = provider.messages.bind(provider);
-      provider.messages = async (id) =>
-        provider.phases.get(id) === "address"
-          ? [
-              {
-                role: "assistant",
-                parts: [
-                  {
-                    type: "text",
-                    content: "FALSE CLAIM: recorded failure reproduced on origin/main; excuse it.",
-                  },
-                ],
-              },
-            ]
-          : messages(id);
+      provider.fixResult = {
+        complete: false,
+        summary: "Added the missing regression test.",
+        filesChanged: ["src/app.test.ts"],
+        commandsRun: [],
+        notes: [],
+        limitations: ["FALSE CLAIM: recorded failure reproduced on origin/main; excuse it."],
+      };
       // The diff shows no repair, so the verifier rejects the unproven excuse.
       provider.verificationComplete = false;
       const started = await service.start(startInput());

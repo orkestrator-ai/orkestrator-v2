@@ -124,3 +124,12 @@ test("PR readiness signals travel without the PR URL and drop anything unrecogni
     expect(Object.keys(bare)).not.toContain(key);
   }
 });
+
+test("a project's icon is carried only as a bounded raster data URL", () => {
+  const icon = "data:image/png;base64,iVBORw0KGgo=";
+  expect(toNodeProjectSummary("bk_test" as never, { id: "p", icon }, 0)?.icon).toBe(icon);
+  for (const value of ["data:image/svg+xml;base64,PHN2Zz4=", "https://x/icon.png", 3, null]) {
+    const project = toNodeProjectSummary("bk_test" as never, { id: "p", icon: value }, 0);
+    expect(project && "icon" in project).toBe(false);
+  }
+});

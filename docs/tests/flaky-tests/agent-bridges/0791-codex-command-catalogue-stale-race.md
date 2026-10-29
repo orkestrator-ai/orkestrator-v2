@@ -231,3 +231,18 @@ mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/c
 Aggregate evidence: `orkestrator-test-run.cmmuTa/bridges.log.gz` in the host
 temporary directory. No catalogue implementation, assertion, timeout or skip
 changed. Preview regressions are independent of this timer race.
+
+## Project icon review validation — 2026-10-29
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer mismatch
+at line 273: expected `stale`, received `ready`. The complete unchanged
+owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence: `validation-04.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-801e01fe-bc32-4c2d-bbaa-76969f1dcae2/`.
+The subsequent exact aggregate rerun's bridges group passed (40.8 s).
+No catalogue implementation, assertion, deadline or skip changed.

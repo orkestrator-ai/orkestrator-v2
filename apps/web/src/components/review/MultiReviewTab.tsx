@@ -32,6 +32,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
+import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
@@ -194,10 +195,12 @@ const AUTO_PR_NOTICE_TONE_CLASS = {
 
 function AutoPrLaunchNotice({
   launch,
+  graphEngine,
 }: {
   launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>;
+  graphEngine: boolean;
 }) {
-  const notice = autoPrLaunchNotice(launch);
+  const notice = autoPrLaunchNotice(launch, graphEngine);
   return (
     <div
       data-testid="multi-review-auto-pr-notice"
@@ -433,11 +436,31 @@ function StepFacts({
   );
 }
 
+/**
+ * A graph-engine review whose run is live (item 301). Its steps are graph
+ * activations controlled from the graph run view, so the bespoke step
+ * controls are never offered for it; once its run ends only the manual Fix
+ * works as on any review.
+ */
+function graphRunLive(workflow: MultiReviewWorkflow | undefined): boolean {
+  return workflow?.engine === "graph" && workflow.graphRun?.settled !== true;
+}
+
+function withoutBespokeStepControls(commands: MultiReviewCommands): MultiReviewCommands {
+  return {
+    address: commands.address,
+    ...(commands.customFix ? { customFix: commands.customFix } : {}),
+    retry: commands.retry,
+    cancel: commands.cancel,
+    stopReviewer: commands.stopReviewer,
+  };
+}
+
 function MultiReviewOverviewTab({
   data,
   isActive,
   hydrateWorkflow = hydrateMultiReviewWorkflow,
-  commands = defaultCommands,
+  commands: providedCommands = defaultCommands,
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
@@ -446,6 +469,10 @@ function MultiReviewOverviewTab({
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
+  // A graph-engine review refuses bespoke step controls even once its run has
+  // ended (only the manual Fix is ordinary then), so none are offered.
+  const commands =
+    workflow?.engine === "graph" ? withoutBespokeStepControls(providedCommands) : providedCommands;
   const [error, setError] = useState<string | null>(null);
   const [presentationNotice, setPresentationNotice] = useState<string | null>(null);
   const [openAfterDelivery, setOpenAfterDelivery] = useState(false);
@@ -885,9 +912,11 @@ function MultiReviewOverviewTab({
   const busy = isBusyPhase(workflow.phase);
   const reviewSessionStalled =
     (workflow.phase === "preparing" || workflow.phase === "consolidating") &&
-    (
-      workflow.reviewSession ??
-      (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
+    // A graph-engine review prepares in a session of its own (item 301).
+    (workflow.engine === "graph" && workflow.phase === "preparing"
+      ? workflow.preparationSession
+      : (workflow.reviewSession ??
+        (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession))
     )?.stalledSince !== undefined;
   const fixSessionStalled =
     workflow.phase === "fixing" && workflow.fixSession?.stalledSince !== undefined;
@@ -1276,9 +1305,12 @@ function MultiReviewOverviewTab({
     upstreamComplete: cleanReviewPr
       ? consolidationStatus.state === "complete"
       : fixStatus.state === "complete",
+    graphEngine: workflow.engine === "graph",
   });
   const canOpenPrTab = workflow.autoPrLaunch?.state === "launched" && prTabOpen;
-  const prLaunchNotice = currentPrLaunch ? autoPrLaunchNotice(currentPrLaunch).text : null;
+  const prLaunchNotice = currentPrLaunch
+    ? autoPrLaunchNotice(currentPrLaunch, workflow.engine === "graph").text
+    : null;
   const prView: MultiReviewFlowNodeView = {
     node: {
       id: "pr",
@@ -1313,11 +1345,13 @@ function MultiReviewOverviewTab({
         <SessionOpenButton
           label="Open PR session"
           title={
-            canOpenPrTab
-              ? "Show the PR agent's tab"
-              : workflow.autoPrLaunch?.state === "launched"
-                ? "The PR agent's tab is no longer open"
-                : "The PR agent has not been launched"
+            workflow.engine === "graph"
+              ? "The graph run's pull request step opens it; there is no PR session"
+              : canOpenPrTab
+                ? "Show the PR agent's tab"
+                : workflow.autoPrLaunch?.state === "launched"
+                  ? "The PR agent's tab is no longer open"
+                  : "The PR agent has not been launched"
           }
           enabled={canOpenPrTab}
           onOpen={openPrTab}
@@ -1377,6 +1411,7 @@ function MultiReviewOverviewTab({
     const stalled = reviewer.status === "running" && Boolean(reviewer.stalledSince);
     const runtime = runtimeParts(reviewer, reviewer.status === "running", reviewPanelNow);
     const stoppable =
+      workflow.engine !== "graph" &&
       workflow.phase === "reviewing" &&
       (reviewer.status === "pending" || reviewer.status === "running");
     const canUnstick =
@@ -1412,7 +1447,10 @@ function MultiReviewOverviewTab({
         state: reviewerFlowState(reviewer.status),
         stalled,
         statusLabel: reviewerStatusLabel(reviewer, workflow.reviewers),
-        detail: modelDetail(reviewer, false),
+        // The focus the reviewer ran with, as recorded at launch.
+        detail: reviewer.lens
+          ? `${modelDetail(reviewer, false)} · Focus: ${reviewer.lens.label}`
+          : modelDetail(reviewer, false),
         runtime,
         runtimeLabel: `${name} runtime and token usage`,
         pendingLabel:
@@ -1646,6 +1684,36 @@ function MultiReviewOverviewTab({
       </div>,
     );
   }
+  if (workflow.engine === "graph" && workflow.graphRun) {
+    const runId = workflow.graphRun.runId;
+    notices.push(
+      <div
+        key="graph-engine"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground"
+      >
+        <span>
+          {graphRunLive(workflow)
+            ? "This review runs on the graph runtime. Restart, pause and stop its steps from its graph run."
+            : "This review ran on the graph runtime."}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            requestGraphRunView({
+              runId,
+              projectId: workflow.projectId,
+              environmentId: workflow.environmentId,
+              mock: false,
+              title: "Multi Review",
+            })
+          }
+        >
+          Open graph run
+        </Button>
+      </div>,
+    );
+  }
   if (error || workflow.error) {
     notices.push(
       <div
@@ -1699,7 +1767,13 @@ function MultiReviewOverviewTab({
         workflow.consolidatedReport?.issues.length === 0 &&
         workflow.consolidatedReport.testCoverageGaps.length === 0))
   ) {
-    notices.push(<AutoPrLaunchNotice key="auto-pr" launch={workflow.autoPrLaunch} />);
+    notices.push(
+      <AutoPrLaunchNotice
+        key="auto-pr"
+        launch={workflow.autoPrLaunch}
+        graphEngine={workflow.engine === "graph"}
+      />,
+    );
   }
 
   return (
@@ -1812,7 +1886,7 @@ function MultiReviewOverviewTab({
       </div>
 
       <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
-        {workflow.phase === "failed" && (
+        {workflow.phase === "failed" && workflow.engine !== "graph" && (
           <Button
             variant="outline"
             disabled={pending}

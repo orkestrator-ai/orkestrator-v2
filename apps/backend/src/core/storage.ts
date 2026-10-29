@@ -1,6 +1,11 @@
 export * from "./storage-shared.js";
 export type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 export type { CoordinatorsStorage } from "./storage-coordinators.js";
+export type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.js";
+export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
+export type { GraphRunsStorage } from "./storage-graph-runs.js";
+export type { GraphEffectsStorage } from "./storage-graph-effects.js";
+export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -17,6 +22,11 @@ import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 import type { CoordinatorsStorage } from "./storage-coordinators.js";
+import type { BugReportsStorage } from "./storage-bug-reports.js";
+import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
+import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { GraphEffectsStorage } from "./storage-graph-effects.js";
+import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -99,7 +109,11 @@ import type {
   AgentMailSummarySnapshot,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import type {
+  PipelineSession,
+  PipelineTranscriptReference,
+} from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipelinesRepository } from "./storage-build-pipelines.js";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionActionOutcome,
@@ -126,6 +140,11 @@ export class StorageService {
   readonly nodes: NodesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
+  readonly bugReports: BugReportsStorage;
+  readonly graphTemplates: GraphTemplatesStorage;
+  readonly graphRuns: GraphRunsStorage;
+  readonly graphEffects: GraphEffectsStorage;
+  readonly graphDescribe: GraphDescribeStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -136,6 +155,11 @@ export class StorageService {
     this.nodes = this.repos.nodes;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
+    this.bugReports = this.repos.bugReports;
+    this.graphTemplates = this.repos.graphTemplates;
+    this.graphRuns = this.repos.graphRuns;
+    this.graphEffects = this.repos.graphEffects;
+    this.graphDescribe = this.repos.graphDescribe;
   }
 
   async init(): Promise<void> {
@@ -303,7 +327,7 @@ export class StorageService {
 
   updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
+    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
   ): Promise<Project> {
     return this.repos.projects.updateProject(projectId, updates);
   }
@@ -1305,6 +1329,34 @@ export class StorageService {
     window: TranscriptReadWindow = {},
   ): Promise<TranscriptRead> {
     return this.repos.buildPipelines.readBuildPipelineTranscript(pipelineId, session, window);
+  }
+
+  /** Graph activation transcripts (item 211), in the build-pipeline transcript store. */
+  commitGraphRunTranscript(
+    input: Parameters<BuildPipelinesRepository["commitGraphRunTranscript"]>[0],
+  ): Promise<PipelineTranscriptReference | null> {
+    return this.repos.buildPipelines.commitGraphRunTranscript(input);
+  }
+
+  describeGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+  ): Promise<{ reference: PipelineTranscriptReference; fingerprint: string } | null> {
+    return this.repos.buildPipelines.describeGraphRunTranscript(runId, activationKey);
+  }
+
+  readGraphRunTranscript(
+    runId: string,
+    activationKey: string,
+    reference: PipelineTranscriptReference,
+    window: TranscriptReadWindow = {},
+  ): Promise<TranscriptRead> {
+    return this.repos.buildPipelines.readGraphRunTranscript(
+      runId,
+      activationKey,
+      reference,
+      window,
+    );
   }
 
   migrateBuildPipelineTranscripts(

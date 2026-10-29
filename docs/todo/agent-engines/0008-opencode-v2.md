@@ -551,8 +551,7 @@ Before any 2.x pin reaches production:
 
 ## Related
 
-- [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
-  [0028-coordinator-consistency-gaps.md](../coordinator-and-multi-review/0028-coordinator-consistency-gaps.md) (OpenCode
+- [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) (OpenCode
   steer is blocked on this).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (`POST /mcp` →
   `PUT /api/experimental/mcp/:server`, V1 config keys).

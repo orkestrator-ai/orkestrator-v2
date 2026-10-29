@@ -396,6 +396,5 @@ None yet.
 
 ## Related
 
-- [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md)
 - [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): moved the container log service row.
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

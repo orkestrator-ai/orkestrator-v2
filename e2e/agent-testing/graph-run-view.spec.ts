@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 
 /**
  * The run view's read side against the real backend (item 211): the
@@ -68,6 +69,7 @@ test("the Graphs designer lists the environment's runs from the backend", async 
     expect(ok, command).toBe(true);
     return body.result as T;
   };
+  await enableExperimentalGraphs(invoke);
 
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
@@ -203,6 +205,7 @@ test("a graph launched from Run graph… finishes while its environment is away 
     expect(response.ok() && !body?.error, command).toBe(true);
     return body.result as T;
   };
+  await enableExperimentalGraphs(invoke);
 
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
@@ -400,6 +403,7 @@ async function connect(page: Page, profile: string) {
     expect(ok, command).toBe(true);
     return body.result as T;
   };
+  await enableExperimentalGraphs(invoke);
   return { status, call, invoke };
 }
 

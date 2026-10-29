@@ -137,6 +137,7 @@ interface CoreFieldsSnapshot {
   terminalHistoryRetentionDays: number;
   experimentalCodexRawEventLogging: boolean;
   experimentalScheduling: boolean;
+  experimentalGraphs: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
   webClientEnabled: boolean;
@@ -190,6 +191,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalCodexRawEventLogging: global.experimentalCodexRawEventLogging ?? true,
     experimentalScheduling: global.experimentalScheduling ?? false,
+    experimentalGraphs: global.experimentalGraphs ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     webClientEnabled: global.webClientEnabled ?? true,
@@ -273,6 +275,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalCodexRawEventLogging ?? true,
     global.experimentalScheduling ?? false,
+    global.experimentalGraphs ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
@@ -377,6 +380,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [experimentalScheduling, setExperimentalScheduling] = useState(
     global.experimentalScheduling ?? false,
   );
+  const [experimentalGraphs, setExperimentalGraphs] = useState(global.experimentalGraphs ?? false);
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -481,6 +485,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalScheduling(global.experimentalScheduling ?? false);
+    setExperimentalGraphs(global.experimentalGraphs ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
@@ -660,6 +665,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
       experimentalScheduling,
+      experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
       webClientEnabled,
@@ -695,6 +701,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
       experimentalScheduling,
+      experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
       webClientEnabled,
@@ -868,6 +875,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         terminalHistoryRetentionDays: number;
         experimentalCodexRawEventLogging: boolean;
         experimentalScheduling: boolean;
+        experimentalGraphs: boolean;
         debugLogging: boolean;
         debugLogRetentionDays: number;
         webClientEnabled: boolean;
@@ -910,6 +918,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         terminalHistoryRetentionDays,
         experimentalCodexRawEventLogging,
         experimentalScheduling,
+        experimentalGraphs,
         debugLogging,
         debugLogRetentionDays,
         webClientEnabled,
@@ -1177,6 +1186,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
+    experimentalGraphs,
+    setExperimentalGraphs,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

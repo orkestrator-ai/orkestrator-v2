@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play } from "lucide-react";
+import { GraphPlayIcon } from "@/components/icons/GraphPlayIcon";
 import { Button } from "@/components/ui/button";
 import { GraphLaunchDialog } from "./GraphLaunchDialog";
 import { openLaunchedGraphRun } from "./open-launched-run";
@@ -35,7 +35,7 @@ export function RunGraphButton({
           setOpen(true);
         }}
       >
-        <Play className="size-4" />
+        <GraphPlayIcon className="size-4" />
         {showLabel && <span className="truncate text-xs">Run graph…</span>}
       </Button>
       {used && environmentId && projectId && (

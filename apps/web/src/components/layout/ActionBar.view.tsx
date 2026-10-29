@@ -378,6 +378,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const prFreshnessNotice = hydrationFreshnessNotice(monitorSyncStatus, "pull request status");
   const prLastCheckedAt = formatObservedAt(lastSuccessfulCheckAt);
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
+  // Graphs are experimental: their buttons show only while they are on.
+  const graphsEnabled = config.global.experimentalGraphs === true;
   const multiReviewAutoFix = config.global.agentSettings?.multiReview?.autoFix ?? false;
   const multiReviewAutoPr = config.global.agentSettings?.multiReview?.autoPr ?? false;
   const storedReviewerCount =
@@ -902,35 +904,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <ToolbarTooltipTrigger
                     tooltip={
                       <>
-                        <p>Graphs</p>
-                        <p className="text-xs text-muted-foreground">
-                          Browse, inspect and import graph templates
-                        </p>
-                      </>
-                    }
-                  >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={() => createTab?.("graph-designer")}
-                      disabled={!selectedEnvironment}
-                      aria-label="Graphs"
-                    >
-                      <Network className="h-4 w-4" />
-                      {isGrid && <span className="truncate text-xs">Graphs</span>}
-                    </Button>
-                  </ToolbarTooltipTrigger>
-
-                  <RunGraphButton
-                    environmentId={selectedEnvironment?.id}
-                    projectId={selectedEnvironment?.projectId ?? null}
-                    showLabel={isGrid}
-                  />
-
-                  <ToolbarTooltipTrigger
-                    tooltip={
-                      <>
                         <p>New Browser Tab</p>
                         <p className="text-xs text-muted-foreground">
                           {!browserPreviewSupported
@@ -1053,6 +1026,39 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       {isGrid && <span className="truncate text-xs">Multi Review</span>}
                     </Button>
                   </ToolbarTooltipTrigger>
+
+                  {graphsEnabled && (
+                    <>
+                      <ToolbarTooltipTrigger
+                        tooltip={
+                          <>
+                            <p>Graphs</p>
+                            <p className="text-xs text-muted-foreground">
+                              Browse, inspect and import graph templates
+                            </p>
+                          </>
+                        }
+                      >
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => createTab?.("graph-designer")}
+                          disabled={!selectedEnvironment}
+                          aria-label="Graphs"
+                        >
+                          <Network className="h-4 w-4" />
+                          {isGrid && <span className="truncate text-xs">Graphs</span>}
+                        </Button>
+                      </ToolbarTooltipTrigger>
+
+                      <RunGraphButton
+                        environmentId={selectedEnvironment?.id}
+                        projectId={selectedEnvironment?.projectId ?? null}
+                        showLabel={isGrid}
+                      />
+                    </>
+                  )}
 
                   {/* Play Button - Run Commands */}
                   <ToolbarTooltipTrigger

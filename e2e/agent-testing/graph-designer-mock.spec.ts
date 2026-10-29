@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 
 /**
  * Mock runs from the Graphs designer against the real backend (item 213):
@@ -77,6 +78,7 @@ test("Graphs designer starts a mock run: no provider, no pull request, would-hav
     expect(response.ok(), command).toBe(true);
     return (await response.json()).result;
   };
+  await enableExperimentalGraphs(invoke);
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
   const project = projects.find((candidate) => candidate.localPath === status.testProject)!;

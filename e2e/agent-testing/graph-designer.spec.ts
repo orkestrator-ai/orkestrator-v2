@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 
 /**
  * The read-only Graphs designer against the real backend (item 110): open
@@ -49,6 +50,7 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     expect(response.ok(), command).toBe(true);
     return (await response.json()).result;
   };
+  await enableExperimentalGraphs(invoke);
 
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");

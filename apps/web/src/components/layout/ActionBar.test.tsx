@@ -297,6 +297,7 @@ let currentEnabledAgentPlatforms:
 let currentActionDefaults: ActionDefaults | undefined;
 let currentMultiReviewSettings: AgentSettingsTier["multiReview"];
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
+let currentExperimentalGraphs: boolean | undefined;
 let currentRepositoryConfig: Record<
   string,
   { prBaseBranch?: string; agentSettings?: AgentSettingsTier }
@@ -570,6 +571,7 @@ mock.module("@/stores", () => ({
       config: {
         global: {
           preferredEditor?: "vscode" | "cursor";
+          experimentalGraphs?: boolean;
           reviewInstruction?: string;
           enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
           agentSettings?: AgentSettingsTier;
@@ -583,6 +585,7 @@ mock.module("@/stores", () => ({
         config: {
           global: {
             preferredEditor: currentPreferredEditor,
+            experimentalGraphs: currentExperimentalGraphs,
             reviewInstruction: currentReviewPrompt,
             enabledAgentPlatforms: currentEnabledAgentPlatforms,
             agentSettings: {
@@ -1053,6 +1056,7 @@ beforeEach(() => {
   currentCodexReasoningEffort = "medium";
   currentOpenCodeModel = "opencode/default-model";
   currentPreferredEditor = "vscode";
+  currentExperimentalGraphs = undefined;
   currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
@@ -1413,6 +1417,29 @@ describe("ActionBar grid presentation", () => {
     expect(hideFiles.className).toContain("bg-elevated");
     expect(hideFiles.className).toContain("text-foreground");
     expect(hideFiles.className).not.toContain("text-blue");
+  });
+});
+
+describe("ActionBar experimental graphs", () => {
+  test("hides the graph buttons while graphs are off", () => {
+    render(<ActionBar />);
+
+    expect(screen.getByRole("button", { name: "Multi Review" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Graphs" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run graph…" })).toBeNull();
+  });
+
+  test("shows Graphs and Run graph… after Multi Review once graphs are on", () => {
+    currentExperimentalGraphs = true;
+    render(<ActionBar />);
+
+    const labels = screen
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((label) =>
+        ["Multi Review", "Graphs", "Run graph…", "Run commands"].includes(label ?? ""),
+      );
+    expect(labels).toEqual(["Multi Review", "Graphs", "Run graph…", "Run commands"]);
   });
 });
 

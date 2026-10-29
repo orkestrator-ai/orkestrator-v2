@@ -1080,6 +1080,12 @@ export interface AppConfig {
      * stored schedules are kept.
      */
     experimentalScheduling?: boolean;
+    /**
+     * Experimental gate for graphs in the web UI. Off (or absent) hides the
+     * action bar's Graphs and Run graph… buttons and a ticket's Run graph…;
+     * the graph commands, tools and already-open graph tabs are unaffected.
+     */
+    experimentalGraphs?: boolean;
     debugLogging?: boolean;
     /** Number of days production application logs remain on disk. */
     debugLogRetentionDays?: number;

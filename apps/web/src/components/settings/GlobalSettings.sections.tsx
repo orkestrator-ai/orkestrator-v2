@@ -319,6 +319,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
+    experimentalGraphs,
+    setExperimentalGraphs,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -2294,6 +2296,23 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderExperimental = () => (
     <div className="max-w-2xl space-y-4">
+      {isWindowMachine(machine) && (
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="experimental-graphs">Graphs</Label>
+            <p className="text-xs text-muted-foreground mt-1">
+              Graphs chain agents, reviews and checks into a reusable flow. Turning this on adds the
+              action bar&apos;s Graphs and Run graph… buttons and Run graph… on a ticket.
+            </p>
+          </div>
+          <Switch
+            id="experimental-graphs"
+            checked={experimentalGraphs}
+            onCheckedChange={setExperimentalGraphs}
+            aria-label="Enable graphs"
+          />
+        </div>
+      )}
       {isWindowMachine(machine) && (
         <div className="flex items-start justify-between gap-4">
           <div>

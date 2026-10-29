@@ -2824,6 +2824,22 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("saves the experimental graphs switch, off by default", async () => {
+    render(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable graphs" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalGraphs: true }),
+        undefined,
+      );
+    });
+  });
+
   test("flushes a pending debounced edit when the form unmounts", async () => {
     const { unmount } = render(<GlobalSettings activeSection="general" />);
 

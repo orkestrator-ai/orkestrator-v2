@@ -50,6 +50,7 @@ import {
   GRAPH_TEMPLATE_SCOPES,
   GRAPH_VOTE_TIE_POLICIES,
   GRAPH_WORKSPACE_ACCESS,
+  GRAPH_WORKSPACE_ISOLATION,
 } from "./template-model.js";
 
 // ------------------------------------------------------------- shared pieces
@@ -672,6 +673,7 @@ const NODE_FIELDS: Record<(typeof GRAPH_NODE_KINDS)[number], readonly string[]> 
     "prompt",
     "capabilities",
     "workspaceAccess",
+    "isolation",
     "minEnforcement",
     "session",
     "replicate",
@@ -740,6 +742,12 @@ export function checkGraphNode(
         joinPath(path, "workspaceAccess"),
         errors,
         GRAPH_WORKSPACE_ACCESS,
+      );
+      checkOptionalEnum(
+        value.isolation,
+        joinPath(path, "isolation"),
+        errors,
+        GRAPH_WORKSPACE_ISOLATION,
       );
       checkOptionalEnum(
         value.minEnforcement,

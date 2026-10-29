@@ -38,6 +38,7 @@ import {
 import type { GraphMockRunOptions } from "@orkestrator/protocol/graphs/mock";
 import { GraphTypeLibrary, validateGraphArtifactValue } from "@orkestrator/protocol/graphs/types";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import type { GraphBranchWorktreeJanitor } from "./graph-branch-worktrees.js";
 import { GraphStorageError, isGraphStorageError } from "./graph-run-errors.js";
 import { GraphNodeExecutorRegistry } from "./graph-run-executors.js";
 import {
@@ -159,6 +160,12 @@ export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
    * and refuses while another workflow may write to it (item 210).
    */
   codeRewindReservation?: <T>(run: GraphRun, operation: () => Promise<T>) => Promise<T>;
+  /**
+   * Removes isolated branch worktrees their activations no longer need, and
+   * a finished run's branches (item 403, `graph-branch-worktrees.ts`). Runs
+   * under the run's lock after each saved record.
+   */
+  branchWorktrees?: Pick<GraphBranchWorktreeJanitor, "wants" | "reconcile">;
   /** False: no supervisor; callers drive passes with `advanceNow` (tests). */
   autoAdvance?: boolean;
   clock?: () => Date;
@@ -291,6 +298,9 @@ export class GraphRunService implements KeyedWorkflowOwner {
 
   private async discover() {
     const result = await discoverGraphRuns(this.storage.graphRuns, (run) => {
+      // A finished run may still list branch worktrees (the backend stopped
+      // before it removed them): sweep once.
+      this.scheduleBranchCleanup(run);
       if (isGraphRunTerminal(run.status)) return;
       this.resultKeys.note(run);
       // Seed only runs no pass has touched: a pass's own view is newer.
@@ -794,9 +804,28 @@ export class GraphRunService implements KeyedWorkflowOwner {
     this.lastStats.delete(runId);
   }
 
+  /**
+   * Isolated branch cleanup after a saved record (item 403): under the run's
+   * lock, against the stored record, so it never races a pass creating a
+   * worktree. Failures are retried after the next save; never rejects.
+   */
+  private scheduleBranchCleanup(run: GraphRun): void {
+    const janitor = this.options.branchWorktrees;
+    if (!janitor || this.stopped || !janitor.wants(run)) return;
+    void this.withLock(run.id, async () => {
+      if (this.stopped) return;
+      const current = await this.storage.graphRuns.getGraphRun(run.id);
+      if (current) await janitor.reconcile(current);
+    }).catch((error: unknown) => {
+      const code = error instanceof Error ? error.name : "error";
+      console.warn(`[graph-runs] Branch worktree cleanup for run ${run.id} failed (${code})`);
+    });
+  }
+
   /** Keeps the keyed index, the result-key index and the locks current after a read or write. */
   private noteRecord(run: GraphRun): void {
     this.resultKeys.note(run);
+    this.scheduleBranchCleanup(run);
     if (isGraphRunTerminal(run.status)) {
       this.memories.delete(run.id);
       this.workspaceLocks.release(run.id);

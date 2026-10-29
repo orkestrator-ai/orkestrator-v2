@@ -34,6 +34,7 @@ const GUARD_WORDS = {
   "read-only": "Read-only guard",
   "remote-ref": "Remote-ref guard",
   enforcement: "Enforcement check",
+  worktree: "Worktree guard",
 } as const;
 
 function planNodeOf(run: GraphRun, nodeId: string | undefined): GraphPlanNode | undefined {
@@ -265,6 +266,25 @@ function ActivationDetails({
               </>
             ) : null}
           </dl>
+        </Section>
+      ) : null}
+      {activation.worktree ? (
+        <Section title="Worktree">
+          <dl
+            className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs"
+            data-graph-worktree=""
+          >
+            <dt className="text-muted-foreground">Path</dt>
+            <dd className="break-all font-mono">{activation.worktree.path}</dd>
+            <dt className="text-muted-foreground">Branch</dt>
+            <dd className="break-all font-mono">{activation.worktree.branch}</dd>
+            <dt className="text-muted-foreground">From</dt>
+            <dd className="font-mono">{activation.worktree.baseRef.slice(0, 12)}</dd>
+          </dl>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            This branch wrote its own worktree; it is removed when the branch finishes, and its
+            branch when the run ends.
+          </p>
         </Section>
       ) : null}
       {activation.guards?.length ? (

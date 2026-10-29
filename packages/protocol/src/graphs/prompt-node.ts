@@ -9,6 +9,7 @@
  * user part, last, so every branch shares the cached prefix before it
  * (item 205). Browser-safe.
  */
+import type { GraphBranchWorktreeFrame } from "./system-contract.js";
 import { escapeFramedEvidenceText } from "../review-evidence-frames.js";
 import type {
   AgentEnforcementJudgement,
@@ -77,6 +78,8 @@ export interface GraphNodePromptRenderInput extends GraphPromptNodeContext {
   resultTools?: GraphResultTools;
   /** For the size lint; default 160 KiB of rendered inputs. */
   ceilingBytes?: number;
+  /** An isolated branch's worktree (item 403): the locked frame naming where it works. */
+  worktree?: GraphBranchWorktreeFrame;
 }
 
 export interface GraphNodePromptRender {
@@ -206,6 +209,7 @@ export function renderGraphNodePrompt(input: GraphNodePromptRenderInput): GraphN
     slots,
     ...(capability ? { capability } : {}),
     ...(input.resultTools ? { resultTools: input.resultTools } : {}),
+    ...(input.worktree ? { worktree: input.worktree } : {}),
   });
   const prompt = `${user}\n\n${system}`;
   return {

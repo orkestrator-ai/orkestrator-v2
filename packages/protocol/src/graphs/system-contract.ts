@@ -18,6 +18,7 @@
  * Browser-safe.
  */
 import { unattendedPolicyFrame } from "../agent-interactions.js";
+import { graphBranchWorktreeInstruction } from "./isolation.js";
 import { wrapSystemInstructions } from "../review-evidence-frames.js";
 import {
   WORKFLOW_RESULT_ARGUMENT_GUIDANCE,
@@ -142,6 +143,18 @@ export interface GraphSystemContractInput {
   capability?: string;
   /** Default `port`. */
   resultTools?: GraphResultTools;
+  /** An isolated branch's worktree (item 403). */
+  worktree?: GraphBranchWorktreeFrame;
+}
+
+/** Where an isolated branch works (item 403, `graphBranchWorktreeInstruction`). */
+export interface GraphBranchWorktreeFrame {
+  /** Absolute path of the worktree in the agent's filesystem. */
+  directory: string;
+  branch: string;
+  baseRef: string;
+  /** Absolute path of the run's own checkout. */
+  root: string;
 }
 
 /** The locked system contract, as the frames appended after the user template. */
@@ -157,6 +170,9 @@ export function graphSystemContract(input: GraphSystemContractInput): string {
     ),
     unattendedPolicyFrame(),
   ];
+  if (input.worktree) {
+    parts.push(wrapSystemInstructions(graphBranchWorktreeInstruction(input.worktree)));
+  }
   if (input.slots.length > 0) {
     parts.push(
       graphOutputResultInstruction({

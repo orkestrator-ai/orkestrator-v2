@@ -17,6 +17,7 @@ import {
   type GraphCapabilitySpec,
   type GraphEnforcementTier,
   type GraphWorkspaceAccess,
+  type GraphWorkspaceIsolation,
 } from "@orkestrator/protocol/graphs/template";
 import { Button } from "@/components/ui/button";
 import { GraphEnforcementMatrix, useGraphNodeCapabilities } from "./GraphEnforcementMatrix";
@@ -26,7 +27,8 @@ import { FormSection, JsonField, SelectField } from "./graph-form-controls";
 
 /**
  * The capabilities form of an agent node (report §6.2–§6.4, item 106):
- * profile, workspace access, per-capability allow and deny overrides (which
+ * profile, workspace access and isolation (item 403), per-capability allow
+ * and deny overrides (which
  * only narrow), the minimum enforcement tier with D4's lowered-floor
  * acknowledgement, and the per-provider enforcement matrix of the result.
  * Push and GitHub writes are never an agent's (D12).
@@ -37,6 +39,11 @@ const ACCESS_LABELS: Readonly<Record<GraphWorkspaceAccess, string>> = {
   read: "Read",
   write: "Write",
 };
+
+const ISOLATION_OPTIONS = [
+  { value: "shared", label: "Shared workspace" },
+  { value: "worktree", label: "Worktree per branch" },
+] as const;
 
 type Override = "profile" | "allow" | "deny";
 
@@ -123,7 +130,7 @@ export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
         <SelectField
           label="Workspace access"
           value={node.workspaceAccess}
-          hint="At most one writer runs on the workspace at a time; replicated nodes must not write (D3)."
+          hint="At most one writer runs on the workspace at a time; a replicated writer needs a worktree per branch (D3)."
           options={GRAPH_WORKSPACE_ACCESS.map((access) => ({
             value: access,
             label: ACCESS_LABELS[access],
@@ -133,6 +140,24 @@ export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
               ...current,
               workspaceAccess: value as GraphWorkspaceAccess,
             }))
+          }
+        />
+        <SelectField
+          label="Isolation"
+          value={node.isolation ?? "shared"}
+          hint={
+            node.replicate && node.workspaceAccess === "write"
+              ? "Each branch writes its own Git worktree from the input commit; a Select branch node or an agent merge brings one back (item 403)."
+              : "Only for a replicated node that writes: each branch then gets its own worktree."
+          }
+          options={ISOLATION_OPTIONS}
+          onChange={(value) =>
+            editNode<GraphAgentNode>(`Isolation ${value}`, (current) => {
+              const next = { ...current };
+              if (value === "worktree") next.isolation = "worktree" as GraphWorkspaceIsolation;
+              else delete next.isolation;
+              return next;
+            })
           }
         />
       </FormSection>

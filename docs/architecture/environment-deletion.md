@@ -49,7 +49,11 @@ Deletion owns state Orkestrator itself creates and names for an environment:
   queues, agent mail, native agent sessions and their display tails, compose
   and file drafts, handoffs, workflow results, the pane layout;
 - graph runs' reference artifacts in the workspace
-  (`.orkestrator/graph-artifacts/<run-id>/`).
+  (`.orkestrator/graph-artifacts/<run-id>/`);
+- isolated graph branches' worktrees in the workspace
+  (`.orkestrator/graph-branches/<run-id>/`) and their Git branches
+  (`orkestrator-graph/<run-id>/…`, in the shared repository for a local
+  environment).
 
 On a merged PR it also deletes the remote head branch through the GitHub API.
 
@@ -116,7 +120,11 @@ Inside the local-server queue:
    (`removeEnvironmentGraphArtifactFiles`), on the host through the
    pinned-root remover and in a running container through the pinned
    in-container remover, so they also go from a worktree deletion keeps. Then
-   clean up claude-tmux sessions while the container and worktree still exist.
+   remove the isolated branch worktrees and branches of every run that had
+   isolated nodes (`removeEnvironmentGraphBranchWorktrees`, item 403): a local
+   environment's branches live in the shared repository and would outlive the
+   worktree otherwise. Then clean up claude-tmux sessions while the container
+   and worktree still exist.
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then run the `worktree` step and, only if it

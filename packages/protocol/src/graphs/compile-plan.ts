@@ -182,6 +182,7 @@ function planNode(
         capabilities: planCapabilities(node, compiled),
         ...(floor !== undefined ? { minEnforcement: floor } : {}),
         floorLowered: state.floorLowered.has(node.id),
+        ...(node.isolation ? { isolation: node.isolation } : {}),
         session: node.session ?? { mode: "fresh" },
         ...(replicate ? { replicate } : {}),
         askHuman: node.askHuman === true,

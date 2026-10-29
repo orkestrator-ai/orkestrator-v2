@@ -76,6 +76,7 @@ import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type {
   GraphActivationBaseline,
   GraphActivationSession,
+  GraphActivationWorktree,
   GraphGuardResult,
   GraphModelBinding,
   GraphRun,
@@ -122,6 +123,8 @@ export interface GraphActivationFacts {
   enforcement?: GraphEnforcementTier;
   enforcementReason?: string;
   baseline?: GraphActivationBaseline;
+  /** An isolated branch's worktree (item 403), recorded before its session. */
+  worktree?: GraphActivationWorktree;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
   /** Usage since the previous report; added to the run's usage. */

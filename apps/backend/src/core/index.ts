@@ -178,6 +178,7 @@ import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./
 import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
+import { GraphBranchWorktreeJanitor, GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { GraphRunService } from "./graph-run-service.js";
@@ -1127,8 +1128,15 @@ export class OrkestratorBackend {
       storage,
       fence: context.runtime.environments.fence,
     });
+    // Isolated branch worktrees (item 403): created by the agent executor,
+    // removed by `select-workspace` and the run service's janitor.
+    const graphBranchWorktrees = new GraphBranchWorktrees({
+      storage,
+      fence: context.runtime.environments.fence,
+    });
     this.graphRuns = new GraphRunService(storage, {
       artifacts: graphArtifacts,
+      branchWorktrees: new GraphBranchWorktreeJanitor({ worktrees: graphBranchWorktrees, storage }),
       workflowAdmission: this.workflowAdmission,
       provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
       // Code rewinds (item 210) share the pipeline's Git port and reservation.
@@ -1172,6 +1180,7 @@ export class OrkestratorBackend {
       requestObservation: (runId, activationKey) =>
         this.graphRuns.requestObservation(runId, activationKey),
       owner: `backend-${randomUUID()}`,
+      branchWorktrees: graphBranchWorktrees,
     });
     this.graphRuns.executors.register(this.graphSystemExecutor);
     // Mock runs (item 213): mock agent, system and human executors; no
@@ -1197,6 +1206,7 @@ export class OrkestratorBackend {
       refreshToolResults: () => this.workflowResultRollout.refresh(),
       ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      branchWorktrees: graphBranchWorktrees,
       // The guards (item 209): the worktree probe defaults to `invoke`.
       lsRemote: (environment, args) =>
         graphShell.remoteGit(environment, "ls-remote", args, { timeoutMs: 60_000 }),

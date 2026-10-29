@@ -171,6 +171,8 @@ export const GRAPH_SYSTEM_ACTION_WORKSPACE: Readonly<
   "wait-for-checks": "none",
   "update-ticket": "none",
   notify: "none",
+  // Fast-forwards the run's branch to the chosen isolated branch (item 403).
+  "select-workspace": "write",
 });
 
 export function graphNodeWorkspaceAccess(node: GraphNodeSpec): GraphWorkspaceAccess {

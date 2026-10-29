@@ -27,6 +27,7 @@ import type { GraphMockRunOptions } from "./mock-pins.js";
 import type { GraphEnforcementTier, GraphScalarValue } from "./template-model.js";
 import type { GraphErrorCause } from "./types.js";
 import type { GraphAgentSessionState } from "./run-agent-session.js";
+import type { GraphActivationWorktree } from "./isolation.js";
 
 const KIB = 1024;
 const MIB = 1024 * KIB;
@@ -275,8 +276,11 @@ export interface GraphActivationSession extends GraphAgentSessionState {
   transcript?: PipelineTranscriptReference;
 }
 
-/** Guards that run around an activation (P0.1, P2.9). */
-export const GRAPH_GUARD_KINDS = ["read-only", "remote-ref", "enforcement"] as const;
+/**
+ * Guards that run around an activation (P0.1, P2.9). `worktree`: an isolated
+ * branch's own worktree is intact, on its branch and committed (item 403).
+ */
+export const GRAPH_GUARD_KINDS = ["read-only", "remote-ref", "enforcement", "worktree"] as const;
 export type GraphGuardKind = (typeof GRAPH_GUARD_KINDS)[number];
 export const GRAPH_GUARD_OUTCOMES = ["passed", "violated", "unavailable"] as const;
 export type GraphGuardOutcome = (typeof GRAPH_GUARD_OUTCOMES)[number];
@@ -359,6 +363,11 @@ export interface NodeActivation {
   enforcementReason?: string;
   /** Workspace state before dispatch, for the guards. */
   baseline?: GraphActivationBaseline;
+  /**
+   * An isolated branch's own worktree (item 403), recorded before dispatch.
+   * A newer attempt of the same position records its own.
+   */
+  worktree?: GraphActivationWorktree;
   guards?: GraphGuardResult[];
   /** At most {@link GRAPH_RUN_BOUNDS.maxErrorChars}; content-free. */
   error?: string;

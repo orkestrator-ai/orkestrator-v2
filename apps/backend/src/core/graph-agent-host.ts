@@ -11,6 +11,7 @@ import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_COMMIT_PATTERN,
   type GraphActivationBaseline,
+  type GraphActivationWorktree,
   type GraphActivationSession,
   type GraphGuardResult,
   type GraphAgentProgressItem,
@@ -50,6 +51,7 @@ import {
   type GraphAgentGuards,
 } from "./graph-agent-guards.js";
 import { graphAgentPolicy } from "./graph-agent-policy.js";
+import { graphBranchAbsolutePath, graphBranchRoot } from "./graph-branch-worktrees.js";
 import {
   graphInputItemIds,
   loadGraphAgentInputs,
@@ -112,6 +114,8 @@ export interface GraphAgentCallFacts {
   enforcement: NonNullable<NodeActivation["enforcement"]>;
   enforcementReason?: string;
   baseline?: GraphActivationBaseline;
+  /** An isolated branch's own worktree (item 403). */
+  worktree?: GraphActivationWorktree;
   /** The activation's guard results (item 209), newest per guard. */
   guards?: GraphGuardResult[];
 }
@@ -612,6 +616,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         node: this.input.node,
         baseline: facts.baseline,
         runId: this.context.run.id,
+        ...(facts.worktree ? { worktree: facts.worktree } : {}),
       });
       facts.guards = mergeGraphGuardResults(facts.guards, results);
     } catch (error) {
@@ -632,6 +637,16 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     const git = this.dependencies.environmentGit;
     if (!git) throw new Error("The environment's Git is unavailable");
     const environmentId = this.context.environmentId;
+    const worktree = this.input.facts.worktree;
+    if (worktree) {
+      // An isolated branch's commit is its own worktree's HEAD, on its branch (item 403).
+      const head = (
+        await git(environmentId, ["-C", worktree.path, "rev-parse", "--verify", "HEAD^{commit}"])
+      ).trim();
+      if (!GRAPH_COMMIT_PATTERN.test(head))
+        throw new Error("The branch worktree's HEAD is not a commit");
+      return { branch: worktree.branch, headRef: head, baseRef: worktree.baseRef };
+    }
     const headRef = (await git(environmentId, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
     if (!GRAPH_COMMIT_PATTERN.test(headRef)) throw new Error("The workspace HEAD is not a commit");
     let branch = (
@@ -689,6 +704,16 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       resultKeys: keys,
       ...(capability ? { capability } : {}),
       resultTools: this.resultTools(),
+      ...(this.input.facts.worktree
+        ? {
+            worktree: {
+              directory: graphBranchAbsolutePath(environment, this.input.facts.worktree.path),
+              branch: this.input.facts.worktree.branch,
+              baseRef: this.input.facts.worktree.baseRef,
+              root: graphBranchRoot(environment),
+            },
+          }
+        : {}),
       targetBranch:
         this.dependencies.targetBranch?.(environment) ??
         (environment.prBaseBranch?.trim() || environment.delegationBaseBranch?.trim() || "main"),
@@ -744,6 +769,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         ? { enforcementReason: facts.enforcementReason }
         : {}),
       ...(facts.baseline ? { baseline: facts.baseline } : {}),
+      ...(facts.worktree ? { worktree: facts.worktree } : {}),
       ...(facts.guards ? { guards: facts.guards } : {}),
       ...(session ? { session } : {}),
     };

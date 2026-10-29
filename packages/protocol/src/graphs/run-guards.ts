@@ -58,6 +58,7 @@ import {
   parseGraphArtifactFilePath,
   type GraphHash,
 } from "./run-identity.js";
+import { graphRunBranchRefPrefix, parseGraphBranchWorktreePath } from "./isolation.js";
 import {
   GRAPH_ACTIVATION_STATES,
   GRAPH_ARTIFACT_BUDGETS,
@@ -622,6 +623,41 @@ function checkBaseline(value: unknown, path: string, errors: FieldErrorCollector
   }
 }
 
+/** An isolated branch's worktree (item 403): our path grammar, a branch of the run, a commit. */
+function checkWorktree(
+  value: unknown,
+  path: string,
+  errors: FieldErrorCollector,
+  runId: unknown,
+): void {
+  if (!checkObject(value, path, ["path", "branch", "baseRef", "createdAt"], errors)) return;
+  const parsed = parseGraphBranchWorktreePath(value.path);
+  if (!parsed) {
+    errors.add(joinPath(path, "path"), "pattern", "Must be a graph branch worktree path");
+  } else if (typeof runId === "string" && parsed.runId !== runId) {
+    errors.add(joinPath(path, "path"), "mismatch", "The worktree belongs to another run");
+  }
+  if (
+    typeof value.branch !== "string" ||
+    typeof runId !== "string" ||
+    !isGraphRunId(runId) ||
+    !value.branch.startsWith(graphRunBranchRefPrefix(runId)) ||
+    value.branch.length > 512 ||
+    !/^[A-Za-z0-9._+/_-]+$/.test(value.branch)
+  ) {
+    errors.add(joinPath(path, "branch"), "pattern", "Must be a branch of the run");
+  }
+  checkPattern(
+    value.baseRef,
+    joinPath(path, "baseRef"),
+    errors,
+    GRAPH_COMMIT_PATTERN,
+    64,
+    "a full commit SHA",
+  );
+  checkTimestamp(value.createdAt, joinPath(path, "createdAt"), errors);
+}
+
 const ACTIVATION_FIELDS = [
   "key",
   "nodeId",
@@ -637,6 +673,7 @@ const ACTIVATION_FIELDS = [
   "enforcement",
   "enforcementReason",
   "baseline",
+  "worktree",
   "guards",
   "error",
   "errorCause",
@@ -650,7 +687,11 @@ function checkActivation(
   value: unknown,
   path: string,
   errors: FieldErrorCollector,
-  context: { nodeIds: ReadonlySet<string> | null; rewindIds: ReadonlySet<string> },
+  context: {
+    nodeIds: ReadonlySet<string> | null;
+    rewindIds: ReadonlySet<string>;
+    runId: unknown;
+  },
 ): string | null {
   if (!checkObject(value, path, ACTIVATION_FIELDS, errors)) return null;
   const keyPath = joinPath(path, "key");
@@ -715,6 +756,9 @@ function checkActivation(
   checkText(value.enforcementReason, joinPath(path, "enforcementReason"), errors, 512);
   if (value.baseline !== undefined)
     checkBaseline(value.baseline, joinPath(path, "baseline"), errors);
+  if (value.worktree !== undefined) {
+    checkWorktree(value.worktree, joinPath(path, "worktree"), errors, context.runId);
+  }
   if (value.guards !== undefined) {
     const guardsPath = joinPath(path, "guards");
     if (checkArray(value.guards, guardsPath, errors, { max: B.maxGuardResults })) {
@@ -940,7 +984,11 @@ export function validateGraphRun(
     let live = 0;
     value.activations.forEach((activation, index) => {
       const path = joinPath("activations", index);
-      const key = checkActivation(activation, path, errors, { nodeIds, rewindIds });
+      const key = checkActivation(activation, path, errors, {
+        nodeIds,
+        rewindIds,
+        runId: value.id,
+      });
       if (stateOf(activation) !== "superseded") live++;
       if (key === null) return;
       if (keys.has(key)) errors.add(joinPath(path, "key"), "duplicate", "Duplicate activation key");

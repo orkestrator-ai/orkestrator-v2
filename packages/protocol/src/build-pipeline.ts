@@ -32,6 +32,12 @@ import {
   type TicketKind,
 } from "./ticket-sections.js";
 import { isNativeAgentModelSubstitution } from "./native-agent.js";
+import {
+  PIPELINE_ADDRESS_REPORT_KIND,
+  isPipelineFixResult,
+  type PipelineAddressReportKind,
+  type PipelineFixResult,
+} from "./build-pipeline-address-report.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -836,6 +842,21 @@ export interface PipelineSession {
    */
   acceptanceCriteriaResults?: PipelineCriterionResult[];
   /**
+   * The result kind this Address session was opened to submit
+   * (`build-pipeline-address-report.ts`). It is the recorded marker of the
+   * typed Address → Verify handoff: Verify reads {@link fixResult} from a
+   * session that has it, and the last assistant text from an Address session
+   * without it (one started before the typed handoff existed). Absent on other
+   * phases.
+   */
+  addressReportKind?: PipelineAddressReportKind;
+  /**
+   * The bounded copy of the `fix-result` this Address session submitted and
+   * the backend accepted. Absent until then, on other phases, and on Address
+   * sessions without {@link addressReportKind}.
+   */
+  fixResult?: PipelineFixResult;
+  /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
    * reviewer or stage that failed, retained when the pipeline moves on.
@@ -1597,6 +1618,12 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.verificationFeedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH)) &&
     (value.acceptanceCriteriaResults === undefined ||
       (value.phase === "verify" && isPipelineCriterionResults(value.acceptanceCriteriaResults))) &&
+    (value.addressReportKind === undefined ||
+      (value.phase === "address" && value.addressReportKind === PIPELINE_ADDRESS_REPORT_KIND)) &&
+    (value.fixResult === undefined ||
+      (value.phase === "address" &&
+        value.addressReportKind !== undefined &&
+        isPipelineFixResult(value.fixResult))) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||

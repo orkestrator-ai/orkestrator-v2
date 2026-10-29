@@ -29,6 +29,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
+import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -42,6 +43,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -168,7 +170,9 @@ class FakeProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -857,7 +861,9 @@ describe("BuildPipelineService", () => {
       expect(retried.sessions.at(-1)).toMatchObject({ phase: "address" });
       expect(provider.created.at(-1)?.options?.mode).toBe("build");
       expect(dispatch.mode).toBe("build");
-      expect(dispatch.schema).toBeUndefined();
+      // The retried Address turn opens its own fix-result slot.
+      expect(dispatch.schema).toEqual(REVIEW_FIX_RESULT_JSON_SCHEMA);
+      expect(retried.sessions.at(-1)?.addressReportKind).toBe("fix-result");
       expect(dispatch.prompt).toContain("Address this exact finding");
       expect(dispatch.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(dispatch.prompt).toContain("non-interactive build session");

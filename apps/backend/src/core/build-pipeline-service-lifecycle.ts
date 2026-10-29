@@ -743,16 +743,21 @@ export class BuildPipelineLifecycle {
       }
       if (candidate.validationRun && !candidate.reviewPackage) return;
       const session = sessionForCurrentPhase(candidate);
-      const resumePrompt = resumePromptFor(phase);
+      const resumePrompt = resumePromptFor(phase, {
+        addressResult: session?.addressReportKind !== undefined,
+      });
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
       if (prompt && session?.status === "idle" && session.phase === sessionPhaseFor(phase)) {
         const requestId = randomUUID();
         const startedAt = new Date().toISOString();
+        // An Address session resumes with a result slot only when it was
+        // opened with one; an older session keeps its text report.
         const structuredReview =
           phase === "building" ||
           phase === "fixing" ||
           phase === "reviewing" ||
-          phase === "verifying";
+          phase === "verifying" ||
+          (phase === "addressing" && session.addressReportKind !== undefined);
         const resumeResultKind = this.ctx.workflowResultKind(phase);
         const resultTransport =
           structuredReview && resumeResultKind

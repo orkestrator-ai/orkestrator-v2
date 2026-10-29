@@ -16,14 +16,62 @@ preparation stage owns the final full validation pass.
 Later pipeline stages read that evidence rather than repeating it. Address runs
 targeted checks for the files it edits. It also owns failure triage: it fixes
 recorded failures that relate to the ticket or the branch, and reproduces any
-it believes are unrelated on the target branch. It ends with a validation
-report. Verify is a quick acceptance review of the diff, read alongside the
-recorded package and that report (`latestAddressReport` reads only this round's
-address session). It runs no suite, typecheck, lint or build, never builds or tests the
+it believes are unrelated on the target branch. It ends by submitting a typed
+fix result ([below](#the-address--verify-handoff)). Verify is a quick
+acceptance review of the diff, read alongside the recorded package and that
+result. It runs no suite, typecheck, lint or build, never builds or tests the
 target branch, and creates no worktrees. A recorded failure in code the branch
 changes blocks it unless the diff shows a repair; that sends the round to Fix,
 which does the reproducing. Verify runs one narrow check only when an acceptance
 criterion cannot be judged by reading the code.
+
+## The Address → Verify handoff
+
+Address is a typed stage like Review and Verify. Its turn opens a `fix-result`
+workflow result slot, the same kind Multi Review's fix step submits
+(`build-pipeline-context.ts` `workflowResultKind`), over the tool transport
+(`submit_fix_result`) or, where the rollout keeps it off, the provider-enforced
+schema. The prompt (`addressValidationInstruction`) says what goes where:
+`summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
+and their commits in `notes`, and every finding left unaddressed and every
+excused failure, with its target-branch reproduction or environmental evidence,
+in `limitations`. The contract's own rule holds: `complete` is true only when
+no check still fails and `limitations` is empty.
+
+- **Missing or malformed.** A turn that ends without an accepted result gets
+  the stage's one reminder and then fails the stage, as Review and Verify do
+  (`awaitStructuredResult`, `remindMissingStageResult`). A structured-output
+  result the contract rejects fails the stage with the contract's error. The
+  tool rejects it at submit time instead, so the model corrects it in its turn.
+- **Accepted.** `finishAddress` (`build-pipeline-service-recovery.ts`) copies
+  the result onto the Address session as `fixResult`, bounded by
+  `PIPELINE_FIX_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-report.ts`:
+  4,000-character summary, 48 files, 20 checks with failed checks kept first,
+  10 notes, 10 limitations, cut entries counted in `omitted`), opens Verify and
+  consumes the slot. An incomplete result (`complete: false`) still goes to
+  Verify, which judges the round.
+- **Verify reads it** (`verificationAddressReport` in
+  `build-pipeline-address-report.ts`) as an untrusted JSON evidence frame
+  (`<address-fix-result-json>`, framed by `ADDRESS_FIX_RESULT_FRAME_INSTRUCTION`
+  from `review-evidence-frames.ts`), as another agent's claim to check against
+  the diff. Only this round's live Address session after its latest review
+  counts. A round whose clean review went straight to Verify, or whose Address
+  was skipped or never had a result accepted, has no report and Verify says so.
+- **Older sessions.** `addressReportKind: "fix-result"` on the session is the
+  recorded marker of a typed Address turn. An Address session without it was
+  started before the typed handoff (or by a path with no result transport): it
+  advances to Verify on idle as before, a resume sends it no result slot, and
+  Verify reads its last assistant text, at most 16,000 characters, as it always
+  did. That fallback is a counted compatibility path
+  (`build-pipeline.address-text-report`,
+  [version compatibility](version-compatibility.md#register)).
+- **Downgrade.** An older backend ignores `addressReportKind` and `fixResult`
+  and advances an idle Address session to Verify without reading the result. A
+  pending tool-mode Address dispatch it cannot bind fails the stage with "lost
+  its result-slot binding", which a retry restarts.
+
+The pipeline inspector shows an Address session's report above its transcript
+(`PipelineAddressReport.tsx`).
 
 ## Fresh discovery for arbitrary repositories
 

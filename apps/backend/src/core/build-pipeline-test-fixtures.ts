@@ -1,4 +1,4 @@
-import type { ReviewPreparationResult } from "./review-prompts.js";
+import type { ReviewFixResult, ReviewPreparationResult } from "./review-prompts.js";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 
 export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {
@@ -15,6 +15,16 @@ export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {
   ],
   uncommittedFiles: [],
   limitations: ["This test does not exercise validation artifact hydration."],
+};
+
+/** A complete Address `fix-result` for suites that only need the stage to finish. */
+export const TEST_FIX_RESULT: ReviewFixResult = {
+  complete: true,
+  summary: "Addressed every review finding.",
+  filesChanged: ["src/app.ts"],
+  commandsRun: [{ command: "bun test src/app.test.ts", result: "passed", summary: "1 passed." }],
+  notes: [],
+  limitations: [],
 };
 
 /** Minimal command result for supervisor tests that do not exercise package hydration itself. */

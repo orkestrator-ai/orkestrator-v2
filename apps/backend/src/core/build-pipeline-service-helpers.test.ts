@@ -39,6 +39,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -336,7 +337,9 @@ class FakeProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -757,25 +760,27 @@ describe("BuildPipelineService", () => {
           value:
             phase === "build" || phase === "fix"
               ? TEST_REVIEW_PREPARATION
-              : {
-                  ...cleanReview,
-                  issues: [
-                    {
-                      severity: "P1",
-                      confidence: 90,
-                      category: "correctness",
-                      title: "Address this exact finding",
-                      file: "src/app.ts",
-                      line: 12,
-                      symbol: "run",
-                      description: "The result is wrong.",
-                      evidence: "The boundary test fails.",
-                      suggestion: "Correct the boundary.",
-                      verification: "Run the boundary test.",
-                    },
-                  ],
-                  verdict: { ready: "with-fixes", reasoning: "One fix is required." },
-                },
+              : phase === "address"
+                ? TEST_FIX_RESULT
+                : {
+                    ...cleanReview,
+                    issues: [
+                      {
+                        severity: "P1",
+                        confidence: 90,
+                        category: "correctness",
+                        title: "Address this exact finding",
+                        file: "src/app.ts",
+                        line: 12,
+                        symbol: "run",
+                        description: "The result is wrong.",
+                        evidence: "The boundary test fails.",
+                        suggestion: "Correct the boundary.",
+                        verification: "Run the boundary test.",
+                      },
+                    ],
+                    verdict: { ready: "with-fixes", reasoning: "One fix is required." },
+                  },
         } as StructuredOutputResult<T>;
       };
       const { started } = await startBuilding(service, storage);

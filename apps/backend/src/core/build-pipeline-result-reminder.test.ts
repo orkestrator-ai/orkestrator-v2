@@ -3,6 +3,7 @@ import type { BuildPipelineSupervisor } from "./build-pipeline-service-superviso
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 import { VERIFICATION_SCHEMA } from "./build-pipeline-service-helpers.js";
+import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -192,6 +193,7 @@ describe("build pipeline consolidation result reminder", () => {
 for (const [phase, kind, tool] of [
   ["fixing", "validation-plan", "submit_validation_plan"],
   ["reviewing", "review-report", "submit_review_report"],
+  ["addressing", "fix-result", "submit_fix_result"],
   ["verifying", "verification-result", "submit_verification_result"],
 ] as const) {
   test.each(["present", "missing", "throws", "mismatch"] as const)(
@@ -208,7 +210,15 @@ for (const [phase, kind, tool] of [
           const lookup = spyOn(workflowResults!, "binding").mockImplementation(async () => {
             if (bindingState === "throws") throw new Error("slot store unavailable");
             if (bindingState === "missing") return null;
-            return { ...binding!, kind: bindingState === "mismatch" ? "fix-result" : kind };
+            return {
+              ...binding!,
+              kind:
+                bindingState === "mismatch"
+                  ? kind === "fix-result"
+                    ? "pr-result"
+                    : "fix-result"
+                  : kind,
+            };
           });
           const prepare = spyOn(workflowResults!, "prepare");
           const before = provider.sent.length;
@@ -227,7 +237,9 @@ for (const [phase, kind, tool] of [
                   ? REVIEW_VALIDATION_PLAN_SCHEMA
                   : kind === "review-report"
                     ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
-                    : VERIFICATION_SCHEMA,
+                    : kind === "fix-result"
+                      ? REVIEW_FIX_RESULT_JSON_SCHEMA
+                      : VERIFICATION_SCHEMA,
               );
             } else {
               expect(session.resultReminderSent).toBeUndefined();

@@ -35,6 +35,7 @@ import { WorkflowResultService } from "./workflow-result-service.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -163,7 +164,9 @@ export class FakeProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 

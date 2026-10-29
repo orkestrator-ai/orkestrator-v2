@@ -474,14 +474,21 @@ export function executionModeOverrideForPhase(
   return phase === "addressing" ? "build" : undefined;
 }
 
-export function resumePromptFor(phase: ResumableBuildPhase): string | null {
+/**
+ * @param options.addressResult The Address session submits a typed fix result
+ *   (`addressReportKind`); an older Address session ends with prose instead.
+ */
+export function resumePromptFor(
+  phase: ResumableBuildPhase,
+  options: { addressResult?: boolean } = {},
+): string | null {
   switch (phase) {
     case "building":
       return `Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "reviewing":
       return "Resume the build pipeline review from where you left off. Continue reviewing the current changes against the original ticket and target branch, incorporate any messages sent while the pipeline was paused, and finish with the required structured review result. Use ordinary prose for interim progress and make the final assistant message the only structured report. Do not ask questions; make sensible assumptions.";
     case "addressing":
-      return "Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate. Do not ask questions; make sensible assumptions.";
+      return `Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate.${options.addressResult ? " Commit every fix, then finish with the required fix result: the files you changed, the checks you ran with their results, the failures you fixed, and anything you left with its evidence." : ""} Do not ask questions; make sensible assumptions.`;
     case "verifying":
       return "Resume verification from where you left off. Re-check the current codebase against the original ticket and incorporate any messages sent while the pipeline was paused. Use ordinary prose for interim progress, never emit a provisional verdict, and make the final assistant message the only JSON object required by the verification instructions.";
     case "fixing":

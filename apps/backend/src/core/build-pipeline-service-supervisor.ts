@@ -122,6 +122,7 @@ import {
   type ReviewWorktreeProbeOptions,
 } from "./review-worktree-probe.js";
 import {
+  REVIEW_FIX_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   createDiscoveryPrompt,
   parseReviewPreparationResult,
@@ -134,6 +135,8 @@ import type { BuildPipelineInteractions } from "./build-pipeline-service-interac
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { sessionWorkspaceBaselineFields } from "./build-pipeline-validation-worktree.js";
 import { BuildPipelineReadOnlyGuard } from "./build-pipeline-read-only-guard.js";
+import { verificationAddressReport } from "./build-pipeline-address-report.js";
+import { PIPELINE_ADDRESS_REPORT_KIND } from "@orkestrator/protocol/build-pipeline-address-report";
 import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 
 /**
@@ -832,7 +835,7 @@ export class BuildPipelineSupervisor {
         await this.finishReview(pipeline, provider, session);
         return;
       case "addressing":
-        await this.startStage(pipeline, "verify", "verifying");
+        await this.recovery.finishAddress(pipeline, provider, session);
         return;
       case "verifying":
         await this.recovery.finishVerification(pipeline, provider, session);
@@ -1521,6 +1524,10 @@ export class BuildPipelineSupervisor {
         schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA
           ? { producedReviewPackagePlan: true as const }
           : {}),
+        // The marker Verify reads to choose the typed report over the text.
+        ...(sessionPhase === "address" && dispatchResultKind === PIPELINE_ADDRESS_REPORT_KIND
+          ? { addressReportKind: PIPELINE_ADDRESS_REPORT_KIND }
+          : {}),
         ...sessionWorkspaceBaselineFields(validationWorktree),
         ...(fixWorktreeFingerprint
           ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
@@ -1848,7 +1855,9 @@ export class BuildPipelineSupervisor {
           ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
           : attempt.phase === "verifying"
             ? VERIFICATION_SCHEMA
-            : undefined
+            : attempt.phase === "addressing"
+              ? REVIEW_FIX_RESULT_JSON_SCHEMA
+              : undefined
       : undefined;
     // A real stage has to carry the selection its session was opened with:
     // Claude and OpenCode take the model per prompt, so omitting it would retry
@@ -2136,6 +2145,7 @@ export class BuildPipelineSupervisor {
             addressValidationInstruction(pipeline.reviewPackage, target),
           ),
         ),
+        schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
         images: [],
       };
     }
@@ -2146,7 +2156,7 @@ export class BuildPipelineSupervisor {
           notes,
           target,
           worktree,
-          await this.latestAddressReport(pipeline),
+          await verificationAddressReport(this.ctx.transcriptCheckpoints, pipeline),
         ),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
@@ -2185,47 +2195,6 @@ export class BuildPipelineSupervisor {
       };
     }
     return { prompt: resolveConflictsPrompt(target), images: [] };
-  }
-
-  /**
-   * The latest assistant text of this round's address stage: what it fixed after the
-   * recorded validation, what it re-checked, and which failures it excused.
-   * Only an address session after the latest review counts, so an earlier
-   * round's report is never mistaken for evidence about this one. Follow-up
-   * replies remain unverified claims, just like the original report.
-   */
-  private async latestAddressReport(pipeline: BuildPipeline): Promise<string | undefined> {
-    let address: PipelineSession | undefined;
-    let foundReview = false;
-    for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-      const session = pipeline.sessions[index]!;
-      if (session.iteration !== pipeline.iteration) break;
-      if (session.phase === "review") {
-        foundReview = true;
-        break;
-      }
-      if (!address && session.phase === "address") address = session;
-    }
-    if (!address || !foundReview) return undefined;
-    // Display transcripts are best-effort. Never substitute an older report
-    // when the latest attempt could not be checkpointed or its tail is missing.
-    if (address.transcriptCheckpointError) return undefined;
-    try {
-      const transcript = await this.ctx.transcriptCheckpoints.window(
-        pipeline.id,
-        address,
-        LAST_ASSISTANT_TEXT_READ_LIMIT,
-      );
-      if (transcript.entries.at(-1)?.index !== transcript.total - 1) return undefined;
-      // window() also includes the first row for handoffs. A disjoint first
-      // row must not become a fallback report when the bounded tail has none.
-      const tailStart = Math.max(0, transcript.total - LAST_ASSISTANT_TEXT_READ_LIMIT);
-      return lastAssistantText(
-        transcript.entries.filter(({ index }) => index >= tailStart).map(({ message }) => message),
-      );
-    } catch {
-      return undefined;
-    }
   }
 
   async finishReview(

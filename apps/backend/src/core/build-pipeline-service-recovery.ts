@@ -19,6 +19,8 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import {
   errorMessage,
@@ -130,6 +132,48 @@ export class BuildPipelineRecovery {
       await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
     }
     await this.stageSupervisor.dispatchPending(pipeline, provider);
+  }
+
+  /**
+   * Completes an Address turn and opens Verify.
+   *
+   * A session opened with a `fix-result` slot (`addressReportKind`) must
+   * return that result first: a missing one gets the stage's one reminder and
+   * then fails the stage, exactly as for Review and Verify. The accepted
+   * result is kept, bounded, on the session, where Verify and the inspector
+   * read it. An incomplete result (`complete: false`) still goes to Verify,
+   * which judges the round. A session without the marker started before the
+   * typed handoff; Verify reads its last assistant text instead.
+   */
+  async finishAddress(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    if (session.addressReportKind === undefined) {
+      await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
+      return;
+    }
+    const requestId = session.structuredRequestId;
+    if (!requestId) throw new Error("Address result key is missing");
+    const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
+    if (!result) {
+      await this.awaitStructuredResult(pipeline, provider, session, "address stage");
+      return;
+    }
+    delete session.structuredWaitStartedAt;
+    if (!result.ok) throw new Error(result.error.message);
+    let fixResult: ReviewFixResult;
+    try {
+      fixResult = parseFixResult(result.value);
+    } catch (error) {
+      throw new Error(`The address stage returned a malformed fix result: ${errorMessage(error)}`);
+    }
+    session.structuredResultStatus = "accepted";
+    session.fixResult = boundPipelineFixResult(fixResult);
+    this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
+    await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
+    await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
 
   async finishVerification(

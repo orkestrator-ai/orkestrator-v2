@@ -212,6 +212,9 @@ export class BuildPipelineContext {
     if (phase === "building" || phase === "fixing")
       return validationPlan ? "validation-plan" : "review-preparation";
     if (phase === "reviewing") return "review-report";
+    // Address turns submit the typed report Verify reads
+    // (`build-pipeline-address-report.ts`).
+    if (phase === "addressing") return "fix-result";
     if (phase === "verifying") return "verification-result";
     return undefined;
   }

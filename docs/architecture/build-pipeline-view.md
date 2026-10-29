@@ -61,6 +61,17 @@ a transcript.
   a clean pass is followed by Verify on the line, with no Address node. The
   fan-out opens the next stage before it drops `reviewFanout`, so a crash in
   between never leaves `reviewing` with nothing to drive it.
+- **Address → Verify.** Address submits a typed `fix-result` and Verify reads
+  it as an evidence frame, not the Address session's last assistant text
+  ([review preparation](review-preparation.md#the-address--verify-handoff)). The
+  accepted result is kept, bounded, on the Address session (`fixResult`, marked
+  by `addressReportKind`), and the Address inspector shows it above the
+  transcript as a collapsed "Address report": complete or incomplete, files,
+  checks (failed ones counted), then the summary, checks, files, notes and
+  limitations (`PipelineAddressReport.tsx`). Its submission status reads as for
+  the other typed stages. An Address session from before the typed handoff has
+  no report there, and Verify reads its text as before. A round with no Address
+  (a clean review) gives Verify no report.
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers
   with no session yet are nodes too. Once the pass is retired, each reviewer

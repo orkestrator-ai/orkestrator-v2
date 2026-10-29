@@ -413,6 +413,33 @@ describe("validateGraphArtifact and its bounds", () => {
     };
     expect(graphArtifactLimitViolation(items)?.code).toBe("artifact-items");
     expect(graphArtifactLimitViolation(artifactFixture(run.id))).toBeNull();
+    const folded = {
+      ...artifactFixture(run.id),
+      itemIds: ["a"],
+      itemSources: [Array.from({ length: 10_001 }, (_, index) => `s${index}`)],
+    };
+    expect(graphArtifactLimitViolation(folded)?.code).toBe("artifact-items");
+  });
+
+  test("item sources run parallel to item ids, each naming at least one source", () => {
+    const run = graphRunFixture();
+    const merged = {
+      ...artifactFixture(run.id),
+      itemIds: ["review/panel.1/issue-1", "review/panel.1/issue-2"],
+      itemSources: [
+        ["review/panel.1/issue-1", "review/panel.2/issue-1"],
+        ["review/panel.1/issue-2"],
+      ],
+    };
+    expect(codes(validateGraphArtifact(merged))).toEqual([]);
+    expect(codes(validateGraphArtifact({ ...merged, itemSources: [["a"]] }))).toContain(
+      "itemSources:mismatch",
+    );
+    expect(codes(validateGraphArtifact({ ...merged, itemSources: [[], ["b"]] }))).toContain(
+      "itemSources[0]:too_few",
+    );
+    const { itemIds: _itemIds, ...withoutIds } = merged;
+    expect(codes(validateGraphArtifact(withoutIds))).toContain("itemSources:mismatch");
   });
 });
 

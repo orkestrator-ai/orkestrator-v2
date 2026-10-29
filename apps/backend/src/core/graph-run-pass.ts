@@ -14,7 +14,10 @@
  *    (3 s plus a stable per-run spread, or sooner when the run was woken for
  *    it), and `cancel` when it ran past its node's `timeoutMs`;
  * 4. unless the run is paused, plans to a fixpoint (retries, `onFailure`,
- *    loops, the ready set; `graph-run-scheduling.ts`), admits under the
+ *    loops, the ready set; `graph-run-scheduling.ts`), loading the artifact
+ *    values planning reads and storing the artifacts it asks for (edge
+ *    transform results, routed `error@1`; item 206) between planning calls,
+ *    admits under the
  *    workspace locks and the run's limits, saves the record (the journal
  *    point), and starts what it admitted; activations that settle at once
  *    (gates, merges) feed another planning round in the same pass;
@@ -29,6 +32,7 @@
  */
 import {
   boundGraphError,
+  GRAPH_RUN_LIMIT_CODES,
   graphBranchBinding,
   graphNodeBranches,
   type GraphBranch,
@@ -40,6 +44,7 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import { GraphStorageError } from "./graph-run-errors.js";
 import type {
   GraphActivationReport,
   GraphCancelReason,
@@ -65,6 +70,11 @@ import {
   settleGraphActivation,
   transitionGraphRun,
 } from "./graph-run-transitions.js";
+import type {
+  GraphArtifactOutcome,
+  GraphArtifactOutcomes,
+  GraphArtifactRequest,
+} from "./graph-run-view.js";
 import { runBoundedTasks, type ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { AdmissionLease } from "./work-admission.js";
@@ -138,6 +148,8 @@ export interface GraphRunPassStats {
   recovers: number;
   cancels: number;
   valueLoads: number;
+  /** Artifacts stored for planning: edge transform results and routed errors. */
+  artifactsStored: number;
   /** Most executor calls in flight at once. */
   maxConcurrentCalls: number;
 }
@@ -182,6 +194,31 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+/** Why a requested artifact could not be stored, without payload content. */
+function storeFailure(request: GraphArtifactRequest, error: unknown): GraphArtifactOutcome {
+  const what =
+    request.purpose === "delivery"
+      ? `Input ${request.port}: the value edge ${request.edgeId} delivers`
+      : `The ${request.type} artifact`;
+  if (error instanceof GraphStorageError) {
+    const issues = (error.issues ?? []).slice(0, 4);
+    // A run budget refused it, or the value is over its type's budgets.
+    const budget =
+      (GRAPH_RUN_LIMIT_CODES as readonly string[]).includes(error.code) ||
+      issues.some((issue) => /:too_(large|many_items)$/.test(issue));
+    return {
+      ok: false,
+      cause: budget ? "budget-exceeded" : "system-error",
+      message: `${what} could not be stored as ${request.type}: ${error.message}${issues.length > 0 ? ` (${issues.join(", ")})` : ""}`,
+    };
+  }
+  return {
+    ok: false,
+    cause: "system-error",
+    message: `${what} could not be stored: ${errorText(error)}`,
+  };
+}
+
 type Call = {
   activation: NodeActivation;
   node: GraphPlanNode;
@@ -203,9 +240,12 @@ class GraphRunPass {
     recovers: 0,
     cancels: 0,
     valueLoads: 0,
+    artifactsStored: 0,
     maxConcurrentCalls: 0,
   };
   private readonly values = new Map<string, { value: unknown }>();
+  /** Edge deliveries and routed errors planning decided or this pass stored. */
+  private readonly outcomes: GraphArtifactOutcomes = new Map();
   private planning: GraphPlanningResult | null = null;
   /** Branches per replicated node; bindings are frozen, so one computation per pass. */
   private readonly branches = new Map<string, GraphBranch[] | null>();
@@ -536,14 +576,47 @@ class GraphRunPass {
     }
   }
 
+  /** Stores what planning asked for; a refusal becomes the request's failed outcome. */
+  private async storeArtifacts(requests: readonly GraphArtifactRequest[]): Promise<void> {
+    for (const request of requests) {
+      if (this.outcomes.has(request.key)) continue;
+      let outcome: GraphArtifactOutcome;
+      try {
+        const ids: string[] = [];
+        for (const value of request.values) {
+          const artifact = await this.deps.artifacts.putValue({
+            runId: this.run.id,
+            type: request.type,
+            producer: request.producer,
+            inputs: request.inputs,
+            value,
+          });
+          this.stats.artifactsStored += 1;
+          ids.push(artifact.id);
+          // Consumers' `when` read these values; they are known already.
+          this.values.set(artifact.id, { value });
+        }
+        outcome = { ok: true, ids };
+      } catch (error) {
+        // A stopping backend is not the delivery's failure: the next pass stores it.
+        if (this.options.signal.aborted) return;
+        outcome = storeFailure(request, error);
+      }
+      this.outcomes.set(request.key, outcome);
+    }
+  }
+
   private async plan(): Promise<GraphPlanningResult> {
-    let planning = planGraphRun(this.run, { at: this.at(), values: this.values });
-    for (let loads = 0; planning.needValues.length > 0 && loads < MAX_VALUE_LOADS; loads++) {
+    const options = () => ({ at: this.at(), values: this.values, outcomes: this.outcomes });
+    let planning = planGraphRun(this.run, options());
+    for (let loads = 0; loads < MAX_VALUE_LOADS; loads++) {
       if (planning.failure) break;
-      const before = this.values.size;
+      if (planning.needValues.length === 0 && planning.needArtifacts.length === 0) break;
+      const before = this.values.size + this.outcomes.size;
       await this.loadValues(planning.needValues);
-      if (this.values.size === before) break;
-      planning = planGraphRun(planning.run, { at: this.at(), values: this.values });
+      await this.storeArtifacts(planning.needArtifacts);
+      if (this.values.size + this.outcomes.size === before) break;
+      planning = planGraphRun(planning.run, options());
     }
     return planning;
   }

@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { bindAllRoles, compiledPlan } from "./graph-run-executor-test-support.js";
-import { missingGraphRunOutputs, planGraphRun } from "./graph-run-scheduling.js";
+import { graphRunSettled, missingGraphRunOutputs, planGraphRun } from "./graph-run-scheduling.js";
 
 const AT = "2026-10-29T00:00:00.000Z";
 const id = (label: string) => createHash("sha256").update(label).digest("hex");
@@ -394,5 +394,155 @@ describe("loops and iterations (§9.2)", () => {
     expect(
       atBound.run.activations.filter((activation) => activation.nodeId === "fix"),
     ).toHaveLength(3);
+  });
+});
+
+describe("skips, routes and deliveries in planning (item 206)", () => {
+  test("a fan-in whose branches were all skipped is absent, not a failed collect", () => {
+    const template = baseTemplate();
+    template.roles.push({ key: "panel", multiplicity: "panel", maxPanel: 4 });
+    template.parameters = [{ key: "enabled", type: "boolean", default: false }];
+    template.nodes[1] = {
+      ...template.nodes[1]!,
+      role: "panel",
+      replicate: { over: "panel", role: "panel" },
+      when: { path: "params.enabled", op: "eq", value: true },
+    } as GraphTemplateV1["nodes"][number];
+    template.nodes.push({
+      id: "consolidate",
+      kind: "agent",
+      role: "worker",
+      capabilities: { profile: "observer" },
+      workspaceAccess: "none",
+      prompt: { template: "Consolidate.\n\n{{> input.reports}}\n" },
+      inputs: [{ name: "reports", type: "list<review-report@1>" }],
+      outputs: [{ name: "report", type: "review-report@1" }],
+    });
+    template.edges.push({
+      id: "review-consolidate",
+      from: { node: "review", port: "report" },
+      to: { node: "consolidate", port: "reports" },
+    });
+    template.outputs = [];
+    let run = plan(runOf(compiledPlan(template))).run;
+    run = completeNode(run, "build");
+    const result = plan(run);
+    expect(result.failure).toBeUndefined();
+    expect(find(result.run, "review", 1, "panel.1").state).toBe("skipped");
+    expect(find(result.run, "consolidate")).toMatchObject({ state: "skipped" });
+  });
+
+  test("a routed failure waits for its error artifact, then feeds the recovery branch", () => {
+    const template = baseTemplate();
+    template.nodes[0] = {
+      ...template.nodes[0]!,
+      onFailure: "route",
+      outputs: [
+        { name: "code", type: "workspace@1" },
+        { name: "error", type: "error@1" },
+      ],
+    } as GraphTemplateV1["nodes"][number];
+    template.nodes.push({
+      id: "recover",
+      kind: "agent",
+      role: "worker",
+      capabilities: { profile: "observer" },
+      workspaceAccess: "none",
+      prompt: { template: "Recover.\n\n{{> input.error}}\n" },
+      inputs: [{ name: "error", type: "error@1" }],
+      outputs: [{ name: "notes", type: "text@1" }],
+    });
+    template.edges.push({
+      id: "build-recover",
+      from: { node: "build", port: "error" },
+      to: { node: "recover", port: "error" },
+    });
+    template.outputs = [];
+    let run = plan(runOf(compiledPlan(template))).run;
+    const build = find(run, "build");
+    run = settle(run, build.key, "failed", { error: "It broke", errorCause: "provider-error" });
+    const outcomes = new Map();
+    const waiting = planGraphRun(run, { at: AT, values: new Map(), outcomes });
+    // The failed node's other consumer skips; the recovery branch waits for the artifact.
+    expect(find(waiting.run, "review").state).toBe("skipped");
+    expect(waiting.run.activations.some((activation) => activation.nodeId === "recover")).toBe(
+      false,
+    );
+    expect(waiting.needArtifacts).toHaveLength(1);
+    const request = waiting.needArtifacts[0]!;
+    expect(request).toMatchObject({
+      purpose: "error",
+      type: "error@1",
+      producer: { nodeId: "build", activation: build.key, port: "error" },
+      // Lineage: what the failed activation consumed.
+      inputs: [id("target"), id("notes")],
+      values: [
+        {
+          node: "build",
+          cause: "provider-error",
+          code: "provider_error",
+          message: "It broke",
+          attempts: 1,
+          retryable: true,
+        },
+      ],
+    });
+    outcomes.set(request.key, { ok: true, ids: [id("error")] });
+    const routed = planGraphRun(waiting.run, { at: AT, values: new Map(), outcomes });
+    expect(routed.needArtifacts).toEqual([]);
+    expect(find(routed.run, "build").outputs).toEqual({ error: id("error") });
+    expect(find(routed.run, "recover")).toMatchObject({
+      state: "ready",
+      inputs: { error: id("error") },
+    });
+  });
+
+  test("an edge with transforms asks for its source values, then for the artifacts it makes", () => {
+    const template = baseTemplate();
+    template.nodes.push({
+      id: "triage",
+      kind: "agent",
+      role: "worker",
+      capabilities: { profile: "observer" },
+      workspaceAccess: "none",
+      prompt: { template: "Triage.\n\n{{> input.findings}}\n" },
+      inputs: [{ name: "findings", type: "list<finding@1>" }],
+      outputs: [{ name: "notes", type: "text@1" }],
+    });
+    template.edges.push({
+      id: "review-triage",
+      from: { node: "review", port: "report" },
+      to: { node: "triage", port: "findings" },
+      transform: [
+        { op: "flatten", path: "issues" },
+        { op: "limit", count: 1 },
+      ],
+    });
+    let run = plan(runOf(compiledPlan(template))).run;
+    run = completeNode(run, "build");
+    run = completeNode(plan(run).run, "review");
+    const reportId = find(run, "review").outputs.report!;
+    const outcomes = new Map();
+    const values = new Map<string, { value: unknown }>();
+    const first = planGraphRun(run, { at: AT, values, outcomes });
+    expect(first.needValues).toEqual([reportId]);
+    expect(first.waiting).toBe(1);
+    values.set(reportId, { value: { issues: [{ title: "one" }, { title: "two" }] } });
+    const second = planGraphRun(first.run, { at: AT, values, outcomes });
+    expect(second.needArtifacts).toHaveLength(1);
+    expect(second.needArtifacts[0]).toMatchObject({
+      purpose: "delivery",
+      type: "finding@1",
+      values: [{ title: "one" }],
+      inputs: [reportId],
+      producer: { nodeId: "triage", activation: "triage#iter=1#attempt=1", port: "findings" },
+    });
+    expect(graphRunSettled(second.run, second)).toBe(false);
+    outcomes.set(second.needArtifacts[0]!.key, { ok: true, ids: [id("finding")] });
+    const third = planGraphRun(second.run, { at: AT, values, outcomes });
+    expect(find(third.run, "triage")).toMatchObject({
+      state: "ready",
+      inputs: { findings: [id("finding")] },
+    });
   });
 });

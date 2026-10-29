@@ -6,15 +6,27 @@
  * of a replicated member) at that iteration has a terminal activation. A
  * settled loop is *done* when
  *
- * - it reached `maxIterations`, or
  * - no member ran in the iteration (all skipped: the loop was not entered,
- *   for example behind an untaken gate outlet), or
+ *   for example behind an untaken gate outlet): reason `not-entered`;
  * - its `until` holds over the iteration's outputs (`<member>.<port>` roots;
  *   a replicated member's root is the list of its branches' values; an
- *   output not produced is unknown, and unknown is not true).
+ *   output not produced is unknown, and unknown is not true): `converged`;
+ * - it reached `maxIterations` without `until` holding: `bound`.
  *
  * Otherwise the run moves to the next iteration (`run.loopIterations`). The
- * done state is not stored: it follows from immutable activations and
+ * iteration is part of every member activation's key
+ * (`node#iter=2#attempt=1`), and a carry reads the producer's latest live
+ * activation of the previous iteration.
+ *
+ * **Stopping at the bound** is an outcome, not a failure: the loop is done,
+ * and everything after it reads the last iteration's artifacts, exactly as
+ * after convergence. A template that must treat non-convergence differently
+ * gates after the loop on the artifact its `until` reads (for §9.2,
+ * `verify.verdict.complete`), sending the unconverged case to a person or a
+ * failure branch. {@link graphLoopState} names the reason, so the run view
+ * (211) can show "stopped at 3 of 3" without re-deriving it.
+ *
+ * The done state is not stored: it follows from immutable activations and
  * artifacts, so every pass derives the same answer. Restarts inside a loop
  * (item 210) rewind `loopIterations` and supersede the later activations.
  */
@@ -24,9 +36,12 @@ import type { GraphPlanLoop } from "@orkestrator/protocol/graphs/compile";
 import { graphPredicatePaths } from "./graph-run-ready-set.js";
 import type { GraphRunView } from "./graph-run-view.js";
 
+/** Why a loop is done: `until` held, it reached `maxIterations`, or nothing in it ran. */
+export type GraphLoopDoneReason = "converged" | "bound" | "not-entered";
+
 export type GraphLoopState =
   | { state: "running" }
-  | { state: "done" }
+  | { state: "done"; reason: GraphLoopDoneReason; iteration: number }
   | { state: "next"; iteration: number }
   /** Settled, but `until` needs these artifact values first. */
   | { state: "needs-values"; ids: string[] };
@@ -43,7 +58,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
       if (activation.state !== "skipped") ran = true;
     }
   }
-  if (!ran || iteration >= loop.maxIterations) return { state: "done" };
+  if (!ran) return { state: "done", reason: "not-entered", iteration };
   const values: Record<string, unknown> = {};
   const missing: string[] = [];
   const roots = new Set(
@@ -85,5 +100,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
     params: view.run.bindings.params,
     run: { iteration },
   });
-  return decision.value ? { state: "done" } : { state: "next", iteration: iteration + 1 };
+  if (decision.value) return { state: "done", reason: "converged", iteration };
+  if (iteration >= loop.maxIterations) return { state: "done", reason: "bound", iteration };
+  return { state: "next", iteration: iteration + 1 };
 }

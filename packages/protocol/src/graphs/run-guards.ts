@@ -312,7 +312,16 @@ export function graphArtifactLimitViolation(artifact: unknown): GraphRunLimitVio
       message: `An artifact records at most ${BUDGETS.maxInputs} lineage inputs`,
     };
   }
-  const items = Array.isArray(artifact.itemIds) ? artifact.itemIds.length : 0;
+  const items = Math.max(
+    Array.isArray(artifact.itemIds) ? artifact.itemIds.length : 0,
+    Array.isArray(artifact.itemSources)
+      ? artifact.itemSources.reduce(
+          (total: number, sources: unknown) =>
+            total + (Array.isArray(sources) ? sources.length : 1),
+          0,
+        )
+      : 0,
+  );
   if (items > BUDGETS.maxItemIds) {
     return {
       code: "artifact-items",
@@ -923,6 +932,7 @@ const ARTIFACT_FIELDS = [
   "bytes",
   "body",
   "itemIds",
+  "itemSources",
   "state",
   "supersededBy",
 ] as const;
@@ -1049,6 +1059,21 @@ export function validateGraphArtifact(value: unknown): FieldValidation<GraphArti
         if (!checkText(id, path, errors, BUDGETS.maxItemIdChars, false)) return;
         if (seen.has(id)) errors.add(path, "duplicate", "Duplicate item id");
         seen.add(id);
+      });
+    }
+  }
+  if (value.itemSources !== undefined) {
+    const itemCount = Array.isArray(value.itemIds) ? value.itemIds.length : -1;
+    if (checkArray(value.itemSources, "itemSources", errors, { max: BUDGETS.maxItemIds })) {
+      if (value.itemSources.length !== itemCount) {
+        errors.add("itemSources", "mismatch", "Item sources run parallel to item ids");
+      }
+      value.itemSources.forEach((sources, index) => {
+        const path = joinPath("itemSources", index);
+        if (!checkArray(sources, path, errors, { min: 1, max: BUDGETS.maxItemIds })) return;
+        sources.forEach((id, position) =>
+          checkText(id, joinPath(path, position), errors, BUDGETS.maxItemIdChars, false),
+        );
       });
     }
   }

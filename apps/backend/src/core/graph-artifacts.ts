@@ -105,6 +105,8 @@ export interface GraphArtifactInput {
   inputs?: readonly string[];
   workspace?: GraphArtifactWorkspace;
   itemIds?: readonly string[];
+  /** A merge's output: per item, the source item ids folded into it (parallel to `itemIds`). */
+  itemSources?: readonly (readonly string[])[];
   /** Domain context for the type's validator: a decision port's choices, a ticket's criteria. */
   validation?: GraphTypeValidationContext;
 }
@@ -224,6 +226,9 @@ export class GraphArtifactStore {
       bytes: "file" in body ? body.file.bytes : graphArtifactInlineBytes(body),
       body,
       ...(input.itemIds ? { itemIds: [...input.itemIds] } : {}),
+      ...(input.itemSources
+        ? { itemSources: input.itemSources.map((sources) => [...sources]) }
+        : {}),
       state: "live",
     };
   }

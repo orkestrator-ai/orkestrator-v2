@@ -177,6 +177,8 @@ import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./
 import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
+import { createGraphGateExecutor } from "./graph-node-gate.js";
+import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { GraphRunService } from "./graph-run-service.js";
 
 /**
@@ -1099,6 +1101,9 @@ export class OrkestratorBackend {
       artifacts: new GraphArtifactStore({ storage, fence: context.runtime.environments.fence }),
       workflowAdmission: this.workflowAdmission,
     });
+    // Gates and merges are deterministic (item 206); mock runs use them too.
+    this.graphRuns.executors.register(createGraphGateExecutor());
+    this.graphRuns.executors.register(createGraphMergeExecutor());
     context.graphRuns = this.graphRuns;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.

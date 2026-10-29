@@ -7,12 +7,16 @@
  *   type's `example` (or stays running while the node is held).
  * - `system`: completes on `start` with examples.
  * - `gate`: evaluates its branches over the input values and forwards its
- *   inputs on the taken outlet.
- * - `merge`: completes with an example of its output type.
+ *   inputs on the taken outlet (the real one is `graph-node-gate.ts`).
+ * - `merge`: completes with an example of its output type (the real one is
+ *   `graph-node-merge.ts`).
  * - `human`: waits (`awaiting-human`) until the test answers with an outlet.
  *
  * Every call is recorded (operation, node, key) with the concurrency it ran
- * at, so tests can check admission caps.
+ * at, so tests can check admission caps. `scripts` give a node's outputs per
+ * iteration and branch (item 206's loop tests); `skipKinds` leaves kinds to
+ * the real executors (the gate and merge of `graph-node-gate.ts` and
+ * `graph-node-merge.ts`).
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -67,9 +71,26 @@ export function graphTypeExample(plan: CompiledGraphPlan, ref: string): unknown 
   return custom?.example === undefined ? undefined : structuredClone(custom.example);
 }
 
+/** What a script sees: one output port of one activation. */
+export interface FakeScriptCall {
+  port: string;
+  iteration: number;
+  branchKey?: string;
+  attempt: number;
+}
+
 /** Pass-through executors for every node kind, with knobs for the tests. */
 export class FakeGraphExecutors {
   readonly calls: FakeExecutorCall[] = [];
+  /** Kinds `register` leaves out, for the real executors. */
+  readonly skipKinds = new Set<GraphExecutableNodeKind>();
+  /**
+   * Node id → the value of an output port (undefined: the type's example;
+   * `null`: the port is not produced).
+   */
+  readonly scripts = new Map<string, (call: FakeScriptCall) => unknown>();
+  /** Node id → causes its next starts fail with, in order (one per start). */
+  readonly failQueue = new Map<string, ("provider-error" | "invalid-result" | "timeout")[]>();
   /** Nodes whose agent activations stay running until released. */
   readonly held = new Set<string>();
   /** Node id → cause: the node's next start fails with it. */
@@ -91,6 +112,7 @@ export class FakeGraphExecutors {
 
   register(registry: GraphNodeExecutorRegistry, options: { mock?: boolean } = {}): void {
     for (const kind of ["agent", "system", "gate", "merge", "human"] as const) {
+      if (this.skipKinds.has(kind)) continue;
       registry.register(this.executor(kind), options);
     }
   }
@@ -139,7 +161,17 @@ export class FakeGraphExecutors {
     const lineage = Object.values(context.activation.inputs).flat();
     for (const port of context.node.outputs) {
       if (port.type.startsWith("list<") || port.name === "error") continue;
-      const value = graphTypeExample(context.run.plan, port.type);
+      const script = this.scripts.get(context.node.id);
+      const scripted = script?.({
+        port: port.name,
+        iteration: context.activation.iteration,
+        attempt: context.activation.attempt,
+        ...(context.activation.branchKey !== undefined
+          ? { branchKey: context.activation.branchKey }
+          : {}),
+      });
+      if (scripted === null) continue;
+      const value = scripted ?? graphTypeExample(context.run.plan, port.type);
       if (value === undefined) continue;
       const artifact = await context.artifacts.putValue({
         runId: context.run.id,
@@ -188,9 +220,8 @@ export class FakeGraphExecutors {
               run: { iteration: context.activation.iteration },
             }).value,
         )?.to ?? node.otherwise;
-      if (taken === undefined) {
-        return { state: "failed", error: "No gate branch held", cause: "system-error" };
-      }
+      // As the real gate: no branch and no `otherwise` takes no outlet.
+      if (taken === undefined) return { state: "complete", outputs: {} };
       return { state: "complete", outlet: taken, outputs: this.forwarded(context) };
     }
     return { state: "complete", outputs: await this.outputs(context) };
@@ -206,6 +237,8 @@ export class FakeGraphExecutors {
             this.failStart.delete(context.node.id);
             return { state: "failed", error: "The fake executor failed", cause };
           }
+          const queued = this.failQueue.get(context.node.id)?.shift();
+          if (queued) return { state: "failed", error: "The fake executor failed", cause: queued };
           if (kind === "agent") {
             this.running.add(context.activation.key);
             this.maxRunning = Math.max(this.maxRunning, this.running.size);

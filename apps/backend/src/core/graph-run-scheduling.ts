@@ -6,7 +6,26 @@
  *    `onFailure` of failed activations, loop progress (`graph-run-loops.ts`)
  *    and the ready set (`graph-run-ready-set.ts`). The 200 live-activation
  *    hard cap and the history bound refuse an append; the run then fails with
- *    `budget-exceeded`.
+ *    `budget-exceeded`. Artifacts the runtime makes itself (edge transforms,
+ *    routed `error@1`) come back as `needArtifacts` for the pass to store.
+ *
+ * ## Failure handling (item 206)
+ *
+ * The latest failed activation of a node position is retried (a new attempt,
+ * the same inputs) while its node's `retry.attempts` allow and its cause is
+ * one of `retry.on` (`provider-error`, `invalid-result`, `timeout`; other
+ * causes never retry). Then `onFailure`:
+ *
+ * - `fail-run` (the default, except for replicated nodes) fails the run and
+ *   stops its other admitted work;
+ * - `skip`: the failed activation delivers nothing, so consumers whose
+ *   required input it was are skipped, as behind an untaken outlet;
+ * - `route`: unless the executor already named one, the runtime stores an
+ *   `error@1` artifact (node, cause, a code derived from the cause, the
+ *   bounded error message, attempts, whether the cause is retryable) and
+ *   records it as the activation's `error` output. Consumers of `error` run
+ *   (they wait while it is stored); consumers of the other outputs skip. On
+ *   success nothing is emitted on `error`, so the recovery branch skips.
  * 2. **Workspace locks** (D3, §6.7): at most one writing activation per
  *    workspace, and no reader while a writer holds it, across every run on
  *    the environment ({@link GraphWorkspaceLocks}). A blocked writer is not
@@ -27,16 +46,29 @@ import type { GraphPlanNode, GraphPlanRunOutput } from "@orkestrator/protocol/gr
 import {
   appendGraphActivation,
   graphActivationKey,
+  GRAPH_ARTIFACT_BUDGETS,
   isGraphActivationTerminal,
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
-import type { GraphWorkspaceAccess } from "@orkestrator/protocol/graphs/template";
+import {
+  GRAPH_RETRY_CAUSES,
+  type GraphWorkspaceAccess,
+} from "@orkestrator/protocol/graphs/template";
 import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import { graphLoopState } from "./graph-run-loops.js";
-import { computeGraphReadySet, resolveGraphEdgeSource } from "./graph-run-ready-set.js";
+import {
+  computeGraphReadySet,
+  GRAPH_ERROR_PORT,
+  resolveGraphEdgeSource,
+} from "./graph-run-ready-set.js";
 import { isGraphActivationAdmitted } from "./graph-run-transitions.js";
-import { GraphRunView, type GraphValueCache } from "./graph-run-view.js";
+import {
+  GraphRunView,
+  type GraphArtifactOutcomes,
+  type GraphArtifactRequest,
+  type GraphValueCache,
+} from "./graph-run-view.js";
 
 export interface GraphRunFailure {
   error: string;
@@ -50,8 +82,10 @@ export interface GraphPlanningResult {
   skipped: number;
   retried: number;
   loopsAdvanced: number;
-  /** Artifact values a `when` or `until` needs before planning can go further. */
+  /** Artifact values a `when`, `until` or edge delivery needs before planning can go further. */
   needValues: string[];
+  /** Artifacts to store (edge deliveries, routed errors) before planning can go further. */
+  needArtifacts: GraphArtifactRequest[];
   /** Node positions still waiting on inputs. */
   waiting: number;
   /** Loops that are done at their current iteration. */
@@ -82,15 +116,47 @@ function retryActivation(view: GraphRunView, failed: NodeActivation, at: string)
   };
 }
 
+/** Characters of an activation error an `error@1` message keeps (under its 4 KiB string budget). */
+const ERROR_MESSAGE_CHARS = 1_300;
+
+/** The `error@1` value of a routed failure. Content-free: the activation's error is already bounded. */
+export function graphRoutedErrorValue(
+  node: GraphPlanNode,
+  activation: NodeActivation,
+  attempts: number,
+): Record<string, unknown> {
+  const cause = activation.errorCause ?? "system-error";
+  const message = (activation.error ?? `Node ${node.id} failed`).slice(0, ERROR_MESSAGE_CHARS);
+  return {
+    node: node.id,
+    cause,
+    code: cause.replaceAll("-", "_"),
+    message: message.length > 0 ? message : `Node ${node.id} failed`,
+    attempts: Math.max(1, attempts),
+    retryable: (GRAPH_RETRY_CAUSES as readonly string[]).includes(cause),
+  };
+}
+
+/** The outcome key of a routed failure's error artifact. */
+function errorKey(activation: NodeActivation): string {
+  return `error\u0000${activation.key}`;
+}
+
+interface FailureDecisions {
+  retries: NodeActivation[];
+  /** Routed failures whose stored `error@1` artifact the record does not name yet. */
+  routed: { key: string; id: string }[];
+  requests: GraphArtifactRequest[];
+  failure?: GraphRunFailure;
+}
+
 /**
  * Retries and `onFailure` for the latest failed activation of each node
- * position. Returns the retries to create, or the run failure.
+ * position: the retries to create, the routed error artifacts to record or
+ * store, or the run failure.
  */
-function failurePolicy(
-  view: GraphRunView,
-  at: string,
-): { retries: NodeActivation[]; failure?: GraphRunFailure } {
-  const retries: NodeActivation[] = [];
+function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
+  const decisions: FailureDecisions = { retries: [], routed: [], requests: [] };
   for (const activation of view.latestActivations()) {
     if (activation.state !== "failed") continue;
     const node = view.node(activation.nodeId);
@@ -100,22 +166,52 @@ function failurePolicy(
       (node.retry.on as readonly GraphErrorCause[]).includes(cause) &&
       view.liveAttempts(activation) < node.retry.attempts
     ) {
-      retries.push(retryActivation(view, activation, at));
+      decisions.retries.push(retryActivation(view, activation, at));
       continue;
     }
     if (node.onFailure === "fail-run") {
       return {
         retries: [],
+        routed: [],
+        requests: [],
         failure: {
           error: `Node ${node.id} failed${activation.error ? `: ${activation.error}` : ""}`,
           cause: cause ?? "system-error",
         },
       };
     }
-    // `skip` and `route`: the failed activation's outputs (none, or the
-    // routed error artifact) are what its consumers see.
+    if (node.onFailure !== "route" || activation.outputs[GRAPH_ERROR_PORT] !== undefined) continue;
+    // `route`: the error artifact goes on the `error` port before consumers read it.
+    const key = errorKey(activation);
+    const known = view.outcomes.get(key);
+    if (known?.ok && known.ids[0] !== undefined) {
+      decisions.routed.push({ key: activation.key, id: known.ids[0] });
+    } else if (known && !known.ok) {
+      return {
+        retries: [],
+        routed: [],
+        requests: [],
+        failure: {
+          error: `Node ${node.id} failed and its error could not be routed: ${known.message}`,
+          cause: "system-error",
+        },
+      };
+    } else {
+      const lineage = [...new Set(Object.values(activation.inputs).flat())].slice(
+        0,
+        GRAPH_ARTIFACT_BUDGETS.maxInputs,
+      );
+      decisions.requests.push({
+        key,
+        purpose: "error",
+        producer: { nodeId: node.id, activation: activation.key, port: GRAPH_ERROR_PORT },
+        type: "error@1",
+        values: [graphRoutedErrorValue(node, activation, view.liveAttempts(activation))],
+        inputs: lineage,
+      });
+    }
   }
-  return { retries };
+  return decisions;
 }
 
 function append(
@@ -134,22 +230,26 @@ function append(
  */
 export function planGraphRun(
   run: GraphRun,
-  options: { at: string; values: GraphValueCache },
+  options: { at: string; values: GraphValueCache; outcomes?: GraphArtifactOutcomes },
 ): GraphPlanningResult {
   let current = run;
+  const outcomes: GraphArtifactOutcomes = options.outcomes ?? new Map();
   const result: Omit<GraphPlanningResult, "run"> = {
     created: 0,
     skipped: 0,
     retried: 0,
     loopsAdvanced: 0,
     needValues: [],
+    needArtifacts: [],
     waiting: 0,
     doneLoops: [],
   };
   const needValues = new Set<string>();
+  const needArtifacts = new Map<string, GraphArtifactRequest>();
   for (let round = 0; round < MAX_PLANNING_ROUNDS; round++) {
     needValues.clear();
-    const view = new GraphRunView(current, options.values);
+    needArtifacts.clear();
+    const view = new GraphRunView(current, options.values, outcomes);
     const failures = failurePolicy(view, options.at);
     if (failures.failure) return { ...result, run: current, failure: failures.failure };
     if (failures.retries.length > 0) {
@@ -162,6 +262,20 @@ export function planGraphRun(
       result.retried += failures.retries.length;
       continue;
     }
+    if (failures.routed.length > 0) {
+      const routed = new Map(failures.routed.map((entry) => [entry.key, entry.id]));
+      current = {
+        ...current,
+        activations: current.activations.map((activation) => {
+          const id = routed.get(activation.key);
+          return id === undefined
+            ? activation
+            : { ...activation, outputs: { ...activation.outputs, [GRAPH_ERROR_PORT]: id } };
+        }),
+      };
+      continue;
+    }
+    failures.requests.forEach((request) => needArtifacts.set(request.key, request));
     const done = new Set<string>();
     let advanced = false;
     for (const loop of view.plan.loops) {
@@ -180,6 +294,7 @@ export function planGraphRun(
     if (advanced) continue;
     const ready = computeGraphReadySet(view, { at: options.at, loopDone: (id) => done.has(id) });
     ready.needValues.forEach((id) => needValues.add(id));
+    view.requests.forEach((request, key) => needArtifacts.set(key, request));
     result.waiting = ready.waiting;
     result.doneLoops = [...done];
     for (const activation of ready.created) {
@@ -192,6 +307,7 @@ export function planGraphRun(
     if (ready.created.length === 0) break;
   }
   result.needValues = [...needValues];
+  result.needArtifacts = [...needArtifacts.values()];
   return { ...result, run: current };
 }
 
@@ -410,8 +526,9 @@ export function graphRunActivity(run: GraphRun): GraphRunActivity {
 /** True when nothing is admitted, ready or waiting and every activation is terminal. */
 export function graphRunSettled(
   run: GraphRun,
-  planning: Pick<GraphPlanningResult, "waiting" | "needValues">,
+  planning: Pick<GraphPlanningResult, "waiting" | "needValues" | "needArtifacts">,
 ): boolean {
   if (planning.waiting > 0 || planning.needValues.length > 0) return false;
+  if (planning.needArtifacts.length > 0) return false;
   return run.activations.every((activation) => isGraphActivationTerminal(activation.state));
 }

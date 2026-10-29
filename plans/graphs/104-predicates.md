@@ -40,7 +40,7 @@ Conditions for gates, `when` and loop `until`, written as JSON that forms can bu
 ## Done when
 
 - [x] Predicates are merged with tests and used by [107](107-compiler.md).
-- [ ] Predicates are used by [206](206-gate-merge-loop-failure.md).
+- [x] Predicates are used by [206](206-gate-merge-loop-failure.md).
 
 ## Notes
 
@@ -144,6 +144,11 @@ a final test asserts every case still produces its code. All codes were already 
 removed. The structural codes come from 101's guard (`predicate-shape.ts`) and are tested in
 `predicates.test.ts`.
 
+**2026-10-29 · Used by 206; box ticked.** The gate executor (`graph-node-gate.ts`) chooses its
+outlet with `evaluateGraphPredicate` (first branch whose predicate is definitely true, else
+`otherwise`), and edge `filter` transforms apply `filterGraphPredicateList` to delivered values
+(`graph-edge-transforms.ts`); node `when` and loop `until` already used the evaluator (203).
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -152,3 +157,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Path roots, scopes and type checker with diagnostic codes, total three-valued evaluator and list filter, table, type-check, example and generated-input totality tests. · Work and tests done; the Done-when box waits for 107 and 206 to use the API and for the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the type checker; Done-when split, 107 half ticked. · 206 half open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Typed per-code coverage tables for the type checker and the evaluator. · 206 half of Done-when still open.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 206 uses the evaluator (gates) and the list filter (edge transforms); 206 half ticked. · complete; awaiting PR

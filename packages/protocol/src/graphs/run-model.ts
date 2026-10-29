@@ -396,6 +396,12 @@ export interface GraphArtifact {
   body: GraphArtifactBody;
   /** Stable per-item source ids (report §5.9). */
   itemIds?: string[];
+  /**
+   * A merge node's output (item 206): for each item, in `itemIds` order, the
+   * source item ids folded into it. `dedupe` keeps every one (D11); at most
+   * `maxItemIds` ids in all.
+   */
+  itemSources?: string[][];
   state: GraphArtifactState;
   /** The rewind that superseded it. */
   supersededBy?: string;

@@ -137,6 +137,47 @@ describe("run-validation", () => {
     expect((report as { error: string }).error).toContain("not the commit to validate");
     expect(w.commands.validations.size).toBe(0);
   });
+
+  test("a plan for an ancestor runs on the later commit a repair loop carries", async () => {
+    const w = await world();
+    const fixed = "a".repeat(40);
+    w.shell.head = fixed;
+    w.shell.commits.add(fixed);
+    w.shell.ancestry.add(`${w.head}>${fixed}`);
+    const code = await w.artifacts.putValue({
+      runId: w.run.id,
+      type: "workspace@1",
+      producer: { nodeId: "fix", activation: "fix#iter=1#attempt=1", port: "code" },
+      value: { branch: "feature/csv", headRef: fixed, baseRef: null },
+    });
+    const activation = w.activation("validate", { iteration: 2 });
+    activation.inputs = { ...activation.inputs, code: code.id };
+    const outputs = outputsOf(await w.executor().start(w.context(activation)));
+    // The worker ran the same commands, on the fixed commit.
+    const start = w.commands.calls.find((call) => call.command === "start_review_validation")!;
+    expect((start.args.run as { plan: { headRef: string } }).plan.headRef).toBe(fixed);
+    expect(await valueOf(w, outputs.results!)).toMatchObject({ headRef: fixed });
+    expect(await valueOf(w, outputs.code!)).toMatchObject({ headRef: fixed });
+  });
+
+  test("a plan for a commit outside the workspace's history is refused", async () => {
+    const w = await world();
+    const other = "b".repeat(40);
+    w.shell.head = other;
+    w.shell.commits.add(other);
+    const code = await w.artifacts.putValue({
+      runId: w.run.id,
+      type: "workspace@1",
+      producer: { nodeId: "fix", activation: "fix#iter=1#attempt=1", port: "code" },
+      value: { branch: "feature/csv", headRef: other, baseRef: null },
+    });
+    const activation = w.activation("validate", { iteration: 2 });
+    activation.inputs = { ...activation.inputs, code: code.id };
+    const report = await w.executor().start(w.context(activation));
+    expect(report).toMatchObject({ state: "failed", cause: "system-error" });
+    expect((report as { error: string }).error).toContain("or one of its ancestors");
+    expect(w.commands.validations.size).toBe(0);
+  });
 });
 
 function planDigest(w: SystemWorld): string {
@@ -172,5 +213,26 @@ describe("run-validation-and-seal", () => {
     expect(w.commands.count("start_review_validation")).toBe(1);
     const generate = w.commands.calls.find((call) => call.command === "generate_review_package")!;
     expect(generate.args).toMatchObject({ expectedHead: w.head, round: 1, targetBranch: "main" });
+  });
+
+  test("sealing refuses a plan made for an ancestor: the package names the plan's commit", async () => {
+    const w = await world();
+    const fixed = "a".repeat(40);
+    w.shell.head = fixed;
+    w.shell.commits.add(fixed);
+    w.shell.ancestry.add(`${w.head}>${fixed}`);
+    const code = await w.artifacts.putValue({
+      runId: w.run.id,
+      type: "workspace@1",
+      producer: { nodeId: "fix", activation: "fix#iter=1#attempt=1", port: "code" },
+      value: { branch: "feature/csv", headRef: fixed, baseRef: null },
+    });
+    const activation = w.activation("seal");
+    activation.inputs = { ...activation.inputs, code: code.id };
+    const report = await w.executor().start(w.context(activation));
+    expect(report).toMatchObject({ state: "failed", cause: "system-error" });
+    expect((report as { error: string }).error).toContain("the workspace is at");
+    expect(w.commands.validations.size).toBe(0);
+    expect(w.commands.packages).toHaveLength(0);
   });
 });

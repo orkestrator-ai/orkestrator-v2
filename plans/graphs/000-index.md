@@ -81,12 +81,12 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
-- [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node.
-- [ ] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound. (Since item 401 the loop also runs as written, with `items` fan-out: `graph-run-items.test.ts`, `graph-mock-provider.test.ts`.)
+- [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node. (2026-10-29: ran live on Claude and Codex in one run up to the PR description; the `pr` node was deliberately not run, because opening a pull request needs the user's approval. See [207](207-system-nodes.md) Notes.)
+- [x] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound. (Since item 401 the loop also runs as written, with `items` fan-out: `graph-run-items.test.ts`, `graph-mock-provider.test.ts`.) (evidence: [207](207-system-nodes.md) Notes, "Live verification: `run-validation` in a repair loop": the loop as written converged live in 2 iterations on Claude and Codex after the `run-validation` ancestor-plan fix)
 - [x] Restart from a mid-graph node keeps independent branches and supersedes exactly the descendants.
 - [x] Code rewind works as it does in the pipeline.
 - [ ] A backend restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover activations.
-- [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs.
+- [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs. (2026-10-29: shown tiers matched and the reviewers were refused on Claude, Codex, OpenCode and Pi, by the providers themselves; Grok and Cursor not run. See [209](209-guards-and-enforcement.md) Notes, "Live conformance run".)
 - [x] A mock run of every example template passes with zero provider sessions. (evidence: [213](213-mock-runs.md) Notes, "Tests"; `apps/backend/src/core/graph-mock-provider.test.ts`, "mock runs of the report §9 examples" and "mock runs of the built-ins' duplicates")
 - [x] The inactive-environment test passes for the run view and human nodes. (evidence: [211](211-run-view.md) and [208](208-human-nodes.md) Notes, "Agent testing"; `e2e/agent-testing/graph-run-view.spec.ts` "a graph launched from Run graph… finishes while its environment is away and rehydrates" and "a human approval waits while its environment is away and is answered later", 3 passed on profile `graphs-208-realstack`)
 - [ ] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction.

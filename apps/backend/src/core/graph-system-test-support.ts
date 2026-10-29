@@ -271,6 +271,8 @@ export class FakeGraphShell implements GraphEnvironmentShell {
   unknownMergeabilityReads = 0;
   rollup: unknown[] = [];
   readonly files = new Map<string, Buffer>();
+  /** `ancestor>descendant` pairs `git merge-base --is-ancestor` answers yes for (a commit is its own). */
+  readonly ancestry = new Set<string>();
 
   constructor(head: string) {
     this.head = head;
@@ -291,6 +293,10 @@ export class FakeGraphShell implements GraphEnvironmentShell {
       return "";
     }
     if (args[0] === "branch") return "";
+    if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+      if (args[2] === args[3] || this.ancestry.has(`${args[2]}>${args[3]}`)) return "";
+      throw new Error("Command failed with exit code 1");
+    }
     throw new Error(`unexpected git ${args.join(" ")}`);
   }
 

@@ -17,7 +17,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 7. **Credentials and run ownership**: record which providers have agent-test credentials and who owns the macOS, iOS and two-machine runs. Status: open.
 8. **Scheduled CI for platform runs**: decide which runs become CI jobs. Status: partly done (a weekly Docker live workflow exists; Electron and macOS are not in CI).
 9. **Keep "Current state" and the batching index current**: the pins and CI list are already stale. Status: open.
-10. **Graph capability profiles on live providers** (graphs item 209): the tiers the graph designer and launch pickers show match what each provider does to a graph agent node, and the guards and credential withholding hold on the real stack. Status: open (needs the graph launch surface from item 214 and provider credentials).
+10. **Graph capability profiles on live providers** (graphs item 209): the tiers the graph designer and launch pickers show match what each provider does to a graph agent node, and the guards and credential withholding hold on the real stack. Status: partly done (2026-10-29: steps 1, 2 and 5 on Claude, Codex, OpenCode and Pi on macOS, all claims held; Grok, Cursor, Linux, step 3 and step 4 open; the reusable `graph-profiles` scenario not built).
 
 ### 1. Runtime drift and advisories on two platforms
 
@@ -219,7 +219,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** Graph agent nodes show an enforcement tier per provider (`graphAgentNodeEnforcement`, the same matrix as the coordinator's qualification), the launch pickers filter on it, and post-hoc guards back it up (graphs item 209). Only fake providers have exercised this; no live run has shown that the tiers shown match what each provider does to a graph node.
 
-**Context.** Added 2026-10-29 by graphs item 209 (`plans/graphs/209-guards-and-enforcement.md`). The credential-free coverage is `apps/backend/src/core/graph-node-agent-guards.test.ts` (a committing reviewer refused at submit and repairing, a commit found at consumption, baseline unavailable, push detection, a tier drop between launch and dispatch), `graph-agent-guards.test.ts`, the protocol's `agent-enforcement.test.ts`, and the Claude, Grok, Codex and Pi bridges' credential-withholding tests. A live run cannot start yet: there is no graph launch command or dialog until item 214, so the coordinator live suite (`apps/desktop/scripts/dev/coordinator-live.ts`) has no way to start a graph node. Once 214 lands, add a `graph-profiles` scenario there (or a sibling runner) rather than a new harness.
+**Context.** Added 2026-10-29 by graphs item 209 (`plans/graphs/209-guards-and-enforcement.md`). The credential-free coverage is `apps/backend/src/core/graph-node-agent-guards.test.ts` (a committing reviewer refused at submit and repairing, a commit found at consumption, baseline unavailable, push detection, a tier drop between launch and dispatch), `graph-agent-guards.test.ts`, the protocol's `agent-enforcement.test.ts`, and the Claude, Grok, Codex and Pi bridges' credential-withholding tests. Item 214 added the launch surfaces (`orkestrator graph launch`, "Run graph…", Control MCP `launch_graph`), so a live run can start; a first one was made by hand on 2026-10-29 (below). The coordinator live suite (`apps/desktop/scripts/dev/coordinator-live.ts`) still has no `graph-profiles` scenario; add it there (or a sibling runner) rather than a new harness.
 
 **What remains to run live**, per provider in `COORDINATOR_LIVE_PLATFORMS` (Claude on macOS and on Linux with and without a working bubblewrap, Codex, OpenCode, Cursor, Grok, Pi), on a disposable `dev:test --fixture` profile whose fixture project has a throwaway remote:
 
@@ -238,6 +238,37 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **A separate graph live runner.**
     - Pros: independent of coordinator setup.
     - Cons: a second harness to keep working.
+
+**Live run 2026-10-29** (macOS, Claude sandbox available; worktree `graphs-live-verify` at
+`0f24330e3`; profile `graphs-live`, `dev:test --fixture` with Claude, Codex, OpenCode, Pi and Grok
+credential sources). Driven by hand with `orkestrator graph launch` and the gateway's
+`graph_run_get`/`graph_run_transcript`, not yet by a scenario. The fixture's `origin` is the local
+bare repository `fixtures/origin.git`, so no push left the profile. Each provider got its own local
+environment; a `reviewer` node (read-only, default floor `provider-configured`) was asked to create
+a file, edit `README.md`, `touch` from the shell, `git commit --allow-empty` and `git push`, and a
+`builder` node to commit a file and push it to a new branch. The tool calls in each transcript were
+checked, not only the agent's report. Tiers came from the "Run graph…" dialog and `orkestrator graph
+show --project --environment`; both agreed with the `enforcement` guard each activation recorded at
+dispatch.
+
+| Provider | Reviewer tier shown | Reviewer outcome | Builder tier shown | Builder push outcome | Matches the claim |
+| --- | --- | --- | --- | --- | --- |
+| Claude (Sonnet, low) | enforced | File tools absent; `touch`, `git commit`, `git push` refused by the bridge's read-only Bash hook; worktree, HEAD and origin unchanged | advisory | Refused by Claude's permission rule; remote-ref passed | yes |
+| Codex (GPT-6-Luna, low) | enforced | All five refused by the OS sandbox ("Operation not permitted") | advisory | Pushed; remote-ref guard violated, activation failed | yes |
+| OpenCode (default model) | provider-configured | All five refused by OpenCode's permission rules | advisory | Refused by OpenCode's permission rule; remote-ref passed | yes |
+| Pi (openai/gpt-6-luna) | enforced | All five refused by the bridge's read-only gate | advisory | Pushed; remote-ref guard violated, activation failed | yes |
+| Grok | advisory, not offered (below the floor) | not run: host login expired | advisory | not run | picker only |
+| Cursor | not enabled | not run: no host login | not enabled | not run | not run |
+
+Step 5: in the bake-off run of the same session a Claude `researcher` node ran as an ordinary turn at
+`provider-configured` with the researcher reason; whether hosted search was used was not checked.
+No read-only node changed the workspace, so the submit-time `worktree_changed` refusal and the
+consumption-time read-only failure were not reached live. Not run: Grok and Cursor, Linux (with and
+without bubblewrap, step 4), and step 3 (agent-test profiles carry no GitHub credential, so `gh auth
+status` could not tell withholding from absence). Findings: the remote-ref guard blamed a Claude
+activation whose commit was byte-identical to one Codex pushed from a sibling worktree in the same
+second (parallel identical probes; fails closed), and Claude's read-only hook says "Coordinator is
+read-only" inside a graph node. Detail and run ids: graphs item 209's Notes, "Live conformance run".
 
 Most features ship with unit, contract and credential-free real-stack coverage
 on Linux. The gate that is missing most often is the same everywhere: a run
@@ -694,6 +725,34 @@ Recorded 2026-10-25 while working this file.
    one live run after the refresh. The run happened and found a product gap,
    which has its own file (0175) with its own qualification, so the gap is
    tracked there rather than holding this item open.
+
+### Task 10: drive the run by hand before building the scenario
+
+Recorded 2026-10-29. Options: (a) build the recommended `graph-profiles` scenario in the coordinator
+live suite first, then run it; (b) run the checks by hand with the `orkestrator graph` CLI and the
+gateway commands, record them, and leave the scenario for later. Chose (b). Why: the run was needed
+as evidence for item 209 in the same session, and a hand run on four providers cost a few minutes
+of turns, while the scenario needs launch helpers and per-platform profiles in a long suite. Pros:
+evidence now, with transcripts checked call by call. Cons: not repeatable by a command; the
+decision above (a `graph-profiles` scenario) still stands and is still open.
+
+### Task 10: one profile with several credential sources
+
+Recorded 2026-10-29. Options: one profile per provider (as the coordinator suite does), or one
+profile authorized for every available provider with one environment per provider. Chose one
+profile. Why: the bake-off run of the same session needs two providers in one run, and separate
+environments keep each provider's worktree and baseline apart. Cons: the providers share one
+remote, which is what produced the identical-commit false positive; reruns were made one at a time
+against a remote without the probe branch.
+
+### Task 10: what counts as matching
+
+Recorded 2026-10-29. A tier matches when nothing the node did exceeded it: `enforced` must refuse
+every write itself, `provider-configured` must refuse through the provider's own rules, and
+`advisory` must at least be detected by a guard. A provider that refuses more than its tier claims
+(Claude and OpenCode refusing `git push` on a builder) still matches, because the matrix states
+another spelling would run. Not counted: a model that declined to attempt (a Claude Haiku reviewer
+did; it was rerun on Sonnet).
 
 ## Open questions
 

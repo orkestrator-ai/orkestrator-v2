@@ -16,7 +16,8 @@ timer and its counter) is done; see Current state.
 
 **Problem.** Queue readers still have to treat a live legacy claim as holding
 its prompt: dispatch, steering, native and tmux drains, tmux mail, enqueue
-dedupe and the public run observer each check `outstandingClaim`. Nothing
+dedupe, web-annotation observation, admission and deduplication, and the public
+run observer each check `outstandingClaim`. Nothing
 current writes a claim, so every new queue reader carries a rule for data only
 an older backend produces.
 
@@ -39,7 +40,10 @@ work across the window"), so the shape upgrade itself never goes away.
 - The `outstandingClaim` readers: `native-agent-prompt-queue-dispatcher.ts`
   (`:400`, `:416`, `:543`), `native-agent-queue-scheduling.ts:46`,
   `native-agent-service.ts` (`:2933`, `:3164`, `:3266`),
-  `prompt-queue-drainer.ts` (`:140`, `:213`, `:232`, `:280`),
+  `prompt-queue-drainer.ts` (`:140`, `:159` after the post-await queue refetch,
+  `:213`, `:232`, `:280`),
+  `web-annotation-dispatch.ts` (`:189` claim observation, `:439` destination
+  holds, `:705` same-body deduplication, `:1058` admission blocked reason),
   `storage-prompts.ts` (`:229`, `:320`, `:388`, `:563`),
   `storage-native-deliveries.ts:374`, `public-api/run-observer.ts:121` and
   `storage-prompt-queue-store.ts` (`:61`, `:79`, `:108`), all under
@@ -122,8 +126,10 @@ task 1 is unchanged, because the floor rule follows Stable releases.
   unrelated queue, preserve its token and message so the old holder can
   acknowledge or reject it. No new claim commands or writers exist.
 - Live claims block dispatch and steering reservations, native and tmux queue
-  drains, and tmux mail submission. Enqueue deduplicates against the held id.
-  A stale whole-list save cannot insert a copy of that id or tombstone it.
+  drains, and tmux mail submission. Web annotations observe held ids, report
+  destination holds, deduplicate the held body and block admission. Enqueue
+  deduplicates against the held id. A stale whole-list save cannot insert a
+  copy of that id or tombstone it.
 - At expiry, or with malformed lease metadata, the message returns to the
   head and replaces any queued copy of the same id. A missing, blank or
   non-string id gets a deterministic recovery id derived from the message

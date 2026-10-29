@@ -335,14 +335,17 @@ The first worker added the three fixtures to
 `agent-provider-interactions.test.ts`, the option the analysis said would
 push it past the 2,000-line limit; it reached 2,213 lines. Chose the
 recommended option after the fact: split it by provider. The Claude,
-Codex, Grok, Pi and OpenCode cases moved verbatim to
+Codex, Grok, Pi and OpenCode cases moved to
 `agent-provider-interactions-{claude,codex,grok,pi,opencode}.test.ts`.
+The Codex snapshot test's registration uses `looped-review`, a valid
+`AgentInteractionOrigin`; `automated-review` is not a valid origin.
 The registration, snapshot-bound, tracker-bound and write-reconciliation
 cases that span providers stay in `agent-provider-interactions.test.ts`.
 `HTTP bridge questions remain pending without a provider write` uses the
-Codex connection, so it moved with Codex. All 33 tests are kept, and every
+Codex connection, so it moved with Codex. All 34 test declarations are kept
+(38 runtime cases, including the five-case `test.each`), and every
 file is under 650 lines. Pros: each provider's mapping is in one place; a
-new fixture no longer reopens the limit. Cons: a move-only diff. References
+new fixture no longer reopens the limit. Cons: a large move diff. References
 in 0001 and 0160 now point at the split files.
 
 ### 7. Verify rather than redo (all tasks)

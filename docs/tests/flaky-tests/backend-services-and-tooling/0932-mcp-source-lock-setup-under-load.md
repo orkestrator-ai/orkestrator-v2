@@ -40,3 +40,26 @@ mise run test:logged -- --name review-repair-tests -- mise run test
 ```
 
 The successful rerun does not establish a flake fix; this case remains open.
+
+
+## Transcript media snapshot review repair — 2026-10-29
+
+Preparation at `63b8a00d7` repeated the two live-holder setup failures:
+`lockFile` was undefined at line 191, then the next case got `ENOENT` instead
+of `busy` at line 231. The complete unchanged owner passed alone (exit 0,
+0.5 s):
+
+```sh
+mise run test:logged -- --name preparation-backend-owner -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is `validation-04.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-d2902dab-3f13-48a3-aea0-29fb21e09960/`.
+No source-store implementation, assertion, timeout or skip changed.
+
+The exact failed aggregate command was rerun after the media fixes and passed
+(exit 0, 156.7 s):
+
+```sh
+mise run test:logged -- --name review-repair-tests -- mise run test
+```

@@ -9,10 +9,12 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { TRANSCRIPT_MEDIA_PIN_COMMAND } from "@orkestrator/protocol/transcript-media-pins";
 import { invoke } from "@/lib/native/backend";
-import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
+import { clearImagePreviewCache, readImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { mediaSnapshotNote } from "@/lib/chat/media-snapshot";
 import { RichMessageContext, RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { clearMediaResolverInflight } from "@/lib/chat/rich-markdown/media-resolver";
+import { cachedToolDetails, ToolDetailLoaderContext } from "@/components/chat/NativeMessage.shared";
+import { mediaCacheKey } from "@/lib/chat/rich-markdown/media-resolver";
 import { FilePart } from "@/components/chat/NativeMessage.file-parts";
 import { MarkdownImage } from "./MediaBlock";
 
@@ -184,21 +186,99 @@ describe("pinned transcript images", () => {
     expect(calls("read_file_base64")).toHaveLength(2);
   });
 
+  for (const kind of ["Markdown", "attachment"] as const) {
+    test.each(["quota", "missing"] as const)(
+      `${kind} live pins reread changed bytes after remount (%s)`,
+      async (reason) => {
+        let onDisk = png(100);
+        invokeMock.mockImplementation((command: string) =>
+          command === TRANSCRIPT_MEDIA_PIN_COMMAND
+            ? Promise.resolve(pinResponse(onDisk, { status: "live", reason }))
+            : Promise.resolve(),
+        );
+        const view = () => (
+          <InMessage>
+            {kind === "Markdown" ? (
+              <MarkdownImage src={SHOT} alt="Live" />
+            ) : (
+              <FilePart path={SHOT} eagerPreview />
+            )}
+          </InMessage>
+        );
+        const first = render(view());
+        await waitFor(() => expect(imageSource()).toBe(`data:image/png;base64,${png(100)}`));
+        expect(screen.getByText("Current file")).toBeTruthy();
+        expect(
+          readImagePreviewCache(mediaCacheKey({ path: SHOT }, { ...SCOPE, messageId: "m1" })),
+        ).toBeNull();
+        first.unmount();
+        onDisk = png(200);
+        render(view());
+        await waitFor(() => expect(imageSource()).toBe(`data:image/png;base64,${png(200)}`));
+        expect(screen.getByText("Current file")).toBeTruthy();
+        expect(calls(TRANSCRIPT_MEDIA_PIN_COMMAND)).toHaveLength(2);
+      },
+    );
+  }
+
+  test.each(["quota", "missing"] as const)(
+    "live deferred details bypass both browser caches (%s)",
+    async (reason) => {
+      const detailRef = `live-detail-${reason}`;
+      let onDisk = png(100);
+      const load = mock(async () => ({
+        detailRef,
+        fileDataUrl: `data:image/png;base64,${onDisk}`,
+        fileSnapshot: { status: "live" as const, reason, capturedAt: MESSAGE_AT },
+      }));
+      const view = () => (
+        <InMessage>
+          <ToolDetailLoaderContext.Provider value={load}>
+            <FilePart path="shot.png" detailRef={detailRef} eagerPreview />
+          </ToolDetailLoaderContext.Provider>
+        </InMessage>
+      );
+      const first = render(view());
+      await waitFor(() => expect(imageSource()).toBe(`data:image/png;base64,${png(100)}`));
+      expect(cachedToolDetails(detailRef)).toBeUndefined();
+      expect(
+        readImagePreviewCache(
+          mediaCacheKey({ path: "shot.png", detailRef }, { ...SCOPE, messageId: "m1" }),
+        ),
+      ).toBeNull();
+      first.unmount();
+      onDisk = png(200);
+      render(view());
+      await waitFor(() => expect(imageSource()).toBe(`data:image/png;base64,${png(200)}`));
+      expect(screen.getByText("Current file")).toBeTruthy();
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
+
   test("labels a copy saved after the file changed", async () => {
     invokeMock.mockImplementation((command: string) =>
       command === TRANSCRIPT_MEDIA_PIN_COMMAND
         ? Promise.resolve(pinResponse(png(100), { fileModifiedAt: "2026-10-29T10:05:00.000Z" }))
         : Promise.resolve(),
     );
-    render(
+    const view = () => (
       <InMessage>
         <MarkdownImage src={SHOT} alt="Late" />
-      </InMessage>,
+      </InMessage>
     );
+    const first = render(view());
     await waitFor(() => expect(screen.getByText("Changed since")).toBeTruthy());
     expect(
       screen.getByRole("button", { name: /^Open image: Late\. The file changed after/ }),
     ).toBeTruthy();
+    const explanation = screen.getByText("Changed since").getAttribute("title");
+    expect(explanation).toContain("The file changed after this message");
+    first.unmount();
+    render(view());
+    await waitFor(() =>
+      expect(screen.getByText("Changed since").getAttribute("title")).toBe(explanation),
+    );
+    expect(calls(TRANSCRIPT_MEDIA_PIN_COMMAND)).toHaveLength(1);
   });
 
   test("an attachment thumbnail is pinned to its message and labels a live copy", async () => {

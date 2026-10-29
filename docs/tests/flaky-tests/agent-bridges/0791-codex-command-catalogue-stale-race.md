@@ -232,3 +232,25 @@ Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-801e01fe-bc32-4c2d-bbaa-76969f1dcae2/`.
 The subsequent exact aggregate rerun's bridges group passed (40.8 s).
 No catalogue implementation, assertion, deadline or skip changed.
+
+
+## Transcript media snapshot review repair — 2026-10-29
+
+Preparation at `63b8a00d7` failed the already-armed-delay case at line 293:
+expected `stale`, received `ready`. The complete unchanged owner passed alone
+(exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is `validation-04.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-d2902dab-3f13-48a3-aea0-29fb21e09960/`.
+No catalogue implementation, assertion, deadline or skip changed.
+
+The exact failed aggregate command was rerun after the media fixes and passed
+(exit 0, 156.7 s):
+
+```sh
+mise run test:logged -- --name review-repair-tests -- mise run test
+```

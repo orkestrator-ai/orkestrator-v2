@@ -158,3 +158,51 @@ test("image previews reserve loading space and restore uncropped geometry on rem
     true,
   );
 });
+
+test("snapshot explanations receive pointer hover and pinned notes survive remount", async ({
+  page,
+}) => {
+  const reads = { late: 0, live: 0 };
+  await page.route("**/fixture-snapshot-detail?*", async (route) => {
+    const live = new URL(route.request().url()).searchParams.get("ref") === "snapshot-live";
+    reads[live ? "live" : "late"]++;
+    await route.fulfill({
+      json: {
+        detailRef: live ? "snapshot-live" : "snapshot-late",
+        fileDataUrl: image,
+        fileSnapshot: {
+          status: live ? "live" : "pinned",
+          capturedAt: "2026-10-21T12:05:00Z",
+          fileModifiedAt: "2026-10-21T12:04:00Z",
+          ...(live ? { reason: "quota" } : {}),
+        },
+      },
+    });
+  });
+  await page.goto("/native-attachments?snapshots");
+  for (const [label, description] of [
+    [
+      "Changed since",
+      "The file changed after this message and before it was first shown here, so this may be a newer version than the message showed.",
+    ],
+    [
+      "Current file",
+      "This environment's saved image storage is full, so this is the file as it is now.",
+    ],
+  ]) {
+    const badge = page.getByText(label!, { exact: true });
+    await expect(badge).toHaveAttribute("title", description!);
+    await badge.hover();
+    expect(await badge.evaluate((element) => element.matches(":hover"))).toBe(true);
+    await expect(badge).toHaveCSS("pointer-events", "auto");
+  }
+  await page.getByText("Changed since", { exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Image preview: late.svg" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Switch transcript" }).click();
+  await expect(page.getByText("Other environment")).toBeVisible();
+  await page.getByRole("button", { name: "Switch transcript" }).click();
+  await expect(page.getByText("Changed since", { exact: true })).toBeVisible();
+  await expect(page.getByText("Current file", { exact: true })).toBeVisible();
+  expect(reads).toEqual({ late: 1, live: 2 });
+});

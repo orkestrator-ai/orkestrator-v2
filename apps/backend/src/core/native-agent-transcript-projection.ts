@@ -4051,26 +4051,32 @@ export class NativeAgentTranscriptProjection {
     // caller, so this grants one exact lazy read instead of widening a shared
     // directory such as /tmp into a renderer-readable root.
     const localImagePath = entry.localImagePath;
-    const readFile = async () => {
+    const readCurrentFile = async () => {
       const bytes = await readReadableHostFile(localImagePath, [path.dirname(localImagePath)]);
       const info = await stat(localImagePath).catch(() => null);
       return { bytes, ...(info ? { modifiedAt: info.mtime.toISOString() } : {}) };
     };
+    // Reuse a successful read if saving it fails; reader failures still propagate.
+    let currentRead: ReturnType<typeof readCurrentFile> | undefined;
+    const readFile = () => (currentRead ??= readCurrentFile());
     // The reference is stable per message, part and path, so its first read
     // is saved and later reads show that copy even after the file changes.
     const pinned =
       typeof this.storage.getDataDir === "function"
-        ? await transcriptMediaPins(this.storage.getDataDir()).pin(
-            {
-              environmentId: input.environmentId,
-              logicalSessionKey: input.logicalSessionKey,
-              messageId: input.detailRef,
-              reference: `detail:${localImagePath}`,
-            },
-            readFile,
-          )
+        ? await transcriptMediaPins(this.storage.getDataDir())
+            .pin(
+              {
+                environmentId: input.environmentId,
+                logicalSessionKey: input.logicalSessionKey,
+                messageId: input.detailRef,
+                reference: `detail:${localImagePath}`,
+              },
+              readFile,
+            )
+            .catch(() => undefined)
         : undefined;
-    const bytes = pinned ? Buffer.from(pinned.bytes) : (await readFile()).bytes;
+    const current = pinned ? undefined : await readFile();
+    const bytes = pinned ? Buffer.from(pinned.bytes) : current!.bytes;
     return {
       ...entry.details,
       fileDataUrl: `data:${imageMimeType(localImagePath)};base64,${bytes.toString("base64")}`,
@@ -4083,7 +4089,14 @@ export class NativeAgentTranscriptProjection {
               ...(pinned.reason ? { reason: pinned.reason } : {}),
             },
           }
-        : {}),
+        : {
+            fileSnapshot: {
+              status: "live" as const,
+              reason: "missing" as const,
+              capturedAt: new Date(this.host.now()).toISOString(),
+              ...(current?.modifiedAt ? { fileModifiedAt: current.modifiedAt } : {}),
+            },
+          }),
     };
   }
 

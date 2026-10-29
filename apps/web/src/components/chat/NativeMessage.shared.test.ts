@@ -44,6 +44,20 @@ describe("tool detail browser cache", () => {
     expect(cachedToolDetails("shared-cache-huge-2")).toBeUndefined();
   });
 
+  test.each(["quota", "missing"] as const)(
+    "live details cannot enter the shared cache (%s)",
+    (reason) => {
+      const detailRef = `shared-cache-live-${reason}`;
+      cacheToolDetails({ detailRef, fileDataUrl: "old" });
+      cacheToolDetails({
+        detailRef,
+        fileDataUrl: "current",
+        fileSnapshot: { status: "live", reason, capturedAt: "2026-10-29T10:00:00Z" },
+      });
+      expect(cachedToolDetails(detailRef)).toBeUndefined();
+    },
+  );
+
   test("retains a detail within the per-entry ceiling", () => {
     const detail = { detailRef: "shared-cache-within-limit", toolOutput: "kept" };
     cacheToolDetails(detail);

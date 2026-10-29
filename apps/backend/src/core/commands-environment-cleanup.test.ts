@@ -21,6 +21,8 @@ import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
+import { transcriptMediaPins, TRANSCRIPT_MEDIA_PINS_DIRECTORY } from "./transcript-media-pins.js";
+
 afterEach(() => closeEnvironmentCleanupStorage());
 
 function environment(overrides: Partial<Environment> = {}): Environment {
@@ -308,6 +310,60 @@ describe("delete_environment host cleanup", () => {
 });
 
 describe("delete_environment durable child-state cleanup", () => {
+  test("removes transcript media pins only for the deleted environment", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await storage.addEnvironment(environment());
+      },
+      async (invokeDelete, storage) => {
+        const pins = transcriptMediaPins(storage.getDataDir());
+        const identity = {
+          environmentId: "e1",
+          logicalSessionKey: "tab",
+          messageId: "m1",
+          reference: "shot.png",
+        };
+        const read = async () => ({ bytes: Buffer.from("private image") });
+        await pins.pin(identity, read);
+        await pins.pin({ ...identity, environmentId: "e2" }, read);
+        const root = path.join(storage.getDataDir(), TRANSCRIPT_MEDIA_PINS_DIRECTORY);
+        expect(await fs.readdir(root)).toHaveLength(2);
+        await invokeDelete();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await fs.readdir(root)).toHaveLength(1);
+        expect((await pins.pin(identity, read)).status).toBe("live");
+        expect((await pins.pin({ ...identity, environmentId: "e2" }, read)).status).toBe("pinned");
+      },
+    );
+  });
+
+  test("pin cleanup failures are reported without stranding environment deletion", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await storage.addEnvironment(environment());
+      },
+      async (invokeDelete, storage) => {
+        const pins = transcriptMediaPins(storage.getDataDir());
+        const cleanup = spyOn(pins, "deleteEnvironment").mockRejectedValue(
+          new Error("private failure detail"),
+        );
+        const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          await expect(invokeDelete()).resolves.toBeUndefined();
+          expect(cleanup).toHaveBeenCalledWith("e1");
+          expect(warning).toHaveBeenCalledWith(
+            "[backend] transcript media pin cleanup failed for e1:",
+            "Error",
+          );
+          expect(await storage.getEnvironment("e1")).toBeNull();
+        } finally {
+          cleanup.mockRestore();
+          warning.mockRestore();
+        }
+      },
+    );
+  });
+
   test("purges agent mail before removing the environment", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

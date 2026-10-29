@@ -3,8 +3,9 @@
  * never touch the file, each message keeps its own version, and the store
  * stays within its byte and pin bounds by answering live instead.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TranscriptMediaPins, type TranscriptMediaPinIdentity } from "./transcript-media-pins.js";
@@ -97,6 +98,47 @@ describe("TranscriptMediaPins", () => {
     expect(shot.reads).toBe(1);
   });
 
+  test("concurrent distinct pins cannot exceed the byte quota", async () => {
+    const pins = new TranscriptMediaPins(root, { maxEnvironmentBytes: 4 });
+    const results = await Promise.all([
+      pins.pin(identity("m1"), file("aaaa").read),
+      pins.pin(identity("m2"), file("bbbb").read),
+    ]);
+    expect(results.map(({ status }) => status).sort()).toEqual(["live", "pinned"]);
+    expect(results.find(({ status }) => status === "live")?.reason).toBe("quota");
+    const [environment] = await readdir(root);
+    const blobs = await readdir(path.join(root, environment!, "blobs"));
+    expect(blobs).toHaveLength(1);
+    expect((await readFile(path.join(root, environment!, "blobs", blobs[0]!))).byteLength).toBe(4);
+    expect(await readdir(path.join(root, environment!, "pins"))).toHaveLength(2);
+  });
+
+  test("concurrent distinct pins cannot exceed the pin quota", async () => {
+    const pins = new TranscriptMediaPins(root, { maxEnvironmentPins: 1 });
+    const results = await Promise.all([
+      pins.pin(identity("m1"), file("a").read),
+      pins.pin(identity("m2"), file("b").read),
+    ]);
+    expect(results.map(({ status }) => status).sort()).toEqual(["live", "pinned"]);
+    const [environment] = await readdir(root);
+    expect(await readdir(path.join(root, environment!, "pins"))).toHaveLength(1);
+    expect(await readdir(path.join(root, environment!, "blobs"))).toHaveLength(1);
+  });
+
+  test("concurrent identical content is charged once, leaving capacity for another blob", async () => {
+    const pins = new TranscriptMediaPins(root, { maxEnvironmentBytes: 8 });
+    const results = await Promise.all([
+      pins.pin(identity("m1"), file("same").read),
+      pins.pin(identity("m2"), file("same").read),
+    ]);
+    expect(results.every(({ status }) => status === "pinned")).toBe(true);
+    expect((await pins.pin(identity("m3"), file("next").read)).status).toBe("pinned");
+    expect((await pins.pin(identity("m4"), file("overflow").read)).status).toBe("live");
+    const [environment] = await readdir(root);
+    expect(await readdir(path.join(root, environment!, "blobs"))).toHaveLength(2);
+    expect(await readdir(path.join(root, environment!, "pins"))).toHaveLength(4);
+  });
+
   test("over the byte bound, answers live and keeps answering live", async () => {
     const pins = new TranscriptMediaPins(root, { maxEnvironmentBytes: 10 });
     const small = file("fits");
@@ -138,6 +180,73 @@ describe("TranscriptMediaPins", () => {
     expect(text(read.bytes)).toBe("newer");
     expect(await readdir(path.join(root, environment!, "blobs")).catch(() => [])).toEqual([]);
   });
+
+  test.each(["{broken", "", "null", '{"schemaVersion":2}', '{"stored":true}'])(
+    "an invalid existing record stays untouched (%s)",
+    async (corrupt) => {
+      const pins = new TranscriptMediaPins(root);
+      const shot = file("original");
+      await pins.pin(identity("m1"), shot.read);
+      const [environment] = await readdir(root);
+      const directory = path.join(root, environment!, "pins");
+      const [record] = await readdir(directory);
+      const recordPath = path.join(directory, record!);
+      await writeFile(recordPath, corrupt);
+      shot.write("newer");
+      for (const store of [pins, new TranscriptMediaPins(root)]) {
+        const result = await store.pin(identity("m1"), shot.read);
+        expect(result).toMatchObject({ status: "live", reason: "missing" });
+        expect(text(result.bytes)).toBe("newer");
+        expect(await readFile(recordPath, "utf8")).toBe(corrupt);
+      }
+    },
+  );
+
+  test.each([false, true])(
+    "deletion drains an active write, including failure (%s)",
+    async (fail) => {
+      const pins = new TranscriptMediaPins(root);
+      const reached = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const originalMkdir = fs.mkdir;
+      let environment = "";
+      const mkdirSpy = spyOn(fs, "mkdir").mockImplementation((async (
+        ...args: Parameters<typeof fs.mkdir>
+      ) => {
+        const result = await originalMkdir(...args);
+        if (String(args[0]).endsWith("/pins")) {
+          environment = path.dirname(String(args[0]));
+          reached.resolve();
+          await resume.promise;
+        }
+        return result;
+      }) as typeof fs.mkdir);
+      const writing = pins.pin(identity("m1"), file("private image").read);
+      // Attach rejection handling before releasing a failing write.
+      const settled = Promise.allSettled([writing]);
+      try {
+        await reached.promise;
+        const deleting = pins.deleteEnvironment("env-1");
+        const late = pins.pin(identity("late"), file("late bytes").read);
+        if (fail) {
+          // Force the record write to fail after the blob has been saved.
+          await rm(path.join(environment, "pins"), { recursive: true });
+        }
+        resume.resolve();
+        await deleting;
+        expect((await settled)[0]?.status).toBe(fail ? "rejected" : "fulfilled");
+        expect(await late).toMatchObject({ status: "live", reason: "missing" });
+        expect(await readdir(root)).toEqual([]);
+        await pins.deleteEnvironment("env-1");
+        expect((await pins.pin(identity("after"), file("later").read)).status).toBe("live");
+        expect(await readdir(root)).toEqual([]);
+      } finally {
+        resume.resolve();
+        await settled;
+        mkdirSpy.mockRestore();
+      }
+    },
+  );
 
   test("environment deletion removes its pins and nothing else", async () => {
     const pins = new TranscriptMediaPins(root);

@@ -610,3 +610,40 @@ Evidence under the host temporary directory:
 `orkestrator-test-run.NFbZp8/scheduling-review-browser.log.gz` and
 `orkestrator-test-run.e92Fv0/scheduling-browser-owners.log.gz`.
 The browser aggregate remains non-green.
+
+## Transcript media snapshot review repair — 2026-10-29
+
+Preparation at `63b8a00d7` reported 952 passed, 106 skipped and the two
+unchanged native branch-suggestion failures (`rel` rather than `release/2.0`).
+The complete one-worker owner reproduced both failures (two passed, two
+failed, 23.7 s):
+
+```sh
+mise run test:logged -- --name preparation-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+Evidence: `orkestrator-test-run.mHoLpL/preparation-browser-owner.log.gz` under
+the host temporary directory. This recurrence is not classified as a newly
+confirmed flake. No native branch component, assertion, timeout or skip changed.
+The changed attachment browser owner, including snapshot hover and remount
+coverage, passed separately in both viewports (9.4 s).
+
+The exact `mise run test:browser` command was rerun after the media fixes:
+952 passed, 106 skipped and four failed (exit 1, 415.8 s). Both native branch
+cases recurred, along with both viewports of the existing streaming find
+convergence case ([0767](../native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md)).
+The attachment cases, including the new snapshot regression, passed.
+
+```sh
+mise run test:logged -- --name review-repair-browser -- mise run test:browser
+```
+
+Evidence: `orkestrator-test-run.Tb46kA/review-repair-browser.log.gz` under the
+host temporary directory. The public-site stage was blocked by the chained
+component-suite failure and was selected separately.
+
+The complete unchanged streaming owner passed alone (44.3 s), confirming the
+0767 recurrence. The separately selected public-site browser stage passed
+(10.8 s). Their exact commands are recorded in the 0767 case above. The full
+repository rerun (`mise run test`) passed in 156.7 s; targeted media backend,
+renderer and browser tests, scoped format/lint, and backend/web/e2e types passed.

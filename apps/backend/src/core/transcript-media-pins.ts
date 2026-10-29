@@ -137,6 +137,8 @@ export class TranscriptMediaPins {
   /** One pin is read or created at a time; concurrent requests share it. */
   private readonly inflight = new Map<string, Promise<TranscriptMediaPinResult>>();
   private readonly deleted = new Set<string>();
+  /** Quota admission, blob writes and deletion share one queue per environment. */
+  private readonly environmentOperations = new Map<string, Promise<void>>();
   private readonly maxEnvironmentBytes: number;
   private readonly maxEnvironmentPins: number;
   private readonly now: () => number;
@@ -168,7 +170,9 @@ export class TranscriptMediaPins {
     );
     const existing = this.inflight.get(file);
     if (existing) return existing;
-    const request = this.resolvePin(environment, file, read);
+    const request = this.withEnvironment(environment, () =>
+      this.resolvePin(environment, file, read),
+    );
     this.inflight.set(file, request);
     const cleanup = () => {
       if (this.inflight.get(file) === request) this.inflight.delete(file);
@@ -186,8 +190,27 @@ export class TranscriptMediaPins {
       if (oldest.done) break;
       this.deleted.delete(oldest.value);
     }
-    this.usage.delete(environment);
-    await rm(environment, { recursive: true, force: true });
+    await this.withEnvironment(environment, async () => {
+      this.usage.delete(environment);
+      await rm(environment, { recursive: true, force: true });
+    });
+  }
+
+  private withEnvironment<T>(environment: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.environmentOperations.get(environment) ?? Promise.resolve();
+    const request = previous.then(operation);
+    // A failed write must release the queue so deletion and later reads still run.
+    const settled = request.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.environmentOperations.set(environment, settled);
+    void settled.then(() => {
+      if (this.environmentOperations.get(environment) === settled) {
+        this.environmentOperations.delete(environment);
+      }
+    });
+    return request;
   }
 
   private environmentDirectory(environmentId: string): string {
@@ -199,6 +222,7 @@ export class TranscriptMediaPins {
     file: string,
     read: () => Promise<TranscriptMediaFileRead>,
   ): Promise<TranscriptMediaPinResult> {
+    if (this.deleted.has(environment)) return this.live(await read(), "missing");
     const raw = await readIfPresent(file);
     const record = raw ? parseRecord(raw.toString("utf8")) : null;
     if (record?.stored) {
@@ -217,6 +241,8 @@ export class TranscriptMediaPins {
       return this.live(await read(), "missing");
     }
     if (record) return this.live(await read(), record.reason ?? "quota");
+    // Existing but unreadable metadata is damaged history, not a new pin.
+    if (raw !== null) return this.live(await read(), "missing");
 
     const current = await read();
     const hash = sha256(current.bytes);
@@ -247,8 +273,7 @@ export class TranscriptMediaPins {
     await writeAtomically(file, JSON.stringify(next));
     usage.pins += 1;
     if (this.deleted.has(environment)) {
-      // Deleted while this pin was being written.
-      await rm(environment, { recursive: true, force: true });
+      // Deletion is queued behind this operation and removes all its writes.
       return this.live(current, "missing", hash, capturedAt);
     }
     return stored

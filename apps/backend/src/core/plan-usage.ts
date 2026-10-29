@@ -420,12 +420,6 @@ export function codexPlanWindows(
   const windows: NativeAgentAccountUsageWindow[] = [];
   if (chosen.primary) windows.push(chosen.primary);
   if (chosen.secondary) windows.push(chosen.secondary);
-  const balance = sources
-    .map((source) => nonEmptyString(asRecord(source.credits)?.balance))
-    .find((value) => value !== undefined);
-  if (balance !== undefined) {
-    windows.push({ window: "credits", label: "Credits", creditBalance: balance.slice(0, 64) });
-  }
   const plan = sources
     .map((source) => nonEmptyString(source.plan_type) ?? nonEmptyString(source.planType))
     .find((value) => value !== undefined);

@@ -244,7 +244,7 @@ export class CodexRuntimeTail {
    */
   async readPlanUsage(): Promise<EngineAccountUsageWindow[] | undefined> {
     const limits = await this.ctx.options.engine.readRateLimitWindows();
-    const windows = accountUsageFromLimits(limits, this.ctx.accountCredits);
+    const windows = accountUsageFromLimits(limits);
     // An empty list is a soft-empty read: app-server returned no usable windows
     // (or the payload was malformed). Signal unavailable rather than letting
     // the settings card state the account has no metered limits.

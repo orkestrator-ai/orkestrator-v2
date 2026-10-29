@@ -237,7 +237,7 @@ describe("claudePlanWindows", () => {
 });
 
 describe("codexPlanWindows", () => {
-  test("maps both limit slots, the plan name and a credit balance", () => {
+  test("maps both limit slots and the plan name, leaving the credit balance out", () => {
     const { windows, plan } = codexPlanWindows(
       {
         rate_limits: {
@@ -266,7 +266,6 @@ describe("codexPlanWindows", () => {
         resetsAt: new Date(1_779_826_837_000).toISOString(),
         windowMinutes: 10_080,
       },
-      { window: "credits", label: "Credits", creditBalance: "$4.20" },
     ]);
   });
 
@@ -317,7 +316,6 @@ describe("codexPlanWindows", () => {
         resetsAt: new Date(1_758_000_000_000).toISOString(),
         windowMinutes: 300,
       },
-      { window: "credits", label: "Credits", creditBalance: "$0" },
     ]);
   });
 
@@ -331,7 +329,7 @@ describe("codexPlanWindows", () => {
       },
       0,
     );
-    expect(windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(windows.map((window) => window.label)).toEqual(["Weekly limit"]);
     expect(windows[0]?.usedPercent).toBe(18);
   });
 
@@ -453,7 +451,6 @@ describe("codexPlanWindows", () => {
     expect(plan).toBe("plus");
     expect(windows).toEqual([
       { window: "primary", label: "5-hour limit", usedPercent: 9, windowMinutes: 300 },
-      { window: "credits", label: "Credits", creditBalance: "$3.50" },
     ]);
   });
 
@@ -687,7 +684,7 @@ describe("createPlanUsageReader", () => {
     });
     const snapshot = await reader(contextWithGlobal(), "codex", { force: true });
     expect(snapshot.status).toBe("ok");
-    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit"]);
     expect(snapshot.windows[0]?.usedPercent).toBe(18);
   });
 

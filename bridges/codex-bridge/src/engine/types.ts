@@ -201,12 +201,6 @@ export interface EngineRateLimitWindowUpdate {
   windowMinutes?: number;
 }
 
-export interface EngineCreditSnapshot {
-  hasCredits?: boolean;
-  unlimited?: boolean;
-  balance?: string;
-}
-
 export interface EngineTurnUsage {
   turnId: string;
   /** When this turn was last accounted, ISO-8601; what dates recorded usage. */
@@ -244,7 +238,6 @@ export interface EngineUsageSnapshot {
   reasoningTokens?: number;
   lastTurnTokens?: number;
   sessionTokens?: number;
-  credits?: EngineCreditSnapshot;
   rateLimits?: EngineRateLimitWindow[];
   turns?: EngineTurnUsage[];
   account?: EngineAccountUsageWindow[];
@@ -530,7 +523,6 @@ export type EngineEvent = EngineEventMeta &
     | {
         kind: "account.rateLimits.updated";
         rateLimits: EngineRateLimitWindowUpdate[];
-        credits?: EngineCreditSnapshot;
       }
     | { kind: "engine.state"; state: EngineState; detail?: string }
     /**

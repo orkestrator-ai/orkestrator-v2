@@ -1325,7 +1325,7 @@ export class CodexRuntimeSessions {
     const previous = session.threadId ? this.ctx.usageByThread.get(session.threadId) : undefined;
     const withLimits = mergeAccountUsage(
       previous?.account,
-      accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
+      accountUsageFromLimits(this.ctx.accountRateLimits),
     );
     const account = mergeAccountUsage(withLimits, providerAccount);
     if (!previous && !account) return undefined;

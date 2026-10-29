@@ -333,7 +333,15 @@ export type GraphTemplateErrorCode = (typeof GRAPH_TEMPLATE_ERROR_CODES)[number]
 export function graphTemplateExportText(template: GraphTemplateV1): string {
   // Validates the value (finite numbers, depth) exactly as digests do.
   canonicalJson(template, 128);
-  return `${prettyCanonicalJson(template, "")}\n`;
+  return graphCanonicalJsonText(template);
+}
+
+/**
+ * Any JSON value as canonical pretty text: sorted keys, two-space indentation,
+ * trailing newline (share bundles, item 405). The caller validates the value.
+ */
+export function graphCanonicalJsonText(value: unknown): string {
+  return `${prettyCanonicalJson(value, "")}\n`;
 }
 
 function prettyCanonicalJson(value: unknown, indent: string): string {

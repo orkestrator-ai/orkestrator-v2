@@ -1,6 +1,7 @@
 import { parseGraphTemplateRef, type GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { GRAPH_ID_PATTERN, GRAPH_TEMPLATE_BOUNDS } from "@orkestrator/protocol/graphs/grammar";
 import type { CommandContext } from "./commands-context.js";
+import { registerGraphSharingCommands } from "./commands-registry-graph-sharing.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import type { GraphTemplateService } from "./graph-template-service.js";
@@ -189,4 +190,7 @@ export function registerGraphTemplateCommands(register: CommandRegistrar): void 
       revisionArg(args.expectedRevision, "expectedRevision"),
     );
   });
+
+  // Item 405: share bundles, signing keys and the project template review.
+  registerGraphSharingCommands(register);
 }

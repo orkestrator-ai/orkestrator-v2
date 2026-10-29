@@ -90,7 +90,12 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "environment-cleanup-sweeps": { kind: "document" },
   "workflow-results": { kind: "envelope", collections: ["entries"] },
   "workflow-result-tools": { kind: "document" },
-  "graph-templates": { kind: "envelope", collections: ["templates", "projects"] },
+  // Item 405 adds `sharing` (the signing keys row) and `approvals` (approved
+  // project-template copies and rejections, one row per project).
+  "graph-templates": {
+    kind: "envelope",
+    collections: ["templates", "projects", "sharing", "approvals"],
+  },
   // Graph runs (plan P2.1): one row per run, owned by its environment; and
   // their artifacts, one row per artifact plus a usage row per run, owned by run.
   "graph-runs": { kind: "record", owner: ownerField("environmentId") },

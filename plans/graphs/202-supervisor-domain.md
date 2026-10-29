@@ -52,8 +52,7 @@ executors and a storage world for tests). Wired in `index.ts` (`context.graphRun
 Multi Review, drain on shutdown). Protocol: recurring kind `graph-run-tick` (inventory **B28**,
 `recurring-work.ts`); resource kind `graph-run` (`resource-events.ts`, announced by
 `storage-graph-runs.ts` on create, save and environment deletion with the run id and project);
-`NodeActivation.outlet` (gate and human nodes: the outlet taken; part of the executor report).
-Docs: `recurring-work.md`
+`NodeActivation.outlet` (gate and human nodes: the outlet taken). Docs: `recurring-work.md`
 (keyed domains, B28, rollback list), `storage.md`. Tests: `graph-run-supervisor.test.ts`.
 
 **2026-10-29 · Obligations** (`graphRunObligation`, one key per run, target = the run's
@@ -63,8 +62,8 @@ environment for admission and environment wakes).
 | --- | --- | --- | --- |
 | `provision` | `provisioning` | 1 s | no |
 | `cancel` | `cancelling` | 1 s | yes |
-| `observe` | an activation `admitting` or `running` (also while `paused`) | 1 s | yes |
-| `advance` | `running`/`waiting` with ready work or positions still to plan | 1 s | yes |
+| `observe` | an activation `admitting` or `running` (also while `paused`) | 3 s + stable spread (203); 1 s while admitting | yes |
+| `advance` | `running`/`waiting` with ready work or positions still to plan | 1 s, or 3 s while blocked; woken on a lock release (203) | yes |
 | `await-human` | only `awaiting-human` activations admitted | 30 s safety | no |
 
 `paused` with nothing admitted, and every terminal status, owe nothing (key dropped; resume wakes).
@@ -81,8 +80,10 @@ their environment wake). `provider-transition` and `environment-change` wake the
 runs. `requestObservation(runId, activationKey)` flags and wakes (208: an answer arrived).
 
 **2026-10-29 · Recovery.** No renderer is involved: `init()` starts the supervisor, whose first
-discovery (`listAllGraphRuns`) registers every run with an obligation and seeds the result-key
-index. Each run's first pass in a process hands every admitted activation to its executor's `recover` (or `start`
+discovery (`listAllGraphRuns`) registers every run with an obligation, seeds the result-key index
+and (once; 203) the workspace lock table from stored admitted activations. Until that first discovery
+completes, no activation that reads or writes a workspace is admitted (`recovering`). Each run's
+first pass in a process hands every admitted activation to its executor's `recover` (or `start`
 for `admitting`, `observe` otherwise) exactly once; `admitting` activations are always restarted
 idempotently until they report.
 
@@ -106,12 +107,11 @@ environment), stores inputs as `$input` artifacts, wakes it. A refused input end
 and throws `invalid-launch`. `get`, `list(environmentId)`, `cancel`, `pause`, `resume`,
 `advanceNow` (a locked pass now), `wake`, `requestObservation`, `resultAccepted`, `passStats`,
 `executors` (registry), `init`, `shutdown`; `wakeEnvironment`, `schedulingStatus`,
-`reconcileScheduling`. Which activations exist and are admitted, the observation cadence and run
-completion are item 203's; until then a pass drives activations already admitted. Errors: `GraphRunServiceError` codes `disabled`, `invalid-launch`,
+`reconcileScheduling`. Errors: `GraphRunServiceError` codes `disabled`, `invalid-launch`,
 `not-found`, `invalid-state`. Options: `artifacts` (required), `executors`, `provisioner`
 (`GraphRunProvisioner.provision(run, signal)` → pending | ready with environmentId | failed; none
-configured fails a provisioning run), `progressIntervalMs`, `autoAdvance`, `clock`, plus the
-keyed options.
+configured fails a provisioning run), `concurrency`, `observationIntervalMs`,
+`progressIntervalMs`, `autoAdvance`, `clock`, plus the keyed options.
 
 **2026-10-29 · For later items.**
 - 204: result keys must be unique across runs (the index maps keys globally; include the run id),

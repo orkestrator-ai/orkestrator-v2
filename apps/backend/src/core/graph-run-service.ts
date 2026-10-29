@@ -1,18 +1,18 @@
 /**
  * Graph runs: launch from a compiled plan, read, cancel, pause and resume,
- * driven by the keyed `graph-run` supervisor (plan P2.2).
+ * driven by the keyed `graph-run` supervisor (plan P2.2, P2.3).
  *
  * The run record is the authority (invariant 1). Every pass reads its run
  * from storage under the run's lock and saves with compare-and-swap; nothing
- * a pass needs lives only in memory except which activations this process
- * already handed to their executor (every admitted activation is recovered
- * once after a restart). The view,
+ * a pass needs lives only in memory except observation timing, which a
+ * restart rebuilds (every admitted activation is recovered once). The view,
  * the CLI and the coordinator rehydrate from the stored record; closing a
  * view never cancels a run.
  *
  * Bounded: one key per run with an obligation (`maxKeys` of the supervisor),
  * at most 8 passes at once sharing the `workflow-provider` admission pool,
- * and the record's own bounds (item 201). Logs carry run ids, codes and counts only.
+ * per-run limits from the plan, the 200 live-activation cap and the record's
+ * own bounds (item 201). Logs carry run ids, codes and counts only.
  *
  * Launch surfaces (item 214) compile a template against the launch
  * environment, resolve role bindings and parameters, and call {@link
@@ -25,6 +25,7 @@ import {
   GRAPH_RUN_FORMAT,
   GRAPH_RUN_FORMAT_VERSION,
   GRAPH_RUN_INPUT_PRODUCER,
+  graphNodeBranches,
   isGraphRunTerminal,
   type GraphRun,
   type GraphRunBindings,
@@ -35,6 +36,7 @@ import type { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphStorageError, isGraphStorageError } from "./graph-run-errors.js";
 import { GraphNodeExecutorRegistry } from "./graph-run-executors.js";
 import {
+  GRAPH_RUN_OBSERVATION_MS,
   GRAPH_RUN_PROGRESS_MS,
   GraphRunMemory,
   GraphRunPassFencedError,
@@ -44,6 +46,7 @@ import {
   type GraphRunPassStats,
   type GraphRunProvisioner,
 } from "./graph-run-pass.js";
+import { GraphWorkspaceLocks, graphRunWorkspaceHold } from "./graph-run-scheduling.js";
 import {
   GraphRunResultKeys,
   createGraphRunSupervisor,
@@ -53,6 +56,10 @@ import {
   type GraphRunObligation,
 } from "./graph-run-supervisor.js";
 import { isGraphActivationAdmitted, transitionGraphRun } from "./graph-run-transitions.js";
+import {
+  reviewFanoutConcurrency,
+  type ReviewFanoutConcurrency,
+} from "./review-fanout-scheduler.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { WorkflowResultAcceptance } from "./workflow-result-service.js";
@@ -67,7 +74,7 @@ import {
   type WorkflowWakeReason,
 } from "./workflow-supervisor.js";
 
-/** Runs whose latest pass counts are kept for diagnostics. */
+/** Runs whose latest pass counts are kept for diagnostics and the benchmark. */
 const MAX_RETAINED_PASS_STATS = 256;
 
 export type GraphRunServiceErrorCode =
@@ -114,6 +121,9 @@ export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
   executors?: GraphNodeExecutorRegistry;
   /** Creates the environment of a run launched without one (207/214). */
   provisioner?: GraphRunProvisioner | null;
+  /** Per-pass executor-call caps; defaults 4 starting, 8 observing, 4 per provider. */
+  concurrency?: Partial<ReviewFanoutConcurrency>;
+  observationIntervalMs?: number;
   progressIntervalMs?: number;
   /** False: no supervisor; callers drive passes with `advanceNow` (tests). */
   autoAdvance?: boolean;
@@ -135,13 +145,18 @@ export class GraphRunService implements KeyedWorkflowOwner {
   readonly enabled: boolean;
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly memories = new Map<string, GraphRunMemory>();
+  private readonly workspaceLocks = new GraphWorkspaceLocks();
   private readonly resultKeys = new GraphRunResultKeys();
   private readonly passDeps: GraphRunPassDependencies;
   private supervisor: KeyedWorkflowSupervisor<GraphRunObligation> | null = null;
   private unsubscribeStorage: (() => void) | null = null;
   private stopController = new AbortController();
   private stopped = false;
-  /** Counts of the latest pass per run. */
+  /** Startup recovery seeded every stored run's workspace holds. */
+  private workspaceSeeded = false;
+  /** Runs a pass has touched since start; recovery seeding never overwrites them. */
+  private readonly passed = new Set<string>();
+  /** Counts of the latest pass per run (the efficiency benchmark reads them). */
   private readonly lastStats = new Map<string, GraphRunPassStats>();
 
   constructor(
@@ -155,12 +170,23 @@ export class GraphRunService implements KeyedWorkflowOwner {
       storage: storage.graphRuns,
       artifacts: options.artifacts,
       executors: this.executors,
+      locks: this.workspaceLocks,
+      workspaceKnown: () => this.workspaceSeeded,
       provisioner: options.provisioner ?? null,
+      concurrency: reviewFanoutConcurrency(options.concurrency),
+      observationIntervalMs: options.observationIntervalMs ?? GRAPH_RUN_OBSERVATION_MS,
       progressIntervalMs: options.progressIntervalMs ?? GRAPH_RUN_PROGRESS_MS,
       monotonic: schedulerNow,
       clock: options.clock ?? (() => new Date()),
       memory: (runId) => this.memory(runId),
       wake: (runId) => this.wake(runId, "explicit"),
+      // A released lock lets another run's ready work in: wake the runs that may have some.
+      released: (environmentId) =>
+        this.supervisor?.wakeTarget(
+          environmentId,
+          "explicit",
+          (obligation) => obligation === "advance" || obligation === "observe",
+        ),
     };
   }
 
@@ -168,13 +194,17 @@ export class GraphRunService implements KeyedWorkflowOwner {
 
   /**
    * Starts the keyed driver. Non-blocking: the first discovery runs on the
-   * scheduler and recovers every run with an obligation. Disabled (rolled
-   * back) or `autoAdvance: false`: nothing runs.
+   * scheduler, recovers every run with an obligation and seeds the workspace
+   * locks. Disabled (rolled back) or `autoAdvance: false`: nothing runs.
    */
   async init(): Promise<void> {
     this.stopped = false;
     this.stopController = new AbortController();
-    if (!this.enabled || this.options.autoAdvance === false || this.supervisor) return;
+    if (!this.enabled || this.options.autoAdvance === false || this.supervisor) {
+      // Driven by hand: there is no recovery pass to wait for.
+      if (this.options.autoAdvance === false) this.workspaceSeeded = true;
+      return;
+    }
     this.supervisor = createGraphRunSupervisor({
       discover: () => this.discover(),
       advance: (pass) => this.advancePass(pass),
@@ -207,9 +237,17 @@ export class GraphRunService implements KeyedWorkflowOwner {
   }
 
   private async discover() {
-    return discoverGraphRuns(this.storage.graphRuns, (run) => {
-      if (!isGraphRunTerminal(run.status)) this.resultKeys.note(run);
+    const result = await discoverGraphRuns(this.storage.graphRuns, (run) => {
+      if (isGraphRunTerminal(run.status)) return;
+      this.resultKeys.note(run);
+      // Seed only runs no pass has touched: a pass's own view is newer.
+      if (!this.workspaceSeeded && !this.passed.has(run.id)) {
+        this.workspaceLocks.set(run.id, run.environmentId, graphRunWorkspaceHold(run));
+      }
     });
+    this.workspaceSeeded = true;
+    this.passed.clear();
+    return result;
   }
 
   // ------------------------------------------------------------ KeyedWorkflowOwner
@@ -413,8 +451,18 @@ export class GraphRunService implements KeyedWorkflowOwner {
     }
     for (const node of plan.nodes) {
       if (node.kind !== "agent") continue;
-      if (launch.roles[node.role] === undefined) {
-        throw launchError(`The role ${node.role} is not bound`);
+      let branches;
+      try {
+        branches = graphNodeBranches(node, launch.roles);
+      } catch (error) {
+        throw launchError(error instanceof Error ? error.message : "Unsupported replication");
+      }
+      const roles = branches ? branches.map((branch) => branch.role) : [node.role];
+      for (const role of roles) {
+        if (launch.roles[role] === undefined) throw launchError(`The role ${role} is not bound`);
+      }
+      if (branches && branches.length === 0 && node.fanOut.min > 0) {
+        throw launchError(`The node ${node.id} has no branches to run`);
       }
     }
     return inputs;
@@ -478,6 +526,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
     this.supervisor?.forget(runId);
     this.memories.delete(runId);
     this.resultKeys.forget(runId);
+    this.workspaceLocks.release(runId);
     this.lastStats.delete(runId);
   }
 
@@ -486,6 +535,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
     this.resultKeys.note(run);
     if (isGraphRunTerminal(run.status)) {
       this.memories.delete(run.id);
+      this.workspaceLocks.release(run.id);
       this.supervisor?.note(run.id, null);
       return;
     }
@@ -530,6 +580,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
 
   private pass(runId: string, options: GraphRunPassOptions): Promise<GraphRun | null> {
     return this.withLock(runId, async () => {
+      if (!this.workspaceSeeded) this.passed.add(runId);
       try {
         const { run, stats } = await runGraphRunPass(this.passDeps, runId, options);
         if (stats) {

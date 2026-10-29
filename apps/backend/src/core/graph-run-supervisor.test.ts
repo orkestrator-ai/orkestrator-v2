@@ -300,6 +300,15 @@ describe("the graph-run keyed domain", () => {
     expect((await disabled.get(run.id))?.status).toBe("cancelled");
   });
 
+  test("a launch is advanced by the driver without any explicit pass", async () => {
+    const { service, time } = await keyed();
+    const run = await service.create(launchInput());
+    await advanceKeyedWork(time, [service], 10_000, 500);
+    const stored = await service.get(run.id);
+    expect(stored?.status).toBe("complete");
+    expect(service.schedulingStatus()?.keys).toBe(0);
+  });
+
   test("discovery registers a run whose wakeup was lost", async () => {
     const { world, service, time } = await keyed();
     await settleKeyedWork(time, [service]);

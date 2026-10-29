@@ -12,8 +12,8 @@
  * | --- | --- | --- |
  * | `provision` | `provisioning` | 1 s, without a provider slot |
  * | `cancel` | `cancelling` | 1 s, until every admitted activation stopped |
- * | `observe` | an activation is `admitting` or `running` | 1 s |
- * | `advance` | `running`/`waiting` with ready work or positions still to plan | 1 s |
+ * | `observe` | an activation is `admitting` or `running` | 3 s plus a stable per-run spread; 1 s while admitting |
+ * | `advance` | `running`/`waiting` with ready work or positions still to plan | 1 s, and woken when a workspace lock is released |
  * | `await-human` | only `awaiting-human` activations are admitted | 30 s safety, without a provider slot; answers wake the run |
  *
  * A `paused` run owes nothing unless an activation is still admitted (it
@@ -29,8 +29,10 @@
  * transitions wake the environment's runs.
  *
  * **Recovery.** Startup needs no renderer: the first discovery registers every
- * run with an obligation and seeds the result-key index, and each run's first
- * pass hands its admitted activations to their executors' `recover`.
+ * run with an obligation, seeds the workspace locks and the result-key index,
+ * and each run's first pass hands its admitted activations to their
+ * executors' `recover`. Until that first discovery completes, no activation
+ * that reads or writes a workspace is admitted.
  */
 import { isGraphRunTerminal, type GraphRun } from "@orkestrator/protocol/graphs/run";
 import { isGraphActivationAdmitted } from "./graph-run-transitions.js";

@@ -370,14 +370,15 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "per-key-serial",
     "storage-reconcile",
   ),
-  // Step 08 keyed supervision of graph runs (item 202): one pass per run
-  // with an obligation every 1 s, 30 s while only a person can act; 30 s
-  // safety discovery.
+  // Step 08 keyed supervision of graph runs (items 202, 203): one pass per
+  // run with an obligation; running activations observed every 3 s plus a
+  // stable spread, 1 s while provisioning, cancelling or admitting, 30 s
+  // while only a person can act; 30 s safety discovery.
   "graph-run-tick": backend(
     "B28",
     "interval",
     "progress",
-    1_000,
+    3_000,
     "per-key-serial",
     "storage-reconcile",
   ),

@@ -6,11 +6,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Decide the host-wide caches**: move or document as process-wide, per entry. Status: open.
-2. **Move the tmux state into one owner**: `tmuxManager`, activity writes, orphan tracking, interactive terminals, Claude state polls and the registered config-directory provider. Status: open.
-3. **Move the other per-backend rows**: feature build, public-API in-flight maps, cleanup preview grants, Cursor SDK login, account usage and refreshers, the OOM watcher, GitHub/Linear locks, the kept-branch log set. Status: open.
-4. **Take `tmux-session-manager.ts` off the `import/no-mutable-exports` allowlist**. Status: open.
-5. **Two-backend tests and qualification**: extend `backend-runtime.test.ts` per moved piece; format, lint, typecheck and `mise run test` per move. Status: open.
+1. **Decide the host-wide caches**: move or document as process-wide, per entry. Status: done (#1335; see Outstanding work 1 and decision 2).
+2. **Move the tmux state into one owner**: `tmuxManager`, activity writes, orphan tracking, interactive terminals, Claude state polls and the registered config-directory provider. Status: done (#1335; `TmuxRuntime`, decision 1).
+3. **Move the other per-backend rows**: feature build, public-API in-flight maps, cleanup preview grants, Cursor SDK login, account usage and refreshers, the OOM watcher, GitHub/Linear locks, the kept-branch log set. Status: done (#1335; follow-ups in 0390 and 0733).
+4. **Take `tmux-session-manager.ts` off the `import/no-mutable-exports` allowlist**. Status: done (#1335).
+5. **Two-backend tests and qualification**: extend `backend-runtime.test.ts` per moved piece; format, lint, typecheck and `mise run test` per move. Status: done (#1335; 14 cases, now 16 with 0733). A green full suite on a quiet host is still under Needs verification.
 
 ### 1. Decide the host-wide caches
 
@@ -381,6 +381,32 @@ evidence.
     - Pros: a complete result for every group. Cons: it is not the default
       configuration, and the run was not green (see Validation evidence and
       case 1195); a green full suite on a quiet host is still needed.
+
+14. **Task 1: two host-wide entries stayed process-wide, not moved as the
+    Task analysis recommended.**
+    - Options: the analysis's recommendation (move `activeDynamicCompressions`
+      and the design export locks); keep them process-wide.
+    - Chosen (in #1335): keep them process-wide, each documented at its
+      declaration and in `backend-runtime.md`.
+    - Why: the compression counter is admission for CPU-bound work, and the
+      export locks serialise writes to one host file, so both bound the host
+      process, not one backend. A per-backend copy would let two backends
+      write one file at once.
+    - Cons: `gateway-support-core.ts` stays on the `import/no-mutable-exports`
+      allowlist.
+15. **Tasks 1, 2, 4 and 5: re-delegated after merge; no code change (2026-10-29).**
+    - A later worker on `todo-0133-tmux-state-owner-abbaa5514765` (from `main`
+      at `79f3bc97`) was asked to do tasks 1, 2, 4 and 5. It found every one
+      already merged in #1335 (`511d3de8`): `tmux-runtime.ts` exists, no
+      `git grep` hit remains for the removed seams, `.oxlintrc.json` no longer
+      lists `tmux-session-manager.ts`, and `backend-runtime.test.ts` has the
+      tmux cases.
+    - Chosen: mark the Task analysis statuses done and change no code, instead
+      of redoing the refactor or deleting this file.
+    - Why: redoing it would be a no-op or a conflict with 0057's split.
+      Deleting the file and its index row (decision 12) is the next step now
+      that #1335 has merged, but the request was to update statuses, so the
+      deletion is left to the reviewer.
 
 ## Needs verification
 

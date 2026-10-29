@@ -174,7 +174,11 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
         },
       },
       inputs: [
-        port("validation-plan@1", true, "The commands to run, for the commit they name."),
+        port(
+          "validation-plan@1",
+          true,
+          "The commands to run, for the commit they name or an ancestor of it (a repair loop's later commits reuse the plan).",
+        ),
         port("workspace@1", true, "The commit to validate; it must be the environment's HEAD."),
       ],
       outputs: [

@@ -6,7 +6,11 @@
  * commit through the environment-owned validation worker
  * (`start_review_validation` / `status_review_validation`, the commands the
  * Build Pipeline and Multi Review drive), after checking that the plan names
- * that commit and that it is the environment's HEAD. The worker is
+ * that commit and that it is the environment's HEAD. `run-validation` also
+ * accepts a plan made for an ancestor of that commit and runs it on the
+ * commit itself: a repair loop (report §9.4) carries the fixer's new commit
+ * into the next iteration with the plan the run started with. Sealing stays
+ * exact, because the package names the commit its plan was made for. The worker is
  * idempotent per validation run id, and the id is derived from the run,
  * the activation slot, the plan and a generation, so a retry, a restart or a
  * second backend process joins the same validation run instead of running the
@@ -74,7 +78,31 @@ export function graphValidationRunId(
   return `graph-validation-${hash}`;
 }
 
-async function validationInputs(ctx: GraphSystemActionContext): Promise<ValidationInputs> {
+/** Whether `ancestor` is `descendant` or one of its ancestors; any failure answers no. */
+async function isAncestor(
+  ctx: GraphSystemActionContext,
+  environment: Environment,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  try {
+    await ctx.deps.shell.git(environment, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The plan, the commit to validate and the environment. With
+ * `acceptAncestorPlan`, a plan for an ancestor of the workspace commit is
+ * rebased onto that commit (its commands run there); otherwise the plan must
+ * name the commit exactly.
+ */
+async function validationInputs(
+  ctx: GraphSystemActionContext,
+  options: { acceptAncestorPlan: boolean },
+): Promise<ValidationInputs> {
   let plan: ReviewValidationPlan;
   try {
     plan = parseReviewValidationPlan(await ctx.requireInput("validation-plan@1"));
@@ -83,12 +111,20 @@ async function validationInputs(ctx: GraphSystemActionContext): Promise<Validati
     throw new GraphSystemActionError("The validation plan is invalid", "invalid-result");
   }
   const workspace = await ctx.requireInput<GraphWorkspaceValue>("workspace@1");
-  if (plan.headRef !== workspace.headRef) {
-    throw new GraphSystemActionError(
-      `The validation plan is for commit ${plan.headRef.slice(0, 12)}, the workspace is at ${workspace.headRef.slice(0, 12)}`,
-    );
-  }
   const environment = await ctx.environment();
+  if (plan.headRef !== workspace.headRef) {
+    if (
+      !options.acceptAncestorPlan ||
+      !(await isAncestor(ctx, environment, plan.headRef, workspace.headRef))
+    ) {
+      throw new GraphSystemActionError(
+        options.acceptAncestorPlan
+          ? `The validation plan is for commit ${plan.headRef.slice(0, 12)}, which is not the workspace's commit ${workspace.headRef.slice(0, 12)} or one of its ancestors`
+          : `The validation plan is for commit ${plan.headRef.slice(0, 12)}, the workspace is at ${workspace.headRef.slice(0, 12)}`,
+      );
+    }
+    plan = { ...plan, headRef: workspace.headRef };
+  }
   const head = (
     await ctx.deps.shell.git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
   ).trim();
@@ -260,7 +296,7 @@ function workspaceFacts(workspace: GraphWorkspaceValue) {
 export const runValidationAction: GraphSystemActionHandler = {
   action: "run-validation",
   async run(ctx) {
-    const inputs = await validationInputs(ctx);
+    const inputs = await validationInputs(ctx, { acceptAncestorPlan: true });
     const run = await validate(ctx, inputs);
     const outputBytes = typeof ctx.params.outputBytes === "number" ? ctx.params.outputBytes : 8_192;
     if (ctx.produces("validation-results@1")) {
@@ -279,7 +315,7 @@ export const runValidationAction: GraphSystemActionHandler = {
 export const runValidationAndSealAction: GraphSystemActionHandler = {
   action: "run-validation-and-seal",
   async run(ctx) {
-    const inputs = await validationInputs(ctx);
+    const inputs = await validationInputs(ctx, { acceptAncestorPlan: false });
     const run = await validate(ctx, inputs);
     const configured = (await ctx.deps.storage.getRepositoryConfig(ctx.run.projectId)).prBaseBranch;
     const targetBranch =

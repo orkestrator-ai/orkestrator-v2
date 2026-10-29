@@ -11,6 +11,7 @@ import { REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS } from "@orkestrator/protocol/
 import type { AgentBranchContext } from "./agent-branch-commits.js";
 import { agentBranchPollScope } from "./agent-branch-stall.js";
 import {
+  AgentBranchResultError,
   agentBranchNowIso,
   type AgentBranchContractFailure,
   type AgentBranchRecord,
@@ -48,7 +49,7 @@ export async function prepareAgentBranchRepair<B extends AgentBranchRecord>(
   const { host } = context;
   const attempt = (branch.schemaRepairAttempts ?? 0) + 1;
   if (attempt > AGENT_BRANCH_MAX_SCHEMA_REPAIR_ATTEMPTS) {
-    throw new Error(
+    throw new AgentBranchResultError(
       `${error.message} The ${host.wording.subject} could not produce ${host.wording.validResult} in ${AGENT_BRANCH_MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
     );
   }

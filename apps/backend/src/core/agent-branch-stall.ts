@@ -9,6 +9,7 @@ import type { AgentBranchContext } from "./agent-branch-commits.js";
 import {
   agentBranchErrorMessage,
   agentBranchNowIso,
+  type AgentBranchFailureKind,
   type AgentBranchRecord,
 } from "./agent-branch-types.js";
 
@@ -28,6 +29,7 @@ export async function failAgentBranch<B extends AgentBranchRecord>(
   context: AgentBranchContext<B>,
   branch: B,
   error: string,
+  kind: AgentBranchFailureKind = "provider",
 ): Promise<"continue"> {
   if (branch.providerSessionId) {
     await context.host.abandonSession(branch, branch.providerSessionId);
@@ -37,6 +39,7 @@ export async function failAgentBranch<B extends AgentBranchRecord>(
   branch.error = error;
   branch.completedAt = agentBranchNowIso();
   delete branch.stalledSince;
+  context.host.branchFailed?.(branch, kind);
   await context.commits.commit();
   return "continue";
 }
@@ -52,6 +55,7 @@ export async function recordAgentBranchStall<B extends AgentBranchRecord>(
   branch: B,
   error: string | (() => Promise<string>),
   retry?: () => Promise<boolean>,
+  kind: AgentBranchFailureKind = "provider",
 ): Promise<"continue" | "stop"> {
   const scope = agentBranchPollScope(context, branch, "idle");
   const gate = context.host.pollGate;
@@ -65,7 +69,12 @@ export async function recordAgentBranchStall<B extends AgentBranchRecord>(
     gate?.exhausted(scope, branch.idleResultPolls, AGENT_BRANCH_MAX_IDLE_RESULT_POLLS)
   ) {
     if (retry && (await retry())) return "stop";
-    return failAgentBranch(context, branch, typeof error === "string" ? error : await error());
+    return failAgentBranch(
+      context,
+      branch,
+      typeof error === "string" ? error : await error(),
+      kind,
+    );
   }
   await context.commits.commit();
   return "continue";

@@ -309,7 +309,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["observer", "reviewer"],
     backend:
-      "none yet: prPrompt (build-pipeline-prompts.ts) pushes and opens the pull request itself, which no agent node may do (D12); 204 needs a description-only builder",
+      "pullRequestDescriptionPrompt (build-pipeline-prompts.ts): prPrompt's description guidance without pushing or touching the pull request (D12)",
     textMaxBytes: 8 * KIB,
   },
   {
@@ -321,7 +321,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [workspaceOutput(true)],
     profiles: ["builder"],
     backend:
-      "resolveConflictsPrompt (build-pipeline-prompts.ts) without its push sentence: an agent node may not push (D12); 204 needs that variant",
+      "resolveConflictsLocallyPrompt (build-pipeline-prompts.ts): resolveConflictsPrompt committing locally, without pushing (D12)",
     textMaxBytes: 8 * KIB,
   },
 ];

@@ -58,6 +58,7 @@ import {
 import {
   AgentBranchDispatchSetupError,
   AgentBranchPolicyUnavailableError,
+  AgentBranchResultError,
   agentBranchErrorMessage,
   agentBranchModel,
   agentBranchNowIso,
@@ -173,6 +174,11 @@ export function unattendedBranchInteraction(input: {
   };
 }
 
+/** The prompt with the turn's result instruction appended, when it has one. */
+function withResultInstruction(prompt: string, instruction: string): string {
+  return instruction ? `${prompt}\n\n${instruction}` : prompt;
+}
+
 export class AgentBranchRunner<B extends AgentBranchRecord> {
   private readonly commits: AgentBranchCommitQueue;
   private readonly context: AgentBranchContext<B>;
@@ -276,6 +282,15 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       this.host.clearAdmission?.(branch);
       delete branch.idleResultPolls;
       delete branch.stalledSince;
+      this.host.branchFailed?.(
+        branch,
+        error instanceof AgentBranchResultError
+          ? "result"
+          : error instanceof ProviderUnreachableError ||
+              (error instanceof Error && error.name === "ProviderSessionFailedError")
+            ? "provider"
+            : "system",
+      );
       this.record({ operation: "reviewer.task", outcome: "failed" });
       await this.commits.commit();
     }
@@ -522,9 +537,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     try {
       await provider.send(
         providerSessionId,
-        toolTransport
-          ? `${prompt}\n\n${host.resultInstruction(branch, requestId, agentMcp)}`
-          : prompt,
+        withResultInstruction(
+          prompt,
+          toolTransport ? host.resultInstruction(branch, requestId, agentMcp) : "",
+        ),
         {
           requestId,
           schema: toolTransport ? undefined : host.resultSchema(branch),
@@ -671,6 +687,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
           : statusDetail
             ? `The ${host.wording.subject} session failed: ${statusDetail}`
             : `The ${host.wording.subject} session failed`;
+      host.branchFailed?.(branch, "provider");
       await this.commits.commit();
       return "continue";
     };
@@ -739,6 +756,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
               })
             : `The ${host.wording.subject} became idle without returning its ${host.wording.resultLabel}`,
         () => prepareAgentBranchReminder(this.context, branch, resultTurn.toolName, finalText),
+        "result",
       );
     }
     await finalUsage();
@@ -827,7 +845,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       branch.providerSessionId!,
       branch.requestId!,
       branch.resultTransport === "tool-v1"
-        ? () => this.host.readResult?.<unknown>(branch.requestId!)
+        ? () =>
+            this.host.dispatchProof
+              ? this.host.dispatchProof<unknown>(branch.requestId!)
+              : this.host.readResult?.<unknown>(branch.requestId!)
         : undefined,
     );
   }

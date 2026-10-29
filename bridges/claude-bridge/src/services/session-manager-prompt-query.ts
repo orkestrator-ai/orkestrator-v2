@@ -7,6 +7,7 @@ import type { SessionState } from "../types/index.js";
 import {
   claudeArtifactServerTools,
   claudeWorkflowResultTools,
+  createWorkflowResultTurnHook,
 } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
@@ -477,7 +478,17 @@ export function claudeQueryOptions(
               },
             ]
           : []),
-        { hooks: [recordingHookDenials(createStaleMcpServerHook(mcp), session.id)] },
+        {
+          hooks: [
+            recordingHookDenials(createStaleMcpServerHook(mcp), session.id),
+            // A turn's declared workflow-result attempt: each result tool only
+            // with the key it answers for, in every permission mode.
+            recordingHookDenials(
+              createWorkflowResultTurnHook((toolUseId) => turnFor(toolUseId).workflowResultTurn()),
+              session.id,
+            ),
+          ],
+        },
         commandChangeHook.PreToolUse,
         shellTaskHook.PreToolUse,
       ],

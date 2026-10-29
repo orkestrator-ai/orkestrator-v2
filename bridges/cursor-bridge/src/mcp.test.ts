@@ -30,6 +30,8 @@ import {
   seedObservedMcpTools,
   setCursorMcpTimeoutsForTests,
   setCursorMcpTransportForTests,
+  WORKFLOW_RESULT_CALL_REFUSAL,
+  workflowResultCallRefusal,
 } from "./mcp.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
 import { boundTranscript } from "./transcript.js";
@@ -482,6 +484,104 @@ describe("hosted coordinator research tools", () => {
 });
 
 describe("hosted Orkestrator custom tools", () => {
+  test("gates the result tools of a turn that declared a workflow-result attempt", async () => {
+    const calls: string[] = [];
+    setCursorMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [
+            "submit_a",
+            "validate_a",
+            "submit_b",
+            "validate_b",
+            "get_workflow_result_status",
+            "read_artifact",
+            "ask_human",
+            "submit_review_report",
+            "validate_workflow_result",
+            "send_message",
+          ].map((name) => ({ name })),
+          async call(name) {
+            calls.push(name);
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    let turn: Parameters<typeof workflowResultCallRefusal>[0] = {
+      tool: "submit_a",
+      resultKey: "key-a",
+      slots: [
+        { tool: "submit_a", resultKey: "key-a" },
+        { tool: "submit_b", resultKey: "key-b" },
+      ],
+      extraTools: ["read_artifact"],
+    };
+    const hosted = await hostOrkestratorCustomTools(
+      { url: "http://127.0.0.1:4567/mcp", token: "attempt-token" },
+      undefined,
+      { workflowResultTurn: () => turn },
+    );
+    const run = async (name: string, args: Record<string, unknown>) => {
+      const tool = hosted?.customTools[name];
+      if (!tool) throw new Error(`missing hosted tool ${name}`);
+      const result = (await tool.execute(args, {})) as { isError?: boolean };
+      return result.isError === true ? "refused" : "ran";
+    };
+
+    expect(await run("submit_a", { resultKey: "key-a" })).toBe("ran");
+    expect(await run("validate_a", { resultKey: "key-a" })).toBe("ran");
+    expect(await run("submit_b", { resultKey: "key-b" })).toBe("ran");
+    expect(await run("submit_a", { resultKey: "key-b" })).toBe("refused");
+    expect(await run("validate_b", { resultKey: "key-a" })).toBe("refused");
+    expect(await run("get_workflow_result_status", { resultKey: "key-b" })).toBe("ran");
+    expect(await run("get_workflow_result_status", { resultKey: "other" })).toBe("refused");
+    expect(await run("read_artifact", { id: "artifact-1" })).toBe("ran");
+    expect(await run("ask_human", { question: "?" })).toBe("refused");
+    // Another attempt's kind tool is not this turn's own.
+    expect(await run("submit_review_report", { resultKey: "key-a" })).toBe("refused");
+    // Tools outside the result family are not gated.
+    expect(await run("send_message", {})).toBe("ran");
+
+    // An old kind-tool turn is not gated here: it behaves as it always did,
+    // and the backend's refusal names the attempt's own key.
+    turn = { tool: "submit_review_report", resultKey: "review-key" };
+    expect(await run("submit_review_report", { resultKey: "review-key" })).toBe("ran");
+    expect(await run("validate_workflow_result", { resultKey: "review-key" })).toBe("ran");
+    expect(await run("submit_review_report", { resultKey: "key-a" })).toBe("ran");
+
+    // A turn that declared no attempt gates nothing.
+    turn = undefined;
+    expect(await run("submit_a", { resultKey: "anything" })).toBe("ran");
+    expect(await run("ask_human", {})).toBe("ran");
+
+    expect(calls.filter((name) => name === "submit_a")).toHaveLength(2);
+    await hosted?.close();
+  });
+
+  test("names the refusal only for result-family tools of a declared turn", () => {
+    const turn = {
+      tool: "submit_a",
+      resultKey: "key-a",
+      slots: [{ tool: "submit_a", resultKey: "key-a" }],
+      extraTools: ["ask_human"],
+    };
+    expect(workflowResultCallRefusal(turn, "submit_a", { resultKey: "x" })).toBe(
+      WORKFLOW_RESULT_CALL_REFUSAL,
+    );
+    expect(workflowResultCallRefusal(turn, "report_progress", { resultKey: "key-a" })).toBe(
+      WORKFLOW_RESULT_CALL_REFUSAL,
+    );
+    expect(workflowResultCallRefusal(turn, "validate_other", {})).toBe(
+      WORKFLOW_RESULT_CALL_REFUSAL,
+    );
+    expect(workflowResultCallRefusal(turn, "ask_human", {})).toBeUndefined();
+    expect(workflowResultCallRefusal(turn, "list_projects", {})).toBeUndefined();
+    expect(workflowResultCallRefusal(turn, "validate_Weird", {})).toBeUndefined();
+    expect(workflowResultCallRefusal(undefined, "submit_a", {})).toBeUndefined();
+  });
+
   test("registers Control MCP tools for in-process execution", async () => {
     setCursorMcpTransportForTests({
       async connect() {

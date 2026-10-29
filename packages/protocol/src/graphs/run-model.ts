@@ -25,6 +25,7 @@ import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan } from "./plan.js";
 import type { GraphEnforcementTier, GraphScalarValue } from "./template-model.js";
 import type { GraphErrorCause } from "./types.js";
+import type { GraphAgentSessionState } from "./run-agent-session.js";
 
 const KIB = 1024;
 const MIB = 1024 * KIB;
@@ -240,7 +241,12 @@ export const GRAPH_ACTIVATION_TERMINAL_STATES = [
 export const GRAPH_DISPATCH_STATES = ["prepared", "dispatching", "sent"] as const;
 export type GraphDispatchState = (typeof GRAPH_DISPATCH_STATES)[number];
 
-export interface GraphActivationSession {
+/**
+ * An agent activation's session: its identity, the dispatch journal and, from
+ * {@link GraphAgentSessionState}, the agent branch runner's durable state
+ * (repair, reminder, continuation, stall clocks) and an `ask_human` question.
+ */
+export interface GraphActivationSession extends GraphAgentSessionState {
   agent: AgentPlatform;
   model?: string;
   effort?: string;

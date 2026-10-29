@@ -178,6 +178,7 @@ import { gitEnvironmentValidator } from "./workflow-result-environment-validator
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphRunService } from "./graph-run-service.js";
+import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -200,6 +201,7 @@ export class OrkestratorBackend {
   private readonly graphTemplates: GraphTemplateService;
   /** Graph runs on the keyed `graph-run` domain (items 202, 203). */
   private readonly graphRuns: GraphRunService;
+  private readonly graphAgents: GraphAgentWiring;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1095,11 +1097,37 @@ export class OrkestratorBackend {
     );
     context.multiReviews = this.multiReviews;
     // Node executors (items 204–208) register on `graphRuns.executors`.
+    const graphArtifacts = new GraphArtifactStore({
+      storage,
+      fence: context.runtime.environments.fence,
+    });
     this.graphRuns = new GraphRunService(storage, {
-      artifacts: new GraphArtifactStore({ storage, fence: context.runtime.environments.fence }),
+      artifacts: graphArtifacts,
       workflowAdmission: this.workflowAdmission,
     });
     context.graphRuns = this.graphRuns;
+    // Agent nodes run on the shared agent branch runner (item 204).
+    this.graphAgents = installGraphAgentExecutor({
+      graphRuns: this.graphRuns,
+      artifacts: graphArtifacts,
+      storage,
+      invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return (await handler(args, context)) as T;
+      },
+      workflowResults: this.workflowResults,
+      agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      toolResultsEnabled: (agent) => this.workflowResultRollout.allows(agent, "graph-output"),
+      refreshToolResults: () => this.workflowResultRollout.refresh(),
+      ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
+      environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      projectNotes: async (projectId) =>
+        (await storage.kanban.getProjectNotes(projectId)).content || undefined,
+      artifactDispatch,
+    });
+    context.graphQuestions = this.graphAgents.questions;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -2271,6 +2299,7 @@ export class OrkestratorBackend {
         }
         try {
           await this.graphRuns.shutdown();
+          this.graphAgents.dispose();
         } catch (error) {
           console.warn("[backend] Failed to drain graph runs:", error);
         }

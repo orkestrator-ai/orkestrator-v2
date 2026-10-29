@@ -82,6 +82,8 @@ export interface AgentBranchRecord {
   completedAt?: string;
 }
 
+export type AgentBranchFailureKind = "provider" | "result" | "system";
+
 /** A result that failed its contract: the repair turn quotes `issues`. */
 export interface AgentBranchContractFailure {
   message: string;
@@ -149,6 +151,11 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   prepareResult?(branch: B, requestId: string, schema: JsonSchema): Promise<void>;
   supportsToolResult?(branch: B): boolean;
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
+  /**
+   * A result that proves a recovered request reached the provider (it can
+   * only have come from that request's own turn). Defaults to {@link readResult}.
+   */
+  dispatchProof?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
   projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
   heldResult?(requestId: string): { digest: string; ageMs: number } | undefined;
   claimResultNudge?(requestId: string): boolean;
@@ -164,7 +171,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   branchPrompt(branch: B, index: number, count: number): Promise<string>;
   /** The result contract, for slot preparation and structured output. */
   resultSchema(branch: B): JsonSchema;
-  /** The result-tool instruction appended to a tool-transport turn. */
+  /** The result-tool instruction appended to a tool-transport turn; empty appends nothing. */
   resultInstruction(
     branch: B,
     requestId: string,
@@ -193,6 +200,13 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   abandonSession(branch: B, providerSessionId: string): Promise<void>;
   /** Errors that end the whole pass instead of failing one branch. */
   isPassFatal?(error: unknown): boolean;
+  /**
+   * Told why a branch failed, as it is committed `failed`: the provider or
+   * session (`provider`), its result contract (`result`: repairs spent, or no
+   * result after the reminder), or anything else (`system`). Owners that
+   * classify failures (graph retry causes) use it; it changes nothing.
+   */
+  branchFailed?(branch: B, kind: AgentBranchFailureKind): void;
   readonly pollGate?: AgentBranchPollGate;
   /** Whether provider-session usage is persisted on the branch. */
   readonly captureUsage?: boolean;
@@ -235,6 +249,14 @@ export class AgentBranchDispatchSetupError extends Error {
       { cause },
     );
     this.name = "ReviewerDispatchSetupError";
+  }
+}
+
+/** The result contract could not be met within the repair budget. */
+export class AgentBranchResultError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentBranchResultError";
   }
 }
 

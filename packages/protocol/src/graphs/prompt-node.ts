@@ -31,6 +31,7 @@ import {
   renderGraphPromptTemplate,
 } from "./prompt-template.js";
 import {
+  type GraphResultTools,
   graphNodeGrantedActions,
   graphNodeResultSlots,
   graphSystemContract,
@@ -67,6 +68,8 @@ export interface GraphNodePromptRenderInput extends GraphPromptNodeContext {
   builtInText?: string;
   /** A designer preview: runtime-only values (files, ids, result keys) become stand-ins without errors. */
   preview?: boolean;
+  /** The result tools the agent's connection lists (default `port`; OpenCode's broker: `broker`). */
+  resultTools?: GraphResultTools;
   /** For the size lint; default 160 KiB of rendered inputs. */
   ceilingBytes?: number;
 }
@@ -179,6 +182,7 @@ export function renderGraphNodePrompt(input: GraphNodePromptRenderInput): GraphN
     ...(input.enforcement ? { enforcement: input.enforcement } : {}),
     slots,
     ...(capability ? { capability } : {}),
+    ...(input.resultTools ? { resultTools: input.resultTools } : {}),
   });
   const prompt = `${user}\n\n${system}`;
   return {

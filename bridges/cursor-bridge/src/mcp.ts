@@ -12,6 +12,11 @@ import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/transcript-artifacts";
+import {
+  isWorkflowResultAttemptTool,
+  type WorkflowResultTurn,
+  workflowResultTurnAllows,
+} from "@orkestrator/protocol/workflow-results";
 
 const AGENT_MCP_SERVER = "orkestrator";
 
@@ -196,6 +201,30 @@ export function setCursorMcpTimeoutsForTests(options?: {
   toolCallTimeoutMs = options?.toolCallMs ?? TOOL_CALL_TIMEOUT_MS;
 }
 
+export const WORKFLOW_RESULT_CALL_REFUSAL =
+  "This call is not part of this turn's own workflow result: name one of the turn's own result tools and its resultKey.";
+
+/**
+ * Why a hosted Orkestrator call must not run, or undefined when it may. Only a
+ * graph activation's turn (one that declared slots) is gated, and only its
+ * result-family tools: a submission or validation tool must name its own
+ * slot's key, status and `report_progress` one of the turn's keys, and
+ * `read_artifact` / `ask_human` must be listed for the turn. Every other tool
+ * (mail, artifacts) and every other turn behaves as before; the attempt's
+ * capability still decides on the backend.
+ */
+export function workflowResultCallRefusal(
+  turn: WorkflowResultTurn | undefined,
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  // Only a graph activation's turn (one with slots) is held here; a kind
+  // tool's turn keeps today's behaviour, where the backend's refusal names
+  // the attempt's own key.
+  if (!turn?.slots || !isWorkflowResultAttemptTool(toolName)) return undefined;
+  return workflowResultTurnAllows(turn, toolName, args) ? undefined : WORKFLOW_RESULT_CALL_REFUSAL;
+}
+
 /**
  * Host Orkestrator MCP tools in-process for a sandboxed coordinator attach.
  *
@@ -207,7 +236,11 @@ export function setCursorMcpTimeoutsForTests(options?: {
 export async function hostOrkestratorCustomTools(
   agentMcp?: AgentMcpConnection,
   health?: SessionState["health"],
-  options?: { httpFallback?: boolean },
+  options?: {
+    httpFallback?: boolean;
+    /** The turn's declared workflow-result attempt, read at call time. */
+    workflowResultTurn?: () => WorkflowResultTurn | undefined;
+  },
 ): Promise<HostedOrkestratorTools | undefined> {
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
@@ -219,6 +252,12 @@ export async function hostOrkestratorCustomTools(
     describe: (tool, description) =>
       orkestratorDescription(description, `Orkestrator Control MCP tool ${tool}`),
     health,
+    ...(options?.workflowResultTurn
+      ? {
+          refuse: (tool: string, args: JsonObject) =>
+            workflowResultCallRefusal(options.workflowResultTurn?.(), tool, args),
+        }
+      : {}),
     failure: options?.httpFallback
       ? "Orkestrator MCP failed to connect in-process; this session will try the HTTP MCP client"
       : "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
@@ -300,6 +339,8 @@ async function hostServerTools(input: {
   describe: (tool: string, description: string | undefined) => string;
   health?: SessionState["health"];
   failure: string;
+  /** A fixed reason to refuse a call before it leaves this process. */
+  refuse?: (remoteName: string, args: JsonObject) => string | undefined;
 }): Promise<HostedOrkestratorTools | undefined> {
   let connection: CursorMcpConnection | undefined;
   try {
@@ -340,6 +381,10 @@ async function hostServerTools(input: {
             ],
             isError: true as const,
           };
+        }
+        const refusal = input.refuse?.(remoteName, forwardedArgs);
+        if (refusal) {
+          return { content: [{ type: "text" as const, text: refusal }], isError: true as const };
         }
         const result = await connection.call(remoteName, forwardedArgs);
         return {

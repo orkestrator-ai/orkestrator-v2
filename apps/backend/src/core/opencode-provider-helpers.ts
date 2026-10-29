@@ -23,13 +23,19 @@ import {
   type OpenCodeMessageIdCoordinator,
 } from "@orkestrator/protocol/opencode-message-id";
 import {
+  GRAPH_ACTIVATION_EXTRA_TOOLS,
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_MCP_SERVER_NAME,
   REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+  parseWorkflowResultTurn,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import type { BridgeConnection, ProviderSendOptions } from "./agent-provider-contract.js";
+import type {
+  BridgeConnection,
+  ProviderPrepareDispatchOptions,
+  ProviderSendOptions,
+} from "./agent-provider-contract.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -355,19 +361,31 @@ export function isOpenCodeWorkflowResultToolName(toolName: string): boolean {
 /**
  * The broker tools a turn that submits `selectedTool` may call. A reviewer's
  * turn also gets `report_finding`; the broker still answers only a live Multi
- * Review reviewer's own signed capability.
+ * Review reviewer's own signed capability. A graph activation also gets the
+ * extra tools its credential lists (`workflowResultExtraTools`).
  */
-function openCodeWorkflowResultTurnToolNames(selectedTool: string): string[] {
+function openCodeWorkflowResultTurnToolNames(
+  selectedTool: string,
+  extraTools: readonly string[] = [],
+): string[] {
   return [
     selectedTool,
     WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
     "get_workflow_result_status",
     ...(selectedTool === workflowResultToolName("review-report") ? [REPORT_FINDING_TOOL_NAME] : []),
+    ...GRAPH_ACTIVATION_EXTRA_TOOLS.filter((tool) => extraTools.includes(tool)),
   ];
 }
 
-/** Hide the persistent broker by default and expose only this turn's tools. */
-export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<string, boolean> {
+/**
+ * Hide the persistent broker by default and expose only this turn's tools.
+ * The graph activation extra tools are hidden like the rest unless the turn
+ * lists them.
+ */
+export function openCodeWorkflowResultTurnTools(
+  selectedTool?: string,
+  extraTools?: readonly string[],
+): Record<string, boolean> {
   const tools = Object.fromEntries(
     [
       ...WORKFLOW_RESULT_KINDS.map((kind) =>
@@ -376,25 +394,76 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
       openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME),
       openCodeWorkflowResultToolId("get_workflow_result_status"),
       openCodeWorkflowResultToolId(REPORT_FINDING_TOOL_NAME),
+      ...GRAPH_ACTIVATION_EXTRA_TOOLS.map(openCodeWorkflowResultToolId),
     ].map((tool) => [tool, false]),
   );
   if (selectedTool) {
-    for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool)) {
+    for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool, extraTools)) {
       tools[openCodeWorkflowResultToolId(tool)] = true;
     }
   }
   return tools;
 }
 
-export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
+export function openCodeWorkflowResultPermissionRules(
+  selectedTool: string,
+  extraTools?: readonly string[],
+) {
   return [
     ...openCodeWorkflowResultDenyPermissionRules(),
-    ...openCodeWorkflowResultTurnToolNames(selectedTool).map((tool) => ({
+    ...openCodeWorkflowResultTurnToolNames(selectedTool, extraTools).map((tool) => ({
       permission: openCodeWorkflowResultToolId(tool),
       pattern: "*",
       action: "allow" as const,
     })),
   ];
+}
+
+/**
+ * Why this turn's workflow-result fields cannot run on OpenCode, or null.
+ *
+ * The broker's tool list is fixed per environment, so a graph activation
+ * submits every output through `submit_graph_output` with each slot's key:
+ * a port's own `submit_<port>` does not exist there. Slots and extra tools
+ * follow `parseWorkflowResultTurn`; the key, when the caller has one, must be
+ * the first slot's. A turn without either is checked exactly as before.
+ */
+export function openCodeWorkflowResultTurnProblem(
+  options: ProviderPrepareDispatchOptions & Pick<ProviderSendOptions, "workflowResultKey">,
+): string | null {
+  const { workflowResultTool: tool, workflowResultSlots: slots } = options;
+  const extraTools = options.workflowResultExtraTools;
+  if (tool === undefined) {
+    return slots !== undefined || extraTools !== undefined
+      ? "workflowResultSlots and workflowResultExtraTools require workflowResultTool"
+      : null;
+  }
+  if (!isOpenCodeWorkflowResultToolName(tool)) {
+    return "workflowResultTool must name a workflow result tool OpenCode's broker lists";
+  }
+  // A turn without slots or extra tools is checked exactly as before.
+  if (slots === undefined && extraTools === undefined) return null;
+  const graphOutput = workflowResultToolName("graph-output");
+  if (
+    slots !== undefined &&
+    (tool !== graphOutput ||
+      !Array.isArray(slots) ||
+      slots.some((slot) => (slot as { tool?: unknown } | null)?.tool !== graphOutput))
+  ) {
+    return `OpenCode result slots must all use ${graphOutput}`;
+  }
+  const first: unknown = slots?.[0]?.resultKey;
+  if (
+    first !== undefined &&
+    options.workflowResultKey !== undefined &&
+    first !== options.workflowResultKey
+  ) {
+    return "workflowResultSlots must start with workflowResultKey";
+  }
+  // Prepare has no key of its own: the first slot names it.
+  const key = options.workflowResultKey ?? first ?? "opencode-prepare";
+  const parsed = parseWorkflowResultTurn(tool, key, slots, extraTools);
+  return parsed.ok ? null : parsed.error;
 }
 
 export function openCodeWorkflowResultDenyPermissionRules() {
@@ -805,7 +874,10 @@ export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<v
  * `system` instruction carrying this turn's artifact grant when one exists.
  */
 export function openCodePromptToolOptions(
-  options: Pick<ProviderSendOptions, "readOnly" | "workflowResultTool" | "artifactGrant">,
+  options: Pick<
+    ProviderSendOptions,
+    "readOnly" | "workflowResultTool" | "workflowResultExtraTools" | "artifactGrant"
+  >,
   reviewEnabled: boolean,
 ): { tools?: Record<string, boolean>; system?: string } {
   const system = options.artifactGrant
@@ -816,7 +888,10 @@ export function openCodePromptToolOptions(
     ...system,
     tools: {
       ...OPENCODE_READ_ONLY_TURN_TOOLS,
-      ...openCodeWorkflowResultTurnTools(options.workflowResultTool),
+      ...openCodeWorkflowResultTurnTools(
+        options.workflowResultTool,
+        options.workflowResultExtraTools,
+      ),
     },
   };
 }

@@ -57,6 +57,18 @@
  * is recorded), the guard baseline and results, and token usage since the
  * previous report (added to the run's usage). Logs and metrics derived from a
  * report hold counts, ids and states only.
+ *
+ * ## The journal
+ *
+ * A fact that must be durable *before* the call goes on — the agent
+ * executor's dispatch journal, where `dispatching` must be saved before the
+ * prompt is sent (item 204) — goes through `context.journal(facts)`: the pass
+ * applies it to the activation without moving its state and saves the record
+ * at once, serialized with every other journal write of the pass. Usage and
+ * `observeAfterMs` are not journaled; report them. A journal write that
+ * cannot be saved rejects with a `GraphActivationJournalFenceError`, and the
+ * call should stop and report `unchanged`: the next pass starts from the
+ * stored record.
  */
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type {
@@ -152,7 +164,20 @@ export interface GraphExecutorContext {
   readonly lease?: AdmissionLease;
   /** Wakes the run for another pass, e.g. after work this call started finishes elsewhere. */
   wake(): void;
+  /**
+   * Durably records facts for this activation now, before the call returns
+   * (see "The journal" above). Resolves once saved.
+   */
+  journal(facts: Omit<GraphActivationFacts, "usage" | "observeAfterMs">): Promise<void>;
   now(): Date;
+}
+
+/** A journal write could not be saved; the call should stop and report `unchanged`. */
+export class GraphActivationJournalFenceError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "GraphActivationJournalFenceError";
+  }
 }
 
 export interface GraphNodeExecutor {

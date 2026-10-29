@@ -290,6 +290,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
       branch.completedAt = agentBranchNowIso();
       delete branch.stalledSince;
       delete branch.idleResultPolls;
+      this.host.branchFailed?.(branch, "provider");
       await this.context.commits.commit();
       return "continue";
     }

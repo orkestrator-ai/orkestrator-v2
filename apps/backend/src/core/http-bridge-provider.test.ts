@@ -169,10 +169,66 @@ describe("HTTP bridge provider", () => {
       expect(body.workflowResultTool).toBeUndefined();
       expect(body.workflowResultKey).toBeUndefined();
     }
-    // Cursor hosts the attempt's tools itself and needs neither.
-    const cursor = httpProvider(() => Response.json({ status: "processing" }), cursorConnection);
-    await cursor.provider.send("session-1", "review", attempt);
-    expect(JSON.parse(String(cursor.requests[0]!.init.body)).workflowResultKey).toBeUndefined();
+    // Cursor and Claude also hold a declared attempt's tools to its key.
+    for (const connection of [cursorConnection, claudeConnection]) {
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "review", attempt);
+      expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+        workflowResultTool: "submit_review_report",
+        workflowResultKey: "11111111-1111-4111-8111-111111111111",
+      });
+    }
+  });
+
+  test("tells every gating bridge a graph activation's slots and extra tools", async () => {
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "activation-token" };
+    const workflowResultSlots = [
+      { tool: "submit_brief", resultKey: "activation-brief" },
+      { tool: "submit_risks", resultKey: "activation-risks" },
+    ];
+    const activation = {
+      requestId: "request-1",
+      readOnly: true,
+      agentMcp,
+      workflowResultTool: "submit_brief",
+      workflowResultKey: "activation-brief",
+      workflowResultSlots,
+      workflowResultExtraTools: ["read_artifact", "ask_human"],
+    };
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      cursorConnection,
+      grokConnection,
+      piConnection,
+    ]) {
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "work", activation);
+      expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+        workflowResultTool: "submit_brief",
+        workflowResultKey: "activation-brief",
+        workflowResultSlots,
+        workflowResultExtraTools: ["read_artifact", "ask_human"],
+      });
+      // Without the activation's own connection there is no attempt to name.
+      const ordinary = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await ordinary.provider.send("session-1", "work", { ...activation, agentMcp: undefined });
+      const body = JSON.parse(String(ordinary.requests[0]!.init.body));
+      expect(body.workflowResultKey).toBeUndefined();
+      expect(body.workflowResultSlots).toBeUndefined();
+      expect(body.workflowResultExtraTools).toBeUndefined();
+    }
+    // A single-slot turn sends no slot list.
+    const single = httpProvider(() => Response.json({ status: "processing" }), piConnection);
+    await single.provider.send("session-1", "work", {
+      requestId: "request-2",
+      agentMcp,
+      workflowResultTool: "submit_brief",
+      workflowResultKey: "activation-brief",
+    });
+    const body = JSON.parse(String(single.requests[0]!.init.body));
+    expect(body.workflowResultSlots).toBeUndefined();
+    expect(body.workflowResultExtraTools).toBeUndefined();
   });
 
   test("forwards Codex's selected workflow-result tool with its attempt connection", async () => {

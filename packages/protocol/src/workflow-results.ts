@@ -180,67 +180,288 @@ export const REPORT_FINDING_TOOL_NAME = "report_finding";
 /** Upper bound on a result key a bridge accepts in a prompt body. */
 export const WORKFLOW_RESULT_KEY_MAX_LENGTH = 128;
 
+/** Upper bound on the output slots one graph activation turn declares. */
+export const WORKFLOW_RESULT_TURN_MAX_SLOTS = 16;
+
+export const WORKFLOW_RESULT_STATUS_TOOL_NAME = "get_workflow_result_status";
+
 /**
- * The workflow-result attempt a turn runs for, as a bridge is told it: the
- * attempt's submission tool and its result key. A bridge that knows it can let
- * exactly that attempt's own tools through a read-only turn, and only when a
- * call names that key. The attempt's capability still decides on the backend.
+ * The tools a graph activation's credential may list beside its result slots
+ * (plan item 204): `report_progress` names one of the slots' keys,
+ * `read_artifact` and `ask_human` take no result key.
  */
-export interface WorkflowResultTurn {
+export const GRAPH_ACTIVATION_EXTRA_TOOLS = [
+  "report_progress",
+  "read_artifact",
+  "ask_human",
+] as const;
+
+export type GraphActivationExtraTool = (typeof GRAPH_ACTIVATION_EXTRA_TOOLS)[number];
+
+/** One result slot of a turn: its submission tool and its result key. */
+export interface WorkflowResultTurnSlot {
   tool: string;
   resultKey: string;
 }
 
 /**
- * Reads the `workflowResultTool` / `workflowResultKey` pair of a prompt body.
- * Both absent is an ordinary turn; one without the other, an unknown tool or a
- * malformed key is a caller error.
+ * The workflow-result attempt a turn runs for, as a bridge is told it: the
+ * attempt's submission tool and its result key. A bridge that knows it can let
+ * exactly that attempt's own tools through a read-only turn, and only when a
+ * call names that key. The attempt's capability still decides on the backend.
+ *
+ * A graph activation declares every output slot in `slots` (the first is
+ * `tool`/`resultKey`) and the extra tools its credential lists in
+ * `extraTools`.
+ */
+export interface WorkflowResultTurn {
+  tool: string;
+  resultKey: string;
+  slots?: readonly WorkflowResultTurnSlot[];
+  extraTools?: readonly string[];
+}
+
+const GRAPH_PORT_SUBMIT_PREFIX = "submit_";
+const GRAPH_PORT_VALIDATE_PREFIX = "validate_";
+/**
+ * The output-port grammar of `graphs/output-slots.ts` (`GRAPH_KEY_PATTERN`, at
+ * most 48 characters, not reserved), restated here because that module
+ * imports this one at load time. A test keeps the two in step.
+ */
+const GRAPH_PORT_PATTERN = /^[a-z][A-Za-z0-9_]*$/;
+const GRAPH_PORT_MAX_CHARS = 48;
+const WORKFLOW_RESULT_KIND_TOOLS: ReadonlySet<string> = new Set(
+  Object.values(WORKFLOW_RESULT_TOOL_NAMES),
+);
+const RESERVED_GRAPH_PORTS: ReadonlySet<string> = new Set([
+  ...[...WORKFLOW_RESULT_KIND_TOOLS].map((tool) => tool.slice(GRAPH_PORT_SUBMIT_PREFIX.length)),
+  WORKFLOW_RESULT_VALIDATION_TOOL_NAME.slice(GRAPH_PORT_VALIDATE_PREFIX.length),
+]);
+
+/** The output port of a per-port `submit_<port>` tool, or null for any other name. */
+export function workflowResultTurnToolPort(tool: unknown): string | null {
+  if (typeof tool !== "string" || !tool.startsWith(GRAPH_PORT_SUBMIT_PREFIX)) return null;
+  const port = tool.slice(GRAPH_PORT_SUBMIT_PREFIX.length);
+  return GRAPH_PORT_PATTERN.test(port) &&
+    port.length <= GRAPH_PORT_MAX_CHARS &&
+    !RESERVED_GRAPH_PORTS.has(port)
+    ? port
+    : null;
+}
+
+function isWorkflowResultTurnTool(tool: unknown): tool is string {
+  return (
+    typeof tool === "string" &&
+    (WORKFLOW_RESULT_KIND_TOOLS.has(tool) || workflowResultTurnToolPort(tool) !== null)
+  );
+}
+
+function isWorkflowResultTurnKey(resultKey: unknown): resultKey is string {
+  return (
+    typeof resultKey === "string" &&
+    resultKey.length > 0 &&
+    resultKey.length <= WORKFLOW_RESULT_KEY_MAX_LENGTH &&
+    /^[A-Za-z0-9_-]+$/.test(resultKey)
+  );
+}
+
+/** The validation tool of a slot's submission tool. */
+function workflowResultTurnValidationTool(tool: string): string {
+  const port = workflowResultTurnToolPort(tool);
+  return port === null
+    ? WORKFLOW_RESULT_VALIDATION_TOOL_NAME
+    : `${GRAPH_PORT_VALIDATE_PREFIX}${port}`;
+}
+
+function parseWorkflowResultTurnSlots(
+  slots: unknown,
+  tool: string,
+  resultKey: string,
+): WorkflowResultTurnSlot[] | null {
+  if (!Array.isArray(slots) || slots.length < 1 || slots.length > WORKFLOW_RESULT_TURN_MAX_SLOTS)
+    return null;
+  const parsed: WorkflowResultTurnSlot[] = [];
+  const keys = new Set<string>();
+  const portTools = new Set<string>();
+  for (const slot of slots) {
+    if (typeof slot !== "object" || slot === null || Array.isArray(slot)) return null;
+    const entry = slot as Record<string, unknown>;
+    if (!isWorkflowResultTurnTool(entry.tool) || !isWorkflowResultTurnKey(entry.resultKey))
+      return null;
+    if (keys.has(entry.resultKey)) return null;
+    keys.add(entry.resultKey);
+    // Kind tools are shared (OpenCode's `submit_graph_output` serves every
+    // slot); a port's own tool belongs to one slot.
+    if (!WORKFLOW_RESULT_KIND_TOOLS.has(entry.tool)) {
+      if (portTools.has(entry.tool)) return null;
+      portTools.add(entry.tool);
+    }
+    parsed.push({ tool: entry.tool, resultKey: entry.resultKey });
+  }
+  if (parsed[0]!.tool !== tool || parsed[0]!.resultKey !== resultKey) return null;
+  return parsed;
+}
+
+function parseWorkflowResultTurnExtraTools(extraTools: unknown): string[] | null {
+  if (!Array.isArray(extraTools) || extraTools.length > GRAPH_ACTIVATION_EXTRA_TOOLS.length)
+    return null;
+  const parsed: string[] = [];
+  for (const name of extraTools) {
+    if (
+      typeof name !== "string" ||
+      !(GRAPH_ACTIVATION_EXTRA_TOOLS as readonly string[]).includes(name) ||
+      parsed.includes(name)
+    )
+      return null;
+    parsed.push(name);
+  }
+  return parsed;
+}
+
+/**
+ * Reads the `workflowResultTool` / `workflowResultKey` pair of a prompt body,
+ * with a graph activation's `workflowResultSlots` and
+ * `workflowResultExtraTools`. Both absent is an ordinary turn; one without the
+ * other, an unknown tool, a malformed key, slots that do not start with the
+ * pair, or slots or extra tools without the pair are a caller error.
  */
 export function parseWorkflowResultTurn(
   tool: unknown,
   resultKey: unknown,
+  slots?: unknown,
+  extraTools?: unknown,
 ): { ok: true; turn?: WorkflowResultTurn } | { ok: false; error: string } {
-  if (tool === undefined && resultKey === undefined) return { ok: true };
-  if (
-    typeof tool !== "string" ||
-    !WORKFLOW_RESULT_KINDS.some((kind) => WORKFLOW_RESULT_TOOL_NAMES[kind] === tool)
-  ) {
+  if (tool === undefined && resultKey === undefined) {
+    if (slots !== undefined || extraTools !== undefined) {
+      return {
+        ok: false,
+        error: "workflowResultSlots and workflowResultExtraTools require workflowResultTool",
+      };
+    }
+    return { ok: true };
+  }
+  if (!isWorkflowResultTurnTool(tool)) {
     return { ok: false, error: "workflowResultTool must name a workflow result tool" };
   }
-  if (
-    typeof resultKey !== "string" ||
-    resultKey.length === 0 ||
-    resultKey.length > WORKFLOW_RESULT_KEY_MAX_LENGTH ||
-    !/^[A-Za-z0-9_-]+$/.test(resultKey)
-  ) {
+  if (!isWorkflowResultTurnKey(resultKey)) {
     return { ok: false, error: "workflowResultKey must be a result key" };
   }
-  return { ok: true, turn: { tool, resultKey } };
+  const turn: WorkflowResultTurn = { tool, resultKey };
+  if (slots !== undefined) {
+    const parsed = parseWorkflowResultTurnSlots(slots, tool, resultKey);
+    if (!parsed) {
+      return {
+        ok: false,
+        error: `workflowResultSlots must list 1 to ${WORKFLOW_RESULT_TURN_MAX_SLOTS} distinct result slots, starting with workflowResultTool and workflowResultKey`,
+      };
+    }
+    turn.slots = parsed;
+  }
+  if (extraTools !== undefined) {
+    const parsed = parseWorkflowResultTurnExtraTools(extraTools);
+    if (!parsed) {
+      return {
+        ok: false,
+        error: `workflowResultExtraTools may only name ${GRAPH_ACTIVATION_EXTRA_TOOLS.join(", ")}, each once`,
+      };
+    }
+    turn.extraTools = parsed;
+  }
+  return { ok: true, turn };
+}
+
+function workflowResultTurnSlots(turn: WorkflowResultTurn): readonly WorkflowResultTurnSlot[] {
+  return turn.slots ?? [{ tool: turn.tool, resultKey: turn.resultKey }];
 }
 
 /**
- * The Orkestrator tools a workflow-result turn's attempt server offers: its
- * submission tool, validation and status, and `report_finding` for a reviewer.
+ * The Orkestrator tools a workflow-result turn's attempt server offers: each
+ * slot's submission and validation tool, status, `report_finding` for a
+ * reviewer, and a graph activation's extra tools.
  */
 export function workflowResultTurnToolNames(turn: WorkflowResultTurn): readonly string[] {
-  return [
-    turn.tool,
-    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
-    "get_workflow_result_status",
-    ...(turn.tool === WORKFLOW_RESULT_TOOL_NAMES["review-report"]
-      ? [REPORT_FINDING_TOOL_NAME]
-      : []),
-  ];
+  const names = new Set<string>();
+  const slots = workflowResultTurnSlots(turn);
+  for (const slot of slots) {
+    names.add(slot.tool);
+    names.add(workflowResultTurnValidationTool(slot.tool));
+  }
+  names.add(WORKFLOW_RESULT_STATUS_TOOL_NAME);
+  if (slots.some((slot) => slot.tool === WORKFLOW_RESULT_TOOL_NAMES["review-report"])) {
+    names.add(REPORT_FINDING_TOOL_NAME);
+  }
+  for (const name of turn.extraTools ?? []) names.add(name);
+  return [...names];
+}
+
+/**
+ * Whether a bare tool name belongs to some workflow-result attempt, whichever
+ * turn declared it: a kind's tools, a graph output port's `submit_<port>` /
+ * `validate_<port>`, status, `report_finding`, or a graph activation's extra
+ * tools. A bridge holding calls to its turn's attempt gates these and leaves
+ * every other tool (mail, artifacts) alone.
+ */
+export function isWorkflowResultAttemptTool(name: string): boolean {
+  if (
+    WORKFLOW_RESULT_KIND_TOOLS.has(name) ||
+    name === WORKFLOW_RESULT_VALIDATION_TOOL_NAME ||
+    name === WORKFLOW_RESULT_STATUS_TOOL_NAME ||
+    name === REPORT_FINDING_TOOL_NAME ||
+    (GRAPH_ACTIVATION_EXTRA_TOOLS as readonly string[]).includes(name) ||
+    workflowResultTurnToolPort(name) !== null
+  )
+    return true;
+  return (
+    name.startsWith(GRAPH_PORT_VALIDATE_PREFIX) &&
+    workflowResultTurnToolPort(
+      `${GRAPH_PORT_SUBMIT_PREFIX}${name.slice(GRAPH_PORT_VALIDATE_PREFIX.length)}`,
+    ) !== null
+  );
+}
+
+function argumentsResultKey(args: unknown): unknown {
+  return typeof args === "object" && args !== null && !Array.isArray(args)
+    ? (args as Record<string, unknown>).resultKey
+    : undefined;
+}
+
+/**
+ * Whether a read-only turn may let this call to an Orkestrator tool through.
+ * A slot's submission and validation tools must name that slot's own key
+ * (`report_finding`, a reviewer slot's key); status and `report_progress` any
+ * slot's key; `read_artifact` and `ask_human` only need to be listed in
+ * `extraTools`. Anything else is not the turn's own.
+ */
+export function workflowResultTurnAllows(
+  turn: WorkflowResultTurn,
+  toolName: string,
+  args: unknown,
+): boolean {
+  const slots = workflowResultTurnSlots(turn);
+  const key = argumentsResultKey(args);
+  const extraTools = turn.extraTools ?? [];
+  if (toolName === WORKFLOW_RESULT_STATUS_TOOL_NAME) {
+    return slots.some((slot) => slot.resultKey === key);
+  }
+  if (toolName === REPORT_FINDING_TOOL_NAME) {
+    return slots.some(
+      (slot) => slot.tool === WORKFLOW_RESULT_TOOL_NAMES["review-report"] && slot.resultKey === key,
+    );
+  }
+  if ((GRAPH_ACTIVATION_EXTRA_TOOLS as readonly string[]).includes(toolName)) {
+    if (!extraTools.includes(toolName)) return false;
+    return toolName === "report_progress" ? slots.some((slot) => slot.resultKey === key) : true;
+  }
+  return slots.some(
+    (slot) =>
+      slot.resultKey === key &&
+      (toolName === slot.tool || toolName === workflowResultTurnValidationTool(slot.tool)),
+  );
 }
 
 /** Whether a tool call's arguments name the turn's own result key. */
 export function callsOwnWorkflowResult(turn: WorkflowResultTurn, args: unknown): boolean {
-  return (
-    typeof args === "object" &&
-    args !== null &&
-    !Array.isArray(args) &&
-    (args as Record<string, unknown>).resultKey === turn.resultKey
-  );
+  return argumentsResultKey(args) === turn.resultKey;
 }
 
 /**

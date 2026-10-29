@@ -261,7 +261,7 @@ describe("renderGraphNodePrompt", () => {
     expect(withUnattendedPolicy("x")).toBe(`x\n\n${unattendedPolicyFrame()}`);
     expect(result.system).toContain("`submit_report`");
     expect(result.system).toContain("`validate_report`");
-    expect(result.system).toContain("`result_status`");
+    expect(result.system).toContain("`get_workflow_result_status`");
     expect(result.system).toContain('"key-1"');
     expect(result.system).toContain("`report_progress`");
     // The contract is backend-owned: the transcript shows only the user part.
@@ -286,7 +286,7 @@ describe("renderGraphNodePrompt", () => {
           noun: "verification verdict",
           submitTool: "submit_verdict",
           validateTool: "validate_verdict",
-          statusTool: "result_status",
+          statusTool: "get_workflow_result_status",
           resultKey: "k",
           capability: "cap_1",
           progress:
@@ -302,21 +302,67 @@ describe("renderGraphNodePrompt", () => {
       prompt: { template: "Go." },
       capabilities: { profile: "builder" },
       outputs: [
-        { name: "code", type: "workspace@1" },
+        { name: "summary", type: "markdown@1" },
         { name: "notes", type: "markdown@1", required: false },
       ],
     });
     const result = renderGraphNodePrompt({
       node,
       compiled: compileGraphCapabilities({ spec: { profile: "builder" }, environment: host }),
-      values: { inputs: {}, resultKeys: { code: "a", notes: "b" } },
+      values: { inputs: {}, resultKeys: { summary: "a", notes: "b" } },
     });
     expect(result.system).toContain(
-      '- `code` (workspace, required): check it with `validate_code` and submit it with `submit_code`, resultKey "a".',
+      '- `summary` (markdown, required): check it with `validate_summary` and submit it with `submit_summary`, resultKey "a".',
     );
     expect(result.system).toContain(
       '- `notes` (markdown, optional): check it with `validate_notes` and submit it with `submit_notes`, resultKey "b".',
     );
+  });
+
+  test("a workspace output has no result tool: the runtime fills it from Git", () => {
+    const node = agentNode({
+      inputs: [],
+      prompt: { template: "Go." },
+      capabilities: { profile: "builder" },
+      outputs: [
+        { name: "code", type: "workspace@1" },
+        { name: "notes", type: "markdown@1" },
+      ],
+    });
+    const result = renderGraphNodePrompt({
+      node,
+      compiled: compileGraphCapabilities({ spec: { profile: "builder" }, environment: host }),
+      values: { inputs: {}, resultKeys: { notes: "b" } },
+    });
+    expect(result.diagnostics.filter((entry) => entry.severity === "error")).toEqual([]);
+    expect(result.system).not.toContain("submit_code");
+    expect(result.system).toContain("`submit_notes`");
+  });
+
+  test("the broker's generic tools replace per-port tools on OpenCode", () => {
+    const node = agentNode({
+      inputs: [],
+      prompt: { template: "Go." },
+      capabilities: { profile: "builder" },
+      outputs: [
+        { name: "summary", type: "markdown@1" },
+        { name: "notes", type: "markdown@1", required: false },
+      ],
+    });
+    const result = renderGraphNodePrompt({
+      node,
+      compiled: compileGraphCapabilities({ spec: { profile: "builder" }, environment: host }),
+      values: {
+        inputs: {},
+        resultKeys: { summary: "a", notes: "b" },
+        capability: "cap_1",
+      },
+      resultTools: "broker",
+    });
+    expect(result.system).toContain(
+      '- `summary` (markdown, required): check it with `validate_workflow_result` and submit it with `submit_graph_output`, resultKey "a".',
+    );
+    expect(result.system).not.toContain("submit_summary");
   });
 
   test("result keys and capabilities are validated", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, jest, test } from "bun:test";
 
 import { harness, threadPayload } from "./app-server-runtime-test-harness.js";
+import { promptThreadConfig } from "./prompt-thread-config.js";
 
 jest.setTimeout(30_000);
 
@@ -205,5 +206,83 @@ describe("workflow result turns", () => {
     expect(requests.find((request) => request.method === "turn/start")?.params.threadId).toBe(
       "thread-2",
     );
+  });
+
+  test("a graph activation turn needs every slot's own submit tool", async () => {
+    let listed = ["submit_brief", "validate_brief", "get_workflow_result_status"];
+    const h = await harness({ "mcpServerStatus/list": () => orkestratorTools(...listed) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const graphTurn = {
+      ...RESULT_TURN,
+      workflowResultTool: "submit_brief",
+      workflowResultTurn: {
+        tool: "submit_brief",
+        resultKey: "key-a",
+        slots: [
+          { tool: "submit_brief", resultKey: "key-a" },
+          { tool: "submit_risks", resultKey: "key-b" },
+        ],
+        extraTools: ["read_artifact"],
+      },
+    };
+
+    const refused = await h.runtime.prompt(sessionId, { ...graphTurn, requestId: "activation" });
+    expect(refused).toMatchObject({ ok: false, status: 424 });
+    expect(refused.ok ? "" : refused.error).toContain("submit_risks");
+    const listings = () =>
+      h
+        .child()
+        .requests.filter((request) => request.method === "mcpServerStatus/list")
+        .map((request) => request.params.threadId);
+    expect(listings().length).toBeGreaterThanOrEqual(2);
+
+    listed = [...listed, "submit_risks", "validate_risks", "read_artifact"];
+    expect(
+      await h.runtime.prompt(sessionId, { ...graphTurn, requestId: "activation" }),
+    ).toMatchObject({ ok: true, result: { status: "processing" } });
+    // The read-only turn approves the attempt-scoped server's tools (each
+    // slot's own, status and the listed extra tools); Codex settles that
+    // approval from configuration, so the backend's capability checks keys.
+    const threadRequest = h
+      .child()
+      .requests.filter(
+        (request) => request.method === "thread/start" || request.method === "thread/resume",
+      )
+      .at(-1)!;
+    const config = threadRequest.params.config as Record<string, Record<string, unknown>>;
+    expect(config["mcp_servers.orkestrator"]?.default_tools_approval_mode).toBe("approve");
+  });
+
+  test("an old kind-tool turn checks only its own tool", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => orkestratorTools("submit_consolidated_review"),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(
+      await h.runtime.prompt(sessionId, { ...RESULT_TURN, requestId: "consolidate" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      h.child().requests.filter((request) => request.method === "mcpServerStatus/list"),
+    ).toHaveLength(1);
+  });
+
+  test("a graph activation's slots do not change the thread configuration", () => {
+    // The attempt's own MCP server is approved as a whole, so its tool names
+    // never reach the thread's settings and never force a thread rebuild.
+    const agentMcp = RESULT_TURN.agentMcp;
+    const single = { agentMcp, workflowResultTool: "submit_brief" };
+    const activation = {
+      ...single,
+      workflowResultTurn: {
+        tool: "submit_brief",
+        resultKey: "key-a",
+        slots: [
+          { tool: "submit_brief", resultKey: "key-a" },
+          { tool: "submit_risks", resultKey: "key-b" },
+        ],
+        extraTools: ["ask_human"],
+      },
+    };
+    expect(promptThreadConfig(activation)).toBe(promptThreadConfig(single));
   });
 });

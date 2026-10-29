@@ -451,6 +451,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     ? await Promise.all([
         hostOrkestratorCustomTools(state.agentMcp, state.health, {
           httpFallback: policy.sandbox === "container",
+          workflowResultTurn: () => state.workflowResultTurn,
         }),
         // The launcher's research servers, hosted the same way: a sandboxed
         // read-only attach cannot call an HTTP MCP server either.

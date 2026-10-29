@@ -40,12 +40,14 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
-import type {
-  GraphActivationReport,
-  GraphCancelReason,
-  GraphExecutorContext,
-  GraphExecutorOperation,
-  GraphNodeExecutorRegistry,
+import {
+  GraphActivationJournalFenceError,
+  type GraphActivationFacts,
+  type GraphActivationReport,
+  type GraphCancelReason,
+  type GraphExecutorContext,
+  type GraphExecutorOperation,
+  type GraphNodeExecutorRegistry,
 } from "./graph-run-executors.js";
 import {
   graphRunActivity,
@@ -209,6 +211,8 @@ class GraphRunPass {
   private planning: GraphPlanningResult | null = null;
   /** Branches per replicated node; bindings are frozen, so one computation per pass. */
   private readonly branches = new Map<string, GraphBranch[] | null>();
+  /** Tail of the serialized journal writes; never rejects. */
+  private journalTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly deps: GraphRunPassDependencies,
@@ -339,6 +343,7 @@ class GraphRunPass {
       signal: this.options.signal,
       ...(this.options.lease ? { lease: this.options.lease } : {}),
       wake: () => this.deps.wake(this.run.id),
+      journal: (facts) => this.journal(activation.key, facts),
       now: () => this.deps.clock(),
     };
     try {
@@ -364,6 +369,48 @@ class GraphRunPass {
       if (this.options.signal.aborted || call.operation === "cancel") return { state: "unchanged" };
       return { state: "failed", error: errorText(error), cause: "system-error" };
     }
+  }
+
+  /**
+   * An executor's journal write: the facts applied to the activation without
+   * moving its state, saved at once and serialized with the pass's other
+   * journal writes (`GraphExecutorContext.journal`). Reports of concurrent
+   * calls are applied after the calls end, so a journal save carries only
+   * journaled facts and what the pass had already applied.
+   */
+  private journal(
+    key: string,
+    facts: Omit<GraphActivationFacts, "usage" | "observeAfterMs">,
+  ): Promise<void> {
+    const write = this.journalTail.then(async () => {
+      const {
+        usage: _usage,
+        observeAfterMs: _observeAfterMs,
+        ...durable
+      } = facts as GraphActivationFacts;
+      const outcome = applyGraphActivationReport(
+        this.run,
+        key,
+        { ...durable, state: "unchanged" },
+        this.at(),
+      );
+      if (!outcome.ok) throw new GraphActivationJournalFenceError(outcome.message);
+      if (!outcome.changed) return;
+      const before = this.run;
+      this.run = outcome.run;
+      try {
+        await this.save();
+      } catch (error) {
+        // The record on disk is the authority: nothing unsaved may ride on a
+        // later write of this pass.
+        if (this.run === outcome.run) this.run = before;
+        throw new GraphActivationJournalFenceError("The activation journal could not be saved", {
+          cause: error,
+        });
+      }
+    });
+    this.journalTail = write.catch(() => undefined);
+    return write;
   }
 
   /** Runs calls under the per-operation caps and applies the reports in record order. */

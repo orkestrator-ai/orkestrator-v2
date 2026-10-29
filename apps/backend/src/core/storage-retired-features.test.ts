@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import syncFs, { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -8,9 +8,11 @@ import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
   isAgentInteractionResolutionJournal,
 } from "@orkestrator/protocol/agent-interactions";
-import { StorageDatabase } from "./storage-database.js";
+import { StorageService, createEnvironment } from "./storage.js";
+import { StorageDatabase, StoreCorruptError } from "./storage-database.js";
 import {
   RETIRE_LOOPED_REVIEWS_VERSION,
+  LOOPED_REVIEW_CLEANUP_STORE,
   withoutLoopedReviewJournalEntries,
   withoutLoopedReviewSessions,
 } from "./storage-retired-features.js";
@@ -134,6 +136,10 @@ describe("retiring Looped Review data", () => {
     try {
       expect(upgraded.schemaVersion()).toBeGreaterThanOrEqual(RETIRE_LOOPED_REVIEWS_VERSION);
       expect(upgraded.hasStore("looped-reviews")).toBe(false);
+      expect(upgraded.readStore(LOOPED_REVIEW_CLEANUP_STORE)?.value).toEqual([
+        { environmentId: "env-1", agent: "codex", providerSessionId: "provider-looped" },
+        { environmentId: "env-1", agent: "codex", providerSessionId: "provider-legacy-looped" },
+      ]);
       const sessions = upgraded.readStore("native-agent-sessions")!.value as Record<
         string,
         unknown
@@ -153,20 +159,135 @@ describe("retiring Looped Review data", () => {
     }
   });
 
-  test("a stray legacy JSON file is archived rather than left beside the database", async () => {
+  test("purges retired archives and stray backups before an environment can be deleted", async () => {
     const directory = await dataDir();
-    await fs.writeFile(path.join(directory, "looped-reviews.json"), "{}\n");
-    await fs.writeFile(path.join(directory, "looped-reviews.json.bak.1"), "{}\n");
-
-    const database = openBackendDatabase(directory);
-    database.close();
-
-    const entries = await fs.readdir(directory);
-    expect(entries.filter((entry) => entry.startsWith("looped-reviews"))).toEqual([]);
-    const [stamp] = await fs.readdir(path.join(directory, LEGACY_JSON_DIRECTORY));
-    expect((await fs.readdir(path.join(directory, LEGACY_JSON_DIRECTORY, stamp!))).sort()).toEqual([
-      "looped-reviews.json",
-      "looped-reviews.json.bak.1",
-    ]);
+    const archive = path.join(directory, LEGACY_JSON_DIRECTORY, "old-generation");
+    await fs.mkdir(archive, { recursive: true });
+    const marker = "private-review-diff-marker";
+    const workflow = {
+      one: {
+        environmentId: "env-1",
+        snapshot: {
+          agent: "codex",
+          sessions: [{ providerSessionId: "archived-turn" }],
+          report: marker,
+        },
+      },
+    };
+    for (const folder of [directory, archive]) {
+      for (const suffix of ["", ".bak.1", ".write.tmp"]) {
+        await fs.writeFile(
+          path.join(folder, `looped-reviews.json${suffix}`),
+          JSON.stringify(workflow),
+        );
+      }
+    }
+    await fs.writeFile(path.join(archive, "unrelated.json"), "unrelated-archive-data");
+    const storage = new StorageService(directory);
+    try {
+      await storage.init();
+      const environment = { ...createEnvironment("project"), id: "env-1" };
+      await storage.addEnvironment(environment);
+      await storage.removeEnvironment(environment.id);
+    } finally {
+      storage.close();
+    }
+    for (const folder of [directory, archive]) {
+      expect((await fs.readdir(folder)).some((file) => file.startsWith("looped-reviews"))).toBe(
+        false,
+      );
+    }
+    const generations = await fs.readdir(path.join(directory, LEGACY_JSON_DIRECTORY));
+    for (const generation of generations) {
+      const folder = path.join(directory, LEGACY_JSON_DIRECTORY, generation);
+      for (const file of await fs.readdir(folder)) {
+        expect((await fs.readFile(path.join(folder, file), "utf8")).includes(marker)).toBe(false);
+      }
+    }
+    expect(await fs.readFile(path.join(archive, "unrelated.json"), "utf8")).toBe(
+      "unrelated-archive-data",
+    );
+    const reopened = openBackendDatabase(directory);
+    try {
+      expect(reopened.readStore(LOOPED_REVIEW_CLEANUP_STORE)?.value).toEqual([
+        { environmentId: "env-1", agent: "codex", providerSessionId: "archived-turn" },
+      ]);
+    } finally {
+      reopened.close();
+    }
   });
+
+  test("archive purge failure retains identities and retries on reopen", async () => {
+    const directory = await dataDir();
+    const archive = path.join(directory, LEGACY_JSON_DIRECTORY, "old-generation");
+    await fs.mkdir(archive, { recursive: true });
+    const file = path.join(archive, "looped-reviews.json.bak.1");
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        one: {
+          environmentId: "env-1",
+          agent: "codex",
+          sessions: [{ providerSessionId: "pending-turn" }],
+          diff: "sensitive-marker",
+        },
+      }),
+    );
+    await fs.writeFile(path.join(archive, "unrelated.json"), "unrelated");
+    const remove = syncFs.rmSync;
+    const failure = spyOn(syncFs, "rmSync").mockImplementation((target, options) => {
+      if (target === file) throw new Error("simulated archive cleanup failure");
+      return remove(target, options);
+    });
+    try {
+      expect(() => openBackendDatabase(directory)).toThrow("simulated archive cleanup failure");
+      expect((await fs.readFile(file, "utf8")).includes("sensitive-marker")).toBe(true);
+    } finally {
+      failure.mockRestore();
+    }
+    const database = openBackendDatabase(directory);
+    try {
+      expect(database.readStore(LOOPED_REVIEW_CLEANUP_STORE)?.value).toEqual([
+        { environmentId: "env-1", agent: "codex", providerSessionId: "pending-turn" },
+      ]);
+      expect(await fs.readdir(archive)).toEqual(["unrelated.json"]);
+    } finally {
+      database.close();
+    }
+  });
+
+  for (const store of ["native-agent-sessions", "agent-interaction-resolution-journal"]) {
+    test.each(["unreadable", "corrupt-row"])(`leaves ${store} %s bytes untouched`, async (kind) => {
+      const directory = await dataDir();
+      const before = new StorageDatabase(directory, {
+        layoutFor: storeLayout,
+        migrations: STORAGE_MIGRATIONS.filter(
+          (migration) => migration.version < RETIRE_LOOPED_REVIEWS_VERSION,
+        ),
+      });
+      if (kind === "unreadable")
+        before.transaction(() => before.writeRawDocumentInTransaction(store, "{ unreadable"));
+      else {
+        before.writeStore(store, store === "native-agent-sessions" ? SESSIONS : JOURNAL);
+        if (store === "native-agent-sessions") {
+          before.db.query("UPDATE store_rows SET value = '{ torn' WHERE store = ?").run(store);
+        } else {
+          before.db.query("UPDATE stores SET document = '{ torn' WHERE name = ?").run(store);
+        }
+      }
+      const rows = before.db.query("SELECT * FROM store_rows WHERE store = ?").all(store);
+      const header = before.db.query("SELECT * FROM stores WHERE name = ?").get(store);
+      before.close();
+      const upgraded = openBackendDatabase(directory);
+      try {
+        expect(upgraded.db.query("SELECT * FROM store_rows WHERE store = ?").all(store)).toEqual(
+          rows,
+        );
+        expect(upgraded.db.query("SELECT * FROM stores WHERE name = ?").get(store)).toEqual(header);
+        expect(() => upgraded.readStore(store)).toThrow(StoreCorruptError);
+      } finally {
+        upgraded.close();
+      }
+    });
+  }
 });

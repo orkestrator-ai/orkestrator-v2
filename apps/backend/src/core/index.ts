@@ -1,3 +1,4 @@
+import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -1532,6 +1533,27 @@ export class OrkestratorBackend {
       });
     }
 
+    let retiredReviewCleanup: Promise<void> | undefined;
+    const reconcileRetiredReviews = () => {
+      if (retiredReviewCleanup) return retiredReviewCleanup;
+      retiredReviewCleanup = cleanupRetiredLoopedReviews(
+        this.context.storage,
+        async <T>(command: string, args: Record<string, unknown>) => {
+          const handler = this.commands.get(command);
+          if (!handler) throw new Error("Review bridge command is unavailable");
+          return (await handler(args, this.context)) as T;
+        },
+      )
+        .catch(() => {
+          console.warn("[backend] Retired Looped Review cleanup remains pending");
+        })
+        .finally(() => {
+          retiredReviewCleanup = undefined;
+        });
+      return retiredReviewCleanup;
+    };
+    await reconcileRetiredReviews();
+
     // Start durable pipelines only after stale bridge ownership and interrupted
     // environment deletion have been reconciled. A doomed pipeline is skipped
     // without preventing the gateway from becoming available.
@@ -1788,6 +1810,14 @@ export class OrkestratorBackend {
           onError: warn("prune agent mail"),
         },
         {
+          name: "retired-looped-reviews",
+          kind: "tab-cleanup",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: reconcileRetiredReviews,
+          onError: warn("stop retired Looped Review turns"),
+        },
+        {
           name: "tab-teardowns",
           kind: "tab-cleanup",
           priority: "maintenance",
@@ -1902,6 +1932,7 @@ export class OrkestratorBackend {
       // grace period. A one-minute, coalesced sweep is responsive enough without
       // repeatedly parsing layouts or overlapping destructive work.
       this.tabResourceSweep ??= setInterval(() => {
+        void reconcileRetiredReviews();
         reconcileTabTeardownsOnce();
         reconcileOrphanedTabResourcesOnce();
       }, 60_000);

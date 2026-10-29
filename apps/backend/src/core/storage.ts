@@ -8,6 +8,11 @@ export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
+import {
+  reconcileRetiredLoopedReviewSessions,
+  type RetirementProvider,
+  type RetiredLoopedReviewSession,
+} from "./storage-retired-features.js";
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
@@ -138,6 +143,12 @@ export class StorageService {
     this.context.startSnapshots();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
+  }
+
+  reconcileRetiredLoopedReviews(
+    providerFor: (target: RetiredLoopedReviewSession) => Promise<RetirementProvider>,
+  ): Promise<void> {
+    return reconcileRetiredLoopedReviewSessions(this.context.database, providerFor);
   }
 
   /** Closes the database connection. Later calls reopen it. */

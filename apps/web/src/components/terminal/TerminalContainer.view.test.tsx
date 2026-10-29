@@ -2635,6 +2635,66 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test.each([false, true])(
+    "seeds a usable layout when every saved tab is retired (active=%s)",
+    async (isActive) => {
+      getPaneLayoutMock.mockResolvedValue({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-hidden",
+        containerId: "container-hidden",
+        activePaneId: "retired-pane",
+        root: {
+          kind: "leaf",
+          id: "retired-pane",
+          tabs: [
+            {
+              id: "retired-one",
+              type: "looped-review",
+              loopedReviewTabData: {
+                workflowId: "one",
+                environmentId: "env-hidden",
+                isLocal: false,
+              },
+            } as never,
+            {
+              id: "retired-two",
+              type: "looped-review",
+              loopedReviewTabData: {
+                workflowId: "two",
+                environmentId: "env-hidden",
+                isLocal: false,
+              },
+            } as never,
+          ],
+          activeTabId: "retired-two",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 1,
+      });
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={isActive}
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => {
+        const state = usePaneLayoutStore.getState();
+        expect(state.hydration.get("env-hidden")).toBe("done");
+        const tabs = state.getAllTabs("env-hidden");
+        expect(tabs.some((tab) => tab.id.startsWith("retired-"))).toBe(false);
+        expect(tabs.some((tab) => tab.type === "plain")).toBe(true);
+        const layout = state.environments.get("env-hidden");
+        const pane = layout && state.getPane(layout.activePaneId, "env-hidden");
+        expect(pane?.tabs.some((tab) => tab.id === pane.activeTabId)).toBe(true);
+        expect(layout?.containerId).toBe("container-hidden");
+      });
+    },
+  );
+
   test("preserves persisted review tabs when workflow hydration is unavailable", async () => {
     listMultiReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
     getPaneLayoutMock.mockResolvedValue({

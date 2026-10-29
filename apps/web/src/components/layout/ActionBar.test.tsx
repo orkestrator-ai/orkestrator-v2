@@ -7749,7 +7749,9 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       (screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     // Looped Review was removed; Review and Multi Review are the review entry points.
-    expect(screen.queryByRole("button", { name: "Looped code review", hidden: true })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Looped code review", hidden: true }) === null,
+    ).toBe(true);
     expect(
       (screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled,
     ).toBe(true);

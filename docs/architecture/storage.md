@@ -401,8 +401,19 @@ feature's data: it deletes the `looped-reviews` store, prunes looped-review
 claims from the agent interaction resolution journal, and deletes the
 native-agent-session records Looped Review started (`looped-review:` logical
 keys). Multi Review and review fan-out sessions that shared the
-`looped-review` origin are kept and relabelled `automated-review`. A stray
-`looped-reviews.json` is still archived into `legacy-json/` and purged.
+`looped-review` origin are kept and relabelled `automated-review`. Before deleting
+records, the migration copies their provider identities (environment, agent and
+provider session ID) into `retired-looped-review-sessions`. Startup reconnects
+to each runtime, requests abort, and removes an identity only after the provider
+confirms idle or missing. Unreachable and still-running turns remain queued for
+minute-by-minute retry and survive backend restarts.
+
+Every startup also extracts identities from stray `looped-reviews.json` files
+and their retained `legacy-json/` copies, including backups and interrupted
+writer temps, then immediately removes those retired copies. No review context,
+diffs or reports survive in that queue, and unrelated archives retain their
+normal retention policy. File removal failures leave their source and queued
+identities for retry on reopen; storage initialization reports the failure.
 
 ### Version 2: legacy JSON import
 

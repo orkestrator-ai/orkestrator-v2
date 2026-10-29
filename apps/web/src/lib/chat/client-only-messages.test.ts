@@ -188,6 +188,77 @@ describe("client-only optimistic messages", () => {
     expect(rows.map((row) => row.id)).toEqual(["peer-mail-mail-good"]);
   });
 
+  test.each([
+    ["title", 7],
+    ["title", { name: "Sender" }],
+    ["environmentName", 7],
+    ["environmentName", { name: "worker" }],
+  ])("rejects a malformed %s name (%#) without losing the next carrier", (field, value) => {
+    for (const from of [
+      mailMessage({}).from,
+      {
+        kind: "node",
+        nodeId: "bk_hp",
+        nodeName: "omarchy-hp",
+        role: "agent",
+        projectId: "p",
+        environmentId: "worker",
+        tabId: "startup-agent",
+        title: "Claude 2",
+        environmentName: "worker",
+      },
+    ]) {
+      const payload = JSON.stringify({
+        messageId: "mail-bad",
+        trust: "same-project",
+        body: "Report",
+        from: { ...from, [field]: value },
+      });
+      const broken =
+        '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n' +
+        payload +
+        "\n</orkestrator-peer-payload-json>\n</orkestrator-peer-message>";
+      const createdAt = "2026-08-28T10:00:00.000Z";
+      expect(createPeerMailNativeMessagesFromCarrier({ content: broken, createdAt })).toEqual([]);
+      const good = renderAgentMailCarrier(mailMessage({ id: "mail-good" }));
+      const rows = createPeerMailNativeMessagesFromCarrier({
+        content: `${broken}\n\n${good}`,
+        createdAt,
+      });
+      expect(rows.map((row) => row.id)).toEqual(["peer-mail-mail-good"]);
+      expect(rows[0]!.peerMail).toMatchObject({ sender: "worker · Codex 1", body: "Report" });
+    }
+  });
+
+  test.each([undefined, null, "Claude 2"])(
+    "accepts optional or nullable sender names (%#)",
+    (name) => {
+      // Construct the JSON boundary directly so null is also exercised for
+      // optional fields that older carrier versions may have serialized.
+      const payload = JSON.stringify({
+        messageId: "mail",
+        trust: "same-project",
+        body: "Report",
+        from: {
+          kind: "node",
+          nodeId: "bk_hp",
+          nodeName: "omarchy-hp",
+          role: "agent",
+          projectId: "p",
+          environmentId: "worker",
+          tabId: "startup-agent",
+          title: name,
+          environmentName: name,
+        },
+      });
+      const content =
+        '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>' +
+        payload +
+        "</orkestrator-peer-payload-json></orkestrator-peer-message>";
+      expect(createPeerMailNativeMessagesFromCarrier({ content, createdAt: "x" })).toHaveLength(1);
+    },
+  );
+
   test("names an agent sender by its environment as well as its tab", () => {
     const tab = mailMessage({}).from as Extract<MailActor, { kind: "tab" }>;
     expect(agentMailSenderLabel(tab, "fix-login-bug")).toBe("fix-login-bug · Codex 1");

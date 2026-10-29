@@ -298,6 +298,14 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
     }
   }
   const from = value.from;
+  // Carrier metadata comes from transcript JSON, not a typed MailActor.
+  // Nullable names are valid, but other types cannot reach the label formatter.
+  if (
+    (from.title != null && typeof from.title !== "string") ||
+    (from.environmentName != null && typeof from.environmentName !== "string")
+  ) {
+    return null;
+  }
   if (
     from.kind !== "user" &&
     from.kind !== "external" &&

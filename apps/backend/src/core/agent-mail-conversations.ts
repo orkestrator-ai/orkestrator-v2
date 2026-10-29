@@ -104,7 +104,11 @@ function actorParticipant(actor: MailActor): AgentMailParticipant {
         kind: actor.role === "coordinator" ? "coordinator" : "agent",
         displayName: `${actor.title || (actor.role === "coordinator" ? "Project coordinator" : actor.tabId)} on ${actor.nodeName}`,
         agent: null,
-        ...(actor.role === "agent" && actor.environmentName
+        // Older leaves use the environment name as the title fallback. The
+        // display name already includes that name and the node suffix.
+        ...(actor.role === "agent" &&
+        actor.environmentName &&
+        actor.environmentName.trim() !== actor.title?.trim()
           ? { environmentName: actor.environmentName }
           : {}),
         projectId: actor.projectId,

@@ -46,13 +46,17 @@ function message(id: string, parts: Array<Record<string, unknown>> = []): TestMe
 }
 
 /** A provider that behaves like a v2 bridge over an in-memory history. */
-function summaryProvider(history: {
-  messages: TestMessage[];
-  epoch: number;
-  revision: number;
-  /** Rows the bridge changed recently, newest first. */
-  revised?: string[];
-}) {
+function summaryProvider(
+  history: {
+    messages: TestMessage[];
+    epoch: number;
+    revision: number;
+    /** Rows the bridge changed recently, newest first. */
+    revised?: string[];
+  },
+  /** `pages: false` is a bridge without page routes; `nameCursors: false` one naming no later row. */
+  bridge: { pages?: boolean; nameCursors?: boolean } = {},
+) {
   const generation = "g1";
   const transcriptSnapshot = async (
     _sessionId: string,
@@ -66,7 +70,7 @@ function summaryProvider(history: {
       limit: options.limit,
       targetBytes: options.targetBytes,
       complete: true,
-      pages: true,
+      pages: bridge.pages ?? true,
       ...(history.revised ? { revisedMessageIds: history.revised } : {}),
       ...(options.knownSourceToken ? { knownToken: options.knownSourceToken } : {}),
     });
@@ -83,11 +87,15 @@ function summaryProvider(history: {
       ...(update.value.historyCursor
         ? {
             historyCursor: update.value.historyCursor,
-            historyCursorBefore: positionedCursorBefore(
-              update.value.messages,
-              update.value.startIndex,
-              update.value.historyCursor,
-            ),
+            ...(bridge.nameCursors === false
+              ? {}
+              : {
+                  historyCursorBefore: positionedCursorBefore(
+                    update.value.messages,
+                    update.value.startIndex,
+                    update.value.historyCursor,
+                  ),
+                }),
           }
         : {}),
       ...(update.value.revisedMessages ? { revisedMessages: update.value.revisedMessages } : {}),
@@ -417,6 +425,99 @@ describe("summary transcripts", () => {
       },
     );
   });
+
+  // The counter split (0232 item 3): a joined page is attributed to why the
+  // session's latest view carried no direct cursor, so each cause can be seen
+  // to go quiet on its own. Without a view (above) it stays the base counter.
+  const joinedCounts = () => {
+    const paths = compatibilityPathUsage.snapshot().paths;
+    return {
+      base: paths["history.joined-v1-page"]?.count ?? 0,
+      unpaged: paths["history.joined-v1-page.unpaged-source"]?.count ?? 0,
+      unnamed: paths["history.joined-v1-page.unnamed-cursor"]?.count ?? 0,
+    };
+  };
+  const shortCalls = (index: number) =>
+    Array.from({ length: 20 }, (_, call) => ({
+      type: "tool-invocation",
+      content: "Run",
+      toolName: "bash",
+      toolUseId: `call-${index}-${call}`,
+      toolOutput: "ok",
+      toolState: "completed",
+    }));
+  for (const [name, rows, options, expected] of [
+    [
+      "a source without direct pages",
+      (index: number) => message(`m${index}`),
+      { pages: false },
+      { base: 0, unpaged: 1, unnamed: 0 },
+    ],
+    [
+      "a pageable source whose bounded view can name no cursor",
+      (index: number) => ({
+        ...message(`m${index}`, shortCalls(index)),
+        content: "c".repeat(4_000),
+      }),
+      { nameCursors: false },
+      { base: 0, unpaged: 0, unnamed: 1 },
+    ],
+  ] as const) {
+    test(`a joined page after ${name} counts under its own cause`, async () => {
+      const history = {
+        messages: Array.from({ length: 250 }, (_, index) => rows(index)),
+        epoch: 1,
+        revision: 1,
+      };
+      const { stub: summaryStub } = summaryProvider(history, options);
+      const provider = {
+        ...summaryStub.provider,
+        interactiveSnapshot: mock(async () => ({
+          status: "idle" as const,
+          messages: history.messages,
+        })),
+      } as typeof summaryStub.provider;
+      await withService(
+        { prefix: "orkestrator-summary-joined-cause-", provider: async () => provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const view = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (view.status !== "snapshot") throw new Error("expected a snapshot");
+          // Older history the view cannot page to directly.
+          expect(view.value.historyPaging).not.toBe("direct");
+          expect(view.value.historyComplete).toBe(false);
+          // What the renderer's `loadEarlierMessages` does without a direct cursor.
+          const update = await service.getProjectionUpdate({
+            ...identity,
+            syncVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (update.status !== "snapshot") throw new Error("expected a snapshot");
+          const before = joinedCounts();
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: update.historyCursor!,
+            limit: 60,
+          });
+          expect(page.messages.length).toBeGreaterThan(0);
+          const after = joinedCounts();
+          expect({
+            base: after.base - before.base,
+            unpaged: after.unpaged - before.unpaged,
+            unnamed: after.unnamed - before.unnamed,
+          }).toEqual(expected);
+          expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
+        },
+      );
+    });
+  }
 
   test("a direct cursor is refused for another session and after its epoch rotates", async () => {
     const history = {

@@ -192,7 +192,7 @@ import {
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
-import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { type CompatibilityPathId, compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import { nativeTerminalMessages } from "./native-terminal-messages.js";
 
@@ -617,6 +617,20 @@ function firstNamedCursor(
   return undefined;
 }
 
+/**
+ * Why a session's latest progressive view carried no direct cursor, kept only
+ * to attribute the joined pages that follow (0232 item 3): a source with no
+ * direct pages retires with the `/messages` fallback, while a source that
+ * pages but named or wrapped no cursor needs direct recovery first.
+ */
+type DirectHistoryGap = "unpaged-source" | "unnamed-cursor";
+/** Sessions whose gap is kept; a view with a direct cursor removes its entry. */
+const DIRECT_HISTORY_GAPS_MAX = 512;
+
+function joinedPageCounter(gap: DirectHistoryGap | undefined): CompatibilityPathId {
+  return gap ? `history.joined-v1-page.${gap}` : "history.joined-v1-page";
+}
+
 function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string {
   if (snapshot.sourceToken) return snapshot.sourceToken;
   const first = snapshot.messages[0] as { id?: unknown } | undefined;
@@ -837,6 +851,8 @@ export class NativeAgentTranscriptProjection {
   /** Bounded normalized transcript source for independent history pages. */
   private readonly projectionHistory = new Map<string, NativeAgentHistoryState>();
   private projectionHistoryBytes = 0;
+  /** By session key: why its latest progressive view had no direct cursor. */
+  private readonly directHistoryGaps = new Map<string, DirectHistoryGap>();
   /**
    * When each projection key's current run of `missing` provider reads began.
    *
@@ -1118,6 +1134,7 @@ export class NativeAgentTranscriptProjection {
     this.projectionSyncBytes = 0;
     this.projectionHistory.clear();
     this.projectionHistoryBytes = 0;
+    this.directHistoryGaps.clear();
     this.toolDetailCache.clear();
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
@@ -2206,6 +2223,16 @@ export class NativeAgentTranscriptProjection {
     await this.displayTailScheduler.flush(sessionKey);
   }
 
+  private recordDirectHistoryGap(sessionKey: string, gap: DirectHistoryGap | undefined): void {
+    this.directHistoryGaps.delete(sessionKey);
+    if (!gap) return;
+    this.directHistoryGaps.set(sessionKey, gap);
+    if (this.directHistoryGaps.size > DIRECT_HISTORY_GAPS_MAX) {
+      const oldest = this.directHistoryGaps.keys().next().value as string | undefined;
+      if (oldest) this.directHistoryGaps.delete(oldest);
+    }
+  }
+
   private trimProgressiveTranscriptCache(): void {
     while (
       this.progressiveTranscriptCache.size > 128 ||
@@ -2637,6 +2664,15 @@ export class NativeAgentTranscriptProjection {
       sourceComplete === false ||
       byteOmitted;
     const complete = !pageable && sourceComplete !== false && !byteOmitted;
+    // Only a view with older history to load can send a click to joined paging.
+    this.recordDirectHistoryGap(
+      sessionKey,
+      complete || directHistoryCursor
+        ? undefined
+        : snapshot.historyCursor
+          ? "unnamed-cursor"
+          : "unpaged-source",
+    );
     const historyEpoch =
       snapshot.historyEpoch ??
       (previous?.value.identity.providerSessionId === providerSessionId
@@ -4115,17 +4151,17 @@ export class NativeAgentTranscriptProjection {
     if (input.before.length > 1024) throw new Error("History cursor is too large");
     const direct = await this.directMessagePage(input);
     if (direct) return direct;
-    compatibilityPathUsage.record("history.joined-v1-page");
-    const projection = await this.refreshProjection(
-      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
-      true,
-    );
-    if (!projection) throw new Error("Native agent history is unavailable");
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
       input.logicalSessionKey,
     );
+    compatibilityPathUsage.record(joinedPageCounter(this.directHistoryGaps.get(sessionKey)));
+    const projection = await this.refreshProjection(
+      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+      true,
+    );
+    if (!projection) throw new Error("Native agent history is unavailable");
     const history = this.projectionHistory.get(sessionKey);
     if (!history) throw new Error("Native agent history is unavailable");
     let cursor: unknown;
@@ -4817,6 +4853,7 @@ export class NativeAgentTranscriptProjection {
     const history = this.projectionHistory.get(key);
     if (history) this.projectionHistoryBytes -= history.bytes;
     this.projectionHistory.delete(key);
+    this.directHistoryGaps.delete(key);
     // Rewind, resume and replacement all land here: nothing kept for the old
     // history may be reused, and a page read still in flight is not admitted.
     this.projectedMessages.forgetSession(key);

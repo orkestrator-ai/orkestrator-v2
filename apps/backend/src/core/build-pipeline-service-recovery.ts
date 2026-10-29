@@ -30,6 +30,9 @@ import {
   MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
   DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
   appendInteractionSummary,
+  PULL_REQUEST_DETECTION_STATES,
+  pullRequestNeedsConflictResolution,
+  verificationPassed,
   type PullRequestDetection,
 } from "./build-pipeline-service-helpers.js";
 import {
@@ -219,13 +222,12 @@ export class BuildPipelineRecovery {
         "Verification returned malformed structured output: expected exactly a boolean complete field, a string rationale field and an acceptanceCriteria array",
       );
     }
-    const { complete, rationale } = result.value;
+    const { rationale } = result.value;
     const criteria = taskSnapshotCriteria(pipeline.taskSnapshot);
     const criterionResults = verificationCriterionResults(criteria, result.value);
     const feedback = feedbackWithUnmetCriteria(rationale, criteria, criterionResults);
     session.structuredResultStatus = "accepted";
-    const passed =
-      complete && !result.value.acceptanceCriteria?.some((item) => item.status === "failed");
+    const passed = verificationPassed(result.value);
     pipeline.verificationResult = passed ? "pass" : "fail";
     pipeline.verificationFeedback = feedback;
     // The pipeline keeps only the newest verdict. The session's own copy is
@@ -304,7 +306,7 @@ export class BuildPipelineRecovery {
       throw new Error("The pull request is still closed. Reopen it before completing Ship.");
     }
     await this.persistPullRequest(pipeline, detection);
-    if (detection.hasMergeConflicts === true) {
+    if (pullRequestNeedsConflictResolution(detection)) {
       await this.stageSupervisor.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
     }
@@ -350,7 +352,7 @@ export class BuildPipelineRecovery {
     if (
       typeof result.url !== "string" ||
       !result.url ||
-      !["open", "merged", "closed"].includes(result.state) ||
+      !(PULL_REQUEST_DETECTION_STATES as readonly string[]).includes(result.state) ||
       (result.hasMergeConflicts !== null && typeof result.hasMergeConflicts !== "boolean")
     ) {
       throw new Error("Pull request detection returned an invalid result");

@@ -119,6 +119,12 @@ import { PIPELINE_ADDRESS_REPORT_KIND } from "@orkestrator/protocol/build-pipeli
 import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import { BuildPipelineStagePrompts, type StagePrompt } from "./build-pipeline-stage-prompts.js";
 import {
+  buildPhaseForSessionPhase,
+  buildPipelineSessionStage,
+  buildPipelineStage,
+  usesPackagePreparationSession,
+} from "./build-pipeline-stages.js";
+import {
   pipelineReviewPreparationInstructions,
   withBuildStepInstructions,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
@@ -441,21 +447,7 @@ export class BuildPipelineSupervisor {
         await this.advanceValidation(pipeline);
         return;
       }
-      const phase =
-        request.phase === "build"
-          ? "building"
-          : request.phase === "review"
-            ? "reviewing"
-            : request.phase === "address"
-              ? "addressing"
-              : request.phase === "verify"
-                ? "verifying"
-                : request.phase === "fix"
-                  ? "fixing"
-                  : request.phase === "pr"
-                    ? "creating-pr"
-                    : "resolving-conflicts";
-      await this.startStage(pipeline, request.phase, phase);
+      await this.startStage(pipeline, request.phase, buildPhaseForSessionPhase(request.phase));
       return;
     }
 
@@ -822,7 +814,7 @@ export class BuildPipelineSupervisor {
       case "fixing":
         if (await this.pauseUnchangedFix(pipeline, session)) return;
         if (
-          (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
+          usesPackagePreparationSession(pipeline) &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL
         ) {
           await this.startReviewPackagePreparation(pipeline);
@@ -1330,7 +1322,7 @@ export class BuildPipelineSupervisor {
       ),
       images: [],
       schema: REVIEW_VALIDATION_PLAN_SCHEMA,
-      label: REVIEW_PACKAGE_SESSION_LABEL,
+      label: buildPipelineStage("preparation").session!.label,
       settings: pipeline.reviewPreparation
         ? {
             agent: pipeline.reviewPreparation.agent,
@@ -1417,7 +1409,7 @@ export class BuildPipelineSupervisor {
       // fails the stage without leaving a session behind or spending a turn on a
       // stage that could never be certified.
       const validationWorktree =
-        (!override && sessionPhase === "verify") || readOnlyReview
+        (!override && buildPipelineSessionStage(sessionPhase).turn === "guarded") || readOnlyReview
           ? await this.validationBaseline(pipeline, readOnlyReview ? "review" : "verify")
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also

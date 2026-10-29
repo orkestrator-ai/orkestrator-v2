@@ -436,6 +436,21 @@ keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
 under its key; the retry gets `…:attempt-2`.
 
+## Stage table and the built-in template
+
+`BUILD_PIPELINE_STAGES` (`apps/backend/src/core/build-pipeline-stages.ts`)
+lists the stages in the order a run meets them, each with its place in the
+rounds, its workspace boundary (`write`, `read-only`, `guarded`, `system`)
+and the result it submits. The supervisor takes session labels, phases,
+result kinds and the read-only and guarded boundaries from it. The built-in
+Build Pipeline graph template (`@orkestrator/protocol/graphs/builtins`,
+plan item 108) describes the same stages, and
+`graph-builtin-templates.test.ts` pins the two together with the routing
+rules (`stageAfterReview`, `verificationPassed`,
+`pullRequestNeedsConflictResolution`), the default and maximum iterations,
+the reviewer cap and the saved step defaults. Change a stage, a rule or a
+bound and that test fails until the template says the same.
+
 ## Constraints
 
 - The graph reads the pipeline record (plus the environment's PR monitor state

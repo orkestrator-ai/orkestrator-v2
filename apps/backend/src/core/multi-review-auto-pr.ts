@@ -82,9 +82,30 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
 }
 
 /** Whether a consolidated report gives the Fix nothing to address. */
-export function consolidatedReportIsClean(workflow: MultiReviewWorkflow): boolean {
+export function consolidatedReportIsClean(
+  workflow: Pick<MultiReviewWorkflow, "consolidatedReport">,
+): boolean {
   const report = workflow.consolidatedReport;
   return report !== undefined && report.issues.length === 0 && report.testCoverageGaps.length === 0;
+}
+
+/**
+ * Whether consolidation hands its report to the Fix: auto-fix is on and the
+ * report has issues or test coverage gaps. Otherwise the review is ready.
+ */
+export function multiReviewAutoFixDue(
+  workflow: Pick<MultiReviewWorkflow, "autoFix" | "consolidatedReport">,
+): boolean {
+  return (
+    workflow.autoFix === true &&
+    workflow.consolidatedReport !== undefined &&
+    !consolidatedReportIsClean(workflow)
+  );
+}
+
+/** Whether a structured Fix result proves completion: it may queue the pull request. */
+export function fixResultCompletes(result: { complete: boolean }): boolean {
+  return result.complete === true;
 }
 
 /**

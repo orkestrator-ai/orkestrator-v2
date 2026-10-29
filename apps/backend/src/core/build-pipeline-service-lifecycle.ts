@@ -4,6 +4,7 @@
  * Each control records its intent under the pipeline lock and leaves the work to
  * the stage supervisor.
  */
+import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -534,7 +535,7 @@ export class BuildPipelineLifecycle {
       sessions: [],
       currentSessionIndex: -1,
       iteration: 0,
-      maxIterations: input.maxIterations ?? 3,
+      maxIterations: input.maxIterations ?? DEFAULT_BUILD_PIPELINE_ITERATIONS,
       createdAt: new Date().toISOString(),
       taskTitle: input.taskTitle,
       taskSnapshot,

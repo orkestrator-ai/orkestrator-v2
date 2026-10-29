@@ -12,7 +12,6 @@ import {
   type PipelineSessionPhase,
   isSupersededPipelineSession,
   stepKeyForSessionPhase,
-  usesReviewFanout,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   pipelineStepInstructions,
@@ -47,6 +46,7 @@ import {
 } from "./review-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import { verificationAddressReport } from "./build-pipeline-address-report.js";
+import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 
 /** A stage's opening prompt, its result schema and the images it is sent with. */
 export interface StagePrompt {
@@ -102,10 +102,9 @@ export class BuildPipelineStagePrompts {
     if (phase === "build") {
       return {
         prompt: buildPrompt(pipeline, notes, target),
-        schema:
-          usesReviewFanout(pipeline) || pipeline.reviewPreparation
-            ? undefined
-            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        schema: usesPackagePreparationSession(pipeline)
+          ? undefined
+          : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
     }
@@ -191,10 +190,9 @@ export class BuildPipelineStagePrompts {
           pipeline.verificationFeedback ?? "The verification did not pass.",
           target,
         ),
-        schema:
-          usesReviewFanout(pipeline) || pipeline.reviewPreparation
-            ? undefined
-            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        schema: usesPackagePreparationSession(pipeline)
+          ? undefined
+          : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
     }

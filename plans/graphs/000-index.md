@@ -45,13 +45,13 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 105 | [105-prompt-templates.md](105-prompt-templates.md) | 1 | in-progress | 101, 102, 106 | Logic-less templates, five render modes, evidence frames, size estimates, lints, the locked system contract. |
 | 106 | [106-capability-profiles.md](106-capability-profiles.md) | 1 | in-progress | 101 | Profiles compiled to `NativeAgentExecutionPolicy`, new capabilities, no push for agents, per-provider enforcement matrix. |
 | 107 | [107-compiler.md](107-compiler.md) | 1 | in-progress | 101, 102, 104, 105, 106 | `compile()` → frozen plan with digest, diagnostics for every rule in report §7.4, cost estimate, `firstIterationFrom`. |
-| 108 | [108-builtin-templates.md](108-builtin-templates.md) | 1 | not-started | 107, 001, 003, 004, 005 | Multi Review, Build Pipeline and Looped Review described as templates, pinned to their engines by tests. |
+| 108 | [108-builtin-templates.md](108-builtin-templates.md) | 1 | in-progress | 107, 001, 003, 004, 005 | Multi Review, Build Pipeline and Looped Review described as templates, pinned to their engines by tests. |
 | 109 | [109-template-storage-and-trust.md](109-template-storage-and-trust.md) | 1 | not-started | 101, 107 | `graph-templates` store, project templates with digest trust, per-project capability ceiling, template commands. |
 | 110 | [110-canvas-spike-and-read-only-designer.md](110-canvas-spike-and-read-only-designer.md) | 1 | not-started | 107, 108, 109 | Time-boxed React Flow vs in-house spike; read-only `graph-designer` tab with library, canvas, inspector, compile panel, JSON import and export. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
-- [ ] All three built-in templates compile cleanly. The pinning tests fail when either the engine or the template changes alone.
+- [x] All three built-in templates compile cleanly. The pinning tests fail when either the engine or the template changes alone (evidence: [108](108-builtin-templates.md) Notes, "How the pins work").
 - [ ] The result-kind registry change is behaviour-neutral, as shown by the unchanged conformance suites.
 - [ ] Compiler, predicate, prompt and schema-subset modules have unit tests for every diagnostic code.
 - [ ] The designer shows the built-in templates and imported user templates, with diagnostics pinned to nodes and edges.

@@ -108,9 +108,11 @@ import {
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
   reviewFanoutNowIso,
+  reviewFanoutReviewerMode,
   type ReviewFanoutHost,
   type ReviewerPollGate,
 } from "./review-fanout.js";
+import { buildPipelineStage, buildPipelineStageTurn } from "./build-pipeline-stages.js";
 import { clearReviewerAdmission } from "./review-fanout-admission.js";
 import { dropProvisionalFindings } from "./review-provisional-findings.js";
 import {
@@ -136,6 +138,10 @@ import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
+/** The panel's result kinds and the consolidation turn, from the stage table. */
+const REVIEWER_RESULT_KIND = buildPipelineStage("review").result!;
+const CONSOLIDATION_RESULT_KIND = buildPipelineStage("consolidation").result!;
+const CONSOLIDATION_TURN = buildPipelineStageTurn(buildPipelineStage("consolidation"));
 
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
@@ -460,7 +466,7 @@ export class BuildPipelineReviewFanout {
       // Reviewers read the immutable package, so they run as Multi Review's do:
       // provider plan mode with the read-only mutation boundary, on every turn
       // including repairs. The read-only guard backs this on every provider.
-      reviewerMode: pipeline.reviewPackage ? "plan" : "build",
+      reviewerMode: reviewFanoutReviewerMode(pipeline.reviewPackage),
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
@@ -486,7 +492,7 @@ export class BuildPipelineReviewFanout {
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
             supportsToolResult: (selection: ReviewerRecord) =>
-              this.deps.workflowToolEnabled?.(selection.agent, "review-report") ?? false,
+              this.deps.workflowToolEnabled?.(selection.agent, REVIEWER_RESULT_KIND) ?? false,
             prepareResult: async (
               selection: ReviewerRecord,
               requestId: string,
@@ -494,7 +500,7 @@ export class BuildPipelineReviewFanout {
             ) =>
               this.deps.workflowResults!.prepare({
                 resultKey: requestId,
-                kind: "review-report",
+                kind: REVIEWER_RESULT_KIND,
                 environmentId: pipeline.environmentId,
                 projectId: pipeline.projectId,
                 provider: selection.agent,
@@ -842,8 +848,7 @@ export class BuildPipelineReviewFanout {
       const sessionKey = `${pipeline.id}:review-consolidation:${pipeline.iteration}:${randomUUID()}`;
       const providerSessionId = await provider.createSession("review", "Review · Consolidation", {
         clientSessionKey: sessionKey,
-        mode: "plan",
-        readOnly: true,
+        ...CONSOLIDATION_TURN,
         model: step.model,
         effort: step.effort,
         ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
@@ -867,12 +872,12 @@ export class BuildPipelineReviewFanout {
         resultTransport:
           this.deps.workflowResults &&
           this.deps.agentMcp &&
-          this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+          this.deps.workflowToolEnabled?.(step.agent, CONSOLIDATION_RESULT_KIND)
             ? "tool-v1"
             : "structured-output-v1",
         ...(this.deps.workflowResults &&
         this.deps.agentMcp &&
-        this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+        this.deps.workflowToolEnabled?.(step.agent, CONSOLIDATION_RESULT_KIND)
           ? { resultSubmission: "preparing" as const }
           : {}),
         ...(step.model ? { model: step.model } : {}),
@@ -963,7 +968,7 @@ export class BuildPipelineReviewFanout {
       if (consolidation.resultTransport === "tool-v1" && this.deps.workflowResults) {
         await this.deps.workflowResults.prepare({
           resultKey: consolidation.requestId,
-          kind: "consolidated-review",
+          kind: CONSOLIDATION_RESULT_KIND,
           environmentId: pipeline.environmentId,
           projectId: pipeline.projectId,
           provider: consolidation.agent,
@@ -987,7 +992,7 @@ export class BuildPipelineReviewFanout {
         turnAgentMcp
           ? {
               agentMcp: turnAgentMcp,
-              workflowResultTool: workflowResultToolName("consolidated-review"),
+              workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
             }
           : undefined,
       );
@@ -1000,7 +1005,7 @@ export class BuildPipelineReviewFanout {
           consolidation.providerSessionId,
           consolidation.resultTransport === "tool-v1"
             ? `${prompt}\n\n${workflowResultInstruction(
-                "consolidated-review",
+                CONSOLIDATION_RESULT_KIND,
                 consolidation.requestId,
                 { capability: agentMcp?.workflowResultCapability },
               )}`
@@ -1011,8 +1016,7 @@ export class BuildPipelineReviewFanout {
               consolidation.resultTransport === "tool-v1"
                 ? undefined
                 : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
-            mode: "plan",
-            readOnly: true,
+            ...CONSOLIDATION_TURN,
             model: consolidation.model,
             effort: consolidation.reasoningEffort,
             ...(typeof consolidation.fastMode === "boolean"
@@ -1022,7 +1026,7 @@ export class BuildPipelineReviewFanout {
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
               ? {
-                  workflowResultTool: workflowResultToolName("consolidated-review"),
+                  workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
                   workflowResultKey: consolidation.requestId,
                 }
               : {}),
@@ -1178,7 +1182,7 @@ export class BuildPipelineReviewFanout {
           workLabel: "consolidation",
           resultLabel: "consolidated report",
           ...(consolidation.resultTransport === "tool-v1"
-            ? { toolName: workflowResultToolName("consolidated-review") }
+            ? { toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND) }
             : {}),
         }),
       );
@@ -1199,7 +1203,7 @@ export class BuildPipelineReviewFanout {
           ? missingWorkflowResultMessage({
               subject: "The consolidation session",
               resultLabel: "consolidated report",
-              toolName: workflowResultToolName("consolidated-review"),
+              toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
               submission: consolidation.resultSubmission,
               finalText: lastAssistantText(session.messages),
             })
@@ -1370,7 +1374,7 @@ export class BuildPipelineReviewFanout {
       "resultReminderSent",
       workflowResultReminderPrompt({
         resultLabel: "consolidated report",
-        toolName: workflowResultToolName("consolidated-review"),
+        toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
         submission: consolidation.resultSubmission,
         finalText: lastAssistantText(session.messages),
         workLabel: "consolidation work",

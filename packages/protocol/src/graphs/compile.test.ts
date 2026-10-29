@@ -195,6 +195,17 @@ describe("the plan", () => {
     expect(plan.order[0]).toBe("build");
   });
 
+  test("a port only a loop's until reads is used, not output-unused", () => {
+    const template = graphTemplateExample("build-pipeline-loop");
+    const verify = agentOf(template, "verify");
+    verify.outputs!.push({ name: "done", type: "text@1" }, { name: "spare", type: "text@1" });
+    template.loops![0]!.until = { path: "verify.done.text", op: "eq", value: "yes" };
+    const unused = compile(template)
+      .diagnostics.filter((d) => d.code === "output-unused" && d.nodeId === "verify")
+      .map((d) => d.port);
+    expect(unused).toEqual(["spare"]);
+  });
+
   test("custom types the plan uses are copied into it", () => {
     const template = baseTemplate();
     const note = {

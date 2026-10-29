@@ -238,6 +238,9 @@ Passed through unchanged: 106's `capability-remote-write` (D12), `capability-mcp
 (`GRAPH_PROMPT_DIAGNOSTIC_CODES`, tested in 105; `prompt-size-over-ceiling` and
 `prompt-unbound-variable` are also tested through `compile`).
 
+**2026-10-29 · Changed by 108.** `output-unused` no longer reports a port that a loop's `until`
+reads (`<node>.<port>`). Test in `compile.test.ts`. See [108](108-builtin-templates.md) Notes.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.

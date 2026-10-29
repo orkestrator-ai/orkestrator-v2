@@ -157,7 +157,7 @@ export class AgentMailBudgets {
     )
       return;
     if (!isAgentMailBudgetHeld(message)) return;
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const coordinatorMailboxId = agentMailboxId(message.toEnvironmentId, message.toTabId);
     if (store.mailboxes[coordinatorMailboxId]?.ownerKind !== "coordinator") return;
     const workerMailboxId =
@@ -300,7 +300,7 @@ export class AgentMailBudgets {
     const settings = normalizeAgentMessagingSettings(
       (await this.repos.config.loadConfig()).global.agentMessaging,
     );
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const hasHeld = Object.values(store.mailboxes).some((mailbox) =>
       mailbox.messages.some(
         (message) =>

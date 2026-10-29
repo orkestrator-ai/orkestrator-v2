@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import {
   DESIGN_EVENT,
   DESIGN_MAX_CANVASES,
@@ -75,6 +76,7 @@ import {
   type DesignPrivateRecord,
   type DesignStorageFaults,
 } from "./records.js";
+import { DesignProfileLedger } from "./browser-profiles.js";
 import { DesignRenderer } from "./renderer.js";
 import { descriptorSchema, designId, operationToken, revision } from "./schemas.js";
 import { buildSync, snapshotEnvelope, tombstone } from "./sync.js";
@@ -107,7 +109,11 @@ export type LoadedRecord =
 export type DesignRendererLike = Pick<
   DesignRenderer,
   "run" | "status" | "probe" | "close" | "invalidateHealth"
->;
+> &
+  Partial<Pick<DesignRenderer, "sweepStaleProfiles">>;
+
+/** Ledger of design browser profiles, under the data directory (see browser-profiles.ts). */
+export const DESIGN_BROWSER_PROFILES_DIRECTORY = "design-browser-profiles";
 
 interface Lane {
   tail: Promise<unknown>;
@@ -187,7 +193,9 @@ export class DesignService {
   constructor(
     dataDir: string,
     private readonly emit: (event: string, payload: unknown) => void,
-    readonly renderer: DesignRendererLike = new DesignRenderer(),
+    readonly renderer: DesignRendererLike = new DesignRenderer({
+      profiles: new DesignProfileLedger(join(dataDir, DESIGN_BROWSER_PROFILES_DIRECTORY)),
+    }),
     options: DesignServiceOptions = {},
   ) {
     this.store = new DesignRecordStore(dataDir, options.faults);
@@ -283,6 +291,7 @@ export class DesignService {
       // Checkpoints written before a crash but never referenced are collected
       // in the background (age-gated so an in-progress writer is never raced).
       this.track(this.collectStartupOrphans());
+      this.track(this.sweepStaleBrowserProfiles());
       this.library.persistSoon();
       this.initialized = true;
     })().catch((error) => {
@@ -2026,6 +2035,15 @@ export class DesignService {
     this.library.close();
     await this.renderer.close();
     await this.coordination.close();
+  }
+
+  /** Profiles of design browsers whose backend was killed before it could close them. */
+  private async sweepStaleBrowserProfiles(): Promise<void> {
+    const removed = (await this.renderer.sweepStaleProfiles?.()) ?? 0;
+    if (removed > 0)
+      console.warn(
+        `[backend] Design startup removed ${removed} stale browser profile${removed === 1 ? "" : "s"}`,
+      );
   }
 
   private async collectStartupOrphans(): Promise<void> {

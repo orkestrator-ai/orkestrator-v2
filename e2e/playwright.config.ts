@@ -1,5 +1,11 @@
 import { defineConfig } from "@playwright/test";
 import path from "node:path";
+import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
+
+// Workers inherit a private TMPDIR, so the browser profiles of a worker that is
+// killed land where a later run can remove them (0248). Workers load this file
+// too and reuse the runner's directory.
+process.once("exit", enterPrivateTestTmpdir());
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 // Override to run beside another checkout's fixture server on the default port.

@@ -1,12 +1,12 @@
 import type { Duplex } from "node:stream";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import {
+  isWorkspaceExcludedCommand,
   NODE_RELAY_PREFIX,
   parseRelayPath,
   relayHttp,
   relayUpgrade,
-} from "./core/nodes/node-relay.js";
-import { isWorkspaceExcludedCommand } from "./core/nodes/node-routing.js";
+} from "./core/nodes/index.js";
 
 /** Routes a client grant (leaf workspace) may use: the client API only. */
 const GRANT_ALLOWED_PATHS = [

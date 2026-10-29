@@ -34,9 +34,6 @@ const LazyClaudeTmuxChatTab = lazy(async () => ({
 const LazyBuildChatTab = lazy(async () => ({
   default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
 }));
-const LazyLoopedReviewTab = lazy(async () => ({
-  default: (await import("@/components/review/LoopedReviewTab")).LoopedReviewTab,
-}));
 const LazyMultiReviewTab = lazy(async () => ({
   default: (await import("@/components/review/MultiReviewTab")).MultiReviewTab,
 }));
@@ -438,28 +435,6 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     data={tab.buildTabData}
                     isActive={isTabActive && isActive}
                     ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  />
-                </LazyLoadBoundary>
-              </div>
-            );
-          }
-
-          if (tab.type === "looped-review" && tab.loopedReviewTabData) {
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  "absolute inset-0",
-                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
-                )}
-              >
-                <LazyLoadBoundary
-                  loadingFallback={renderTabFallback(isTabActive && isActive)}
-                  renderError={renderTabError(isTabActive && isActive)}
-                >
-                  <LazyLoopedReviewTab
-                    data={tab.loopedReviewTabData}
-                    isActive={isTabActive && isActive}
                   />
                 </LazyLoadBoundary>
               </div>

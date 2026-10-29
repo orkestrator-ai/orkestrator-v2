@@ -64,7 +64,7 @@ mailbox; the messages remain until retention prunes them.
 | `claude`, `codex`, `opencode` | `terminal` | Same as tab type |
 | `cursor`, `grok`, `pi` terminal, `plain`, `browser`, workflow tabs | none | Not addressable |
 
-Review and workflow tabs (`claude-build`, `looped-review`, `multi-review`)
+Review and workflow tabs (`claude-build`, `multi-review`)
 are never mailboxes.
 
 **Actors.** Every message records who sent it:

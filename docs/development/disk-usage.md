@@ -110,7 +110,7 @@ ignored files. The project home cannot be moved.
 | Location | Pruned by | When |
 | --- | --- | --- |
 | `<main checkout>/.turbo/cache` (shared by every worktree) | Turborepo, `cacheMaxAge` 7 days and `cacheMaxSize` 10 GB in `turbo.json` | Start of each `turbo run` |
-| `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start | Stopped profiles whose checkout no longer exists |
+| `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start; `dev:prune --older-than` for the empty directories a reset or prune leaves | Stopped profiles whose checkout no longer exists |
 | Worktrees a dev profile registered in an outside repository | `dev:reset`, `dev:prune`, start-up pruning | With the profile; branches only when merged |
 | A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
@@ -120,7 +120,9 @@ ignored files. The project home cannot be moved.
 | `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; none older than 7 days; at most 16 GiB together (the newest hourly always kept). No copy when the disk lacks the live-page copy estimate plus equal headroom (at least 2 GiB). Existing non-incremental databases reuse freed pages without shrinking. Temporary copies of dead processes removed at start-up and before each copy |
 | Superseded change-tracking measurements in `orkestrator.sqlite` (`change_measurements`, `change_measurement_files`) | Measurement publication and the change-tracking retention pass | On each publication (bounded) and two minutes after start, then hourly, in batches; the newest two per owner and scope, and any selected or restorable one, stay |
 | Artifact preview worker scratch, `ork-artifact-preview-<pid>-*` in the system temp dir | The job itself after a verified exit (which includes any Chromium still running with the scratch as its profile, even one the worker was still launching); otherwise the next backend start with process isolation | At start-up, once the owner has exited or its recorded process start identity differs from the current PID, and the directory is over an hour old. Scratch without a recorded identity uses a day-long limit if its PID is live; names without a PID also use a day. An inspection failure retains recorded scratch for a live PID. |
+| Design renderer browser profiles, `playwright_chromiumdev_profile-*` in the backend's temp dir | Playwright, when the browser exits; otherwise the next backend start, from the ledger in `<data dir>/design-browser-profiles/` | At start-up, only for profiles that ledger recorded, once their backend and browser have both exited (recorded start identities), the profile is over an hour old, and no live process names it. Profiles of other tools share the prefix and are never touched |
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |
+| Test processes' private `TMPDIR`, `ork-test-tmp-<pid>-*` in the system temp dir, or `/private/tmp` on macOS (holds the browser profiles and anything else a test leaves) | The process itself when its preload's `afterAll` (Bun) or `exit` (Playwright runner) runs; otherwise the next test process | Once the owner has exited, the directory is over an hour old, and no live process names it on its command line |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 
 ## What you clean yourself
@@ -163,8 +165,11 @@ mise run dev:prune --force              # explicitly discard changes in linked w
 mise run dev:reset --profile <name>     # remove one stopped profile (--stop-first stops it)
 ```
 
-`dev:prune` never touches a running profile, a directory without a valid
-profile sentinel, or a `profile.json` that describes another directory.
+`dev:prune` never touches a running profile or a `profile.json` that
+describes another directory. Directories without a valid profile sentinel
+are kept, except for empty reset skeletons: `--older-than` can remove the
+profile root and its empty `data` and `data/portable-inputs` directories
+after that age. Other entries disqualify a directory from this exception.
 Automatic pruning and ordinary `dev:prune` keep a profile if a linked worktree
 has modified or untracked files. Inspect the reported path before using
 `dev:prune --force` or `dev:reset`, which can discard those files.

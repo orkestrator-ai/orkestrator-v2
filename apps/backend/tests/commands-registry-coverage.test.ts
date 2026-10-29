@@ -855,7 +855,7 @@ describe("direct backend command registry coverage", () => {
       loadSessionBuffer: value("loadSessionBuffer", "terminal output"),
       deletePaneLayout: value("deletePaneLayout", undefined),
       getPaneLayout: value("getPaneLayout", { revision: 3 }),
-      getLoopedReviewWorkflow: value("getLoopedReviewWorkflow", {
+      getMultiReviewWorkflow: value("getMultiReviewWorkflow", {
         version: 2,
         id: "workflow-1",
         environmentId: "env-1",
@@ -868,7 +868,7 @@ describe("direct backend command registry coverage", () => {
           expiresAt: "2026-08-03T00:01:00.000Z",
         },
       }),
-      listLoopedReviewWorkflows: value("listLoopedReviewWorkflows", [
+      listMultiReviewWorkflows: value("listMultiReviewWorkflows", [
         {
           version: 2,
           id: "workflow-1",
@@ -883,7 +883,6 @@ describe("direct backend command registry coverage", () => {
           },
         },
       ]),
-      deleteLoopedReviewWorkflow: value("deleteLoopedReviewWorkflow", undefined),
       getBuildPipeline: value("getBuildPipeline", { id: "pipeline-1" }),
       listBuildPipelines: value("listBuildPipelines", [{ id: "pipeline-1" }]),
       deleteBuildPipeline: value("deleteBuildPipeline", undefined),
@@ -927,7 +926,7 @@ describe("direct backend command registry coverage", () => {
         call: { method: "deletePaneLayout", args: ["env-1"] },
       },
       {
-        command: "get_looped_review_workflow",
+        command: "get_multi_review_workflow",
         args: { workflowId: "workflow-1" },
         expected: {
           version: 2,
@@ -937,10 +936,10 @@ describe("direct backend command registry coverage", () => {
           updatedAt: "2026-08-03T00:00:00.000Z",
           revision: 7,
         },
-        call: { method: "getLoopedReviewWorkflow", args: ["workflow-1"] },
+        call: { method: "getMultiReviewWorkflow", args: ["workflow-1"] },
       },
       {
-        command: "list_looped_review_workflows",
+        command: "list_multi_review_workflows",
         args: { environmentId: "env-1" },
         expected: [
           {
@@ -952,7 +951,7 @@ describe("direct backend command registry coverage", () => {
             revision: 7,
           },
         ],
-        call: { method: "listLoopedReviewWorkflows", args: ["env-1"] },
+        call: { method: "listMultiReviewWorkflows", args: ["env-1"] },
       },
       {
         command: "get_build_pipeline",
@@ -1063,57 +1062,6 @@ describe("direct backend command registry coverage", () => {
         context,
       ),
     ).rejects.toThrow("Expected referencedHandoffIds to be an array");
-  });
-
-  test("deleting a looped review is gated on the stored version, not on whether the snapshot parses", async () => {
-    const deleteLoopedReviewWorkflow = mock(async () => undefined);
-    const withRecord = (record: unknown) =>
-      contextWithStorage({
-        getLoopedReviewWorkflow: mock(async () => record),
-        deleteLoopedReviewWorkflow,
-      });
-
-    // A backend-owned record whose snapshot does not parse is the one most
-    // likely to still have a live supervisor driving it. Gating on the parsed
-    // phase would fail open here and delete it out from under that supervisor.
-    await expect(
-      invoke(
-        "delete_looped_review_workflow",
-        { workflowId: "workflow-1" },
-        withRecord({
-          version: 2,
-          id: "workflow-1",
-          environmentId: "env-1",
-          revision: 7,
-          updatedAt: "2026-08-03T00:00:00.000Z",
-          snapshot: { id: "workflow-1", phase: "preparing" },
-        }),
-      ),
-    ).rejects.toThrow("must be cancelled before deletion");
-    expect(deleteLoopedReviewWorkflow).not.toHaveBeenCalled();
-
-    // A legacy record was never backend-owned, so it stays deletable.
-    await expect(
-      invoke(
-        "delete_looped_review_workflow",
-        { workflowId: "workflow-1" },
-        withRecord({
-          version: 1,
-          id: "workflow-1",
-          environmentId: "env-1",
-          revision: 7,
-          updatedAt: "2026-08-03T00:00:00.000Z",
-          snapshot: { id: "workflow-1", phase: "preparing" },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(deleteLoopedReviewWorkflow).toHaveBeenCalledTimes(1);
-
-    // So does a record that no longer exists at all.
-    await expect(
-      invoke("delete_looped_review_workflow", { workflowId: "workflow-1" }, withRecord(null)),
-    ).resolves.toBeUndefined();
-    expect(deleteLoopedReviewWorkflow).toHaveBeenCalledTimes(2);
   });
 
   test("deleting a multi review delegates its complete teardown to the supervisor", async () => {

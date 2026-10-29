@@ -38,7 +38,7 @@ import {
 
 const TERMINAL_TYPES = new Set(["claude", "codex", "opencode"]);
 
-const WORKFLOW_TYPES = new Set(["claude-build", "looped-review", "multi-review"]);
+const WORKFLOW_TYPES = new Set(["claude-build", "multi-review"]);
 
 /**
  * Which coordinator each environment belongs to, as the mail address of that

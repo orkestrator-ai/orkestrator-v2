@@ -50,8 +50,8 @@ describe("resolveNativeAgentExecutionPolicy", () => {
     ],
     [host, "build-pipeline", "pipeline", "none", "auto-approve", false, "full"],
     [container, "build-pipeline", "pipeline", "container", "auto-approve", true, "restricted"],
-    [host, "looped-review", "pipeline", "none", "auto-approve", false, "full"],
-    [container, "looped-review", "pipeline", "container", "auto-approve", true, "restricted"],
+    [host, "automated-review", "pipeline", "none", "auto-approve", false, "full"],
+    [container, "automated-review", "pipeline", "container", "auto-approve", true, "restricted"],
   ] as const)(
     "%s / %s",
     (environment, origin, id, sandbox, approvals, projectResources, networkAccess) => {
@@ -128,7 +128,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
             },
           },
         },
-        "looped-review",
+        "automated-review",
       ),
     ).toMatchObject({
       id: "pipeline",
@@ -208,7 +208,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
   });
 
   test("the unsandboxed default carries no note", () => {
-    expect(resolveNativeAgentExecutionPolicy(host, "looped-review").note).toBeUndefined();
+    expect(resolveNativeAgentExecutionPolicy(host, "automated-review").note).toBeUndefined();
   });
 
   test("a host cannot claim a container it does not have", () => {

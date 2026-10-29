@@ -16,7 +16,7 @@ import type { Environment, PersistedMultiReviewWorkflow } from "./models.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
-import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
+import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
 import {
   actionHash,
   requireCoordinatorConversation,
@@ -64,7 +64,7 @@ function result(
   recovery?: string,
 ): MultiReviewActionResult {
   return {
-    workflow: stripLoopedReviewSnapshotSecrets(workflow),
+    workflow: stripWorkflowSnapshotSecrets(workflow),
     reused,
     outcome: ui.status === "opened" ? "opened" : "partial",
     ui,
@@ -643,7 +643,7 @@ export function registerCoordinatorReviewActions(
       throw new Error("Multi Review not found in this project");
     return {
       ...(outcome as unknown as Omit<MultiReviewActionResult, "workflow">),
-      workflow: stripLoopedReviewSnapshotSecrets({
+      workflow: stripWorkflowSnapshotSecrets({
         ...saved.snapshot,
         backendRevision: saved.revision,
       }),

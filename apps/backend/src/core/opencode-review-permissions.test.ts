@@ -12,7 +12,7 @@ import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-poli
 import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode-provider-helpers.js";
 
 const environment = { environmentType: "local" as const, networkAccessMode: "full" as const };
-const policy = resolveNativeAgentExecutionPolicy(environment, "looped-review");
+const policy = resolveNativeAgentExecutionPolicy(environment, "automated-review");
 const reviewOptions = {
   requestId: "review-request",
   mode: "plan" as const,
@@ -305,7 +305,7 @@ describe("OpenCode reviewer shell permissions", () => {
 
     const restoredProvider = openCodeProvider(fake);
     restoredProvider.registerSession?.("review-session", {
-      origin: "looped-review",
+      origin: "automated-review",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       reviewerSession: true,
       phase: "review",
@@ -410,7 +410,7 @@ describe("OpenCode reviewer shell permissions", () => {
 
     const restoredProvider = openCodeProvider(fake);
     restoredProvider.registerSession?.("review-session", {
-      origin: "looped-review",
+      origin: "automated-review",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       reviewerSession: true,
       phase: "review",

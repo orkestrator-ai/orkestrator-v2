@@ -116,7 +116,7 @@ import { sessionIncompleteTurnNotice } from "./models.js";
 import { NativeAgentResumeIdentityObserver } from "./native-agent-resume-identity.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
-import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
+import { legacyCompatibilityCounts } from "./change-tracking/index.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { fileURLToPath } from "node:url";

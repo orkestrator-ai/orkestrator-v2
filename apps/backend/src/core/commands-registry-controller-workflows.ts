@@ -14,7 +14,7 @@ import { COORDINATOR_DELEGATION_PRESENTATION } from "@orkestrator/protocol/revie
 
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
-import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
+import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
 import { assertContainerDelegationCommitPublished } from "./commands-registry-coordinator.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -68,7 +68,7 @@ function actionResult(
   recovery?: string,
 ): MultiReviewActionResult {
   return {
-    workflow: stripLoopedReviewSnapshotSecrets(workflow),
+    workflow: stripWorkflowSnapshotSecrets(workflow),
     reused,
     outcome: ui.status === "opened" ? "opened" : "partial",
     ui,

@@ -4,12 +4,10 @@ import type { Environment } from "@/types";
 // These hydrators have their own test files. Snapshot and restore per the Bun
 // mock rules in AGENTS.md so a non-isolated run does not leave them faked.
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
-import * as realLoopedReview from "@/lib/looped-review-persistence";
 import * as realMultiReview from "@/lib/multi-review-persistence";
 
 const realModules = {
   "@/lib/build-pipeline-persistence": { ...realBuildPipeline },
-  "@/lib/looped-review-persistence": { ...realLoopedReview },
   "@/lib/multi-review-persistence": { ...realMultiReview },
 };
 
@@ -20,11 +18,9 @@ afterAll(() => {
 });
 
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
-const hydrateLoopedReviewWorkflow = mock(async (_id: string) => undefined);
 const hydrateMultiReviewWorkflow = mock(async (_id: string) => undefined);
 
 mock.module("@/lib/build-pipeline-persistence", () => ({ hydrateBuildPipeline }));
-mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkflow }));
 mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
@@ -41,7 +37,6 @@ const {
 } = await import("./pane-layout-authoritative");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
@@ -122,14 +117,12 @@ function paneState(
 beforeEach(() => {
   localStorage.clear();
   hydrateBuildPipeline.mockClear();
-  hydrateLoopedReviewWorkflow.mockClear();
   hydrateMultiReviewWorkflow.mockClear();
   useEnvironmentStore.setState({ environments: [environment()] });
   useBuildPipelineStore.setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
   });
-  useLoopedReviewStore.setState({ workflows: new Map() });
   useMultiReviewStore.setState({ workflows: new Map() });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -175,13 +168,12 @@ describe("collectPaneDependencyIds", () => {
   test("finds ids in a leaf", () => {
     const root = leaf("default", [
       { id: "build", type: "claude-build", buildTabData: { pipelineId: "pipeline-1" } },
-      { id: "review", type: "looped-review", loopedReviewTabData: { workflowId: "workflow-1" } },
+      { id: "review", type: "multi-review", multiReviewTabData: { workflowId: "workflow-1" } },
       { id: "plain", type: "plain" },
     ]);
 
     expect(collectPaneDependencyIds(root)).toEqual({
       pipelineIds: new Set(["pipeline-1"]),
-      workflowIds: new Set(["workflow-1"]),
     });
   });
 
@@ -194,7 +186,7 @@ describe("collectPaneDependencyIds", () => {
           { id: "b1", type: "claude-build", buildTabData: { pipelineId: "deep-pipeline" } },
         ]),
         leaf("b", [
-          { id: "r1", type: "looped-review", loopedReviewTabData: { workflowId: "deep-workflow" } },
+          { id: "r1", type: "multi-review", multiReviewTabData: { workflowId: "deep-workflow" } },
         ]),
       ),
       leaf("c", [
@@ -204,7 +196,6 @@ describe("collectPaneDependencyIds", () => {
 
     expect(collectPaneDependencyIds(root)).toEqual({
       pipelineIds: new Set(["deep-pipeline", "other-pipeline"]),
-      workflowIds: new Set(["deep-workflow"]),
     });
   });
 
@@ -228,7 +219,6 @@ describe("collectPaneDependencyIds", () => {
   test("ignores malformed nodes, tabs, and ids", () => {
     const empty = {
       pipelineIds: new Set<string>(),
-      workflowIds: new Set<string>(),
     };
     expect(collectPaneDependencyIds(null)).toEqual(empty);
     expect(collectPaneDependencyIds(undefined)).toEqual(empty);
@@ -247,8 +237,6 @@ describe("collectPaneDependencyIds", () => {
           { id: "a", buildTabData: "nope" },
           { id: "b", buildTabData: { pipelineId: 7 } },
           { id: "c", buildTabData: { pipelineId: "   " } },
-          { id: "d", loopedReviewTabData: [] },
-          { id: "e", loopedReviewTabData: { workflowId: "" } },
         ],
       }),
     ).toEqual(empty);
@@ -302,11 +290,6 @@ describe("hydratePaneLayoutDependencies", () => {
         { id: "b2", type: "claude-build", buildTabData: { pipelineId: "missing-pipeline" } },
       ]),
       leaf("b", [
-        {
-          id: "r1",
-          type: "looped-review",
-          loopedReviewTabData: { workflowId: "missing-workflow" },
-        },
         { id: "m1", type: "multi-review", multiReviewTabData: { workflowId: "missing-multi" } },
       ]),
     );
@@ -314,7 +297,6 @@ describe("hydratePaneLayoutDependencies", () => {
     await hydratePaneLayoutDependencies(root);
 
     expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["missing-pipeline"]);
-    expect(hydrateLoopedReviewWorkflow.mock.calls.map(([id]) => id)).toEqual(["missing-workflow"]);
     expect(hydrateMultiReviewWorkflow.mock.calls.map(([id]) => id)).toEqual(["missing-multi"]);
   });
 
@@ -322,7 +304,6 @@ describe("hydratePaneLayoutDependencies", () => {
     await hydratePaneLayoutDependencies(leaf("default", [{ id: "plain", type: "plain" }]));
 
     expect(hydrateBuildPipeline).not.toHaveBeenCalled();
-    expect(hydrateLoopedReviewWorkflow).not.toHaveBeenCalled();
     expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
   });
 

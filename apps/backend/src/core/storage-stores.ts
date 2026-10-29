@@ -7,6 +7,11 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import { recordShapeUpgradeMigration } from "./storage-record-upgrades.js";
 import {
+  RETIRED_LEGACY_STORES,
+  queueLoopedReviewSessions,
+  retireLoopedReviewsMigration,
+} from "./storage-retired-features.js";
+import {
   WEB_ANNOTATION_STORE_LAYOUT,
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotation-store-layout.js";
@@ -53,7 +58,6 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "opencode-model-catalog": { kind: "envelope", collections: ["catalogs"] },
   sessions: { kind: "array", owner: ownerField("environmentId") },
   "pane-layouts": { kind: "record" },
-  "looped-reviews": { kind: "record" },
   "multi-reviews": { kind: "record" },
   "build-pipelines": { kind: "record" },
   "native-agent-sessions": { kind: "record" },
@@ -95,6 +99,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
 const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   "storage-deletion-fences": { kind: "record" },
   "storage-legacy-json-cleanups": { kind: "document" },
+  "retired-looped-review-sessions": { kind: "document" },
   "host-maintenance": { kind: "document" },
   "compatibility-path-usage": { kind: "document" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
@@ -218,6 +223,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   },
   recordShapeUpgradeMigration,
   changeLedgerMigration,
+  retireLoopedReviewsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {
@@ -258,7 +264,7 @@ export function retireLegacyJsonStores(dataDir: string, now = Date.now()): numbe
   } catch {
     topLevel = [];
   }
-  for (const store of Object.keys(STORE_LAYOUTS)) {
+  for (const store of [...Object.keys(STORE_LAYOUTS), ...RETIRED_LEGACY_STORES]) {
     if (store.includes("/")) continue;
     for (const entry of legacyArtifacts(topLevel, `${store}.json`)) {
       move(path.join(dataDir, entry), entry);
@@ -527,6 +533,30 @@ function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {
   }
 }
 
+/** Queue identities before purging every retired primary, backup and writer temp. */
+function retireLoopedReviewJsonStores(database: StorageDatabase, dataDir: string): void {
+  for (const store of RETIRED_LEGACY_STORES) {
+    const copies = [
+      ...legacyArtifacts(fs.readdirSync(dataDir), `${store}.json`).map((file) =>
+        path.join(dataDir, file),
+      ),
+      ...legacyJsonCopies(dataDir, store),
+    ];
+    for (const file of copies) {
+      const stat = fs.statSync(file);
+      if (stat.isFile()) {
+        if (stat.size > 64 * 1024 * 1024)
+          throw new Error("Retired review archive exceeds cleanup limit");
+        const parsed = parseJson(readIfPresent(file));
+        if (parsed) database.transaction(() => queueLoopedReviewSessions(database, parsed.value));
+      }
+      // Queue writes commit before file removal. Failed removal leaves either
+      // both copies or the durable queue, so reopen retries idempotently.
+      fs.rmSync(file, { recursive: true, force: true });
+    }
+  }
+}
+
 /**
  * Charges a connection's reads to recurring work. Storage is charged by what
  * the caller got, not where the rows came from: a read served from the
@@ -557,6 +587,14 @@ export function openBackendDatabase(
     ...RECURRING_STORAGE_OBSERVERS,
     ...options,
   });
+  try {
+    // Retired evidence is purged even when ordinary archive moves fail. Capture
+    // identities first, including expired generations, before retention purge.
+    retireLoopedReviewJsonStores(database, dataDir);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   try {
     const imported = database.openedAtVersion < LEGACY_JSON_IMPORT_VERSION;
     const moved = retireLegacyJsonStores(dataDir);

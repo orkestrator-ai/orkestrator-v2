@@ -256,7 +256,7 @@ or a person.
     the table (`interactionKinds` in `http-bridge-provider.ts`).
 - Unattended outcomes: every workflow owner resolves interactions through the
   shared journaled path with `agentInteractionPolicyAction`
-  (`build-pipeline-service-interactions.ts`, `looped-review-service.ts`).
+  (`build-pipeline-service-interactions.ts`).
 - Codex answers every server request (`app-server/server-request-router.ts`):
   - exec-policy and network-policy amendments are never offered or sent
     (`app-server/approvals.ts`; removed on 2026-10-27 by

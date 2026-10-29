@@ -15,7 +15,7 @@ import {
   validationPreparation,
 } from "./review-validation-service.js";
 import {
-  generateLoopedReviewPackage,
+  generateReviewPackage,
   parseReviewPreparationValidation,
   verifyEnvironmentReviewPackage,
 } from "./commands-review.js";
@@ -233,17 +233,10 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
     const preparation = validationPreparation(run);
     const validation = parseReviewPreparationValidation(preparation.validation, run.id);
     expect(validation[0]!.stdoutSha256).toHaveLength(64);
-    const pkg = await generateLoopedReviewPackage(
-      "env",
-      run.id,
-      1,
-      "main",
-      validation,
-      [],
-      [],
-      context,
-      { expectedHead: head, validationPlan: run.plan },
-    );
+    const pkg = await generateReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
+      expectedHead: head,
+      validationPlan: run.plan,
+    });
     // Both streams were hashed; the report counts them and their bytes.
     expect(await verifyEnvironmentReviewPackage("env", pkg, context)).toEqual({
       valid: true,
@@ -261,7 +254,7 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
       "cancelled",
     );
     expect(
-      generateLoopedReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
+      generateReviewPackage("env", run.id, 1, "main", validation, [], [], context, {
         expectedHead: "0".repeat(40),
       }),
     ).rejects.toThrow("HEAD changed");

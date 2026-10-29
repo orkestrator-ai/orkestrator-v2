@@ -102,3 +102,11 @@ finished. Only the subsequent run counts as broad browser evidence.
   [0199](../../todo/transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md#live-qualification-2026-10-28-review-follow-up)
   and [0049](../../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#sidebar-probe-qualification-2026-10-28).
   Profile `idleqa-0199-review` was stopped and reset.
+
+## Diagnosis (2026-10-29)
+
+The `storage-writer-guards.test.ts` timeouts here are diagnosed in
+[1309](../backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md):
+the test runs a CPU-bound scan of the whole backend source within the 5 s
+default budget, and the scan only finishes in time when the host is lightly
+loaded.

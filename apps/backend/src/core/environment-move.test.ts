@@ -42,8 +42,9 @@ import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../tests/temp-s
 setDefaultTimeout(30_000);
 
 // An Arch Linux sweep (0247) found `ork-env-move-*` roots left by runs whose
-// tests passed; on macOS the file leaves none, so the writer is unproven.
-// Roots carry their owner's PID and a later run removes those of dead owners.
+// tests passed: a diff scan still running at teardown wrote the project's
+// `.git/info/exclude`, so teardown also settles diff scans. Roots carry their
+// owner's PID and a later run removes those of dead owners.
 const TEMP_PREFIXES = ["ork-env-move-", "ork-env-move-template-"];
 sweepStaleTempDirs({
   prefix: TEMP_PREFIXES,
@@ -87,7 +88,13 @@ afterEach(async () => {
   const finished = runtimes.splice(0);
   for (const runtime of finished) runtime.shutdown();
   await removeFixturesAfterSettlement(
-    () => Promise.all(finished.map((runtime) => runtime.terminals.history.settled())),
+    () =>
+      Promise.all(
+        finished.flatMap((runtime) => [
+          runtime.terminals.history.settled(),
+          runtime.diffStats.settled(),
+        ]),
+      ),
     roots.splice(0),
   );
 });

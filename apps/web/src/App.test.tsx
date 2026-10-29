@@ -10,8 +10,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
-import { loopedReviewFixture } from "@/test/looped-review-fixture";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { AppConfig, Environment } from "@/types";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
@@ -311,36 +310,7 @@ const mockSavePaneLayout = mock(
     revision: expectedRevision + 1,
   }),
 );
-const mockListLoopedReviewWorkflows = mock(
-  async (
-    _environmentId: string,
-  ): Promise<
-    Array<{
-      id: string;
-      environmentId: string;
-      version: number;
-      snapshot: LoopedReviewWorkflow;
-      updatedAt: string;
-      revision: number;
-    }>
-  > => [],
-);
-const mockSaveLoopedReviewWorkflow = mock(
-  async (
-    id: string,
-    environmentId: string,
-    version: number,
-    snapshot: unknown,
-    expectedRevision = 0,
-  ) => ({
-    id,
-    environmentId,
-    version,
-    snapshot,
-    updatedAt: "2026-07-26T00:00:00.000Z",
-    revision: expectedRevision + 1,
-  }),
-);
+const mockListMultiReviewWorkflows = mock(async (_environmentId: string): Promise<never[]> => []);
 const mockListPromptQueues = mock(async (_environmentId: string) => []);
 const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
@@ -392,11 +362,10 @@ mock.module("@/lib/backend", () => ({
   getEnvironment: mockGetEnvironment,
   prepareEnvironmentAgentLaunch: mockPrepareEnvironmentAgentLaunch,
   listBuildPipelines: mockListBuildPipelines,
-  listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
+  listMultiReviewWorkflows: mockListMultiReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
   savePaneLayout: mockSavePaneLayout,
   applyPaneLayoutIntent: mockApplyPaneLayoutIntent,
-  saveLoopedReviewWorkflow: mockSaveLoopedReviewWorkflow,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
 }));
 
@@ -572,7 +541,7 @@ function resetStores({
     messageQueue: new Map(),
   });
 
-  useLoopedReviewStore.setState({ workflows: new Map() });
+  useMultiReviewStore.setState({ workflows: new Map() });
 }
 
 function resetAppMocks() {
@@ -623,8 +592,8 @@ function resetAppMocks() {
   );
   mockSavePaneLayout.mockClear();
   mockApplyPaneLayoutIntent.mockClear();
-  mockListLoopedReviewWorkflows.mockReset();
-  mockListLoopedReviewWorkflows.mockResolvedValue([]);
+  mockListMultiReviewWorkflows.mockReset();
+  mockListMultiReviewWorkflows.mockResolvedValue([]);
   mockListPromptQueues.mockReset();
   mockListPromptQueues.mockResolvedValue([]);
   mockListBuildPipelines.mockReset();
@@ -637,7 +606,6 @@ function resetAppMocks() {
     return { importedIds: [], skipped: 0 };
   });
   mockStartBuildPipelinePersistence.mockClear();
-  mockSaveLoopedReviewWorkflow.mockClear();
   mockToastError.mockClear();
   mockAppUnlisten.mockClear();
   appEventCallbacks = new Map();
@@ -798,7 +766,7 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("background-terminal-host") === null).toBe(true);
   });
 
-  test("hydrates looped reviews exactly once per environment, starting from an empty store", async () => {
+  test("hydrates multi reviews exactly once per environment, starting from an empty store", async () => {
     // Cold start is the case that matters: the store is empty, so hydration
     // must not be conditional on already holding a workflow. It must also not
     // be duplicated — a second hydration path would double every list call.
@@ -807,12 +775,12 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-a",
     });
-    expect(useLoopedReviewStore.getState().workflows.size).toBe(0);
+    expect(useMultiReviewStore.getState().workflows.size).toBe(0);
 
     render(<App />);
 
     await waitFor(() => {
-      expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
+      expect(mockListMultiReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
         "env-a",
         "env-b",
       ]);
@@ -923,7 +891,7 @@ describe("App background processing mounts", () => {
     }
   });
 
-  test("contains one looped-review hydration rejection and continues hydrating peers", async () => {
+  test("contains one multi-review hydration rejection and continues hydrating peers", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-rejected", "project-one"),
@@ -932,8 +900,8 @@ describe("App background processing mounts", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
-    const hydrationError = new Error("looped reviews unavailable");
-    mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) => {
+    const hydrationError = new Error("multi reviews unavailable");
+    mockListMultiReviewWorkflows.mockImplementation(async (environmentId: string) => {
       if (environmentId === "env-rejected") throw hydrationError;
       return [];
     });
@@ -944,12 +912,12 @@ describe("App background processing mounts", () => {
       render(<App />);
 
       await waitFor(() => {
-        expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
+        expect(mockListMultiReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
           "env-rejected",
           "env-restored",
         ]);
         expect(warn).toHaveBeenCalledWith(
-          "[App] Failed to restore looped reviews for env-rejected:",
+          "[App] Failed to restore multi reviews for env-rejected:",
           hydrationError,
         );
       });
@@ -957,49 +925,6 @@ describe("App background processing mounts", () => {
     } finally {
       console.warn = originalWarn;
     }
-  });
-
-  test("hydrates looped reviews without retaining a background terminal host", async () => {
-    const background = makeEnvironment("env-looped", "project-2");
-    resetStores({
-      environments: [makeEnvironment("env-visible", "project-1"), background],
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-visible",
-    });
-    const workflow = loopedReviewFixture({
-      environmentId: background.id,
-      projectId: background.projectId,
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-    });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) =>
-      environmentId === background.id
-        ? [
-            {
-              id: workflow.id,
-              environmentId: workflow.environmentId,
-              version: workflow.version,
-              snapshot: workflow,
-              updatedAt: workflow.updatedAt,
-              revision: 2,
-            },
-          ]
-        : [],
-    );
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
-        backendRevision: 2,
-        phase: "preparing",
-      });
-    });
-    expect(mockListLoopedReviewWorkflows).toHaveBeenCalledWith("env-looped");
-    expect(screen.queryByTestId("terminal-env-looped") === null).toBe(true);
   });
 
   test("routes the empty selection to the launcher and forwards environment operations", async () => {

@@ -395,8 +395,8 @@ and the decisions below were recorded.
   latency budgets:
   [recurring-work.md](../../architecture/recurring-work.md#latency-budgets).
   No reference artifact is committed; generate one before any comparison.
-  The workflows block drives feature planning, build pipelines, looped review
-  and multi review (its rollback is the real `WorkflowDueScheduler`, on the
+  The workflows block drives feature planning, build pipelines and multi
+  review (its rollback is the real `WorkflowDueScheduler`, on the
   harness's manual clock since 2026-10-25). It reports `storageReads`
   beside `storageStats` and `storageBytes` (what those reads fetched from
   SQLite, since 2026-10-25), and the test holds each attempt to a per-domain
@@ -418,8 +418,8 @@ and the decisions below were recorded.
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
     `workflow-supervisor.ts`): a comma list of `feature-planning`,
-    `build-pipeline`, `looped-review`, `multi-review`, `native-queues`,
-    `backend-activity`, or `all`. A named domain runs its old whole-store
+    `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, or
+    `all`. A named domain runs its old whole-store
     driver instead of the keyed one; `multi-review` falls back to
     `WorkflowDueScheduler`.
   - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` (read in `core/index.ts`).
@@ -740,10 +740,7 @@ Obligations the keyed drivers must keep when the old drivers go:
 - Obligations are named per domain, not inferred from a `running` phase.
   Feature planning owes every active phase. Build pipelines owe result
   consumption in any phase, provisioning, review fan-out, stage progression
-  and terminal side effects. Looped review owes result consumption,
-  cancelling, prepared dispatch, awaiting result, phase start and legacy
-  adoption; a parked ambiguous dispatch owes nothing until an explicit retry
-  or discard. Multi review's list is shared by every driver in
+  and terminal side effects. Multi review's list is shared by every driver in
   `multi-review-scheduling.ts`. A native queue owes work while pending or
   holding a reserved in-flight head; parked, empty and tmux queues owe
   nothing.

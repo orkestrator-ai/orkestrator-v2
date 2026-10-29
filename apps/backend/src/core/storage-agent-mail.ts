@@ -202,7 +202,7 @@ export class AgentMailRepository {
     ) {
       return true;
     }
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const mailbox = store.mailboxes[agentMailboxId(workerEnvironmentId, workerTabId)];
     if (!mailbox) return false;
     return mailbox.messages.some(
@@ -221,12 +221,12 @@ export class AgentMailRepository {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
     const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
     if (!message)
       throw new AgentMailError("message-not-found", "Message not found in this mailbox");
-    return message;
+    return structuredClone(message);
   }
 
   /** Serializes follow-up admission with worker completion, including periodic recovery. */
@@ -357,7 +357,7 @@ export class AgentMailRepository {
       sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
     ]);
     const replay = await this.store.enqueue(async () => {
-      const store = await this.store.load();
+      const store = await this.store.snapshot();
       const { senderScope } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
       const fingerprint = sendFingerprint({ ...requested, subject });
@@ -380,7 +380,8 @@ export class AgentMailRepository {
       }
       return null;
     });
-    if (replay) return replay;
+    // A copy: the snapshot is shared and frozen, and a send returns its own message.
+    if (replay) return structuredClone(replay);
     input = await this.resolveCoordinatorAddress(sender, input);
     await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
       input.toEnvironmentId,
@@ -898,7 +899,7 @@ export class AgentMailRepository {
   }
 
   async getAgentMailStatus(messageId: string): Promise<AgentMailMessageSummary> {
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const located = findMessage(store, messageId);
     if (located) return metadataMessage(located.message);
     const counterpart = store.counterparts[messageId];
@@ -913,7 +914,10 @@ export class AgentMailRepository {
     environmentId: string,
     tabId: string,
   ): Promise<AgentMailMessageSummary[]> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const cutoff =
       Date.now() -
       normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
@@ -932,7 +936,10 @@ export class AgentMailRepository {
   }
 
   async listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const cutoff =
       Date.now() -
       normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
@@ -949,7 +956,10 @@ export class AgentMailRepository {
     cutoff: number;
     mailboxes: ConversationMailbox[];
   }> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     return {
       revision: store.revision,

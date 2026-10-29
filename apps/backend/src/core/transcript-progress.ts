@@ -211,24 +211,6 @@ export function compareProgressDigests(
   return digestBase(prior) === digestBase(next) ? "changed" : "rebased";
 }
 
-/**
- * Apply one sample to a durable clock that has no tracker (the looped-review
- * structured wait). A first sample and a change move `progressAt`, as before;
- * a rebase only replaces the digest, so an upgrade or a bridge restart neither
- * resets nor advances the stall clock.
- */
-export function applyProgressSample(
-  clock: { progressDigest?: string; progressAt?: string },
-  digest: string,
-  now: string,
-): ProgressComparison {
-  const comparison = compareProgressDigests(clock.progressDigest, digest);
-  if (comparison === "unchanged") return comparison;
-  clock.progressDigest = digest;
-  if (comparison !== "rebased") clock.progressAt = now;
-  return comparison;
-}
-
 function retainableToken(token: unknown): string | undefined {
   return typeof token === "string" &&
     token.length > 0 &&

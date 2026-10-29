@@ -66,8 +66,8 @@ export function createBuildPipelineProvider(
  * Start a workflow session that names no model on the runtime's effective
  * default.
  *
- * Builds resolve their model before they get here, but Multi Review and looped
- * review pass a launcher's "Default" choice straight through as no model. Left
+ * Builds resolve their model before they get here, but Multi Review passes a
+ * launcher's "Default" choice straight through as no model. Left
  * alone, a runtime with `resolveDefaultModel` would fall back to its own
  * server-side choice, which for OpenCode ignores the provider allowlist. The
  * runtime retains the created session's model for model-less turns, including

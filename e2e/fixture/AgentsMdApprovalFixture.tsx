@@ -81,10 +81,21 @@ export function AgentsMdApprovalFixture() {
   const [decision, setDecision] = useState<unknown>(null);
   useState(() => installFixture(setDecision));
   const [settled, setSettled] = useState(false);
+  const shownRequest = new URLSearchParams(window.location.search).has("many")
+    ? {
+        ...request,
+        agentsMd: {
+          changes: Array.from({ length: 6 }, (_, index) => ({
+            action: "add" as const,
+            text: `Decision ${index + 1}: ${"Keep this decision readable in full. ".repeat(12)}`,
+          })),
+        },
+      }
+    : request;
   return (
     <main className="p-4">
       {settled ? null : (
-        <AgentsMdApprovalDialog request={request} onSettled={() => setSettled(true)} />
+        <AgentsMdApprovalDialog request={shownRequest} onSettled={() => setSettled(true)} />
       )}
       <pre data-testid="decision">{decision ? JSON.stringify(decision) : ""}</pre>
     </main>

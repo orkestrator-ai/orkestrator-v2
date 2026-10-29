@@ -161,7 +161,7 @@ export class NativeAgentTurnRecovery {
     return (
       this.strategy(session.agent) !== undefined &&
       session.origin !== "build-pipeline" &&
-      session.origin !== "looped-review"
+      session.origin !== "automated-review"
     );
   }
 

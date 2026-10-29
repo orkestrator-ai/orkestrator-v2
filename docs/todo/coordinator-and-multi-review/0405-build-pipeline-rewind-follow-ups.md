@@ -5,6 +5,153 @@ Checked against the branch that made build pipeline restarts rewind
 design is in
 [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step).
 
+## Task analysis
+
+Analysed 2026-10-28 against `main` at `79f3bc97`.
+
+Items 3 to 6 were built or checked on 2026-10-28 (#1376, `077da798`); they are
+listed as done and covered by "Assumptions and decisions" below. What is left
+is live qualification: two runs that need provider logins (and, for item 2, a
+GitHub repository), and two narrower checks from "Needs verification". Nothing
+merged since #1376 changes the rewind code; #1393 (`f4e14254`) only rewrote the
+Verify prompt.
+
+### Tasks
+
+1. **A real rewind end to end**: restart round 1's Verify after the last Verify failed, then Address alone and "Prepare package again", on a `dev:test` profile. Status: open (needs a live provider).
+2. **Re-Ship and code rewind on a real repository**: the same PR is pushed to, edited and reopened; "Rewind code to here" on a shipped Build force-pushes with lease. Status: open (needs a live provider and a GitHub repository).
+3. **Stacked layout**: every superseded column draws its own bypass at phone width. Status: done.
+4. **Rewind the code to a step**: "Rewind code to here…" with preview, backup ref and reset. Status: done.
+5. **Address without rerunning Review**: per-round report copies. Status: done.
+6. **Package-only restart on the single-review path**: "Prepare package again". Status: done.
+7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: open.
+8. **Stacked bypass on WebKit and a physical phone**. Status: open.
+
+### 1. A real rewind end to end
+
+**Problem.** Restarts that rewind to a step's round have only unit, service and fixture evidence, and they are on for every pipeline.
+
+**Context.** `restartLocatedStage` (`apps/backend/src/core/build-pipeline-service-lifecycle.ts:1176`) applies the rules in `apps/backend/src/core/build-pipeline-rewind.ts` (`supersedeSessionsFrom` at `:68`, `recordRewind` at `:94`, the round-report helpers `pruneRoundReviewReports`, `retainRoundReviewReport` and `roundReviewReport` at `:179`, `:196`, `:228`). The graph collapses superseded sessions into a "Previous attempt" node (`apps/web/src/components/build-pipeline/pipeline-flow.ts`).
+
+**Investigation.** The description still holds. The fixture scenarios `rewound-loop` and `code-rewind` (`e2e/PipelineFlow.spec.ts:340`, `:379`) and the service tests listed under Current state cover the same steps against fake providers. The live run adds real provider sessions being superseded mid-pipeline, real result slots being closed, and the supervisor picking the restart up from `failed`.
+
+**Decisions.**
+
+- **Which providers run it?**
+  - **Cursor for every stage and a two-reviewer panel of Cursor and Pi (recommended).** The user approved the saved Cursor key (as `CURSOR_API_KEY`) and a copied Pi login for disposable `dev:test` profiles on 2026-09-27; reset the profile afterwards.
+    - Pros: no interactive login; covers fan-out, consolidation and Address.
+    - Cons: does not cover Claude or Codex sessions being superseded.
+  - **Claude and Codex after `mise run dev:login`.**
+    - Pros: the two most used providers.
+    - Cons: the user must log the profile in.
+- **One run or separate runs?**
+  - **One pipeline, shared with item 1 of [0315](0315-build-pipeline-flow-graph.md) (recommended).** Let it fail its last Verify (a failing test the ticket names, `maxIterations` of 2 or more), then restart round 1's Verify, then round 1's Address. Use a second, single-review pipeline for "Prepare package again".
+    - Pros: one fan-out run covers both files' end-to-end checks.
+    - Cons: a long run; a fault part-way blocks both.
+  - **Separate runs per check.**
+    - Pros: each failure is easy to attribute.
+    - Cons: three or more full pipelines.
+- **What counts as a pass?** The line, the previous-attempt node and its expansion, the rerun's Fix 2 → Verify 2 rounds, and the kept selection and expansion after leaving the tab, as the item lists; the restarted Address runs without a Review session; "Prepare package again" opens a preparation session and leaves the Build's turn live.
+
+### 2. Re-Ship and code rewind on a real repository
+
+**Problem.** The re-Ship and force-push paths have only service and fixture evidence, and they write to a real remote and PR.
+
+**Context.** The Ship prompt tells the agent the existing PR (`existingPullRequestUrl`) and, after a code rewind that dropped pushed commits, to push with `--force-with-lease` (`apps/backend/src/core/build-pipeline-prompts.ts:730-745`; the supervisor sets both at `build-pipeline-service-supervisor.ts:2213-2219`). `forcePushUpstream` (`apps/backend/src/core/build-pipeline-code-rewind.ts:205`) derives the rule from the newest code rewind. The reset is `resetWorktreeToCommit` (`build-pipeline-code-rewind.ts:161-199`).
+
+**Investigation.** The description still holds. Whether `gh pr edit` and `gh pr reopen` are used, and whether the lease push targets the same branch, depends on the agent following the prompt, which only a live run shows.
+
+**Decisions.**
+
+- **Which repository and GitHub credentials?**
+  - **A throwaway private repository under the user's account, with a token scoped to it (recommended).**
+    - Pros: force pushes and reopened PRs touch nothing that matters; `gh pr edit` and `reopen` run for real.
+    - Cons: the user must create the repository and token; this worker must not use the user's own GitHub login.
+  - **The Orkestrator repository on a scratch branch.**
+    - Pros: no setup.
+    - Cons: stray PRs and force pushes on the real project.
+  - **A local bare remote.**
+    - Pros: no GitHub at all.
+    - Cons: no PR, so the PR half is not tested.
+- **What counts as a pass?** After restarting Verify on a completed pipeline, the same PR number gets the new commits and an edited description; a PR closed by hand beforehand is reopened. After "Rewind code to here" on the Build, the dialog names the pushed commits, `refs/orkestrator/build-pipeline-rewinds/<pipeline>/<rewind>` holds the old tip, and the next Ship's push is `--force-with-lease` to the same PR.
+
+### 3. Stacked layout
+
+**Problem.** Every superseded column in the stacked (phone-width) layout must draw its own bypass beside the node.
+
+**Context.** Decision 5 below.
+
+**Investigation.** Done. `e2e/PipelineFlow.spec.ts:340` ("an expanded previous attempt keeps the live line beside every superseded step") runs in the `mobile-chromium` (390 px) and `desktop-chromium` (1024 px) projects (`e2e/playwright.config.ts:41-49`).
+
+**Decisions.** None; done. WebKit and a physical phone are task 8.
+
+### 4. Rewind the code to a step
+
+**Problem.** There was no way to reset the branch to where a step started.
+
+**Context.** Decisions 1 to 3, 7 and 8 below.
+
+**Investigation.** Done in #1376. `headAtStart` on `PipelineSession` (`packages/protocol/src/build-pipeline.ts:822`), recorded at `build-pipeline-service-supervisor.ts:1492`; the commands `preview_build_pipeline_code_rewind` and `rewind_build_pipeline_code` (`apps/backend/src/core/commands-registry-build.ts:89`, `:96`); the backup ref (`build-pipeline-code-rewind.ts:63-70`); the `environmentGit` option (`apps/backend/src/core/index.ts:1046`); the dialog `PipelineCodeRewindDialog.tsx`.
+
+**Decisions.** None; done.
+
+### 5. Address without rerunning Review
+
+**Problem.** Restarting an earlier round's Address reran Review, because only the newest report was kept.
+
+**Context.** Decision 4 below.
+
+**Investigation.** Done in #1376. `roundReviewReports` with `MAX_PIPELINE_ROUND_REVIEW_REPORT_BYTES = 1024 * 1024` and `MAX_PIPELINE_ROUND_REVIEW_REPORTS = 11` (`packages/protocol/src/build-pipeline.ts:293-295`); helpers in `build-pipeline-rewind.ts:179`, `:196` and `:228`; tests in the "per-round review report copies" block of `build-pipeline-rewind.test.ts:235`.
+
+**Decisions.** None; done.
+
+### 6. Package-only restart on the single-review path
+
+**Problem.** On the single-review path, preparing the package again meant rerunning the Build or Fix that wrote the plan.
+
+**Context.** Decision 6 below.
+
+**Investigation.** Done in #1376. `pipelinePackageRestartStageId` (`apps/web/src/components/build-pipeline/pipeline-flow.ts:294-313`) offers `review-package:<sessionKey>` on the Build or Fix that wrote the plan and on its Prepare node.
+
+**Decisions.** None; done.
+
+### 7. Code rewind in a container environment
+
+**Problem.** The reset has only run against a fake `environmentGit` and on a local worktree, never inside a container.
+
+**Context.** `createPipelineEnvironmentGit` (`apps/backend/src/core/commands-review.ts:209-219`) uses `createEnvironmentCommandRunner`, which for a container runs `docker exec -w /workspace <container> git …` (`commands-review.ts:250-260`). The worktree probe behind `headAtStart` uses the same runner (`commands-registry-terminal.ts:1109`).
+
+**Investigation.** The claim in "Needs verification" is accurate: the runner is shared, but the reset sequence (`rev-parse`, `update-ref <ref> <head> ""`, `status --porcelain --untracked-files=all`, `reset --hard`, `build-pipeline-code-rewind.ts:183-199`) has not run in a container. Container environments already run `git -C /workspace reset --hard` through `docker exec` elsewhere (`reconcileContainerDelegationBase`, `apps/backend/src/core/commands-environment.ts:1109-1113`), so the risk is the new `update-ref` and its ref namespace, not `reset` itself. The live Docker suites are opt-in (`RUN_LIVE_DOCKER_TESTS=1` with `ORKESTRATOR_QUALIFICATION_IMAGE`, `apps/backend/tests/container-live-qualification.test.ts:28-30`).
+
+**Decisions.**
+
+- **How to verify it?**
+  - **Use a container environment for the item 1 or item 2 run and do one "Rewind code to here" there (recommended).**
+    - Pros: no new code; the real backend path end to end.
+    - Cons: one-off evidence; waits on a live run.
+  - **Add an opt-in live Docker case that calls `resetWorktreeToCommit` through `createPipelineEnvironmentGit` against a real container.**
+    - Pros: repeatable; needs no provider or GitHub.
+    - Cons: new test code and a qualification image; it must follow the live Docker suites' labelled-resource cleanup.
+- **What counts as a pass?** Inside the container, `git rev-parse HEAD` equals the step's `headAtStart`, the backup ref resolves to the old tip, `git status` is clean, and the pipeline restarts from that step.
+
+### 8. Stacked bypass on WebKit and a physical phone
+
+**Problem.** The stacked layout was checked only in Chromium.
+
+**Context.** Decision 5 below. The browser config accepts `ORKESTRATOR_E2E_BROWSER=webkit` as an opt-in qualification engine and notes WebKit has no `moveBefore` (`e2e/playwright.config.ts:8-15`).
+
+**Investigation.** Not run. The phone and desktop projects keep their names whatever engine runs them.
+
+**Decisions.**
+
+- **Which check counts?**
+  - **Run `ORKESTRATOR_E2E_BROWSER=webkit bunx playwright test --config e2e/playwright.config.ts e2e/PipelineFlow.spec.ts` and require the stacked-bypass test to pass in both projects (recommended).**
+    - Pros: repeatable; Safari's engine at 390 px; no device needed.
+    - Cons: not a real phone (touch scrolling, safe areas).
+  - **Also look on a physical phone through the remote gateway.**
+    - Pros: the real device.
+    - Cons: manual; needs a phone and a reachable profile. Worth doing only if WebKit shows a difference.
+
 ## Current state
 
 "Restart from here" on any live step rewinds the pipeline to that step's round
@@ -53,6 +200,17 @@ Tests: `build-pipeline-service-rewind-follow-ups.test.ts`,
 `build-pipeline-prompts.test.ts`, `PipelineFlowView.code-rewind.test.tsx`, and
 two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
 
+### Done
+
+3. **Stacked layout.** Checked in the component browser fixture rather than
+   on a live profile, because the stacked column is a pure projection of the
+   record (decision 5): `e2e/PipelineFlow.spec.ts` "an expanded previous
+   attempt keeps the live line beside every superseded step" passes at 390 px
+   (stacked) and 1024 px (graph, one bypass edge over the attempt).
+4. **Rewind the code to a step.** Built as described above; decisions 1 to 3.
+5. **Address without rerunning Review.** Built; decision 4.
+6. **Package-only restart on the single-review path.** Built; decision 6.
+
 ## Outstanding work
 
 ### Qualification
@@ -74,16 +232,33 @@ two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
 
 None.
 
-## Done
+## Constraints and rationale
 
-3. **Stacked layout.** Checked in the component browser fixture rather than
-   on a live profile, because the stacked column is a pure projection of the
-   record (decision 5): `e2e/PipelineFlow.spec.ts` "an expanded previous
-   attempt keeps the live line beside every superseded step" passes at 390 px
-   (stacked) and 1024 px (graph, one bypass edge over the attempt).
-4. **Rewind the code to a step.** Built as described above; decisions 1 to 3.
-5. **Address without rerunning Review.** Built; decision 4.
-6. **Package-only restart on the single-review path.** Built; decision 6.
+Known limits, by design:
+
+- Rewinds older than the newest 50 drop their record; their sessions stay
+  superseded and the attempt node then shows no restart time. A code rewind
+  that ages out also stops telling Ship to force-push.
+- A same-round restart carries the first fix attempt's unchanged-worktree
+  baseline; a rewind from a later round does not.
+- Steps recorded before `headAtStart` existed, fan-out reviewers and
+  consolidation offer no code rewind.
+- Code rewind backup refs are never pruned by the pipeline.
+
+## Needs verification
+
+- Items 1 and 2 above: live runs on a `dev:test` profile with real provider
+  logins and a real GitHub repository. Not run here: the worker that built
+  items 3 to 6 had no throwaway provider or GitHub credentials, and must not
+  use the user's. Since then the user's approval of the saved Cursor key and a
+  copied Pi login for disposable `dev:test` profiles (2026-09-27) has been
+  noted under task 1; a GitHub repository is still needed for item 2.
+- `git reset --hard` and `git update-ref` through `docker exec` in a
+  containerized environment (the service tests use a fake `environmentGit`;
+  the local runner and the container runner are the same ones the existing
+  worktree probe uses, but the reset itself has not run in a container).
+  Task 7.
+- The stacked bypass on WebKit and on a physical phone. Task 8.
 
 ## Assumptions and decisions
 
@@ -171,24 +346,7 @@ Decisions made on 2026-10-28 while building items 3 to 6.
    backend command, so a renderer cannot reset a branch around the pipeline's
    checks.
 
-## Needs verification
+## Related
 
-- Items 1 and 2 above: live runs on a `dev:test` profile with real provider
-  logins and a real GitHub repository. Not run here: this worker has no
-  throwaway provider or GitHub credentials, and must not use the user's.
-- `git reset --hard` and `git update-ref` through `docker exec` in a
-  containerized environment (the service tests use a fake `environmentGit`;
-  the local runner and the container runner are the same ones the existing
-  worktree probe uses, but the reset itself has not run in a container).
-- The stacked bypass on WebKit and on a physical phone.
-
-## Known limits (by design)
-
-- Rewinds older than the newest 50 drop their record; their sessions stay
-  superseded and the attempt node then shows no restart time. A code rewind
-  that ages out also stops telling Ship to force-push.
-- A same-round restart carries the first fix attempt's unchanged-worktree
-  baseline; a rewind from a later round does not.
-- Steps recorded before `headAtStart` existed, fan-out reviewers and
-  consolidation offer no code rewind.
-- Code rewind backup refs are never pruned by the pipeline.
+- [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step): the design
+- [0315-build-pipeline-flow-graph.md](0315-build-pipeline-flow-graph.md): the flow graph's own live qualification

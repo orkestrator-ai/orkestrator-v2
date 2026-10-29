@@ -18,7 +18,6 @@ import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resou
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realNativeAgent from "@/components/native-agent";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
-import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realMultiReviewTab from "@/components/review/MultiReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
 import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
@@ -27,7 +26,6 @@ import * as realHooks from "@/hooks";
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realNativeAgentSnapshot = { ...realNativeAgent };
 const realBrowserTabSnapshot = { ...realBrowserTab };
-const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realMultiReviewTabSnapshot = { ...realMultiReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
 const realBuildChatTabSnapshot = { ...realBuildChatTab };
@@ -226,23 +224,6 @@ mock.module("@/components/browser/BrowserTab", () => ({
   ),
 }));
 
-mock.module("@/components/review/LoopedReviewTab", () => ({
-  LoopedReviewTab: ({
-    data,
-    isActive,
-  }: {
-    data: { environmentId: string; workflowId: string };
-    isActive: boolean;
-  }) => (
-    <div
-      data-testid="looped-review-tab"
-      data-environment-id={data.environmentId}
-      data-workflow-id={data.workflowId}
-      data-active={String(isActive)}
-    />
-  ),
-}));
-
 /** Set to make the Multi Review tab throw during render. */
 let multiReviewTabFailure: Error | null = null;
 /** Bumped once per mount so a forced remount is observable, unlike a re-render. */
@@ -425,7 +406,6 @@ describe("PaneLeafContainer", () => {
     mock.module("@/components/claude/ClaudeTmuxChatTab", () => realClaudeTmuxChatTabSnapshot);
     mock.module("@/components/native-agent", () => realNativeAgentSnapshot);
     mock.module("@/components/browser/BrowserTab", () => realBrowserTabSnapshot);
-    mock.module("@/components/review/LoopedReviewTab", () => realLoopedReviewTabSnapshot);
     mock.module("@/components/review/MultiReviewTab", () => realMultiReviewTabSnapshot);
     mock.module("@/components/terminal/FileViewerTab", () => realFileViewerTabSnapshot);
     mock.module("@/components/build-pipeline/BuildChatTab", () => realBuildChatTabSnapshot);
@@ -1175,41 +1155,6 @@ describe("PaneLeafContainer", () => {
       environmentId: "env-visible",
       sessionId: "grok-session",
       active: "false",
-    });
-  });
-
-  test("renders a looped-review tab with authoritative workflow identity", async () => {
-    const pane = {
-      kind: "leaf" as const,
-      id: "pane-looped",
-      tabs: [
-        {
-          id: "tab-looped",
-          type: "looped-review" as const,
-          loopedReviewTabData: {
-            environmentId: "env-hidden",
-            workflowId: "workflow-1",
-          },
-        },
-      ],
-      activeTabId: "tab-looped",
-    };
-
-    render(
-      <PaneLeafContainer
-        pane={pane}
-        environmentId="env-hidden"
-        containerId="container-hidden"
-        isActive
-      />,
-    );
-
-    expect(await screen.findByTestId("looped-review-tab")).toMatchObject({
-      dataset: {
-        environmentId: "env-hidden",
-        workflowId: "workflow-1",
-        active: "true",
-      },
     });
   });
 

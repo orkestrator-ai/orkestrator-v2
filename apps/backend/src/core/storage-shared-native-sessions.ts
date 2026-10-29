@@ -39,7 +39,7 @@ export function isPersistedNativeAgentSession(
       value.origin === "interactive-tmux" ||
       value.origin === "coordinator" ||
       value.origin === "build-pipeline" ||
-      value.origin === "looped-review") &&
+      value.origin === "automated-review") &&
     isAgentInteractionPolicy(value.interactionPolicy) &&
     (value.inferredComposerSelection === undefined ||
       (isRecord(value.inferredComposerSelection) &&
@@ -208,16 +208,11 @@ export function migratePersistedNativeAgentSession(
   ) {
     return null;
   }
-  const legacyLoopedReview =
-    typeof value.logicalSessionKey === "string" &&
-    value.logicalSessionKey.startsWith("looped-review:");
   const migrated = {
     ...value,
     version: NATIVE_AGENT_SESSION_VERSION,
-    origin: legacyLoopedReview ? "looped-review" : "interactive-native",
-    interactionPolicy: legacyLoopedReview
-      ? UNATTENDED_AGENT_INTERACTION_POLICY
-      : INTERACTIVE_AGENT_INTERACTION_POLICY,
+    origin: "interactive-native",
+    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
   };
   return isPersistedNativeAgentSession(migrated, expectedKey) ? migrated : null;
 }
@@ -236,7 +231,7 @@ export function resolveNativeAgentInteractionMetadata(input: {
   const origin = input.origin ?? "interactive-native";
   const interactionPolicy =
     input.interactionPolicy ??
-    (origin === "build-pipeline" || origin === "looped-review"
+    (origin === "build-pipeline" || origin === "automated-review"
       ? UNATTENDED_AGENT_INTERACTION_POLICY
       : INTERACTIVE_AGENT_INTERACTION_POLICY);
   if (
@@ -245,10 +240,10 @@ export function resolveNativeAgentInteractionMetadata(input: {
       "interactive-tmux",
       "coordinator",
       "build-pipeline",
-      "looped-review",
+      "automated-review",
     ].includes(origin) ||
     !isAgentInteractionPolicy(interactionPolicy) ||
-    (origin === "build-pipeline" || origin === "looped-review") !==
+    (origin === "build-pipeline" || origin === "automated-review") !==
       (interactionPolicy.mode === "unattended")
   ) {
     return null;

@@ -68,7 +68,7 @@ describe("Codex interaction adapter", () => {
       return Response.json({ status: "idle" });
     }, codexConnection);
     provider.registerSession?.("session-1", {
-      origin: "looped-review",
+      origin: "automated-review",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       phase: "discovery",
     });

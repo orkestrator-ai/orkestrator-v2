@@ -26,7 +26,7 @@ import {
   type InProcessToolInfo,
   type InProcessToolResult,
 } from "./mcp-in-process.js";
-import type { ScheduledJobService } from "./scheduled-jobs/service.js";
+import type { ScheduledJobService } from "./scheduled-jobs/index.js";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
@@ -41,7 +41,7 @@ import {
   ARTIFACT_TOOL_INSTRUCTIONS,
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
-} from "./transcript-artifacts/tools.js";
+} from "./transcript-artifacts/index.js";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
@@ -385,9 +385,9 @@ async function createAgentToolServer(
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
   const messagingScope = messagingEnabled ? scope : null;
   let messagingInstructions = "";
-  // Only `initialize` and `server/discover` answer with the instructions. The
-  // mailbox lookup below parses the whole mail store, so every other request
-  // (each `tools/list` and `tools/call`) skips it; see agentMcpAnnounces.
+  // Only `initialize` and `server/discover` answer with the instructions, so
+  // every other request (each `tools/list` and `tools/call`) skips the
+  // mailbox lookup below; see agentMcpAnnounces.
   if (messagingEnabled && instructions) {
     const { mailboxes } = await storage.listAgentMailboxes({
       environmentId: scope.environmentId,

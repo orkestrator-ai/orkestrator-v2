@@ -308,6 +308,19 @@ export interface WebAnnotationSourceHint {
   verified: boolean;
 }
 
+/** The hint's known fields only, so a producer cannot carry extra keys to storage or the agent. */
+export function webAnnotationSourceHintFields(
+  hint: WebAnnotationSourceHint,
+): WebAnnotationSourceHint {
+  return {
+    producer: hint.producer,
+    path: hint.path,
+    ...(hint.line === undefined ? {} : { line: hint.line }),
+    ...(hint.component === undefined ? {} : { component: hint.component }),
+    verified: hint.verified,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Captures
 

@@ -1,5 +1,8 @@
 import type { BuildPipelineAgent, PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  promptCarrierJson,
+  wrapSystemInstructions,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 /** Matches the prompt budget used by the interactive "Continue in…" handoff. */
 export const BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -103,13 +106,8 @@ function messageCreatedAt(value: unknown, fallback: string): string {
   return fallback;
 }
 
-/** JSON frames cannot synthesize the handoff's structural XML-like tags. */
-export function promptCarrierJson(value: unknown): string {
-  return JSON.stringify(value, null, 2).replace(
-    /[<>&\u2028\u2029]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
+/** JSON frames cannot synthesize the handoff's structural XML-like tags (shared with the protocol). */
+export { promptCarrierJson };
 
 /**
  * Cost of a record inside the pretty-printed transcript array.

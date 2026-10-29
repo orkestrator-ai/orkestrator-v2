@@ -388,3 +388,76 @@ export const STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT = {
 
 export const REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS: readonly ReviewEvidenceFrameDisplayContract[] =
   [MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT, STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT];
+
+// ------------------------------------------------------- evidence escaping
+//
+// The primitives every evidence frame is written with. They live here, beside
+// the frame markers, so the backend's prompts and the graph prompt renderer
+// (`graphs/prompt-render.ts`, which the designer's preview also runs) write
+// byte-identical frames.
+
+/**
+ * Serializes JSON for an evidence frame. Every `<` and `>` is written as its
+ * JSON unicode escape, which parsers decode identically, so no string inside
+ * the frame can spell the frame's closing marker.
+ */
+export function serializeFramedEvidence(value: unknown): string {
+  return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
+}
+
+/**
+ * Pretty-printed JSON for a frame a model reads directly (the Address and
+ * custom-fix findings). Besides `<` and `>`, `&` and the JavaScript line
+ * separators are escaped, so the carrier cannot synthesize a structural tag.
+ */
+export function promptCarrierJson(value: unknown): string {
+  return JSON.stringify(value, null, 2).replace(
+    /[<>&\u2028\u2029]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * Escapes prose for an evidence frame: `<` becomes `&lt;` and `>` becomes
+ * `&gt;`, so no text inside the frame can open or close a frame. `&` is left
+ * alone: the escape only has to make markers unspellable, and a model reads
+ * `&lt;` as `<` either way.
+ */
+export function escapeFramedEvidenceText(text: string): string {
+  if (!text.includes("<") && !text.includes(">")) return text;
+  return text.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** Tag of the frame a graph node's input is rendered in (item 105, report §5.13). */
+export const GRAPH_EVIDENCE_FRAME_TAG = "orkestrator-evidence";
+export const GRAPH_EVIDENCE_FRAME_CLOSE = `</${GRAPH_EVIDENCE_FRAME_TAG}>`;
+
+function graphEvidenceAttributeValue(value: string): string {
+  // Attributes describe the frame (port, type, render mode); they come from
+  // the template grammar, but are escaped anyway so none can end the tag.
+  return value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/** `<orkestrator-evidence port="report" type="review-report@1" render="json-frame">`. */
+export function graphEvidenceFrameOpen(attributes: readonly (readonly [string, string])[]): string {
+  const rendered = attributes
+    .filter(([name]) => /^[a-z][a-z-]*$/.test(name))
+    .map(([name, value]) => ` ${name}="${graphEvidenceAttributeValue(value)}"`)
+    .join("");
+  return `<${GRAPH_EVIDENCE_FRAME_TAG}${rendered}>`;
+}
+
+/**
+ * One complete graph evidence frame around an already escaped body (built
+ * with {@link serializeFramedEvidence} or {@link escapeFramedEvidenceText}).
+ */
+export function wrapGraphEvidenceFrame(
+  attributes: readonly (readonly [string, string])[],
+  escapedBody: string,
+): string {
+  return `${graphEvidenceFrameOpen(attributes)}\n${escapedBody}\n${GRAPH_EVIDENCE_FRAME_CLOSE}`;
+}

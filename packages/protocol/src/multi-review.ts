@@ -8,6 +8,7 @@ import {
   STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN,
+  promptCarrierJson,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
 import {
@@ -72,14 +73,6 @@ export const MULTI_REVIEW_REVIEW_TAB_TITLE = "Review preparation & consolidation
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
 export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
   "The original consolidation conversation was no longer available. A fresh Fix session was created and seeded with the consolidated findings.";
-
-/** JSON evidence cannot synthesize the frame's XML-like boundary markers. */
-function promptCarrierJson(value: unknown): string {
-  return JSON.stringify(value, null, 2).replace(
-    /[<>&\u2028\u2029]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
 
 /** Build the complete prompt for a fresh custom-fix session. */
 export function multiReviewCustomFixPrompt(

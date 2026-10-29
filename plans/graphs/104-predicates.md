@@ -39,7 +39,8 @@ Conditions for gates, `when` and loop `until`, written as JSON that forms can bu
 
 ## Done when
 
-- [ ] Predicates are merged with tests and used by [107](107-compiler.md) and [206](206-gate-merge-loop-failure.md).
+- [x] Predicates are merged with tests and used by [107](107-compiler.md).
+- [ ] Predicates are used by [206](206-gate-merge-loop-failure.md).
 
 ## Notes
 
@@ -128,9 +129,17 @@ nodes × 16 path segments; list operators use `length` only.
 **2026-10-29 · Open box.** "Done when" stays unticked: it needs 107 and 206 to use the API, and
 a merged PR.
 
+**2026-10-29 · Used by 107; box split.** The compiler type-checks node `when` and gate branches
+with `graphNodePredicateScope` (delivered port types after transforms, decision `choices` from
+the producing port), loop `until` with `graphLoopPredicateScope` (member outputs, lifted for
+replicated members) and edge filters with `graphFilterPredicateScope`, all through
+`checkGraphPredicateTypes`; every finding is `condition-invalid` with the 104 code as `detail`.
+The Done-when box is split: the 107 half is ticked, the 206 half stays open.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Path roots, scopes and type checker with diagnostic codes, total three-valued evaluator and list filter, table, type-check, example and generated-input totality tests. · Work and tests done; the Done-when box waits for 107 and 206 to use the API and for the PR.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the type checker; Done-when split, 107 half ticked. · 206 half open.

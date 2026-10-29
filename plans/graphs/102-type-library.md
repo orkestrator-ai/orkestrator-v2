@@ -44,7 +44,7 @@ Every edge payload has a named, versioned type. Built-in types reuse today's sch
 
 ## Done when
 
-- [ ] The type library is merged with tests and used by [107](107-compiler.md).
+- [x] The type library is merged with tests and used by [107](107-compiler.md).
 
 ## Notes
 
@@ -168,6 +168,13 @@ decisions), then the protocol domain check. Built-in markdown renders use only `
 **2026-10-29 · Open box.** "Done when" stays unticked: it needs 107 (not started) to use the
 library, and a merged PR.
 
+**2026-10-29 · Used by 107.** The compiler builds one `GraphTypeLibrary` per compile (template
+types, then the caller's library types), resolves every port with it, lifts replicated outputs
+to `list<T>` before `graphTypeAssignability`, maps its codes to `edge-type-mismatch` /
+`edge-cardinality` (`detail` = the 102 code), runs `graphEdgeTransformResultType` step by step
+(`edge-transform-invalid`, path `edges[i].transform[j]`), suggests adapters in messages, and
+records `budgetCheck` per edge in the plan. "Done when" ticked; the PR is still to come.
+
 **2026-10-29 · Template change.** Output ports take `choices?: string[]` (2–32 distinct
 enum-grammar values, `decision@N` only, else `not_applicable`): the report's "choice enum
 supplied by the node". The §9.3 judge declares its lens keys.
@@ -178,3 +185,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Type library, validators, schema subset, schema from example, assignability, transforms, adapters, families, custom-type guard, decision choices; shared validators moved into the protocol; tests. · Work and tests done; the Done-when box waits for 107 to use the library and for the PR.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the library; Done-when ticked. · complete; awaiting PR

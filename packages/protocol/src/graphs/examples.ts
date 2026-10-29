@@ -11,6 +11,7 @@
  */
 import type { GraphPredicate } from "./predicate-shape.js";
 import type {
+  GraphAcknowledgement,
   GraphEdgeSource,
   GraphEdgeSpec,
   GraphPortTarget,
@@ -381,8 +382,10 @@ function buildPipelineLoop(): GraphTemplateV1 {
         kind: "agent",
         role: "verifier",
         capabilities: { profile: "verifier" },
+        // No floor: a verifier's shell may write build outputs, so no provider
+        // holds it above advisory; the post-hoc guard protects the sources, as
+        // for today's Verify (items 106, 107).
         workspaceAccess: "read",
-        minEnforcement: "provider-configured",
         prompt: { builtIn: "verify" },
         inputs: [
           { name: "ticket", type: "ticket@1", render: "markdown" },
@@ -469,6 +472,15 @@ function buildPipelineLoop(): GraphTemplateV1 {
   };
 }
 
+function taintAcknowledgement(digest: string): GraphAcknowledgement {
+  return {
+    kind: "taint",
+    digest,
+    acknowledgedAt: "2026-10-29T00:00:00Z",
+    code: "taint-reaches-side-effect",
+  };
+}
+
 function designBriefExample() {
   return {
     summary: "Cache resolved settings per project.",
@@ -481,8 +493,9 @@ function designBriefExample() {
 /**
  * Report §9.3. Added: the judge also emits the chosen brief (citing its
  * source) so the human node has one artifact to edit, and a `describe-pr`
- * node produces the PR description. The taint acknowledgement the report
- * mentions needs the compiler's warning digest (107), so it is not encoded.
+ * node produces the PR description. The briefs are tainted (the designers
+ * search the web), so the template acknowledges the compiler's three taint
+ * warnings, one per side-effecting node they reach (item 107).
  */
 function designBakeOff(): GraphTemplateV1 {
   return {
@@ -526,7 +539,12 @@ function designBakeOff(): GraphTemplateV1 {
         },
         storage: "value",
         budgets: { maxBytes: 65_536, maxStringBytes: 16_384, maxItems: 100 },
-        render: { summary: ["summary"] },
+        // `describe-pr` reads the chosen brief as markdown (item 105).
+        render: {
+          markdown:
+            "{{summary}}\n\n## Approach\n\n{{approach}}\n\n## Risks\n\n{{#risks}}\n- {{.}}\n{{/risks}}\n\n## Files\n\n{{#filesTouched}}\n- `{{.}}`\n{{/filesTouched}}",
+          summary: ["summary"],
+        },
         example: designBriefExample(),
       },
     ],
@@ -717,6 +735,13 @@ function designBakeOff(): GraphTemplateV1 {
     ],
     // design 3 + judge 1 + build 1 + Multi Review (1 + 8 + 1 + 1 + 1) + describe-pr 1.
     limits: { maxAgentSessions: 18, maxConcurrentAgents: 8 },
+    // The human approval node is the mitigation; these record that the user
+    // accepted untrusted briefs reaching build, the review and the PR.
+    acknowledgements: [
+      taintAcknowledgement("d56b47a53670c6167dfdb765d4a7b37335d6c02b818f62a00ae4d587c6b95738"),
+      taintAcknowledgement("03df3ffc07d53d8b12a9ba6b609c37b66f2527ac70dc667716c0153603035211"),
+      taintAcknowledgement("374befdfe540379fb5878612a1becef7ef50d42e9258f0f28f897035de63c2b7"),
+    ],
     layout: {
       design: { x: 0, y: 0 },
       judge: { x: 240, y: 0 },

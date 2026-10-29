@@ -5,6 +5,8 @@ import {
   coordinatorWebResearchFromEnv,
 } from "@orkestrator/protocol/coordinator-web-research";
 import {
+  nativeAgentDeniedCapabilities,
+  nativeAgentMcpServer,
   nativeAgentPolicyDeniesWebSearch,
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
@@ -41,6 +43,16 @@ const CAPABILITY_TOOLS: ReadonlyMap<NativeAgentCapability, readonly string[]> = 
   // creates scheduled cloud agents.
   ["network", ["WebFetch", "WebSearch", "RemoteTrigger"]],
   ["web.search", ["WebSearch"]],
+  // The CLI's sub-agent tool, under both of its names.
+  ["subagents", ["Task", "Agent"]],
+  // Command rules: Bash stays, and a call matching the pattern as written is
+  // denied in every permission mode. Another spelling (`git -C x push`, a
+  // script) still runs, which is why the enforcement matrix rates these
+  // advisory and the post-hoc guards hold the rest. `gh` goes whole for
+  // `github.write`: no pattern separates its reading commands from its writes.
+  ["git.commit", ["Bash(git commit)", "Bash(git commit *)"]],
+  ["git.push", ["Bash(git push)", "Bash(git push *)"]],
+  ["github.write", ["Bash(gh)", "Bash(gh *)"]],
 ]);
 
 /** Tools a read-only coordinator turn may use, before MCP is added. */
@@ -429,11 +441,20 @@ export function isCoordinatorReadOnlyPolicy(
   return policy?.id === "coordinator-read-only";
 }
 
-/** Provider tool names for the capabilities this policy denies. */
+/**
+ * Provider tool names and rules for the capabilities this policy denies, in
+ * either wire form (`nativeAgentDeniedCapabilities`). A denied `mcp:<server>`
+ * becomes a deny rule for every tool of that server, which the CLI matches on
+ * its normalised name.
+ */
 export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined): string[] {
-  const denied = policy?.capabilityPolicy?.deny ?? [];
   const tools = new Set<string>();
-  for (const capability of denied) {
+  for (const capability of nativeAgentDeniedCapabilities(policy)) {
+    const server = nativeAgentMcpServer(capability);
+    if (server) {
+      tools.add(`${claudeMcpToolPrefix(server)}*`);
+      continue;
+    }
     for (const tool of CAPABILITY_TOOLS.get(capability) ?? []) tools.add(tool);
   }
   if (!nativeAgentPolicyDeniesWebSearch(policy)) tools.delete("WebSearch");
@@ -717,6 +738,9 @@ export function createCoordinatorReadOnlyHook(
   options: { commandSandbox?: CoordinatorCommandSandbox } = {},
 ): HookCallback {
   const deniedTools = new Set(claudeDeniedTools(policy));
+  const deniedMcpPrefixes = [...deniedTools]
+    .filter((tool) => tool.startsWith("mcp__") && tool.endsWith("__*"))
+    .map((tool) => tool.slice(0, -1));
   const allowedMcpPrefixes = [
     claudeMcpToolPrefix("orkestrator"),
     ...researchMcpServerNames.map(claudeMcpToolPrefix),
@@ -733,6 +757,9 @@ export function createCoordinatorReadOnlyHook(
       return deny(
         `Coordinator turns do not wait, so ${toolName} is not available. Delegated work reports back by waking this conversation with a message when it finishes; end your turn instead.`,
       );
+    }
+    if (deniedMcpPrefixes.some((prefix) => toolName.startsWith(prefix))) {
+      return deny(`This session's policy denies the MCP server behind ${toolName}.`);
     }
     if (toolName.startsWith("mcp__")) {
       // Project MCP servers are arbitrary programs. Only Orkestrator's own

@@ -30,6 +30,7 @@
  * content still does not fit, the caller gets a {@link ConsolidationBudgetError}
  * before anything is dispatched.
  */
+import { serializeFramedEvidence } from "@orkestrator/protocol/review-evidence-frames";
 import type {
   ReviewCommit,
   ReviewCoverageGap,
@@ -167,14 +168,9 @@ function stripModels<T extends { reviewModels?: string[] }>(finding: T): Omit<T,
   return rest;
 }
 
-/**
- * Serializes JSON for an evidence frame. Every `<` and `>` is written as its
- * JSON unicode escape, which parsers decode identically, so no string inside
- * the frame can spell the frame's closing marker.
- */
-export function serializeFramedEvidence(value: unknown): string {
-  return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-}
+// The frame serializer lives in the protocol so the graph prompt renderer and
+// the designer's preview write byte-identical frames; re-exported for callers.
+export { serializeFramedEvidence };
 
 function encodedBytes(value: unknown): number {
   return Buffer.byteLength(serializeFramedEvidence(value), "utf8");

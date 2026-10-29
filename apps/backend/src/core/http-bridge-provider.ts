@@ -43,6 +43,7 @@ import {
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   isNativeAgentExecutionPolicy,
   nativeAgentCapabilities,
+  nativeAgentPolicyForBridge,
   parseNativeAgentSteerRejection,
 } from "@orkestrator/protocol/native-agent";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
@@ -169,6 +170,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.observationWakeup.close();
   }
 
+  /**
+   * The policy as this bridge reads it: capabilities newer than the bridge's
+   * vocabulary travel in `extendedDeny`, with stand-ins where the bridge does
+   * not translate them, so a bridge older than the backend (one baked into a
+   * container image) never rejects the policy and falls back to its default.
+   */
+  private wirePolicy(
+    policy: NativeAgentExecutionPolicy | undefined,
+  ): NativeAgentExecutionPolicy | undefined {
+    return policy ? nativeAgentPolicyForBridge(policy, this.agent) : undefined;
+  }
+
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionAdapter.registerSession(sessionId, interaction);
   }
@@ -194,7 +207,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 mode,
                 clientSessionKey,
                 agentMcp: options.agentMcp,
-                policy: options.policy,
+                policy: this.wirePolicy(options.policy),
               }
             : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
               ? {
@@ -205,7 +218,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   mode,
                   readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
                   agentMcp: options.agentMcp,
-                  policy: options.policy,
+                  policy: this.wirePolicy(options.policy),
                   ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
                     : {}),
@@ -214,7 +227,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   title: label,
                   clientSessionKey,
                   agentMcp: options.agentMcp,
-                  policy: options.policy,
+                  policy: this.wirePolicy(options.policy),
                 },
         ),
       },
@@ -1182,7 +1195,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(controls?.mode ? { mode: controls.mode } : {}),
             ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
             ...(parameterValues ? { parameterValues } : {}),
-            ...(policy ? { policy } : {}),
+            ...(policy ? { policy: this.wirePolicy(policy) } : {}),
           }),
         },
         this.fetchImpl,
@@ -1207,7 +1220,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         const policyResponse = await bridgeFetch(
           this.connection,
           `/session/${encodeURIComponent(sessionId)}/config`,
-          { method: "POST", body: JSON.stringify({ policy }) },
+          { method: "POST", body: JSON.stringify({ policy: this.wirePolicy(policy) }) },
           this.fetchImpl,
         );
         await assertOkWithErrorDetail(policyResponse, "Claude resumed session policy update");
@@ -1226,7 +1239,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(controls?.mode ? { mode: controls.mode } : {}),
           ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
           ...(parameterValues ? { parameterValues } : {}),
-          ...(policy ? { policy } : {}),
+          ...(policy ? { policy: this.wirePolicy(policy) } : {}),
         }),
       },
       this.fetchImpl,

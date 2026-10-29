@@ -7,7 +7,10 @@
  * restart, an idle detach or a crashed child all recover without the renderer
  * seeing anything other than a session that was briefly connecting.
  */
-import { nativeAgentPolicyDeniesWebSearch } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentDeniedCapabilities,
+  nativeAgentPolicyDeniesWebSearch,
+} from "@orkestrator/protocol/native-agent";
 import { cursorAppliedPolicy, resolveCursorExecutionPolicy } from "./execution-policy.js";
 
 export { cursorAppliedPolicy, resolveCursorExecutionPolicy };
@@ -227,6 +230,8 @@ const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly ToolName[]>> = O
   shell: ["shell", "task"],
   "shell.mutate": ["shell", "task"],
   network: ["webFetch", "webSearch", "task"],
+  // Its sub-agent tool; a read-only attach never offers it at all.
+  subagents: ["task"],
 });
 
 /**
@@ -270,7 +275,8 @@ export function cursorDeniedTools(
   policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): ToolName[] {
   const tools = new Set<ToolName>();
-  for (const capability of policy.capabilityPolicy?.deny ?? []) {
+  // Either wire form: denials newer than the legacy six travel in `extendedDeny`.
+  for (const capability of nativeAgentDeniedCapabilities(policy)) {
     for (const tool of CURSOR_CAPABILITY_TOOLS[capability] ?? []) tools.add(tool);
   }
   return Array.from(tools);

@@ -30,13 +30,14 @@ import {
   type AgentInteractionOutcome,
   type AgentInteractionRequest,
   type AgentInteractionWorkflowSummary,
+  UNATTENDED_POLICY_INSTRUCTION,
+  withUnattendedPolicy,
 } from "@orkestrator/protocol/agent-interactions";
 import {
   nativeAgentCapabilities,
   type AgentModel,
   type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
-import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { normalizeBuildStepInstructions } from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { AppConfig } from "./models.js";
@@ -573,14 +574,9 @@ export const MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS = 3;
 export const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 export const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
 export const DEFAULT_INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
-export const UNATTENDED_POLICY_INSTRUCTION =
-  "This is a non-interactive build session: no user can answer a provider input request. " +
-  "If input is unavailable or declined, choose the safest likely assumption yourself, " +
-  "state that assumption, and continue. Never treat the absence of a person as authorization.";
-
-export function withUnattendedPolicy(prompt: string): string {
-  return `${prompt}\n\n${wrapSystemInstructions(UNATTENDED_POLICY_INSTRUCTION)}`;
-}
+// The policy text is shared with graph agent nodes (item 105), so it lives in
+// the protocol; re-exported for the pipeline's callers.
+export { UNATTENDED_POLICY_INSTRUCTION, withUnattendedPolicy };
 
 /**
  * The content-bearing change key a transcript snapshot used to persist:

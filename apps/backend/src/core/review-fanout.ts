@@ -14,16 +14,13 @@
  * storage, its own lease fence, and its own worktree baseline; this module owns
  * the turn.
  *
- * The runner deliberately holds no state of its own beyond the host. Every
- * reviewer field it writes is a durable one, because the turn it describes runs
- * inside the environment and outlives this process.
+ * Everything inside one reviewer's turn — admission, the dispatch journal and
+ * proof-based recovery, observation, repair, the reminder and continuation,
+ * token metering and transcript capture — is the shared agent branch runner's
+ * (`agent-branch-runner.ts`); this module adapts a review panel onto it.
  */
-import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
-import { randomUUID } from "node:crypto";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
   REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS,
-  REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
   REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS,
   REVIEW_FANOUT_MAX_SNAPSHOT_PATHS,
   reviewersSettled,
@@ -40,6 +37,7 @@ import {
   STRUCTURED_REVIEW_MAX_ISSUES,
   safeParseStructuredReviewReport,
   structuredReviewReportBudgetIssues,
+  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
@@ -48,36 +46,10 @@ import {
   workflowResultToolName,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
-import {
-  LAST_ASSISTANT_TEXT_READ_LIMIT,
-  lastAssistantText,
-  missingWorkflowResultMessage,
-  workflowResultReminderPrompt,
-  workflowRestartContinuationPrompt,
-} from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import {
-  beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
-  type ArtifactTurnDispatch,
-  type WorkflowArtifactTurnOptions,
-} from "./workflow-artifact-turns.js";
-import type {
-  NativeAgentContextUsage,
-  NativeAgentExecutionPolicy,
-} from "@orkestrator/protocol/native-agent";
-import {
-  AmbiguousPromptDispatchError,
-  ProviderDispatchPreparationError,
-  readProviderStatus,
-  type BuildPipelineProvider,
-  type ProviderPrepareDispatchOptions,
-} from "./build-pipeline-provider.js";
-import { retainProvider } from "./provider-retirement.js";
-import {
-  ProviderUnreachableError,
-  type ProviderDispatchStatus,
-} from "./agent-provider-contract.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
   structuredReportRepairPrompt,
   type ReviewWorktreeSnapshot,
@@ -93,18 +65,10 @@ import {
   PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
-  type ProgressObservation,
 } from "./multi-review-progress.js";
-import {
-  hasProgressSnapshot,
-  readTranscriptProgressSample,
-  type ProgressReadKind,
-} from "./transcript-progress.js";
 import { probeReviewWorktree, REVIEW_WORKTREE_PROBE_ATTEMPTS } from "./review-worktree-probe.js";
 import {
   efficiencyPlatform,
-  recordEfficiency,
-  type EfficiencyEvent,
   type EfficiencyOwner,
   type MultiReviewEfficiencyObserver,
 } from "./multi-review-efficiency.js";
@@ -113,7 +77,6 @@ import {
   runBoundedTasks,
   type ReviewFanoutConcurrency,
 } from "./review-fanout-scheduler.js";
-import { PassTranscriptReader } from "./review-fanout-transcript.js";
 import { attributeReportFindings } from "./review-fanout-provenance.js";
 import {
   clearReviewerAdmission,
@@ -123,16 +86,23 @@ import {
   appendProvisionalFindings,
   dropProvisionalFindings,
 } from "./review-provisional-findings.js";
+import { AGENT_BRANCH_RESULT_COMMIT_NUDGE_MS } from "./agent-branch-observation.js";
+import { AgentBranchRunner, unattendedBranchInteraction } from "./agent-branch-runner.js";
+import {
+  agentBranchNeedsDispatch,
+  type AgentBranchHost,
+  type AgentBranchPollGate,
+} from "./agent-branch-types.js";
+
+// The branch helpers owners import from here.
+export { commitProgressObservation } from "./agent-branch-observation.js";
+export {
+  attachAgentBeforeDispatch,
+  resolveUnattendedReviewerInteractions,
+} from "./agent-branch-runner.js";
 
 export const MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;
 export const MAX_REVIEW_IDLE_RESULT_POLLS = REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS;
-
-/** Content-free measurement of how each due progress probe was answered. */
-const PROGRESS_READ_OPERATIONS = {
-  unchanged: "transcript.progress_unchanged",
-  snapshot: "transcript.progress_snapshot",
-  fallback: "transcript.progress_fallback",
-} as const satisfies Record<ProgressReadKind, EfficiencyEvent["operation"]>;
 
 export function reviewFanoutNowIso(): string {
   return new Date().toISOString();
@@ -144,21 +114,6 @@ function nowIso(): string {
 
 export function reviewFanoutErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * The model to dispatch a reviewer's turn under, or `undefined` for "unset".
- *
- * A reviewer that pinned nothing says so explicitly, because the placeholder
- * cannot: `"default"` is a real Claude catalog id — the bridge resolves it to
- * Opus with a 1M context — so for Claude it is a selection to be forwarded,
- * while for every other harness it is only the launcher's stand-in for a
- * catalogue it does not have yet. This is the same line `stepModel` draws for
- * a single-reviewer review step.
- */
-function reviewerModel(reviewer: ReviewerRecord): string | undefined {
-  if (reviewer.modelUnpinned) return undefined;
-  return reviewer.model === "default" && reviewer.agent !== "claude" ? undefined : reviewer.model;
 }
 
 /** The review source is known to differ from the snapshot every reviewer saw. */
@@ -178,25 +133,6 @@ export class ReviewSnapshotUnverifiableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ReviewSnapshotUnverifiableError";
-  }
-}
-
-/** A pre-dispatch policy read can be retried because no provider request ran. */
-class ReviewerPolicyUnavailableError extends Error {
-  constructor(cause: unknown) {
-    super("Reviewer execution policy is temporarily unavailable", { cause });
-    this.name = "ReviewerPolicyUnavailableError";
-  }
-}
-
-/** Broker or permission setup failed before the prompt request was written. */
-class ReviewerDispatchSetupError extends Error {
-  constructor(cause: unknown) {
-    super(
-      cause instanceof Error ? cause.message : "Reviewer dispatch setup is temporarily unavailable",
-      { cause },
-    );
-    this.name = "ReviewerDispatchSetupError";
   }
 }
 
@@ -322,13 +258,6 @@ export {
 
 const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
 
-/** The usage counters a reviewer record keeps from a provider observation. */
-type ReviewerObservedUsage = Pick<NativeAgentContextUsage, "sessionTokens" | "cacheReadTokens">;
-
-function usageCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
 /** Summarises why every reviewer failed, deduplicating a shared root cause. */
 export function reviewerFailureSummary(reviewers: readonly ReviewerRecord[]): string {
   const reasons = [
@@ -414,114 +343,12 @@ export function parseStructuredReportResult(
   return parsed;
 }
 
-/**
- * Apply a probe to the durable progress clocks.
- *
- * `reset` — the transcript moved; the stall clock starts from now.
- * `hold` — first comparable sample of a session that has no clock yet; the
- * caller must not treat it as "unchanged" or a `stallAbandonMs: 0` test would
- * fail a reviewer on its first successful read.
- * `evaluate` — unchanged, failed, throttled, or a restart of a session that
- * already has a durable clock. The caller then applies the stall thresholds.
- */
-export function commitProgressObservation(
-  target: { progressAt?: string; stalledSince?: string; progressDigest?: string },
-  observation: ProgressObservation,
-): "reset" | "hold" | "evaluate" {
-  if (observation.probed && observation.digest) {
-    target.progressDigest = observation.digest;
-  }
-  if (observation.changed) {
-    target.progressAt = nowIso();
-    delete target.stalledSince;
-    return "reset";
-  }
-  if (observation.baselineEstablished && target.progressAt === undefined) {
-    target.progressAt = nowIso();
-    return "hold";
-  }
-  return "evaluate";
-}
-
-/**
- * Attach the provider's agent process before a prompt is written.
- *
- * Best-effort by contract: the prompt request performs the same work and is the
- * one that answers authoritatively, so a failure here is left for it to report
- * rather than pre-empting it.
- */
-export async function attachAgentBeforeDispatch(
-  provider: BuildPipelineProvider,
-  providerSessionId: string,
-  options?: ProviderPrepareDispatchOptions,
-): Promise<void> {
-  try {
-    await provider.prepareDispatch?.(providerSessionId, options);
-  } catch (error) {
-    console.warn(
-      "[review-fanout] Attaching the agent before dispatch failed:",
-      reviewFanoutErrorMessage(error),
-    );
-  }
-}
-
-/**
- * Answers every interaction a reviewer session is parked on.
- *
- * Reviewers run unattended by construction — nobody is watching a fan-out of
- * eight sessions — so a request that would block the turn is declined, and one
- * that would grant access is denied. Both are fail-closed: an unanswered
- * request wedges the reviewer, and the review phase does not advance while any
- * reviewer is still running.
- *
- * Deliberately *not* the build pipeline's own `enforcePendingInteraction`,
- * which journals through a single `pendingInteractionResolution` slot on the
- * pipeline. That slot has one owner; N concurrent reviewers would contend for
- * it and the guard would reject every session but one.
- */
-export async function resolveUnattendedReviewerInteractions(
-  provider: BuildPipelineProvider,
-  providerSessionId: string,
-  assertFence: () => Promise<void>,
-): Promise<void> {
-  if (!provider.interactions) return;
-  const snapshot = await provider.interactions.listPendingInteractions(providerSessionId);
-  await assertFence();
-  for (const request of snapshot.requests) {
-    const action =
-      request.kind === "question" ||
-      request.kind === "mcp-form" ||
-      request.kind === "elicitation" ||
-      request.kind === "terminal-selection"
-        ? ("decline" as const)
-        : ("deny" as const);
-    await provider.interactions.resolveInteraction(providerSessionId, request.id, {
-      version: 1,
-      interactionId: request.id,
-      sessionId: providerSessionId,
-      action,
-      resolvedAt: Date.now(),
-    });
-    await assertFence();
-  }
-}
-
 // ---------------------------------------------------------------------------
 // The runner
 // ---------------------------------------------------------------------------
 
-/**
- * Everything the fan-out needs from whichever workflow owns it.
- *
- * A host is expected to be cheap to construct per pass: the runner calls it
- * synchronously between awaits and never caches anything across ticks.
- */
 /** See {@link ReviewFanoutHost.pollGate}. Scopes are process-local identifiers. */
-export interface ReviewerPollGate {
-  count(scope: string): boolean;
-  exhausted(scope: string, count: number, limit: number): boolean;
-  clear(scope: string): void;
-}
+export type ReviewerPollGate = AgentBranchPollGate;
 
 /**
  * When the panel hands over to consolidation: once every reviewer has settled
@@ -544,6 +371,12 @@ export function reviewFanoutReviewerMode(reviewPackage: unknown): "plan" | "buil
   return reviewPackage ? "plan" : "build";
 }
 
+/**
+ * Everything the fan-out needs from whichever workflow owns it.
+ *
+ * A host is expected to be cheap to construct per pass: the runner calls it
+ * synchronously between awaits and never caches anything across ticks.
+ */
 export interface ReviewFanoutHost {
   /** Identifies the owning workflow in session keys and interaction fences. */
   readonly workflowId: string;
@@ -715,15 +548,6 @@ function reviewerSettled(reviewer: ReviewerRecord): boolean {
   );
 }
 
-/** A reviewer whose next step is session creation or prompt dispatch. */
-function reviewerNeedsDispatch(reviewer: ReviewerRecord): boolean {
-  return (
-    reviewer.status === "pending" ||
-    reviewer.dispatchState === "prepared" ||
-    reviewer.dispatchState === "dispatching"
-  );
-}
-
 /**
  * A reviewer about to receive its original, evidence-bearing prompt. A schema
  * repair or an unstick continuation re-uses the evidence the reviewer already
@@ -738,114 +562,26 @@ function reviewerNeedsEvidence(reviewer: ReviewerRecord): boolean {
   );
 }
 
+export const REVIEW_RESULT_COMMIT_NUDGE_MS = AGENT_BRANCH_RESULT_COMMIT_NUDGE_MS;
+
 /**
- * How long a validated, uncommitted report may sit before the live turn is
- * nudged to commit it. Long enough that a model finishing its last read is not
- * interrupted, short enough that a model fighting its own tool calls is not
- * left to spin for minutes.
+ * The panel around the shared branch runner: each reviewer is one branch of
+ * {@link AgentBranchRunner}, which owns everything inside its turn. What stays
+ * here is what only a review panel knows — the evidence check before
+ * admission, provisional findings, the admission-queue projection, the
+ * review prompt, the structured-review contract and its provenance, and the
+ * fan-in outcome.
  */
-export const REVIEW_RESULT_COMMIT_NUDGE_MS = 90_000;
-
 export class ReviewFanoutRunner {
-  /** Tail of the serialized commit queue; never rejects. */
-  private commitTail: Promise<void> = Promise.resolve();
-  /** An observation changed the in-memory record since the last write. */
-  private observationStaged = false;
-  private passStartedAt = Date.now();
+  private readonly branches: AgentBranchRunner<ReviewerRecord>;
 
-  constructor(private readonly host: ReviewFanoutHost) {}
-
-  private stallWarningMs(): number {
-    return this.host.stallWarningMs ?? DEFAULT_STALL_WARNING_MS;
+  constructor(private readonly host: ReviewFanoutHost) {
+    this.branches = new AgentBranchRunner(reviewBranchHost(host));
   }
 
-  private stallAbandonMs(): number {
-    return this.host.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS;
-  }
-
-  private record(event: Omit<EfficiencyEvent, "owner">): void {
-    recordEfficiency(this.host.efficiency, {
-      owner: this.host.efficiencyOwner ?? "multi-review",
-      phase: "reviewing",
-      ...event,
-    });
-  }
-
-  /**
-   * Immediate, durable write of a safety transition: session identity, the
-   * dispatch journal, an accepted result, or a terminal reviewer state.
-   *
-   * Serialized with every other write this runner makes, so concurrent
-   * reviewers cannot lose one another's updates. The caller awaits its own
-   * commit before its next fallible operation — that is what keeps
-   * `dispatching` durable before `send`.
-   *
-   * `transition`, when given, is applied to the in-memory record only once
-   * this write's turn in the queue comes, and reverted if the write fails.
-   * Every save serializes the whole panel, so a change made before then would
-   * ride on a peer's earlier write; for `dispatching` that made a request
-   * durable whose own commit, and so whose send, might never happen.
-   */
-  private commit(transition?: { apply(): void; revert(): void }): Promise<void> {
-    const run = this.commitTail.then(async () => {
-      const staged = this.observationStaged;
-      // Whatever was staged rides on this write.
-      this.observationStaged = false;
-      const started = Date.now();
-      transition?.apply();
-      try {
-        await this.host.save();
-      } catch (error) {
-        // Reverted before the queue moves on, so no later write carries it.
-        transition?.revert();
-        this.observationStaged ||= staged;
-        throw error;
-      }
-      this.record({ operation: "workflow.save_safety", elapsedMs: Date.now() - started });
-    });
-    this.commitTail = run.catch(() => undefined);
-    return run;
-  }
-
-  /**
-   * Marks an observational change — progress digest and clock, token usage,
-   * the stall warning — for the single checkpoint at the end of the pass. The
-   * change is already on the in-memory record, so any safety commit before
-   * then carries it too.
-   */
-  private stageObservation(): void {
-    this.observationStaged = true;
-    this.record({ operation: "workflow.observation_staged" });
-  }
-
-  /**
-   * Writes staged observations once. A failure other than a lost fence is
-   * logged, not thrown: an observation is recoverable from the provider on the
-   * next pass, and must never turn an already-settled result into a retry.
-   */
-  async flushObservations(): Promise<void> {
-    const run = this.commitTail.then(async () => {
-      if (!this.observationStaged) return;
-      this.observationStaged = false;
-      const started = Date.now();
-      try {
-        await this.host.save();
-      } catch (error) {
-        this.observationStaged = true;
-        throw error;
-      }
-      this.record({ operation: "workflow.save_observation", elapsedMs: Date.now() - started });
-    });
-    this.commitTail = run.catch(() => undefined);
-    try {
-      await run;
-    } catch (error) {
-      if (this.isFatal(error)) throw error;
-      console.warn(
-        "[review-fanout] Checkpointing reviewer observations failed:",
-        reviewFanoutErrorMessage(error),
-      );
-    }
+  /** Writes staged observations once; see {@link AgentBranchRunner.flushObservations}. */
+  flushObservations(): Promise<void> {
+    return this.branches.flushObservations();
   }
 
   /**
@@ -860,7 +596,7 @@ export class ReviewFanoutRunner {
    * lets in-flight provider calls settle, and is then rethrown.
    */
   async advanceReviewers(reviewers: ReviewerRecord[]): Promise<ReviewFanoutOutcome> {
-    this.passStartedAt = Date.now();
+    const passStartedAt = this.branches.beginPass();
     const live = reviewers.flatMap((reviewer, index) =>
       reviewerSettled(reviewer) ? [] : [{ reviewer, index }],
     );
@@ -877,18 +613,20 @@ export class ReviewFanoutRunner {
     for (const { reviewer } of live) {
       if (reviewer.status !== "running" || !reviewer.requestId) continue;
       const reported = this.host.takeProvisionalFindings?.(reviewer) ?? [];
-      if (appendProvisionalFindings(reviewer, reported)) this.stageObservation();
+      if (appendProvisionalFindings(reviewer, reported)) this.branches.stageObservation();
     }
 
     let fatal: { error: unknown } | undefined;
     const stats = await runBoundedTasks(
       live.map(({ reviewer, index }) => ({
         reviewer,
-        pool: reviewerNeedsDispatch(reviewer) ? ("admission" as const) : ("observation" as const),
+        pool: agentBranchNeedsDispatch(reviewer)
+          ? ("admission" as const)
+          : ("observation" as const),
         group: efficiencyPlatform(reviewer.agent),
         run: async () => {
           try {
-            await this.advanceReviewerIsolated(reviewer, index, reviewers.length);
+            await this.branches.advanceIsolated(reviewer, index, reviewers.length);
           } catch (error) {
             fatal ??= { error };
           }
@@ -902,7 +640,7 @@ export class ReviewFanoutRunner {
         const queued = waiting.flatMap((task) =>
           task.reviewer.status === "pending" ? [task.reviewer] : [],
         );
-        if (projectReviewerAdmissionQueue(reviewers, queued)) this.stageObservation();
+        if (projectReviewerAdmissionQueue(reviewers, queued)) this.branches.stageObservation();
       },
     );
     // A reviewer still pending here (a retryable setup failure, or a pass that
@@ -913,13 +651,13 @@ export class ReviewFanoutRunner {
         reviewers.filter((reviewer) => reviewer.status === "pending"),
       )
     ) {
-      this.stageObservation();
+      this.branches.stageObservation();
     }
-    this.record({
+    this.branches.record({
       operation: "reviewer.task",
       reviewers: reviewers.length,
       count: stats.maxActive,
-      elapsedMs: Date.now() - this.passStartedAt,
+      elapsedMs: Date.now() - passStartedAt,
     });
     if (fatal) {
       if (isReviewSnapshotError(fatal.error)) {
@@ -929,7 +667,7 @@ export class ReviewFanoutRunner {
       }
       throw fatal.error;
     }
-    await this.flushObservations();
+    await this.branches.flushObservations();
 
     if (!reviewersSettled(reviewers)) return { kind: "working" };
     const reports = usableReviewerReports(reviewers);
@@ -942,64 +680,6 @@ export class ReviewFanoutRunner {
   }
 
   /**
-   * One reviewer's advance inside its own failure boundary. Rethrows only
-   * what must end the pass: snapshot/evidence faults and a lost fence.
-   */
-  private async advanceReviewerIsolated(
-    reviewer: ReviewerRecord,
-    index: number,
-    reviewerCount: number,
-  ): Promise<void> {
-    try {
-      await this.advanceReviewer(reviewer, index, reviewerCount);
-    } catch (error) {
-      if (isReviewSnapshotError(error)) throw error;
-      if (this.isFatal(error)) {
-        this.record({ operation: "reviewer.task", outcome: "fenced" });
-        throw error;
-      }
-      if (
-        error instanceof ReviewerPolicyUnavailableError ||
-        error instanceof ReviewerDispatchSetupError
-      ) {
-        // The reviewer is still durably prepared. Leave it retryable instead
-        // of converting a pre-prompt failure into a terminal review result;
-        // its peers carry on regardless.
-        this.record({ operation: "reviewer.task", outcome: "retryable" });
-        return;
-      }
-      // The failure may have been raised while the provider turn was still
-      // executing. Abort the session best-effort so that turn cannot keep
-      // running through consolidation; the session id is kept so the
-      // read-only transcript stays reachable and a later retry can abort
-      // again without harm.
-      if (reviewer.providerSessionId) {
-        await this.host.abandonSession(reviewer, reviewer.providerSessionId);
-        this.host.progress.forget(reviewer.providerSessionId);
-      }
-      reviewer.status = "failed";
-      reviewer.error = reviewFanoutErrorMessage(error).slice(0, 4_096);
-      reviewer.completedAt = nowIso();
-      clearReviewerAdmission(reviewer);
-      delete reviewer.idleResultPolls;
-      delete reviewer.stalledSince;
-      this.record({ operation: "reviewer.task", outcome: "failed" });
-      await this.commit();
-    }
-  }
-
-  /**
-   * Errors that must not be absorbed into one reviewer's `error` field.
-   *
-   * A lost controller lease means this process no longer owns the workflow, so
-   * writing to it at all would race the owner that does. Hosts name their own
-   * fence error by class name because the runner cannot import theirs.
-   */
-  private isFatal(error: unknown): boolean {
-    return error instanceof Error && error.name.endsWith("FenceError");
-  }
-
-  /**
    * Aborts reviewer turns the workflow is about to stop supervising.
    *
    * A snapshot failure escapes the per-reviewer handler that normally does
@@ -1009,1016 +689,162 @@ export class ReviewFanoutRunner {
    * read-only transcripts stay reachable.
    */
   async abandonLiveReviewers(reviewers: readonly ReviewerRecord[]): Promise<void> {
-    await Promise.all(
-      reviewers
-        .filter((reviewer) => reviewer.status === "running" && reviewer.providerSessionId)
-        .map((reviewer) => this.host.abandonSession(reviewer, reviewer.providerSessionId!)),
-    );
+    await this.branches.abandonLive(reviewers);
   }
+}
 
-  /**
-   * Advances one reviewer. `stop` means this reviewer has nothing more to do
-   * this pass (a parked dispatch, a queued repair); its peers are unaffected.
-   */
-  private async advanceReviewer(
-    reviewer: ReviewerRecord,
-    index: number,
-    reviewerCount: number,
-  ): Promise<"continue" | "stop"> {
-    const host = this.host;
-    let provider: BuildPipelineProvider;
-    try {
-      provider = await host.provider(reviewer);
-    } catch (error) {
-      // Reconnection is observation of an existing turn, not a new dispatch.
-      // Startup backoff must share the same bound as an unreachable transport.
-      if (
-        reviewer.status === "running" &&
-        reviewer.providerSessionId &&
-        (reviewer.dispatchState === "sent" || reviewer.dispatchState === "dispatching") &&
-        (error instanceof ProviderUnreachableError ||
-          (typeof error === "object" &&
-            error !== null &&
-            "retryable" in error &&
-            error.retryable === true))
-      ) {
-        return this.recordUnavailable(reviewer, error);
-      }
-      throw error;
-    }
-    const release = retainProvider(provider);
-    try {
-      return await this.advanceReviewerWithProvider(reviewer, index, reviewerCount, provider);
-    } finally {
-      release();
-    }
-  }
-
-  /** See {@link ReviewFanoutHost.artifactTurns}. Best-effort; never blocks a dispatch. */
-  private beginReviewerArtifactTurn(
-    reviewer: ReviewerRecord,
-    index: number,
-    agentMcp: AgentToolConnection | undefined,
-  ): WorkflowArtifactTurnOptions | undefined {
-    const turns = this.host.artifactTurns;
-    if (!turns || !reviewer.providerSessionId || !reviewer.requestId) return undefined;
-    return beginWorkflowArtifactTurn(turns.dispatch, {
-      environmentId: turns.environmentId,
-      projectId: turns.projectId,
-      conversationKey: reviewer.sessionKey ?? this.host.sessionKeyFor(reviewer, index),
-      turnId: reviewer.requestId,
-      providerSessionId: reviewer.providerSessionId,
-      agent: reviewer.agent,
-      ...(agentMcp ? { agentMcp } : {}),
-    });
-  }
-
-  private settleReviewerArtifactTurn(reviewer: ReviewerRecord, index: number): void {
-    const turns = this.host.artifactTurns;
-    if (!turns || !reviewer.requestId) return;
-    settleArtifactDispatchTurn(
-      turns.dispatch,
-      turns.environmentId,
-      reviewer.sessionKey ?? this.host.sessionKeyFor(reviewer, index),
-      reviewer.requestId,
-    );
-  }
-
-  private async advanceReviewerWithProvider(
-    reviewer: ReviewerRecord,
-    index: number,
-    reviewerCount: number,
-    provider: BuildPipelineProvider,
-  ): Promise<"continue" | "stop"> {
-    const host = this.host;
-    await host.assertFence();
-    if (reviewer.status === "pending") {
-      const sessionKey = host.sessionKeyFor(reviewer, index);
-      const createStarted = Date.now();
-      const providerSessionId = await provider.createSession(
-        "review",
-        host.sessionLabelFor(reviewer, index),
-        {
-          clientSessionKey: sessionKey,
-          mode: host.reviewerMode ?? "build",
-          ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
-          reviewerSession: true,
-          model: reviewerModel(reviewer),
-          effort: reviewer.reasoningEffort,
-          ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
-          policy: await host.executionPolicy(),
-          interaction: this.interactionContext(reviewer, sessionKey),
-        },
-      );
-      this.record({
-        operation: "reviewer.create",
-        platform: efficiencyPlatform(reviewer.agent),
-        elapsedMs: Date.now() - createStarted,
-      });
-      await host.assertFence();
-      reviewer.sessionKey = sessionKey;
-      reviewer.providerSessionId = providerSessionId;
-      reviewer.requestId = randomUUID();
-      reviewer.dispatchState = "prepared";
-      reviewer.resultTransport =
-        host.prepareResult && (host.supportsToolResult?.(reviewer) ?? true)
-          ? "tool-v1"
-          : "structured-output-v1";
-      reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
-      reviewer.status = "running";
-      reviewer.startedAt = nowIso();
-      clearReviewerAdmission(reviewer);
-      delete reviewer.tokenCount;
-      delete reviewer.cacheReadTokens;
-      delete reviewer.usageFinalizationPolls;
-      // A new session reports its own boundary.
-      delete reviewer.commandSandboxOff;
-      host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);
-      delete reviewer.progressAt;
-      delete reviewer.progressDigest;
-      delete reviewer.stalledSince;
-      delete reviewer.continuationPrompt;
-      await this.commit();
-    }
-    if (!reviewer.providerSessionId || !reviewer.requestId) return "continue";
-    provider.registerSession?.(
-      reviewer.providerSessionId,
-      this.interactionContext(reviewer, reviewer.sessionKey),
-    );
-    if (reviewer.dispatchState === "prepared") {
-      // Built before the dispatch is journaled: the worktree probe is a command
-      // round trip that can be slow or fail, and nothing about it is ambiguous
-      // while `dispatchState` is still `prepared`.
-      //
-      // A schema repair re-sends a prompt this reviewer already answered, so it
-      // needs no snapshot. Gating it would turn an already-handled formatting
-      // retry into a whole-workflow failure over drift the reviewer's own
-      // authorised validation writes caused.
-      let prompt = reviewer.schemaRepairPrompt ?? reviewer.continuationPrompt;
-      if (!prompt) {
-        if (host.reviewerPrompt) {
-          prompt = await host.reviewerPrompt(index, reviewerCount, reviewer);
-        } else {
-          if (!host.reviewSnapshot) {
-            throw new Error(`${host.label} has no reviewer evidence source`);
-          }
-          const worktree = await host.reviewSnapshot();
-          prompt = createMultiReviewerPrompt({
-            targetBranch: host.targetBranch,
-            reviewInstruction: host.reviewInstruction,
-            reviewerNumber: index + 1,
-            reviewerCount,
-            worktree,
-            worktreeChangedDuringReview: host.worktreeChangedDuringReview?.() === true,
-            lens: reviewer.lens,
-          });
-        }
-        this.record({ operation: "reviewer.prompt", bytes: Buffer.byteLength(prompt, "utf8") });
-      }
-      await host.assertFence();
-      const agentMcp =
-        reviewer.resultTransport === "tool-v1"
-          ? await host.agentMcp?.(reviewer, reviewer.requestId)
-          : undefined;
-      if (reviewer.resultTransport === "tool-v1" && host.prepareResult) {
-        await host.prepareResult(
-          reviewer,
-          reviewer.requestId,
-          STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-        );
-      }
-      let reviewShellPolicy: NativeAgentExecutionPolicy | undefined;
-      if (host.reviewerMode === "plan" && reviewer.agent === "opencode") {
-        try {
-          // Resolve every fallible argument before opening the at-most-once
-          // window. Once `dispatching` is saved, the next await must be send.
-          reviewShellPolicy = await host.executionPolicy();
-        } catch (error) {
-          throw new ReviewerPolicyUnavailableError(error);
-        }
-      }
-      const artifactTurn = this.beginReviewerArtifactTurn(reviewer, index, agentMcp);
-      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
-      try {
-        // Attach after the connection is resolved so broker registration happens
-        // outside the at-most-once window.
-        await attachAgentBeforeDispatch(
-          provider,
-          reviewer.providerSessionId,
-          turnAgentMcp
-            ? {
-                agentMcp: turnAgentMcp,
-                workflowResultTool: workflowResultToolName("review-report"),
-              }
-            : undefined,
-        );
-        // Other reviewers may be committing concurrently; this reviewer's own
-        // journal is what matters. Its `dispatching` write is durable once this
-        // await resolves, and `send` is the next reviewer-local fallible call.
-        // Set inside the write, so no peer's save can make it durable first.
-        await this.commit({
-          apply: () => {
-            reviewer.dispatchState = "dispatching";
-          },
-          revert: () => {
-            reviewer.dispatchState = "prepared";
-          },
-        });
-      } catch (error) {
-        this.settleReviewerArtifactTurn(reviewer, index);
-        throw error;
-      }
-      const sendStarted = Date.now();
-      try {
-        await provider.send(
-          reviewer.providerSessionId,
-          reviewer.resultTransport === "tool-v1"
-            ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId, {
-                capability: agentMcp?.workflowResultCapability,
-                provisionalFindings: host.takeProvisionalFindings !== undefined,
-              })}`
-            : prompt,
-          {
-            requestId: reviewer.requestId,
-            schema:
-              reviewer.resultTransport === "tool-v1"
-                ? undefined
-                : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
-            mode: host.reviewerMode ?? "build",
-            ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
-            ...(reviewShellPolicy ? { reviewShellPolicy } : {}),
-            model: reviewerModel(reviewer),
-            effort: reviewer.reasoningEffort,
-            ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
-            ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
-            ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
-            ...(agentMcp
-              ? {
-                  workflowResultTool: workflowResultToolName("review-report"),
-                  workflowResultKey: reviewer.requestId,
-                }
-              : {}),
-          },
-        );
-      } catch (error) {
-        // An ambiguous send may still be running; its grant settles with the
-        // turn. A refused one never ran, so its grant must not outlive it.
-        if (!(error instanceof AmbiguousPromptDispatchError)) {
-          this.settleReviewerArtifactTurn(reviewer, index);
-        }
-        if (error instanceof AmbiguousPromptDispatchError) {
-          this.record({
-            operation: "reviewer.send",
-            outcome: "ambiguous",
-            platform: efficiencyPlatform(reviewer.agent),
-            elapsedMs: Date.now() - sendStarted,
-          });
-          return "stop";
-        }
-        reviewer.dispatchState = "prepared";
-        await this.commit();
-        if (error instanceof ProviderDispatchPreparationError) {
-          throw new ReviewerDispatchSetupError(error);
-        }
-        throw error;
-      }
-      const sentAt = Date.now();
-      this.record({
-        operation: "reviewer.send",
-        outcome: "success",
-        platform: efficiencyPlatform(reviewer.agent),
-        elapsedMs: sentAt - sendStarted,
-      });
-      this.record({
-        operation: "reviewer.dispatch_skew",
-        reviewers: reviewerCount,
-        elapsedMs: sentAt - this.passStartedAt,
-      });
-      await host.assertFence();
-      reviewer.dispatchState = "sent";
-      delete reviewer.continuationPrompt;
-      await this.commit();
-    }
-    if (reviewer.dispatchState === "dispatching") {
-      // A durable intent is not acceptance. In particular, session status may
-      // still describe the request replaced by this continuation. Providers
-      // without request-scoped proof stay parked within the idle-poll bound;
-      // neither unknown nor a retired (lost) ID is safe to resend.
-      const acceptance = await this.recoveredDispatchAcceptance(provider, reviewer);
-      await host.assertFence();
-      if (acceptance === "lost") {
-        // Retired for good: the provider refuses this id, and a new one could
-        // run the same turn twice. Waiting out the idle bound changes nothing.
-        return this.failReviewer(
-          reviewer,
-          "The reviewer dispatch was lost in a provider restart and cannot be resent safely",
-        );
-      }
-      if (acceptance === "absent") {
-        // The provider proves the id never reached it: a send that never
-        // happened, so back to `prepared` exactly as a send refused before the
-        // prompt was written. The next pass re-runs admission and sends it again
-        // under the same id; a late delivery of the first attempt is then the
-        // provider's duplicate.
-        reviewer.dispatchState = "prepared";
-        delete reviewer.idleResultPolls;
-        host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0idle`);
-        await this.commit();
-        return "continue";
-      }
-      if (acceptance !== "dispatched") {
-        return this.recordStall(
-          reviewer,
-          "The reviewer dispatch acceptance could not be confirmed",
-        );
-      }
-      reviewer.dispatchState = "sent";
-      delete reviewer.continuationPrompt;
-      delete reviewer.idleResultPolls;
-      host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0idle`);
-      await this.commit();
-    }
-    if (reviewer.status !== "running") return "continue";
-    // Read as data so the terminal-failure branch below fires whether or not
-    // the provider explained itself, and can report the explanation when it did.
-    const statusStarted = Date.now();
-    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
-    try {
-      await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
-      observation = await readProviderStatus(
-        provider,
-        reviewer.providerSessionId,
-        reviewer.requestId,
-      );
-    } catch (error) {
-      if (!(error instanceof ProviderUnreachableError)) throw error;
-      // A bridge that cannot be reached is an observation fault, not the
-      // reviewer's: keep its state and look again when due. The host drops its
-      // cached provider so the next pass reconnects, which restarts a local
-      // bridge that died; the idle-poll bound still fails a reviewer whose
-      // bridge never comes back.
-      await host.providerUnavailable?.(reviewer, provider);
-      return this.recordUnavailable(reviewer, error);
-    }
-    this.record({
-      operation: "reviewer.status",
-      platform: efficiencyPlatform(reviewer.agent),
-      elapsedMs: Date.now() - statusStarted,
-    });
-    const { status, error: statusDetail } = observation;
-    await host.assertFence();
-    // Kept once seen: the turn's commands ran without the sandbox even if a
-    // later read no longer says so. The card names the boundary.
-    if (
-      observation.commandSandboxOff !== undefined &&
-      reviewer.commandSandboxOff !== observation.commandSandboxOff
-    ) {
-      reviewer.commandSandboxOff = observation.commandSandboxOff;
-      await this.commit();
-    }
-    if ((status === "idle" || status === "error") && observation.turnSettled === false)
-      return "continue";
-    const transcript = new PassTranscriptReader(provider, reviewer.providerSessionId, {
-      observer: host.efficiency,
-      owner: host.efficiencyOwner ?? "multi-review",
-    });
-    const settling = status !== "running" && observation.backgroundWorkLive !== true;
-    await this.mirrorTranscript(reviewer, index, provider, transcript, settling);
-    // The turn ended: its artifact grant ends with it. A reminder, repair or
-    // continuation turn is dispatched under a new request id with its own.
-    if (settling) this.settleReviewerArtifactTurn(reviewer, index);
-    if (status === "running") {
-      await this.clearStall(reviewer);
-      await this.nudgeUncommittedResult(provider, reviewer);
-      return this.observeReviewerProgress(provider, reviewer, transcript, observation.contextUsage);
-    }
-    // Outside the running path the turn is settling, so this read is bounded
-    // by the stall and usage-finalization budgets rather than once per pass.
-    const finalUsage = () =>
-      this.refreshReviewerUsage(
-        reviewer,
-        provider,
-        observation.contextUsage,
-        this.usageNeedsTranscript(provider, observation.contextUsage)
-          ? transcript.read(provider.usageMessageLimit)
-          : undefined,
-      );
-    if (status === "blocked") {
-      await finalUsage();
-      // Every unattended interaction was already resolved above, and a provider
-      // without an interaction surface can never be unblocked from here. Bound
-      // the wait the same way the idle path is bounded rather than polling a
-      // stalled reviewer forever.
-      return this.recordStall(
-        reviewer,
-        "The reviewer stayed blocked without a resolvable interaction",
-      );
-    }
-    const failReviewerSession = async (): Promise<"continue"> => {
-      await finalUsage();
-      reviewer.status = "failed";
-      reviewer.completedAt = nowIso();
-      reviewer.error =
-        status === "missing"
-          ? "The reviewer session no longer exists"
-          : statusDetail
-            ? `The reviewer session failed: ${statusDetail}`
-            : "The reviewer session failed";
-      await this.commit();
-      return "continue";
-    };
-    // A provider restart that cut the turn short is not the reviewer's
-    // failure: a report it already submitted is still accepted below, and
-    // otherwise the same session continues the review once.
-    const restartInterrupted = status === "error" && observation.interruption === "restart";
-    if ((status === "error" && !restartInterrupted) || status === "missing") {
-      return failReviewerSession();
-    }
-    if (reviewer.resultTransport === "tool-v1") {
-      reviewer.resultSubmission = await host.projectResult?.(reviewer.requestId);
-    }
-    const result =
-      reviewer.resultTransport === "tool-v1"
-        ? ((await host.readResult?.<unknown>(reviewer.requestId)) ?? null)
-        : await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
-    await host.assertFence();
-    // An interrupted structured-output turn records a provider failure, not a
-    // report; only an accepted report outlives the restart.
-    if (restartInterrupted && result?.ok !== true) {
-      await finalUsage();
-      if (await this.prepareReviewerRestartContinuation(reviewer)) return "stop";
-      return failReviewerSession();
-    }
-    if (!result) {
-      if (observation.backgroundWorkLive) {
-        // The reviewer ended its turn to wait on background agents it launched;
-        // the provider resumes it when they settle. That is progress, not an
-        // idle reviewer, so it stays bounded by the transcript stall clock —
-        // and its usage by the probe throttle, not by every pass.
-        await this.clearStall(reviewer);
-        return this.observeReviewerProgress(
-          provider,
-          reviewer,
-          transcript,
-          observation.contextUsage,
-        );
-      }
-      await finalUsage();
-      const finalText = async () =>
-        lastAssistantText(
-          await transcript
-            .read(
-              Math.min(
-                LAST_ASSISTANT_TEXT_READ_LIMIT,
-                provider.messageReadLimit ?? LAST_ASSISTANT_TEXT_READ_LIMIT,
-              ),
-            )
-            .catch(() => undefined),
-        );
-      return this.recordStall(
-        reviewer,
-        async () =>
-          reviewer.resultTransport === "tool-v1"
-            ? missingWorkflowResultMessage({
-                subject: "The reviewer",
-                resultLabel: "structured report",
-                toolName: workflowResultToolName("review-report"),
-                submission: reviewer.resultSubmission,
-                finalText: await finalText(),
-              })
-            : "The reviewer became idle without returning its structured report",
-        () => this.prepareReviewerResultReminder(reviewer, finalText),
-      );
-    }
-    await finalUsage();
-    const parsed = parseStructuredReportResult(result);
-    if (!parsed.success) {
-      return this.prepareReviewerReportRepair(reviewer, parsed.error);
-    }
-    const usageScope = `${host.workflowId}\0${reviewer.id}\0usage`;
-    if (
-      host.captureReviewerUsage &&
-      observation.usagePending === true &&
-      (reviewer.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
-      !host.pollGate?.exhausted(
-        usageScope,
-        reviewer.usageFinalizationPolls ?? 0,
-        REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
-      )
-    ) {
-      // A probe that does not count (a wakeup burst) simply looks again later.
-      if (host.pollGate && !host.pollGate.count(usageScope)) return "continue";
-      reviewer.usageFinalizationPolls = (reviewer.usageFinalizationPolls ?? 0) + 1;
-      await this.commit();
-      return "continue";
-    }
-    reviewer.report = attributeReportFindings(parsed.data, reviewer);
-    reviewer.status = "completed";
-    reviewer.completedAt = nowIso();
-    // The accepted report is the reviewer's findings; the provisional ones it
-    // reported on the way were progress and are replaced, not merged.
-    dropProvisionalFindings(reviewer);
-    delete reviewer.schemaRepairPrompt;
-    delete reviewer.continuationPrompt;
-    delete reviewer.idleResultPolls;
-    delete reviewer.usageFinalizationPolls;
-    delete reviewer.stalledSince;
-    this.host.progress.forget(reviewer.providerSessionId);
-    delete reviewer.progressDigest;
-    if (reviewer.resultTransport === "tool-v1") {
-      host.stageResultConsumption?.(reviewer.requestId);
-    }
-    await this.commit();
-    if (reviewer.resultTransport === "tool-v1") {
-      try {
-        await host.consumeResult?.(reviewer.requestId);
-        delete reviewer.resultSubmission;
-        host.finishResultConsumption?.(reviewer.requestId);
-        await this.commit();
-      } catch (error) {
-        // A lost fence is not a deferred consumption: the owner that took over
-        // consumes the result, and this pass must stop.
-        if (this.isFatal(error)) throw error;
-        host.stageResultConsumption?.(reviewer.requestId);
-        console.warn(
-          `[review-fanout] Deferred result consumption: ${reviewFanoutErrorMessage(error)}`,
-        );
-      }
-    }
-    return "continue";
-  }
-
-  private interactionContext(reviewer: ReviewerRecord, fence: string | undefined) {
-    return {
-      origin: "automated-review" as const,
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      reviewerSession: true,
-      phase: "review" as const,
-      workflowId: this.host.workflowId,
-      provider: reviewer.agent,
-      fence,
-    };
-  }
-
-  /**
-   * A host that renders reviewer transcripts is refreshed here rather than on
-   * its own schedule, so a reviewer that finishes between ticks still leaves a
-   * complete transcript behind. A read failure is not the reviewer's failure.
-   */
-  private async mirrorTranscript(
-    reviewer: ReviewerRecord,
-    index: number,
-    provider: BuildPipelineProvider,
-    transcript: PassTranscriptReader,
-    settling: boolean,
-  ): Promise<void> {
-    if (!this.host.onReviewerObserved) return;
-    try {
-      await this.host.onReviewerObserved(
-        reviewer,
-        index,
-        provider,
-        () => transcript.read(undefined),
-        settling,
-      );
-    } catch (error) {
-      console.warn(
-        "[review-fanout] Mirroring a reviewer transcript failed:",
-        reviewFanoutErrorMessage(error),
-      );
-    }
-  }
-
-  /**
-   * Usage comes from the authoritative status observation whenever the
-   * provider supplies it; only a provider that meters from messages, and only
-   * when the observation carried none, needs a transcript read for it.
-   */
-  private usageNeedsTranscript(
-    provider: BuildPipelineProvider,
-    observedUsage: ReviewerObservedUsage | undefined,
-  ): boolean {
-    return (
-      this.host.captureReviewerUsage === true &&
-      observedUsage === undefined &&
-      provider.usageFromMessages !== undefined
-    );
-  }
-
-  /**
-   * Copies the provider's cumulative token counter into the durable workflow.
-   * Usage is presentation metadata: an unavailable meter must never fail an
-   * otherwise healthy review turn.
-   */
-  private async refreshReviewerUsage(
-    reviewer: ReviewerRecord,
-    provider: BuildPipelineProvider,
-    observedUsage: ReviewerObservedUsage | undefined,
-    messages: Promise<unknown[]> | undefined,
-  ): Promise<boolean> {
-    if (!this.host.captureReviewerUsage || !reviewer.providerSessionId) return false;
-    try {
-      const usage =
-        observedUsage ??
-        (provider.usageFromMessages && messages
-          ? provider.usageFromMessages(await messages)
-          : undefined);
-      const reported = usageCount(usage?.sessionTokens);
-      const cacheReads = usageCount(usage?.cacheReadTokens);
-      if (reported === undefined && cacheReads === undefined) return false;
-      await this.host.assertFence();
-      const tokenCount =
-        reported === undefined ? reviewer.tokenCount : Math.max(reviewer.tokenCount ?? 0, reported);
-      // Pi and Cursor report cache reads for their latest turn only, so the
-      // largest value seen is kept rather than the latest.
-      const cacheReadTokens =
-        cacheReads === undefined
-          ? reviewer.cacheReadTokens
-          : Math.max(reviewer.cacheReadTokens ?? 0, cacheReads);
-      if (reviewer.tokenCount === tokenCount && reviewer.cacheReadTokens === cacheReadTokens) {
-        return false;
-      }
-      if (tokenCount !== undefined) reviewer.tokenCount = tokenCount;
-      if (cacheReadTokens !== undefined) reviewer.cacheReadTokens = cacheReadTokens;
-      return true;
-    } catch (error) {
-      if (this.isFatal(error)) throw error;
-      console.warn(
-        "[review-fanout] Reading reviewer token usage failed:",
-        reviewFanoutErrorMessage(error),
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Bounds a reviewer that reports `running` without producing anything.
-   *
-   * Provider status alone cannot distinguish a long turn from a wedged one — a
-   * Cursor parent holding its turn open for a background child whose transcript
-   * stopped moving reports `running` indefinitely, and the review phase will not
-   * advance while any reviewer is still running. Transcript movement is the
-   * signal that separates the two, because bridges stream sub-agent activity
-   * into the parent transcript as it happens.
-   *
-   * The transcript is read only when the tracker says a probe is due: a
-   * throttled pass starts no provider request at all. A due probe asks for a
-   * bounded, conditional one-message snapshot (`transcript-progress.ts`); an
-   * unchanged reviewer answers without any transcript body. A provider without
-   * that surface falls back to its newest message, and one that meters usage
-   * from messages shares that one due read.
-   *
-   * The warning is durable so the tab can show it; the abandon is what stops one
-   * stuck reviewer from halting consolidation for good.
-   *
-   * A failed or throttled probe is not a fingerprint comparison, but it is not
-   * a pause of the stall clock either: `progressAt` / `startedAt` still decide
-   * whether the session has been silent too long. A restart compares against
-   * the persisted digest so it cannot invent a new baseline or move the clock
-   * forward.
-   */
-  private async observeReviewerProgress(
-    provider: BuildPipelineProvider,
-    reviewer: ReviewerRecord,
-    transcript: PassTranscriptReader,
-    observedUsage: ReviewerObservedUsage | undefined,
-  ): Promise<"continue"> {
-    const providerSessionId = reviewer.providerSessionId;
-    if (!providerSessionId) return "continue";
-    const previousDigest = reviewer.progressDigest;
-    let usageChanged = await this.refreshReviewerUsage(
-      reviewer,
-      provider,
-      observedUsage,
-      undefined,
-    );
-    const usageFromTranscript = this.usageNeedsTranscript(provider, observedUsage);
-    this.record({
-      operation: this.host.progress.isProbeDue(providerSessionId)
-        ? "transcript.probe_due"
-        : "transcript.probe_throttled",
-    });
-    const observation = await this.host.progress.observe(
-      providerSessionId,
-      (known) => {
-        // The progress sample comes from the bounded snapshot when the
-        // provider has one; usage metering then needs its own (bounded,
-        // `usageMessageLimit`) read, started only because a probe is due.
-        if (usageFromTranscript && hasProgressSnapshot(provider)) {
-          void transcript.read(provider.usageMessageLimit);
-        }
-        return readTranscriptProgressSample({
-          provider,
-          sessionId: providerSessionId,
-          known,
-          // Usage metering peeks this read later, so it keeps the usage shape
-          // whenever that still covers the window the sample asked for.
-          fallbackRead: (limit) =>
-            transcript.read(
-              usageFromTranscript && (provider.usageMessageLimit ?? Infinity) >= limit
-                ? provider.usageMessageLimit
-                : limit,
-            ),
-          onRead: (kind) => this.record({ operation: PROGRESS_READ_OPERATIONS[kind] }),
-        });
-      },
-      reviewer.progressDigest,
-    );
-    if (usageFromTranscript) {
-      // Only a read someone already paid for this pass — the due probe or the
-      // owner's mirror. Usage metering never starts a read of its own here.
-      const shared = transcript.peek(provider.usageMessageLimit);
-      if (shared) {
-        usageChanged =
-          (await this.refreshReviewerUsage(reviewer, provider, undefined, shared)) || usageChanged;
-      }
-    }
-    await this.host.assertFence();
-    const decision = commitProgressObservation(reviewer, observation);
-    if (decision === "reset" || decision === "hold") {
-      this.stageObservation();
-      return "continue";
-    }
-    const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
-    if (elapsedMs === null) {
-      if (this.shouldPersistUsageOrProgress(usageChanged, previousDigest, reviewer)) {
-        this.stageObservation();
-      }
-      return "continue";
-    }
-    if (elapsedMs >= this.stallAbandonMs()) {
-      // Best-effort, like every other abandon: the session is unresponsive, so
-      // waiting for it to confirm the abort would reproduce the stall.
-      await this.host.abandonSession(reviewer, providerSessionId);
-      this.host.progress.forget(providerSessionId);
-      reviewer.status = "failed";
-      reviewer.error = `The reviewer produced no activity for ${stalledMinutes(elapsedMs)} minutes and was stopped so the rest of the review could continue`;
-      reviewer.completedAt = nowIso();
-      delete reviewer.stalledSince;
-      delete reviewer.idleResultPolls;
-      await this.commit();
-      return "continue";
-    }
-    if (elapsedMs >= this.stallWarningMs() && reviewer.stalledSince === undefined) {
-      reviewer.stalledSince = nowIso();
-      this.stageObservation();
-      return "continue";
-    }
-    if (this.shouldPersistUsageOrProgress(usageChanged, previousDigest, reviewer)) {
-      this.stageObservation();
-    }
-    return "continue";
-  }
-
-  /**
-   * Steers a running reviewer that holds a validated report it has not
-   * committed. Best-effort and at most once per slot: the nudge only restates
-   * what the model already has, and a steer that cannot be delivered must not
-   * disturb the turn.
-   */
-  private async nudgeUncommittedResult(
-    provider: BuildPipelineProvider,
-    reviewer: ReviewerRecord,
-  ): Promise<void> {
-    const sessionId = reviewer.providerSessionId;
-    const requestId = reviewer.requestId;
-    if (reviewer.resultTransport !== "tool-v1" || !sessionId || !requestId) return;
-    const held = this.host.heldResult?.(requestId);
-    if (!held || held.ageMs < REVIEW_RESULT_COMMIT_NUDGE_MS) return;
-    if (!provider.steerSupported || !provider.activeSteerRun || !provider.performSessionAction) {
-      return;
-    }
-    if (!this.host.claimResultNudge?.(requestId)) return;
-    try {
-      if (!(await provider.steerSupported(sessionId))) return;
-      const active = await provider.activeSteerRun(sessionId);
-      if (active?.state !== "running") return;
-      await provider.performSessionAction(sessionId, {
-        kind: "steer",
-        text: `Your structured report already passed \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\`. If it is final, commit it now by calling \`${workflowResultToolName("review-report")}\` with resultKey ${JSON.stringify(requestId)} (and the capability from your instructions, if one was given) and \`validatedDigest\` ${JSON.stringify(held.digest)}; leave \`result\` out so the large object is not sent again. If a call is rejected as unparseable, the brace count is off by one: recount and call again without shortening the report.`,
-        requestId: randomUUID(),
-        expectedRunId: active.runId,
-      });
-    } catch (error) {
-      console.warn(
-        `[review-fanout] Could not nudge an uncommitted result: ${reviewFanoutErrorMessage(error)}`,
-      );
-    }
-  }
-
-  private shouldPersistUsageOrProgress(
-    usageChanged: boolean,
-    previousDigest: string | undefined,
-    reviewer: ReviewerRecord,
-  ): boolean {
-    if (reviewer.progressDigest !== previousDigest) return true;
-    return usageChanged && this.host.persistReviewerUsageImmediately !== false;
-  }
-
-  private async prepareReviewerReportRepair(
-    reviewer: ReviewerRecord,
-    error: ReviewContractValidationError,
-  ): Promise<"stop"> {
-    const attempt = (reviewer.schemaRepairAttempts ?? 0) + 1;
-    if (attempt > MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS) {
-      throw new Error(
-        `${error.message} The reviewer could not produce a valid report in ${MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
-      );
-    }
-    const previousRequestId = reviewer.requestId;
-    const previousTransport = reviewer.resultTransport;
-    // Retire the old slot before the new request identity reaches memory: with
-    // concurrent reviewers, a peer's commit could otherwise persist the new id
-    // while the superseded slot was still accepting submissions.
-    if (previousTransport === "tool-v1" && previousRequestId) {
-      await this.host.closeResult?.(previousRequestId);
-    }
-    reviewer.schemaRepairAttempts = attempt;
-    reviewer.schemaRepairPrompt = structuredReportRepairPrompt(
-      error.issues,
-      attempt,
-      MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
-    );
-    reviewer.requestId = randomUUID();
-    reviewer.dispatchState = "prepared";
-    reviewer.resultTransport =
-      this.host.prepareResult && (this.host.supportsToolResult?.(reviewer) ?? true)
-        ? "tool-v1"
-        : "structured-output-v1";
-    reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
-    delete reviewer.idleResultPolls;
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0usage`);
-    await this.commit();
-    return "stop";
-  }
-
-  /**
-   * Queues the single reminder turn for a tool-transport reviewer that went
-   * idle with no accepted report, in place of failing it. Returns false when
-   * the reminder does not apply or was already spent.
-   *
-   * The reviewer's analysis is complete by now; only delivery failed, and a
-   * fresh session would redo all of it. The follow-up runs in the same session
-   * under a new result slot, exactly like a schema repair.
-   */
-  private async prepareReviewerResultReminder(
-    reviewer: ReviewerRecord,
-    finalText: () => Promise<string | undefined>,
-  ): Promise<boolean> {
-    if (
-      reviewer.resultTransport !== "tool-v1" ||
-      reviewer.resultReminderSent === true ||
-      !reviewer.providerSessionId ||
-      // Accepted-but-unread and budget-exhausted slots are not a delivery gap
-      // another turn can close.
-      reviewer.resultSubmission === "received" ||
-      reviewer.resultSubmission === "needs-attention"
-    ) {
-      return false;
-    }
-    const prompt = workflowResultReminderPrompt({
+/**
+ * A review panel's owner, as the shared branch runner sees it: the
+ * reviewer prompt, the structured-review contract, provenance on acceptance
+ * and the reviewer's words in failure text. Everything else passes through.
+ */
+function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecord> {
+  const toolName = workflowResultToolName("review-report");
+  return {
+    workflowId: host.workflowId,
+    sessionPhase: "review",
+    ...(host.reviewerMode ? { mode: host.reviewerMode } : {}),
+    wording: {
+      subject: "reviewer",
       resultLabel: "structured report",
-      toolName: workflowResultToolName("review-report"),
-      submission: reviewer.resultSubmission,
-      finalText: await finalText(),
-    });
-    // Retire the old slot before the new request identity reaches memory, for
-    // the same reason a schema repair does.
-    if (reviewer.requestId) await this.host.closeResult?.(reviewer.requestId);
-    reviewer.resultReminderSent = true;
-    reviewer.continuationPrompt = prompt;
-    delete reviewer.schemaRepairPrompt;
-    reviewer.requestId = randomUUID();
-    reviewer.dispatchState = "prepared";
-    reviewer.resultSubmission = "preparing";
-    // The reminder is a new turn; the stall clock measures it, not the wait
-    // that preceded it.
-    reviewer.progressAt = nowIso();
-    delete reviewer.stalledSince;
-    delete reviewer.idleResultPolls;
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
-    await this.commit();
-    return true;
-  }
-
-  /**
-   * Queues the single continuation turn for a reviewer whose turn a provider
-   * restart cut short. Returns false once it was spent, so a second restart
-   * fails the reviewer instead of looping.
-   *
-   * The session still holds the partial review, so it continues there under a
-   * new request id, exactly like the result reminder; only the prompt differs,
-   * because this review is not finished.
-   */
-  private async prepareReviewerRestartContinuation(reviewer: ReviewerRecord): Promise<boolean> {
-    if (reviewer.restartContinuationSent === true || !reviewer.providerSessionId) return false;
-    const toolResult = reviewer.resultTransport === "tool-v1";
-    const prompt = workflowRestartContinuationPrompt({
       workLabel: "review",
-      resultLabel: "structured report",
-      ...(toolResult ? { toolName: workflowResultToolName("review-report") } : {}),
-    });
-    if (toolResult && reviewer.requestId) await this.host.closeResult?.(reviewer.requestId);
-    reviewer.restartContinuationSent = true;
-    reviewer.continuationPrompt = prompt;
-    delete reviewer.schemaRepairPrompt;
-    reviewer.requestId = randomUUID();
-    reviewer.dispatchState = "prepared";
-    reviewer.resultSubmission = toolResult ? "preparing" : undefined;
-    reviewer.progressAt = nowIso();
-    delete reviewer.stalledSince;
-    delete reviewer.idleResultPolls;
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
-    await this.commit();
-    return true;
-  }
-
-  /**
-   * What can be proven about a recovered `dispatching` request.
-   *
-   * The provider's dispatch journal answers first. A result for this exact
-   * request id is proof too, from the one place it could only have come from
-   * its own turn: the tool-transport slot is keyed by the request and written
-   * with that attempt's capability, and a structured result names its request.
-   * A report submitted before a provider restart retired the id is used rather
-   * than discarded with the turn it came from, and outranks an `absent` answer.
-   */
-  private async recoveredDispatchAcceptance(
-    provider: BuildPipelineProvider,
-    reviewer: ReviewerRecord,
-  ): Promise<ProviderDispatchStatus> {
-    return recoveredDispatchAcceptance(
-      provider,
-      reviewer.providerSessionId!,
-      reviewer.requestId!,
-      reviewer.resultTransport === "tool-v1"
-        ? () => this.host.readResult?.<unknown>(reviewer.requestId!)
-        : undefined,
-    );
-  }
-
-  /** Ends a reviewer that can make no further progress, best-effort aborting its turn. */
-  private async failReviewer(reviewer: ReviewerRecord, error: string): Promise<"continue"> {
-    if (reviewer.providerSessionId) {
-      await this.host.abandonSession(reviewer, reviewer.providerSessionId);
-      this.host.progress.forget(reviewer.providerSessionId);
-    }
-    reviewer.status = "failed";
-    reviewer.error = error;
-    reviewer.completedAt = nowIso();
-    delete reviewer.stalledSince;
-    await this.commit();
-    return "continue";
-  }
-
-  private recordUnavailable(reviewer: ReviewerRecord, error: unknown) {
-    return this.recordStall(
-      reviewer,
-      `The reviewer's ${reviewer.agent} provider stayed unreachable: ${reviewFanoutErrorMessage(error)}`,
-    );
-  }
-
-  /**
-   * Counts one stalled poll, failing the reviewer once the bound is reached.
-   * `error` may be deferred so a costly explanation is built only then.
-   * `retry`, when given, may claim the exhausted bound for one more turn
-   * instead of failing.
-   */
-  private async recordStall(
-    reviewer: ReviewerRecord,
-    error: string | (() => Promise<string>),
-    retry?: () => Promise<boolean>,
-  ): Promise<"continue" | "stop"> {
-    const scope = `${this.host.workflowId}\0${reviewer.id}\0idle`;
-    const gate = this.host.pollGate;
-    if (gate && !gate.count(scope)) return "continue";
-    reviewer.idleResultPolls = Math.min(
-      (reviewer.idleResultPolls ?? 0) + 1,
-      MAX_REVIEW_IDLE_RESULT_POLLS,
-    );
-    if (
-      reviewer.idleResultPolls >= MAX_REVIEW_IDLE_RESULT_POLLS ||
-      gate?.exhausted(scope, reviewer.idleResultPolls, MAX_REVIEW_IDLE_RESULT_POLLS)
-    ) {
-      if (retry && (await retry())) return "stop";
-      return this.failReviewer(reviewer, typeof error === "string" ? error : await error());
-    }
-    await this.commit();
-    return "continue";
-  }
-
-  /** Observed progress restarts the idle and final-usage windows. */
-  private async clearStall(reviewer: ReviewerRecord): Promise<"continue"> {
-    if (reviewer.idleResultPolls === undefined && reviewer.usageFinalizationPolls === undefined)
-      return "continue";
-    delete reviewer.idleResultPolls;
-    delete reviewer.usageFinalizationPolls;
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
-    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0usage`);
-    await this.commit();
-    return "continue";
-  }
+      validResult: "a valid report",
+      stallStopReason: "so the rest of the review could continue",
+    },
+    sessionKeyFor: (reviewer, index) => host.sessionKeyFor(reviewer, index),
+    sessionLabelFor: (reviewer, index) => host.sessionLabelFor(reviewer, index),
+    interactionContext: (reviewer, fence) =>
+      unattendedBranchInteraction({
+        origin: "automated-review",
+        reviewerSession: true,
+        phase: "review",
+        workflowId: host.workflowId,
+        provider: reviewer.agent,
+        fence,
+      }),
+    provider: (reviewer) => host.provider(reviewer),
+    ...(host.providerUnavailable
+      ? {
+          providerUnavailable: (reviewer: ReviewerRecord, provider: BuildPipelineProvider) =>
+            host.providerUnavailable!(reviewer, provider),
+        }
+      : {}),
+    executionPolicy: () => host.executionPolicy(),
+    ...(host.agentMcp
+      ? {
+          agentMcp: (reviewer: ReviewerRecord, resultKey: string) =>
+            host.agentMcp!(reviewer, resultKey),
+        }
+      : {}),
+    ...(host.prepareResult
+      ? {
+          prepareResult: (reviewer: ReviewerRecord, requestId: string, schema: JsonSchema) =>
+            host.prepareResult!(reviewer, requestId, schema),
+        }
+      : {}),
+    ...(host.supportsToolResult
+      ? { supportsToolResult: (reviewer: ReviewerRecord) => host.supportsToolResult!(reviewer) }
+      : {}),
+    ...(host.readResult
+      ? {
+          readResult: <T>(requestId: string) => host.readResult!<T>(requestId),
+        }
+      : {}),
+    ...(host.projectResult
+      ? { projectResult: (requestId: string) => host.projectResult!(requestId) }
+      : {}),
+    ...(host.heldResult ? { heldResult: (requestId: string) => host.heldResult!(requestId) } : {}),
+    ...(host.claimResultNudge
+      ? { claimResultNudge: (requestId: string) => host.claimResultNudge!(requestId) }
+      : {}),
+    ...(host.consumeResult
+      ? { consumeResult: (requestId: string) => host.consumeResult!(requestId) }
+      : {}),
+    ...(host.stageResultConsumption
+      ? {
+          stageResultConsumption: (requestId: string) => host.stageResultConsumption!(requestId),
+        }
+      : {}),
+    ...(host.finishResultConsumption
+      ? {
+          finishResultConsumption: (requestId: string) => host.finishResultConsumption!(requestId),
+        }
+      : {}),
+    ...(host.closeResult
+      ? { closeResult: (requestId: string) => host.closeResult!(requestId) }
+      : {}),
+    save: () => host.save(),
+    assertFence: () => host.assertFence(),
+    branchPrompt: async (reviewer, index, count) => {
+      if (host.reviewerPrompt) return host.reviewerPrompt(index, count, reviewer);
+      if (!host.reviewSnapshot) {
+        throw new Error(`${host.label} has no reviewer evidence source`);
+      }
+      const worktree = await host.reviewSnapshot();
+      return createMultiReviewerPrompt({
+        targetBranch: host.targetBranch,
+        reviewInstruction: host.reviewInstruction,
+        reviewerNumber: index + 1,
+        reviewerCount: count,
+        worktree,
+        worktreeChangedDuringReview: host.worktreeChangedDuringReview?.() === true,
+        lens: reviewer.lens,
+      });
+    },
+    resultSchema: () => STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+    resultInstruction: (_reviewer, requestId, agentMcp) =>
+      workflowResultInstruction("review-report", requestId, {
+        capability: agentMcp?.workflowResultCapability,
+        provisionalFindings: host.takeProvisionalFindings !== undefined,
+      }),
+    resultTurn: (_reviewer, requestId) => ({
+      toolName,
+      prepare: { workflowResultTool: toolName },
+      send: { workflowResultTool: toolName, workflowResultKey: requestId },
+    }),
+    parseResult: (_reviewer, result) => parseStructuredReportResult(result),
+    repairPrompt: (_reviewer, issues, attempt, maxAttempts) =>
+      structuredReportRepairPrompt(issues, attempt, maxAttempts),
+    acceptResult: (reviewer, data) => {
+      reviewer.report = attributeReportFindings(data as StructuredReviewReport, reviewer);
+      // The accepted report is the reviewer's findings; the provisional ones it
+      // reported on the way were progress and are replaced, not merged.
+      dropProvisionalFindings(reviewer);
+    },
+    commitNudgeText: (_reviewer, requestId, digest) =>
+      `Your structured report already passed \`${WORKFLOW_RESULT_VALIDATION_TOOL_NAME}\`. If it is final, commit it now by calling \`${toolName}\` with resultKey ${JSON.stringify(requestId)} (and the capability from your instructions, if one was given) and \`validatedDigest\` ${JSON.stringify(digest)}; leave \`result\` out so the large object is not sent again. If a call is rejected as unparseable, the brace count is off by one: recount and call again without shortening the report.`,
+    clearAdmission: (reviewer) => {
+      clearReviewerAdmission(reviewer);
+    },
+    resolveUnattendedInteractions: (provider, providerSessionId) =>
+      host.resolveUnattendedInteractions(provider, providerSessionId),
+    abandonSession: (reviewer, providerSessionId) =>
+      host.abandonSession(reviewer, providerSessionId),
+    isPassFatal: isReviewSnapshotError,
+    ...(host.pollGate ? { pollGate: host.pollGate } : {}),
+    ...(host.captureReviewerUsage !== undefined ? { captureUsage: host.captureReviewerUsage } : {}),
+    ...(host.persistReviewerUsageImmediately !== undefined
+      ? { persistUsageImmediately: host.persistReviewerUsageImmediately }
+      : {}),
+    ...(host.artifactTurns ? { artifactTurns: host.artifactTurns } : {}),
+    ...(host.onReviewerObserved
+      ? {
+          onObserved: (
+            reviewer: ReviewerRecord,
+            index: number,
+            provider: BuildPipelineProvider,
+            readTranscript: () => Promise<readonly unknown[]>,
+            settling: boolean,
+          ) => host.onReviewerObserved!(reviewer, index, provider, readTranscript, settling),
+        }
+      : {}),
+    progress: host.progress,
+    ...(host.stallWarningMs !== undefined ? { stallWarningMs: host.stallWarningMs } : {}),
+    ...(host.stallAbandonMs !== undefined ? { stallAbandonMs: host.stallAbandonMs } : {}),
+    ...(host.concurrency ? { concurrency: host.concurrency } : {}),
+    ...(host.efficiency ? { efficiency: host.efficiency } : {}),
+    ...(host.efficiencyOwner ? { efficiencyOwner: host.efficiencyOwner } : {}),
+  };
 }
 
 /** Re-exported so hosts do not each import the progress module directly. */

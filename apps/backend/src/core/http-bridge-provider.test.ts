@@ -47,6 +47,54 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("sends policies in a wire form every released bridge still validates", async () => {
+    const policy = {
+      id: "pipeline" as const,
+      sandbox: "none" as const,
+      approvals: "auto-approve" as const,
+      projectResources: true,
+      networkAccess: "full" as const,
+      capabilityPolicy: {
+        deny: ["shell.mutate", "git.push", "subagents", "mcp:docs", "orkestrator:mail"] as const,
+      },
+    };
+    const wire = {
+      deny: ["shell.mutate"],
+      extendedDeny: ["git.push", "subagents", "mcp:docs"],
+    };
+    for (const [connection, projectResources] of [
+      [claudeConnection, true],
+      [codexConnection, true],
+      [cursorConnection, true],
+      [piConnection, true],
+      [grokConnection, false],
+    ] as const) {
+      const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
+      await created.provider.createSession("build", "Graph node", {
+        policy: { ...policy, capabilityPolicy: { deny: [...policy.capabilityPolicy.deny] } },
+      });
+      const sent = JSON.parse(String(created.requests[0]!.init.body)).policy;
+      expect(sent.capabilityPolicy).toEqual(wire);
+      // Claude, Codex, Cursor and Pi name an MCP server themselves (item 404);
+      // on Grok repository config goes instead.
+      expect(sent.projectResources).toBe(projectResources);
+
+      const resumed = httpProvider(
+        () => Response.json({ sessionId: "session-1", status: "idle" }),
+        connection,
+      );
+      await resumed.provider.resumeSession!("session-1", undefined, {
+        ...policy,
+        capabilityPolicy: { deny: [...policy.capabilityPolicy.deny] },
+      });
+      const resumeBodies = resumed.requests
+        .map((request) => (request.init.body ? JSON.parse(String(request.init.body)) : {}))
+        .filter((body) => body.policy);
+      expect(resumeBodies.length).toBe(1);
+      expect(resumeBodies[0].policy.capabilityPolicy).toEqual(wire);
+    }
+  });
+
   test("leaves the default model alone on bridges whose prompts carry the model", () => {
     for (const connection of [claudeConnection, piConnection, cursorConnection, grokConnection]) {
       expect(httpProvider(() => Response.json({}), connection).provider.resolveDefaultModel).toBe(
@@ -122,10 +170,66 @@ describe("HTTP bridge provider", () => {
       expect(body.workflowResultTool).toBeUndefined();
       expect(body.workflowResultKey).toBeUndefined();
     }
-    // Cursor hosts the attempt's tools itself and needs neither.
-    const cursor = httpProvider(() => Response.json({ status: "processing" }), cursorConnection);
-    await cursor.provider.send("session-1", "review", attempt);
-    expect(JSON.parse(String(cursor.requests[0]!.init.body)).workflowResultKey).toBeUndefined();
+    // Cursor and Claude also hold a declared attempt's tools to its key.
+    for (const connection of [cursorConnection, claudeConnection]) {
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "review", attempt);
+      expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+        workflowResultTool: "submit_review_report",
+        workflowResultKey: "11111111-1111-4111-8111-111111111111",
+      });
+    }
+  });
+
+  test("tells every gating bridge a graph activation's slots and extra tools", async () => {
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "activation-token" };
+    const workflowResultSlots = [
+      { tool: "submit_brief", resultKey: "activation-brief" },
+      { tool: "submit_risks", resultKey: "activation-risks" },
+    ];
+    const activation = {
+      requestId: "request-1",
+      readOnly: true,
+      agentMcp,
+      workflowResultTool: "submit_brief",
+      workflowResultKey: "activation-brief",
+      workflowResultSlots,
+      workflowResultExtraTools: ["read_artifact", "ask_human"],
+    };
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      cursorConnection,
+      grokConnection,
+      piConnection,
+    ]) {
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "work", activation);
+      expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+        workflowResultTool: "submit_brief",
+        workflowResultKey: "activation-brief",
+        workflowResultSlots,
+        workflowResultExtraTools: ["read_artifact", "ask_human"],
+      });
+      // Without the activation's own connection there is no attempt to name.
+      const ordinary = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await ordinary.provider.send("session-1", "work", { ...activation, agentMcp: undefined });
+      const body = JSON.parse(String(ordinary.requests[0]!.init.body));
+      expect(body.workflowResultKey).toBeUndefined();
+      expect(body.workflowResultSlots).toBeUndefined();
+      expect(body.workflowResultExtraTools).toBeUndefined();
+    }
+    // A single-slot turn sends no slot list.
+    const single = httpProvider(() => Response.json({ status: "processing" }), piConnection);
+    await single.provider.send("session-1", "work", {
+      requestId: "request-2",
+      agentMcp,
+      workflowResultTool: "submit_brief",
+      workflowResultKey: "activation-brief",
+    });
+    const body = JSON.parse(String(single.requests[0]!.init.body));
+    expect(body.workflowResultSlots).toBeUndefined();
+    expect(body.workflowResultExtraTools).toBeUndefined();
   });
 
   test("forwards Codex's selected workflow-result tool with its attempt connection", async () => {

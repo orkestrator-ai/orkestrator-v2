@@ -239,6 +239,59 @@ describe("the current turn's workflow-result attempt", () => {
     });
   }
 
+  test("a read-only graph activation may use each slot's own tools with that slot's key", () => {
+    const activation: WorkflowResultTurn = {
+      tool: "submit_a",
+      resultKey: KEY,
+      slots: [
+        { tool: "submit_a", resultKey: KEY },
+        { tool: "submit_b", resultKey: OTHER_KEY },
+      ],
+      extraTools: ["read_artifact"],
+    };
+    const { state, child, responses } = readOnlySession(activation);
+    try {
+      let id = 0;
+      const ask = (toolCall: Record<string, unknown>) =>
+        child.onPermission((id += 1), { sessionId: state.acpSessionId, toolCall, options });
+      ask(named("orkestrator__submit_a", { resultKey: KEY, result: {} }));
+      ask(useTool("orkestrator__validate_a", { resultKey: KEY, result: {} }));
+      ask({
+        toolCallId: "ns",
+        _meta: { "x.ai/tool": { name: "submit_b", namespace: "orkestrator" } },
+        rawInput: { resultKey: OTHER_KEY },
+      });
+      ask(named("orkestrator__get_workflow_result_status", { resultKey: OTHER_KEY }));
+      ask(named("orkestrator__read_artifact", { id: "artifact-1" }));
+      // Another slot's key, an unlisted extra tool, and a kind tool the turn
+      // did not declare are refused.
+      ask(named("orkestrator__submit_a", { resultKey: OTHER_KEY, result: {} }));
+      ask(named("orkestrator__validate_b", { resultKey: KEY }));
+      ask(named("orkestrator__ask_human", { question: "?" }));
+      ask(named("orkestrator__report_progress", { resultKey: KEY }));
+      ask(named("orkestrator__validate_workflow_result", { resultKey: KEY }));
+      expect(responses).toEqual([...Array(5).fill(allowed), ...Array(5).fill(refused)]);
+      state.workflowResultTurn = { ...activation, extraTools: ["ask_human"] };
+      ask(named("orkestrator__ask_human", { question: "?" }));
+      ask(named("orkestrator__read_artifact", { id: "artifact-1" }));
+      expect(responses.slice(10)).toEqual([allowed, refused]);
+      expect(state.approvals.size).toBe(0);
+    } finally {
+      clearApprovals(state);
+      sessions.delete(state.id);
+    }
+  });
+
+  test("an old kind-tool turn does not admit per-port or extra tools", () => {
+    for (const toolCall of [
+      named("orkestrator__submit_a"),
+      named("orkestrator__read_artifact"),
+      named("orkestrator__ask_human"),
+    ]) {
+      expect(workflowResultPermissionOption({ toolCall, options }, reviewerTurn)).toBeUndefined();
+    }
+  });
+
   test("an explicit tool denial still wins", () => {
     const { state, child, responses } = readOnlySession(reviewerTurn, {
       id: "pipeline",

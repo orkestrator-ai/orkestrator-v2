@@ -1511,6 +1511,18 @@ describe("successful lifecycle routes", () => {
         { workflowResultTool: "submit_review_report" },
         { workflowResultTool: "rm -rf", workflowResultKey: resultKey },
         { workflowResultTool: "submit_review_report", workflowResultKey: "not a key" },
+        { workflowResultTool: "submit_a", workflowResultKey: resultKey, workflowResultSlots: [] },
+        {
+          workflowResultTool: "submit_a",
+          workflowResultKey: resultKey,
+          workflowResultSlots: [{ tool: "submit_b", resultKey }],
+        },
+        {
+          workflowResultTool: "submit_a",
+          workflowResultKey: resultKey,
+          workflowResultExtraTools: ["send_message"],
+        },
+        { workflowResultSlots: [{ tool: "submit_a", resultKey }] },
       ]) {
         const response = await call(`/session/${state.id}/prompt`, {
           method: "POST",
@@ -1532,6 +1544,31 @@ describe("successful lifecycle routes", () => {
       expect(review.status).toBe(202);
       await waitFor(() => state.status === "idle");
       expect(state.workflowResultTurn).toEqual({ tool: "submit_review_report", resultKey });
+
+      // A graph activation declares every slot and its extra tools.
+      const slots = [
+        { tool: "submit_a", resultKey },
+        { tool: "submit_b", resultKey: "activation-b" },
+      ];
+      const activation = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "work",
+          requestId: "req-activation",
+          workflowResultTool: "submit_a",
+          workflowResultKey: resultKey,
+          workflowResultSlots: slots,
+          workflowResultExtraTools: ["ask_human"],
+        }),
+      });
+      expect(activation.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.workflowResultTurn).toEqual({
+        tool: "submit_a",
+        resultKey,
+        slots,
+        extraTools: ["ask_human"],
+      });
 
       // The next ordinary turn is not that attempt's.
       const ordinary = await call(`/session/${state.id}/prompt`, {

@@ -46,6 +46,7 @@ import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 
 import type { BridgeModel } from "./models-cache.js";
 import { structuredOutputFailure, type JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 
 import { promptThreadConfig } from "./prompt-thread-config.js";
 
@@ -92,6 +93,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: EngineTurnConfig["agentMcp"];
       workflowResultTool?: string;
+      /** The whole attempt, when the backend named its key (graph activation slots). */
+      workflowResultTurn?: WorkflowResultTurn;
       /** The session's composer approval mode. */
       approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
@@ -168,6 +171,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: EngineTurnConfig["agentMcp"];
       workflowResultTool?: string;
+      /** The whole attempt, when the backend named its key (graph activation slots). */
+      workflowResultTurn?: WorkflowResultTurn;
       /** The session's composer approval mode. */
       approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
@@ -501,19 +506,25 @@ export class CodexRuntimePrompt {
     context.promptThreadConfig = promptThreadConfig(turnConfig);
     context.projectSkillsRevision = projectSkillsRevision;
     if (input.workflowResultTool && turnConfig.agentMcp) {
-      // The turn can only finish by calling this tool. Without it the model
-      // runs to the end and pastes its result as text, which the backend waits
-      // on for minutes before failing with no explanation.
-      const availability = await this.ctx.options.engine.workflowResultToolAvailability(
-        context.threadId,
-        input.workflowResultTool,
+      // The turn can only finish by calling these tools: a graph activation
+      // submits every slot through its own. Without one the model runs to the
+      // end and pastes its result as text, which the backend waits on for
+      // minutes before failing with no explanation.
+      const submitTools = new Set(
+        input.workflowResultTurn?.slots?.map((slot) => slot.tool) ?? [input.workflowResultTool],
       );
-      if (availability.state === "missing") {
-        return {
-          ok: false,
-          status: 424,
-          error: `Codex could not offer ${input.workflowResultTool} to this session: the orkestrator MCP server ${availability.reason}`,
-        };
+      for (const tool of submitTools) {
+        const availability = await this.ctx.options.engine.workflowResultToolAvailability(
+          context.threadId,
+          tool,
+        );
+        if (availability.state === "missing") {
+          return {
+            ok: false,
+            status: 424,
+            error: `Codex could not offer ${tool} to this session: the orkestrator MCP server ${availability.reason}`,
+          };
+        }
       }
     }
 

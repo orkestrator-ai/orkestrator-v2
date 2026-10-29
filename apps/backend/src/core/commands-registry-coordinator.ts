@@ -17,6 +17,7 @@ import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
+import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import {
   buildPipelineInputWithDefaults,
@@ -131,6 +132,7 @@ export function registerCoordinatorCommands(
 ): void {
   registerCoordinatorReviewActions(register, dependencies);
   registerCoordinatorSurfaceActions(register, dependencies);
+  registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
@@ -508,7 +510,12 @@ export function registerCoordinatorCommands(
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
       if (!workspace || workspace.projectId !== project) throw new Error("Coordinator not found");
-      if (kind !== "environment" && kind !== "build-pipeline" && kind !== "multi-review") {
+      if (
+        kind !== "environment" &&
+        kind !== "build-pipeline" &&
+        kind !== "multi-review" &&
+        kind !== "graph-run"
+      ) {
         throw new Error("Invalid coordinator workflow kind");
       }
       const association: CoordinatorWorkflowAssociation = {

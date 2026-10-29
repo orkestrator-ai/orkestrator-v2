@@ -65,6 +65,7 @@ import {
   reviewReportSession,
 } from "./PipelineSessionTranscript";
 import { PipelineTicketView } from "./PipelineTicketView";
+import { PipelineAddressReport } from "./PipelineAddressReport";
 import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
 import type { PipelineControls } from "./usePipelineControls";
 
@@ -781,10 +782,15 @@ function InspectorNotes({
             ? "review-report"
             : session.phase === "verify"
               ? "verification-result"
-              : "review-preparation"
+              : session.phase === "address"
+                ? "fix-result"
+                : "review-preparation"
         }
       />,
     );
+  }
+  if (session?.phase === "address" && session.fixResult) {
+    notes.push(<PipelineAddressReport key="address-report" result={session.fixResult} />);
   }
   if (
     node.kind === "verify" &&

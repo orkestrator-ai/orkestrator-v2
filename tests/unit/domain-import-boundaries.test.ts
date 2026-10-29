@@ -110,6 +110,21 @@ describe("backend domain import boundaries", () => {
     );
   });
 
+  test("protocol graph modules stay browser-safe", () => {
+    lintImports(
+      "packages/protocol/src/graphs/boundary-probe.ts",
+      [
+        "../field-validation.js",
+        "./grammar.js",
+        "node:fs",
+        "bun:sqlite",
+        "../testing/fake-intervals.js",
+      ],
+      [3, 4, 5],
+    );
+    lintImports("packages/protocol/src/graphs/boundary-probe.test.ts", ["bun:test"], []);
+  });
+
   test("protocol change-tracking modules retain their backend exemption", () => {
     lintImports(
       "apps/backend/src/core/boundary-probe.ts",

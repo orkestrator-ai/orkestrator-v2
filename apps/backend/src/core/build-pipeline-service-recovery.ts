@@ -19,7 +19,10 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   errorMessage,
   resumablePhase,
@@ -28,6 +31,9 @@ import {
   MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
   DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
   appendInteractionSummary,
+  PULL_REQUEST_DETECTION_STATES,
+  pullRequestNeedsConflictResolution,
+  verificationPassed,
   type PullRequestDetection,
 } from "./build-pipeline-service-helpers.js";
 import {
@@ -132,6 +138,48 @@ export class BuildPipelineRecovery {
     await this.stageSupervisor.dispatchPending(pipeline, provider);
   }
 
+  /**
+   * Completes an Address turn and opens Verify.
+   *
+   * A session opened with a `fix-result` slot (`addressReportKind`) must
+   * return that result first: a missing one gets the stage's one reminder and
+   * then fails the stage, exactly as for Review and Verify. The accepted
+   * result is kept, bounded, on the session, where Verify and the inspector
+   * read it. An incomplete result (`complete: false`) still goes to Verify,
+   * which judges the round. A session without the marker started before the
+   * typed handoff; Verify reads its last assistant text instead.
+   */
+  async finishAddress(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    if (session.addressReportKind === undefined) {
+      await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
+      return;
+    }
+    const requestId = session.structuredRequestId;
+    if (!requestId) throw new Error("Address result key is missing");
+    const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
+    if (!result) {
+      await this.awaitStructuredResult(pipeline, provider, session, "address stage");
+      return;
+    }
+    delete session.structuredWaitStartedAt;
+    if (!result.ok) throw new Error(result.error.message);
+    let fixResult: ReviewFixResult;
+    try {
+      fixResult = parseFixResult(result.value);
+    } catch (error) {
+      throw new Error(`The address stage returned a malformed fix result: ${errorMessage(error)}`);
+    }
+    session.structuredResultStatus = "accepted";
+    session.fixResult = boundPipelineFixResult(fixResult);
+    this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
+    await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
+    await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
+  }
+
   async finishVerification(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
@@ -175,13 +223,12 @@ export class BuildPipelineRecovery {
         "Verification returned malformed structured output: expected exactly a boolean complete field, a string rationale field and an acceptanceCriteria array",
       );
     }
-    const { complete, rationale } = result.value;
+    const { rationale } = result.value;
     const criteria = taskSnapshotCriteria(pipeline.taskSnapshot);
     const criterionResults = verificationCriterionResults(criteria, result.value);
     const feedback = feedbackWithUnmetCriteria(rationale, criteria, criterionResults);
     session.structuredResultStatus = "accepted";
-    const passed =
-      complete && !result.value.acceptanceCriteria?.some((item) => item.status === "failed");
+    const passed = verificationPassed(result.value);
     pipeline.verificationResult = passed ? "pass" : "fail";
     pipeline.verificationFeedback = feedback;
     // The pipeline keeps only the newest verdict. The session's own copy is
@@ -195,9 +242,7 @@ export class BuildPipelineRecovery {
     await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (passed) {
-      await this.updateKanbanLifecycle(pipeline, {
-        comment: "✅ Validation complete",
-      });
+      await this.updateKanbanLifecycle(pipeline, buildPipelineKanbanUpdate("validation-complete"));
       await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
       await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
@@ -260,7 +305,7 @@ export class BuildPipelineRecovery {
       throw new Error("The pull request is still closed. Reopen it before completing Ship.");
     }
     await this.persistPullRequest(pipeline, detection);
-    if (detection.hasMergeConflicts === true) {
+    if (pullRequestNeedsConflictResolution(detection)) {
       await this.stageSupervisor.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
     }
@@ -306,7 +351,7 @@ export class BuildPipelineRecovery {
     if (
       typeof result.url !== "string" ||
       !result.url ||
-      !["open", "merged", "closed"].includes(result.state) ||
+      !(PULL_REQUEST_DETECTION_STATES as readonly string[]).includes(result.state) ||
       (result.hasMergeConflicts !== null && typeof result.hasMergeConflicts !== "boolean")
     ) {
       throw new Error("Pull request detection returned an invalid result");
@@ -323,12 +368,10 @@ export class BuildPipelineRecovery {
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
     });
-    await this.updateKanbanLifecycle(pipeline, {
-      status: "review",
-      prUrl: detection.url,
-      prState: detection.state,
-      comment: `🔗 PR raised: ${detection.url}`,
-    });
+    await this.updateKanbanLifecycle(
+      pipeline,
+      buildPipelineKanbanUpdate("pr-raised", { url: detection.url, state: detection.state }),
+    );
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
@@ -395,9 +438,10 @@ export class BuildPipelineRecovery {
       try {
         pipeline.completionCommentStatus = "posting";
         await this.ctx.save(pipeline, pipeline.backendRevision);
-        await this.updateKanbanLifecycle(pipeline, {
-          status: pipeline.phase === "complete" ? "review" : "backlog",
-        });
+        await this.updateKanbanLifecycle(
+          pipeline,
+          buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
+        );
         pipeline.completionCommentStatus = "posted";
         pipeline.completionCommentPostedAt = new Date().toISOString();
         delete pipeline.completionCommentError;

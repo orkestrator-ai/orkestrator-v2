@@ -8,6 +8,8 @@ import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/c
 import {
   appendNativeAgentPolicyNote,
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  nativeAgentDeniedCapabilities,
+  nativeAgentMcpServer,
   nativeAgentPolicyDeniesNetwork,
   nativeAgentPolicyDeniesWebSearch,
   normalizeOpenCodeModelProviders,
@@ -21,13 +23,19 @@ import {
   type OpenCodeMessageIdCoordinator,
 } from "@orkestrator/protocol/opencode-message-id";
 import {
+  GRAPH_ACTIVATION_EXTRA_TOOLS,
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_MCP_SERVER_NAME,
   REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+  parseWorkflowResultTurn,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import type { BridgeConnection, ProviderSendOptions } from "./agent-provider-contract.js";
+import type {
+  BridgeConnection,
+  ProviderPrepareDispatchOptions,
+  ProviderSendOptions,
+} from "./agent-provider-contract.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -41,6 +49,7 @@ import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinato
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
+import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
   mimeTypeForFilename,
@@ -353,19 +362,31 @@ export function isOpenCodeWorkflowResultToolName(toolName: string): boolean {
 /**
  * The broker tools a turn that submits `selectedTool` may call. A reviewer's
  * turn also gets `report_finding`; the broker still answers only a live Multi
- * Review reviewer's own signed capability.
+ * Review reviewer's own signed capability. A graph activation also gets the
+ * extra tools its credential lists (`workflowResultExtraTools`).
  */
-function openCodeWorkflowResultTurnToolNames(selectedTool: string): string[] {
+function openCodeWorkflowResultTurnToolNames(
+  selectedTool: string,
+  extraTools: readonly string[] = [],
+): string[] {
   return [
     selectedTool,
     WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
     "get_workflow_result_status",
     ...(selectedTool === workflowResultToolName("review-report") ? [REPORT_FINDING_TOOL_NAME] : []),
+    ...GRAPH_ACTIVATION_EXTRA_TOOLS.filter((tool) => extraTools.includes(tool)),
   ];
 }
 
-/** Hide the persistent broker by default and expose only this turn's tools. */
-export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<string, boolean> {
+/**
+ * Hide the persistent broker by default and expose only this turn's tools.
+ * The graph activation extra tools are hidden like the rest unless the turn
+ * lists them.
+ */
+export function openCodeWorkflowResultTurnTools(
+  selectedTool?: string,
+  extraTools?: readonly string[],
+): Record<string, boolean> {
   const tools = Object.fromEntries(
     [
       ...WORKFLOW_RESULT_KINDS.map((kind) =>
@@ -374,25 +395,76 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
       openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME),
       openCodeWorkflowResultToolId("get_workflow_result_status"),
       openCodeWorkflowResultToolId(REPORT_FINDING_TOOL_NAME),
+      ...GRAPH_ACTIVATION_EXTRA_TOOLS.map(openCodeWorkflowResultToolId),
     ].map((tool) => [tool, false]),
   );
   if (selectedTool) {
-    for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool)) {
+    for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool, extraTools)) {
       tools[openCodeWorkflowResultToolId(tool)] = true;
     }
   }
   return tools;
 }
 
-export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
+export function openCodeWorkflowResultPermissionRules(
+  selectedTool: string,
+  extraTools?: readonly string[],
+) {
   return [
     ...openCodeWorkflowResultDenyPermissionRules(),
-    ...openCodeWorkflowResultTurnToolNames(selectedTool).map((tool) => ({
+    ...openCodeWorkflowResultTurnToolNames(selectedTool, extraTools).map((tool) => ({
       permission: openCodeWorkflowResultToolId(tool),
       pattern: "*",
       action: "allow" as const,
     })),
   ];
+}
+
+/**
+ * Why this turn's workflow-result fields cannot run on OpenCode, or null.
+ *
+ * The broker's tool list is fixed per environment, so a graph activation
+ * submits every output through `submit_graph_output` with each slot's key:
+ * a port's own `submit_<port>` does not exist there. Slots and extra tools
+ * follow `parseWorkflowResultTurn`; the key, when the caller has one, must be
+ * the first slot's. A turn without either is checked exactly as before.
+ */
+export function openCodeWorkflowResultTurnProblem(
+  options: ProviderPrepareDispatchOptions & Pick<ProviderSendOptions, "workflowResultKey">,
+): string | null {
+  const { workflowResultTool: tool, workflowResultSlots: slots } = options;
+  const extraTools = options.workflowResultExtraTools;
+  if (tool === undefined) {
+    return slots !== undefined || extraTools !== undefined
+      ? "workflowResultSlots and workflowResultExtraTools require workflowResultTool"
+      : null;
+  }
+  if (!isOpenCodeWorkflowResultToolName(tool)) {
+    return "workflowResultTool must name a workflow result tool OpenCode's broker lists";
+  }
+  // A turn without slots or extra tools is checked exactly as before.
+  if (slots === undefined && extraTools === undefined) return null;
+  const graphOutput = workflowResultToolName("graph-output");
+  if (
+    slots !== undefined &&
+    (tool !== graphOutput ||
+      !Array.isArray(slots) ||
+      slots.some((slot) => (slot as { tool?: unknown } | null)?.tool !== graphOutput))
+  ) {
+    return `OpenCode result slots must all use ${graphOutput}`;
+  }
+  const first: unknown = slots?.[0]?.resultKey;
+  if (
+    first !== undefined &&
+    options.workflowResultKey !== undefined &&
+    first !== options.workflowResultKey
+  ) {
+    return "workflowResultSlots must start with workflowResultKey";
+  }
+  // Prepare has no key of its own: the first slot names it.
+  const key = options.workflowResultKey ?? first ?? "opencode-prepare";
+  const parsed = parseWorkflowResultTurn(tool, key, slots, extraTools);
+  return parsed.ok ? null : parsed.error;
 }
 
 export function openCodeWorkflowResultDenyPermissionRules() {
@@ -429,14 +501,66 @@ export function effectiveOpenCodePolicy(
 /**
  * Whether a rule set refuses every command and page fetch. OpenCode takes the
  * last rule that matches, which is why `openCodePermissionRules` puts denials
- * last.
+ * last. Only whole-permission rules count: a deny for one command pattern
+ * (`git push *`) leaves every other command running.
  */
 export function openCodeRulesBlockNetwork(
   rules: readonly { permission: string; pattern: string; action: string }[],
 ): boolean {
   const action = (permission: string) =>
-    rules.findLast((rule) => rule.permission === permission || rule.permission === "*")?.action;
+    rules.findLast(
+      (rule) => (rule.permission === permission || rule.permission === "*") && rule.pattern === "*",
+    )?.action;
   return ["bash", "webfetch"].every((permission) => action(permission) === "deny");
+}
+
+/**
+ * Command patterns each git or GitHub capability denies, for both of
+ * OpenCode's shell permission ids. OpenCode matches globs against the command
+ * as written, so `git -C x push` or a script still runs: these are advice the
+ * provider applies, and the post-hoc guards hold the rest. `gh` is denied
+ * whole for `github.write`, its reading commands included, because no glob
+ * separates them from the writing ones.
+ */
+const OPENCODE_CAPABILITY_COMMAND_DENIALS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({
+    "git.commit": Object.freeze(["git commit", "git commit *"]),
+    "git.push": Object.freeze(["git push", "git push *"]),
+    "github.write": Object.freeze(["gh", "gh *"]),
+  });
+
+/**
+ * Deny rules for the capabilities newer than the coordinator's vocabulary:
+ * sub-agents (`task`, whose sub-agents inherit every deny of the parent), a
+ * named MCP server (OpenCode registers its tools as `<server>_<tool>`, and a
+ * permission key is a wildcard over the tool name), and the git and GitHub
+ * command patterns above.
+ */
+function openCodeExtendedCapabilityDenials(policy: NativeAgentExecutionPolicy) {
+  const rules: { permission: string; pattern: string; action: "deny" }[] = [];
+  for (const capability of nativeAgentDeniedCapabilities(policy)) {
+    if (capability === "subagents") {
+      rules.push({ permission: "task", pattern: "*", action: "deny" });
+      continue;
+    }
+    const server = nativeAgentMcpServer(capability);
+    if (server) {
+      // OpenCode replaces characters outside `[A-Za-z0-9_-]` in a server name
+      // with `_` before prefixing its tools. Both spellings are denied; a
+      // server whose name merely starts with this one's loses its tools too,
+      // which is the safe direction.
+      for (const prefix of new Set([server, server.replace(/[^A-Za-z0-9_-]/g, "_")])) {
+        rules.push({ permission: `${prefix}_*`, pattern: "*", action: "deny" });
+      }
+      continue;
+    }
+    for (const pattern of OPENCODE_CAPABILITY_COMMAND_DENIALS[capability] ?? []) {
+      for (const permission of ["bash", "shell"]) {
+        rules.push({ permission, pattern, action: "deny" });
+      }
+    }
+  }
+  return rules;
 }
 
 export function openCodePermissionRules(
@@ -447,6 +571,12 @@ export function openCodePermissionRules(
      * registered them under (`opencode-coordinator-research.ts`).
      */
     researchTools?: readonly string[];
+    /**
+     * The MCP servers the directory's instance lists, for a policy that
+     * selects its user servers (graphs item 404,
+     * `openCodeConfiguredMcpServersFor`). Their rules come last.
+     */
+    configuredMcpServers?: readonly string[];
   } = {},
 ) {
   const action =
@@ -489,6 +619,10 @@ export function openCodePermissionRules(
       pattern: "*",
       action: "deny" as const,
     })),
+    ...openCodeExtendedCapabilityDenials(policy),
+    ...(options.configuredMcpServers
+      ? openCodeUserMcpRules(policy, options.configuredMcpServers)
+      : []),
   ];
 }
 
@@ -750,7 +884,10 @@ export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<v
  * `system` instruction carrying this turn's artifact grant when one exists.
  */
 export function openCodePromptToolOptions(
-  options: Pick<ProviderSendOptions, "readOnly" | "workflowResultTool" | "artifactGrant">,
+  options: Pick<
+    ProviderSendOptions,
+    "readOnly" | "workflowResultTool" | "workflowResultExtraTools" | "artifactGrant"
+  >,
   reviewEnabled: boolean,
 ): { tools?: Record<string, boolean>; system?: string } {
   const system = options.artifactGrant
@@ -761,7 +898,10 @@ export function openCodePromptToolOptions(
     ...system,
     tools: {
       ...OPENCODE_READ_ONLY_TURN_TOOLS,
-      ...openCodeWorkflowResultTurnTools(options.workflowResultTool),
+      ...openCodeWorkflowResultTurnTools(
+        options.workflowResultTool,
+        options.workflowResultExtraTools,
+      ),
     },
   };
 }

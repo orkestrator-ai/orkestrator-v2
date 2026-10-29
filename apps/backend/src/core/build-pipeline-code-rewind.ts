@@ -17,21 +17,27 @@
  *   commits stay recoverable;
  * - when the upstream branch already has commits the reset drops, the next
  *   Ship is told to force-push with lease instead of a plain push.
+ *
+ * The Git inspection and reset live in `workspace-code-rewind.ts`, shared
+ * with graph runs' code rewinds (item 210); this module keeps the
+ * pipeline's rules.
  */
 import {
-  MAX_CODE_REWIND_COMMIT_SUBJECT_LENGTH,
-  MAX_CODE_REWIND_PREVIEW_COMMITS,
   isActiveBuildPhase,
   isSupersededPipelineSession,
   type BuildPipeline,
   type PipelineCodeRewind,
   type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
+import { codeRewindRefComponent, type CodeRewindInspection } from "./workspace-code-rewind.js";
 
-/** Runs `git` with `args` in the environment's worktree and returns stdout. */
-export type EnvironmentGit = (environmentId: string, args: string[]) => Promise<string>;
-
-const COMMIT_ID = /^[0-9a-f]{40,64}$/i;
+// The Git side is shared with graph runs' code rewinds (item 210).
+export {
+  inspectCodeRewind,
+  resetWorktreeToCommit,
+  type CodeRewindInspection,
+  type EnvironmentGit,
+} from "./workspace-code-rewind.js";
 
 /**
  * Why the pipeline's state forbids a code rewind to `session` right now, or
@@ -61,141 +67,8 @@ export function codeRewindStateBlocker(
 
 /** The ref that keeps the pre-rewind tip reachable. */
 export function codeRewindBackupRef(pipelineId: string, rewindId: string): string {
-  const component = (value: string) =>
-    value
-      .replace(/[^A-Za-z0-9_-]/g, "-")
-      .replace(/^-+/, "")
-      .slice(0, 80) || "pipeline";
+  const component = (value: string) => codeRewindRefComponent(value, "pipeline");
   return `refs/orkestrator/build-pipeline-rewinds/${component(pipelineId)}/${component(rewindId)}`;
-}
-
-export interface CodeRewindInspection {
-  commits: { sha: string; subject: string }[];
-  commitCount: number;
-  upstream?: { ref: string; droppedCommits: number };
-}
-
-function count(output: string): number {
-  const value = Number.parseInt(output.trim(), 10);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error("Git returned an unusable commit count.");
-  }
-  return value;
-}
-
-/**
- * Reads what resetting HEAD to `target` would drop. Throws an error written
- * for the user when the target is missing or not an ancestor of HEAD.
- */
-export async function inspectCodeRewind(
-  git: EnvironmentGit,
-  environmentId: string,
-  target: string,
-): Promise<CodeRewindInspection> {
-  if (!COMMIT_ID.test(target)) {
-    throw new Error("This step's recorded starting commit is not a commit ID.");
-  }
-  let aheadOutput: string;
-  try {
-    aheadOutput = await git(environmentId, ["rev-list", "--count", `HEAD..${target}`]);
-  } catch {
-    throw new Error(
-      `The commit this step started from (${target.slice(0, 12)}) is no longer in the repository.`,
-    );
-  }
-  const ahead = count(aheadOutput);
-  if (ahead > 0) {
-    throw new Error(
-      `The branch no longer contains the commit this step started from (${target.slice(0, 12)}); its history was rewritten.`,
-    );
-  }
-  const commitCount = count(await git(environmentId, ["rev-list", "--count", `${target}..HEAD`]));
-  const log = await git(environmentId, [
-    "log",
-    "--no-color",
-    `--max-count=${MAX_CODE_REWIND_PREVIEW_COMMITS}`,
-    "--format=%H%x1f%s",
-    `${target}..HEAD`,
-  ]);
-  const commits = log
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const [sha = "", ...subject] = line.split("\u001f");
-      const text = subject.join(" ").trim();
-      return {
-        sha,
-        subject:
-          text.length <= MAX_CODE_REWIND_COMMIT_SUBJECT_LENGTH
-            ? text
-            : `${text.slice(0, MAX_CODE_REWIND_COMMIT_SUBJECT_LENGTH - 1)}…`,
-      };
-    })
-    .filter((commit) => COMMIT_ID.test(commit.sha));
-  let upstream: CodeRewindInspection["upstream"];
-  let ref: string | undefined;
-  try {
-    ref = (
-      await git(environmentId, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
-    ).trim();
-  } catch {
-    // No upstream: nothing was pushed from this branch, or it was never set.
-  }
-  if (ref) {
-    upstream = {
-      ref: ref.slice(0, 256),
-      droppedCommits: count(
-        await git(environmentId, ["rev-list", "--count", `${target}..@{upstream}`]),
-      ),
-    };
-  }
-  return { commits, commitCount, ...(upstream ? { upstream } : {}) };
-}
-
-/**
- * Keeps `from` reachable at `backupRef`, then moves the branch and worktree to
- * `to` after verifying HEAD and cleanliness through the reset runner. The caller
- * holds the environment reservation and has durably saved this intent. A retry
- * recognizes the already-applied reset by its target and matching backup.
- */
-export async function resetWorktreeToCommit(
-  git: EnvironmentGit,
-  environmentId: string,
-  reset: { from: string; to: string; backupRef: string },
-): Promise<void> {
-  const head = (await git(environmentId, ["rev-parse", "HEAD"])).trim();
-  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
-    throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
-  }
-  if (head === reset.to && head !== reset.from) {
-    // A crash after reset but before the final save: prove this intent's backup.
-    const backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
-    if (backup !== reset.from) throw new Error("The pending rewind's backup does not match.");
-    return;
-  }
-  if (head !== reset.from) {
-    throw new Error(
-      "The branch moved since the rewind was previewed. Review the commits it drops again.",
-    );
-  }
-  // Creating a new ref is idempotent, but never replace an unrelated backup.
-  let backup: string | undefined;
-  try {
-    backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
-  } catch {
-    /* Not created yet. */
-  }
-  if (backup && backup !== reset.from)
-    throw new Error("The pending rewind's backup does not match.");
-  if (!backup) await git(environmentId, ["update-ref", reset.backupRef, head, ""]);
-  // Refuse a writer that changed HEAD or files during backup creation as well.
-  if ((await git(environmentId, ["rev-parse", "HEAD"])).trim() !== head) {
-    throw new Error("The branch moved since the rewind was previewed.");
-  }
-  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
-    throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
-  }
-  await git(environmentId, ["reset", "--hard", reset.to]);
 }
 
 /**

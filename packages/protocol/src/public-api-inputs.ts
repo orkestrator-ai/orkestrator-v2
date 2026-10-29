@@ -17,6 +17,8 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
+import { BUILD_ACTION_INPUTS, REVIEW_LENS_INPUT } from "./public-api-inputs-build.js";
+import { GRAPH_ACTION_INPUTS } from "./public-api-inputs-graph.js";
 import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
@@ -343,6 +345,15 @@ const reviewSelection: PublicJsonSchema = {
   additionalProperties: false,
 };
 
+/** A Multi Review reviewer row, which alone may carry a focus. */
+const reviewerSelection: PublicJsonSchema = {
+  ...reviewSelection,
+  properties: {
+    ...reviewSelection.properties,
+    lens: REVIEW_LENS_INPUT,
+  },
+};
+
 const createEnvironmentFields: Record<string, PublicJsonSchema> = {
   projectId,
   type: environmentType,
@@ -419,9 +430,15 @@ const scheduleTiming: Record<string, PublicJsonSchema> = {
 const scheduleAction: PublicJsonSchema = {
   type: "object",
   description:
-    "What fires. kind action: run one public action (action plus input; a mutation other than schedule.* and actions that always need confirmation). kind prompt: send prompt to an idle agent session (sessionId). kind launch: launch an environment like environment.launch; without baseCommit the base branch's newest commit is resolved when it fires.",
+    "What fires. kind action: run one public action (action plus input; a mutation other than schedule.* and actions that always need confirmation). kind prompt: send prompt to an idle agent session (sessionId). kind launch: launch an environment like environment.launch; without baseCommit the base branch's newest commit is resolved when it fires. kind graph: launch a saved graph template (request); the template must be launchable when the schedule is created.",
   properties: {
-    kind: { type: "string", enum: ["action", "prompt", "launch"] },
+    kind: { type: "string", enum: ["action", "prompt", "launch", "graph"] },
+    request: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "kind graph: the launch request ({ref, projectId, environment, roles?, params?, inputs?, ticket?}), as graph.launch takes it, without requestId (each fire supplies one).",
+    },
     action: {
       type: "string",
       enum: PUBLIC_ACTION_NAMES,
@@ -1284,8 +1301,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             minItems: 1,
             maxItems: 32,
             description:
-              "Reviewer rows. Omitted: the saved Multi Review reviewers. Set only when the user asks for specific reviewers.",
-            items: reviewSelection,
+              "Reviewer rows, each with an optional focus (lens). Omitted: the saved Multi Review reviewers and their saved focus. Set only when the user asks for specific reviewers or a focus.",
+            items: reviewerSelection,
           },
           reviewModel: {
             ...reviewSelection,
@@ -1319,6 +1336,17 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       examples: [
         { environmentId: "env-1" },
         { environmentId: "env-1", autoFix: true, autoPr: true },
+        {
+          environmentId: "env-1",
+          reviewers: [
+            {
+              agent: "claude",
+              model: "claude-opus-5",
+              lens: { label: "Security", instruction: "Trace untrusted input to its sinks." },
+            },
+            { agent: "codex", model: "gpt-5.5" },
+          ],
+        },
       ],
     },
     "review.list": {
@@ -1361,6 +1389,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       input: schema({ workflowId }, ["workflowId"]),
       examples: [{ workflowId: "review-1" }],
     },
+    ...BUILD_ACTION_INPUTS,
+    ...GRAPH_ACTION_INPUTS,
     "pr.create": {
       capability: "sessions.control",
       confirmation: "voice",

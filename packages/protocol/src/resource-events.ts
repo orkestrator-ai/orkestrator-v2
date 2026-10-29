@@ -57,6 +57,25 @@ export const RESOURCE_KINDS = [
    * only, like `scheduled-job`.
    */
   "permission-rule",
+  /**
+   * A graph template changed (item 109): a user template was saved or
+   * deleted (id `user:<id>`), or a project's templates, trust records or
+   * capability ceiling changed (id `project:<projectId>`). Clients re-read
+   * `graph_templates_list`. A hint only.
+   */
+  "graph-template",
+  /**
+   * A graph run changed (items 202, 203): created, advanced by a scheduler
+   * pass, cancelled, or deleted with its environment. The id is the run id;
+   * clients re-read the run. A hint only: the stored run is authoritative.
+   */
+  "graph-run",
+  /**
+   * An environment's "Describe a graph" job changed (item 215): started,
+   * progressed, finished, cancelled or dismissed. The id is the environment
+   * id; clients re-read `graph_describe_status`. A hint only.
+   */
+  "graph-describe",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

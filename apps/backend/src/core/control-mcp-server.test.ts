@@ -22,6 +22,7 @@ import {
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 
 type RpcBody = {
   result?: {
@@ -556,6 +557,262 @@ describe("Orkestrator control MCP server", () => {
         COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
       );
     }
+  });
+
+  test("bounds start_build_pipeline maxIterations by the protocol limit", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const tool = listed.body.result?.tools?.find((item) => item.name === "start_build_pipeline") as
+      | { inputSchema?: { properties?: Record<string, { minimum?: number; maximum?: number }> } }
+      | undefined;
+    expect(tool?.inputSchema?.properties?.maxIterations).toMatchObject({
+      minimum: 1,
+      maximum: MAX_BUILD_PIPELINE_ITERATIONS,
+    });
+
+    const call = (requestId: string, maxIterations: number) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "start_build_pipeline",
+        arguments: {
+          requestId,
+          taskId: "task-1",
+          baseBranch: "main",
+          baseCommit: "a".repeat(40),
+          taskTitle: "Task",
+          taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+          maxIterations,
+        },
+      });
+    const refused = await call("build-too-many-iterations", MAX_BUILD_PIPELINE_ITERATIONS + 1);
+    expect(refused.body.result?.isError).toBe(true);
+    expect(JSON.stringify(refused.body.result)).toContain(
+      `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}`,
+    );
+    expect(
+      invocations.filter((entry) => entry.command === "start_coordinator_build_pipeline"),
+    ).toHaveLength(0);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+    }));
+    const accepted = await call("build-max-iterations", MAX_BUILD_PIPELINE_ITERATIONS);
+    expect(accepted.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({ maxIterations: MAX_BUILD_PIPELINE_ITERATIONS });
+  });
+
+  test("start_build_pipeline carries per-step instructions within their bound", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const call = (requestId: string, extra: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "start_build_pipeline",
+        arguments: {
+          requestId,
+          taskId: "task-1",
+          baseBranch: "main",
+          baseCommit: "a".repeat(40),
+          taskTitle: "Task",
+          taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+          ...extra,
+        },
+      });
+    const refused = await call("build-long-instructions", {
+      steps: { verify: { instructions: "x".repeat(16 * 1024 + 1) } },
+    });
+    expect(refused.body.result?.isError).toBe(true);
+    expect(JSON.stringify(refused.body.result)).toContain("instructions must be at most 16384");
+    expect(
+      invocations.filter((entry) => entry.command === "start_coordinator_build_pipeline"),
+    ).toHaveLength(0);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: {
+        build: { agent: "claude", instructions: "Write the test first." },
+        review: { agent: "codex", instructions: "Security." },
+      },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { agent: "claude", instructions: "Merge duplicates." },
+    }));
+    const accepted = await call("build-instructions", {
+      steps: { build: { instructions: "Write the test first." } },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { instructions: "Merge duplicates." },
+    });
+    expect(accepted.body.result?.isError).not.toBe(true);
+    // The tool forwards the caller's choices; the backend command layers an
+    // instructions-only step over the saved selection.
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({
+      steps: { build: { instructions: "Write the test first." } },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { instructions: "Merge duplicates." },
+    });
+    // The result reports what was stored by size, not by echoing the text.
+    const selection = accepted.body.result?.structuredContent?.selection as Record<string, unknown>;
+    expect(selection).toMatchObject({
+      steps: { build: { agent: "claude", instructionsBytes: 21 } },
+      reviewers: [
+        { agent: "codex", instructionsBytes: 9 },
+        { agent: "claude", instructionsBytes: 12 },
+      ],
+      reviewPreparation: { agent: "claude", instructionsBytes: 17 },
+    });
+    expect(JSON.stringify(selection)).not.toContain("Write the test first.");
+  });
+
+  test("Multi Review launch tools and start_build_pipeline carry reviewer lenses", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const call = (name: string, args: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", { name, arguments: args });
+    const lens = { label: "Security", instruction: "Trace untrusted input to its sinks." };
+    const lensSummary = { label: "Security", instructionBytes: 35 };
+    const workflow = {
+      id: "review-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "preparing",
+      reviewers: [
+        { id: "r1", agent: "codex", model: "gpt-5.6-codex", status: "pending", lens },
+        { id: "r2", agent: "codex", model: "gpt-5.6-codex", status: "pending" },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6-codex" },
+    };
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      ui: { status: "opened" },
+      workflow,
+    }));
+    overrides.set("start_coordinator_multi_review", () => workflow);
+    const reviewers = [
+      { agent: "codex", model: "gpt-5.6-codex", lens },
+      { agent: "codex", model: "gpt-5.6-codex" },
+    ];
+
+    const launched = await call("launch_multi_review", {
+      requestId: "launch-lens",
+      environmentId: "env-1",
+      reviewers,
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
+        ?.args.input,
+    ).toMatchObject({ reviewers });
+    const launchedSelection = launched.body.result?.structuredContent?.selection as {
+      reviewers: unknown[];
+    };
+    expect(launchedSelection.reviewers[0]).toMatchObject({ lens: lensSummary });
+    expect(JSON.stringify(launchedSelection)).not.toContain(lens.instruction);
+
+    const started = await call("start_multi_review", {
+      requestId: "start-lens",
+      buildPipelineId: "pipeline-1",
+      environmentId: "env-1",
+      targetBranch: "main",
+      reviewers,
+    });
+    expect(started.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
+        .input,
+    ).toMatchObject({ reviewers });
+    expect(
+      (started.body.result!.structuredContent!.selection as { reviewers: unknown[] }).reviewers[0],
+    ).toMatchObject({ lens: lensSummary });
+
+    const launches = () =>
+      invocations.filter((entry) => entry.command === "launch_coordinator_multi_review_action")
+        .length;
+    const before = launches();
+    for (const args of [
+      { reviewers: [{ ...reviewers[0], lens: { label: "x".repeat(65), instruction: "x" } }] },
+      { reviewers: [{ ...reviewers[0], lens: { label: "L", instruction: "é".repeat(2049) } }] },
+      { reviewers: [{ ...reviewers[0], lens: { label: "L" } }] },
+      { fixModel: { agent: "codex", model: "gpt-5.6-codex", lens } },
+    ]) {
+      const refused = await call("launch_multi_review", {
+        requestId: "launch-bad-lens",
+        environmentId: "env-1",
+        ...args,
+      });
+      expect(refused.body.result?.isError).toBe(true);
+    }
+    expect(launches()).toBe(before);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: { review: { agent: "codex", lens } },
+      reviewers: [
+        { agent: "codex", lens },
+        { agent: "claude", instructions: "Performance." },
+      ],
+    }));
+    const build = await call("start_build_pipeline", {
+      requestId: "build-lens",
+      taskId: "task-1",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      taskTitle: "Task",
+      taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+      reviewers: [
+        { agent: "codex", lens },
+        { agent: "claude", instructions: "Performance." },
+      ],
+    });
+    expect(build.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({ reviewers: [{ agent: "codex", lens }, { agent: "claude" }] });
+    const buildSelection = build.body.result?.structuredContent?.selection as Record<
+      string,
+      unknown
+    >;
+    expect(buildSelection).toMatchObject({
+      steps: { review: { agent: "codex", lens: lensSummary } },
+      reviewers: [
+        { agent: "codex", lens: lensSummary },
+        { agent: "claude", instructionsBytes: 12 },
+      ],
+    });
+    expect(JSON.stringify(buildSelection)).not.toContain(lens.instruction);
+    const refusedBuild = await call("start_build_pipeline", {
+      requestId: "build-bad-lens",
+      taskId: "task-1",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      taskTitle: "Task",
+      taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+      reviewers: [{ agent: "codex", lens: { label: "Two\nlines", instruction: "x" } }],
+    });
+    expect(refusedBuild.body.result?.isError).toBe(true);
   });
 
   test("withholds the schedule tools while experimental scheduling is off", async () => {

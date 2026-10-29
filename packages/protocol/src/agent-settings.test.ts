@@ -296,7 +296,40 @@ describe("resolveMultiReviewSettings", () => {
       autoPr: false,
       reviewerCount: 3,
       additionalReviewers: [{ platform: "codex", model: "gpt-5.6" }],
+      reviewerLenses: [null, null, null],
     });
+  });
+
+  test("keeps a saved lens per reviewer position, padded and cut to the count", () => {
+    const security = { label: "Security", instruction: "Check auth." };
+    const tests = { label: "Tests", instruction: "Check coverage." };
+    const resolved = resolveMultiReviewSettings({
+      global: {
+        multiReview: { reviewerCount: 3, reviewerLenses: [null, security, null, tests] },
+      },
+    });
+    expect(resolved.reviewerLenses).toEqual([null, security, null]);
+    expect(
+      normalizeAgentSettings({
+        multiReview: {
+          reviewerCount: 4,
+          reviewerLenses: [
+            { label: " Security ", instruction: " Check auth. " },
+            { label: "", instruction: "blank label" },
+            { label: "x".repeat(65), instruction: "too long" },
+            tests,
+            null,
+          ],
+        },
+      }).multiReview,
+    ).toEqual({
+      reviewerCount: 4,
+      // Valid text is kept as typed; a launch trims it.
+      reviewerLenses: [{ label: " Security ", instruction: " Check auth. " }, null, null, tests],
+    });
+    expect(
+      normalizeAgentSettings({ multiReview: { reviewerLenses: [null, null] } }).multiReview,
+    ).toBeUndefined();
   });
 });
 

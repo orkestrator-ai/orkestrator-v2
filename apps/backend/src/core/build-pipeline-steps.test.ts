@@ -24,6 +24,7 @@ import {
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -104,6 +105,9 @@ class RecordingProvider implements BuildPipelineProvider {
    */
   readonly createdModes: Array<[PipelineSessionPhase, string | undefined]> = [];
   readonly sentModes: Array<string | undefined> = [];
+  /** The read-only mutation boundary each session and turn asked for. */
+  readonly createdReadOnly: Array<[PipelineSessionPhase, boolean | undefined]> = [];
+  readonly sentReadOnly: Array<boolean | undefined> = [];
   /** Session ids this harness was asked to stop, in call order. */
   readonly aborted: string[] = [];
 
@@ -126,6 +130,7 @@ class RecordingProvider implements BuildPipelineProvider {
     const id = `${this.agent}-${phase}-${++this.counter}`;
     this.phases.set(id, phase);
     this.createdModes.push([phase, options.mode]);
+    this.createdReadOnly.push([phase, options.readOnly]);
     this.created.push({
       agent: this.agent,
       phase,
@@ -147,6 +152,7 @@ class RecordingProvider implements BuildPipelineProvider {
     if (error) throw error;
     this.taken.add(options.requestId);
     this.sentModes.push(options.mode);
+    this.sentReadOnly.push(options.readOnly);
     this.sent.push({
       agent: this.agent,
       sessionId,
@@ -178,9 +184,11 @@ class RecordingProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : this.verificationComplete
-            ? { complete: true, rationale: "All criteria pass." }
-            : { complete: false, rationale: "Acceptance checks still fail." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : this.verificationComplete
+              ? { complete: true, rationale: "All criteria pass." }
+              : { complete: false, rationale: "Acceptance checks still fail." }) as T,
     };
   }
 
@@ -1618,7 +1626,7 @@ describe("per-step model placeholders", () => {
 });
 
 describe("per-step execution modes", () => {
-  test("keeps every Codex stage writable for validation", async () => {
+  test("keeps every Codex stage writable for validation except the packaged review", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const codex = providerFor("codex");
       const started = await service.start({
@@ -1637,15 +1645,24 @@ describe("per-step execution modes", () => {
       // the sandbox a stage runs under is one decision in one place.
       expect(codex.createdModes).toEqual([
         ["build", "build"],
-        ["review", "build"],
+        ["review", "plan"],
         ["verify", "build"],
         ["pr", "build"],
       ]);
-      expect(codex.sentModes).toEqual(["build", "build", "build", "build"]);
+      expect(codex.sentModes).toEqual(["build", "plan", "build", "build"]);
+      // The reviewer reads an immutable package, so it is read-only like a
+      // Multi Review reviewer, at session creation and on its turn.
+      expect(codex.createdReadOnly).toEqual([
+        ["build", undefined],
+        ["review", true],
+        ["verify", undefined],
+        ["pr", undefined],
+      ]);
+      expect(codex.sentReadOnly).toEqual([undefined, true, undefined, undefined]);
     });
   });
 
-  test("keeps every Claude stage in build mode", async () => {
+  test("keeps every Claude stage in build mode except the read-only packaged review", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const claude = providerFor("claude");
       const started = await service.start({
@@ -1662,11 +1679,12 @@ describe("per-step execution modes", () => {
 
       expect(claude.createdModes.map(([, mode]) => mode)).toEqual([
         "build",
-        "build",
+        "plan",
         "build",
         "build",
       ]);
-      expect(claude.sentModes).toEqual(["build", "build", "build", "build"]);
+      expect(claude.sentModes).toEqual(["build", "plan", "build", "build"]);
+      expect(claude.sentReadOnly).toEqual([undefined, true, undefined, undefined]);
     });
   });
 
@@ -1746,15 +1764,22 @@ describe("per-step execution modes", () => {
       const addressDispatch = sent.find((entry) => entry.agent === "opencode");
       expect(addressDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(addressDispatch?.prompt).toContain("Off-by-one");
-      expect(addressDispatch?.prompt).toContain("End with a validation report");
-      // The verifier judges the address stage's own report instead of rerunning its checks.
+      expect(addressDispatch?.prompt).toContain("Report your work in the fix result you submit");
+      // The verifier judges the address stage's own typed report instead of
+      // rerunning its checks, and never its last assistant text.
       const verifyDispatch = sent.find((entry) =>
         entry.prompt.startsWith("Verify the committed branch changes"),
       );
-      expect(verifyDispatch?.prompt).toContain(
+      expect(verifyDispatch?.prompt).toContain("<address-fix-result-json>");
+      expect(verifyDispatch?.prompt).toContain(TEST_FIX_RESULT.summary);
+      expect(verifyDispatch?.prompt).not.toContain(
         "Fixed the off-by-one; reran src/app.test.ts: pass.",
       );
-      expect(codex.sentModes.slice(0, 2)).toEqual(["build", "build"]);
+      const verifying = await snapshot(storage, started.id);
+      const address = verifying.sessions.find((session) => session.phase === "address");
+      expect(address?.addressReportKind).toBe("fix-result");
+      expect(address?.fixResult).toEqual(TEST_FIX_RESULT);
+      expect(codex.sentModes.slice(0, 2)).toEqual(["build", "plan"]);
     });
   });
 });

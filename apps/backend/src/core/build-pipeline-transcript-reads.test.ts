@@ -23,6 +23,7 @@ import type {
 } from "./agent-provider-contract.js";
 import type { BuildPipelineProvider, ProviderStatus } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -164,7 +165,9 @@ class ProbingProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "build" || phase === "fix"
         ? TEST_REVIEW_PREPARATION
-        : { complete: true, rationale: "All criteria pass." }) as T,
+        : phase === "address"
+          ? TEST_FIX_RESULT
+          : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 

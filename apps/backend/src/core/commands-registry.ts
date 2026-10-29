@@ -1,4 +1,12 @@
 import { registerChangeCommands } from "./commands-registry-changes.js";
+import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
+import { registerGraphLaunchCommands } from "./commands-registry-graph-launch.js";
+import {
+  registerGraphRunCommands,
+  registerGraphRunRewindCommands,
+} from "./commands-registry-graph-runs.js";
+import { registerGraphDescribeCommands } from "./commands-registry-graph-describe.js";
+import { registerGraphMockCommands } from "./commands-registry-graph-mock.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
@@ -355,6 +363,12 @@ export function createCommandRegistry(
   registerAgentAccountCommands(register, dependencies);
   registerOpenCodeProviderLoginCommands(register);
   registerWorkflowResultCommands(register);
+  registerGraphTemplateCommands(register);
+  registerGraphRunCommands(register);
+  registerGraphLaunchCommands(register);
+  registerGraphRunRewindCommands(register);
+  registerGraphDescribeCommands(register);
+  registerGraphMockCommands(register);
   registerTeardownCommands(register, dependencies);
   // Last: the public contract composes the commands registered above.
   registerPublicApiCommands(register, dependencies);

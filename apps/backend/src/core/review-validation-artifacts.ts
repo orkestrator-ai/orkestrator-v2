@@ -15,6 +15,102 @@ export interface ValidationArtifactVerification {
 }
 
 /**
+ * Why a workspace file could not be hashed: it is absent, it is reached
+ * through a symbolic link or leaves the workspace, it is over its bound, or
+ * the environment could not be asked (a container that cannot be exec'd).
+ */
+export type WorkspaceFileHashFailure = "missing" | "not-confined" | "too-large" | "unavailable";
+
+export class WorkspaceFileHashError extends Error {
+  constructor(
+    readonly failure: WorkspaceFileHashFailure,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "WorkspaceFileHashError";
+  }
+}
+
+/**
+ * Hashes one workspace file at its source: on the host for a local worktree,
+ * inside the container (`realpath`, `stat`, `sha256sum`) otherwise, so no file
+ * content crosses the backend/container boundary. The path must resolve to
+ * itself (no symbolic link on the way) inside the workspace and name a
+ * regular file within `maxBytes`. `label` starts every message.
+ */
+export async function hashEnvironmentWorkspaceFile(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  relative: string,
+  options: { maxBytes: number; label: string },
+): Promise<{ sha256: string; bytes: number }> {
+  const { label, maxBytes } = options;
+  if (environment.environmentType === "local") {
+    const root = await realpath(environment.worktreePath!);
+    const target = path.join(root, relative);
+    let resolved: string;
+    try {
+      resolved = await realpath(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new WorkspaceFileHashError("missing", `${label} is missing`, { cause: error });
+      }
+      throw error;
+    }
+    const info = await lstat(target);
+    if (resolved !== target || !resolved.startsWith(root + path.sep) || !info.isFile()) {
+      throw new WorkspaceFileHashError(
+        "not-confined",
+        `${label} is not confined or exceeds its limit`,
+      );
+    }
+    if (info.size > maxBytes) {
+      throw new WorkspaceFileHashError(
+        "too-large",
+        `${label} is not confined or exceeds its limit`,
+      );
+    }
+    const hash = createHash("sha256");
+    let bytes = 0;
+    for await (const chunk of createReadStream(target)) {
+      bytes += (chunk as Buffer).byteLength;
+      // The file grew after the stat: stop at the bound rather than read on.
+      if (bytes > maxBytes) {
+        throw new WorkspaceFileHashError(
+          "too-large",
+          `${label} is not confined or exceeds its limit`,
+        );
+      }
+      hash.update(chunk);
+    }
+    return { sha256: hash.digest("hex"), bytes };
+  }
+  const target = `/workspace/${relative}`;
+  let resolved: string;
+  try {
+    resolved = (await runner("realpath", ["--", target], 10_000)).trim();
+  } catch (error) {
+    // A missing file and a container that cannot be reached fail the same
+    // way here; both refuse, and neither is reported as the other.
+    throw new WorkspaceFileHashError("unavailable", `${label} could not be read`, {
+      cause: error,
+    });
+  }
+  if (resolved !== target)
+    throw new WorkspaceFileHashError("not-confined", `${label} is not confined`);
+  const size = Number((await runner("stat", ["-c", "%s", "--", target], 10_000)).trim());
+  if (!Number.isSafeInteger(size) || size < 0 || size > maxBytes) {
+    throw new WorkspaceFileHashError("too-large", `${label} is not confined or exceeds its limit`);
+  }
+  const sha256 = (await runner("sha256sum", ["--", target], 30_000)).trim().split(/\s+/)[0]!;
+  if (!/^[a-f0-9]{64}$/.test(sha256)) {
+    throw new WorkspaceFileHashError("unavailable", `${label} could not be hashed`);
+  }
+  return { sha256, bytes: size };
+}
+
+/**
  * Hash at the source; no raw output crosses a backend/container boundary.
  * Returns the artifact count and bytes it hashed, so a verification's cost can
  * be measured beyond the package's own declared size.
@@ -42,36 +138,13 @@ export async function verifyValidationArtifacts(
         path.isAbsolute(relative)
       )
         throw new Error("Invalid validation artifact identity");
-      let actual: string;
-      let size: number;
-      if (environment.environmentType === "local") {
-        const root = await realpath(environment.worktreePath!);
-        const target = path.join(root, relative);
-        const resolved = await realpath(target);
-        const info = await lstat(target);
-        if (
-          resolved !== target ||
-          !resolved.startsWith(root + path.sep) ||
-          !info.isFile() ||
-          info.size > MAX_VALIDATION_ARTIFACT_BYTES
-        )
-          throw new Error("Validation artifact is not confined or exceeds its limit");
-        size = info.size;
-        const hash = createHash("sha256");
-        for await (const chunk of createReadStream(target)) hash.update(chunk);
-        actual = hash.digest("hex");
-      } else {
-        const target = `/workspace/${relative}`;
-        const resolved = (await runner("realpath", ["--", target], 10_000)).trim();
-        if (resolved !== target) throw new Error("Validation artifact is not confined");
-        size = Number((await runner("stat", ["-c", "%s", "--", target], 10_000)).trim());
-        if (!Number.isSafeInteger(size) || size < 0 || size > MAX_VALIDATION_ARTIFACT_BYTES)
-          throw new Error("Validation artifact is not confined or exceeds its limit");
-        actual = (await runner("sha256sum", ["--", target], 30_000)).trim().split(/\s+/)[0]!;
-      }
-      if (actual !== digest) throw new Error("Validation artifact SHA-256 changed");
+      const actual = await hashEnvironmentWorkspaceFile(environment, runner, relative, {
+        maxBytes: MAX_VALIDATION_ARTIFACT_BYTES,
+        label: "Validation artifact",
+      });
+      if (actual.sha256 !== digest) throw new Error("Validation artifact SHA-256 changed");
       verified.artifacts += 1;
-      verified.bytes += size;
+      verified.bytes += actual.bytes;
     }
   }
   return verified;

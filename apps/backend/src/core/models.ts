@@ -964,6 +964,11 @@ export interface AppConfig {
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
     /**
+     * Which runtime runs new Multi Reviews (item 301). Absent means
+     * `bespoke`; `ORKESTRATOR_MULTI_REVIEW_ENGINE` overrides it for testing.
+     */
+    multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
+    /**
      * Weakest read-only guarantee a coordinator conversation may run under.
      *
      * Absent means `provider-configured`: platforms whose boundary the
@@ -1070,6 +1075,11 @@ export interface AppConfig {
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
+    /**
+     * Reviewer focus presets the launchers offer (`review-lens.ts`). Absent
+     * means the shipped five; a stored list, even an empty one, is the user's.
+     */
+    reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal

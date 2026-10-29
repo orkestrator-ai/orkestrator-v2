@@ -1263,6 +1263,12 @@ export interface PromptOptions {
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
   agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
+  /**
+   * The workflow-result attempt this turn runs for (`workflowResultTool`,
+   * `workflowResultKey` and a graph activation's slots and extra tools). Its
+   * own tools run under any policy, and only with the key each answers for.
+   */
+  workflowResultTurn?: import("@orkestrator/protocol/workflow-results").WorkflowResultTurn;
   parameterValues?: Record<string, string | boolean>;
   attachments?: Array<{
     type: "file" | "image";

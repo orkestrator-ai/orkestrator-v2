@@ -347,6 +347,14 @@ export interface SessionState {
    */
   hostedMcpTools?: Record<string, SDKCustomTool>;
   /**
+   * The workflow-result attempt the current prompt declared
+   * (`workflowResultTool` / `workflowResultKey`, a graph activation's
+   * `workflowResultSlots` and `workflowResultExtraTools`). The hosted
+   * Orkestrator tools read it at call time and refuse a result-family call
+   * that is not the turn's own. Replaced by every prompt; never persisted.
+   */
+  workflowResultTurn?: import("@orkestrator/protocol/workflow-results").WorkflowResultTurn;
+  /**
    * Local SDK options used to attach this agent. Per-run custom-tool callbacks
    * merge into this object so repeating them never drops cwd or sandbox policy.
    */

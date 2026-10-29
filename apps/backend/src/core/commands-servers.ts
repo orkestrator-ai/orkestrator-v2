@@ -129,6 +129,8 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { drainContainerProcesses } from "./container-readiness.js";
+import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
+import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import {
   activeAgentAccountShellEnvironment,
@@ -1424,6 +1426,32 @@ export async function deleteEnvironment(
         await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       if (environment?.worktreePath)
         context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
+      // Graph runs' reference artifacts live in the workspace: remove them
+      // while the worktree and container still exist (a project home's
+      // worktree is kept). Their records go with the other records below.
+      if (environment && storage.graphRuns) {
+        const files = await removeEnvironmentGraphArtifactFiles(environment, {
+          storage,
+          fence: context.runtime.environments.fence,
+        });
+        if (files.failed > 0) {
+          console.warn(
+            `[backend] ${files.failed} graph run artifact director(ies) were not removed for ${environmentId}`,
+          );
+        }
+        // Isolated branch worktrees and branches (item 403): for a local
+        // environment the branches live in the shared repository, so they
+        // must go before the worktree does.
+        const branches = await removeEnvironmentGraphBranchWorktrees(environment, {
+          storage,
+          fence: context.runtime.environments.fence,
+        });
+        if (branches.failed > 0) {
+          console.warn(
+            `[backend] ${branches.failed} graph run(s) kept branch worktrees for ${environmentId}`,
+          );
+        }
+      }
       // Before the container is removed and before the worktree is deleted:
       // killing the tmux sessions needs the container alive, and restoring the
       // user's `.claude/settings.local.json` from the tmux-mode backup needs
@@ -1483,6 +1511,11 @@ export async function deleteEnvironment(
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
       await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
+      // A graph run is scoped to one environment (D7) and its artifacts to the
+      // run: both go with it, like a pipeline.
+      if (storage.graphRuns) await storage.graphRuns.deleteGraphRunsByEnvironment(environmentId);
+      // Its "Describe a graph" job can never run again either (item 215).
+      storage.graphDescribe?.deleteGraphDescribeJob(environmentId);
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
       // StorageService owns this in production. Keep the deletion seam tolerant

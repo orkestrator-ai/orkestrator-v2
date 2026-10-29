@@ -243,6 +243,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       this.researchTools,
       dependencies.ensureCoordinatorResearch,
+      connection.directory,
     );
     this.reviewPermissions = new OpenCodeReviewSessionPermissions(
       this.client,
@@ -250,6 +251,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       () => this.requestOptions(),
       (sessionId, policy) => this.sessionPolicy.remember(sessionId, policy),
       this.researchTools,
+      (policy) => this.sessionPolicy.configuredMcpServers(policy),
     );
     this.workflowResults = new OpenCodeWorkflowResultBroker(
       this.client,
@@ -571,7 +573,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.lifecycle.rememberExistingSession(created.sessionId);
         this.registerSession(created.sessionId, options.interaction);
         if (created.policy) {
-          this.sessionPolicy.remember(created.sessionId, created.policy);
+          this.sessionPolicy.remember(
+            created.sessionId,
+            created.policy,
+            created.configuredMcpServers,
+          );
         }
         return created.sessionId;
       } catch (error) {
@@ -604,6 +610,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
+      ...(options.workflowResultKey !== undefined
+        ? { workflowResultKey: options.workflowResultKey }
+        : {}),
+      ...(options.workflowResultSlots !== undefined
+        ? { workflowResultSlots: options.workflowResultSlots }
+        : {}),
+      ...(options.workflowResultExtraTools !== undefined
+        ? { workflowResultExtraTools: options.workflowResultExtraTools }
+        : {}),
     });
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
     const parts = openCodePromptParts(shapedPrompt, options);
@@ -649,7 +664,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const workflowTool = options.workflowResultTool;
       const reviewEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
       // Grant inside the lock; another provider may have owned the preceding turn.
-      await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
+      await this.workflowResults.begin(
+        sessionId,
+        options.requestId,
+        workflowTool,
+        workflowTool ? options.workflowResultExtraTools : undefined,
+      );
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt, options.requestId);
       this.actionRetry.beginTurn(sessionId);

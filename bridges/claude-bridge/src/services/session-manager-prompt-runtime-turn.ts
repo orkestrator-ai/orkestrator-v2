@@ -37,6 +37,7 @@ export function createClaudeRuntimeTurn(turn: TurnState): ClaudeRuntimeTurn {
     recordBackgroundTaskHook: turnHook(turn, recordBackgroundTaskHook),
     recordPreCompact: turnHook(turn, recordPreCompact),
     recordPostCompact: turnHook(turn, recordPostCompact),
+    workflowResultTurn: () => turn.options?.workflowResultTurn,
     applyCommandChanges: (toolUseId, change) => applyCommandChanges(turn, toolUseId, change),
     supersede: () => {
       // The newer turn owns the root conversation, its continuations and the

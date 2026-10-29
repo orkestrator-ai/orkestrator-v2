@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
+import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import {
   describeScheduleTrigger,
@@ -16,6 +17,7 @@ import {
   summarizeScheduledJob,
   type ScheduleAction,
   type ScheduleFire,
+  type ScheduleGraphLaunch,
   type ScheduleOwner,
   type ScheduleState,
   type ScheduleTriggerInput,
@@ -717,8 +719,32 @@ export function normalizeAction(raw: unknown): ScheduleAction {
         ...(nodeId ? { nodeId } : {}),
       };
     }
+    case "graph": {
+      const raw = action.request;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new ScheduleInputError("action.request must be a graph launch request");
+      }
+      if (Buffer.byteLength(JSON.stringify(raw)) > SCHEDULED_JOB_LIMITS.actionInputMaxBytes) {
+        throw new ScheduleInputError("action.request is too large");
+      }
+      // The fire supplies its own stable request key; a schedule never saves defaults.
+      const {
+        requestId: _requestId,
+        saveDefaults: _saveDefaults,
+        ...rest
+      } = raw as Record<string, unknown>;
+      let request: ScheduleGraphLaunch;
+      try {
+        request = parseGraphLaunchRequest(rest);
+      } catch (error) {
+        throw new ScheduleInputError(
+          `action.request: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return { kind: "graph", request };
+    }
     default:
-      throw new ScheduleInputError("action.kind must be action, prompt or launch");
+      throw new ScheduleInputError("action.kind must be action, prompt, launch or graph");
   }
 }
 
@@ -732,6 +758,10 @@ function defaultName(action: ScheduleAction): string {
       return `Prompt ${action.tabId}`;
     case "launch":
       return `Launch ${action.agent}`;
+    case "graph": {
+      const ref = action.request.ref;
+      return `Graph ${ref.scope === "project" ? ref.path : ref.id}`;
+    }
   }
 }
 

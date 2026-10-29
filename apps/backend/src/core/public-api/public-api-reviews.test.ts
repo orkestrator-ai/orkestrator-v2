@@ -131,6 +131,53 @@ describe("review.*", () => {
     expect(reviews.launches).toHaveLength(1);
   });
 
+  test("review.launch carries each reviewer's lens, and its receipt carries no lens text", async () => {
+    const { harness } = await setup();
+    const reviews = fakeReviews(harness);
+    const lens = { label: "Security", instruction: "Trace untrusted input to its sinks." };
+    const input = {
+      environmentId: "env-1",
+      reviewers: [
+        { agent: "claude", model: "opus", lens },
+        { agent: "codex", model: "gpt-5.5" },
+      ],
+    };
+    const launched = await harness.call("review.launch", input, { requestId: "review-lens" });
+    if (!launched.ok) throw new Error(`${launched.error.code}: ${launched.error.message}`);
+    expect((reviews.launches[0]!.input as { reviewers: unknown }).reviewers).toEqual(
+      input.reviewers,
+    );
+    expect(JSON.stringify(launched.receipt)).not.toContain("untrusted");
+    expect(JSON.stringify(launched.result)).not.toContain("untrusted");
+    // A different lens under the same key is a different intent.
+    const conflict = await harness.call(
+      "review.launch",
+      { ...input, reviewers: [{ ...input.reviewers[0], lens: { ...lens, label: "Perf" } }] },
+      { requestId: "review-lens" },
+    );
+    expect(!conflict.ok && conflict.error.code).toBe("request-conflict");
+    expect(reviews.launches).toHaveLength(1);
+
+    for (const reviewers of [
+      [{ agent: "claude", model: "opus", lens: { label: "x".repeat(65), instruction: "x" } }],
+      [{ agent: "claude", model: "opus", lens: { label: "L", instruction: "é".repeat(2049) } }],
+      [{ agent: "claude", model: "opus", lens: { label: "L" } }],
+    ]) {
+      const refused = await harness.call(
+        "review.launch",
+        { environmentId: "env-1", reviewers },
+        { requestId: `review-bad-lens-${reviewers[0]!.lens.label.length}` },
+      );
+      expect(!refused.ok && refused.error.code).toBe("invalid-input");
+    }
+    const lensOnFix = await harness.call(
+      "review.launch",
+      { environmentId: "env-1", fixModel: { agent: "claude", model: "opus", lens } },
+      { requestId: "review-lens-fix" },
+    );
+    expect(!lensOnFix.ok && lensOnFix.error.code).toBe("invalid-input");
+  });
+
   test("a review whose tab could not open is a partial outcome with its recovery", async () => {
     const { harness } = await setup();
     const reviews = fakeReviews(harness);

@@ -3,15 +3,21 @@ import { z } from "zod";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./control-mcp-server.js";
 import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
 import { workflowSummary } from "./control-workflow-summary.js";
+import { reviewLensSchema, selectedLens } from "./control-mcp-tool-support.js";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 
-const selection = z
-  .object({
-    agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-    model: z.string().trim().min(1).max(512),
-    reasoningEffort: z.string().trim().min(1).max(128).optional(),
-  })
+const selectionFields = {
+  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: z.string().trim().min(1).max(512),
+  reasoningEffort: z.string().trim().min(1).max(128).optional(),
+};
+
+const selection = z.object(selectionFields).strict();
+
+/** A reviewer row, which alone may carry a focus. */
+const reviewerSelection = z
+  .object({ ...selectionFields, lens: reviewLensSchema.optional() })
   .strict();
 
 /** The async contract for a coordinator-started workflow; see `COORDINATOR_WORKFLOW_STATUS_WAKE`. */
@@ -32,7 +38,12 @@ export async function workflowStatusWakeResult(invoke: ControlMcpInvoker) {
   };
 }
 
-type SelectionRow = { agent?: unknown; model?: unknown; reasoningEffort?: unknown };
+type SelectionRow = {
+  agent?: unknown;
+  model?: unknown;
+  reasoningEffort?: unknown;
+  lens?: unknown;
+};
 
 function selectionRow(row: SelectionRow | undefined) {
   if (!row) return null;
@@ -40,6 +51,7 @@ function selectionRow(row: SelectionRow | undefined) {
     agent: row.agent,
     model: row.model,
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
+    ...selectedLens(row.lens),
   };
 }
 
@@ -154,12 +166,12 @@ export function registerControlReviewActions(
           requestId: z.string().trim().min(1).max(256),
           environmentId: z.string().trim().min(1).max(200),
           reviewers: z
-            .array(selection)
+            .array(reviewerSelection)
             .min(1)
             .max(32)
             .optional()
             .describe(
-              "Optional. Omit to use the user's saved reviewer rows. Set only when the user asks for specific reviewers.",
+              "Optional. Omit to use the user's saved reviewer rows and their saved focus. Set only when the user asks for specific reviewers or a focus (lens) per reviewer.",
             ),
           reviewModel: selection
             .optional()

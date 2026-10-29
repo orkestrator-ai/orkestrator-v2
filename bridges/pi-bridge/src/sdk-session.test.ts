@@ -266,3 +266,54 @@ describe("resumed tool loadout (Pi 1.3+)", () => {
     );
   });
 });
+
+describe("GitHub credential withholding (item 209)", () => {
+  const graphPolicy = (extendedDeny: string[]): NativeAgentExecutionPolicy => ({
+    id: "pipeline",
+    sandbox: "none",
+    approvals: "auto-approve",
+    projectResources: false,
+    networkAccess: "full",
+    capabilityPolicy: {
+      deny: [],
+      ...(extendedDeny.length > 0 ? { extendedDeny: extendedDeny as never } : {}),
+    },
+  });
+
+  async function envSeenByBash(clientSessionKey: string, policy: NativeAgentExecutionPolicy) {
+    let output = "";
+    await withSdkSession({ clientSessionKey, policy }, async ({ state, script, prompt }) => {
+      const env: ToolCall = {
+        type: "toolCall",
+        id: `${clientSessionKey}-env`,
+        name: "bash",
+        arguments: { command: "env" },
+      };
+      script([[env]]);
+      await prompt("Print the environment.");
+      await waitFor(() => toolPart(state, env.id)?.toolState === "success");
+      await state.session!.agent.waitForIdle();
+      // The session's bash is the replacement only when it withholds.
+      expect(state.session!.getActiveToolNames()).toContain("bash");
+      output = String(toolPart(state, env.id)?.toolOutput ?? "");
+    });
+    return output;
+  }
+
+  test("a graph session's bash runs without the credential; an ordinary session's keeps it", async () => {
+    const previous = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "gho_pi_sdk_probe";
+    try {
+      const withheld = await envSeenByBash("sdk-gh-withheld", graphPolicy(["github.write"]));
+      expect(withheld).not.toContain("gho_pi_sdk_probe");
+      expect(withheld).toContain("GH_CONFIG_DIR=");
+      expect(withheld).toContain("GIT_CONFIG_KEY_0=credential.helper");
+
+      const ordinary = await envSeenByBash("sdk-gh-ordinary", graphPolicy([]));
+      expect(ordinary).toContain("GH_TOKEN=gho_pi_sdk_probe");
+    } finally {
+      if (previous === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previous;
+    }
+  });
+});

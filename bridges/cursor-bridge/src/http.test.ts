@@ -542,6 +542,69 @@ describe("prompt dispatch", () => {
     });
   });
 
+  test("records the turn's declared workflow-result attempt and clears it on the next prompt", async () => {
+    const state = await createSession();
+    attachFake(state);
+    const slots = [
+      { tool: "submit_brief", resultKey: "key-a" },
+      { tool: "submit_risks", resultKey: "key-b" },
+    ];
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "work",
+        requestId: "graph-1",
+        workflowResultTool: "submit_brief",
+        workflowResultKey: "key-a",
+        workflowResultSlots: slots,
+        workflowResultExtraTools: ["read_artifact"],
+      }),
+    });
+    expect(response.status).toBe(202);
+    expect(state.workflowResultTurn).toEqual({
+      tool: "submit_brief",
+      resultKey: "key-a",
+      slots,
+      extraTools: ["read_artifact"],
+    });
+    await waitFor(() => state.status !== "running");
+
+    const ordinary = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "chat", requestId: "plain-1" }),
+    });
+    expect(ordinary.status).toBe(202);
+    expect(state.workflowResultTurn).toBeUndefined();
+  });
+
+  test("refuses malformed workflow-result fields before journaling", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    for (const fields of [
+      { workflowResultTool: "submit_brief" },
+      { workflowResultTool: "send_message", workflowResultKey: "key-a" },
+      {
+        workflowResultTool: "submit_brief",
+        workflowResultKey: "key-a",
+        workflowResultSlots: [{ tool: "submit_risks", resultKey: "key-b" }],
+      },
+      {
+        workflowResultTool: "submit_brief",
+        workflowResultKey: "key-a",
+        workflowResultExtraTools: ["send_message"],
+      },
+      { workflowResultSlots: [{ tool: "submit_brief", resultKey: "key-a" }] },
+    ]) {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "work", requestId: "bad", ...fields }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(state.promptJournal.has("bad")).toBe(false);
+    expect(agent.sends).toHaveLength(0);
+  });
+
   test("a repeat of the same request id is a duplicate, never a second turn", async () => {
     const state = await createSession();
     const agent = attachFake(state);

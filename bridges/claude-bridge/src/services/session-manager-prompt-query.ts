@@ -7,6 +7,7 @@ import type { SessionState } from "../types/index.js";
 import {
   claudeArtifactServerTools,
   claudeWorkflowResultTools,
+  createWorkflowResultTurnHook,
 } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
@@ -25,10 +26,14 @@ import {
   claudeSandboxRefusal,
 } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
+import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
   AGENT_MCP_SERVER_NAME,
+  claudeGrantedMcpServerNames,
+  claudeUserMcpQueryOptions,
   getMcpRuntimeConfig,
   mcpSourceScopeForPolicy,
+  userMcpServerFilter,
 } from "./mcp-config.js";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import {
@@ -37,8 +42,9 @@ import {
   claudeReadOnlyAllowedTools,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
+  readOnlyRefusalRole,
 } from "./read-only-policy.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
+import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -131,7 +137,14 @@ export async function resolveQueryPlan(
     { servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision },
     { plugins, coordinatorSkills },
   ] = await Promise.all([
-    getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
+    getMcpRuntimeConfig(
+      cwd,
+      process.env,
+      options?.agentMcp,
+      mcpSourceScopeForPolicy(policy),
+      // A graph node loads only the user servers it was granted (item 404).
+      userMcpServerFilter(policy),
+    ),
     // Installs pass only when the settings this CLI reads enable them. A
     // coordinator also gets the user's and the project's skills, mirrored
     // without their hooks or tool grants (`coordinator-skills.ts`).
@@ -168,6 +181,12 @@ export async function resolveQueryPlan(
         "Agent",
       ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
+  // A graph node's granted user servers (item 404) are approved up front like
+  // the Orkestrator tools: the template's grant is the approval. A session
+  // that asks keeps asking for them.
+  const grantedMcpServerNames = claudeAsksForApproval(policy, options)
+    ? []
+    : claudeGrantedMcpServerNames(policy, mcpServerNames);
   // A worker can always report back, whatever its approval setting: under
   // "deny" only allowed tools run, and the mail tools must be among them. The
   // transcript-artifact tools share that footing: they write only to
@@ -190,12 +209,14 @@ export async function resolveQueryPlan(
           .map((server) => server.name)
           .filter((name) => mcpServerNames.has(name)),
         skillNames: coordinatorSkills,
+        grantedMcpServerNames,
       })
     : [
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
         ...agentMailTools,
         ...claudeWorkflowResultTools(mcpServerNames),
         ...claudeArtifactServerTools(mcpServerNames),
+        ...grantedMcpServerNames.map((name) => `${claudeMcpToolPrefix(name)}*`),
       ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
@@ -235,7 +256,8 @@ export async function resolveQueryPlan(
     testHooks?.afterAttachmentInitialValidation,
   );
 
-  const queryEnvironment = await runtimeEnvironmentForAgentQuery();
+  // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
+  const queryEnvironment = await runtimeEnvironmentForSessionQuery(policy);
   const liveSettings = claudeLiveSettings({
     model: options?.model,
     permissionMode,
@@ -457,6 +479,10 @@ export function claudeQueryOptions(
     // A later `setMcpServers` cannot drop these until it has taken them
     // over; see `session-manager-prompt-mcp-sync.ts`.
     mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
+    // A policy that selects user servers (a graph node, item 404) needs
+    // `strictMcpConfig`: without it the CLI loads every server of its
+    // settings sources itself, whatever the inline set says.
+    ...claudeUserMcpQueryOptions(policy),
     // Load plugins from user config
     plugins: pluginCount > 0 ? plugins : undefined,
     hooks: {
@@ -470,14 +496,33 @@ export function claudeQueryOptions(
               {
                 hooks: [
                   recordingHookDenials(
-                    createCoordinatorReadOnlyHook(policy, undefined, readOnlyCommandSandbox),
+                    createCoordinatorReadOnlyHook(policy, undefined, {
+                      ...(readOnlyCommandSandbox
+                        ? { commandSandbox: readOnlyCommandSandbox.commandSandbox }
+                        : {}),
+                      // A graph reviewer or pipeline review is not a coordinator.
+                      role: readOnlyRefusalRole(
+                        session.executionPolicy,
+                        options?.readOnly === true,
+                      ),
+                    }),
                     session.id,
                   ),
                 ],
               },
             ]
           : []),
-        { hooks: [recordingHookDenials(createStaleMcpServerHook(mcp), session.id)] },
+        {
+          hooks: [
+            recordingHookDenials(createStaleMcpServerHook(mcp), session.id),
+            // A turn's declared workflow-result attempt: each result tool only
+            // with the key it answers for, in every permission mode.
+            recordingHookDenials(
+              createWorkflowResultTurnHook((toolUseId) => turnFor(toolUseId).workflowResultTurn()),
+              session.id,
+            ),
+          ],
+        },
         commandChangeHook.PreToolUse,
         shellTaskHook.PreToolUse,
       ],

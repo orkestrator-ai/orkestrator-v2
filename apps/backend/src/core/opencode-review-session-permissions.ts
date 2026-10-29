@@ -15,6 +15,7 @@ import {
   openCodeReviewPermissionRules,
   openCodeSessionCreateModel,
 } from "./opencode-provider-helpers.js";
+import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
 
 const REVIEW_SESSION_METADATA_KEY = "orkestrator.reviewSession";
 const REVIEW_SESSION_METADATA_VERSION = 1;
@@ -77,6 +78,13 @@ export class OpenCodeReviewSessionPermissions {
     private readonly requestOptions: () => { signal: AbortSignal },
     private readonly onPolicy: (sessionId: string, policy: NativeAgentExecutionPolicy) => void,
     private readonly researchTools: () => readonly string[] = () => [],
+    /**
+     * The instance's MCP servers for a policy that selects its user servers
+     * (graphs item 404); `undefined` for one that does not.
+     */
+    private readonly configuredMcpServers: (
+      policy: NativeAgentExecutionPolicy,
+    ) => Promise<string[] | undefined> = async () => undefined,
   ) {}
 
   registerCandidate(sessionId: string): void {
@@ -86,13 +94,21 @@ export class OpenCodeReviewSessionPermissions {
   async createSession(
     label: string,
     options: ProviderCreateSessionOptions,
-  ): Promise<{ sessionId: string; policy?: NativeAgentExecutionPolicy }> {
+  ): Promise<{
+    sessionId: string;
+    policy?: NativeAgentExecutionPolicy;
+    configuredMcpServers?: string[];
+  }> {
     const policy = options.policy ? effectiveOpenCodePolicy(options.policy) : undefined;
     if (options.reviewerSession && !policy) {
       throw new Error("OpenCode reviewer sessions require an execution policy");
     }
+    const configuredMcpServers = policy ? await this.configuredMcpServers(policy) : undefined;
     const permission = policy
-      ? openCodePermissionRules(policy, { researchTools: this.researchTools() })
+      ? openCodePermissionRules(policy, {
+          researchTools: this.researchTools(),
+          ...(configuredMcpServers ? { configuredMcpServers } : {}),
+        })
       : undefined;
     const model = openCodeSessionCreateModel(options.model, options.effort);
     const response = await this.client.session.create(
@@ -109,7 +125,11 @@ export class OpenCodeReviewSessionPermissions {
     assertSdkResponse(response, "OpenCode session creation");
     if (!response.data?.id) throw new Error("OpenCode returned an empty session");
     this.rememberCreated(response.data.id, policy, options.reviewerSession === true);
-    return { sessionId: response.data.id, ...(policy ? { policy } : {}) };
+    return {
+      sessionId: response.data.id,
+      ...(policy ? { policy } : {}),
+      ...(configuredMcpServers ? { configuredMcpServers } : {}),
+    };
   }
 
   enableForTurn(sessionId: string, options: ProviderSendOptions): Promise<boolean> {
@@ -135,11 +155,17 @@ export class OpenCodeReviewSessionPermissions {
     if (!basePolicy) return false;
     const policy = effectiveOpenCodePolicy(requestedPolicy);
     try {
+      // The reviewer block stays one contiguous run (`readPolicy` looks for
+      // it); a selection's MCP rules follow it.
+      const configuredMcpServers = await this.configuredMcpServers(policy);
       const response = await this.client.session.update(
         {
           sessionID: sessionId,
           directory: this.directory,
-          permission: openCodeReviewPermissionRules(policy),
+          permission: [
+            ...openCodeReviewPermissionRules(policy),
+            ...(configuredMcpServers ? openCodeUserMcpRules(policy, configuredMcpServers) : []),
+          ],
         },
         this.requestOptions(),
       );
@@ -159,11 +185,15 @@ export class OpenCodeReviewSessionPermissions {
     const policy = await this.readPolicy(sessionId);
     if (!policy || !this.active.has(sessionId)) return false;
     try {
+      const configuredMcpServers = await this.configuredMcpServers(policy);
       const response = await this.client.session.update(
         {
           sessionID: sessionId,
           directory: this.directory,
-          permission: openCodePermissionRules(policy, { researchTools: this.researchTools() }),
+          permission: openCodePermissionRules(policy, {
+            researchTools: this.researchTools(),
+            ...(configuredMcpServers ? { configuredMcpServers } : {}),
+          }),
         },
         this.requestOptions(),
       );

@@ -39,6 +39,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -163,7 +164,9 @@ class FakeProvider implements BuildPipelineProvider {
         ? cleanReview
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 

@@ -97,6 +97,8 @@ import { ALLOWLIST_ENTRY_HINT } from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
+import { ReviewLensPresetsEditor } from "./agent/ReviewLensPresetsEditor";
+import { MultiReviewEngineSetting } from "./agent/MultiReviewEngineSetting";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
@@ -325,6 +327,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
+    reviewLensPresets,
+    setReviewLensPresets,
+    multiReviewEngine,
+    setMultiReviewEngine,
     webClientStatus,
     setWebClientStatus,
     setWebClientApplyError,
@@ -438,8 +444,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         canInherit={false}
         enabledPlatforms={enabledAgentPlatforms}
         catalog={catalog}
+        lensPresets={reviewLensPresets}
         disabled={isSaving}
       />
+
+      <div className="border-t border-zinc-800/80 pt-5">
+        <ReviewLensPresetsEditor
+          presets={reviewLensPresets}
+          onChange={setReviewLensPresets}
+          disabled={isSaving}
+        />
+      </div>
+
+      <div className="border-t border-zinc-800/80 pt-5">
+        <MultiReviewEngineSetting
+          value={multiReviewEngine}
+          onChange={setMultiReviewEngine}
+          disabled={isSaving}
+        />
+      </div>
 
       <div className="border-t border-zinc-800/80 pt-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

@@ -1,9 +1,15 @@
 import { promises as fs } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { McpServerConfig, SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
-import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentAllowsUserMcpServer,
+  nativeAgentRestrictsUserMcp,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentMcpServer,
+} from "@orkestrator/protocol/native-agent";
 import { workingDirectory } from "./config.js";
 import { COORDINATOR_SKILLS_SERVER } from "./coordinator-skills.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
@@ -12,6 +18,11 @@ import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/transcript-artifacts";
+import {
+  isWorkflowResultAttemptTool,
+  type WorkflowResultTurn,
+  workflowResultTurnAllows,
+} from "@orkestrator/protocol/workflow-results";
 
 const AGENT_MCP_SERVER = "orkestrator";
 
@@ -79,6 +90,44 @@ export interface CursorMcpResolutionPolicy {
   readOnly?: boolean;
   /** Session-level project-resource decision. False skips repository servers. */
   projectResources?: boolean;
+  /**
+   * The session selects its configured servers (graphs item 404,
+   * `cursorUserMcpServerFilter`). The bridge then reads the user's
+   * `~/.cursor/mcp.json` (and, with project resources, `.cursor/mcp.json`)
+   * itself and keeps only the servers this admits, because the SDK would
+   * otherwise load every server of its settings sources.
+   */
+  userServers?: (name: string) => boolean;
+  /** Home directory holding `.cursor/mcp.json`; the process's own when absent. */
+  configHome?: string;
+}
+
+/**
+ * Which configured servers a session under `policy` may load (graphs item
+ * 404): its `userMcpServers` selection minus its `mcp:<server>` denials.
+ * `undefined` when the policy selects nothing and denies no server, so an
+ * ordinary session keeps the SDK's own settings-source loading.
+ */
+export function cursorUserMcpServerFilter(
+  policy: NativeAgentExecutionPolicy | undefined,
+): ((name: string) => boolean) | undefined {
+  if (!nativeAgentRestrictsUserMcp(policy)) return undefined;
+  return (name) => nativeAgentAllowsUserMcpServer(policy, name);
+}
+
+/**
+ * The SDK settings sources of an attach. A read-only coordinator loads none,
+ * and so does a session that selects its MCP servers: every source would
+ * also load its servers, and the SDK has no per-server switch. The cost is
+ * that such a session also runs without the user's and the project's Cursor
+ * rules and plugins.
+ */
+export function cursorSettingSources(
+  policy: Pick<NativeAgentExecutionPolicy, "projectResources">,
+  options: { readOnly: boolean; selectsServers: boolean },
+): Array<"user" | "project" | "team" | "plugins"> {
+  if (options.readOnly || options.selectsServers) return [];
+  return policy.projectResources ? ["user", "project", "team", "plugins"] : ["user"];
 }
 
 /**
@@ -98,7 +147,20 @@ export async function cursorMcpServers(
   policy?: CursorMcpResolutionPolicy,
 ): Promise<Record<string, McpServerConfig>> {
   const allowProject = policy?.readOnly !== true && policy?.projectResources === true;
-  const servers = allowProject ? await readProjectMcpServers() : {};
+  const select = policy?.readOnly !== true ? policy?.userServers : undefined;
+  const servers: Record<string, McpServerConfig> = select
+    ? Object.fromEntries(
+        Object.entries({
+          // The project file wins a same-name entry, as it does in Cursor.
+          ...(await readMcpServersFile(
+            join(policy?.configHome ?? homedir(), ".cursor", "mcp.json"),
+          )),
+          ...(allowProject ? await readProjectMcpServers() : {}),
+        }).filter(([name]) => select(name)),
+      )
+    : allowProject
+      ? await readProjectMcpServers()
+      : {};
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (url && token) {
@@ -196,6 +258,30 @@ export function setCursorMcpTimeoutsForTests(options?: {
   toolCallTimeoutMs = options?.toolCallMs ?? TOOL_CALL_TIMEOUT_MS;
 }
 
+export const WORKFLOW_RESULT_CALL_REFUSAL =
+  "This call is not part of this turn's own workflow result: name one of the turn's own result tools and its resultKey.";
+
+/**
+ * Why a hosted Orkestrator call must not run, or undefined when it may. Only a
+ * graph activation's turn (one that declared slots) is gated, and only its
+ * result-family tools: a submission or validation tool must name its own
+ * slot's key, status and `report_progress` one of the turn's keys, and
+ * `read_artifact` / `ask_human` must be listed for the turn. Every other tool
+ * (mail, artifacts) and every other turn behaves as before; the attempt's
+ * capability still decides on the backend.
+ */
+export function workflowResultCallRefusal(
+  turn: WorkflowResultTurn | undefined,
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  // Only a graph activation's turn (one with slots) is held here; a kind
+  // tool's turn keeps today's behaviour, where the backend's refusal names
+  // the attempt's own key.
+  if (!turn?.slots || !isWorkflowResultAttemptTool(toolName)) return undefined;
+  return workflowResultTurnAllows(turn, toolName, args) ? undefined : WORKFLOW_RESULT_CALL_REFUSAL;
+}
+
 /**
  * Host Orkestrator MCP tools in-process for a sandboxed coordinator attach.
  *
@@ -207,7 +293,11 @@ export function setCursorMcpTimeoutsForTests(options?: {
 export async function hostOrkestratorCustomTools(
   agentMcp?: AgentMcpConnection,
   health?: SessionState["health"],
-  options?: { httpFallback?: boolean },
+  options?: {
+    httpFallback?: boolean;
+    /** The turn's declared workflow-result attempt, read at call time. */
+    workflowResultTurn?: () => WorkflowResultTurn | undefined;
+  },
 ): Promise<HostedOrkestratorTools | undefined> {
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
@@ -219,6 +309,12 @@ export async function hostOrkestratorCustomTools(
     describe: (tool, description) =>
       orkestratorDescription(description, `Orkestrator Control MCP tool ${tool}`),
     health,
+    ...(options?.workflowResultTurn
+      ? {
+          refuse: (tool: string, args: JsonObject) =>
+            workflowResultCallRefusal(options.workflowResultTurn?.(), tool, args),
+        }
+      : {}),
     failure: options?.httpFallback
       ? "Orkestrator MCP failed to connect in-process; this session will try the HTTP MCP client"
       : "Orkestrator MCP failed to connect; this coordinator session will continue without delegation tools",
@@ -300,6 +396,8 @@ async function hostServerTools(input: {
   describe: (tool: string, description: string | undefined) => string;
   health?: SessionState["health"];
   failure: string;
+  /** A fixed reason to refuse a call before it leaves this process. */
+  refuse?: (remoteName: string, args: JsonObject) => string | undefined;
 }): Promise<HostedOrkestratorTools | undefined> {
   let connection: CursorMcpConnection | undefined;
   try {
@@ -340,6 +438,10 @@ async function hostServerTools(input: {
             ],
             isError: true as const,
           };
+        }
+        const refusal = input.refuse?.(remoteName, forwardedArgs);
+        if (refusal) {
+          return { content: [{ type: "text" as const, text: refusal }], isError: true as const };
         }
         const result = await connection.call(remoteName, forwardedArgs);
         return {
@@ -691,8 +793,11 @@ function parseMcpToolName(
     : undefined;
 }
 
-async function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {
-  const path = resolve(workingDirectory, ".cursor", "mcp.json");
+function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {
+  return readMcpServersFile(resolve(workingDirectory, ".cursor", "mcp.json"));
+}
+
+async function readMcpServersFile(path: string): Promise<Record<string, McpServerConfig>> {
   try {
     const stat = await fs.stat(path);
     if (stat.size > MAX_MCP_CONFIG_BYTES) return {};

@@ -182,10 +182,17 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
-| `review launch ENV [--reviewer A=M[@E]]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation | provider |
+| `review launch ENV [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation. `--focus`/`--focus-file` set `--reviewer` row N's `lens` ([reviewer lenses](review-preparation.md#reviewer-lenses)): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB), one line is both; the receipt carries no lens text | provider |
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
 | `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
+| `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
+| `build list --project P` / `build get BUILD` | `build.list/get` | Build Pipeline storage; each step's selection with the byte size of its instructions and focus, never the text | read |
+| `build cancel BUILD` | `build.cancel` | Build Pipeline supervisor `cancel` (refused once the build ended) | process |
+| `graph list [--project P] [--limit N] [--cursor C]` / `graph show TEMPLATE [--project P [--environment ENV]]` | `graph.list/show` | the graph template library (`GraphTemplateService`), paged by reference; with a project, the launch options (`GraphRunLaunchService.options`): each role's providers with their tier and why one is unavailable, and the launch defaults. Never prompt text. See [Graphs](#graphs) | read |
+| `graph validate (TEMPLATE \| --file PATH) [--project P]` | `graph.validate` | `GraphTemplateService.compile` of a saved template, or of a template file's JSON without saving it | read |
+| `graph launch TEMPLATE --project P (--environment ENV \| --new-worktree \| --new-container) [--role KEY=A[/M[@E]][,…]]… [--focus ROLE[.N]=TEXT]… [--focus-file ROLE[.N]=PATH]… [--param KEY=VALUE]… [--input NAME=JSON]… [--input-file NAME=PATH]… [--ticket T [--ticket-input NAME]]` | `graph.launch` | the one launch service every surface uses (`GraphRunLaunchService.launch`, `requestedBy: "cli"`) | metadata, filesystem, provider, external |
+| `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
 | `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
@@ -195,7 +202,7 @@ not advertise at its version before sending it.
 | `mail mailboxes` | `mail.mailboxes` | agent-mail directory (refused while messaging is disabled) | read |
 | `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
 | `schedule list/get` | `schedule.list/get` | `ScheduledJobService` ([scheduled-jobs.md](scheduled-jobs.md)) | read |
-| `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner | metadata |
+| `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner. `create`/`update` build a mail, prompt, launch, graph (`--graph TEMPLATE` with the flags of `graph launch`; see [Graphs](#graphs)) or other action | metadata |
 | `permissions rules list` | `permission.rule.list` | `PermissionRuleStore` ([permission-rules.md](permission-rules.md)) | read |
 | `permissions rules remove` | `permission.rule.remove` | `PermissionRuleStore`; removal only, a rule is created only from an approval card | metadata |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
@@ -361,6 +368,10 @@ A reconciler (startup pass, environment change events, 15 s sweep, and every
 | queued prompt runs (`--enqueue`) | Still settled from the durable queue and dispatch journal; one restarted before its item was written is `interrupted` |
 | project removal | Succeeds when the project is gone; otherwise its fence is lifted and it is `interrupted` (environments a cascade already deleted stay deleted) |
 | exec | The worker survives; its recorded exit status settles the run |
+| build launch | `partial` with the pipeline's ID when a pipeline holds the launch's admission key (recorded at admission), else `interrupted`; never launched again |
+| build cancel | Succeeds when the pipeline ended (`failed`), else `interrupted` |
+| graph launch | Succeeds with the run's ID when a run holds the ID derived from the operation's request key, else `interrupted`; never launched again |
+| graph cancel | Succeeds when the run is cancelling or ended, else `interrupted` |
 
 ## Environments
 
@@ -398,7 +409,9 @@ environment's running exec commands.
 `PUBLIC_PROJECT_SETTINGS`, `PUBLIC_ENVIRONMENT_SETTINGS`): repository branch
 defaults, port mappings, files to copy, entry port, allowed domains, and the
 agent defaults (`agent.defaultAgent`, `agent.<platform>.mode|model|reasoningEffort|fastMode`).
-Credentials are never settable here.
+Credentials are never settable here. App-level settings, such as the review
+focus presets (`reviewLensPresets`), have no CLI key; Settings in the app edits
+them.
 
 `get` reports the stored value, the effective value, its source tier
 (environment → repository → global → default) and when it applies
@@ -601,6 +614,126 @@ it never scans a worktree or reads a transcript or provider. A backend without
 change tracking answers both actions with `capability-unavailable` (exit 8)
 and advertises them as unavailable in `capabilities`. Both are reads: they
 take no request key and leave no receipt.
+
+## Build Pipelines
+
+`build launch TICKET --project P` starts the Kanban ticket's Build Pipeline as
+the Build button does (handler:
+[`actions-builds.ts`](../../apps/backend/src/core/public-api/actions-builds.ts)):
+the ticket's title, description, criteria, comments and images are the task
+snapshot, its source is the ticket, and the pipeline runs build, review,
+address, verify and PR ([build-pipeline-view.md](build-pipeline-view.md)).
+Give exactly one target: `--type local|container` for a new environment
+(optionally pinned with `--base-branch` and `--base-commit`, validated as for
+`environment create`; a container base must be pushed) or `--environment ENV`
+for an existing worker environment of the project (never the project
+checkout). Everything left out runs the saved Build defaults, layered exactly
+as for the coordinator's `start_build_pipeline`
+(`buildPipelineInputWithDefaults`), so a launch from the CLI, the coordinator
+and the app agree.
+
+- `--step STAGE=AGENT[/MODEL[@EFFORT]]` picks one step's agent and model;
+  STAGE is `build`, `review`, `address`, `verify`, `pr`, `resolve-conflicts`
+  or `preparation` (the review panel's preparation and consolidation). A model
+  ID may contain `/`; the effort follows the last `@`.
+- `--instructions STAGE=TEXT` and `--instructions-file STAGE=PATH` (`-` reads
+  stdin) add the user's own instructions to a step
+  ([per-stage instructions](build-pipeline-view.md#per-stage-instructions)),
+  at most 16 KiB each. A step named only this way keeps its saved model. Fix
+  uses Build's.
+- `--reviewer AGENT=MODEL[@EFFORT]` rows replace the saved reviewers; reviewer
+  1 is the review step, so `--step review=` and `--instructions review=` are
+  refused with rows (use `--instructions 1=TEXT`). `N=TEXT` targets reviewer
+  row N, and `--focus`/`--focus-file N=…` set its lens as for `review launch`.
+- `--max-iterations N` is bounded by `MAX_BUILD_PIPELINE_ITERATIONS` (10).
+
+The client refuses malformed flags, over-bound text and a missing target
+before sending anything (exit 2). The backend checks the same bounds (006's
+instructions guard, 005's lens guard, the iteration limit), the project,
+ticket and environment before admission, so a refused launch leaves no
+operation record. The launch runs under the operation: a provisioning that
+outlasts the request leaves it `running` and a backend continuation settles
+it. The receipt and result carry IDs and states only (`pipelineId`,
+`environmentId`, `taskId`, `phase`, `reused`); `build get` reports each step's
+agent, model and effort with `instructionsBytes` and
+`lens: {labelBytes, instructionBytes}`, never the text. A second request key
+for a ticket whose build is still active returns that build with
+`reused: true`; its steps are the ones it started with.
+
+## Graphs
+
+`graph …` launches saved graph templates (item 214; handler:
+[`actions-graphs.ts`](../../apps/backend/src/core/public-api/actions-graphs.ts)).
+Templates are created and edited only in the app's designer; there is no
+authoring action, here or for the coordinator (D6). A template is named
+`builtin:<id>`, `user:<id>` or `project:<file>` (a `.orkestrator/graphs`
+file of `--project`; `graph list` prints the references).
+
+- `graph show TEMPLATE --project P` reports each role's providers with the
+  enforcement tier they hold on this host and, for one that is unavailable,
+  why (a step's `minEnforcement` floor, or no way to return the role's typed
+  results), plus what a launch that leaves a role out binds. Lenses are
+  reported by size. An untrusted or engine template still shows, with
+  `launch.launchable: false` and the reason.
+- `graph validate` compiles a saved template, or with `--file PATH` (`-`:
+  stdin, at most 512 KiB) a template document that is never saved, and prints
+  the compiler's diagnostics (at most 50, the rest counted) and cost;
+  `--project` compiles under that project's capability ceiling. It exits 0
+  whenever it answers, even for a document that does not parse (its field
+  errors come back as `template-<code>` diagnostics); read `ok` and
+  `launchable`.
+- `graph launch` runs in an existing environment of the project
+  (`--environment`) or a new worktree or restricted container the run creates
+  (D7). `--role KEY=AGENT[/MODEL[@EFFORT]]` binds a role (a panel role's
+  models separated by commas); `--focus ROLE[.N]=TEXT` and `--focus-file` set
+  panel model N's lens as for `review launch`. `--param KEY=VALUE` sends
+  `true`, `false`, `null` and numbers as JSON scalars and anything else as
+  text; the backend checks each against its declaration. `--input NAME=JSON`
+  and `--input-file NAME=PATH` give value run inputs (at most 256 KiB
+  together); `--ticket T` binds a Kanban ticket as the template's `ticket@1`
+  input and links it to the run's environment. Whatever is left out uses the
+  defaults saved for the template in the project, then Settings, exactly as
+  the app's launch dialog and the coordinator's `launch_graph` do: they all
+  call `GraphRunLaunchService`.
+- `schedule create|update … --graph TEMPLATE --project P` schedules the same
+  launch: it takes every flag of `graph launch` above, checked the same way,
+  and stores `{kind: "graph", request}` (`graphScheduleLaunchRequest` in
+  `commands/graphs.ts`): the reference, the environment choice, a role given
+  one model as a single binding and several as a panel, parameters, inputs
+  and the ticket, without a request key (each fire supplies `sched:<fireId>`)
+  and without saving defaults. Roles and parameters left out take the saved
+  defaults when the schedule fires. `schedule.create` refuses a template
+  that is not launchable at creation. A graph flag without `--graph`, or
+  `--graph` beside another action, is refused before anything is sent.
+
+The client refuses malformed flags and references before sending anything
+(exit 2). Before admission the backend reads the template's launch options,
+so an unknown project, environment, ticket or template (exit 3), an
+environment of another project (`invalid-input`, exit 2), an untrusted
+project template (`conflict`, exit 8), an engine built-in (`unsupported`,
+exit 8), a template that does not compile or waits on an acknowledgement
+(`not-ready`, exit 8), and an unknown role or input, a list for a one-model
+role, a provider below a step's floor or a parameter outside its declaration
+(`invalid-input`, exit 2) leave no operation record. Every refusal carries
+the launch's own code in `error.details.reason` (`GRAPH_LAUNCH_ERROR_CODES`:
+`untrusted`, `engine-template`, `not-launchable`, `invalid-binding`,
+`invalid-launch`, …). A launch's intent is the validated input with the
+template reference as written (scope `project:<id>`), so reusing a
+`--request-id` with other flags is `request-conflict`. The launch service's
+idempotency key is `public:<requestKey>` (`graphPublicLaunchRequestId` in
+`public-api/graph-recovery.ts`) and the run's ID is derived from it
+(`graphLaunchRunId`: `launch-` and a SHA-256 prefix over the project and that
+key), so a replay returns the same run and restart recovery finds it.
+Receipts, results and `graph status` carry IDs, states and counts only
+(`runId`, `environmentId`, `status`, activations by state, sessions and
+tokens; `graph status` adds `requestedBy`, `ticketId`, `mock`, timestamps and
+the run's error, cut to 500 characters, with its cause), never input
+values, ticket text, prompts or lens text. `graph cancel` (scope
+`graph-run:<id>`) asks the run to stop; its record, artifacts and
+environment are kept. A run that already ended is refused before admission
+(`conflict`, exit 8, its status in `error.details`); a run already
+cancelling is admitted and succeeds. The coordinator's `launch_graph` is
+separate: see [coordinator.md](coordinator.md#saved-graphs).
 
 ## Exec
 

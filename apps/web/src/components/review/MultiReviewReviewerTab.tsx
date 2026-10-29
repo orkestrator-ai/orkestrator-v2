@@ -774,6 +774,9 @@ export function MultiReviewReviewerTab({
     state.workflows.get(data.workflowId)?.reviewers.find((entry) => entry.id === data.reviewerId),
   );
   const reviewerSessionKey = reviewerRecord?.sessionKey;
+  const graphEngine = useMultiReviewStore(
+    (state) => state.workflows.get(data.workflowId)?.engine === "graph",
+  );
   const reviewerProviderSessionId = reviewerRecord?.providerSessionId;
   const artifactConversation = useMemo(
     () =>
@@ -819,16 +822,24 @@ export function MultiReviewReviewerTab({
       ? transcriptError
       : (actionError ?? transcriptError);
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
+  // A graph-engine reviewer is a graph activation (item 301): it is stopped
+  // and restarted from the graph run view, never from here.
+  const bespoke = !graphEngine;
   const stoppable =
+    bespoke &&
     snapshot?.workflowPhase === "reviewing" &&
     (snapshot.status === "running" || snapshot.status === "pending");
   const restartable =
-    snapshot?.workflowPhase === "reviewing" ||
-    snapshot?.workflowPhase === "consolidating" ||
-    snapshot?.workflowPhase === "ready" ||
-    snapshot?.workflowPhase === "failed";
+    bespoke &&
+    (snapshot?.workflowPhase === "reviewing" ||
+      snapshot?.workflowPhase === "consolidating" ||
+      snapshot?.workflowPhase === "ready" ||
+      snapshot?.workflowPhase === "failed");
   const unstickable =
-    snapshot?.workflowPhase === "reviewing" && running && snapshot.dispatchState === "sent";
+    bespoke &&
+    snapshot?.workflowPhase === "reviewing" &&
+    running &&
+    snapshot.dispatchState === "sent";
   const lifecycleActionPending = stopping || restarting || unsticking;
   const statusLine = snapshot
     ? snapshot.status === "cancelled"

@@ -484,6 +484,71 @@ exit 2
     });
   });
 
+  test("verify inherits the address model but not its instructions", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await createFeatureBuild(
+        {
+          ...input,
+          steps: {
+            address: { agent: "codex", model: "gpt-5.6", instructions: "Fix every nit." },
+          },
+        },
+        { storage, runtime, buildPipelines: supervisor.service },
+      );
+      const started = supervisor.started[0]!;
+      expect(started.steps?.address?.instructions).toBe("Fix every nit.");
+      expect(started.steps?.verify).toEqual({ agent: "codex", model: "gpt-5.6" });
+    });
+  });
+
+  test("forwards per-step, reviewer and preparation instructions to the pipeline", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await createFeatureBuild(
+        {
+          ...input,
+          steps: {
+            build: { agent: "claude", instructions: "Write the test first." },
+            pr: { agent: "claude", instructions: "Title the PR in English." },
+          },
+          reviewers: [
+            { agent: "claude", instructions: "Security." },
+            { agent: "codex", instructions: "Performance." },
+          ],
+          reviewPreparation: { agent: "claude", instructions: "Merge duplicates." },
+        },
+        { storage, runtime, buildPipelines: supervisor.service },
+      );
+      const started = supervisor.started[0]!;
+      expect(started.steps?.build?.instructions).toBe("Write the test first.");
+      expect(started.steps?.pr?.instructions).toBe("Title the PR in English.");
+      expect(started.reviewers?.map((reviewer) => reviewer.instructions)).toEqual([
+        "Security.",
+        "Performance.",
+      ]);
+      expect(started.reviewPreparation?.instructions).toBe("Merge duplicates.");
+    });
+  });
+
+  test("rejects instructions over 16 KiB", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await expect(
+        createFeatureBuild(
+          {
+            ...input,
+            steps: {
+              build: { agent: "claude", instructions: "x".repeat(16 * 1024 + 1) },
+            },
+          },
+          { storage, runtime, buildPipelines: supervisor.service },
+        ),
+      ).rejects.toThrow();
+      expect(supervisor.started).toHaveLength(0);
+    });
+  });
+
   test("keeps an explicit verify selection", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();

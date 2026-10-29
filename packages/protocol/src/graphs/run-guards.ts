@@ -35,6 +35,7 @@ import {
   GRAPH_DIGEST_PATTERN,
   GRAPH_ID_PATTERN,
   GRAPH_KEY_PATTERN,
+  GRAPH_TEMPLATE_BOUNDS,
   checkBoundedJson,
   graphUtf8Bytes,
   parseGraphTypeRef,
@@ -551,6 +552,7 @@ const ACTIVATION_FIELDS = [
   "state",
   "inputs",
   "outputs",
+  "outlet",
   "session",
   "policy",
   "enforcement",
@@ -601,6 +603,16 @@ function checkActivation(
   checkEnum(value.state, joinPath(path, "state"), errors, GRAPH_ACTIVATION_STATES);
   checkPortArtifacts(value.inputs, joinPath(path, "inputs"), errors, true);
   checkPortArtifacts(value.outputs, joinPath(path, "outputs"), errors, false);
+  if (value.outlet !== undefined) {
+    checkPattern(
+      value.outlet,
+      joinPath(path, "outlet"),
+      errors,
+      GRAPH_KEY_PATTERN,
+      GRAPH_TEMPLATE_BOUNDS.maxKeyChars,
+      "an outlet name",
+    );
+  }
   if (value.session !== undefined) checkSession(value.session, joinPath(path, "session"), errors);
   if (value.policy !== undefined && !isNativeAgentExecutionPolicy(value.policy)) {
     errors.add(joinPath(path, "policy"), "type", "Expected a native agent execution policy");

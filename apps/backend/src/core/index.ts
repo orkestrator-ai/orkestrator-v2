@@ -176,6 +176,8 @@ import {
 import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
 import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
+import { GraphArtifactStore } from "./graph-artifacts.js";
+import { GraphRunService } from "./graph-run-service.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -196,6 +198,8 @@ export class OrkestratorBackend {
   private readonly coordinators: CoordinatorService;
   private readonly userCommands: UserCommandService;
   private readonly graphTemplates: GraphTemplateService;
+  /** Graph runs on the keyed `graph-run` domain (items 202, 203). */
+  private readonly graphRuns: GraphRunService;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1090,6 +1094,12 @@ export class OrkestratorBackend {
       },
     );
     context.multiReviews = this.multiReviews;
+    // Node executors (items 204–208) register on `graphRuns.executors`.
+    this.graphRuns = new GraphRunService(storage, {
+      artifacts: new GraphArtifactStore({ storage, fence: context.runtime.environments.fence }),
+      workflowAdmission: this.workflowAdmission,
+    });
+    context.graphRuns = this.graphRuns;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -1150,8 +1160,10 @@ export class OrkestratorBackend {
         },
       ),
     );
-    this.workflowResults.onAccepted(({ environmentId }) => {
-      this.wakeWorkflows(environmentId, "result-accepted");
+    this.workflowResults.onAccepted((event) => {
+      this.wakeWorkflows(event.environmentId, "result-accepted");
+      // Graph runs map the slot to its one owning run instead.
+      this.graphRuns.resultAccepted(event);
     });
     storage.addResourceChangeListener((change) => {
       // Readiness and execution identity (status, setup, bridge port/token)
@@ -1178,6 +1190,7 @@ export class OrkestratorBackend {
       this.featurePlanning,
       this.buildPipelines,
       this.multiReviews,
+      this.graphRuns,
     ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
   }
@@ -1583,6 +1596,10 @@ export class OrkestratorBackend {
     });
     await this.multiReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore multi reviews:", error);
+    });
+    // Non-blocking: the first discovery recovers every run with an obligation.
+    await this.graphRuns.init().catch((error) => {
+      console.warn("[backend] Failed to restore graph runs:", error);
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
@@ -2251,6 +2268,11 @@ export class OrkestratorBackend {
           await this.multiReviews.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain multi reviews:", error);
+        }
+        try {
+          await this.graphRuns.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain graph runs:", error);
         }
         try {
           await this.featurePlanning.shutdown();

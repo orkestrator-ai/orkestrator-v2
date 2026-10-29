@@ -236,12 +236,18 @@ export class GraphRunsRepository {
     this.checkedRun(next);
     return this.enqueueGraphRunMutation(async () => {
       await this.assertEnvironmentWritable(next.environmentId);
-      return this.context.updateStoreRow<GraphRun>(this.graphRunsFile(), next.id, (current) => {
-        if (current !== undefined) {
-          throw new GraphStorageError("run-exists", "A graph run with this id already exists");
-        }
-        return { result: next, value: next };
-      });
+      const created = this.context.updateStoreRow<GraphRun>(
+        this.graphRunsFile(),
+        next.id,
+        (current) => {
+          if (current !== undefined) {
+            throw new GraphStorageError("run-exists", "A graph run with this id already exists");
+          }
+          return { result: next, value: next };
+        },
+      );
+      this.context.changes.announce("graph-run", next.id, next.projectId);
+      return created;
     });
   }
 
@@ -317,6 +323,7 @@ export class GraphRunsRepository {
             options.supersede.rewindId,
           );
         }
+        this.context.changes.announce("graph-run", candidate.id, candidate.projectId);
         return saved;
       });
     });
@@ -527,6 +534,7 @@ export class GraphRunsRepository {
             delete: true,
           }));
         });
+        this.context.changes.announce("graph-run", runId, undefined, undefined, true);
       }
       return runIds;
     });

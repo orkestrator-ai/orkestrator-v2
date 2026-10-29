@@ -33,6 +33,11 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
+import {
+  buildPipelineSessionStage,
+  buildPipelineStage,
+  sessionPhaseForBuildPhase,
+} from "./build-pipeline-stages.js";
 import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import {
   errorMessage,
@@ -209,14 +214,13 @@ export class BuildPipelineContext {
     phase: ResumableBuildPhase,
     validationPlan = false,
   ): WorkflowResultKind | undefined {
-    if (phase === "building" || phase === "fixing")
-      return validationPlan ? "validation-plan" : "review-preparation";
-    if (phase === "reviewing") return "review-report";
-    // Address turns submit the typed report Verify reads
-    // (`build-pipeline-address-report.ts`).
-    if (phase === "addressing") return "fix-result";
-    if (phase === "verifying") return "verification-result";
-    return undefined;
+    // An implementation-phase turn sent the validation-plan schema: the
+    // dedicated package preparation.
+    if (validationPlan && (phase === "building" || phase === "fixing")) {
+      return buildPipelineStage("preparation").result ?? undefined;
+    }
+    const sessionPhase = sessionPhaseForBuildPhase(phase);
+    return sessionPhase ? (buildPipelineSessionStage(sessionPhase).result ?? undefined) : undefined;
   }
 
   async workflowAgentMcp(

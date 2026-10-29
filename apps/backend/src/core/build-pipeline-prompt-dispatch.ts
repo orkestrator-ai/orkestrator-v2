@@ -8,6 +8,7 @@
  * that may already have arrived only on the provider's proof that it did not.
  */
 import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
+import { buildPipelineSessionStage } from "./build-pipeline-stages.js";
 import {
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -281,7 +282,10 @@ export function readsReviewPackage(
   pipeline: BuildPipeline,
   sessionPhase: PipelineSessionPhase,
 ): boolean {
-  return sessionPhase === "review" && pipeline.reviewPackage !== undefined;
+  return (
+    buildPipelineSessionStage(sessionPhase).turn === "read-only" &&
+    pipeline.reviewPackage !== undefined
+  );
 }
 
 /**

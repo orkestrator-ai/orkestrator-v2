@@ -1,4 +1,5 @@
-import { taskSnapshotCriteria, usesReviewFanout } from "@orkestrator/protocol/build-pipeline";
+import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
+import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import { createHash } from "node:crypto";
@@ -223,7 +224,7 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string, targetBranch
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     "Build this feature completely. Do not ask questions; make your best judgment for ambiguous requirements.",
-    usesReviewFanout(pipeline) || pipeline.reviewPreparation
+    usesPackagePreparationSession(pipeline)
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),
   ]
@@ -754,7 +755,7 @@ export function fixPrompt(
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
     `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. For those unrelated failures, establish target-branch reproduction or a demonstrated environmental cause before treating them as pre-existing or environmental; do not change unrelated code or tests to hide them. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with the target-branch reproduction or demonstrated environmental-cause evidence.`,
-    usesReviewFanout(pipeline) || pipeline.reviewPreparation
+    usesPackagePreparationSession(pipeline)
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),
   ]

@@ -81,6 +81,7 @@
     "./image-manifest": "./src/image-manifest.ts",
     "./git-remote-url": "./src/git-remote-url.ts",
     "./graphs/artifact-type-def": "./src/graphs/artifact-type-def.ts",
+    "./graphs/builtins": "./src/graphs/builtins/index.ts",
     "./graphs/capability-profiles": "./src/graphs/capability-profiles.ts",
     "./graphs/compile": "./src/graphs/compile.ts",
     "./graphs/examples": "./src/graphs/examples.ts",

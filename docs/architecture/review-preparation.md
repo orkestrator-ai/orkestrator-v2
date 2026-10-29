@@ -256,6 +256,15 @@ later Fix; that Fix's changes need a manual PR update. `autoPr` without `autoFix
 means a PR after a Fix the user (or `address_multi_review`) starts. The PR
 session pushes the branch and opens the pull request; nothing merges.
 
+The built-in Multi Review graph template (`@orkestrator/protocol/graphs/builtins`,
+plan item 108) describes these rules: `multiReviewAutoFixDue`,
+`queueCleanReviewAutoPr`, `queueAutoPr` and `fixResultCompletes` in
+`multi-review-auto-pr.ts` decide the route, and `multi-review-steps.ts` holds
+each step's result kind and turn (`MULTI_REVIEW_STEP_TURNS`,
+`MULTI_REVIEW_INTERACTIVE_FIX`). `graph-builtin-templates.test.ts` pins the
+template to them. The template cannot express a Fix the user starts by hand
+after an `autoPr`-only launch; that stays an engine behaviour.
+
 ## Performance boundary and verification
 
 Without reusing earlier results, preparation cannot finish before its required

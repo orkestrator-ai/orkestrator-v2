@@ -523,6 +523,27 @@ export interface ReviewerPollGate {
   clear(scope: string): void;
 }
 
+/**
+ * When the panel hands over to consolidation: once every reviewer has settled
+ * and at least `minSuccessful` produced a usable report, with the failed
+ * reviewers carried as a summary rather than blocking.
+ */
+export const REVIEW_FANOUT_FAN_IN = Object.freeze({
+  wait: "all-settled",
+  minSuccessful: 1,
+  includeFailures: true,
+} as const);
+
+/**
+ * A reviewer's provider mode. A sealed package makes the reviewer a read-only
+ * plan-mode turn (the runner adds the read-only boundary for `plan`); a review
+ * without one, a record from before packages, runs in build mode. Multi Review
+ * and the pipeline panel both decide it here.
+ */
+export function reviewFanoutReviewerMode(reviewPackage: unknown): "plan" | "build" {
+  return reviewPackage ? "plan" : "build";
+}
+
 export interface ReviewFanoutHost {
   /** Identifies the owning workflow in session keys and interaction fences. */
   readonly workflowId: string;
@@ -912,7 +933,7 @@ export class ReviewFanoutRunner {
 
     if (!reviewersSettled(reviewers)) return { kind: "working" };
     const reports = usableReviewerReports(reviewers);
-    if (reports.length > 0) return { kind: "ready", reports };
+    if (reports.length >= REVIEW_FANOUT_FAN_IN.minSuccessful) return { kind: "ready", reports };
     // Reviewers fail locally, so an environment-wide cause (an unreachable
     // bridge, a deleted worktree) reaches here as the same message on every
     // reviewer. Carry the distinct causes up rather than reporting a bare

@@ -16,9 +16,10 @@ import type { GraphCapabilityCeiling } from "./capability-profiles.js";
 import type { GraphCompileDiagnostic } from "./compile-diagnostics.js";
 import type { CompiledGraphPlan, GraphCompileCost, GraphPlanAcknowledgementRef } from "./plan.js";
 import { GRAPH_ID_PATTERN, GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
+import type { GraphBuiltInEngineStatus } from "./builtins/index.js";
 import type { GraphTemplateEngine, GraphTemplateScope, GraphTemplateV1 } from "./template-model.js";
 
-export { graphBuiltinTemplates } from "./builtin-registry.js";
+export { graphBuiltinEngineStatus, graphBuiltinTemplates } from "./builtin-registry.js";
 export { GRAPH_TEMPLATE_SCOPES, type GraphTemplateScope } from "./template-model.js";
 
 // ---------------------------------------------------------------- bounds
@@ -170,6 +171,13 @@ export interface GraphTemplateSummary {
   name: string;
   description?: string;
   engine?: GraphTemplateEngine;
+  /**
+   * Built-ins only: `active` when the engine named by `engine` runs the flow
+   * today, `retired` when it was removed (Looped Review). Either way a
+   * built-in runs on its engine, never on the graph runtime (D5): duplicate it
+   * to run a copy there.
+   */
+  engineStatus?: GraphBuiltInEngineStatus;
   /** Store revision for user templates; the file's `revision` field otherwise. */
   revision: number;
   /** {@link graphTemplateDigest}. */
@@ -179,7 +187,10 @@ export interface GraphTemplateSummary {
   trust: GraphTemplateTrustState;
   /** When the current digest was approved (trusted project templates). */
   approvedAt?: string;
-  /** Trusted and the compiler's `launchable`. */
+  /**
+   * Trusted, the compiler's `launchable`, and runs on the graph runtime (a
+   * built-in with an `engine` does not, D5).
+   */
   launchable: boolean;
   /** Compiled under the project's ceiling (or the default ceiling without a project). */
   compile: GraphTemplateCompileSummary;
@@ -308,6 +319,7 @@ export const GRAPH_TEMPLATE_ERROR_CODES = [
   "digest-mismatch",
   "limit",
   "invalid-ceiling",
+  "engine-template",
 ] as const;
 export type GraphTemplateErrorCode = (typeof GRAPH_TEMPLATE_ERROR_CODES)[number];
 

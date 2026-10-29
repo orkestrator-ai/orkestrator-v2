@@ -1,4 +1,3 @@
-import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
@@ -15,6 +14,7 @@ import {
   type NativeAgentService,
 } from "./native-agent-service.js";
 import { addressPrompt } from "./build-pipeline-prompts.js";
+import { MULTI_REVIEW_INTERACTIVE_FIX } from "./multi-review-steps.js";
 
 export class MissingMultiReviewAddressSessionError extends Error {
   constructor() {
@@ -101,7 +101,7 @@ export async function recoverMissingMultiReviewFixSession(
     agent: workflow.fixModel.agent,
     logicalSessionKey,
     origin: "interactive-native" as const,
-    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    interactionPolicy: MULTI_REVIEW_INTERACTIVE_FIX.interactionPolicy,
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
     reasoningEffort: workflow.fixModel.reasoningEffort,
@@ -123,7 +123,7 @@ export async function recoverMissingMultiReviewFixSession(
     ...identity,
     prompt: `${addressPrompt(workflow.consolidatedReport)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
     requestId,
-    mode: "build",
+    mode: MULTI_REVIEW_INTERACTIVE_FIX.mode,
   });
   if (outcome.outcome !== "accepted") {
     throw new MultiReviewAddressDispatchError(
@@ -179,7 +179,7 @@ export async function dispatchMultiReviewAddressPrompt(
     agent: selection.agent,
     logicalSessionKey,
     origin: "interactive-native" as const,
-    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    interactionPolicy: MULTI_REVIEW_INTERACTIVE_FIX.interactionPolicy,
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
     reasoningEffort: selection.reasoningEffort,
@@ -242,7 +242,7 @@ export async function dispatchMultiReviewAddressPrompt(
       ...identity,
       prompt,
       requestId,
-      mode: "build",
+      mode: MULTI_REVIEW_INTERACTIVE_FIX.mode,
     });
   } catch (error) {
     throw new MultiReviewAddressDispatchError(

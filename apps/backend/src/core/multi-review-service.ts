@@ -188,11 +188,19 @@ import {
   parseStructuredReportResult,
   promptWorktreeSnapshot,
   resolveUnattendedReviewerInteractions,
+  reviewFanoutReviewerMode,
   type ReviewFanoutHost,
 } from "./review-fanout.js";
+import {
+  MULTI_REVIEW_REVIEWER_RESULT_KIND,
+  multiReviewStepResultKind,
+  multiReviewStepTurnOptions,
+} from "./multi-review-steps.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   consolidatedReportIsClean,
+  fixResultCompletes,
+  multiReviewAutoFixDue,
   interactiveFixAutoPrSkipMessage,
   interactiveFixCanQueueAutoPr,
   launchMultiReviewAutoPr,
@@ -208,7 +216,7 @@ import type { ReviewPackageVerification } from "./commands-review.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Structured reports need a mutation boundary without provider planning behavior. */
-const READ_ONLY_REPORT_TURN = Object.freeze({ mode: "build" as const, readOnly: true });
+const READ_ONLY_REPORT_TURN = Object.freeze(multiReviewStepTurnOptions("consolidate"));
 const DEFAULT_POLL_MS = 1_000;
 /** Running provider work is observed every few seconds, with per-workflow jitter. */
 const DEFAULT_OBSERVATION_MS = 3_000;
@@ -3376,7 +3384,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(this.options.workflowResults
         ? {
             supportsToolResult: (selection: MultiReviewModelSelection) =>
-              this.workflowToolEnabled(selection.agent, "review-report"),
+              this.workflowToolEnabled(selection.agent, MULTI_REVIEW_REVIEWER_RESULT_KIND),
             prepareResult: async (
               selection: MultiReviewModelSelection,
               requestId: string,
@@ -3384,7 +3392,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             ) =>
               this.options.workflowResults!.prepare({
                 resultKey: requestId,
-                kind: "review-report",
+                kind: MULTI_REVIEW_REVIEWER_RESULT_KIND,
                 environmentId: workflow.environmentId,
                 projectId: workflow.projectId,
                 provider: selection.agent,
@@ -3419,7 +3427,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         await this.save(workflow, token);
       },
       assertFence: () => this.assertFence(workflow.id, token),
-      reviewerMode: workflow.reviewPackage ? "plan" : "build",
+      reviewerMode: reviewFanoutReviewerMode(workflow.reviewPackage),
       ...(workflow.reviewPackage
         ? {
             beforeAdmission: () => this.verifyReviewEvidence(workflow, token, "fanout"),
@@ -3787,7 +3795,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         preparing ? "Multi Review · Prepare review package" : "Multi Review · Consolidation",
         {
           clientSessionKey: sessionKey,
-          ...(preparing ? { mode: "build" as const, readOnly: false } : READ_ONLY_REPORT_TURN),
+          ...(preparing ? multiReviewStepTurnOptions("prepare") : READ_ONLY_REPORT_TURN),
           model: selection.model === "default" ? undefined : selection.model,
           effort: selection.reasoningEffort,
           ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
@@ -3925,12 +3933,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           : request.kind === "consolidate"
             ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
             : REVIEW_FIX_RESULT_JSON_SCHEMA;
-      const resultKind: WorkflowResultKind =
-        request.kind === "prepare"
-          ? "validation-plan"
-          : request.kind === "consolidate"
-            ? "consolidated-review"
-            : "fix-result";
+      const resultKind: WorkflowResultKind = multiReviewStepResultKind(request.kind);
       const agentMcp =
         request.resultTransport === "tool-v1"
           ? await this.workflowAgentMcp(
@@ -3978,9 +3981,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           {
             requestId: request.requestId,
             schema: request.resultTransport === "tool-v1" ? undefined : schema,
-            ...(request.kind === "consolidate"
-              ? READ_ONLY_REPORT_TURN
-              : { mode: "build" as const, readOnly: false }),
+            ...multiReviewStepTurnOptions(request.kind),
             model: selection.model === "default" ? undefined : selection.model,
             effort: selection.reasoningEffort,
             ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
@@ -4375,11 +4376,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
         queueRestartedFix(workflow);
-      } else if (
-        workflow.autoFix &&
-        (workflow.consolidatedReport.issues.length > 0 ||
-          workflow.consolidatedReport.testCoverageGaps.length > 0)
-      ) {
+      } else if (multiReviewAutoFixDue(workflow)) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
         queueDefaultFix(workflow);
@@ -4425,7 +4422,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     session.completedAt = nowIso();
     settleStepRuntime(workflow, "fix");
     delete workflow.activeRequest;
-    if (!fixed.complete) {
+    if (!fixResultCompletes(fixed)) {
       session.status = "failed";
       workflow.phase = "failed";
       workflow.error = `The fix model could not address every finding: ${fixed.summary}`;
@@ -5028,9 +5025,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Result kind produced by one multi-review step. */
   private stepResultKind(kind: MultiReviewStepKind): WorkflowResultKind {
-    if (kind === "prepare") return "validation-plan";
-    if (kind === "consolidate") return "consolidated-review";
-    return "fix-result";
+    return multiReviewStepResultKind(kind);
   }
 
   private async bridgeConnection(

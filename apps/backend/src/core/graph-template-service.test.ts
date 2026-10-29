@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { graphTemplateDigest } from "@orkestrator/protocol/graphs/compile";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
+import { graphBuiltinTemplates } from "@orkestrator/protocol/graphs/library";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import {
   createGraphTemplateFixture,
@@ -101,6 +102,27 @@ describe("scopes", () => {
       "invalid-template",
     );
     expect((await rejection(service.get({ scope: "builtin", id: "nope" }))).code).toBe("not-found");
+  });
+
+  test("the shipped built-ins run on their engines: listed, never launched as graphs", async () => {
+    await fixture.close();
+    fixture = await createGraphTemplateFixture({ builtins: graphBuiltinTemplates });
+    const { service } = fixture;
+    const builtins = (await service.list()).templates.filter((entry) => entry.scope === "builtin");
+    expect(builtins.map((entry) => [entry.id, entry.engine, entry.engineStatus])).toEqual([
+      ["multi-review", "multi-review", "active"],
+      ["build-pipeline", "build-pipeline", "active"],
+      ["looped-review", "looped-review", "retired"],
+    ]);
+    for (const entry of builtins) {
+      expect(entry.compile).toMatchObject({ ok: true, launchable: true, errors: 0 });
+      expect(entry.launchable).toBe(false);
+      expect((await rejection(service.compileForLaunch(entry.ref))).code).toBe("engine-template");
+    }
+    const copy = await service.duplicate({ scope: "builtin", id: "build-pipeline" });
+    expect(copy.summary).toMatchObject({ scope: "user", launchable: true });
+    expect(copy.summary.engineStatus).toBeUndefined();
+    expect((await service.compileForLaunch(copy.summary.ref)).plan).not.toBeNull();
   });
 
   test("an invalid built-in is skipped, never listed", async () => {

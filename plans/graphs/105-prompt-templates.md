@@ -183,6 +183,12 @@ pass through unchanged, pinned to `nodes[i].prompt(.template)` with `offset`/`le
 plan's input `render` is `graphPromptEffectiveMode` of the same scope. The Done-when box is split:
 the 107 half is ticked, the 204 half stays open.
 
+**2026-10-29 · Changed by 108.** Built-in definitions corrected to match their builders, so the
+built-in templates compile cleanly: `consolidation` takes an optional `package` input and lists
+`reviewer` among its profiles; `address-review` and `verify` take an optional `package` input
+(recorded validation); `build` and `pipeline-fix` declare their `fix-result` output optional
+(today's Build and Fix turns submit none). See [108](108-builtin-templates.md) Notes.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.

@@ -80,11 +80,22 @@ const workspaceOutput = (required: boolean) => ({
   required,
   description: "The commit the node leaves.",
 });
-const fixResultOutput = {
+const fixResultOutput = (required: boolean) => ({
   name: "report",
   types: ["fix-result"],
-  required: true,
+  required,
   description: "What was changed and what was validated.",
+});
+/**
+ * The sealed package a stage reads its recorded validation from, as the
+ * pipeline's Address and Verify builders do (`recordedValidationSection`).
+ */
+const recordedValidationInput: GraphBuiltInPromptPort = {
+  name: "package",
+  types: ["review-package"],
+  required: false,
+  render: "file",
+  description: "The sealed review package whose recorded validation the stage reads.",
 };
 
 const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
@@ -150,6 +161,14 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         render: "json-frame",
         description: "Every reviewer's report.",
       },
+      {
+        name: "package",
+        types: ["review-package"],
+        required: false,
+        render: "file",
+        description:
+          "The package the reviewers shared; the builder reconciles each report's scope against it.",
+      },
     ],
     outputs: [
       {
@@ -159,7 +178,8 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         description: "The consolidated report, citing source ids.",
       },
     ],
-    profiles: ["observer"],
+    // Today's consolidation is a read-only turn that may make targeted reads.
+    profiles: ["observer", "reviewer"],
     backend:
       "createMultiReviewConsolidationPrompt (multi-review-prompts.ts), with buildConsolidationEvidence",
     textMaxBytes: 16 * KIB,
@@ -180,7 +200,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       },
       workspaceInput(false),
     ],
-    outputs: [fixResultOutput, workspaceOutput(false)],
+    outputs: [fixResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
       "addressPrompt (build-pipeline-prompts.ts) as the Multi Review fix sends it; multiReviewCustomFixPrompt (protocol multi-review.ts) with a user instruction",
@@ -200,8 +220,9 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         description: "The review report to address.",
       },
       workspaceInput(false),
+      recordedValidationInput,
     ],
-    outputs: [workspaceOutput(false), fixResultOutput],
+    outputs: [workspaceOutput(false), fixResultOutput(true)],
     profiles: ["builder"],
     backend:
       "addressPrompt with addressValidationInstruction (build-pipeline-prompts.ts, build-pipeline-service-supervisor.ts)",
@@ -212,7 +233,10 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     label: "Build",
     description: "Implements the ticket completely without asking questions, then validates it.",
     inputs: [ticketInput(true), workspaceInput(false)],
-    outputs: [workspaceOutput(false), fixResultOutput],
+    // Optional: today's Build turn submits no fix result (a panel review
+    // prepares the package in its own session; one reviewer's Build submits
+    // the package preparation instead).
+    outputs: [workspaceOutput(false), fixResultOutput(false)],
     profiles: ["builder"],
     backend: "buildPrompt (build-pipeline-prompts.ts)",
     textMaxBytes: 16 * KIB,
@@ -233,7 +257,8 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       },
       workspaceInput(false),
     ],
-    outputs: [workspaceOutput(false), fixResultOutput],
+    // Optional, as for Build: today's Fix turn submits no fix result.
+    outputs: [workspaceOutput(false), fixResultOutput(false)],
     profiles: ["builder"],
     backend: "fixPrompt (build-pipeline-prompts.ts)",
     textMaxBytes: 16 * KIB,
@@ -253,6 +278,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         render: "json-frame",
         description: "What the Address stage reported, when it ran.",
       },
+      recordedValidationInput,
     ],
     outputs: [
       {

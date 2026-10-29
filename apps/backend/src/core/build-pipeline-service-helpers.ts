@@ -15,6 +15,7 @@ import type {
   PipelineSessionPhase,
   ResumableBuildPhase,
   StartBuildPipelineInput,
+  VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   BUILD_STEP_KEYS,
@@ -41,6 +42,10 @@ import {
 import { normalizeBuildStepInstructions } from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { AppConfig } from "./models.js";
+import {
+  BUILD_PIPELINE_SESSION_LABELS,
+  sessionPhaseForBuildPhase,
+} from "./build-pipeline-stages.js";
 import {
   type BuildPipelineProvider,
   type ProviderExecutionMode,
@@ -72,15 +77,9 @@ export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>
 // and its type guard from one field list, so neither can drift from the other.
 export const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 
-export const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
-  build: "Build Session",
-  review: "Review Session",
-  address: "Address Issues Session",
-  verify: "Verification Session",
-  fix: "Fix Session",
-  pr: "PR Creation Session",
-  "resolve-conflicts": "Conflict Resolution Session",
-};
+/** Each session phase's label, from the stage table (`build-pipeline-stages.ts`). */
+export const SESSION_LABELS: Readonly<Record<PipelineSessionPhase, string>> =
+  BUILD_PIPELINE_SESSION_LABELS;
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -463,26 +462,7 @@ export function normalizeReviewPreparation(
 }
 
 export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {
-  switch (phase) {
-    case "building":
-      return "build";
-    case "reviewing":
-      return "review";
-    case "addressing":
-      return "address";
-    case "verifying":
-      return "verify";
-    case "fixing":
-      return "fix";
-    case "creating-pr":
-      return "pr";
-    case "resolving-conflicts":
-      return "resolve-conflicts";
-    case "creating-environment":
-    case "starting-environment":
-    case "waiting-for-setup":
-      return null;
-  }
+  return sessionPhaseForBuildPhase(phase);
 }
 
 export function executionModeOverrideForPhase(
@@ -521,11 +501,34 @@ export function resumePromptFor(
   }
 }
 
+/** The states pull request detection reports. */
+export const PULL_REQUEST_DETECTION_STATES = ["open", "merged", "closed"] as const;
+
 export type PullRequestDetection = {
   url: string;
-  state: "open" | "merged" | "closed";
+  state: (typeof PULL_REQUEST_DETECTION_STATES)[number];
   hasMergeConflicts: boolean | null;
 };
+
+/**
+ * After Ship: GitHub reports merge conflicts, so conflict resolution runs. An
+ * unknown answer (null, still computing) is not a conflict.
+ */
+export function pullRequestNeedsConflictResolution(
+  detection: Pick<PullRequestDetection, "hasMergeConflicts">,
+): boolean {
+  return detection.hasMergeConflicts === true;
+}
+
+/**
+ * A verdict passes when it is complete and no acceptance criterion failed;
+ * a passing verdict ships, any other starts another round or fails the run.
+ */
+export function verificationPassed(
+  verdict: Pick<VerificationVerdict, "complete" | "acceptanceCriteria">,
+): boolean {
+  return verdict.complete && !verdict.acceptanceCriteria?.some((item) => item.status === "failed");
+}
 
 /**
  * How long a pipeline may stay in reconnect before it is failed.

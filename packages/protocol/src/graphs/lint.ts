@@ -126,6 +126,14 @@ function lintTemplate(state: GraphCompileState): void {
       consumed.add(portKey(source.node, source.port));
     }
   }
+  // A loop's `until` reads `<nodeId>.<port>`: that port decides the loop, so
+  // it is consumed even when no edge leaves it.
+  for (const loop of template.loops ?? []) {
+    for (const path of predicatePaths(loop.until)) {
+      const [node, port] = path.split(".");
+      if (node !== undefined && port !== undefined) consumed.add(portKey(node, port));
+    }
+  }
   for (const { node } of state.nodes.values()) {
     for (const port of node.inputs ?? []) {
       const first = port.firstIterationFrom;

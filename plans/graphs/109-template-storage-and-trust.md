@@ -147,6 +147,7 @@ Web wrappers (each takes an optional trailing `machine`): `listGraphTemplates`, 
 each, skips (and logs the id of) an invalid or duplicate one, and serves them read-only and
 duplicable. Until 108 lands the library lists user and project templates only; the service tests
 inject built-ins (`builtins` option).
+- 2026-10-29 (coordinator, merge with 108): `GRAPH_BUILTIN_TEMPLATE_FACTORIES` now registers 108's three built-ins. Summaries carry `engineStatus` (`active`/`retired`) for built-ins; a built-in is never `launchable` and `compileForLaunch` refuses it with `engine-template`, since it runs on its own engine (D5); a duplicate runs on the graph runtime. Test: "the shipped built-ins run on their engines: listed, never launched as graphs".
 
 ## Progress log
 

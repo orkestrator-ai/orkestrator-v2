@@ -17,6 +17,7 @@ import {
   graphUtf8Bytes,
 } from "@orkestrator/protocol/graphs/grammar";
 import {
+  graphBuiltinEngineStatus,
   graphBuiltinTemplates,
   graphTemplateExportFileName,
   graphTemplateExportText,
@@ -189,8 +190,9 @@ export class GraphTemplateService {
 
   /**
    * Compiles a stored template (`ref`) or an unsaved draft (`template`) under
-   * the project's ceiling. `forLaunch` refuses a template that is not trusted:
-   * an untrusted project template is listed but never compiled for a launch.
+   * the project's ceiling. `forLaunch` refuses a template that is not trusted
+   * (an untrusted project template is listed but never compiled for a launch)
+   * and a built-in, which runs on its own engine (D5).
    */
   async compile(
     target: { ref: GraphTemplateRef } | { template: unknown },
@@ -211,6 +213,12 @@ export class GraphTemplateService {
         resolved.trust === "changed"
           ? "This project template changed since it was approved; approve the new version before launching it"
           : "This project template is not trusted; approve it before launching it",
+      );
+    }
+    if (input.forLaunch && resolved.template.engine !== undefined) {
+      throw new GraphTemplateError(
+        "engine-template",
+        "A built-in template runs on its own engine; duplicate it to run a copy as a graph",
       );
     }
     const context = await this.compileContext(projectIdFor(target.ref, input.projectId));
@@ -617,12 +625,16 @@ export class GraphTemplateService {
       name: template.name,
       ...(template.description !== undefined ? { description: template.description } : {}),
       ...(template.engine !== undefined ? { engine: template.engine } : {}),
+      ...(resolved.ref.scope === "builtin" && graphBuiltinEngineStatus(template.id)
+        ? { engineStatus: graphBuiltinEngineStatus(template.id) }
+        : {}),
       revision: resolved.revision,
       digest: resolved.digest,
       readOnly: resolved.readOnly,
       trust: resolved.trust,
       ...(resolved.approvedAt ? { approvedAt: resolved.approvedAt } : {}),
-      launchable: resolved.trust === "trusted" && compileSummary.launchable,
+      launchable:
+        resolved.trust === "trusted" && template.engine === undefined && compileSummary.launchable,
       compile: compileSummary,
       ...(resolved.updatedAt ? { updatedAt: resolved.updatedAt } : {}),
     };

@@ -6,11 +6,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Session-control collaborator**: move Stop, resume, fork, actions, controls and sign-in out of `NativeAgentService`. Status: open.
+1. **Session-control collaborator**: move Stop, resume, fork, actions, controls and sign-in out of `NativeAgentService`. Status: done (`NativeAgentSessionOperations`; steer stays for task 2).
 2. **Dispatch and mail injection collaborator**: move the dispatch path and mail injection out only if the lease and fence ordering stays in one place; includes the open question about sharing a collaborator with Stop. Status: open.
 3. **Split the transcript projection by read model**: progressive reads apart from the legacy full projection, with shared caches under one owner. Status: open.
-4. **Move the projection's free helpers into a module**. Status: open.
-5. **Qualification per split**: direct tests for each new class, `forTesting()` reads moved with the state, end-to-end suites unchanged. Status: open.
+4. **Move the projection's free helpers into a module**. Status: done (`native-agent-projection-helpers.ts`).
+5. **Qualification per split**: direct tests for each new class, `forTesting()` reads moved with the state, end-to-end suites unchanged. Status: done for tasks 1 and 4; open for tasks 2 and 3.
 
 ### 1. Session-control collaborator
 
@@ -133,6 +133,92 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: one review of the final structure, still bisectable.
     - Cons: a very large diff against two of the most frequently changed backend files, inviting merge conflicts with feature work.
 
+## Assumptions and decisions
+
+Tasks 1 and 4 done 2026-10-28 on `todo-0057-native-agent-service-split`.
+`native-agent-service.ts` went from 4,420 to 3,868 lines and
+`native-agent-transcript-projection.ts` from 5,722 to 5,255. Both moves are
+verbatim: the moved method bodies match the originals token for token apart
+from `this.` becoming `this.host.`.
+
+### Task 1: collaborator width (sign-in included, steer left)
+
+Took the recommended scope (Stop, background-task stop, suggested prompts,
+the resume list and archive, resume, fork, session and MCP actions, controls
+and interactions) but **also moved sign-in** (`readProjectionAuthStatus`,
+`beginProjectionSignIn`, `cancelProjectionSignIn`,
+`signOutProjectionProvider`). The recommendation left sign-in because it
+"depends on the provider registry", but the code shows it needs only
+`provider` (which resume and the resume list already need) and
+`observeProvider`: one more host callback, not the registry. The task title
+and outstanding-work item 1 both name sign-in.
+
+Steer stays on the service, as recommended: `steerQueuedPrompt`,
+`performProjectionSteer` and `dispatchPersistedSteer` take the dispatcher's
+mutation fence around `storage.dispatchNativeAgentSteerOnce`, and the prompt
+queue reaches `dispatchQueuedAsyncQuestionAnswer` through them, so they belong
+with task 2. The `steer` session action reaches it through one host callback.
+
+### Task 1: one-line delegates on the service
+
+Recommended option taken. The 17 public methods stay on `NativeAgentService`
+as one-line delegates, so `commands-registry-native.ts`, the public-API fakes
+and the design host (which calls service methods by name) are unchanged.
+
+### Task 1: name and file
+
+`NativeAgentSessionOperations` in `native-agent-session-operations.ts`.
+`native-agent-session-controls.ts` already exists (the composer control
+merge), and "controls" here means composer controls, so a
+`NativeAgentSessionControl` beside it would read as the same subject.
+
+### Task 1: host shape
+
+The host has 15 members: six shared references (`storage`, `options`,
+`projections`, `promptQueues`, `interactions`, optional `permissionRules`) and
+nine callbacks (`now`, `assertProjectionInput`, `resolveProjectionSession`,
+`provider`, `observeProvider`, `trustedSessionInput`, `adoptSession`,
+`getProjection`, `performProjectionSteer`). The callbacks are arrow functions
+over the service, as 0010 wires every host, so service suites that patch a
+service seam (`provider`, `trustedSessionInput`, `observeBridgeConnection`)
+still reach the moved code unchanged. `getProjection` stays a callback rather
+than being inlined so the move stays verbatim. Stop holds no fence state: it
+takes `withSessionMutationIntent`, `fenceTurnInterrupt` and
+`releaseTurnInterrupt` from the dispatcher, as before.
+
+### Task 4: target module and what moves
+
+Recommended option taken: `native-agent-projection-helpers.ts`, with the
+projection module re-exporting the four helpers existing importers use
+(`attachProgressToToolRows`, `mergeContextUsageTurns`,
+`mergeNativeAgentQueueItems`, `withProviderContextWindow`), so no importer
+changed. The module-level functions and constants moved; the class-private
+type declarations (`ProjectedProgressiveTranscript`,
+`ProgressiveTranscriptEntry`, `ProgressiveHydrationEntry`,
+`ProviderTranscriptRow`, `ProjectedTranscriptMessage`,
+`PromptPresentationKind`) stay with the class, because they describe its
+cache state and should move with whichever read model owns that state in
+task 3.
+
+### Tasks 4 and 1: order and branching
+
+The recommended order is one change per task, 4, 3, 1, 2. This delegation
+asked for tasks 1 and 4 together, so they are two commits on one branch
+(task 4 first, then task 1), each reviewable and bisectable alone. Doing task
+1 before task 3 is safe: task 1 touches only the service, and task 3 only
+the projection.
+
+### Task 5: qualification
+
+`native-agent-session-operations.test.ts` drives the new class through its
+public interface with a fake host (Stop ordering and its abort ladder,
+resume and the replaced-session close, the resume list, fork, actions,
+sign-in, controls, interactions). `native-agent-projection-helpers.test.ts`
+covers the helpers module and checks the re-exports are the same functions.
+The new class owns no state, so no `forTesting()` reads moved;
+`collaborators(service)` lists it as `sessionOperations`. The
+`native-agent-service-*.test.ts` oracle suites are unchanged.
+
 Opened 2026-10-23 from
 [0010-native-agent-service-collaborators.md](0010-native-agent-service-collaborators.md)
 (decision 11), which removed the six-layer `extends` chain but left two files
@@ -164,7 +250,7 @@ well over the repository's 2,000-line guideline.
 
 ### Code
 
-1. Split the session-control operations (Stop, resume, fork, actions,
+1. Done: split the session-control operations (Stop, resume, fork, actions,
    controls, sign-in) out of `NativeAgentService` into a collaborator taking a
    host, as 0010 did for the stateful clusters. Keep the public methods as
    delegates.
@@ -175,7 +261,7 @@ well over the repository's 2,000-line guideline.
    progressive transcript/state/discovery reads and the legacy full
    projection with sync and history, sharing the tool-detail and
    projected-message caches through one owner.
-4. Move the projection module's free helpers
+4. Done: move the projection module's free helpers
    (`mergeContextUsageTurns`, `attachProgressToToolRows` and the rest) into
    their own module.
 

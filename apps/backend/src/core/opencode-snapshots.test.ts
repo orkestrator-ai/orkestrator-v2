@@ -199,6 +199,7 @@ describe("OpenCode history paging", () => {
     const snapshot = await snapshotOf(openCodeHistoryServer(12));
     expect(snapshot.messages).toHaveLength(12);
     expect(snapshot.complete).toBe(true);
+    expect(snapshot.historyPageable).toBe(true);
     expect(snapshot.historyCursor).toBeUndefined();
   });
 

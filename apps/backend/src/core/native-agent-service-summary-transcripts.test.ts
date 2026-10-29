@@ -84,6 +84,7 @@ function summaryProvider(
       historyEpoch: `${generation}:${history.epoch}`,
       freshness: "current",
       representation: "summary",
+      historyPageable: bridge.pages ?? true,
       ...(update.value.historyCursor
         ? {
             historyCursor: update.value.historyCursor,
@@ -446,15 +447,17 @@ describe("summary transcripts", () => {
       toolOutput: "ok",
       toolState: "completed",
     }));
-  for (const [name, rows, options, expected] of [
+  for (const [name, count, rows, options, expected] of [
     [
       "a source without direct pages",
+      250,
       (index: number) => message(`m${index}`),
       { pages: false },
       { base: 0, unpaged: 1, unnamed: 0 },
     ],
     [
       "a pageable source whose bounded view can name no cursor",
+      250,
       (index: number) => ({
         ...message(`m${index}`, shortCalls(index)),
         content: "c".repeat(4_000),
@@ -462,10 +465,20 @@ describe("summary transcripts", () => {
       { nameCursors: false },
       { base: 0, unpaged: 0, unnamed: 1 },
     ],
+    [
+      "a pageable source starting at its first message whose projected rows exceed the byte bound",
+      75,
+      (index: number) => ({
+        ...message(`m${index}`, shortCalls(index)),
+        content: "c".repeat(4_000),
+      }),
+      { pages: true },
+      { base: 0, unpaged: 0, unnamed: 1 },
+    ],
   ] as const) {
     test(`a joined page after ${name} counts under its own cause`, async () => {
       const history = {
-        messages: Array.from({ length: 250 }, (_, index) => rows(index)),
+        messages: Array.from({ length: count }, (_, index) => rows(index)),
         epoch: 1,
         revision: 1,
       };
@@ -491,6 +504,18 @@ describe("summary transcripts", () => {
           // Older history the view cannot page to directly.
           expect(view.value.historyPaging).not.toBe("direct");
           expect(view.value.historyComplete).toBe(false);
+          if (count < liveWindow.messages) {
+            const sent = await provider.transcriptSnapshot!("provider-session", {
+              limit: liveWindow.messages,
+              targetBytes: liveWindow.targetBytes,
+            });
+            if ("unchanged" in sent) throw new Error("expected a snapshot");
+            expect(sent.historyStartIndex).toBe(0);
+            expect(sent.messages).toHaveLength(count);
+            expect(sent.historyCursor).toBeUndefined();
+            expect(view.value.messages.length).toBeLessThan(count);
+            expect((view.value.messages[0] as TestMessage).id).not.toBe(history.messages[0]!.id);
+          }
           // What the renderer's `loadEarlierMessages` does without a direct cursor.
           const update = await service.getProjectionUpdate({
             ...identity,
@@ -514,6 +539,85 @@ describe("summary transcripts", () => {
             unnamed: after.unnamed - before.unnamed,
           }).toEqual(expected);
           expect(summaryStub.transcriptPage).not.toHaveBeenCalled();
+        },
+      );
+    });
+  }
+
+  for (const recovery of ["complete view", "direct cursor"] as const) {
+    test(`a later ${recovery} clears an earlier joined-page cause`, async () => {
+      const history = {
+        messages: Array.from({ length: 150 }, (_, index) => message(`m${index}`)),
+        epoch: 1,
+        revision: 1,
+      };
+      const bridge = { pages: false };
+      const { stub } = summaryProvider(history, bridge);
+      const provider = {
+        ...stub.provider,
+        interactiveSnapshot: mock(async () => ({
+          status: "idle" as const,
+          messages: history.messages,
+        })),
+      };
+      await withService(
+        { prefix: "orkestrator-summary-cleared-gap-", provider: async () => provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const input = {
+            ...identity,
+            viewVersion: 1 as const,
+            liveWindow: { ...liveWindow, messages: 50 },
+            forceSnapshot: true,
+          };
+          const initial = await service.getTranscriptUpdate(input);
+          if (initial.status !== "snapshot") throw new Error("expected a snapshot");
+          expect(initial.value.historyComplete).toBe(false);
+          expect(initial.value.historyPaging).not.toBe("direct");
+          const key = nativeAgentSessionStorageKey(
+            identity.environmentId,
+            identity.agent,
+            identity.logicalSessionKey,
+          );
+          expect(projectionInternals(service).directHistoryGaps.get(key)).toBe("unpaged-source");
+
+          bridge.pages = recovery === "direct cursor";
+          if (recovery === "complete view") history.messages = history.messages.slice(0, 80);
+          history.revision += 1;
+          const recovered = await service.getTranscriptUpdate({
+            ...input,
+            liveWindow,
+          });
+          if (recovered.status !== "snapshot") throw new Error("expected a snapshot");
+          if (recovery === "complete view") expect(recovered.value.historyComplete).toBe(true);
+          else expect(recovered.value.historyPaging).toBe("direct");
+          expect(projectionInternals(service).directHistoryGaps.has(key)).toBe(false);
+
+          // New rows can arrive before a caller next uses joined paging; attribution
+          // still follows the most recent view, which cleared the old cause.
+          if (recovery === "complete view") {
+            history.messages.push(
+              ...Array.from({ length: 150 }, (_, index) => message(`new${index}`)),
+            );
+            history.revision += 1;
+          }
+          const joined = await service.getProjectionUpdate({
+            ...identity,
+            syncVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          if (joined.status !== "snapshot") throw new Error("expected a snapshot");
+          expect(joined.historyCursor).toBeDefined();
+          const before = joinedCounts();
+          const page = await service.getMessagePage({
+            ...identity,
+            syncVersion: 1,
+            before: joined.historyCursor!,
+            limit: 60,
+          });
+          expect(page.messages.length).toBeGreaterThan(0);
+          expect(joinedCounts()).toEqual({ ...before, base: before.base + 1 });
         },
       );
     });

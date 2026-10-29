@@ -1109,6 +1109,10 @@ export class NativeAgentTranscriptProjection {
       progressiveReadWaiterCount: () => this.progressiveReadWaiterCount,
       projectedMessages: this.projectedMessages,
       directHistoryPages: this.directHistoryPages,
+      projectionHistory: this.projectionHistory,
+      directHistoryGaps: this.directHistoryGaps,
+      updateProjectionHistory: (...args: Parameters<typeof this.updateProjectionHistory>) =>
+        this.updateProjectionHistory(...args),
       toolDetailCache: this.toolDetailCache,
       toolDetailCacheBytes: () => this.toolDetailCacheBytes,
       /** Simulate capacity eviction of every tool detail. */
@@ -1811,6 +1815,7 @@ export class NativeAgentTranscriptProjection {
       const entry = this.projectionHistory.get(oldest);
       if (entry) this.projectionHistoryBytes -= entry.bytes;
       this.projectionHistory.delete(oldest);
+      this.directHistoryGaps.delete(oldest);
     }
   }
 
@@ -2665,11 +2670,14 @@ export class NativeAgentTranscriptProjection {
       byteOmitted;
     const complete = !pageable && sourceComplete !== false && !byteOmitted;
     // Only a view with older history to load can send a click to joined paging.
+    // A pageable source can omit its cursor at the first message, even when
+    // our byte bound then drops leading rows. Prefer explicit capability;
+    // snapshots predating that field can still prove paging with a cursor.
     this.recordDirectHistoryGap(
       sessionKey,
       complete || directHistoryCursor
         ? undefined
-        : snapshot.historyCursor
+        : (snapshot.historyPageable ?? Boolean(snapshot.historyCursor))
           ? "unnamed-cursor"
           : "unpaged-source",
     );
@@ -5024,6 +5032,7 @@ export class NativeAgentTranscriptProjection {
             const history = this.projectionHistory.get(historyKey);
             if (history) this.projectionHistoryBytes -= history.bytes;
             this.projectionHistory.delete(historyKey);
+            this.directHistoryGaps.delete(historyKey);
           }
           this.projectionMissingSince.delete(key);
         }

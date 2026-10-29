@@ -11,6 +11,7 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 import {
   nativeAgentSessionStorageKey,
+  NATIVE_HISTORY_CACHE_MAX_BYTES,
   type CommandInvoker,
   type NativeAgentRuntimeProvider,
   type NativeAgentProjectionInput,
@@ -111,6 +112,54 @@ async function withProjection(
 }
 
 describe("NativeAgentTranscriptProjection", () => {
+  test("history capacity eviction clears only the evicted session's direct-history gap", async () => {
+    const stub = createProviderStub("opencode");
+    await withProjection(stub.provider, async ({ projection }) => {
+      const state = projection.forTesting();
+      state.updateProjectionHistory(
+        sessionKey,
+        "provider-session",
+        [textMessage("m0", "old")],
+        0,
+        true,
+      );
+      state.directHistoryGaps.set(sessionKey, "unpaged-source");
+      const otherKey = `${sessionKey}:other`;
+      state.directHistoryGaps.set(otherKey, "unnamed-cursor");
+      // A single oversized retained history is allowed, but it evicts older entries.
+      state.updateProjectionHistory(
+        otherKey,
+        "other-session",
+        ["x".repeat(NATIVE_HISTORY_CACHE_MAX_BYTES)],
+        0,
+        true,
+      );
+      expect(state.projectionHistory.has(sessionKey)).toBe(false);
+      expect(state.directHistoryGaps.has(sessionKey)).toBe(false);
+      expect(state.projectionHistory.has(otherKey)).toBe(true);
+      expect(state.directHistoryGaps.get(otherKey)).toBe("unnamed-cursor");
+    });
+  });
+
+  test("a missing sync-v1 session clears its retained history and direct-history gap", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [textMessage("m0", "old")] }),
+    });
+    await withProjection(stub.provider, async ({ projection, host }) => {
+      const input = { ...identity, representation: "sync-v1" as const };
+      await projection.refreshProjection(input, true);
+      const state = projection.forTesting();
+      expect(state.projectionHistory.has(sessionKey)).toBe(true);
+      state.directHistoryGaps.set(sessionKey, "unpaged-source");
+      state.directHistoryGaps.set("unrelated-session", "unnamed-cursor");
+      host.resolveProjectionSession = async () => null;
+      expect(await projection.refreshProjection(input, true)).toBeNull();
+      expect(state.projectionHistory.has(sessionKey)).toBe(false);
+      expect(state.directHistoryGaps.has(sessionKey)).toBe(false);
+      expect(state.directHistoryGaps.get("unrelated-session")).toBe("unnamed-cursor");
+    });
+  });
+
   test.each([undefined, "sync-v1"] as const)(
     "a late generated title cannot change a replacement conversation's cached title or revision (%s)",
     async (representation) => {

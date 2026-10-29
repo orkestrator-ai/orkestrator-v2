@@ -202,8 +202,9 @@ cursor, and that cost a whole transcript read on bridges that page directly.
    - `history.joined-v1-page.unpaged-source`: the source has no direct pages
      (the Claude `/messages` fallback, a bridge without page routes);
    - `history.joined-v1-page.unnamed-cursor`: the source pages, but no kept
-     row named a cursor (the OpenCode error-row case) or the cursor was too
-     long to wrap;
+     row named a cursor (the OpenCode error-row case, or a first-message
+     snapshot whose projected rows exceed the backend byte bound) or the
+     cursor was too long to wrap;
    - `history.joined-v1-page`: the view had a direct cursor, or no view was
      read, so the caller paged with a v1 cursor it did not need.
    Before this change the base id counted every joined page. Covered by
@@ -214,8 +215,16 @@ cursor, and that cost a whole transcript read on bridges that page directly.
    still mints a joined v1 cursor`, which reads no view and so stays on the
    base id. The register row names the three ids and retires the path when
    the Claude `/messages` fallback row has retired, the floor is at or above
-   the first Stable release with 0232, the cursor-boundary and cursor-length
-   cases have direct recovery, and all three counters are quiet.
+   the first Stable release with 0232, the first-message byte-bound,
+   cursor-boundary and cursor-length cases have direct recovery, and all
+   three counters are quiet.
+   The source's `historyPageable` capability now distinguishes pages from
+   unpaged sources independently of cursor presence. Regression coverage
+   includes a pages-enabled bridge sending its entire 75-row history at
+   start index zero while the backend drops leading rows. A later complete
+   view or direct cursor clears an earlier cause; projection-history capacity
+   eviction and missing-session sync-v1 invalidation clear it too. These paths
+   are covered in the summary-transcripts and transcript-projection owners.
 4. Open, blocked on the support window. Once the register condition holds
    and the counter is quiet on the machines you can reach, remove joined
    paging, the v1 cursor namespace, `projectionHistory` and the renderer's
@@ -252,8 +261,9 @@ recommendation:
   restarts and is read through `get_compatibility_path_usage` and
   `/api/metrics`. Its rule is "no session, agent, URL or version", so the
   causes stand in for the provider. `unpaged-source` is in practice the Claude
-  `/messages` fallback. `unnamed-cursor` is the OpenCode error-row case or an
-  overlong cursor.
+  `/messages` fallback. `unnamed-cursor` includes the OpenCode error-row case,
+  an overlong cursor, and a pageable first-message snapshot whose projected
+  rows exceed the backend byte bound without naming a new cursor.
 
 The original reason names were `byte-bound-dropped-leading`,
 `window-not-whole` and `no-provider-cursor`. Since #1323 the first two only
@@ -354,7 +364,8 @@ the bridge and boundary retirements are separated. Cons:
 - the base id's older totals mix every cause, so read `lastSeenAt` after
   this release rather than `count`;
 - the cause is the latest view's, held in a map of at most 512 sessions, so a
-  page for a session evicted from it counts on the base id.
+  page for a session evicted from it counts on the base id. Projection-history
+  eviction and sync-v1 invalidation also discard the corresponding cause.
 
 Newer ids already persist safely through older backends sharing the
 database, since `normalizeCompatibilityPathUsage` keeps unknown ids on write.
@@ -366,7 +377,8 @@ The todo proposed "the floor at or above the first Stable release with item
 adopts direct cursors, so the condition is instead:
 - no source in the window lacks direct pages (the `/messages` fallback row
   has retired);
-- the cursor-boundary and cursor-length cases have direct recovery;
+- the first-message byte-bound, cursor-boundary and cursor-length cases have
+  direct recovery;
 - the floor has passed the first Stable release with 0232;
 - all three counters are quiet.
 

@@ -4,6 +4,7 @@ import {
   bugReportReaperEnvironments,
   updateBugReportBridgeFromEnvironment,
 } from "./bug-report-runtime.js";
+import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -2043,6 +2044,7 @@ export class OrkestratorBackend {
       // The registry writer lease is the data directory's single-writer
       // guard: a second backend sharing it never fires schedules.
       isWriter: () => this.context.registryWriterLease?.isHeld() ?? true,
+      enabled: () => schedulingEnabled(storage),
       ownerLabel: async (owner) => {
         if (owner.kind === "control-mcp") {
           const credential = controlMcp

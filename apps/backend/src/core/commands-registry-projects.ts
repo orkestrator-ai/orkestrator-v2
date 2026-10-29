@@ -967,6 +967,8 @@ export function registerProjectCommands(
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void context.runtime.diffStats.sync(context).catch(() => undefined);
+    // The experimental scheduling switch takes effect now, not at the next tick.
+    context.scheduledJobs?.wake();
   });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
@@ -1005,6 +1007,7 @@ export function registerProjectCommands(
       days: updated.global.terminalHistoryRetentionDays,
     });
     await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
+    context.scheduledJobs?.wake();
     return redactAppConfig(updated);
   });
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>

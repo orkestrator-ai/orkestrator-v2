@@ -44,7 +44,12 @@ function answer(owner: string, command: string, args: Record<string, unknown> = 
     return configs[owner];
   }
   if (command === "get_backend_profile")
-    return { revision: 1, displayName: "Leaf", colorToken: "blue", updatedAt: "" };
+    return {
+      revision: 1,
+      displayName: owner === "command" ? "Command" : "Leaf",
+      colorToken: "blue",
+      updatedAt: "",
+    };
   if (command === "get_node_status") return { nodeId: "command" };
   if (command === "get_node_summaries")
     return {
@@ -53,6 +58,7 @@ function answer(owner: string, command: string, args: Record<string, unknown> = 
       self: { nodeId: "command", displayName: "Command", projects: [], environments: [] },
     };
   if (command === "get_agent_model_catalog_cache") return { schemaVersion: 1 };
+  if (command === "list_scheduled_jobs") return { schedules: [], timeZone: "Europe/London" };
   if (command === "get_log_directory") return `/${owner}/logs`;
   if (command === "get_github_cli_status")
     return { installed: false, authenticated: false, canSignIn: false };
@@ -100,7 +106,7 @@ afterEach(() => {
   useAccountMachineStore.getState().choose(undefined);
   workspace.mockReset();
 });
-function mount(section: "general" | "review" = "general") {
+function mount(section: "general" | "review" | "experimental" = "general") {
   return render(
     <FederationProvider>
       <SettingsPage open onOpenChange={() => {}} defaultSection={section} />
@@ -169,4 +175,64 @@ test("locked command-node section saves independently loaded command config", as
   });
   expect(writes.some((write) => write.owner === "leaf")).toBe(false);
   await act(async () => {});
+});
+
+test("the Schedules section is offered only while experimental scheduling is on", async () => {
+  const view = mount();
+  await directory("/leaf/projects");
+  expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
+  expect(screen.getAllByRole("button", { name: "Experimental" }).length).toBeGreaterThan(0);
+  view.unmount();
+
+  configs.leaf = {
+    ...configs.leaf!,
+    global: { ...configs.leaf!.global, experimentalScheduling: true },
+  };
+  useConfigStore.setState(initialConfig);
+  mount();
+  await directory("/leaf/projects");
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Schedules" }).length).toBeGreaterThan(0),
+  );
+});
+
+test("a command window with a leaf selected only offers scheduling on the window machine", async () => {
+  delete window.orkestratorWorkspaceTarget;
+  workspace.mockImplementation(async (command: string, args?: Record<string, unknown>) =>
+    answer("command", command, args),
+  );
+  mount("experimental");
+  await screen.findByText("Codex Raw Event Logging");
+  expect(screen.queryByRole("switch", { name: "Enable scheduling" })).toBeNull();
+  expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
+  expect(writes).toEqual([]);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^Command/ }))[0]!);
+  const toggle = await screen.findByRole("switch", { name: "Enable scheduling" });
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    expect(writes).toContainEqual(
+      expect.objectContaining({
+        owner: "command",
+        global: expect.objectContaining({ experimentalScheduling: true }),
+      }),
+    ),
+  );
+  expect(writes.some((write) => write.owner === "leaf")).toBe(false);
+  expect(configs.leaf!.global.experimentalScheduling).not.toBe(true);
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Schedules" }).length).toBeGreaterThan(0),
+  );
+  fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
+  await screen.findByText("Codex Raw Event Logging");
+  expect(screen.queryByRole("switch", { name: "Enable scheduling" })).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", { name: "Schedules" })[0]!);
+  await waitFor(() =>
+    expect(workspace.mock.calls.some(([command]) => command === "list_scheduled_jobs")).toBe(true),
+  );
+  expect(
+    (window.orkestratorPortal!.invoke as ReturnType<typeof mock>).mock.calls.some(
+      ([command, args]) => command === "invoke_on_node" && args?.command === "list_scheduled_jobs",
+    ),
+  ).toBe(false);
 });

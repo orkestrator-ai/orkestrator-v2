@@ -25,6 +25,27 @@ stalled workers" in one durable tool call and end its turn.
 | `apps/web/src/components/settings/SchedulesSettings.tsx` | Settings → Schedules |
 | `packages/cli/src/client/commands/schedule.ts` | `orkestrator schedule …` |
 
+## Experimental switch
+
+Scheduling is experimental and off by default. `global.experimentalScheduling`
+(Settings → Experimental → Scheduling) turns it on for that backend. The
+switch is shown only when Settings is editing the window's own machine; the
+Schedules menu and actions use that same backend. While it is off:
+
+- Settings → Schedules is not offered.
+- Every `*_scheduled_job` registry command and every `schedule.*` public
+  action (so `orkestrator schedule …` and operator Control MCP calls) is
+  refused, the public actions with `capability-unavailable`.
+- Agents and coordinators are not offered `create_schedule`,
+  `list_schedules` or `cancel_schedule`.
+- The scheduler claims nothing (`ScheduledJobService` option `enabled`, read
+  each tick). Stored schedules are kept. When it is turned back on, a missed
+  fire runs or is skipped under the usual [missed-fire](#missed-fires) rules.
+
+Saving the global config wakes the scheduler, so the switch takes effect at
+once rather than at the next safety tick. Environment-deletion cleanup of
+schedules runs either way.
+
 ## Model
 
 A schedule (`ScheduledJob`) records:

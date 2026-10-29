@@ -177,3 +177,18 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Complete owning-file rerun:** `mise run test:logged -- --name codex-fixture-rerun -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (1.4 s).
 - **Evidence:** `orkestrator-test-run.bgBVht` under the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in this owner changed.
+
+
+## Scheduling switch review — 2026-10-29
+
+The exact `mise run test` retry (through `test:logged`, name
+`scheduling-review-full-tests`) repeated this unchanged owner's five-second
+deadline at 5010.52 ms. The complete owner passed alone (exit 0, 0.3 s):
+
+```sh
+mise run test:logged -- --name scheduling-fake-codex-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.w2FXh0/bridges.log.gz` under the host
+temporary directory after aggregate finalization. No implementation,
+assertion, deadline or skip changed in this owner.

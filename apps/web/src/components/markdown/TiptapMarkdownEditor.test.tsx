@@ -2,9 +2,32 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import type { Editor } from "@tiptap/react";
+import type {
+  MermaidRenderRequest,
+  MermaidRenderResponse,
+} from "@orkestrator/protocol/transcript-artifact-commands";
+import {
+  setMermaidRenderer,
+  setMermaidSvgSanitizer,
+} from "@/lib/chat/rich-markdown/mermaid-render";
+import { richRenderScheduler } from "@/lib/chat/rich-render-cache";
 import { TiptapMarkdownEditor, type TiptapMarkdownEditorHandle } from "./TiptapMarkdownEditor";
 
 type TiptapEditorElement = HTMLElement & { editor: Editor };
+
+function mermaidOk(): MermaidRenderResponse {
+  const svg = '<svg viewBox="0 0 200 100"><g class="node"><text>Template</text></g></svg>';
+  return {
+    ok: true,
+    svg,
+    diagramType: "flowchart",
+    rendererVersion: "test",
+    svgBytes: svg.length,
+    svgElements: 3,
+    edges: 1,
+    renderDigest: "digest",
+  };
+}
 
 function interceptStoreSyncTimeout() {
   const originalSetTimeout = globalThis.setTimeout;
@@ -148,6 +171,71 @@ describe("TiptapMarkdownEditor", () => {
     expect(editor.className).toContain("[&_pre_code]:py-0");
     expect(editor.className).toContain("[&_pre_code]:bg-transparent");
     expect(editor.className).toContain("[&_pre_code]:rounded-none");
+  });
+
+  test("draws a mermaid fence as a diagram above its collapsed, editable source", async () => {
+    const source = "flowchart LR\n  A[Template] --> B[Plan]";
+    const renderer = mock(async (_input: MermaidRenderRequest) => mermaidOk());
+    setMermaidRenderer(renderer);
+    setMermaidSvgSanitizer((svg) => ({ svg }));
+    richRenderScheduler.clear();
+    try {
+      render(
+        <TiptapMarkdownEditor
+          markdown={`Before\n\n\`\`\`mermaid\n${source}\n\`\`\`\n\nAfter`}
+          fontFamily="Fira Code"
+          fontSize={14}
+          onChange={() => {}}
+          onSave={() => {}}
+        />,
+      );
+
+      const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
+      await waitFor(() => {
+        expect(editor.querySelector("[data-markdown-diagram-preview] svg")).toBeTruthy();
+      });
+      expect(renderer.mock.calls[0]?.[0]).toMatchObject({ source });
+      const sourceBlock = editor.querySelector("[data-markdown-diagram-source]");
+      expect(sourceBlock?.getAttribute("data-state")).toBe("collapsed");
+      expect(sourceBlock?.textContent).toBe(source);
+      expect(editor.editor.getMarkdown()).toBe(
+        `Before\n\n\`\`\`mermaid\n${source}\n\`\`\`\n\nAfter`,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit source" }));
+      await waitFor(() => expect(sourceBlock?.getAttribute("data-state")).toBe("open"));
+      act(() => {
+        editor.editor.commands.insertContent("\n  B --> C[Run]");
+      });
+      expect(editor.editor.getMarkdown()).toContain(
+        `\`\`\`mermaid\n${source}\n  B --> C[Run]\n\`\`\``,
+      );
+      await waitFor(() => expect(renderer).toHaveBeenCalledTimes(2));
+      expect(renderer.mock.calls[1]?.[0]).toMatchObject({ source: `${source}\n  B --> C[Run]` });
+    } finally {
+      setMermaidRenderer(null);
+      setMermaidSvgSanitizer(null);
+    }
+  });
+
+  test("keeps other fences as plain code without a diagram preview", async () => {
+    render(
+      <TiptapMarkdownEditor
+        markdown={"```ts\nconst mermaid = true;\n```"}
+        fontFamily="Fira Code"
+        fontSize={14}
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    const editor = await screen.findByTestId("tiptap-markdown-editor");
+    await waitFor(() => {
+      expect(editor.querySelector("pre > code.language-ts")?.textContent).toBe(
+        "const mermaid = true;",
+      );
+    });
+    expect(editor.querySelector("[data-markdown-diagram]")).toBeNull();
   });
 
   test("debounces rich-editor changes into Markdown", async () => {

@@ -1,7 +1,12 @@
 # Composable agent graphs plan
 
 Status: proposed 2026-10-29; all decisions confirmed with the maintainer on
-2026-10-29. Nothing is built yet.
+2026-10-29. Delivered in
+[#1436](https://github.com/orkestrator-ai/orkestrator-v2/pull/1436): Phases 0
+and 1 are complete; Phase 2 is built, with two exit criteria waiting on live
+runs (D28, and Grok, Cursor and Linux); Phase 3's graph-runtime Multi Review is
+built behind a setting with the default unchanged (D23); Phase 4 items 401–405
+are built, 406 is dropped (D24); 501 waits on Phase 3 (D25).
 
 Work items and their status: [`plans/graphs/000-index.md`](graphs/000-index.md).
 Each Pn.m section below is one numbered file there (P1.7 is `107`).
@@ -34,7 +39,7 @@ decision means editing its row and saying why.
 | --- | --- | --- | --- |
 | D1 | How is the designer built? | A real canvas designer, built in two steps. Phase 1 ships a read-only canvas, JSON import and export, and the compile panel. Phase 2 adds drag-and-drop editing and the "describe a graph" agent. | Full editor in Phase 1 (built while the model is still settling); forms and JSON only, with a display-only canvas; AI-first authoring as the main path. |
 | D2 | Where do templates live? | Three scopes. *Built-in* templates ship in code, are read-only and can be duplicated. *User* templates live in app data, and new templates go there by default. *Project* templates in `.orkestrator/graphs/*.graph.json` are read too, but stay untrusted until the user approves their digest (§6.9). | Repository first (new templates saved into the repo); app only, with no repository templates. |
-| D3 | Parallel writers? | Not in version 1. At most one writing activation per workspace, and replicated nodes must be read-only or have no workspace access. Isolated per-branch worktrees, with select or merge, come in Phase 4. | Plan for them in version 1 (adds worktree lifecycle, disk and container work to the first release). |
+| D3 | Parallel writers? | Not in version 1. At most one writing activation per workspace, and replicated nodes must be read-only or have no workspace access. **Updated 2026-10-29 (item 403):** Phase 4 adds isolated per-branch worktrees for replicated writers. A replicated writer must opt in with `isolation: "worktree"`; each branch then writes its own Git worktree created from the node's `workspace@1` input, and the one-writer lock applies per worktree, while the branches only read the run's workspace. A `select-workspace` system node fast-forwards the run's branch to the judged branch, or an agent merge combines them. Reason: competing implementations (report §6.7, §9.3) need parallel writers, and isolation keeps the version 1 guarantee that no two writers share a checkout. | Plan for them in version 1 (adds worktree lifecycle, disk and container work to the first release). For item 403: let replicated writers share one checkout (their edits would collide); a bridge or environment per branch (a container publishes one port per bridge, and D7 keeps one environment per run); worktrees outside the environment root (providers' own write sandboxes allow only the working directory); a new `select` node kind (a system action already has specs, effects, mock support and designer forms). |
 | D4 | Enforcement floor | A node whose profile denies writes defaults to `minEnforcement: "provider-configured"`, so model pickers hide advisory providers (Grok today). The user can lower the floor per node, with an explicit acknowledgement. This mirrors the coordinator safety setting. | Require `enforced` (rules out OpenCode, Cursor, and Claude without its sandbox); warn only, offering every provider. |
 | D5 | Built-in flows | They stay on their engines and are described as read-only templates. "Duplicate to customise" produces a user template that runs on the graph runtime. Multi Review is ported in Phase 3 behind a flag once the parity tests pass. Porting the Build Pipeline is optional (Phase 5). | One engine for everything (commit to porting both); never port (two engines for good). |
 | D6 | Coordinator | It can list, launch, read and cancel saved templates over Control MCP. It gets a status wake when a run ends or waits for a person. It cannot create or edit templates. | Launch and author (drafts the user approves); no coordinator access. |
@@ -53,6 +58,13 @@ decision means editing its row and saying why.
 | D19 | Reviewer lens presets (P0.5) | Editable in Settings. Five presets ship (Security, Performance, Tests and coverage, API and compatibility, Maintainability), and the user can edit, delete and add to them. Free text is always available at launch. | Fixed presets plus free text; free text only. |
 | D20 | Waiting for CI | In version 1. A `wait-for-checks` system node ships in Phase 2. It reads the PR monitor's check status, waits within a bound, and emits a typed result, so graphs can do "open PR → wait for CI → fix if red". | Defer to Phase 4. |
 | D21 | Clean panel review (P0.3) | When a reviewer panel's consolidated report has no issues and no coverage gaps, the Build Pipeline skips Address and goes to Verify, as the single-reviewer path already does. | Always run Address on both paths. |
+| D22 | Phase 4 design notes (401–405) | Approved as built on 2026-10-29: the design notes in each item file stand (items fan-out recorded once per position with explicit truncation; sub-graphs inlined with namespaced ids and pinned digests; opt-in isolated worktrees with guard-checked confinement and `select-workspace`; per-node MCP selection with no user servers by default; signed or digest-checked share bundles with a review panel). The notes were written and built before agreement because the question about Phase 4 timed out; the maintainer reviewed and approved them afterwards. | Review each note in the pull request before merging; approve some and rework others. |
+| D23 | Multi Review default engine (Phase 3) | The graph-runtime Multi Review ships behind `multiReviewEngine` (and `ORKESTRATOR_MULTI_REVIEW_ENGINE`) with the bespoke engine still the default. The maintainer soaks the graph runtime by opting in, then decides the flip; the bespoke service is retired only after the flip, once no supported version needs it. | Flip the default now and keep the bespoke engine for rollback; flip and retire the bespoke service now. |
+| D24 | Coordinator authoring (406) | D6 stands: the coordinator lists, launches, reads and cancels saved templates and never creates or edits them. Item 406 is dropped. | Leave 406 blocked; replace D6 so the coordinator drafts templates that stay untrusted until the user approves them. |
+| D25 | Porting the Build Pipeline (501) | Not started. Decided after Multi Review has soaked on the graph runtime (D23), as Phase 5 says. | Drop the port now; start the parity work now. |
+| D26 | Looped Review built-in (P1.8) | Its engine was removed in #1417 (2026-10-29). The built-in stays as a *retired* description (`engineStatus: "retired"`): listed, duplicable onto the graph runtime, never launched on an engine. | Remove it from the built-ins. |
+| D27 | Taint sources and trusted prompt text (P1.7, §5.13, invariant 5) | Taint starts only at nodes deliberately given web access (`researcher`, an explicit `web.search` or `network` allow) and at `wait-for-checks`; a builder's ambient environment network does not count. In prompt templates every value taken from an input artifact (`input.*`, `item`, `ticket`) renders inside an evidence frame; launch parameters, `run`, `branch` and `lens` values are the user's or the template's own text and stay unframed. | Count every node with network access as a taint source (every graph with two builders would need an acknowledgement); frame every template value, parameters and lenses included. |
+| D28 | Live verification still open | A live `open-pull-request` (which opens a real pull request) is not run without the maintainer naming a test repository, so the Phase 2 "from launch to PR" exit criterion and item 207's live box stay open. | Run it against this repository; drop the criterion. |
 
 ## Non-goals
 
@@ -205,6 +217,9 @@ placeholders stay as they are, because Address is never drawn ahead. Update
 - The instructions are stored on the pipeline record, so restarts and rewinds
   reuse them.
 - The UI is a collapsible text field on each step card in `BuildLaunchDialog.tsx`.
+- The CLI round trip (a Phase 0 exit criterion) is delivered by work item
+  [007](graphs/007-cli-build-pipeline-launch.md): no public action launched a
+  Build Pipeline, so it adds `build.*` actions and `orkestrator build` commands.
 
 ### Phase 0 exit criteria
 

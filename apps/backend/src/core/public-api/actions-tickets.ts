@@ -71,7 +71,7 @@ function publicTicketDetail(task: KanbanTask): PublicTicketDetail {
   };
 }
 
-async function requireTicket(
+export async function requireTicket(
   context: PublicActionContext,
   projectId: string,
   ticketId: string,

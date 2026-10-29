@@ -7,6 +7,7 @@ import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table
 import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { marked } from "marked";
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
 
 const RICH_MARKDOWN_TOKEN_TYPES = new Set([
   "blockquote",
@@ -293,9 +294,11 @@ export function createMarkdownExtensions() {
   return [
     StarterKit.configure({
       code: false,
+      codeBlock: false,
       paragraph: false,
     }),
     MarkdownCode,
+    MarkdownCodeBlock,
     MarkdownParagraph,
     Markdown.configure({
       markedOptions: {

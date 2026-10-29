@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,
@@ -226,6 +227,17 @@ describe("build pipeline multi-model review", () => {
       expect(
         reviewCreates.find((entry) => entry.label === "Review · Consolidation")?.options?.policy,
       ).toMatchObject({ id: "pipeline" });
+      // Reviewers read the immutable package, so they are read-only like
+      // Multi Review's: plan mode and the mutation boundary on the session and
+      // on every turn. Consolidation only writes a report, so it is too.
+      for (const created of reviewCreates) {
+        expect(created.options).toMatchObject({ mode: "plan", readOnly: true });
+      }
+      for (const sent of provider.sent.filter((entry) => entry.sessionId.startsWith("review-"))) {
+        expect(sent).toMatchObject({ mode: "plan", readOnly: true });
+      }
+      // The panel's read-only guard baseline was taken before any reviewer ran.
+      expect(reviewing.reviewFanout?.workspaceBaseline).toMatchObject({ head: HEAD, paths: [] });
       const reviewerPrompts = provider.sent.filter(
         (entry) =>
           entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),
@@ -290,6 +302,53 @@ describe("build pipeline multi-model review", () => {
       const verifying = await advanceUntil(service, read, started.id, "verifying");
       expect(verifying.error ?? verifying.phase).toBe("verifying");
       expect(packageGeneration.verificationCount).toBe(3);
+    });
+  });
+
+  test("a clean consolidated report skips Address and goes straight to Verify", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.consolidationFindings = "clean";
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const verifying = await advanceUntil(service, read, started.id, "verifying");
+      expect(verifying.error ?? verifying.phase).toBe("verifying");
+      expect(verifying.structuredReview).toMatchObject({
+        reviewSummary: "Merged review.",
+        issues: [],
+        testCoverageGaps: [],
+      });
+      // The single-review path's rule: nothing to address, so no Address turn.
+      expect(verifying.sessions.some((session) => session.phase === "address")).toBe(false);
+      expect(provider.created.some((entry) => entry.phase === "address")).toBe(false);
+      expect(verifying.sessions[verifying.currentSessionIndex]?.phase).toBe("verify");
+      // The next stage opened before the fan-out record was dropped, as on the
+      // Address route.
+      expect(verifying.reviewFanout).toBeUndefined();
+    });
+  });
+
+  test("a consolidated report with only coverage gaps goes to Address", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.consolidationFindings = "coverage-gap";
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      expect(addressing.structuredReview?.issues).toEqual([]);
+      expect(addressing.structuredReview?.testCoverageGaps).toHaveLength(1);
+      expect(addressing.structuredReview?.testCoverageGaps[0]?.reviewModels).toEqual([
+        "claude/opus",
+      ]);
+      expect(addressing.sessions[addressing.currentSessionIndex]?.phase).toBe("address");
+      expect(addressing.reviewFanout).toBeUndefined();
     });
   });
 
@@ -1530,9 +1589,10 @@ describe("build pipeline multi-model review", () => {
     );
   });
 
-  test("continues from the immutable package when the live worktree HEAD moves", async () => {
+  test("fails the pass when a reviewer moved the worktree HEAD, keeping the evidence", async () => {
     await withPipeline(async ({ service, read, provider, worktree }) => {
-      provider.ambiguousModels.add("opus");
+      provider.runningModels.add("opus");
+      provider.runningModels.add("sonnet");
       const started = await service.start(
         startInput([
           { agent: "claude", model: "opus" },
@@ -1540,19 +1600,32 @@ describe("build pipeline multi-model review", () => {
         ]),
       );
       await advanceUntil(service, read, started.id, "reviewing");
-      await service.advanceNow(started.id);
+      for (let pass = 0; pass < 5; pass += 1) await service.advanceNow(started.id);
+      expect(
+        (await read(started.id)).reviewFanout?.reviewers.every((r) => r.status === "running"),
+      ).toBe(true);
+      // One reviewer commits; nothing is checked while no report has arrived.
       worktree.head = "2".repeat(40);
-
       await service.advanceNow(started.id);
-      const advanced = await read(started.id);
+      expect((await read(started.id)).phase).toBe("reviewing");
 
-      expect(advanced.phase).toBe("addressing");
-      expect(advanced.error).toBeUndefined();
-      expect(provider.aborted).toHaveLength(0);
+      // Its report arrives: the pass fails without waiting for the other one.
+      provider.runningModels.delete("opus");
+      await service.advanceNow(started.id);
+      const failed = await read(started.id);
+
+      expect(failed.phase).toBe("failed");
+      expect(failed.error).toBe(
+        "Review cannot be certified because review changed the environment HEAD",
+      );
+      // Nothing was reset, and the baseline the change is judged against stays.
+      expect(worktree.head).toBe("2".repeat(40));
+      expect(failed.reviewFanout?.workspaceBaseline?.head).toBe(HEAD);
+      expect(provider.sent.some((entry) => entry.sessionId.includes("consolidation"))).toBe(false);
     });
   });
 
-  test("does not probe the live worktree after the package is prepared", async () => {
+  test("fails the pass closed when the worktree cannot be observed as reports arrive", async () => {
     await withPipeline(async ({ service, read, provider, worktree }) => {
       provider.ambiguousModels.add("opus");
       const started = await service.start(
@@ -1568,9 +1641,170 @@ describe("build pipeline multi-model review", () => {
       await service.advanceNow(started.id);
       const advanced = await read(started.id);
 
-      expect(advanced.phase).toBe("addressing");
-      expect(advanced.error).toBeUndefined();
+      expect(advanced.phase).toBe("failed");
+      expect(advanced.error).toBe(
+        "Review cannot be certified because the backend could not verify Git state after review: probe failed (Error)",
+      );
     });
+  });
+
+  test("fails before any reviewer is dispatched when the baseline cannot be taken", async () => {
+    await withPipeline(async ({ service, read, provider, worktree }) => {
+      worktree.failAfterPackage = true;
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const failed = await advanceUntil(service, read, started.id, "failed");
+
+      expect(failed.error).toBe(
+        "Review cannot start because the backend could not establish the environment Git state: probe failed (Error)",
+      );
+      expect(reviewerSessionCreates(provider)).toHaveLength(0);
+      expect(failed.reviewFanout).toBeUndefined();
+    });
+  });
+
+  test("fails consolidation that moved the worktree HEAD before its report is used", async () => {
+    await withPipeline(async ({ service, read, provider, worktree }) => {
+      provider.runningConsolidation = true;
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      for (let pass = 0; pass < 10; pass += 1) {
+        if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+        await service.advanceNow(started.id);
+      }
+      expect((await read(started.id)).reviewFanout?.consolidation?.state).toBe("sent");
+      worktree.head = "2".repeat(40);
+      provider.runningConsolidation = false;
+
+      const failed = await advanceUntil(service, read, started.id, "failed", 5);
+
+      expect(failed.error).toBe(
+        "Review consolidation cannot be certified because consolidation changed the environment HEAD",
+      );
+      expect(failed.structuredReview).toBeUndefined();
+    });
+  });
+
+  test("refuses a consolidator that committed at submit time and accepts it once repaired", async () => {
+    await withPipeline(
+      async ({ service, read, provider, worktree, workflowResults }) => {
+        provider.runningConsolidation = true;
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let pass = 0; pass < 10; pass += 1) {
+          if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+          await service.advanceNow(started.id);
+        }
+        const consolidation = (await read(started.id)).reviewFanout!.consolidation!;
+        expect(consolidation.resultTransport).toBe("tool-v1");
+        const report = await provider.structured<unknown>(
+          consolidation.providerSessionId,
+          consolidation.requestId,
+        );
+        if (!report?.ok) throw new Error("expected a consolidated report");
+        const merged = report.value as StructuredReviewReport;
+        // The tool contract requires every issue to state its alternatives.
+        const submission = {
+          ...merged,
+          issues: merged.issues.map((issue) => ({ ...issue, alternativeFixes: [] })),
+        };
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+
+        worktree.paths = ["scratch.md"];
+        const refused = await workflowResults!.submit(scope, consolidation.requestId, submission);
+        expect(refused).toMatchObject({
+          ok: false,
+          error: { code: "worktree_changed", nextAction: "correct" },
+        });
+        expect(refused.ok ? "" : refused.error.message).toContain(
+          "Consolidation left 1 uncommitted path",
+        );
+        expect(refused.ok ? "" : refused.error.message).toContain("- `scratch.md`");
+
+        worktree.paths = [];
+        expect(
+          await workflowResults!.submit(scope, consolidation.requestId, submission),
+        ).toMatchObject({ ok: true });
+        provider.runningConsolidation = false;
+        const addressing = await advanceUntil(service, read, started.id, "addressing", 5);
+        expect(addressing.error ?? addressing.phase).toBe("addressing");
+      },
+      { toolMode: true },
+    );
+  });
+
+  test("refuses a reviewer that committed at submit time and accepts it once repaired", async () => {
+    await withPipeline(
+      async ({ service, read, provider, worktree, workflowResults }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let pass = 0; pass < 10; pass += 1) {
+          if (
+            (await read(started.id)).reviewFanout?.reviewers.every(
+              (reviewer) => reviewer.dispatchState === "sent",
+            )
+          )
+            break;
+          await service.advanceNow(started.id);
+        }
+        const reviewer = (await read(started.id)).reviewFanout!.reviewers[0]!;
+        expect(reviewer.resultTransport).toBe("tool-v1");
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+
+        // The reviewer commits, then tries to submit.
+        worktree.head = "2".repeat(40);
+        const refused = await workflowResults!.submit(
+          scope,
+          reviewer.requestId!,
+          reportFor("Final report"),
+        );
+        expect(refused).toMatchObject({
+          ok: false,
+          error: { code: "worktree_changed", nextAction: "correct" },
+        });
+        expect(refused.ok ? "" : refused.error.message).toContain(
+          `HEAD moved from \`${HEAD}\` to \`${worktree.head}\` during review`,
+        );
+        await service.advanceNow(started.id);
+        expect((await read(started.id)).phase).toBe("reviewing");
+
+        // It puts HEAD back within its turn, and the same report is accepted.
+        worktree.head = HEAD;
+        expect(
+          await workflowResults!.submit(scope, reviewer.requestId!, reportFor("Final report")),
+        ).toMatchObject({ ok: true });
+        provider.runningModels.delete("opus");
+        await service.advanceNow(started.id);
+        expect((await read(started.id)).phase).toBe("reviewing");
+        expect(
+          (await read(started.id)).reviewFanout?.reviewers.find(
+            (candidate) => candidate.id === reviewer.id,
+          )?.status,
+        ).toBe("completed");
+      },
+      { toolMode: true, toolKinds: ["review-report"] },
+    );
   });
 
   test("bounds blocked reviewer polling and aborts the parked sessions", async () => {

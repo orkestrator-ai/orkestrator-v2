@@ -9,14 +9,17 @@ import {
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
+import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
 import {
   agentSelectionSchema,
   asArray,
+  reviewerSelectionSchema,
   assertCoordinatorLaunchBaseOnBranch,
   buildPipelineSelection,
-  buildStepSchema,
+  buildReviewerSchema,
+  buildStepOverrideSchema,
   isRecord,
   nodeIdField,
   readAnnotations,
@@ -27,6 +30,7 @@ import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "./control-shared-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
+import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
 import type {
   ScheduleOwner,
@@ -59,6 +63,7 @@ export function registerCoordinatorWorkflowTools(
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
+  registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,
     coordinatorId: coordinatorScope.coordinatorId,
@@ -94,7 +99,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, and multi-review associations for this project with bounded authoritative summaries.",
+        "List durable worker, build-pipeline, multi-review and graph-run associations for this project with bounded authoritative summaries.",
       inputSchema: z.object({}),
       annotations: readAnnotations(),
     },
@@ -146,6 +151,12 @@ export function registerCoordinatorWorkflowTools(
               });
               const record = normalizedWorkflow(workflow);
               resource = record ? workflowSummary(record) : null;
+            } else if (kind === "graph-run") {
+              const run = await inv<unknown>("get_coordinator_graph_run", {
+                scope: coordinatorScope,
+                runId: resourceId,
+              });
+              resource = isRecord(run) && isRecord(run.run) ? run.run : null;
             }
           } catch {
             resource = { id: resourceId, status: "unavailable" };
@@ -242,7 +253,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Start a structured build pipeline",
       description:
-        "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set; any field you leave out keeps its saved default.",
+        "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         taskId: z.string().trim().min(1).max(200),
@@ -257,30 +268,30 @@ export function registerCoordinatorWorkflowTools(
           ),
         steps: z
           .object({
-            build: buildStepSchema.optional(),
-            review: buildStepSchema.optional(),
-            address: buildStepSchema.optional(),
-            verify: buildStepSchema.optional(),
-            pr: buildStepSchema.optional(),
-            "resolve-conflicts": buildStepSchema.optional(),
+            build: buildStepOverrideSchema.optional(),
+            review: buildStepOverrideSchema.optional(),
+            address: buildStepOverrideSchema.optional(),
+            verify: buildStepOverrideSchema.optional(),
+            pr: buildStepOverrideSchema.optional(),
+            "resolve-conflicts": buildStepOverrideSchema.optional(),
           })
           .strict()
           .optional()
           .describe(
-            "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step.",
+            "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step, or gives instructions for it. A step that names only instructions keeps its saved agent and model.",
           ),
         reviewers: z
-          .array(buildStepSchema)
+          .array(buildReviewerSchema)
           .min(1)
           .max(32)
           .optional()
           .describe(
-            "Optional. Replaces the saved Multi Review reviewer rows for the review step. Omit to use them. Set only when the user asks for specific reviewers.",
+            "Optional. Replaces the saved Multi Review reviewer rows (and their saved focus) for the review step. Omit to use them. Set only when the user asks for specific reviewers, for a focus (lens) per reviewer, or for instructions per reviewer.",
           ),
-        reviewPreparation: buildStepSchema
+        reviewPreparation: buildStepOverrideSchema
           .optional()
           .describe(
-            "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one.",
+            "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one, or for instructions for it; naming only instructions keeps the saved model.",
           ),
         taskTitle: z.string().trim().min(1).max(500),
         taskSnapshot: z.object({
@@ -297,7 +308,17 @@ export function registerCoordinatorWorkflowTools(
             .default([]),
         }),
         existingEnvironmentId: z.string().trim().min(1).max(200).optional(),
-        maxIterations: z.number().int().min(1).max(20).optional(),
+        maxIterations: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_BUILD_PIPELINE_ITERATIONS, {
+            error: `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}, the Build Pipeline's iteration limit.`,
+          })
+          .optional()
+          .describe(
+            `Optional. Review/fix/verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
+          ),
         nodeId: nodeIdField.describe(
           "Optional: run the build on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
         ),
@@ -420,12 +441,12 @@ export function registerCoordinatorWorkflowTools(
         targetBranch: z.string().trim().min(1).max(500),
         reviewInstruction: z.string().max(100_000).optional(),
         reviewers: z
-          .array(agentSelectionSchema)
+          .array(reviewerSelectionSchema)
           .min(1)
           .max(32)
           .optional()
           .describe(
-            "Optional. Omit to use the user's saved reviewer rows. Set only when the user asks for specific reviewers.",
+            "Optional. Omit to use the user's saved reviewer rows and their saved focus. Set only when the user asks for specific reviewers or a focus (lens) per reviewer.",
           ),
         reviewModel: agentSelectionSchema
           .optional()

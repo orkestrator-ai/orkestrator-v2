@@ -70,6 +70,10 @@ import {
   publicStatus,
   publicSessionReference,
 } from "./public.js";
+import {
+  parseWorkflowResultTurn,
+  type WorkflowResultTurn,
+} from "@orkestrator/protocol/workflow-results";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
@@ -993,6 +997,15 @@ async function handlePrompt(
   }
   const commandFields = readBridgePromptCommandFields(body);
   if (!commandFields.ok) throw new HttpError(400, commandFields.error);
+  // The workflow-result attempt this turn runs for, if any. Malformed fields
+  // are a caller error, refused before anything is journaled.
+  const workflowResult = parseWorkflowResultTurn(
+    body.workflowResultTool,
+    body.workflowResultKey,
+    body.workflowResultSlots,
+    body.workflowResultExtraTools,
+  );
+  if (!workflowResult.ok) throw new HttpError(400, workflowResult.error);
   // This bridge lists no provider commands, so no selection can have come from
   // its catalogue. Refuse it before anything is journaled rather than hand
   // the command's name to `agent.send` as if the SDK would execute it.
@@ -1099,6 +1112,7 @@ async function handlePrompt(
       attachments,
       body,
       clientSignal,
+      workflowResultTurn: workflowResult.turn,
     });
   } finally {
     if (state.dispatchClaim === claim) state.dispatchClaim = undefined;
@@ -1117,6 +1131,7 @@ async function dispatchClaimedPrompt(
     attachments: ReturnType<typeof parsePromptAttachments>;
     body: JsonObject;
     clientSignal: AbortSignal;
+    workflowResultTurn: WorkflowResultTurn | undefined;
   },
 ): Promise<void> {
   const { prompt, requestId, schema, readOnly, attachments, body, clientSignal } = input;
@@ -1143,6 +1158,9 @@ async function dispatchClaimedPrompt(
       prepared = true;
     }
     storeAgentMcp(state, body.agentMcp);
+    // Every prompt replaces it, so an ordinary turn after an attempt's turn
+    // gates nothing.
+    state.workflowResultTurn = input.workflowResultTurn;
     applyComposerPatch(state, parseComposerPatch(body));
     if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
       await detachAgent(state);

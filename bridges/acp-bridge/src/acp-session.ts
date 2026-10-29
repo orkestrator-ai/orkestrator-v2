@@ -7,7 +7,7 @@ import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { isArtifactServerToolCall } from "./acp-artifact-permission.js";
 import {
-  callsOwnWorkflowResult,
+  workflowResultTurnAllows,
   workflowResultTurnToolNames,
   type WorkflowResultTurn,
 } from "@orkestrator/protocol/workflow-results";
@@ -753,11 +753,13 @@ function wrappedToolArguments(input: unknown): unknown {
 
 /**
  * The allow option for a call to the current turn's own workflow-result
- * attempt: its submission tool, validation, status and, for a reviewer,
- * `report_finding`. Granted under every approval policy, including a
- * read-only turn's `deny`, but only while the turn declared that attempt
- * (`workflowResultTool` / `workflowResultKey` on its prompt) and only for a
- * call whose arguments name the attempt's own result key.
+ * attempt: each result slot's submission and validation tool, status, for a
+ * reviewer `report_finding`, and a graph activation's listed extra tools.
+ * Granted under every approval policy, including a read-only turn's `deny`,
+ * but only while the turn declared that attempt (`workflowResultTool` /
+ * `workflowResultKey`, and a graph activation's `workflowResultSlots` /
+ * `workflowResultExtraTools`, on its prompt) and only for a call whose
+ * arguments name the key that tool answers for (`workflowResultTurnAllows`).
  *
  * These tools exist only on the attempt's own capability and write nothing in
  * the workspace. Identity follows `orkestratorToolPermissionOption`: a
@@ -783,12 +785,16 @@ export function workflowResultPermissionOption(
     !wrapped &&
     xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
     typeof xaiTool.name === "string" &&
-    allowed.includes(xaiTool.name.trim());
+    allowed.includes(xaiTool.name.trim())
+      ? xaiTool.name.trim()
+      : undefined;
   const qualified =
-    typeof name === "string" &&
-    allowed.some((tool) => orkestratorToolIds(tool).includes(name.trim()));
-  if (!namespaced && !qualified) return undefined;
-  if (!callsOwnWorkflowResult(turn, wrapped ? wrappedToolArguments(input) : input)) {
+    typeof name === "string"
+      ? allowed.find((tool) => orkestratorToolIds(tool).includes(name.trim()))
+      : undefined;
+  const tool = namespaced ?? qualified;
+  if (tool === undefined) return undefined;
+  if (!workflowResultTurnAllows(turn, tool, wrapped ? wrappedToolArguments(input) : input)) {
     return undefined;
   }
   return allowOptionId(params);

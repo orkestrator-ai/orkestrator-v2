@@ -13,7 +13,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 3. **Prefix-cache measurement on real reviewer panels**: measure `cacheReadTokens` across a real Claude panel, then Codex. Status: partly done.
 4. **Overlap from real panels**: default two-reviewer panels and panels that record `consolidationOverlap`. Status: partly done.
 5. **What each provider's `cacheReadTokens` means**: the open question; Claude measured, the rest from code only. Status: partly done.
-6. **Deferred product decisions**: presets, lenses, adaptive stopping, a different default panel. Status: deferred (on tasks 2 to 4).
+6. **Deferred product decisions**: presets, lenses, adaptive stopping, a different default panel. Status: lenses shipped (2026-10-29, graphs item 005, decision D19); the rest deferred (on tasks 2 to 4).
 
 ### 1. Code items 1 to 3
 
@@ -135,11 +135,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 6. Deferred product decisions
 
-**Problem.** Presets (Quick, Balanced, Thorough), review lenses, adaptive stopping and a different default panel are all gated on tasks 2 to 4. Nothing is built, by design.
+**Problem.** Presets (Quick, Balanced, Thorough), adaptive stopping and a different default panel are gated on tasks 2 to 4. Review lenses were decided outside this file and shipped on 2026-10-29 (see **Current state**).
 
 **Context.** The constraints forbid dormant protocol fields, silent cancellation of reviewers and any lens or stopping rule that regresses corpus recall.
 
-**Investigation.** No preset or lens fields exist in `packages/protocol/src/multi-review-launch.ts` or elsewhere in the protocol, which matches the file. The first overlap data (77% single-source, position 4 adding 9 of 22 while using 5 to 21 million tokens against 0.8 to 5.4 million for the others) hints that a larger panel finds more but at high cost, which bears on presets more than on stopping.
+**Investigation.** No panel-preset field exists in the protocol. A lens field does since 2026-10-29: `ReviewerModelSelection.lens` (`packages/protocol/src/review-fanout.ts`), with its guard, presets and prompt section in `packages/protocol/src/review-lens.ts`. The first overlap data (77% single-source, position 4 adding 9 of 22 while using 5 to 21 million tokens against 0.8 to 5.4 million for the others) hints that a larger panel finds more but at high cost, which bears on presets more than on stopping.
 
 **Decisions.**
 
@@ -191,10 +191,12 @@ providers, and a cache measurement of real reviewer panels.
   carries no `maxLength` / `maxItems`, because several providers reject or
   strip them; the repair feedback states the limits instead.
 - **Stable prompt prefix.** `reviewerPanelSection`
-  (`multi-review-prompts.ts`) is the only per-reviewer text, and it is the last
-  section of the packaged, live-worktree and Build Pipeline reviewer prompts.
-  The invariant prefix is therefore byte-identical across a panel. The section
-  still says position carries no priority.
+  (`multi-review-prompts.ts`) is the first per-reviewer text in the packaged,
+  live-worktree and Build Pipeline reviewer prompts. Only the reviewer's lens
+  (and, in the Build Pipeline, the reviewer's own instructions) follow it
+  (`reviewerPanelTail`), so the invariant prefix is byte-identical across a
+  panel whatever lenses it uses. The section still says position carries no
+  priority.
 - **Launcher.** `packages/protocol/src/multi-review-launch.ts` provides
   `multiReviewDuplicateReviewerGroups`, `multiReviewDuplicateWarning` and a
   turn-count `multiReviewWorkEstimate` / `multiReviewWorkSummary`.
@@ -232,8 +234,33 @@ providers, and a cache measurement of real reviewer panels.
   `scripts/multi-review-evaluation.ts` (`prompts`, `score`, `panel`) is the
   operator entry point. The durable description is in
   [`review-preparation.md`](../../architecture/review-preparation.md#panel-value-measurements).
-- **Not built.** There are no preset or lens protocol fields. That is
-  intended until the measurements below exist.
+- **Reviewer lenses (shipped 2026-10-29).** Built by graphs item 005
+  (`plans/graphs/005-reviewer-lenses.md`, decision D19 in
+  `plans/composable-graphs.md`), not gated on the measurements here. What
+  shipped differs from the deferred idea below: a lens is free text
+  (`lens: { label, instruction }` on a reviewer row; label at most 64
+  characters, instruction at most 4 KiB), not a shared-protocol enum, and the
+  launchers offer editable presets (app setting `reviewLensPresets`, shipping
+  Security, Performance, Tests and coverage, API and compatibility,
+  Maintainability). Following the cache findings under **Qualification**, the
+  lens is the last per-reviewer section, after the panel position, so the
+  shared prefix stays byte-identical; the lens does not change what Claude can
+  cache today (one user message per reviewer). The reviewer prompt says to
+  keep reporting critical issues outside the focus. Consolidation evidence
+  carries each reviewer's label as `focus`, plus one paragraph telling the
+  consolidator not to drop or downgrade a finding for lying outside a focus;
+  a panel without lenses gets the same prompt as before. Overlap counts and
+  provenance are unchanged. Lenses are opt-in: with none set, every reviewer
+  and consolidation prompt is byte-identical to before. Evidence:
+  `review-lens.test.ts`, `multi-review-prompts.test.ts` (byte-identical prefix
+  across a panel with different lenses), `review-consolidation-evidence.test.ts`,
+  `multi-review-evaluation.test.ts` ("reviewer lenses over the corpus": every
+  corpus case with a lens on every reviewer keeps every source ID, names each
+  reviewer's focus and still scores its reference perfectly). The durable
+  description is in
+  [`review-preparation.md`](../../architecture/review-preparation.md#reviewer-lenses).
+- **Not built.** There is no panel-preset (Quick, Balanced, Thorough) field.
+  That is intended until the measurements below exist.
 
 ## Outstanding work
 
@@ -356,6 +383,12 @@ and real review stacks; batch them with
   - Still to do: overlap from the default two-reviewer panel, and from panels
     that record `consolidationOverlap` (this branch), so cited-versus-dropped
     counts are exact.
+- **Lensed panels.** Not run. Lenses shipped on 2026-10-29 (see **Current
+  state**). Compare real panels with and without lenses on the same change:
+  overlap, novel findings per position, and whether a lensed reviewer still
+  reports critical issues outside its focus. Also run `live` consolidation on
+  the corpus with lens labels attached (the deterministic checks in
+  `multi-review-evaluation.test.ts` cannot show model behaviour).
 
 ### Deferred until measured
 
@@ -364,10 +397,12 @@ quality results above:
 
 - Quick, Balanced and Thorough presets that expand into ordinary, editable
   reviewer rows. Their reviewer counts and models are not assumed.
-- Optional, non-exclusive review lenses (correctness, tests, security,
+- ~~Optional, non-exclusive review lenses (correctness, tests, security,
   maintainability, performance) as a shared-protocol enum. Consolidation sees
   the declared lens. Reviewers must still report critical issues outside their
-  lens.
+  lens.~~ Shipped 2026-10-29 as free-text lenses with editable presets (see
+  **Current state**). Whether lensed panels find more than unlensed ones is
+  not measured; see **Qualification**.
 - Opt-in adaptive stopping, with a minimum panel and a measured novelty or
   confidence rule.
 - Any change to the default two-reviewer panel.
@@ -394,7 +429,10 @@ quality results above:
 - Compaction never truncates findings, gaps, locations, severities or source
   IDs. Over budget, only optional prose is removed, in a fixed order.
 - Ship lenses or adaptive stopping only if recall does not regress on the
-  fixed corpus.
+  fixed corpus. For lenses the deterministic corpus checks hold (lens-free
+  prompts are unchanged, and with lenses every source finding reaches
+  consolidation and every reference scores perfectly); a live recall run with
+  lensed panels is still open under **Qualification**.
 
 ## Open questions
 

@@ -670,6 +670,19 @@ export async function ensureReviewPackageIsGitExcluded(
   runner: EnvironmentCommandRunner,
   filePath: string,
 ): Promise<void> {
+  await ensureWorkspaceArtifactIsGitExcluded(environment, runner, filePath, "Review package path");
+}
+
+/**
+ * Makes `.orkestrator` Git-excluded in the environment and proves `filePath`
+ * is: a sealed artifact must never be committed or show as a change.
+ */
+export async function ensureWorkspaceArtifactIsGitExcluded(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  filePath: string,
+  label: string,
+): Promise<void> {
   if (environment.environmentType === "local") {
     await addLocalWorkspaceArtifactsToGitExclude(environment.worktreePath!);
   } else {
@@ -678,7 +691,7 @@ export async function ensureReviewPackageIsGitExcluded(
   try {
     await runner("git", ["check-ignore", "--quiet", "--no-index", "--", filePath], 10_000);
   } catch (error) {
-    throw new Error(`Review package path is not Git-excluded: ${filePath}`, { cause: error });
+    throw new Error(`${label} is not Git-excluded: ${filePath}`, { cause: error });
   }
 }
 

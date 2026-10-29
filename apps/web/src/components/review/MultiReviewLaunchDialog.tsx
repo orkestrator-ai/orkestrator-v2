@@ -37,6 +37,13 @@ import {
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import { createUuid } from "@/lib/uuid";
+import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
+import {
+  ReviewLensField,
+  launchedReviewLens,
+  reviewLensDraftError,
+  useReviewLensPresets,
+} from "./ReviewLensField";
 
 interface PickerRow extends MultiReviewModelSelection {
   key: string;
@@ -49,6 +56,8 @@ export interface MultiReviewRowDefaults {
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
+  /** The saved focus for this reviewer position; reviewer rows only. */
+  lens?: ReviewLens;
 }
 
 export interface MultiReviewLaunchSelection {
@@ -116,14 +125,18 @@ function initialConfiguredRow(
   defaults: MultiReviewRowDefaults | undefined,
   fallback: MultiReviewRowDefaults,
   catalog: AgentModelCatalog,
+  options: { withLens?: boolean } = {},
 ): PickerRow {
-  return initialRow(
+  const row = initialRow(
     defaults?.defaultAgent ?? fallback.defaultAgent,
     catalog,
     defaults?.preferredModels ?? fallback.preferredModels,
     defaults?.preferredReasoningEfforts ?? fallback.preferredReasoningEfforts,
     defaults?.preferredFastModes ?? fallback.preferredFastModes,
   );
+  // Only a reviewer row takes its position's saved focus; the fallback's never
+  // spreads to another position.
+  return options.withLens && defaults?.lens ? { ...row, lens: { ...defaults.lens } } : row;
 }
 
 function cleanRow(row: PickerRow): MultiReviewModelSelection {
@@ -132,7 +145,14 @@ function cleanRow(row: PickerRow): MultiReviewModelSelection {
     model: row.model,
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
     ...(typeof row.fastMode === "boolean" ? { fastMode: row.fastMode } : {}),
+    ...launchedReviewLens(row.lens),
   };
+}
+
+/** A preparation or fix row: never a lens. */
+function cleanStepRow(row: PickerRow): MultiReviewModelSelection {
+  const { lens: _lens, ...selection } = cleanRow(row);
+  return selection;
 }
 
 /**
@@ -221,7 +241,7 @@ function initialRows({
       : [fallbackDefaults, secondReviewerDefaults ?? fallbackDefaults];
   return {
     reviewers: configuredReviewers.map((defaults) =>
-      initialConfiguredRow(defaults, fallbackDefaults, resolvedCatalog),
+      initialConfiguredRow(defaults, fallbackDefaults, resolvedCatalog, { withLens: true }),
     ),
     reviewModel: initialConfiguredRow(reviewModelDefaults, fallbackDefaults, resolvedCatalog),
     fixModel: initialConfiguredRow(fixModelDefaults, fallbackDefaults, resolvedCatalog),
@@ -237,8 +257,8 @@ export function defaultMultiReviewLaunchSelection(
     autoFix: defaults.defaultAutoFix ?? false,
     autoPr: defaults.defaultAutoPr ?? false,
     reviewers: rows.reviewers.map(cleanRow),
-    reviewModel: cleanRow(rows.reviewModel),
-    fixModel: cleanRow(rows.fixModel),
+    reviewModel: cleanStepRow(rows.reviewModel),
+    fixModel: cleanStepRow(rows.fixModel),
   };
 }
 
@@ -262,6 +282,7 @@ function ModelRow({
   onReorderFavorites,
   onChange,
   onRemove,
+  lensPresets,
 }: {
   row: PickerRow;
   label: string;
@@ -272,6 +293,8 @@ function ModelRow({
   onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
   onChange: (row: PickerRow) => void;
   onRemove?: () => void;
+  /** Present on reviewer rows, which offer a Focus. */
+  lensPresets?: readonly ReviewLensPreset[];
 }) {
   const selected = modelsForAgent(catalog, row.agent).find((model) => model.id === row.model);
   const reasoning =
@@ -354,6 +377,18 @@ function ModelRow({
         title={label}
         className="min-h-11 w-full border border-border/70 bg-input-surface py-2.5 md:max-w-none md:flex-1"
       />
+      {lensPresets && (
+        <ReviewLensField
+          id={`multi-review-focus-${row.key}`}
+          reviewerLabel={label}
+          value={row.lens}
+          presets={lensPresets}
+          onChange={(lens) => {
+            const { lens: _previous, ...rest } = row;
+            onChange(lens ? { ...rest, lens } : rest);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -376,6 +411,7 @@ export function MultiReviewLaunchDialog({
   onConfirm,
 }: MultiReviewLaunchDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const lensPresets = useReviewLensPresets();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const makeRow = () =>
     initialRow(
@@ -412,6 +448,7 @@ export function MultiReviewLaunchDialog({
         .join(" "),
     [reviewers],
   );
+  const lensError = reviewers.some((row) => reviewLensDraftError(row.lens) !== null);
   const workSummary = multiReviewWorkSummary(
     multiReviewWorkEstimate({ reviewerCount: reviewers.length, autoFix, autoPr }),
   );
@@ -477,13 +514,13 @@ export function MultiReviewLaunchDialog({
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy) return;
+            if (busy || lensError) return;
             onConfirm({
               autoFix,
               autoPr,
               reviewers: reviewers.map(cleanRow),
-              reviewModel: cleanRow(reviewModel),
-              fixModel: cleanRow(fixModel),
+              reviewModel: cleanStepRow(reviewModel),
+              fixModel: cleanStepRow(fixModel),
             });
           }}
         >
@@ -497,7 +534,8 @@ export function MultiReviewLaunchDialog({
                 <div>
                   <h3 className="text-sm font-semibold">Review models</h3>
                   <p className="text-xs text-zinc-500">
-                    Each model receives its own isolated review session.
+                    Each model receives its own isolated review session. A focus asks one reviewer
+                    to look hardest at an area; it still reports critical issues outside it.
                   </p>
                 </div>
                 <Button
@@ -540,6 +578,7 @@ export function MultiReviewLaunchDialog({
                         ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
                         : undefined
                     }
+                    lensPresets={lensPresets}
                   />
                 ))}
               </div>
@@ -632,7 +671,7 @@ export function MultiReviewLaunchDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy || reviewers.length === 0}>
+            <Button type="submit" disabled={busy || lensError || reviewers.length === 0}>
               {busy ? "Starting Multi Review…" : `Start ${reviewers.length}-model review`}
             </Button>
           </DialogFooter>

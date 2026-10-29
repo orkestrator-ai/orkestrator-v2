@@ -11,6 +11,25 @@ import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { withoutRetiredParameterValues } from "./native-agent-retired-parameters.js";
 
 /**
+ * The workflow-result attempt a turn runs for, for a bridge that gates tools
+ * itself: the attempt's tool and key and, for a graph activation, every
+ * result slot and the extra tools its credential lists. A read-only turn lets
+ * exactly those tools through, and only for calls naming the turn's own keys.
+ * Without the attempt's own connection there is no attempt to name.
+ */
+function workflowResultTurnFields(options: ProviderSendOptions): Record<string, unknown> {
+  if (!options.agentMcp || !options.workflowResultTool || !options.workflowResultKey) return {};
+  return {
+    workflowResultTool: options.workflowResultTool,
+    workflowResultKey: options.workflowResultKey,
+    ...(options.workflowResultSlots ? { workflowResultSlots: options.workflowResultSlots } : {}),
+    ...(options.workflowResultExtraTools
+      ? { workflowResultExtraTools: options.workflowResultExtraTools }
+      : {}),
+  };
+}
+
+/**
  * The JSON body of `POST /session/:id/prompt` for an HTTP bridge.
  *
  * Every bridge reads the shared fields; each agent adds the controls its
@@ -55,12 +74,14 @@ export function bridgePromptBody(
           // Also sent on plan turns: it decides who approves tools once the
           // plan is accepted.
           ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+          ...workflowResultTurnFields(options),
         }
       : agent === "codex"
         ? {
             fastMode: options.fastMode ?? connection.fastMode,
             agentMcp: options.agentMcp,
             workflowResultTool: options.workflowResultTool,
+            ...workflowResultTurnFields(options),
             ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
           }
         : agent === "cursor" || agent === "grok" || agent === "pi"
@@ -70,17 +91,9 @@ export function bridgePromptBody(
               reasoningEffort: options.effort ?? connection.effort,
               mode: options.mode,
               agentMcp: options.agentMcp,
-              // Grok and Pi gate tools in the bridge, so a read-only turn needs
+              // These bridges gate tools themselves, so a read-only turn needs
               // to know which attempt's tools it may let through.
-              ...(agent !== "cursor" &&
-              options.agentMcp &&
-              options.workflowResultTool &&
-              options.workflowResultKey
-                ? {
-                    workflowResultTool: options.workflowResultTool,
-                    workflowResultKey: options.workflowResultKey,
-                  }
-                : {}),
+              ...workflowResultTurnFields(options),
             }
           : { fastMode: options.fastMode ?? connection.fastMode }),
   };

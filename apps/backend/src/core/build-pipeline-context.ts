@@ -19,7 +19,6 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
   isBuildPipeline,
-  isActiveBuildPhase,
   BUILD_PIPELINE_VERSION,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
@@ -33,6 +32,11 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
+import {
+  buildPipelineSessionStage,
+  buildPipelineStage,
+  sessionPhaseForBuildPhase,
+} from "./build-pipeline-stages.js";
 import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import {
   errorMessage,
@@ -62,8 +66,13 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { resetWorktreeToCommit } from "./build-pipeline-code-rewind.js";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import {
+  assertNoOtherWorkflowWriting,
+  resetWorktreeToCommit,
+  withWorkspaceCodeRewindReservation,
+  type EnvironmentGit,
+} from "./workspace-code-rewind.js";
+import type { WorkspaceWriters } from "./workspace-writers.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -105,6 +114,12 @@ export type BuildPipelineServiceOptions = {
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */
   assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
+  /**
+   * D3 across engines (`workspace-writers.ts`): a stage start claims the
+   * checkout against graph runs, and every record read or saved is noted so
+   * graph runs see what the pipeline holds. Absent: not consulted.
+   */
+  workspaceWriters?: WorkspaceWriters;
 } & KeyedWorkflowServiceOptions;
 
 export class BuildPipelineContext {
@@ -209,11 +224,13 @@ export class BuildPipelineContext {
     phase: ResumableBuildPhase,
     validationPlan = false,
   ): WorkflowResultKind | undefined {
-    if (phase === "building" || phase === "fixing")
-      return validationPlan ? "validation-plan" : "review-preparation";
-    if (phase === "reviewing") return "review-report";
-    if (phase === "verifying") return "verification-result";
-    return undefined;
+    // An implementation-phase turn sent the validation-plan schema: the
+    // dedicated package preparation.
+    if (validationPlan && (phase === "building" || phase === "fixing")) {
+      return buildPipelineStage("preparation").result ?? undefined;
+    }
+    const sessionPhase = sessionPhaseForBuildPhase(phase);
+    return sessionPhase ? (buildPipelineSessionStage(sessionPhase).result ?? undefined) : undefined;
   }
 
   async workflowAgentMcp(
@@ -359,7 +376,10 @@ export class BuildPipelineContext {
   }
 
   /** Keeps the keyed index current after an authoritative read or durable write. */
-  noteRecord(pipelineId: string, snapshot: unknown): void {
+  noteRecord(pipelineId: string, snapshot: unknown, revision?: number): void {
+    if (revision !== undefined) {
+      this.options.workspaceWriters?.notePipeline(pipelineId, snapshot, revision);
+    }
     this.supervisor?.note(
       pipelineId,
       buildPipelineObligation(snapshot),
@@ -374,7 +394,7 @@ export class BuildPipelineContext {
 
   async requireRecord(pipelineId: string): Promise<PersistedBuildPipeline> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    this.noteRecord(pipelineId, record?.snapshot);
+    this.noteRecord(pipelineId, record?.snapshot, record?.revision);
     if (!record || !isBuildPipeline(record.snapshot)) {
       throw new Error(`Build pipeline not found: ${pipelineId}`);
     }
@@ -417,37 +437,22 @@ export class BuildPipelineContext {
       await this.storage.deleteBuildPipelineTranscriptsFor(pipeline.id).catch(() => undefined);
     }
     pipeline.backendRevision = saved.revision;
-    this.noteRecord(pipeline.id, pipeline);
+    this.noteRecord(pipeline.id, pipeline, saved.revision);
     return saved;
   }
 
   async withCodeRewindReservation<T>(pipeline: BuildPipeline, run: () => Promise<T>): Promise<T> {
-    const fence = this.options.environmentFence ?? this.rewindFence;
-    return fence.withExclusiveMutation(pipeline.environmentId, [], async () => {
-      // Resolve the path only after moves/replacements are excluded. A write
-      // already in flight on that path makes binding refuse the reservation.
-      const environment = await this.storage.getEnvironment(pipeline.environmentId);
-      if (!environment) throw new Error("Environment not found");
-      fence.bindMovePaths(
-        pipeline.environmentId,
-        environment.worktreePath ? [environment.worktreePath] : [],
-      );
-      for (const record of await this.storage.listAllBuildPipelines()) {
-        const sibling = record.snapshot;
-        if (
-          record.id !== pipeline.id &&
-          isBuildPipeline(sibling) &&
-          sibling.environmentId === pipeline.environmentId &&
-          (isActiveBuildPhase(sibling.phase) ||
-            sibling.sessions.some((session) => session.status === "running"))
-        ) {
-          throw new Error(
-            "Another pipeline may write to this environment. Pause it before rewinding code.",
-          );
-        }
-      }
-      await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
-      return run();
+    return withWorkspaceCodeRewindReservation({
+      fence: this.options.environmentFence ?? this.rewindFence,
+      storage: this.storage,
+      environmentId: pipeline.environmentId,
+      assertQuiet: async () => {
+        await assertNoOtherWorkflowWriting(this.storage, pipeline.environmentId, {
+          pipelineId: pipeline.id,
+        });
+        await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
+      },
+      run,
     });
   }
 

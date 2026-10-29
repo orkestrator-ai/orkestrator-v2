@@ -12,7 +12,12 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { claudeJsonPath } from "./claude-home.js";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentAllowsUserMcpServer,
+  nativeAgentRestrictsUserMcp,
+  nativeAgentUserMcpGrant,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { readJsonSliceCached, readJsonSliceCachedWithDigest } from "./json-file-cache.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import {
@@ -363,9 +368,55 @@ function normalizeScope(scope: McpSourceScope | boolean): McpSourceScope {
 export function mcpSourceScopeForPolicy(
   policy: NativeAgentExecutionPolicy | undefined,
 ): McpSourceScope {
-  if (isCoordinatorReadOnlyPolicy(policy)) return "none";
+  if (isCoordinatorReadOnlyPolicy(policy)) {
+    // A read-only turn of a graph node that was granted user servers (item
+    // 404) reads the user's own file for them, and only them
+    // (`userMcpServerFilter`). A coordinator's policy never carries a grant,
+    // and a coordinator process replaces whatever policy a request names.
+    return (nativeAgentUserMcpGrant(policy)?.length ?? 0) > 0 ? "user" : "none";
+  }
   if (policy?.projectResources === false) return "user";
   return "all";
+}
+
+/**
+ * The configured servers a turn under `policy` may load, as a filter over
+ * server names (item 404): the policy's `userMcpServers` selection minus its
+ * `mcp:<server>` denials. `undefined` when the policy narrows nothing, so an
+ * ordinary session loads every configured server as before.
+ */
+export function userMcpServerFilter(
+  policy: NativeAgentExecutionPolicy | undefined,
+): ((name: string) => boolean) | undefined {
+  if (!nativeAgentRestrictsUserMcp(policy)) return undefined;
+  return (name) => nativeAgentAllowsUserMcpServer(policy, name);
+}
+
+/**
+ * The granted user servers (item 404) this turn actually loaded, whose tools
+ * the turn approves up front. Empty for a policy without a selection.
+ */
+export function claudeGrantedMcpServerNames(
+  policy: NativeAgentExecutionPolicy | undefined,
+  loaded: ReadonlySet<string>,
+): string[] {
+  return (nativeAgentUserMcpGrant(policy) ?? []).filter((name) => loaded.has(name));
+}
+
+/**
+ * Query options for a policy that selects user MCP servers (item 404).
+ *
+ * The CLI loads the servers of every enabled settings source itself, so an
+ * inline set filtered to the grant would not keep the others out.
+ * `strictMcpConfig` makes the inline set the only one: no user, project or
+ * plugin MCP file is read. Plugin servers therefore never load for such a
+ * session, which is right: they cannot be named in a grant. A policy that
+ * selects nothing keeps today's behaviour (plugin servers load).
+ */
+export function claudeUserMcpQueryOptions(policy: NativeAgentExecutionPolicy | undefined): {
+  strictMcpConfig?: true;
+} {
+  return nativeAgentUserMcpGrant(policy) !== undefined ? { strictMcpConfig: true } : {};
 }
 
 async function loadScopedMcpServers(
@@ -434,12 +485,20 @@ export async function getMcpRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env,
   connection?: AgentMcpConnection,
   sources: McpSourceScope | boolean = "all",
+  /** Which configured servers may load (`userMcpServerFilter`); all when absent. */
+  allowConfigured?: (name: string) => boolean,
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
   revision: McpConfigRevision;
 }> {
-  const { configs, revision } = await loadScopedMcpServers(cwd, normalizeScope(sources));
+  const scoped = await loadScopedMcpServers(cwd, normalizeScope(sources));
+  const { revision } = scoped;
+  // A configured server outside the session's selection is never loaded and
+  // never named: with `strictMcpConfig` the CLI starts only this inline set.
+  const configs = allowConfigured
+    ? Object.fromEntries(Object.entries(scoped.configs).filter(([name]) => allowConfigured(name)))
+    : scoped.configs;
   const agentServer =
     getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);

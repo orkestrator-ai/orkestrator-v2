@@ -32,6 +32,14 @@ import {
   type TicketKind,
 } from "./ticket-sections.js";
 import { isNativeAgentModelSubstitution } from "./native-agent.js";
+import {
+  PIPELINE_ADDRESS_REPORT_KIND,
+  isPipelineFixResult,
+  type PipelineAddressReportKind,
+  type PipelineFixResult,
+} from "./build-pipeline-address-report.js";
+import { isBuildStepInstructions } from "./build-pipeline-stage-instructions.js";
+import { isReviewLens, type ReviewLens } from "./review-lens.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -336,6 +344,19 @@ export interface BuildStepConfig {
   reasoningEffort?: string;
   /** Fast/Normal choice retained for exact prompt recovery. */
   fastMode?: boolean;
+  /**
+   * The user's own instructions for this step, at most 16 KiB of UTF-8
+   * (`MAX_BUILD_STEP_INSTRUCTIONS_BYTES`). Rendered as a framed
+   * section after the stage's contract (`build-pipeline-stage-instructions.ts`);
+   * Fix reads Build's.
+   */
+  instructions?: string;
+  /**
+   * A reviewer's focus (`review-lens.ts`): read on the review step and on each
+   * `reviewers` entry only, and dropped from every other step when stored.
+   * Rendered after the reviewer's panel position and before its instructions.
+   */
+  lens?: ReviewLens;
 }
 
 export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
@@ -836,6 +857,21 @@ export interface PipelineSession {
    */
   acceptanceCriteriaResults?: PipelineCriterionResult[];
   /**
+   * The result kind this Address session was opened to submit
+   * (`build-pipeline-address-report.ts`). It is the recorded marker of the
+   * typed Address → Verify handoff: Verify reads {@link fixResult} from a
+   * session that has it, and the last assistant text from an Address session
+   * without it (one started before the typed handoff existed). Absent on other
+   * phases.
+   */
+  addressReportKind?: PipelineAddressReportKind;
+  /**
+   * The bounded copy of the `fix-result` this Address session submitted and
+   * the backend accepted. Absent until then, on other phases, and on Address
+   * sessions without {@link addressReportKind}.
+   */
+  fixResult?: PipelineFixResult;
+  /**
    * Why this session's attempt failed, at most
    * {@link MAX_PIPELINE_SESSION_ERROR_LENGTH} characters. Set for a fan-out
    * reviewer or stage that failed, retained when the pipeline moves on.
@@ -851,13 +887,16 @@ export interface PipelineSession {
    */
   structuredResultStatus?: "pending" | "accepted";
   /**
-   * Immutable Git state captured before a writable verification turn starts.
+   * Immutable Git state captured before a guarded turn starts: a verification
+   * turn, or a single review over an immutable package (the read-only guard,
+   * `apps/backend/src/core/workspace-read-only-guard.ts`).
    *
    * Verification may write ignored compiler output and caches, but its result
    * is certified only if HEAD and the set of Git-visible uncommitted paths stay
    * unchanged. Addressing can leave paths in this baseline; verification must
    * preserve them. Persisting it keeps the guard valid across backend restarts.
-   * Packaged review reads an immutable package and has no live-worktree baseline.
+   * A panel review keeps one baseline for the whole pass on
+   * `reviewFanout.workspaceBaseline` instead.
    */
   validationHeadAtStart?: string;
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
@@ -1427,7 +1466,9 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
     AGENTS.has(value.agent as BuildPipelineAgent) &&
     isOptionalNonBlankString(value.model) &&
     isOptionalNonBlankString(value.reasoningEffort) &&
-    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
+    (value.instructions === undefined || isBuildStepInstructions(value.instructions)) &&
+    (value.lens === undefined || isReviewLens(value.lens))
   );
 }
 
@@ -1594,6 +1635,12 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.verificationFeedback.length <= MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH)) &&
     (value.acceptanceCriteriaResults === undefined ||
       (value.phase === "verify" && isPipelineCriterionResults(value.acceptanceCriteriaResults))) &&
+    (value.addressReportKind === undefined ||
+      (value.phase === "address" && value.addressReportKind === PIPELINE_ADDRESS_REPORT_KIND)) &&
+    (value.fixResult === undefined ||
+      (value.phase === "address" &&
+        value.addressReportKind !== undefined &&
+        isPipelineFixResult(value.fixResult))) &&
     (value.error === undefined ||
       (isNonBlankString(value.error) && value.error.length <= MAX_PIPELINE_SESSION_ERROR_LENGTH)) &&
     (value.structuredResultStatus === undefined ||

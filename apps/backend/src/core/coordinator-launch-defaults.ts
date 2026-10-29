@@ -12,6 +12,8 @@
  * - Reviewer 1 is the Review action default; Reviewer 2 is Review 2 when it
  *   names an enabled platform, else Review; Reviewer 3 onward are the saved
  *   additional reviewers, each falling back to Review.
+ * - Each reviewer carries the saved focus for its position
+ *   (`multiReview.reviewerLenses`), as the button's rows do.
  * - Preparation/consolidation and Fix use their own action default when it
  *   names an enabled platform, else Review.
  * - Each row layers its action's model, effort and speed over that platform's
@@ -44,6 +46,7 @@ import {
   buildPipelineConfiguredDefaults,
   defaultBuildPipelineAgent,
 } from "@orkestrator/protocol/build-pipeline-defaults";
+import type { BuildStepConfig } from "@orkestrator/protocol/build-pipeline";
 import {
   DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
   resolveActionDefaults,
@@ -58,6 +61,7 @@ import {
   type MultiReviewModelSelection,
 } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 
 export interface MultiReviewDefaultRows {
@@ -174,8 +178,12 @@ export function multiReviewDefaultRows(
       ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
     });
   });
+  const lenses = settings.global?.multiReview?.reviewerLenses ?? [];
   return {
-    reviewers: reviewers.map((row) => concreteRow(row, catalog)),
+    reviewers: reviewers.map((row, index) => ({
+      ...concreteRow(row, catalog),
+      ...reviewLensField(lenses[index] ?? undefined),
+    })),
     reviewModel: concreteRow(configuredRow("reviewPreparation") ?? review, catalog),
     fixModel: concreteRow(configuredRow("fixReviewIssues") ?? review, catalog),
   };
@@ -202,12 +210,27 @@ export function savedLaunchSettings(
 }
 
 /**
+ * A named step that leaves out its agent names only instructions (the
+ * coordinator schema allows that): it keeps the saved selection it replaces.
+ */
+function withSavedSelection(step: unknown, saved: BuildStepConfig | undefined): unknown {
+  if (!step || typeof step !== "object" || Array.isArray(step)) return step;
+  if ((step as { agent?: unknown }).agent !== undefined || !saved) return step;
+  return { ...saved, ...step, agent: saved.agent };
+}
+
+/**
  * A build request with every omitted choice filled from the Build button's defaults.
  *
  * Explicit steps are layered over the saved ones and explicit reviewers replace
  * them, exactly as `useBuildPipeline` does for the renderer. The build agent
  * defaults the way the launcher's does. Environment-tier settings are not
  * read: the launcher resolves before any worker exists.
+ *
+ * A step or preparation named without an agent carries only instructions and
+ * keeps the saved selection: the build step the pipeline agent, a reviewer its
+ * saved row, and preparation its saved model (Address's, which unconfigured
+ * preparation borrows, when the saved review has one reviewer).
  */
 export function buildPipelineInputWithDefaults(
   input: Record<string, unknown>,
@@ -222,7 +245,20 @@ export function buildPipelineInputWithDefaults(
     input.steps && typeof input.steps === "object" && !Array.isArray(input.steps)
       ? (input.steps as Record<string, unknown>)
       : {};
-  const steps = { ...configured.steps, ...explicitSteps };
+  // A named build step decides the pipeline agent, as it does in the launcher.
+  const buildStep = explicitSteps.build as { agent?: unknown } | undefined;
+  const agentType =
+    buildStep?.agent ??
+    input.agentType ??
+    defaultBuildPipelineAgent(tiers, enabled ?? ["claude", "codex", "opencode"]);
+  const saved: Record<string, BuildStepConfig | undefined> = {
+    ...configured.steps,
+    build: { agent: agentType as BuildStepConfig["agent"] },
+  };
+  const steps: Record<string, unknown> = { ...configured.steps };
+  for (const [key, step] of Object.entries(explicitSteps)) {
+    steps[key] = withSavedSelection(step, saved[key]);
+  }
   const reviewers =
     input.reviewers ??
     configured.reviewers.map((reviewer, index) =>
@@ -230,16 +266,17 @@ export function buildPipelineInputWithDefaults(
     );
   if (Array.isArray(reviewers) && reviewers.length > 0) steps.review = reviewers[0];
   const reviewPreparation =
-    input.reviewPreparation ??
-    (Array.isArray(reviewers) && reviewers.length > 1 ? configured.reviewPreparation : undefined);
-  // A named build step decides the pipeline agent, as it does in the launcher.
-  const buildStep = explicitSteps.build as { agent?: unknown } | undefined;
+    input.reviewPreparation !== undefined
+      ? withSavedSelection(
+          input.reviewPreparation,
+          configured.reviewPreparation ?? configured.steps.address,
+        )
+      : Array.isArray(reviewers) && reviewers.length > 1
+        ? configured.reviewPreparation
+        : undefined;
   return {
     ...input,
-    agentType:
-      buildStep?.agent ??
-      input.agentType ??
-      defaultBuildPipelineAgent(tiers, enabled ?? ["claude", "codex", "opencode"]),
+    agentType,
     steps,
     reviewers: Array.isArray(reviewers) && reviewers.length === 1 ? undefined : reviewers,
     reviewPreparation,

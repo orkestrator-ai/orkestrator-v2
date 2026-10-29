@@ -523,6 +523,8 @@ export interface CursorSdkLoginProgress {
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
+  /** Which runtime runs new Multi Reviews (item 301); absent means bespoke. */
+  multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
   /** Weakest read-only guarantee a coordinator conversation may run under. */
   coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
   /** Internal marker for the one-time coordinator safety-default migration. */
@@ -616,6 +618,8 @@ export interface GlobalConfig {
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */
   reviewInstruction?: string;
+  /** Reviewer focus presets; absent means the shipped five (`review-lens.ts`). */
+  reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
   agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
 }
 

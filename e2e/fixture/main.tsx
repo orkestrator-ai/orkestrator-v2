@@ -116,6 +116,9 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const MarkdownEditorDiagramFixture = lazy(async () => ({
+  default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
+}));
 const ExpandedViewersFixture = lazy(async () => ({
   default: (await import("./ExpandedViewersFixture")).ExpandedViewersFixture,
 }));
@@ -1995,6 +1998,12 @@ function fixtureForPath() {
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
+  if (window.location.pathname === "/markdown-editor-diagram")
+    return (
+      <Suspense fallback={null}>
+        <MarkdownEditorDiagramFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/system-usage") {
     installSystemUsageFixture();
     return <SystemUsageFixture />;

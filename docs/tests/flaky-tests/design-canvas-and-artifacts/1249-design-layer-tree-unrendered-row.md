@@ -101,3 +101,34 @@ Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.W9Ohup/native-branch-owner.log.gz`.
 This remains an unrelated non-green native picker limitation, not a newly
 confirmed flake. No owning source or tests changed.
+
+## Markdown diagram review validation — 2026-10-29
+
+The exact `mise run test:browser` rerun, logged as `review-browser-rerun`,
+reported 949 passed, 106 skipped and three failed in 457.0 seconds with nine
+workers. The mobile unrendered-layer case repeated the missing `plans (h2)`
+treeitem at `DesignCanvasAccessibility.spec.ts:613`. Both other failures were
+the established native branch-suggestion cases in `AgentLaunchDialog.spec.ts`
+(`release/2.0` expected, `rel` received). All Markdown diagram regressions
+passed. The component-stage failure prevented the public-site stage from
+running.
+
+Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.TMNeJB/review-browser-rerun.log.gz`.
+No design-canvas or native branch-picker implementation, assertion, deadline
+or skip changed.
+
+
+Complete unchanged owners ran sequentially with one worker:
+
+```sh
+mise run test:logged -- --name review-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/markdown-review-owners
+```
+
+The accessibility owner passed ten cases with four existing skips, including
+the previously failing mobile unrendered-layer case. The native picker retained
+both suggestion failures; its two manual-entry cases passed. Combined result:
+12 passed, four skipped, two failed (183.4 s). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.c9s5wV/review-browser-owners.log.gz`.
+The native picker remains an unrelated non-green limitation; the accessibility
+failure remains intermittent. Neither suite's assertions or skips changed.

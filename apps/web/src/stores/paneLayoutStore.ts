@@ -2,6 +2,7 @@ import { createSessionKey } from "@/lib/utils";
 import { create } from "zustand";
 import type {
   BrowserAnnotationPanelState,
+  GraphDesignerTabData,
   PullRequestTabData,
   PaneNode,
   PaneLeaf,
@@ -273,6 +274,12 @@ interface PaneLayoutState {
   updateTabPullRequest: (
     tabId: string,
     patch: { view?: PullRequestTabData["view"]; title?: string; reopen?: boolean },
+    environmentId?: string,
+  ) => void;
+  /** Record the template a Graphs designer tab shows, so a reload reopens it. */
+  updateTabGraphDesigner: (
+    tabId: string,
+    data: GraphDesignerTabData,
     environmentId?: string,
   ) => void;
   /** Persist only web annotation panel view preferences for a browser tab. */
@@ -1443,6 +1450,27 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
       tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, pullRequestData: next } : tab)),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
+  },
+
+  updateTabGraphDesigner: (tabId, data, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || existingTab?.type !== "graph-designer") return;
+    if (JSON.stringify(existingTab.graphDesignerData ?? {}) === JSON.stringify(data)) return;
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, graphDesignerData: { ...data } } : tab,
+      ),
     }));
     const environments = new Map(state.environments);
     environments.set(envId, { ...envState, root: newRoot });

@@ -1436,7 +1436,12 @@ async function handleAdmittedPrompt(
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
     throw new HttpError(400, "readOnly must be a boolean");
-  const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+  const workflowResult = parseWorkflowResultTurn(
+    body.workflowResultTool,
+    body.workflowResultKey,
+    body.workflowResultSlots,
+    body.workflowResultExtraTools,
+  );
   if (!workflowResult.ok) throw new HttpError(400, workflowResult.error);
   storeAgentMcp(state, body.agentMcp);
   state.workflowResultTurn = workflowResult.turn;

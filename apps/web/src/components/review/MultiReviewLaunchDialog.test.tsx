@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
+import type { GlobalConfig } from "@/types";
+import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
 import {
   defaultMultiReviewLaunchSelection,
   flatCatalog,
@@ -818,5 +820,116 @@ describe("MultiReviewLaunchDialog launch value", () => {
     expect(summary.textContent).toContain("3 reviewer turns");
     fireEvent.click(screen.getByLabelText("Auto-fix after consolidation"));
     expect(summary.textContent).toContain("then 1 fix turn");
+  });
+});
+
+describe("MultiReviewLaunchDialog focus", () => {
+  function setPresets(reviewLensPresets: GlobalConfig["reviewLensPresets"]) {
+    const config = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: { ...config, global: { ...config.global, reviewLensPresets } },
+    });
+  }
+  afterEach(() => setPresets(undefined));
+
+  function renderDialog(defaults: Partial<MultiReviewLaunchDefaults> = {}) {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={onConfirm}
+        {...defaults}
+      />,
+    );
+    return onConfirm;
+  }
+
+  test("offers the shipped presets and copies the chosen preset's text into the launch", () => {
+    const onConfirm = renderDialog();
+    const select = screen.getByRole("combobox", { name: "Reviewer 1 focus" });
+    const options = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(options).toEqual([
+      "No focus",
+      ...SHIPPED_REVIEW_LENS_PRESETS.map((preset) => preset.label),
+      "Custom…",
+    ]);
+    fireEvent.change(select, { target: { value: "preset:security" } });
+    expect(screen.getByText(SHIPPED_REVIEW_LENS_PRESETS[0]!.instruction)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.reviewers[0]!.lens).toEqual({
+      label: "Security",
+      instruction: SHIPPED_REVIEW_LENS_PRESETS[0]!.instruction,
+    });
+    expect(selection.reviewers[1]).not.toHaveProperty("lens");
+    expect(selection.reviewModel).not.toHaveProperty("lens");
+    expect(selection.fixModel).not.toHaveProperty("lens");
+  });
+
+  test("uses the edited presets and accepts free text, blocking an incomplete one", () => {
+    setPresets([{ id: "mine", label: "Migrations", instruction: "Check both directions." }]);
+    const onConfirm = renderDialog();
+    const select = screen.getByRole("combobox", { name: "Reviewer 2 focus" });
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["No focus", "Migrations", "Custom…"]);
+    // Custom starts from the preset's text, so it can be adjusted.
+    fireEvent.change(select, { target: { value: "preset:mine" } });
+    fireEvent.change(select, { target: { value: "custom:" } });
+    const label = screen.getByRole("textbox", { name: "Reviewer 2 focus label" });
+    expect((label as HTMLInputElement).value).toBe("Migrations");
+    fireEvent.change(label, { target: { value: "" } });
+    const start = screen.getByRole("button", { name: "Start 2-model review" });
+    expect((start as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Give the focus a label.")).toBeTruthy();
+    fireEvent.change(label, { target: { value: " Down migrations " } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Reviewer 2 focus instruction" }), {
+      target: { value: "Check every down migration. " },
+    });
+    expect((start as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(start);
+    expect(onConfirm.mock.calls[0]![0].reviewers[1]!.lens).toEqual({
+      label: "Down migrations",
+      instruction: "Check every down migration.",
+    });
+  });
+
+  test("opens each reviewer on its position's saved focus", () => {
+    const lens = { label: "Tests", instruction: "Name the missing cases." };
+    const onConfirm = renderDialog({
+      reviewerDefaults: [{ defaultAgent: "claude" }, { defaultAgent: "codex", lens }],
+    });
+    expect(
+      (screen.getByRole("combobox", { name: "Reviewer 2 focus" }) as HTMLSelectElement).value,
+    ).toBe("custom:");
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.reviewers[0]).not.toHaveProperty("lens");
+    expect(selection.reviewers[1]!.lens).toEqual(lens);
+    expect(
+      defaultMultiReviewLaunchSelection({
+        defaultAgent: "claude",
+        catalog,
+        reviewerDefaults: [{ defaultAgent: "claude" }, { defaultAgent: "codex", lens }],
+      }).reviewers[1]!.lens,
+    ).toEqual(lens);
+  });
+
+  test("two rows on one model with different focuses are not duplicates", () => {
+    renderDialog({ reviewerDefaults: [{ defaultAgent: "claude" }, { defaultAgent: "claude" }] });
+    expect(screen.getByTestId("multi-review-duplicate-warning").textContent).toContain(
+      "same configuration",
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 2 focus" }), {
+      target: { value: "preset:performance" },
+    });
+    expect(screen.getByTestId("multi-review-duplicate-warning").textContent).toBe("");
   });
 });

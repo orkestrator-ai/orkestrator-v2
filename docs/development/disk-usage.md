@@ -33,6 +33,14 @@ after you have cleaned up by hand (whether to retry or clear such entries is an
 open question in todo 0023); see
 [environment-deletion.md](../architecture/environment-deletion.md#reconciler).
 
+A graph run whose replicated builder uses `isolation: "worktree"` (item 403)
+checks out one worktree per branch inside the environment, under
+`.orkestrator/graph-branches/`. Each holds a full checkout (plus whatever the
+branch's agent installs, such as `node_modules`) only while its branch runs.
+The report's `isolated graph branches` row sums them across local
+environments and counts leftovers the repository no longer lists as
+worktrees; a container's branches are in its storage volume.
+
 In the app, **Settings > Disk usage** lists every environment's size: its
 worktree (largest top-level entries) or its container (writable layer,
 recovery copies and storage volumes; the shared image is not counted), plus
@@ -115,6 +123,7 @@ ignored files. The project home cannot be moved.
 | A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
 | Per-environment bridge state, worktrees, local branches, containers, volumes and networks | Environment deletion and its reconciler | At deletion; failed steps retried with backoff. See [environment-deletion.md](../architecture/environment-deletion.md) |
+| Isolated graph branch worktrees, `<environment>/.orkestrator/graph-branches/<run>/…`, and their branches `orkestrator-graph/<run>/…` (item 403) | The graph run service's branch janitor; `select-workspace`; environment deletion | A branch's worktree when its activation finishes (complete, failed, cancelled or superseded); the run's branches and anything left when the run ends; a select's candidates at once; finished runs that still list some at backend start-up. At most 16 branch worktrees run at once per environment |
 | Orphaned bridge state, empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend orphan sweeps | At start-up and hourly; branches at most daily per project |
 | `<data dir>/legacy-json/<timestamp>/` (JSON stores archived by the one-time SQLite import) | Backend database open | 14 days after the import |
 | `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; none older than 7 days; at most 16 GiB together (the newest hourly always kept). No copy when the disk lacks the live-page copy estimate plus equal headroom (at least 2 GiB). Existing non-incremental databases reuse freed pages without shrinking. Temporary copies of dead processes removed at start-up and before each copy |

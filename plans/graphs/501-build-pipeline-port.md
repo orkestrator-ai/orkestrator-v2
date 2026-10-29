@@ -49,3 +49,4 @@ None yet.
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
+- 2026-10-29 · coordinator · Left not started until Multi Review has soaked on the graph runtime (D25). · Decide after the Phase 3 soak.

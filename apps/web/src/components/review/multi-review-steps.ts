@@ -182,6 +182,15 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
   if (workflow.phase === "failed" && workflow.activeRequest?.kind === "consolidate") {
     return step("Failed", "failed");
   }
+  // A graph-engine review keeps no request once its run ended (item 301): its
+  // consolidation session says whether that step is the one that failed.
+  if (
+    workflow.phase === "failed" &&
+    workflow.engine === "graph" &&
+    workflow.reviewSession?.status === "failed"
+  ) {
+    return step("Failed", "failed");
+  }
   return step("Not started", "not-started");
 }
 
@@ -214,7 +223,10 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   const dispatched =
     workflow.activeRequest?.kind === "fix" ||
     workflow.fixResult !== undefined ||
-    workflow.addressPromptPending === true;
+    workflow.addressPromptPending === true ||
+    // A graph-engine Fix that started (item 301), whose run then ended.
+    (workflow.engine === "graph" && workflow.stepRuntimes?.fix !== undefined) ||
+    (workflow.engine === "graph" && workflow.fixSession?.status === "failed");
   if (workflow.phase === "failed" && dispatched) return step("Failed", "failed");
   if (workflow.phase === "ready") return step("Ready to start", "not-started");
   return step("Not started", "not-started");
@@ -272,7 +284,11 @@ export type FixSessionOpenOutcome =
   "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
 
 /** Status copy for the backend-owned PR launch that follows a successful Fix or a clean report. */
-export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>): {
+export function autoPrLaunchNotice(
+  launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>,
+  /** A graph-engine review (item 301): a system step, not an agent tab, opens it. */
+  graphEngine = false,
+): {
   text: string;
   tone: "muted" | "success" | "warning";
 } {
@@ -280,7 +296,9 @@ export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["auto
     launch.basis === "clean-review" ? "The review found nothing to fix" : "The fix completed";
   if (launch.state === "launched") {
     return {
-      text: `${reason}, so a PR tab was launched to commit, push, and open the pull request.`,
+      text: graphEngine
+        ? `${reason}, so the graph run's pull request step pushed the branch and opened the pull request.`
+        : `${reason}, so a PR tab was launched to commit, push, and open the pull request.`,
       tone: "success",
     };
   }
@@ -294,7 +312,9 @@ export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["auto
     };
   }
   return {
-    text: `${reason}. The pull request agent is being launched in the background.`,
+    text: graphEngine
+      ? `${reason}. The graph run is writing the description and opening the pull request.`
+      : `${reason}. The pull request agent is being launched in the background.`,
     tone: "muted",
   };
 }
@@ -331,6 +351,7 @@ export function pullRequestStep({
   prState,
   agentPhase,
   upstreamComplete,
+  graphEngine = false,
 }: {
   autoPr: boolean;
   launch: MultiReviewWorkflow["autoPrLaunch"];
@@ -339,6 +360,11 @@ export function pullRequestStep({
   agentPhase: NativeAgentTurnPhase | undefined;
   /** The Fix, or the clean report that stood in for it, finished. */
   upstreamComplete: boolean;
+  /**
+   * A graph-engine review (item 301): the graph run's `open-pull-request`
+   * system step opens it, so `launched` means it exists and no agent runs.
+   */
+  graphEngine?: boolean;
 }): PullRequestStepStatus {
   const launched = launch?.state === "launched";
   if (prUrl && (launched || upstreamComplete)) {
@@ -347,6 +373,16 @@ export function pullRequestStep({
       state: "complete",
       label: `Pull request ${state}`,
       statusWord: { text: state, tone: state === "closed" ? "warning" : "muted" },
+    };
+  }
+  if (graphEngine && launched) {
+    return { state: "complete", label: "Pull request opened by the graph run" };
+  }
+  if (graphEngine && launch?.state === "pending") {
+    return {
+      state: "running",
+      label: "The graph run is writing the description and opening the pull request",
+      statusWord: { text: "opening", tone: "running" },
     };
   }
   if (launched && agentPhase && ACTIVE_AGENT_PHASES.has(agentPhase)) {

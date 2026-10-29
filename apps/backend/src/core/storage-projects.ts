@@ -391,6 +391,8 @@ export class ProjectsRepository {
         error instanceof Error ? error.name : "unknown",
       );
     }
+    // Its template trust records and capability ceiling (item 109) go with it.
+    this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 
@@ -1298,7 +1300,7 @@ export class ProjectsRepository {
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error(
-        "source must be frontend, claude-terminal, claude-tmux, native-agent, or multi-review",
+        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, or graph-run",
       );
     }
     if (

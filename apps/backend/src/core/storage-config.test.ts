@@ -5,6 +5,13 @@ import path from "node:path";
 import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "@orkestrator/protocol/coordinator";
 import { defaultConfig, normalizePersistedConfig } from "./storage-shared.js";
 import { StorageService } from "./storage.js";
+import {
+  SHIPPED_REVIEW_LENS_PRESETS,
+  isShippedReviewLensPresetList,
+  resolveReviewLensPresets,
+  restoreShippedReviewLensPresets,
+  shippedReviewLensPresets,
+} from "@orkestrator/protocol/review-lens";
 
 describe("StorageService config migration", () => {
   test("a renderer save preserves backend-owned default resource limits", async () => {
@@ -62,6 +69,85 @@ describe("StorageService config migration", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+  test("round-trips review lens presets, refuses over-bound lists and restores the shipped five", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-review-lens-config-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const initial = (await storage.loadConfig()).global;
+      // Absent is the shipped five; nothing is written until the user edits.
+      expect(initial.reviewLensPresets).toBeUndefined();
+      expect(resolveReviewLensPresets(initial.reviewLensPresets)).toEqual([
+        ...SHIPPED_REVIEW_LENS_PRESETS,
+      ]);
+
+      const edited = [
+        { id: "mine", label: " Migrations ", instruction: " Check both directions. " },
+        ...shippedReviewLensPresets().slice(1),
+      ];
+      await storage.updateGlobalConfig({ ...initial, reviewLensPresets: edited });
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      const saved = (await restarted.loadConfig()).global.reviewLensPresets!;
+      // Stored as typed; a launch trims the text it copies.
+      expect(saved[0]).toEqual(edited[0]);
+      expect(saved).toHaveLength(5);
+      // A save from another settings section keeps them.
+      await restarted.updateGlobalConfig({
+        ...(await restarted.loadConfig()).global,
+        debugLogging: true,
+      });
+      expect((await restarted.loadConfig()).global.reviewLensPresets).toEqual(saved);
+      // An empty list is the user's choice, not "absent".
+      await restarted.updateGlobalConfig({
+        ...(await restarted.loadConfig()).global,
+        reviewLensPresets: [],
+      });
+      expect((await restarted.loadConfig()).global.reviewLensPresets).toEqual([]);
+
+      const current = (await restarted.loadConfig()).global;
+      for (const reviewLensPresets of [
+        Array.from({ length: 21 }, (_, index) => ({
+          id: `p${index}`,
+          label: "L",
+          instruction: "I",
+        })),
+        [{ id: "a", label: "x".repeat(65), instruction: "I" }],
+        [{ id: "a", label: "L", instruction: "é".repeat(2049) }],
+        [
+          { id: "a", label: "L", instruction: "I" },
+          { id: "a", label: "M", instruction: "J" },
+        ],
+      ]) {
+        await expect(
+          restarted.updateGlobalConfig({ ...current, reviewLensPresets }),
+        ).rejects.toThrow("Review focus presets");
+      }
+      expect((await restarted.loadConfig()).global.reviewLensPresets).toEqual([]);
+
+      // Restore puts the shipped five back; the renderer then omits the key.
+      const restored = restoreShippedReviewLensPresets([])!;
+      expect(isShippedReviewLensPresetList(restored)).toBe(true);
+      const { reviewLensPresets: _cleared, ...withoutPresets } = current;
+      await restarted.updateGlobalConfig(withoutPresets);
+      expect((await restarted.loadConfig()).global.reviewLensPresets).toBeUndefined();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a hand-edited preset list keeps its valid presets when read", () => {
+    const config = defaultConfig();
+    (config.global as unknown as Record<string, unknown>).reviewLensPresets = [
+      { id: "ok", label: "Fine", instruction: "Look." },
+      { id: "bad", label: "", instruction: "Look." },
+      "junk",
+    ];
+    expect(normalizePersistedConfig(config).global.reviewLensPresets).toEqual([
+      { id: "ok", label: "Fine", instruction: "Look." },
+    ]);
+  });
+
   test("adds default notification settings to persisted legacy config", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-migration-"));
     try {

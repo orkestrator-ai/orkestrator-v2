@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PR_MONITOR_CHANGED_EVENT, type PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import { PrMonitorService } from "./pr-monitor.js";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -51,6 +52,7 @@ export class PrMonitorRuntime {
   private syncQueue: Promise<void> = Promise.resolve();
   private warnedMissingMergeCleanup = false;
   private closedService: Pick<PrMonitorService, keyof PrMonitorService> | undefined;
+  private readonly listeners = new Set<(event: PrMonitorEvent) => void>();
 
   constructor(options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
@@ -182,6 +184,28 @@ export class PrMonitorRuntime {
     );
   }
 
+  /**
+   * In-process observers of every announced monitor event (graph
+   * `wait-for-checks` nodes wait on them instead of polling). Listeners run
+   * synchronously after the event is emitted; one that throws is ignored.
+   */
+  onEvent(listener: (event: PrMonitorEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private announce(event: string, payload: unknown): void {
+    this.emit?.(event, payload);
+    if (event !== PR_MONITOR_CHANGED_EVENT) return;
+    for (const listener of this.listeners) {
+      try {
+        listener(payload as PrMonitorEvent);
+      } catch {
+        // An observer must never break the monitor it observes.
+      }
+    }
+  }
+
   /** Terminal close: releases every PR polling timer and the admission pool. */
   shutdown(): void {
     if (this.closedService) return;
@@ -232,7 +256,7 @@ export class PrMonitorRuntime {
      */
     const admission = new WorkAdmissionPool({ name: "external-pr" });
     const service = new PrMonitorService({
-      emit: (event, payload) => this.emit?.(event, payload),
+      emit: (event, payload) => this.announce(event, payload),
       admission,
       cooldownScope: prMonitorCooldownScope,
       effects: {

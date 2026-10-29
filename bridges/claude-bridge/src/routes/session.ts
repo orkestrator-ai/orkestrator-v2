@@ -80,6 +80,7 @@ import type {
   MessagesResponse,
 } from "../types/index.js";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
+import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
   boundTranscriptResponse,
   parseTranscriptTailLimit,
@@ -712,6 +713,18 @@ session.post("/:id/prompt", async (c) => {
     if (readOnly !== undefined && typeof readOnly !== "boolean") {
       return c.json({ error: "readOnly must be a boolean" }, 400);
     }
+    // The workflow-result attempt this turn runs for: its own result tools run
+    // under any policy, each only with the key it answers for.
+    const workflowResult = parseWorkflowResultTurn(
+      body.workflowResultTool,
+      body.workflowResultKey,
+      body.workflowResultSlots,
+      body.workflowResultExtraTools,
+    );
+    if (!workflowResult.ok) {
+      return c.json({ error: workflowResult.error }, 400);
+    }
+    const workflowResultTurn = workflowResult.turn;
     const permissionMode =
       rawPermissionMode &&
       ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(
@@ -937,6 +950,7 @@ session.post("/:id/prompt", async (c) => {
             promptSuggestions,
             parameterValues,
             ...(agentMcp ? { agentMcp } : {}),
+            ...(workflowResultTurn ? { workflowResultTurn } : {}),
             ...(providerPrompt !== undefined ? { providerPrompt } : {}),
             ...(outputSchema !== undefined ? { outputSchema } : {}),
             requestId,
@@ -1013,6 +1027,7 @@ session.post("/:id/prompt", async (c) => {
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
+      ...(workflowResultTurn ? { workflowResultTurn } : {}),
       ...(providerPrompt !== undefined ? { providerPrompt } : {}),
     }).catch((error) => {
       console.error("[session] Error processing prompt:", error);

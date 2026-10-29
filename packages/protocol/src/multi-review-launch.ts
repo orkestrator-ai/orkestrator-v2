@@ -14,13 +14,15 @@ export interface MultiReviewLaunchSelectionIdentity {
   reasoningEffort?: string;
   fastMode?: boolean;
   modelUnpinned?: boolean;
+  lens?: { label: string; instruction: string };
 }
 
 /**
  * The behaviour-affecting identity of one reviewer selection: platform, model,
- * reasoning effort, speed, and whether the model was left to the provider.
- * Display labels play no part, so two rows that read differently but launch
- * identically are still the same configuration.
+ * reasoning effort, speed, whether the model was left to the provider, and the
+ * reviewer's lens. Display labels play no part, so two rows that read
+ * differently but launch identically are still the same configuration; two
+ * rows on one model with different lenses are deliberately different reviews.
  */
 export function multiReviewSelectionKey(selection: MultiReviewLaunchSelectionIdentity): string {
   return JSON.stringify([
@@ -29,6 +31,7 @@ export function multiReviewSelectionKey(selection: MultiReviewLaunchSelectionIde
     selection.reasoningEffort?.trim() || null,
     typeof selection.fastMode === "boolean" ? selection.fastMode : null,
     selection.modelUnpinned === true,
+    selection.lens ? [selection.lens.label.trim(), selection.lens.instruction.trim()] : null,
   ]);
 }
 

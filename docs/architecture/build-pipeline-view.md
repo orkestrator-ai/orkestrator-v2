@@ -4,7 +4,9 @@ Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
-2026-10-28).
+2026-10-28), the shared review routing (2026-10-29), read-only reviewers
+with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
+reviewer lenses (2026-10-29), and the CLI's `build launch` (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -53,6 +55,24 @@ a transcript.
   Address, Fix, conflict resolution and extra passes are never drawn ahead and
   never dimmed; they appear when they start. A finished or cancelled pipeline
   has nothing ahead.
+- **After review.** One rule routes both review paths (`stageAfterReview` in
+  `build-pipeline-service-helpers.ts`): the accepted report, a single
+  reviewer's or the panel's consolidated one, goes to Address when it has
+  issues or test coverage gaps, and straight to Verify when it has neither. So
+  a clean pass is followed by Verify on the line, with no Address node. The
+  fan-out opens the next stage before it drops `reviewFanout`, so a crash in
+  between never leaves `reviewing` with nothing to drive it.
+- **Address → Verify.** Address submits a typed `fix-result` and Verify reads
+  it as an evidence frame, not the Address session's last assistant text
+  ([review preparation](review-preparation.md#the-address--verify-handoff)). The
+  accepted result is kept, bounded, on the Address session (`fixResult`, marked
+  by `addressReportKind`), and the Address inspector shows it above the
+  transcript as a collapsed "Address report": complete or incomplete, files,
+  checks (failed ones counted), then the summary, checks, files, notes and
+  limitations (`PipelineAddressReport.tsx`). Its submission status reads as for
+  the other typed stages. An Address session from before the typed handoff has
+  no report there, and Verify reads its text as before. A round with no Address
+  (a clean review) gives Verify no report.
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers
   with no session yet are nodes too. Once the pass is retired, each reviewer
@@ -66,6 +86,16 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
+- **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
+  and the Git-visible paths as they found them. Reviewers and consolidation
+  also run in provider read-only mode, as Multi Review's do. The backend
+  checks at submit time, so an agent can undo a change within its turn, and
+  again when it uses the result; a change fails the step, and the failed node
+  shows the error naming the moved HEAD or the paths
+  ([review preparation](review-preparation.md#read-only-reviewers-and-the-git-guard)).
+  A step whose starting Git state cannot be observed fails before any of its
+  sessions starts. The launcher's Review and Verify cards state exactly this
+  scope.
 - **Stops.** The current session carries a pause, failure or cancellation. A
   stage that failed or paused before its session existed gets a node of its
   own; a fan-out that failed without consolidating carries it on
@@ -152,6 +182,85 @@ only grows, is saved on the transcript persist cadence while the turn runs and
 with the final transcript when it ends, and a meter that fails never fails the
 stage. The validation run of a Prepare node, the Ticket, Setup and the PR run
 no agent and have no tokens.
+
+## Per-stage instructions
+
+Every step can carry the user's own instructions: `BuildStepConfig.instructions`,
+at most 16 KiB of UTF-8 (`MAX_BUILD_STEP_INSTRUCTIONS_BYTES`). The guard,
+renderer and stage mapping live in
+`packages/protocol/src/build-pipeline-stage-instructions.ts`
+(`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
+rejects a longer text, so every launch input that carries steps (the launcher,
+feature builds, the coordinator, the public `build.launch` action) is bounded by
+the same check.
+
+- **Prompt.** A stage with instructions gets one framed section after its own
+  contract: "**Additional instructions from the user** for this stage…" and the
+  text inside `<user-stage-instructions>` … `</user-stage-instructions>`
+  (`withBuildStepInstructions`). The preamble says they refine the task and do
+  not change the stage's result format, permissions or rules. A marker typed
+  inside the text is escaped so it cannot close the frame. Only the
+  session-wide unattended-input note follows it. A step without instructions
+  gets a prompt identical to before, byte for byte.
+- **Which step a stage reads.** Build, Review (single reviewer), Address,
+  Verify, Ship and conflict resolution read their own step
+  (`pipelineStepInstructions` with `stepKeyForSessionPhase`). Fix reads
+  Build's, as it runs on Build's model. Each fan-out reviewer reads its own row
+  in `reviewers` (`pipelineReviewerInstructions`), after the panel section, so
+  the panel's shared prompt prefix stays byte-identical. The dedicated package
+  preparation and the fan-out consolidation read `reviewPreparation`
+  (`pipelineReviewPreparationInstructions`); without a preparation step they
+  borrow Address's model but not Address's instructions. On the
+  single-reviewer path the build or fix turn prepares the package inline, under
+  Build's instructions.
+- **Record.** The backend stores them trimmed on `steps`, `reviewers` and
+  `reviewPreparation` (`normalizeSteps`, `normalizeReviewers`); blank text is
+  dropped. Every stage prompt is rebuilt from the record, so a restart, a
+  rewind, a retried stage, a fresh review panel and a backend restart all read
+  the same text. Resume, reminders and repairs continue a session that already
+  has the opening prompt and do not repeat it. A feature build that pins
+  Address but not Verify copies Address's model to Verify, not its
+  instructions.
+- **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
+  "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte
+  counter. Over 16 KiB the field is marked invalid and Start build is disabled.
+  The Build card notes that Fix uses them too. Instructions belong to one
+  launch: the dialog starts empty every time it opens, and saved build defaults
+  (action defaults) hold models only.
+- **CLI.** `orkestrator build launch TICKET --instructions STAGE=TEXT` (or
+  `--instructions-file STAGE=PATH`, `N=…` for reviewer row N) sends them
+  through the public `build.launch` action, which layers them over the saved
+  defaults as the coordinator does; `build get` reports each step's
+  `instructionsBytes`, never the text
+  ([public-cli.md](public-cli.md#build-pipelines)).
+
+## Reviewer lenses
+
+Each reviewer can have a focus, a lens (`BuildStepConfig.lens`, the shape and
+bounds of `ReviewerModelSelection.lens`; see
+[reviewer lenses](review-preparation.md#reviewer-lenses)). Only the review step
+and the `reviewers` rows keep one: `normalizeSteps` drops a lens from every
+other step and `normalizeReviewPreparation` from the preparation step.
+
+- **Prompt.** A fan-out reviewer's prompt is the shared package prompt, its
+  panel section, its "**Review focus**" section and then its own instructions
+  frame, so the prefix before the panel section stays byte-identical across the
+  panel. A single reviewer has no panel section; the review step's lens follows
+  the review contract and precedes the step's instructions.
+- **Record.** The stored row keeps the text the launcher copied. Each fan-out
+  pass copies it onto the reviewer's record (`reviewFanout.reviewers[i].lens`),
+  so a retried reviewer, a fresh pass after a restart or rewind, and a backend
+  restart render the same focus. The consolidation evidence carries each
+  reviewer's label as `focus`.
+- **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
+  saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
+  the Build button, feature and ticket builds, the coordinator and the CLI's
+  `build launch` start from the same focus as the Multi Review button;
+  `build launch --reviewer … --focus N=TEXT` replaces it per row.
+- **Launcher.** Each reviewer card in `BuildLaunchDialog.tsx` (and the single
+  Review card) has a Focus select (`ReviewLensField.tsx`): no focus, a saved
+  preset, or custom text. It opens on the position's saved focus; an
+  incomplete custom focus disables Start build.
 
 ## Inspector and actions
 
@@ -295,7 +404,8 @@ sessions by `supersededBy` and read `rewinds`).
 `build-pipeline-code-rewind.ts`) resets the branch to the commit a step started
 from, then restarts the pipeline from that step exactly as "Restart from here"
 does. Every stage session started by the supervisor records `headAtStart`
-(Verify reuses its validation baseline; other stages probe once, best effort);
+(Verify and a packaged single Review reuse their read-only guard baseline;
+other stages probe once, best effort);
 fan-out reviewers and consolidation do not, and a step without it has no
 action.
 
@@ -334,6 +444,21 @@ keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
 under its key; the retry gets `…:attempt-2`.
 
+## Stage table and the built-in template
+
+`BUILD_PIPELINE_STAGES` (`apps/backend/src/core/build-pipeline-stages.ts`)
+lists the stages in the order a run meets them, each with its place in the
+rounds, its workspace boundary (`write`, `read-only`, `guarded`, `system`)
+and the result it submits. The supervisor takes session labels, phases,
+result kinds and the read-only and guarded boundaries from it. The built-in
+Build Pipeline graph template (`@orkestrator/protocol/graphs/builtins`,
+plan item 108) describes the same stages, and
+`graph-builtin-templates.test.ts` pins the two together with the routing
+rules (`stageAfterReview`, `verificationPassed`,
+`pullRequestNeedsConflictResolution`), the default and maximum iterations,
+the reviewer cap and the saved step defaults. Change a stage, a rule or a
+bound and that test fails until the template says the same.
+
 ## Constraints
 
 - The graph reads the pipeline record (plus the environment's PR monitor state
@@ -348,6 +473,9 @@ under its key; the retry gets `…:attempt-2`.
   and are superseded by their first restart like any other. Sessions written
   before `headAtStart` existed offer no code rewind; records without
   `roundReviewReports` rerun Review when an earlier round's Address restarts.
+  Review sessions without a `validationHeadAtStart` and panel passes without
+  `reviewFanout.workspaceBaseline` predate the read-only guard and are not
+  certified against one.
 
 Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
 [0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).

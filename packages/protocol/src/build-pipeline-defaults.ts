@@ -123,14 +123,21 @@ export function buildPipelineConfiguredDefaults(
     Math.max(1, multiReview.reviewerCount),
   );
   const reviewers = Array.from({ length: reviewerCount }, (_, index) => {
-    if (index === 0) return { ...review };
-    if (index === 1) return { ...review2 };
-    return configuredReviewer(
-      multiReview.additionalReviewers[index - 2],
-      review,
-      tiers,
-      enabledAgents,
-    );
+    const selection =
+      index === 0
+        ? { ...review }
+        : index === 1
+          ? { ...review2 }
+          : configuredReviewer(
+              multiReview.additionalReviewers[index - 2],
+              review,
+              tiers,
+              enabledAgents,
+            );
+    // The saved focus for this position travels with its row, exactly as the
+    // Multi Review button's rows carry it.
+    const lens = multiReview.reviewerLenses[index];
+    return lens ? { ...selection, lens: { ...lens } } : selection;
   });
   const reviewPreparation =
     reviewerCount > 1

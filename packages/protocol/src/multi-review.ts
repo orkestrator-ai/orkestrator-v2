@@ -8,6 +8,7 @@ import {
   STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN,
+  promptCarrierJson,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
 import {
@@ -22,6 +23,7 @@ import {
   REVIEW_FANOUT_MIN_REVIEWERS,
   isReviewerModelSelection,
   isReviewerModelSelectionFields,
+  isReviewStepModelSelection,
   isReviewerRecordList,
   isReviewWorktreeSnapshotRecord,
   isReviewPanelOverlap,
@@ -71,14 +73,6 @@ export const MULTI_REVIEW_REVIEW_TAB_TITLE = "Review preparation & consolidation
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
 export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
   "The original consolidation conversation was no longer available. A fresh Fix session was created and seeded with the consolidated findings.";
-
-/** JSON evidence cannot synthesize the frame's XML-like boundary markers. */
-function promptCarrierJson(value: unknown): string {
-  return JSON.stringify(value, null, 2).replace(
-    /[<>&\u2028\u2029]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
 
 /** Build the complete prompt for a fresh custom-fix session. */
 export function multiReviewCustomFixPrompt(
@@ -393,6 +387,53 @@ export interface MultiReviewAutoPrLaunch {
   message?: string;
 }
 
+/**
+ * Which runtime runs a Multi Review (item 301, plan Phase 3, D5).
+ *
+ * `bespoke`: `multi-review-service.ts` runs every step itself (the default).
+ * `graph`: the service launches a graph run of the built-in Multi Review
+ * template and projects that run onto this record, so every surface that reads
+ * the record (the review-pass tab, the CLI, the coordinator) keeps working.
+ */
+export const MULTI_REVIEW_ENGINES = ["bespoke", "graph"] as const;
+export type MultiReviewEngine = (typeof MULTI_REVIEW_ENGINES)[number];
+/** The app setting's default until the graph runtime has soaked (Phase 3). */
+export const MULTI_REVIEW_DEFAULT_ENGINE: MultiReviewEngine = "bespoke";
+/** Testing override; wins over the app setting when it names an engine. */
+export const MULTI_REVIEW_ENGINE_ENV = "ORKESTRATOR_MULTI_REVIEW_ENGINE";
+
+export function isMultiReviewEngine(value: unknown): value is MultiReviewEngine {
+  return typeof value === "string" && (MULTI_REVIEW_ENGINES as readonly string[]).includes(value);
+}
+
+/**
+ * The engine a new Multi Review starts on: the environment override when it
+ * names an engine, else the app setting, else {@link MULTI_REVIEW_DEFAULT_ENGINE}.
+ * An unknown override is ignored rather than guessed at.
+ */
+export function resolveMultiReviewEngine(
+  setting: unknown,
+  override: string | undefined,
+): MultiReviewEngine {
+  const forced = override?.trim().toLowerCase();
+  if (isMultiReviewEngine(forced)) return forced;
+  return isMultiReviewEngine(setting) ? setting : MULTI_REVIEW_DEFAULT_ENGINE;
+}
+
+/**
+ * The graph run behind a graph-engine Multi Review (`engine: "graph"`).
+ *
+ * `settled` is set once the run ended and its final state was projected; from
+ * then on the record is an ordinary settled Multi Review, so the manual Fix
+ * (`address`, `customFix`) works on it as on any other.
+ */
+export interface MultiReviewGraphRunLink {
+  runId: string;
+  /** The run revision the record was last projected from. */
+  projectedRevision?: number;
+  settled?: boolean;
+}
+
 export interface MultiReviewWorkflow {
   /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
@@ -405,6 +446,13 @@ export interface MultiReviewWorkflow {
   autoPr?: boolean;
   /** Delivery state of the automatic PR launch; absent until a Fix completes or a clean report settles. */
   autoPrLaunch?: MultiReviewAutoPrLaunch;
+  /**
+   * `graph` when a graph run of the built-in Multi Review template runs this
+   * review (item 301); absent on every bespoke record, old ones included.
+   */
+  engine?: "graph";
+  /** The graph run a graph-engine review is projected from. */
+  graphRun?: MultiReviewGraphRunLink;
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
   controller: "backend";
   /** Backend-only storage lease fence. Renderer responses omit it. */
@@ -635,7 +683,14 @@ function nonBlank(value: unknown, max = 512): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 
-export const isMultiReviewModelSelection = isReviewerModelSelection;
+/**
+ * A preparation, consolidation or fix selection. A lens is a reviewer's focus,
+ * so these refuse one ({@link isMultiReviewReviewerSelection} accepts it).
+ */
+export const isMultiReviewModelSelection = isReviewStepModelSelection;
+
+/** A reviewer row, which may carry the reviewer's lens. */
+export const isMultiReviewReviewerSelection = isReviewerModelSelection;
 
 const isMultiReviewModelSelectionFields = isReviewerModelSelectionFields;
 
@@ -662,7 +717,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
-    !value.reviewers.every(isMultiReviewModelSelection) ||
+    !value.reviewers.every(isMultiReviewReviewerSelection) ||
     (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
     !isMultiReviewModelSelection(value.fixModel)
   ) {
@@ -918,6 +973,18 @@ const AUTO_PR_LAUNCH_STATES = new Set<MultiReviewAutoPrLaunch["state"]>([
   "failed",
 ]);
 
+function isGraphRunLink(value: unknown): value is MultiReviewGraphRunLink {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["runId", "projectedRevision", "settled"]) &&
+    nonBlank(value.runId, 128) &&
+    (value.projectedRevision === undefined ||
+      (Number.isSafeInteger(value.projectedRevision) &&
+        (value.projectedRevision as number) >= 0)) &&
+    (value.settled === undefined || typeof value.settled === "boolean")
+  );
+}
+
 function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
   return (
     record(value) &&
@@ -956,6 +1023,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "autoFix",
       "autoPr",
       "autoPrLaunch",
+      "engine",
+      "graphRun",
       "reviewers",
       "reviewModel",
       "consolidationModel",
@@ -1006,6 +1075,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
     (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
     (value.autoPrLaunch !== undefined && !isAutoPrLaunch(value.autoPrLaunch)) ||
+    (value.engine !== undefined && value.engine !== "graph") ||
+    (value.engine === "graph") !== (value.graphRun !== undefined) ||
+    (value.graphRun !== undefined && !isGraphRunLink(value.graphRun)) ||
     !PHASES.has(value.phase as MultiReviewPhase) ||
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
@@ -1090,13 +1162,17 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   ) {
     return false;
   }
+  // A graph-engine Fix is a graph activation: it is `fixing` from admission,
+  // before its provider session exists, and it never journals a request here.
+  const graphEngine = value.engine === "graph";
   if (
+    !graphEngine &&
     (value.phase === "fixing" || value.phase === "completed") &&
     !isFixSession(value.fixSession)
   ) {
     return false;
   }
-  if (value.phase === "fixing") {
+  if (value.phase === "fixing" && !graphEngine) {
     const activeRequest = value.activeRequest;
     if (!isActiveRequest(activeRequest) || activeRequest.kind !== "fix") return false;
   }

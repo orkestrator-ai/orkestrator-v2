@@ -28,7 +28,9 @@ import {
 } from "./session-manager-interaction-holds.js";
 import {
   claudeArtifactServerTools,
+  claudeWorkflowResultCallRefusal,
   claudeWorkflowResultTools,
+  isOwnClaudeWorkflowResultCall,
 } from "./claude-workflow-result-tools.js";
 import { abortSession } from "./session-manager-lifecycle.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
@@ -358,8 +360,19 @@ export async function turnCanUseTool(
   // approvals are handled above, so a denying session can still ask the user.
   // Otherwise the mode already chose not to ask, so a tool that still reaches
   // here runs.
+  // The turn's declared attempt holds its result tools to their own keys
+  // (the PreToolUse hook already refused such a call; this covers a caller
+  // that reaches here another way).
+  const workflowResultTurn = turn.options?.workflowResultTurn;
+  const workflowResultRefusal = claudeWorkflowResultCallRefusal(
+    workflowResultTurn,
+    toolName,
+    input,
+  );
+  if (workflowResultRefusal) return { behavior: "deny" as const, message: workflowResultRefusal };
   if (
     (claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) ||
+      isOwnClaudeWorkflowResultCall(turn.mcpServerNames, workflowResultTurn, toolName, input) ||
       claudeArtifactServerTools(turn.mcpServerNames).includes(toolName)) &&
     !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
   ) {

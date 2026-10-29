@@ -43,6 +43,11 @@ export const COMPATIBILITY_PATH_IDS = [
   "mcp-report.older-bridge-outcome",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
+  /**
+   * Verify read an Address session's last assistant text because the session
+   * has no typed `fix-result` marker: it started before the typed handoff.
+   */
+  "build-pipeline.address-text-report",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

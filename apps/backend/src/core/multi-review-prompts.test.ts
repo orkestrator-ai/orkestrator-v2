@@ -8,7 +8,13 @@ import {
   createMultiReviewerPrompt,
   createPackagedMultiReviewerPrompt,
   reviewerPanelSection,
+  reviewerPanelTail,
 } from "./multi-review-prompts.js";
+import {
+  REVIEW_LENS_FRAME_OPEN,
+  SHIPPED_REVIEW_LENS_PRESETS,
+  reviewLensSection,
+} from "@orkestrator/protocol/review-lens";
 import { parseReviewPackageReference } from "./review-package.js";
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
 
@@ -274,6 +280,34 @@ describe("multi review consolidation prompt", () => {
   });
 });
 
+describe("multi review consolidation with lenses", () => {
+  test("names each reviewer's lens label and explains it only when one is set", () => {
+    const plain = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [
+        { reviewerId: "a", agent: "claude", model: "opus", report },
+        { reviewerId: "b", agent: "codex", model: "gpt", report },
+      ],
+    });
+    expect(plain).not.toContain('"focus"');
+    expect(plain).not.toContain("coverage differs by design");
+    const focused = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [
+        { reviewerId: "a", agent: "claude", model: "opus", focus: "Security", report },
+        { reviewerId: "b", agent: "codex", model: "gpt", report },
+      ],
+    });
+    expect(focused).toContain(
+      '"reviewerId":"a","agent":"claude","model":"opus","focus":"Security"',
+    );
+    expect(focused).toContain("coverage differs by design");
+    expect(focused).toContain("do not drop or downgrade a finding");
+    // Only the label travels; the instruction was for the reviewer.
+    expect(focused).not.toContain(SHIPPED_REVIEW_LENS_PRESETS[0]!.instruction);
+  });
+});
+
 describe("multi review preparation prompt", () => {
   test("carries the interim-update contract with the Multi Review restrictions", () => {
     const prompt = createMultiReviewPreparationPrompt({
@@ -332,6 +366,56 @@ describe("reviewer prompt prefix stability", () => {
     expect(prompts[0]!.endsWith(reviewerPanelSection(1, 2))).toBe(true);
     expect(prompts[0]!.slice(0, -reviewerPanelSection(1, 2).length)).toBe(
       prompts[1]!.slice(0, -reviewerPanelSection(2, 2).length),
+    );
+  });
+
+  test("a panel with different lenses shares a byte-identical prefix up to the panel section", () => {
+    const lenses = [
+      SHIPPED_REVIEW_LENS_PRESETS[0]!,
+      undefined,
+      { label: "Migrations", instruction: "Check every schema migration both ways." },
+    ];
+    const packaged = lenses.map((lens, index) =>
+      createPackagedMultiReviewerPrompt({
+        reviewPackage,
+        reviewInstruction: "Focus on concurrency",
+        reviewerNumber: index + 1,
+        reviewerCount: 3,
+        lens,
+      }),
+    );
+    const live = lenses.map((lens, index) =>
+      createMultiReviewerPrompt({
+        targetBranch: "main",
+        reviewerNumber: index + 1,
+        reviewerCount: 3,
+        lens,
+      }),
+    );
+    for (const prompts of [packaged, live]) {
+      const prefixes = prompts.map((prompt, index) => {
+        const tail = reviewerPanelTail(index + 1, 3, lenses[index]);
+        expect(prompt.endsWith(tail)).toBe(true);
+        // The lens follows the panel position; nothing per-reviewer precedes it.
+        expect(prompt.indexOf(reviewerPanelSection(index + 1, 3))).toBe(
+          prompt.length - tail.length,
+        );
+        return prompt.slice(0, prompt.length - tail.length);
+      });
+      expect(new Set(prefixes).size).toBe(1);
+      expect(prefixes[0]).not.toContain(REVIEW_LENS_FRAME_OPEN);
+      expect(prompts[0]!.endsWith(reviewLensSection(lenses[0]))).toBe(true);
+      expect(prompts[1]!.endsWith(reviewerPanelSection(2, 3))).toBe(true);
+      expect(prompts[1]).not.toContain(REVIEW_LENS_FRAME_OPEN);
+    }
+    // A reviewer without a lens gets exactly the prompt it got before lenses.
+    expect(packaged[1]).toBe(
+      createPackagedMultiReviewerPrompt({
+        reviewPackage,
+        reviewInstruction: "Focus on concurrency",
+        reviewerNumber: 2,
+        reviewerCount: 3,
+      }),
     );
   });
 

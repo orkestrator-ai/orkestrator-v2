@@ -39,6 +39,13 @@ import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
+import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
+import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
+import {
+  onGraphRunViewRequested,
+  takePendingGraphRunView,
+  type GraphRunViewRequest,
+} from "@/lib/graph-run-navigation";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -1279,6 +1286,30 @@ export function TerminalContainer({
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });
 
+      if (type === "graph-run") {
+        if (!options?.graphRun) return false;
+        return openGraphRunTab({
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          run: options.graphRun,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+      }
+
+      if (type === "graph-designer")
+        return openGraphDesignerTab({
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          template: options?.graphTemplate,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+
       // A pull request has one tab per environment: opening it again focuses
       // that tab (with the requested view) rather than counting a new one.
       if (type === "pull-request") {
@@ -1949,6 +1980,28 @@ export function TerminalContainer({
     setCreateFileTab,
     setOpenFilePaths,
     environmentId,
+  ]);
+
+  // Launched and mock graph runs open here (items 213, 214): the active
+  // environment's pane answers requests naming it, and picks up one made
+  // while it was not on screen.
+  useEffect(() => {
+    if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;
+    const open = (request: GraphRunViewRequest): boolean =>
+      request.environmentId === environmentId &&
+      handleCreateTab("graph-run", {
+        graphRun: { runId: request.runId, ...(request.title ? { title: request.title } : {}) },
+      });
+    const pending = takePendingGraphRunView(environmentId);
+    if (pending) open(pending);
+    return onGraphRunViewRequested(open);
+  }, [
+    isActive,
+    isEnvironmentRunning,
+    containerId,
+    isLocalEnvironmentReady,
+    environmentId,
+    handleCreateTab,
   ]);
 
   // A file opened from the project board's files panel names this

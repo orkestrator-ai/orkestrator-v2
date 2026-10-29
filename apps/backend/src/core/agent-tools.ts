@@ -31,9 +31,11 @@ import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-job
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   registerWorkflowResultBrokerTools,
+  registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
 import {
@@ -110,6 +112,8 @@ export type AgentToolScope = {
   projectId: string;
   tabId?: string;
   workflowResultKey?: string;
+  /** A graph activation's output slots: one capability for every port (see `workflowResultActivationConnection`). */
+  workflowResultKeys?: string[];
   workflowResultBroker?: boolean;
 };
 
@@ -331,6 +335,230 @@ export function agentMcpAnnounces(body: unknown): boolean {
   });
 }
 
+/**
+ * The Kanban ticket tools, scoped to the credential's project: reading
+ * (`list_tickets`, `get_ticket`) and writing (`create_ticket`,
+ * `update_ticket`, `add_ticket_comment`). The general server registers both;
+ * a graph activation's credential registers the groups its node opted into
+ * (`orkestrator:tickets.read`, `orkestrator:tickets.write`; item 204).
+ */
+function registerKanbanTicketTools(
+  server: McpServer,
+  storage: StorageService,
+  scope: Pick<AgentToolScope, "projectId">,
+  access: { read: boolean; write: boolean },
+): void {
+  if (access.read) {
+    server.registerTool(
+      "list_tickets",
+      {
+        title: "List Kanban tickets",
+        description:
+          "List summaries of Kanban tickets in the current project, optionally filtered by status.",
+        inputSchema: z.object({
+          status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+          offset: z.number().int().min(0).default(0),
+          limit: z.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT),
+        }),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ status, offset, limit }) => {
+        const all = await storage.kanban.getKanbanTasks(scope.projectId);
+        const filtered = status ? all.filter((task) => task.status === status) : all;
+        const tickets = filtered.slice(offset, offset + limit).map(ticketSummary);
+        return toolResult({
+          tickets,
+          total: filtered.length,
+          offset,
+          limit,
+          hasMore: offset + tickets.length < filtered.length,
+        });
+      },
+    );
+
+    server.registerTool(
+      "get_ticket",
+      {
+        title: "Read a Kanban ticket",
+        description:
+          "Read one Kanban ticket in the current project, including acceptance criteria and a paginated comment page.",
+        inputSchema: z.object({
+          ticketId: z.string().trim().min(1).max(200),
+          commentOffset: z.number().int().min(0).default(0),
+          commentLimit: z
+            .number()
+            .int()
+            .min(1)
+            .max(MAX_COMMENT_LIMIT)
+            .default(DEFAULT_COMMENT_LIMIT),
+        }),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ ticketId, commentOffset, commentLimit }) => {
+        const ticket = await scopedTicket(storage, scope.projectId, ticketId);
+        return ticketResult(ticket, commentOffset, commentLimit);
+      },
+    );
+  }
+  if (access.write) {
+    server.registerTool(
+      "create_ticket",
+      {
+        title: "Create a Kanban ticket",
+        description:
+          "Create a Kanban ticket in the current project. New tickets default to backlog. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
+        inputSchema: z.object({
+          requestId: z.string().trim().min(1).max(256).optional(),
+          title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+          kind: ticketKindField,
+          sections: ticketSectionsField,
+          description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
+          acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
+          status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ title, kind, sections, description, acceptanceCriteria, status, requestId }) => {
+        const ticket = await storage.kanban.addKanbanTask(scope.projectId, title, description, {
+          acceptanceCriteria,
+          status,
+          requestId,
+          ...(kind ? { kind } : {}),
+          ...(sections ? { sections: parseTicketSectionsPatch(sections) } : {}),
+        });
+        return ticketResult(ticket);
+      },
+    );
+
+    server.registerTool(
+      "update_ticket",
+      {
+        title: "Update a Kanban ticket",
+        description:
+          "Update editable fields on a Kanban ticket in the current project. Omitted fields are unchanged; sections replaces only the sections it names.",
+        inputSchema: z.object({
+          ticketId: z.string().trim().min(1).max(200),
+          title: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
+          kind: ticketKindField,
+          sections: ticketSectionsField,
+          description: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
+          acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
+          status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ ticketId, title, kind, sections, description, acceptanceCriteria, status }) => {
+        await scopedTicket(storage, scope.projectId, ticketId);
+        const updates: Parameters<typeof storage.kanban.updateKanbanTask>[1] = {
+          ...(title !== undefined ? { title } : {}),
+          ...(kind !== undefined ? { kind } : {}),
+          ...(sections !== undefined ? { sections: parseTicketSectionsPatch(sections) } : {}),
+          ...(description !== undefined ? { description } : {}),
+          ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
+          ...(status !== undefined ? { status: status as KanbanStatus } : {}),
+        };
+        if (Object.keys(updates).length === 0) {
+          throw new Error("Provide at least one ticket field to update");
+        }
+        const ticket = await storage.kanban.updateKanbanTask(ticketId, updates, scope.projectId);
+        return ticketResult(ticket);
+      },
+    );
+
+    server.registerTool(
+      "add_ticket_comment",
+      {
+        title: "Comment on a Kanban ticket",
+        description: "Add a durable comment to a Kanban ticket in the current project.",
+        inputSchema: z.object({
+          requestId: z.string().trim().min(1).max(256).optional(),
+          ticketId: z.string().trim().min(1).max(200),
+          text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async ({ ticketId, text, requestId }) => {
+        await scopedTicket(storage, scope.projectId, ticketId);
+        const ticket = await storage.kanban.addKanbanComment(
+          ticketId,
+          text,
+          scope.projectId,
+          requestId,
+        );
+        const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
+        return ticketResult(ticket, commentOffset);
+      },
+    );
+  }
+}
+
+/**
+ * A graph activation's own tools on its result credential (item 204): the
+ * host's `report_progress`, `read_artifact` and `ask_human` as the node's
+ * grants allow, and the Orkestrator groups the node opted into. Mail and
+ * schedules act as the environment's caller mailbox, as an environment
+ * credential does; nothing is registered for keys that are not a live graph
+ * activation.
+ */
+async function registerGraphActivationTools(
+  server: McpServer,
+  storage: StorageService,
+  scope: AgentToolScope,
+  resultKeys: readonly string[],
+  graphTools: GraphActivationToolHost | null,
+  consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
+  schedules: ScheduledJobService | null | undefined,
+): Promise<void> {
+  if (!graphTools) return;
+  const tools = await graphTools.resolve(
+    { environmentId: scope.environmentId, projectId: scope.projectId },
+    resultKeys,
+  );
+  if (!tools) return;
+  tools.register(server);
+  const groups = new Set(tools.groups);
+  registerKanbanTicketTools(server, storage, scope, {
+    read: groups.has("tickets.read"),
+    write: groups.has("tickets.write"),
+  });
+  if (!groups.has("mail") && !groups.has("schedules")) return;
+  const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
+  if (!messagingEnabled) return;
+  const callerScope = { environmentId: scope.environmentId, projectId: scope.projectId };
+  if (groups.has("mail"))
+    registerAgentMessagingTools(server, storage, callerScope, consumeRateLimit);
+  if (groups.has("schedules") && schedules) {
+    registerScheduleTools(server, "agent", () =>
+      agentScheduleBackend(storage, callerScope, schedules),
+    );
+  }
+}
+
 async function createAgentToolServer(
   storage: StorageService,
   scope: AgentToolScope,
@@ -340,7 +568,10 @@ async function createAgentToolServer(
   provisionalFindings?: ProvisionalFindingSink | null,
   artifacts?: TranscriptArtifactToolHost | null,
   schedules?: ScheduledJobService | null,
-  { instructions = true }: { instructions?: boolean } = {},
+  {
+    instructions = true,
+    graphTools = null,
+  }: { instructions?: boolean; graphTools?: GraphActivationToolHost | null } = {},
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -356,6 +587,27 @@ async function createAgentToolServer(
       workflowResults,
       { environmentId: scope.environmentId, projectId: scope.projectId },
       provisionalFindings,
+    );
+    // Graph activations on OpenCode: the broker's tool list is fixed, so the
+    // activation tools are always listed and authorized per call.
+    graphTools?.registerBroker(
+      server,
+      { environmentId: scope.environmentId, projectId: scope.projectId },
+      async (capability) => {
+        const single = await workflowResults.authenticateCapability(capability);
+        if (single) {
+          return single.environmentId === scope.environmentId &&
+            single.projectId === scope.projectId
+            ? [single.workflowResultKey]
+            : null;
+        }
+        const activation = await workflowResults.authenticateActivationCapability(capability);
+        return activation &&
+          activation.environmentId === scope.environmentId &&
+          activation.projectId === scope.projectId
+          ? activation.workflowResultKeys
+          : null;
+      },
     );
     return server;
   }
@@ -377,8 +629,60 @@ async function createAgentToolServer(
     registerWorkflowResultTools(
       server,
       workflowResults,
-      { ...callerScope, workflowResultKey: scope.workflowResultKey, kind: binding.kind },
+      {
+        ...callerScope,
+        workflowResultKey: scope.workflowResultKey,
+        kind: binding.kind,
+        ...(binding.slot ? { slot: binding.slot } : {}),
+      },
       provisionalFindings,
+    );
+    if (binding.kind === "graph-output") {
+      await registerGraphActivationTools(
+        server,
+        storage,
+        scope,
+        [scope.workflowResultKey],
+        graphTools,
+        consumeRateLimit,
+        schedules,
+      );
+    }
+    return server;
+  }
+  if (scope.workflowResultKeys) {
+    const server = new McpServer(
+      { name: "orkestrator-workflow-result", version: "1.0.0" },
+      {
+        instructions:
+          "Use these tools only to submit or check the results assigned to this workflow step: one submission tool per output.",
+      },
+    );
+    if (!workflowResults) throw new Error("Workflow result tools are unavailable");
+    const callerScope = {
+      environmentId: scope.environmentId,
+      projectId: scope.projectId,
+    };
+    const scopes = [];
+    for (const workflowResultKey of scope.workflowResultKeys) {
+      const binding = await workflowResults.binding(callerScope, workflowResultKey);
+      if (!binding) throw new Error("Workflow result capability is unavailable");
+      scopes.push({
+        ...callerScope,
+        workflowResultKey,
+        kind: binding.kind,
+        ...(binding.slot ? { slot: binding.slot } : {}),
+      });
+    }
+    registerWorkflowResultSlotTools(server, workflowResults, scopes);
+    await registerGraphActivationTools(
+      server,
+      storage,
+      scope,
+      scope.workflowResultKeys,
+      graphTools,
+      consumeRateLimit,
+      schedules,
     );
     return server;
   }
@@ -454,165 +758,7 @@ async function createAgentToolServer(
     );
   }
 
-  server.registerTool(
-    "list_tickets",
-    {
-      title: "List Kanban tickets",
-      description:
-        "List summaries of Kanban tickets in the current project, optionally filtered by status.",
-      inputSchema: z.object({
-        status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
-        offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(MAX_LIST_LIMIT).default(DEFAULT_LIST_LIMIT),
-      }),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async ({ status, offset, limit }) => {
-      const all = await storage.kanban.getKanbanTasks(scope.projectId);
-      const filtered = status ? all.filter((task) => task.status === status) : all;
-      const tickets = filtered.slice(offset, offset + limit).map(ticketSummary);
-      return toolResult({
-        tickets,
-        total: filtered.length,
-        offset,
-        limit,
-        hasMore: offset + tickets.length < filtered.length,
-      });
-    },
-  );
-
-  server.registerTool(
-    "get_ticket",
-    {
-      title: "Read a Kanban ticket",
-      description:
-        "Read one Kanban ticket in the current project, including acceptance criteria and a paginated comment page.",
-      inputSchema: z.object({
-        ticketId: z.string().trim().min(1).max(200),
-        commentOffset: z.number().int().min(0).default(0),
-        commentLimit: z.number().int().min(1).max(MAX_COMMENT_LIMIT).default(DEFAULT_COMMENT_LIMIT),
-      }),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async ({ ticketId, commentOffset, commentLimit }) => {
-      const ticket = await scopedTicket(storage, scope.projectId, ticketId);
-      return ticketResult(ticket, commentOffset, commentLimit);
-    },
-  );
-
-  server.registerTool(
-    "create_ticket",
-    {
-      title: "Create a Kanban ticket",
-      description:
-        "Create a Kanban ticket in the current project. New tickets default to backlog. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256).optional(),
-        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
-        kind: ticketKindField,
-        sections: ticketSectionsField,
-        description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
-        acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
-        status: z.enum(["backlog", "in-progress", "review", "done"]).default("backlog"),
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async ({ title, kind, sections, description, acceptanceCriteria, status, requestId }) => {
-      const ticket = await storage.kanban.addKanbanTask(scope.projectId, title, description, {
-        acceptanceCriteria,
-        status,
-        requestId,
-        ...(kind ? { kind } : {}),
-        ...(sections ? { sections: parseTicketSectionsPatch(sections) } : {}),
-      });
-      return ticketResult(ticket);
-    },
-  );
-
-  server.registerTool(
-    "update_ticket",
-    {
-      title: "Update a Kanban ticket",
-      description:
-        "Update editable fields on a Kanban ticket in the current project. Omitted fields are unchanged; sections replaces only the sections it names.",
-      inputSchema: z.object({
-        ticketId: z.string().trim().min(1).max(200),
-        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
-        kind: ticketKindField,
-        sections: ticketSectionsField,
-        description: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
-        acceptanceCriteria: z.string().max(MAX_DESCRIPTION_LENGTH).optional(),
-        status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async ({ ticketId, title, kind, sections, description, acceptanceCriteria, status }) => {
-      await scopedTicket(storage, scope.projectId, ticketId);
-      const updates: Parameters<typeof storage.kanban.updateKanbanTask>[1] = {
-        ...(title !== undefined ? { title } : {}),
-        ...(kind !== undefined ? { kind } : {}),
-        ...(sections !== undefined ? { sections: parseTicketSectionsPatch(sections) } : {}),
-        ...(description !== undefined ? { description } : {}),
-        ...(acceptanceCriteria !== undefined ? { acceptanceCriteria } : {}),
-        ...(status !== undefined ? { status: status as KanbanStatus } : {}),
-      };
-      if (Object.keys(updates).length === 0) {
-        throw new Error("Provide at least one ticket field to update");
-      }
-      const ticket = await storage.kanban.updateKanbanTask(ticketId, updates, scope.projectId);
-      return ticketResult(ticket);
-    },
-  );
-
-  server.registerTool(
-    "add_ticket_comment",
-    {
-      title: "Comment on a Kanban ticket",
-      description: "Add a durable comment to a Kanban ticket in the current project.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256).optional(),
-        ticketId: z.string().trim().min(1).max(200),
-        text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async ({ ticketId, text, requestId }) => {
-      await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.kanban.addKanbanComment(
-        ticketId,
-        text,
-        scope.projectId,
-        requestId,
-      );
-      const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
-      return ticketResult(ticket, commentOffset);
-    },
-  );
+  registerKanbanTicketTools(server, storage, scope, { read: true, write: true });
 
   if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
 
@@ -676,6 +822,7 @@ export class AgentToolsServer {
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
   private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
   private scheduledJobs: ScheduledJobService | null = null;
+  private graphActivationToolHost: GraphActivationToolHost | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -825,6 +972,32 @@ export class AgentToolsServer {
   }
 
   /**
+   * One connection for every output slot of a graph activation (report §5.5):
+   * it lists `submit_<port>` and `validate_<port>` per slot and one status
+   * tool. Slots must be prepared `graph-output` slots of this environment and
+   * project. A single slot uses {@link workflowResultConnection}, which gives
+   * the same per-port tools. Not for the OpenCode broker: OpenCode submits
+   * graph outputs through the broker's generic `submit_graph_output`.
+   */
+  workflowResultActivationConnection(
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKeys: readonly string[],
+  ): AgentToolConnection {
+    if (!this.server || !this.port) throw new Error("Agent tools server is not running");
+    if (!this.workflowResults) throw new Error("Workflow result tools are unavailable");
+    const hostname = target === "container" ? "host.docker.internal" : "127.0.0.1";
+    return {
+      url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
+      token: this.workflowResults.activationCapabilityToken(
+        { environmentId, projectId },
+        resultKeys,
+      ),
+    };
+  }
+
+  /**
    * Issues a container credential that rings `onSignal` and opens nothing
    * else: `/mcp` never accepts it and the request carries no data, so the
    * receiver must read the state it is told about itself. Null before the
@@ -886,6 +1059,15 @@ export class AgentToolsServer {
    */
   setTranscriptArtifactToolHost(host: TranscriptArtifactToolHost | null): void {
     this.transcriptArtifactToolHost = host;
+  }
+
+  /**
+   * Installs (or removes, with null) the graph activation tool host: graph
+   * agent credentials then list their node's `report_progress`,
+   * `read_artifact`, `ask_human` and opted-in Orkestrator groups (item 204).
+   */
+  setGraphActivationToolHost(host: GraphActivationToolHost | null): void {
+    this.graphActivationToolHost = host;
   }
 
   /** Installs the scheduler behind the agents' schedule tools. */
@@ -976,7 +1158,11 @@ export class AgentToolsServer {
     if (!token) return null;
     const processScope = this.scopesByDigest.get(credentialDigest(token));
     if (processScope) return processScope;
-    return (await this.workflowResults?.authenticateCapability(token)) ?? null;
+    return (
+      (await this.workflowResults?.authenticateCapability(token)) ??
+      (await this.workflowResults?.authenticateActivationCapability(token)) ??
+      null
+    );
   }
 
   private consumeMailRateLimit(scope: AgentToolScope, kind: AgentMessagingRateLimitKind): void {
@@ -1114,6 +1300,7 @@ export class AgentToolsServer {
       const environment = await this.storage.getEnvironment(scope.environmentId);
       if (
         scope.workflowResultKey ||
+        scope.workflowResultKeys ||
         scope.workflowResultBroker ||
         !environment ||
         environment.projectId !== scope.projectId
@@ -1167,7 +1354,10 @@ export class AgentToolsServer {
                 this.provisionalFindingSink,
                 this.transcriptArtifactToolHost,
                 this.scheduledJobs,
-                { instructions: agentMcpAnnounces(body) },
+                {
+                  instructions: agentMcpAnnounces(body),
+                  graphTools: this.graphActivationToolHost,
+                },
               ),
         { legacy: "stateless" },
       );

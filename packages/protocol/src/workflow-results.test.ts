@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { graphOutputPortProblem, graphOutputToolPort } from "./graphs/output-slots.js";
 import {
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
@@ -14,6 +15,11 @@ import {
   parseWorkflowResultTurn,
   workflowResultTurnToolNames,
   callsOwnWorkflowResult,
+  GRAPH_ACTIVATION_EXTRA_TOOLS,
+  isWorkflowResultAttemptTool,
+  WORKFLOW_RESULT_TURN_MAX_SLOTS,
+  workflowResultTurnAllows,
+  workflowResultTurnToolPort,
   workflowResultNoun,
   workflowResultSubmissionLabel,
   workflowResultToolName,
@@ -221,6 +227,211 @@ describe("a turn's declared workflow-result attempt", () => {
     expect(callsOwnWorkflowResult(turn, { resultKey, result: {} })).toBe(true);
     for (const args of [{ resultKey: "other" }, {}, undefined, [resultKey], resultKey]) {
       expect(callsOwnWorkflowResult(turn, args)).toBe(false);
+    }
+  });
+});
+
+describe("a graph activation turn's result slots", () => {
+  const keyA = "graph-activation-a";
+  const keyB = "graph-activation-b";
+  const slots = [
+    { tool: "submit_brief", resultKey: keyA },
+    { tool: "submit_risks", resultKey: keyB },
+  ];
+
+  test("accepts per-port tools, slots and extra tools", () => {
+    expect(parseWorkflowResultTurn("submit_brief", keyA)).toEqual({
+      ok: true,
+      turn: { tool: "submit_brief", resultKey: keyA },
+    });
+    expect(
+      parseWorkflowResultTurn("submit_brief", keyA, slots, ["read_artifact", "report_progress"]),
+    ).toEqual({
+      ok: true,
+      turn: {
+        tool: "submit_brief",
+        resultKey: keyA,
+        slots,
+        extraTools: ["read_artifact", "report_progress"],
+      },
+    });
+    // OpenCode: every slot uses the shared graph-output tool.
+    expect(
+      parseWorkflowResultTurn("submit_graph_output", keyA, [
+        { tool: "submit_graph_output", resultKey: keyA },
+        { tool: "submit_graph_output", resultKey: keyB },
+      ]).ok,
+    ).toBe(true);
+    expect(parseWorkflowResultTurn("submit_brief", keyA, undefined, []).ok).toBe(true);
+    const many = Array.from({ length: WORKFLOW_RESULT_TURN_MAX_SLOTS }, (_, index) => ({
+      tool: `submit_port${index}`,
+      resultKey: `key-${index}`,
+    }));
+    expect(parseWorkflowResultTurn("submit_port0", "key-0", many).ok).toBe(true);
+  });
+
+  test("refuses malformed slots and extra tools", () => {
+    const refused: [unknown, unknown, unknown, unknown][] = [
+      [undefined, undefined, slots, undefined],
+      [undefined, undefined, undefined, ["read_artifact"]],
+      ["submit_Brief", keyA, undefined, undefined],
+      ["submit_workflow_result", keyA, undefined, undefined],
+      [`submit_${"p".repeat(49)}`, keyA, undefined, undefined],
+      ["submit_brief", keyA, [], undefined],
+      ["submit_brief", keyA, {}, undefined],
+      ["submit_brief", keyA, [slots[1], slots[0]], undefined],
+      ["submit_brief", keyA, [slots[0], { tool: "submit_risks", resultKey: keyA }], undefined],
+      ["submit_brief", keyA, [slots[0], { tool: "submit_brief", resultKey: keyB }], undefined],
+      ["submit_brief", keyA, [slots[0], { tool: "send_message", resultKey: keyB }], undefined],
+      ["submit_brief", keyA, [slots[0], { tool: "submit_risks", resultKey: "a b" }], undefined],
+      ["submit_brief", keyA, [slots[0], null], undefined],
+      [
+        "submit_port0",
+        "key-0",
+        Array.from({ length: WORKFLOW_RESULT_TURN_MAX_SLOTS + 1 }, (_, index) => ({
+          tool: `submit_port${index}`,
+          resultKey: `key-${index}`,
+        })),
+        undefined,
+      ],
+      ["submit_brief", keyA, slots, ["send_message"]],
+      ["submit_brief", keyA, slots, ["ask_human", "ask_human"]],
+      ["submit_brief", keyA, slots, "ask_human"],
+      ["submit_brief", keyA, slots, [42]],
+    ];
+    for (const [tool, key, turnSlots, extraTools] of refused) {
+      expect(parseWorkflowResultTurn(tool, key, turnSlots, extraTools).ok).toBe(false);
+    }
+  });
+
+  test("names each slot's own tools, status and the listed extra tools", () => {
+    expect(
+      workflowResultTurnToolNames({
+        tool: "submit_brief",
+        resultKey: keyA,
+        slots,
+        extraTools: ["ask_human"],
+      }),
+    ).toEqual([
+      "submit_brief",
+      "validate_brief",
+      "submit_risks",
+      "validate_risks",
+      "get_workflow_result_status",
+      "ask_human",
+    ]);
+    expect(
+      workflowResultTurnToolNames({
+        tool: "submit_graph_output",
+        resultKey: keyA,
+        slots: [
+          { tool: "submit_graph_output", resultKey: keyA },
+          { tool: "submit_graph_output", resultKey: keyB },
+        ],
+      }),
+    ).toEqual(["submit_graph_output", "validate_workflow_result", "get_workflow_result_status"]);
+  });
+
+  test("lets a call through only with its own slot's key", () => {
+    const turn = { tool: "submit_brief", resultKey: keyA, slots, extraTools: ["read_artifact"] };
+    expect(workflowResultTurnAllows(turn, "submit_brief", { resultKey: keyA })).toBe(true);
+    expect(workflowResultTurnAllows(turn, "validate_brief", { resultKey: keyA })).toBe(true);
+    expect(workflowResultTurnAllows(turn, "submit_risks", { resultKey: keyB })).toBe(true);
+    expect(workflowResultTurnAllows(turn, "submit_brief", { resultKey: keyB })).toBe(false);
+    expect(workflowResultTurnAllows(turn, "validate_risks", { resultKey: keyA })).toBe(false);
+    expect(workflowResultTurnAllows(turn, "validate_workflow_result", { resultKey: keyA })).toBe(
+      false,
+    );
+    for (const key of [keyA, keyB]) {
+      expect(workflowResultTurnAllows(turn, "get_workflow_result_status", { resultKey: key })).toBe(
+        true,
+      );
+    }
+    expect(workflowResultTurnAllows(turn, "get_workflow_result_status", { resultKey: "x" })).toBe(
+      false,
+    );
+    expect(workflowResultTurnAllows(turn, "read_artifact", { id: "artifact" })).toBe(true);
+    expect(workflowResultTurnAllows(turn, "read_artifact", undefined)).toBe(true);
+    expect(workflowResultTurnAllows(turn, "ask_human", { question: "?" })).toBe(false);
+    expect(workflowResultTurnAllows(turn, "report_progress", { resultKey: keyA })).toBe(false);
+    expect(workflowResultTurnAllows(turn, "report_finding", { resultKey: keyA })).toBe(false);
+    expect(workflowResultTurnAllows(turn, "send_message", { resultKey: keyA })).toBe(false);
+    const progress = { ...turn, extraTools: ["report_progress", "ask_human"] };
+    expect(workflowResultTurnAllows(progress, "report_progress", { resultKey: keyB })).toBe(true);
+    expect(workflowResultTurnAllows(progress, "report_progress", {})).toBe(false);
+    expect(workflowResultTurnAllows(progress, "ask_human", {})).toBe(true);
+    expect(workflowResultTurnAllows(progress, "read_artifact", {})).toBe(false);
+  });
+
+  test("an old kind-tool turn allows what it always did", () => {
+    const resultKey = "11111111-1111-4111-8111-111111111111";
+    const turn = { tool: "submit_review_report", resultKey };
+    for (const tool of workflowResultTurnToolNames(turn)) {
+      expect(workflowResultTurnAllows(turn, tool, { resultKey })).toBe(
+        callsOwnWorkflowResult(turn, { resultKey }),
+      );
+      expect(workflowResultTurnAllows(turn, tool, { resultKey: "other" })).toBe(false);
+    }
+    expect(workflowResultTurnAllows(turn, "read_artifact", { resultKey })).toBe(false);
+    expect(GRAPH_ACTIVATION_EXTRA_TOOLS).toEqual(["report_progress", "read_artifact", "ask_human"]);
+  });
+
+  test("knows every attempt's tools and nothing else", () => {
+    for (const name of [
+      "submit_review_report",
+      "submit_graph_output",
+      "validate_workflow_result",
+      "get_workflow_result_status",
+      "report_finding",
+      "report_progress",
+      "read_artifact",
+      "ask_human",
+      "submit_brief",
+      "validate_brief",
+    ]) {
+      expect(isWorkflowResultAttemptTool(name)).toBe(true);
+    }
+    for (const name of [
+      "send_message",
+      "get_artifact",
+      "validate_Brief",
+      "validate_review_report",
+      "submit_workflow_result",
+      "submit_",
+      "validate_",
+    ]) {
+      expect(isWorkflowResultAttemptTool(name)).toBe(false);
+    }
+  });
+
+  test("the local port grammar agrees with the graph output tool grammar", () => {
+    const ports = [
+      "brief",
+      "risks_2",
+      "aB9_x",
+      "a",
+      "p".repeat(48),
+      "p".repeat(49),
+      "Brief",
+      "_brief",
+      "9brief",
+      "brief-x",
+      "brief x",
+      "",
+      "review_report",
+      "graph_output",
+      "workflow_result",
+      "fix_result",
+      "feature_plan_state",
+      "review_preparation_x",
+    ];
+    for (const port of ports) {
+      const tool = `submit_${port}`;
+      expect(workflowResultTurnToolPort(tool)).toBe(graphOutputToolPort(tool));
+      expect(workflowResultTurnToolPort(tool) === port).toBe(graphOutputPortProblem(port) === null);
+    }
+    for (const name of ["validate_brief", "brief", undefined, 42, "submit_"]) {
+      expect(workflowResultTurnToolPort(name)).toBe(graphOutputToolPort(name));
     }
   });
 });

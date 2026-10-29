@@ -40,6 +40,9 @@ export function graphCompetingImplementationsTemplate(): GraphTemplateV1 {
         workspaceAccess: "write",
         isolation: "worktree",
         replicate: { over: "samples", count: 3 },
+        // A writer fails the run by default; here the judge picks among the
+        // builders that succeeded, so a failed builder only drops out.
+        onFailure: "skip",
         prompt: {
           template:
             "Implement the ticket. Other builders implement it too, independently; make the change you think is best.\n\n{{> input.ticket}}\n\n{{> input.code}}\n",

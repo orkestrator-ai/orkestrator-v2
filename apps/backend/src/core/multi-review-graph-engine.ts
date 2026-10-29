@@ -20,7 +20,9 @@
  * | `fixer` | `fixModel` |
  * | `describer` | the saved pull request default (the bespoke PR tab's) |
  *
- * Parameters: `autoFix`, `autoPr`, `targetBranch` and `reviewInstruction`.
+ * Parameters: `autoFix`, `autoPr` and `targetBranch`. The review instruction
+ * is the optional `reviewInstruction` run input (`markdown@1`), which the
+ * discovery review's built-in writes where today's reviewer prompt has it.
  * The run id is derived from the workflow id (`multi-review-<id>`), so a
  * launch retried after a crash finds the run it created.
  *
@@ -39,9 +41,10 @@ import {
 import type { GraphRunLaunchService } from "./graph-run-launch.js";
 import type { GraphRunService } from "./graph-run-service.js";
 import {
-  MULTI_REVIEW_GRAPH_INSTRUCTION_PARAM,
+  MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT,
   MULTI_REVIEW_GRAPH_TARGET_BRANCH_PARAM,
   multiReviewGraphEngineTemplate,
+  multiReviewGraphInstructionValue,
 } from "./multi-review-graph-template.js";
 import { projectMultiReviewGraphRun } from "./multi-review-graph-projection.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
@@ -119,14 +122,21 @@ export function multiReviewGraphRoles(
 
 /** The parameter values a workflow's launch input gives the template. */
 export function multiReviewGraphParams(
-  workflow: Pick<MultiReviewWorkflow, "autoFix" | "autoPr" | "targetBranch" | "reviewInstruction">,
+  workflow: Pick<MultiReviewWorkflow, "autoFix" | "autoPr" | "targetBranch">,
 ): Record<string, string | boolean> {
   return {
     autoFix: workflow.autoFix === true,
     autoPr: workflow.autoPr === true,
     [MULTI_REVIEW_GRAPH_TARGET_BRANCH_PARAM]: workflow.targetBranch,
-    [MULTI_REVIEW_GRAPH_INSTRUCTION_PARAM]: workflow.reviewInstruction ?? "",
   };
+}
+
+/** The run input values a workflow's launch input gives the template: its instruction, if any. */
+export function multiReviewGraphInputs(
+  workflow: Pick<MultiReviewWorkflow, "reviewInstruction">,
+): Record<string, unknown> {
+  const instruction = multiReviewGraphInstructionValue(workflow.reviewInstruction);
+  return instruction ? { [MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT]: instruction } : {};
 }
 
 export class MultiReviewGraphEngine {
@@ -147,6 +157,7 @@ export class MultiReviewGraphEngine {
           environment: { kind: "existing", environmentId: workflow.environmentId },
           roles: multiReviewGraphRoles(workflow),
           params: multiReviewGraphParams(workflow),
+          inputs: multiReviewGraphInputs(workflow),
         },
         multiReviewGraphEngineTemplate({ targetBranch: workflow.targetBranch }),
         workflow.graphRun?.runId ?? multiReviewGraphRunId(workflow.id),

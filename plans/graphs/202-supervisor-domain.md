@@ -123,9 +123,18 @@ configured fails a provisioning run), `concurrency`, `observationIntervalMs`,
 - 214: `GraphRunLaunch` above; register a `provisioner` for runs that create their environment; a
   run that fails before it has an environment is not removed by environment deletion.
 
+**2026-10-29 · Audit: non-graph results never read the store.**
+`GraphRunService.resultAccepted` read the environment's whole run list for
+every result key it had not indexed, including every other workflow's.
+`WorkflowResultAcceptance` now carries the slot's `kind` (from the receipt),
+and `resultAccepted` returns at once for any kind but `graph-output`, the only
+kind graph activations open. Test: `graph-run-supervisor.test.ts` ("a slot
+this process has not indexed …").
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · `graph-run` keyed domain, obligations, result-slot wakes, discovery and restart recovery, run service and executor contract; tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · `resultAccepted` ignores non-graph result kinds without a store read · awaiting PR

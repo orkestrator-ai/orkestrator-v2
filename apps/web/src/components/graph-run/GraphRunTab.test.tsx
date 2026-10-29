@@ -243,6 +243,35 @@ describe("GraphRunTab items fan-out (item 401)", () => {
 });
 
 describe("GraphRunTab inspector", () => {
+  test("a ready position says what it waits for: another engine writing the environment", async () => {
+    stored = reviewRun([
+      act(
+        { nodeId: "plan" },
+        {
+          state: "ready",
+          blocked: {
+            reason: "external-workflow",
+            holder: "build-pipeline",
+            holderAccess: "write",
+          },
+        },
+      ),
+    ]);
+    renderTab();
+    await screen.findByTestId("graph-run-title");
+    fireEvent.click(faceOf("plan"));
+    expect(screen.getByTestId("graph-run-inspector-status").textContent).toBe(
+      "Waiting: Build Pipeline is writing this environment",
+    );
+    const panel = inspector();
+    await waitFor(() =>
+      expect(panel.querySelector("[data-graph-activation-blocked]")).not.toBeNull(),
+    );
+    expect(panel.querySelector("[data-graph-activation-blocked]")!.textContent).toBe(
+      "Waiting: Build Pipeline is writing this environment",
+    );
+  });
+
   test("shows the profile, the tier actually enforced and why, guards, usage and errors", async () => {
     stored = reviewRun([
       act(

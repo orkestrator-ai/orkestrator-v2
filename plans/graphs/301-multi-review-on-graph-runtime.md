@@ -58,15 +58,15 @@ Multi Review runs on the graph runtime with no loss of quality, robustness or ef
   `start_multi_review`, CLI `review launch`) already calls
   `MultiReviewService.start`, so routing lives there: on `graph` the record gets
   `engine: "graph"` and `graphRun: { runId: "multi-review-<workflow id>" }`
-  (`MultiReviewGraphRunLink`, validated by `isMultiReviewWorkflow`). A review
-  instruction over 4 KiB (the graph string-parameter bound) starts on bespoke
-  instead, logged without content.
+  (`MultiReviewGraphRunLink`, validated by `isMultiReviewWorkflow`). The review
+  instruction travels as a run input (see the 2026-10-29 audit note); nothing
+  falls back to bespoke.
 - **Launch.** `multi-review-graph-engine.ts` launches through the new
   `GraphRunLaunchService.launchInline(request, template, runId, origin)` (same
   binding, floor, parameter and workspace checks as `launch`) compiled by
   `GraphTemplateService.compileInlineForLaunch`. The template is the built-in
   copied per launch (`multi-review-graph-template.ts`): `engine` dropped, string
-  params `targetBranch` and `reviewInstruction`, and the target branch written
+  param `targetBranch` and the optional `markdown@1` run input `reviewInstruction`, and the target branch written
   onto `package`/`pr` system params (system params take no references).
   Bindings: preparer = `reviewModel ?? fixModel`; reviewer panel = reviewers in
   order with lenses; consolidator = `consolidationModel ?? preparer`; fixer =
@@ -101,7 +101,7 @@ Multi Review runs on the graph runtime with no loss of quality, robustness or ef
   checks the output with `REVIEW_CONSOLIDATION_PROVENANCE` and its wording
   (moved to `review-consolidation-provenance.ts`; `cite`, per the 103 note).
   `targetBranch` param drives agent prompts (`graph-agent-host.ts`);
-  `reviewInstruction` param is read by the discovery review only.
+  the `reviewInstruction` run input is read by the discovery review only.
 - **Known differences** (documented in `review-preparation.md` §"The engine
   setting"): the automatic Fix is an unattended node (no interactive Fix tab);
   `validationRun` progress is not projected (the `package` node validates and
@@ -120,7 +120,7 @@ Multi Review runs on the graph runtime with no loss of quality, robustness or ef
 - **Setting.** `multi-review-graph-engine.test.ts` › "the engine setting"
   (override wins, unknown ignored; stored, validated and kept by a save that
   omits it; bespoke starts record no engine, graph starts record their run; a
-  >4 KiB instruction stays bespoke). `multi-review-engine.test.ts` (protocol)
+  >4 KiB instruction runs on graph; one past 128 KiB refuses the start). `multi-review-engine.test.ts` (protocol)
   › "the engine setting". `GlobalSettings.multi-review-engine.test.tsx`
   (Settings saves `multiReviewEngine: "graph"`).
 - **Evaluation corpus.** `multi-review-graph-evaluation.test.ts`, every corpus
@@ -228,9 +228,29 @@ retired. Both wait for a soak period on the graph runtime that the user
 decides; then flip `MULTI_REVIEW_DEFAULT_ENGINE`, and retire the service once
 no supported version needs it (`docs/architecture/version-compatibility.md`).
 
+**2026-10-29 · Audit: the review instruction is a run input.** The audit
+found that a review instruction over 4 KiB silently started on bespoke with
+`graph` selected. The instruction is now the optional `reviewInstruction` run
+input (`markdown@1`, 128 KiB), edged to a new optional `instruction` port on
+`review` in the per-launch template copy (`multi-review-graph-template.ts`; the
+protocol built-in and its digest are unchanged). `discovery-review` gained an
+optional `instruction` input (text/markdown) that the adapter reads only from a
+run input (`GraphBuiltInPromptInputValue.runInput`, producer `$input`), so the
+prompt text matches bespoke (`createDiscoveryPrompt({ reviewInstruction })`);
+the input wins over the older `reviewInstruction` parameter, still read for
+runs whose frozen plan declares it. An instruction past 128 KiB encoded (Multi
+Review allows 100,000 characters) refuses a graph start with
+`MultiReviewGraphEngineError` before any record exists; the bespoke path is
+unchanged. `multiReviewInstructionFitsGraph` is removed;
+`multiReviewGraphInputs` and `multiReviewGraphInstructionProblem` are added.
+Tests: `multi-review-graph-engine.test.ts` (a ~5.6 KiB instruction runs on
+graph and reaches both reviewers; a 140,000-byte one refuses on graph and is
+accepted on bespoke; no instruction, no input), `graph-agent-builtins.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Graph-engine Multi Review behind `multiReviewEngine` / `ORKESTRATOR_MULTI_REVIEW_ENGINE` (default bespoke), projected onto the Multi Review record; all eight parity boxes and the tests box ticked with evidence. · Soak, flip and retirement await the user's decision.
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · review instruction as a run input (`markdown@1`); no bespoke fallback, an over-budget instruction refuses a graph start · awaiting PR

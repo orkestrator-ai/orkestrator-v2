@@ -256,6 +256,27 @@ above; keep branch keys stable. 206: gate/merge executors; failure routes. 207: 
 recreates superseded positions with the next attempt and the same inputs. 213: register mock
 executors with `{mock: true}`. Extend the benchmark with real executors and loops.
 
+**2026-10-29 · Audit: D3 across engines.** `GraphWorkspaceLocks` saw only graph
+runs. `workspace-writers.ts` now projects every holder of a checkout: Build
+Pipelines (Build, Fix, package preparation, Address, Verify, PR, conflict
+resolution and setup write; reviewing reads; a running session counts by its
+stage) and bespoke Multi Reviews (preparing and fixing write; reviewing and
+consolidating read). `selectGraphAdmissions` takes `external` from
+`WorkspaceWriters.externalHold` (new block `external-workflow` with
+`holder`/`holderAccess`; an unseeded projection blocks as `recovering`).
+Decision: graph readers wait for an external writer too (D3: no reader beside a
+writer; a read-only node's guard would fail on the other engine's edits). The
+pass persists `NodeActivation.blocked` (`GRAPH_ACTIVATION_BLOCK_REASONS`,
+`GRAPH_WORKSPACE_HOLDER_KINDS`; validated by `run-guards.ts`) for every block
+reason and clears it on admission or settle. Build Pipeline stages claim the
+checkout through `WorkspaceWriters.claim` before anything is saved or sent and
+wait on `WorkspaceBusyError`, re-derived on the next pass. The projection is
+seeded by one scan per store, then kept by record notes and resource changes.
+Interactive agent tabs are out of scope; a bespoke Multi Review does not wait
+for a graph writer (graphs.md Known gaps). Tests: `workspace-writers.test.ts`,
+`build-pipeline-workspace-writers.test.ts`,
+`graph-run-external-workspace.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -263,3 +284,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Ready set with iterations, carries, outlets, collect and `when`; loops, retries, timeouts; D3 workspace locks across runs; admission limits and per-operation caps; 3 s observation cadence; run statuses; benchmark skeleton; tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Enforced `limits.maxTokens` (soft meter at admission) and `limits.maxWallClockMs` (run fails, admitted work cancelled `run-failed`, deadline wakes paused and waiting runs); usage vs limits in the run view header; `graph-run-limits.test.ts`. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · cross-engine workspace holders (`workspace-writers.ts`), persisted admission blocks · awaiting PR

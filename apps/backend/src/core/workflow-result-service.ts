@@ -98,6 +98,8 @@ export type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt };
 export interface WorkflowResultAcceptance {
   resultKey: string;
   environmentId: string;
+  /** The accepted slot's kind (its receipt's), so a listener can ignore other kinds unread. */
+  kind: WorkflowResultKind;
 }
 
 interface StoredWorkflowResult extends WorkflowResultSlotInput {
@@ -1078,7 +1080,11 @@ export class WorkflowResultService {
     if (submission.ok && !submission.duplicate) {
       for (const listener of Array.from(this.acceptanceListeners)) {
         try {
-          listener({ resultKey, environmentId: scope.environmentId });
+          listener({
+            resultKey,
+            environmentId: scope.environmentId,
+            kind: submission.receipt.kind,
+          });
         } catch {
           // Waking is an optimization; the workflow still polls the result.
         }

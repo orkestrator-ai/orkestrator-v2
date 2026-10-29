@@ -28,6 +28,7 @@
 import type { GraphErrorCause } from "./types.js";
 import {
   GRAPH_RUN_TERMINAL_STATUSES,
+  type GraphActivationBlock,
   type GraphActivationSession,
   type GraphArtifact,
   type GraphArtifactFile,
@@ -261,4 +262,39 @@ export function graphActivationSkipRefusal(
     return `A ${activation.state} activation cannot be skipped`;
   }
   return null;
+}
+
+const GRAPH_WORKSPACE_HOLDER_LABELS = {
+  "build-pipeline": "Build Pipeline",
+  "multi-review": "Multi Review",
+} as const;
+
+/**
+ * What a `ready` activation's recorded block reads as in the run view and
+ * the CLI: "Waiting: Build Pipeline is writing this environment".
+ * Content-free (engine names and limits only).
+ */
+export function graphActivationBlockText(block: GraphActivationBlock): string {
+  switch (block.reason) {
+    case "concurrency":
+      return "Waiting: the run's limit of concurrent agents is reached";
+    case "token-budget":
+      return "Waiting: the run's token limit is reached; running agents finish first";
+    case "workspace-lock":
+      return "Waiting: another graph step is using this environment's workspace";
+    case "worktree-limit":
+      return "Waiting: this environment already runs its most isolated worktrees";
+    case "recovering":
+      return "Waiting: recovering the environment's workspace holders after a restart";
+    case "external-workflow": {
+      const who = block.holder ? GRAPH_WORKSPACE_HOLDER_LABELS[block.holder] : "Another workflow";
+      const doing =
+        block.holderAccess === "read"
+          ? "reading"
+          : block.holderAccess === "write"
+            ? "writing"
+            : "using";
+      return `Waiting: ${who} is ${doing} this environment`;
+    }
+  }
 }

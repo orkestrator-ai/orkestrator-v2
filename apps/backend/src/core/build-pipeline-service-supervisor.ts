@@ -134,6 +134,7 @@ import {
   readOnlyReviewSendOptions,
   readsReviewPackage,
 } from "./build-pipeline-prompt-dispatch.js";
+import { WorkspaceBusyError } from "./workspace-writers.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -142,7 +143,22 @@ import {
 export const UNCHANGED_FIX_PAUSE_MESSAGE =
   "Paused: the fix stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
+/** A hand-written prompt for one session: a retry, a user message or package preparation. */
+type StageOverride = {
+  prompt: string;
+  images: BuildPipeline["taskSnapshot"]["images"];
+  mode?: ProviderExecutionMode;
+  schema?: JsonSchema;
+  label?: string;
+  settings?: BuildStepSelection;
+};
+
+/** Pipelines whose current wait for a graph run was logged; cleared past this. */
+const MAX_WORKSPACE_WAITS_NOTED = 256;
+
 export class BuildPipelineSupervisor {
+  /** The wait last logged per pipeline (one line per wait, not per pass). */
+  private readonly workspaceWaits = new Map<string, WorkspaceBusyError["reason"]>();
   /**
    * Progress clocks for the reviewer fan-out.
    *
@@ -282,7 +298,10 @@ export class BuildPipelineSupervisor {
     if (existing) return existing;
     const next = this.advance(pipelineId, namingPrompt)
       .catch(async (error) => {
-        if (error instanceof ProviderUnavailableError) {
+        if (error instanceof WorkspaceBusyError) {
+          // A graph run holds the checkout: the next pass tries the stage again.
+          this.noteWorkspaceWait(pipelineId, error);
+        } else if (error instanceof ProviderUnavailableError) {
           await this.interactions.recordReconnect(pipelineId, error).catch(() => undefined);
         } else {
           await this.interactions.fail(pipelineId, error).catch(() => undefined);
@@ -293,6 +312,14 @@ export class BuildPipelineSupervisor {
       });
     this.ctx.locks.set(pipelineId, next);
     return next;
+  }
+
+  /** Logs a pipeline's wait for a graph run once per wait (ids and reason only). */
+  private noteWorkspaceWait(pipelineId: string, error: WorkspaceBusyError): void {
+    if (this.workspaceWaits.get(pipelineId) === error.reason) return;
+    if (this.workspaceWaits.size >= MAX_WORKSPACE_WAITS_NOTED) this.workspaceWaits.clear();
+    this.workspaceWaits.set(pipelineId, error.reason);
+    console.info(`[build-pipeline] ${pipelineId}: ${error.message}`);
   }
 
   async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
@@ -393,6 +420,11 @@ export class BuildPipelineSupervisor {
     }
 
     if (pipeline.phase === "waiting-for-setup") {
+      // Setup writes the checkout and the Build stage follows it: wait for a
+      // graph run holding the environment before running either.
+      this.ctx.options.workspaceWriters
+        ?.claim({ kind: "build-pipeline", id: pipeline.id }, pipeline.environmentId, "write")
+        .release();
       await this.ctx.invoke("run_environment_setup", {
         environmentId: pipeline.environmentId,
       });
@@ -1363,18 +1395,41 @@ export class BuildPipelineSupervisor {
     await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
+  /**
+   * Opens a stage, first claiming the checkout against graph runs (D3 across
+   * engines, `workspace-writers.ts`): a writing stage waits while a graph run
+   * reads or writes the environment, a review while one writes. Waiting is a
+   * {@link WorkspaceBusyError} thrown before anything is saved or sent;
+   * `runLocked` swallows it and the next pass re-derives the same start from
+   * the stored record, exactly as after a provider that was unreachable.
+   */
   async startStage(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
     phase: ResumableBuildPhase,
-    override?: {
-      prompt: string;
-      images: BuildPipeline["taskSnapshot"]["images"];
-      mode?: ProviderExecutionMode;
-      schema?: JsonSchema;
-      label?: string;
-      settings?: BuildStepSelection;
-    },
+    override?: StageOverride,
+  ): Promise<void> {
+    const writers = this.ctx.options.workspaceWriters;
+    const use = buildPipelineSessionStage(sessionPhase).turn === "read-only" ? "read" : "write";
+    const claim =
+      writers && pipeline.environmentId
+        ? writers.claim({ kind: "build-pipeline", id: pipeline.id }, pipeline.environmentId, use)
+        : null;
+    this.workspaceWaits.delete(pipeline.id);
+    try {
+      await this.startClaimedStage(pipeline, sessionPhase, phase, override);
+    } finally {
+      // The stage's own save already noted the record, so the projection
+      // shows the stage before the claim goes.
+      claim?.release();
+    }
+  }
+
+  private async startClaimedStage(
+    pipeline: BuildPipeline,
+    sessionPhase: PipelineSessionPhase,
+    phase: ResumableBuildPhase,
+    override?: StageOverride,
   ): Promise<void> {
     await this.ctx.refreshWorkflowRollout();
     // A pipeline retains reports only for its newest review attempt. This is

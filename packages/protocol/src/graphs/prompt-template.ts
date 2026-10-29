@@ -24,7 +24,10 @@
  * nesting, sections, tags, iterations, output) and never throw: problems are
  * diagnostics. Browser-safe.
  */
-import { serializeFramedEvidence } from "../review-evidence-frames.js";
+import {
+  serializeFramedEvidence,
+  wrapGraphInlineEvidenceFrame,
+} from "../review-evidence-frames.js";
 import { graphUtf8Bytes } from "./grammar.js";
 
 // ------------------------------------------------------------- diagnostics
@@ -550,20 +553,25 @@ export interface GraphPromptLookupOptions {
   containers?: ReadonlySet<string>;
 }
 
-/** Resolve a path against a context stack (innermost last). */
-export function lookupGraphPromptPath(
+/** Where a lookup found its value: the context level, and whether a root alias answered. */
+type GraphPromptLocatedLookup =
+  { found: true; value: unknown; level: number; alias: boolean } | { found: false };
+
+function locateGraphPromptPath(
   stack: readonly unknown[],
   path: readonly string[],
-  options: GraphPromptLookupOptions = {},
-): GraphPromptLookup {
+  options: GraphPromptLookupOptions,
+): GraphPromptLocatedLookup {
   if (path.length === 1 && path[0] === ".") {
     if (stack.length === 0 || (stack.length === 1 && options.containers)) return { found: false };
-    return { found: true, value: stack.at(-1) };
+    return { found: true, value: stack.at(-1), level: stack.length - 1, alias: false };
   }
   for (let level = stack.length - 1; level >= 0; level--) {
     if (level === 0) {
       const name = path.join(".");
-      if (options.aliases?.has(name)) return { found: true, value: options.aliases.get(name) };
+      if (options.aliases?.has(name)) {
+        return { found: true, value: options.aliases.get(name), level, alias: true };
+      }
       if (path.length === 1 && options.containers?.has(name)) return { found: false };
     }
     const first = graphPromptOwnValue(stack[level], path[0]!);
@@ -574,9 +582,30 @@ export function lookupGraphPromptPath(
       if (!next.found) return { found: false };
       value = next.value;
     }
-    return { found: true, value };
+    return { found: true, value, level, alias: false };
   }
   return { found: false };
+}
+
+/** Resolve a path against a context stack (innermost last). */
+export function lookupGraphPromptPath(
+  stack: readonly unknown[],
+  path: readonly string[],
+  options: GraphPromptLookupOptions = {},
+): GraphPromptLookup {
+  const found = locateGraphPromptPath(stack, path, options);
+  return found.found ? { found: true, value: found.value } : { found: false };
+}
+
+/**
+ * Where an interpolated value came from: its path from the root context
+ * (`["input", "notes", "2", "title"]` for `{{title}}` inside
+ * `{{#input.notes}}`), or a root alias (`item.index`), which names no part
+ * of any value.
+ */
+export interface GraphPromptValueOrigin {
+  path: readonly string[];
+  alias: boolean;
 }
 
 /** Mustache falsiness: missing, null, false, `""`, `0`, `NaN` and `[]`. */
@@ -613,6 +642,14 @@ export function graphPromptValueText(value: unknown): string | null {
 export interface GraphPromptRenderOptions {
   /** Applied to every interpolated value (the renderer's `<`/`>` escape). */
   escapeValue?: (text: string) => string;
+  /**
+   * The inline evidence frame an interpolated value is written in, from where
+   * it came (invariant 5): attributes to frame it, or undefined to write it
+   * bare. Node templates frame every value taken from an input artifact.
+   */
+  frameValue?: (
+    origin: GraphPromptValueOrigin,
+  ) => readonly (readonly [string, string])[] | undefined;
   /** Applied to template text, and to tags rendered as written. */
   escapeText?: (text: string) => string;
   /** Expands `{{> input.<port>}}`; undefined renders the tag as written. */
@@ -671,6 +708,20 @@ export function renderGraphPromptTemplate(
     });
   };
 
+  const lookup = options.lookup ?? {};
+  // Each context level's origin, aligned with the stack: the root is `[]`.
+  const origins: GraphPromptValueOrigin[] = [{ path: [], alias: false }];
+  const originOf = (
+    found: Extract<GraphPromptLocatedLookup, { found: true }>,
+    path: readonly string[],
+  ): GraphPromptValueOrigin => {
+    if (found.alias) return { path, alias: true };
+    const base = origins[found.level]!;
+    return path.length === 1 && path[0] === "."
+      ? base
+      : { path: [...base.path, ...path], alias: base.alias };
+  };
+
   const renderNodes = (nodes: readonly GraphPromptNode[], stack: unknown[]) => {
     for (const node of nodes) {
       switch (node.kind) {
@@ -678,14 +729,15 @@ export function renderGraphPromptTemplate(
           emit(escapeText(node.text));
           break;
         case "variable": {
-          const found = lookupGraphPromptPath(stack, node.path, options.lookup);
+          const found = locateGraphPromptPath(stack, node.path, lookup);
           const text = found.found ? graphPromptValueText(found.value) : null;
-          if (text === null) {
+          if (text === null || !found.found) {
             noteMissing(node, node.path.join("."));
             emit(escapeText(node.raw));
-          } else {
-            emit(escapeValue(text));
+            break;
           }
+          const frame = options.frameValue?.(originOf(found, node.path));
+          emit(frame ? wrapGraphInlineEvidenceFrame(frame, escapeValue(text)) : escapeValue(text));
           break;
         }
         case "partial": {
@@ -699,7 +751,7 @@ export function renderGraphPromptTemplate(
           break;
         }
         case "section": {
-          const found = lookupGraphPromptPath(stack, node.path, options.lookup);
+          const found = locateGraphPromptPath(stack, node.path, lookup);
           const value = found.found ? found.value : undefined;
           const falsy = isGraphPromptFalsy(value);
           if (node.inverted) {
@@ -710,19 +762,25 @@ export function renderGraphPromptTemplate(
             }
             break;
           }
-          if (falsy) break;
-          const elements = Array.isArray(value) ? value : [value];
-          for (const element of elements) {
+          if (falsy || !found.found) break;
+          const origin = originOf(found, node.path);
+          const list = Array.isArray(value);
+          const elements = list ? value : [value];
+          for (const [index, element] of elements.entries()) {
             iterations++;
             if (iterations > limits.maxIterations) {
               truncated = true;
               throw new OutputLimitReached();
             }
             stack.push(element);
+            origins.push(
+              list ? { path: [...origin.path, String(index)], alias: origin.alias } : origin,
+            );
             try {
               renderNodes(node.children, stack);
             } finally {
               stack.pop();
+              origins.pop();
             }
           }
           break;

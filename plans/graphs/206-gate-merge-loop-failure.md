@@ -139,9 +139,21 @@ deliveries; `itemSources` shows dedupe folds; `GraphRunPassStats.artifactsStored
 merges are live executors registered in `index.ts`; mock runs resolve them unless a mock is
 registered.
 
+**2026-10-29 · Audit: `onFailure` default for writers.** Replicated nodes
+defaulted to `skip` even when they were (isolated) writers, while P2.6 makes
+`fail-run` the default for writers. `compile-plan.ts` now defaults a node whose
+workspace access is `write` (isolated replicated writers included) to
+`fail-run`, and keeps `skip` for replicated readers and nodes without workspace
+access. No built-in or example template's plan changed; the competing
+implementations example (403) now states `onFailure: "skip"` on its builders,
+since its judge picks among the builders that succeeded. Test:
+`isolation.test.ts` ("writers default to fail-run, isolated replicated ones
+too").
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Gate and merge executors, edge transforms and budget checks at delivery, routed `error@1`, loop done reasons, skip and carry fixes in the ready set, `itemSources`; tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · writers default to `fail-run`, replicated readers keep `skip` · awaiting PR

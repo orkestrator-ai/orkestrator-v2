@@ -206,6 +206,35 @@ minted), and `renderGraphNodePrompt`/`graphSystemContract` take `resultTools: "b
 OpenCode's generic `submit_graph_output`/`validate_workflow_result`. The registry's `backend`
 strings name the push-free builders. The Done-when box is ticked.
 
+**2026-10-29 · Audit: inline value frames (invariant 5).** A variable such as
+`{{input.note.title}}` used to be pasted as plain text with only `<`/`>`
+escaped. Every value a node template takes from an input artifact now renders
+inside its own inline frame,
+`<orkestrator-evidence port="note" path="title">…</orkestrator-evidence>`
+(`wrapGraphInlineEvidenceFrame` in `review-evidence-frames.ts`; body escaped
+with `escapeFramedEvidenceText`, objects as framed JSON). The engine tracks
+each context level's path from the root and passes it to a new `frameValue`
+render option (`GraphPromptValueOrigin`); `graphPromptUpstreamFrame(scope)`
+frames `input.<port>…`, the `items` element (`item…`, under its port) and
+`ticket…` (`run-input="<name>"`), including names resolved inside sections
+over them (`path="2.title"`) and element fields that shadow a root. Decision:
+`params` (template defaults or values the user typed at launch), `run`,
+`branch`, the `item.index`/`item.id` aliases and `lens` (from the template or
+the launch, never upstream) are trusted and stay bare. Type markdown templates
+and summaries already sit in a block frame and are unchanged. The size
+estimator adds each frame once per tag execution
+(`graphPromptValueFrameMaxBytes`, list indices at their widest; new
+`valueFrameBytes` bound option), and a new property test over an `items` node
+with a ticket checks render ≤ max and ≤ nominal for plain values.
+`GRAPH_UNTRUSTED_EVIDENCE_INSTRUCTION` now describes both frame forms. The
+designer preview renders through the same function (test "the designer
+preview frames upstream values the same way"). Built-in prompts keep their
+builders' framing (graphs.md Known gaps).
+
+**2026-10-29 · Audit (item 301): `discovery-review` instruction input.**
+`discovery-review` gained an optional `instruction` input (text/markdown,
+render markdown), which the backend reads only from a run input.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -215,3 +244,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 runs the lints and size estimate; Done-when split, 107 half ticked. · 204 half open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Per-code prompt diagnostic coverage table. · 204 half of Done-when still open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 204 renders agent prompts through `renderGraphNodePrompt`; status tool, workspace slots and broker tools settled for it. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · inline evidence frames for every upstream template value, estimator and property tests, instruction text; `discovery-review` instruction input for 301 · awaiting PR

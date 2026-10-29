@@ -357,6 +357,64 @@ describe("size estimates bound rendered sizes", () => {
     }
   });
 
+  test("framed values on an items node, with a ticket, stay within the bound", () => {
+    const random = rng(7);
+    const compiled = compileGraphCapabilities({ spec: { profile: "reviewer" }, environment: host });
+    const ticketType = graphBuiltInType("ticket@1")!;
+    const templates = [
+      "{{item.title}} {{#item.items}}{{name}}:{{#sub}}{{x}},{{/sub}}{{/item.items}} {{item.index}} {{item.id}}",
+      "{{ticket.title}} {{#ticket.acceptanceCriteria}}{{.}}{{/ticket.acceptanceCriteria}} {{input.a.items.0.sub.0.x}} {{input.list.title}}",
+      "{{#input.a.items}}{{#sub}}{{x}}{{input.a.title}}{{item.title}}{{/sub}}{{/input.a.items}}{{#item}}{{body}}{{/item}}",
+    ];
+    for (const source of templates) {
+      const node: GraphAgentNode = {
+        ...makeNode(source, "json-frame", "json-frame"),
+        replicate: { over: "items", input: "list", maxBranches: 4 },
+      };
+      const template = {
+        ...TEMPLATE_CONTEXT,
+        inputs: [{ name: "ticket", type: "ticket@1" }],
+      };
+      const context = { node, template };
+      const estimate = estimateGraphNodePromptSize({ ...context, compiled });
+      for (let round = 0; round < 16; round++) {
+        const hostile = round % 2 === 1;
+        const base = values(random, hostile, 1);
+        const element = sample(RECORD.schema, RECORD.budgets, random, hostile);
+        const ticket = sample(
+          ticketType.schema,
+          { ...ticketType.budgets, maxBytes: Math.min(ticketType.budgets.maxBytes, 20_000) },
+          random,
+          hostile,
+        );
+        const result = renderGraphNodePrompt({
+          ...context,
+          compiled,
+          values: {
+            ...base,
+            inputs: { ...base.inputs, list: element },
+            item: { index: 32, id: "i".repeat(128) },
+            ticket,
+          },
+          enforcement: { tier: "advisory" },
+        });
+        expect(result.user).toContain("<orkestrator-evidence");
+        expect({ source, round, fits: result.bytes <= estimate.maxBytes }).toEqual({
+          source,
+          round,
+          fits: true,
+        });
+        if (!hostile) {
+          expect({ source, round, nominal: result.bytes <= estimate.nominalBytes }).toEqual({
+            source,
+            round,
+            nominal: true,
+          });
+        }
+      }
+    }
+  });
+
   test("type markdown templates bound their renders", () => {
     const random = rng(3);
     const node = makeNode("{{> input.a}}", "markdown", "markdown");
@@ -436,7 +494,11 @@ describe("size estimates bound rendered sizes", () => {
       compiled,
       values: { inputs: { a: value }, resultKeys: { report: "r", notes: "n" } },
     });
-    expect(result.user).toBe(value.title.repeat(25));
+    expect(result.user).toBe(
+      `<orkestrator-evidence port="a" path="title">${value.title}</orkestrator-evidence>`.repeat(
+        25,
+      ),
+    );
     const estimate = estimateGraphPromptUserSize(context);
     expect(graphUtf8Bytes(result.user)).toBeLessThanOrEqual(estimate.nominalBytes);
   });

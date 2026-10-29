@@ -62,6 +62,7 @@ import {
 } from "./run-identity.js";
 import { graphRunBranchRefPrefix, parseGraphBranchWorktreePath } from "./isolation.js";
 import {
+  GRAPH_ACTIVATION_BLOCK_REASONS,
   GRAPH_ACTIVATION_STATES,
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_ARTIFACT_FORMAT_VERSION,
@@ -78,6 +79,7 @@ import {
   GRAPH_RUN_LAUNCHERS,
   GRAPH_RUN_STATUSES,
   GRAPH_TEMPLATE_SCOPES,
+  GRAPH_WORKSPACE_HOLDER_KINDS,
   type GraphArtifact,
   type GraphRun,
   type GraphRunLimitViolation,
@@ -715,6 +717,7 @@ const ACTIVATION_FIELDS = [
   "baseline",
   "worktree",
   "guards",
+  "blocked",
   "error",
   "errorCause",
   "createdAt",
@@ -806,6 +809,31 @@ function checkActivation(
       value.guards.forEach((entry, index) =>
         checkGuardResult(entry, joinPath(guardsPath, index), errors),
       );
+    }
+  }
+  if (value.blocked !== undefined) {
+    const blockedPath = joinPath(path, "blocked");
+    if (checkObject(value.blocked, blockedPath, ["reason", "holder", "holderAccess"], errors)) {
+      checkEnum(
+        value.blocked.reason,
+        joinPath(blockedPath, "reason"),
+        errors,
+        GRAPH_ACTIVATION_BLOCK_REASONS,
+      );
+      if (value.blocked.holder !== undefined) {
+        checkEnum(
+          value.blocked.holder,
+          joinPath(blockedPath, "holder"),
+          errors,
+          GRAPH_WORKSPACE_HOLDER_KINDS,
+        );
+      }
+      if (value.blocked.holderAccess !== undefined) {
+        checkEnum(value.blocked.holderAccess, joinPath(blockedPath, "holderAccess"), errors, [
+          "write",
+          "read",
+        ] as const);
+      }
     }
   }
   checkError(value, path, errors);

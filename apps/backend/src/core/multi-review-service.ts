@@ -151,7 +151,7 @@ import {
   multiReviewWorkflowIdOfRun,
   type MultiReviewGraphEngine,
 } from "./multi-review-graph-engine.js";
-import { multiReviewInstructionFitsGraph } from "./multi-review-graph-template.js";
+import { multiReviewGraphInstructionProblem } from "./multi-review-graph-template.js";
 import {
   isGraphEngineProjection,
   isSupervisedPhase,
@@ -1177,9 +1177,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /**
    * Whether this start runs on the graph runtime (item 301): the setting or
-   * its override selects it and the graph services are wired. A review
-   * instruction longer than a graph parameter holds stays on the bespoke
-   * engine, which the log says (without the instruction).
+   * its override selects it and the graph services are wired. The review
+   * instruction becomes the run's `markdown@1` input; one past that type's
+   * budget refuses the start (never a silent switch to bespoke).
    */
   private async graphEngineFor(input: StartMultiReviewInput): Promise<boolean> {
     const graph = this.options.graph;
@@ -1188,12 +1188,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       console.warn("[multi-review] The graph engine is selected but unavailable; using bespoke");
       return false;
     }
-    if (!multiReviewInstructionFitsGraph(input.reviewInstruction)) {
-      console.info(
-        "[multi-review] The review instruction is longer than a graph parameter holds; using bespoke",
-      );
-      return false;
-    }
+    const problem = multiReviewGraphInstructionProblem(input.reviewInstruction);
+    if (problem) throw new MultiReviewGraphEngineError(problem);
     return true;
   }
 

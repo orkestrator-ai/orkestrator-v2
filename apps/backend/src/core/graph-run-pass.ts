@@ -70,6 +70,7 @@ import {
   missingGraphRunOutputs,
   planGraphRun,
   selectGraphAdmissions,
+  type GraphExternalWorkspaceHold,
   type GraphPlanningResult,
   type GraphRunFailure,
   type GraphWorkspaceLocks,
@@ -78,6 +79,7 @@ import {
   admitGraphActivation,
   applyGraphActivationReport,
   isGraphActivationAdmitted,
+  markGraphActivationBlocked,
   settleGraphActivation,
   transitionGraphRun,
 } from "./graph-run-transitions.js";
@@ -212,6 +214,15 @@ export interface GraphRunPassDependencies {
   wake(runId: string): void;
   /** A run released workspace holds; other runs on the environment may proceed. */
   released(environmentId: string, runId: string): void;
+  /**
+   * What other engines (Build Pipelines, bespoke Multi Reviews) hold on a
+   * workspace (`workspace-writers.ts`). `ready` seeds once; `hold` is a
+   * synchronous map read, null while unseeded. Absent: none tracked.
+   */
+  externalWorkspace?: {
+    ready(): Promise<boolean>;
+    hold(environmentId: string): GraphExternalWorkspaceHold | null;
+  };
   /**
    * Before a pass over a run that is not finished, with the record the pass
    * read: returns the record to pass over, or null to skip this pass (a code
@@ -855,14 +866,24 @@ class GraphRunPass {
       await this.cancelSurplus();
       // A mock run shares no workspace: its own holds are the only ones.
       const environmentId = graphRunLockedWorkspace(this.run);
+      const external = this.deps.externalWorkspace;
+      // Seed before deciding; from here to the lock reservation below nothing
+      // awaits, so a pipeline stage claiming at the same time sees one or the other.
+      if (environmentId !== undefined && external) await external.ready();
       const decision = selectGraphAdmissions(this.run, {
         others:
           environmentId === undefined
             ? { writers: 0, readers: 0 }
             : this.deps.locks.others(environmentId, this.run.id),
         workspaceKnown: this.deps.workspaceKnown(),
+        ...(environmentId !== undefined && external
+          ? { external: external.hold(environmentId) }
+          : {}),
       });
       const at = this.at();
+      for (const { key, ...block } of decision.blocked) {
+        this.run = markGraphActivationBlocked(this.run, key, block);
+      }
       for (const { key, meter } of decision.exhausted) {
         this.run = settleGraphActivation(this.run, key, "failed", at, {
           error: graphRunMeterError(this.run, meter),

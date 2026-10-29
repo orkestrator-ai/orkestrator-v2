@@ -23,6 +23,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
+import { GRAPH_LAUNCH_BOUNDS } from "@orkestrator/protocol/graphs/launch";
 import {
   GRAPH_RUN_FORMAT,
   GRAPH_RUN_FORMAT_VERSION,
@@ -179,8 +180,18 @@ export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
    * under the run's lock after each saved record.
    */
   branchWorktrees?: Pick<GraphBranchWorktreeJanitor, "wants" | "reconcile">;
+  /**
+   * What Build Pipelines and bespoke Multi Reviews hold on a run's workspace
+   * (D3 across engines, `workspace-writers.ts`); absent: not consulted.
+   */
+  externalWorkspace?: GraphRunPassDependencies["externalWorkspace"];
   /** False: no supervisor; callers drive passes with `advanceNow` (tests). */
   autoAdvance?: boolean;
+  /**
+   * Finished runs kept per environment (invariant 6); default
+   * `GRAPH_LAUNCH_BOUNDS.maxFinishedRunsPerEnvironment` (100).
+   */
+  runHistoryPerEnvironment?: number;
   clock?: () => Date;
 }
 
@@ -216,6 +227,8 @@ export class GraphRunService implements KeyedWorkflowOwner {
   private readonly lastStats = new Map<string, GraphRunPassStats>();
   /** Restarts and code rewinds (item 210). */
   private readonly rewinds: GraphRunRewinds;
+  /** Run-history prunes in flight, per environment; `again` reruns once after. */
+  private readonly pruning = new Map<string, { done: Promise<string[]>; again: boolean }>();
 
   constructor(
     private readonly storage: GraphRunStorage,
@@ -246,6 +259,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
           (obligation) => obligation === "advance" || obligation === "observe",
         ),
       prepare: (run) => this.finishPendingCodeRewind(run),
+      ...(options.externalWorkspace ? { externalWorkspace: options.externalWorkspace } : {}),
     };
     this.rewinds = new GraphRunRewinds({
       storage: storage.graphRuns,
@@ -304,17 +318,26 @@ export class GraphRunService implements KeyedWorkflowOwner {
     this.unsubscribeStorage?.();
     this.unsubscribeStorage = null;
     this.stopController.abort();
-    while (this.locks.size > 0) {
-      await Promise.allSettled(this.locks.values());
+    while (this.locks.size > 0 || this.pruning.size > 0) {
+      await Promise.allSettled([
+        ...this.locks.values(),
+        ...Array.from(this.pruning.values(), (entry) => entry.done),
+      ]);
     }
   }
 
   private async discover() {
+    const finished = new Map<string, number>();
     const result = await discoverGraphRuns(this.storage.graphRuns, (run) => {
       // A finished run may still list branch worktrees (the backend stopped
       // before it removed them): sweep once.
       this.scheduleBranchCleanup(run);
-      if (isGraphRunTerminal(run.status)) return;
+      if (isGraphRunTerminal(run.status)) {
+        if (run.environmentId !== undefined) {
+          finished.set(run.environmentId, (finished.get(run.environmentId) ?? 0) + 1);
+        }
+        return;
+      }
       this.resultKeys.note(run);
       // Seed only runs no pass has touched: a pass's own view is newer.
       if (!this.workspaceSeeded && !this.passed.has(run.id)) {
@@ -323,7 +346,75 @@ export class GraphRunService implements KeyedWorkflowOwner {
     });
     this.workspaceSeeded = true;
     this.passed.clear();
+    // Run history (invariant 6): at startup, and whenever a discovery finds
+    // an environment over the bound (a prune that failed, another process).
+    for (const [environmentId, count] of finished) {
+      if (count > this.historyLimit()) this.schedulePrune(environmentId);
+    }
     return result;
+  }
+
+  // ------------------------------------------------------------ run history
+
+  private historyLimit(): number {
+    return (
+      this.options.runHistoryPerEnvironment ?? GRAPH_LAUNCH_BOUNDS.maxFinishedRunsPerEnvironment
+    );
+  }
+
+  /**
+   * Deletes the environment's oldest finished runs beyond the history bound
+   * (invariant 6), with their artifacts, effects and transcripts; running,
+   * waiting and paused runs are never touched. Calls for one environment
+   * share one prune, and a call while one runs makes it run once more.
+   * Returns the ids the prune this call joined removed.
+   */
+  pruneRunHistory(environmentId: string): Promise<string[]> {
+    const pending = this.pruning.get(environmentId);
+    if (pending) {
+      pending.again = true;
+      return pending.done;
+    }
+    const entry = { done: Promise.resolve<string[]>([]), again: false };
+    entry.done = (async () => {
+      const removed: string[] = [];
+      do {
+        entry.again = false;
+        removed.push(
+          ...(await this.storage.graphRuns.pruneFinishedGraphRuns(
+            environmentId,
+            this.historyLimit(),
+          )),
+        );
+      } while (entry.again && !this.stopped);
+      if (removed.length > 0) {
+        // Their sealed reference files live in the workspace (best effort).
+        const files = await this.options.artifacts.removeRunFiles(environmentId, removed);
+        console.info(
+          `[graph-runs] Removed ${removed.length} finished runs of environment ${environmentId} beyond its history of ${this.historyLimit()}${files.failed > 0 ? ` (${files.failed} artifact directories left)` : ""}`,
+        );
+      }
+      return removed;
+    })().finally(() => {
+      if (this.pruning.get(environmentId) === entry) this.pruning.delete(environmentId);
+    });
+    this.pruning.set(environmentId, entry);
+    return entry.done;
+  }
+
+  /** Prunes in the background after a run of the environment finished; never rejects. */
+  private schedulePrune(environmentId: string | undefined): void {
+    if (environmentId === undefined || this.stopped) return;
+    void this.pruneRunHistory(environmentId).catch((error: unknown) => {
+      const code = error instanceof GraphStorageError ? error.code : "error";
+      console.warn(`[graph-runs] Pruning the run history of ${environmentId} failed (${code})`);
+    });
+  }
+
+  /** After a save: a run that is now finished may push its environment past the history bound. */
+  private afterSave(run: GraphRun): void {
+    this.noteRecord(run);
+    if (isGraphRunTerminal(run.status)) this.schedulePrune(run.environmentId);
   }
 
   // ------------------------------------------------------------ KeyedWorkflowOwner
@@ -364,7 +455,9 @@ export class GraphRunService implements KeyedWorkflowOwner {
    * activation owns the slot, and marks that activation for observation.
    */
   resultAccepted(event: WorkflowResultAcceptance): void {
-    if (!this.supervisor) return;
+    // Graph activations open only `graph-output` slots: any other kind is
+    // another workflow's result, and never costs a store read here.
+    if (!this.supervisor || event.kind !== "graph-output") return;
     const owner = this.resultKeys.owner(event.resultKey);
     if (owner) {
       this.memory(owner.runId).flagged.add(owner.activationKey);
@@ -372,8 +465,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       return;
     }
     // Not indexed (recorded by another process, or before this process saw
-    // the run): look in the environment's stored runs. Most slots are not
-    // graph slots at all, and then nothing is woken.
+    // the run): look in the environment's stored runs.
     void this.storage.graphRuns
       .listGraphRuns(event.environmentId)
       .then((runs) => {
@@ -425,6 +517,18 @@ export class GraphRunService implements KeyedWorkflowOwner {
 
   async list(environmentId: string): Promise<GraphRun[]> {
     return this.storage.graphRuns.listGraphRuns(environmentId);
+  }
+
+  /**
+   * What graph runs hold on an environment's checkout, for another engine
+   * about to use it (D3 across engines). Null until startup recovery seeded
+   * the lock table: the caller waits rather than guess.
+   */
+  workspaceHold(environmentId: string): { writers: number; readers: number } | null {
+    if (!this.workspaceSeeded) return null;
+    // An isolated branch already counts as a reader of the run's workspace.
+    const hold = this.workspaceLocks.others(environmentId, "");
+    return { writers: hold.writers, readers: hold.readers };
   }
 
   /** Counts of the latest pass over a run in this process (content-free). */
@@ -512,7 +616,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
           }),
           run.revision,
         );
-        this.noteRecord(run);
+        this.afterSave(run);
         throw launchError(`A run input was refused (${code})`);
       }
       return this.storage.graphRuns.saveGraphRun(
@@ -885,7 +989,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       if (!next) return current;
       return this.storage.graphRuns.saveGraphRun(next, current.revision);
     });
-    this.noteRecord(run);
+    this.afterSave(run);
     return run;
   }
 
@@ -911,7 +1015,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
             this.lastStats.delete(this.lastStats.keys().next().value!);
           }
         }
-        if (run) this.noteRecord(run);
+        if (run) this.afterSave(run);
         else this.forgetRun(runId);
         return run;
       } catch (error) {
@@ -966,7 +1070,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       { error: `The run reached its ${error.code} bound`, cause: "budget-exceeded" },
     );
     const saved = await this.storage.graphRuns.saveGraphRun(next, current.revision);
-    this.noteRecord(saved);
+    this.afterSave(saved);
     return saved;
   }
 }

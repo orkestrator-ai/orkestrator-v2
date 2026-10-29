@@ -214,6 +214,22 @@ describe("the compiler", () => {
     ).toBe(".orkestrator/graph-branches/r1/bake--implement/i1/sample.3");
   });
 
+  test("writers default to fail-run, isolated replicated ones too", () => {
+    const template = graphCompetingImplementationsTemplate();
+    const nodeOf = (plan: ReturnType<typeof compile>["plan"], id: string) =>
+      plan!.nodes.find((node) => node.id === id)!;
+    // The example opts its builders into `skip` explicitly.
+    expect(nodeOf(compile(template).plan, "implement").onFailure).toBe("skip");
+    delete agentOf(template, "implement").onFailure;
+    const plan = compile(template).plan;
+    expect(nodeOf(plan, "implement")).toMatchObject({
+      workspaceAccess: "write",
+      isolation: "worktree",
+      onFailure: "fail-run",
+    });
+    // A replicated reader keeps `skip` (the multi-review panel, compile.test.ts).
+  });
+
   test("without isolation the same template has a replicated writer (D3)", () => {
     const template = graphCompetingImplementationsTemplate();
     delete agentOf(template, "implement").isolation;

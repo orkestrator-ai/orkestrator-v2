@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type { GraphGuardResult, GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
+import { graphActivationBlockText } from "@orkestrator/protocol/graphs/run-view";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { formatTokenCount } from "@/lib/context-usage";
@@ -231,6 +232,13 @@ function ActivationDetails({
               </>
             ) : null}
           </dl>
+        </Section>
+      ) : null}
+      {activation.state === "ready" && activation.blocked && run.status !== "paused" ? (
+        <Section title="Waiting">
+          <p role="status" data-graph-activation-blocked="" className="text-xs text-amber-300">
+            {graphActivationBlockText(activation.blocked)}
+          </p>
         </Section>
       ) : null}
       {activation.error ? (

@@ -72,6 +72,7 @@ import {
   withWorkspaceCodeRewindReservation,
   type EnvironmentGit,
 } from "./workspace-code-rewind.js";
+import type { WorkspaceWriters } from "./workspace-writers.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -113,6 +114,12 @@ export type BuildPipelineServiceOptions = {
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */
   assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
+  /**
+   * D3 across engines (`workspace-writers.ts`): a stage start claims the
+   * checkout against graph runs, and every record read or saved is noted so
+   * graph runs see what the pipeline holds. Absent: not consulted.
+   */
+  workspaceWriters?: WorkspaceWriters;
 } & KeyedWorkflowServiceOptions;
 
 export class BuildPipelineContext {
@@ -369,7 +376,10 @@ export class BuildPipelineContext {
   }
 
   /** Keeps the keyed index current after an authoritative read or durable write. */
-  noteRecord(pipelineId: string, snapshot: unknown): void {
+  noteRecord(pipelineId: string, snapshot: unknown, revision?: number): void {
+    if (revision !== undefined) {
+      this.options.workspaceWriters?.notePipeline(pipelineId, snapshot, revision);
+    }
     this.supervisor?.note(
       pipelineId,
       buildPipelineObligation(snapshot),
@@ -384,7 +394,7 @@ export class BuildPipelineContext {
 
   async requireRecord(pipelineId: string): Promise<PersistedBuildPipeline> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    this.noteRecord(pipelineId, record?.snapshot);
+    this.noteRecord(pipelineId, record?.snapshot, record?.revision);
     if (!record || !isBuildPipeline(record.snapshot)) {
       throw new Error(`Build pipeline not found: ${pipelineId}`);
     }
@@ -427,7 +437,7 @@ export class BuildPipelineContext {
       await this.storage.deleteBuildPipelineTranscriptsFor(pipeline.id).catch(() => undefined);
     }
     pipeline.backendRevision = saved.revision;
-    this.noteRecord(pipeline.id, pipeline);
+    this.noteRecord(pipeline.id, pipeline, saved.revision);
     return saved;
   }
 

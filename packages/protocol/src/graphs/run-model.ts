@@ -293,6 +293,34 @@ export const GRAPH_ACTIVATION_TERMINAL_STATES = [
   "superseded",
 ] as const satisfies readonly GraphActivationState[];
 
+/**
+ * Why a `ready` activation is not admitted yet (P2.3, D3). `external-workflow`:
+ * another engine (a Build Pipeline, a bespoke Multi Review) holds the
+ * environment's workspace; `holder` names which.
+ */
+export const GRAPH_ACTIVATION_BLOCK_REASONS = [
+  "concurrency",
+  "token-budget",
+  "workspace-lock",
+  "worktree-limit",
+  "recovering",
+  "external-workflow",
+] as const;
+export type GraphActivationBlockReason = (typeof GRAPH_ACTIVATION_BLOCK_REASONS)[number];
+
+/** The non-graph engines whose workspace use a graph run waits for. */
+export const GRAPH_WORKSPACE_HOLDER_KINDS = ["build-pipeline", "multi-review"] as const;
+export type GraphWorkspaceHolderKind = (typeof GRAPH_WORKSPACE_HOLDER_KINDS)[number];
+
+/** The block a `ready` activation waits on, recorded by the pass (content-free). */
+export interface GraphActivationBlock {
+  reason: GraphActivationBlockReason;
+  /** `external-workflow` only: the engine holding the workspace. */
+  holder?: GraphWorkspaceHolderKind;
+  /** `external-workflow` only: whether that engine writes or reads the checkout. */
+  holderAccess?: "write" | "read";
+}
+
 /** The dispatch journal of today's sessions (`prepared → dispatching → sent`). */
 export const GRAPH_DISPATCH_STATES = ["prepared", "dispatching", "sent"] as const;
 export type GraphDispatchState = (typeof GRAPH_DISPATCH_STATES)[number];
@@ -414,6 +442,11 @@ export interface NodeActivation {
    */
   worktree?: GraphActivationWorktree;
   guards?: GraphGuardResult[];
+  /**
+   * A `ready` activation's current admission block, set by the pass that
+   * could not admit it and dropped when it is admitted or settled.
+   */
+  blocked?: GraphActivationBlock;
   /** At most {@link GRAPH_RUN_BOUNDS.maxErrorChars}; content-free. */
   error?: string;
   errorCause?: GraphErrorCause;

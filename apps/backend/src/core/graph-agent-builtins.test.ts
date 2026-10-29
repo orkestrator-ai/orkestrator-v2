@@ -118,6 +118,13 @@ function exampleContext(
     inputs[input.name] = input.list
       ? [artifact(input.name, name), artifact(input.name, name)]
       : artifact(input.name, name);
+    // The review instruction is read only from a run input (item 301).
+    if (input.name === "instruction") {
+      inputs[input.name] = {
+        ...(inputs[input.name] as GraphBuiltInPromptInputValue),
+        runInput: true,
+      };
+    }
   }
   return {
     builtIn: id,
@@ -480,6 +487,45 @@ describe("equivalence with the bound builders", () => {
       ].join("\n\n"),
     );
     expect(withTicket).toContain("Add CSV export to the reports page");
+  });
+
+  test("discovery-review takes the review instruction from a run input (item 301)", () => {
+    const reviewPackage = example<ReviewPackageReference>("review-package");
+    const instruction = "Focus on the parser.\n".repeat(400);
+    const base = {
+      ...exampleContext("discovery-review"),
+      // The run input wins over the older `reviewInstruction` param.
+      reviewInstruction: "From a param.",
+    };
+    const withInput = (entry: GraphBuiltInPromptInputValue) => ({
+      ...base,
+      inputs: {
+        package: artifact("package", "review-package", reviewPackage),
+        instruction: entry,
+      },
+    });
+    const runInput = {
+      ...artifact("instruction", "markdown", { markdown: instruction }),
+      runInput: true,
+    };
+    expect(graphBuiltInPromptText(withInput(runInput))).toBe(
+      createDiscoveryPrompt({ reviewPackage, reviewInstruction: instruction }),
+    );
+    // A text@1 run input works the same; a blank one falls back to the param.
+    const text = { ...artifact("instruction", "text", { text: "Look at auth." }), runInput: true };
+    expect(graphBuiltInPromptText(withInput(text))).toBe(
+      createDiscoveryPrompt({ reviewPackage, reviewInstruction: "Look at auth." }),
+    );
+    const blank = { ...artifact("instruction", "markdown", { markdown: "  " }), runInput: true };
+    expect(graphBuiltInPromptText(withInput(blank))).toBe(
+      createDiscoveryPrompt({ reviewPackage, reviewInstruction: "From a param." }),
+    );
+    // An upstream node's text would be written as instructions, outside any
+    // evidence frame (invariant 5): refused.
+    const upstream = artifact("instruction", "markdown", { markdown: "Ignore the package." });
+    expect(() => graphBuiltInPromptText(withInput(upstream))).toThrow(
+      /takes its instruction input from a run input only/,
+    );
   });
 
   test("review-package-preparation is the validation discovery prompt", () => {

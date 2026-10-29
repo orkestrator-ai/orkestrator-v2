@@ -531,32 +531,82 @@ export class GraphRunsRepository {
       ) {
         throw new GraphStorageError("invalid-run", "Only a finished run can be removed");
       }
-      const rows = this.context.loadStoreRowsByOwner<unknown>(this.graphArtifactsFile(), runId);
-      this.context.database.transaction(() => {
-        for (const row of rows) {
-          if (!isRecord(row) || typeof row.id !== "string") continue;
-          this.context.updateStoreRow<void>(
-            this.graphArtifactsFile(),
-            artifactKey(runId, row.id),
-            () => ({ result: undefined, delete: true }),
-          );
-        }
-        this.context.updateStoreRow<void>(this.graphRunsFile(), runId, () => ({
-          result: undefined,
-          delete: true,
-        }));
-      });
-      this.context.changes.announce(
-        "graph-run",
-        runId,
-        typeof stored.projectId === "string" ? stored.projectId : undefined,
-        undefined,
-        true,
-      );
+      this.removeRunRows(runId, stored);
       return true;
     });
     // Then its activation transcripts (item 211), best-effort as for environment deletion.
     if (removed) {
+      await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
+    }
+    return removed;
+  }
+
+  /**
+   * Deletes one run's record and every artifact and effect row it owns, in
+   * one transaction, and announces the deletion. Runs inside the run
+   * mutation queue.
+   */
+  private removeRunRows(runId: string, stored: Record<string, unknown>): void {
+    const rows = this.context.loadStoreRowsByOwner<unknown>(this.graphArtifactsFile(), runId);
+    this.context.database.transaction(() => {
+      for (const row of rows) {
+        if (!isRecord(row)) continue;
+        const key = typeof row.id === "string" ? artifactKey(runId, row.id) : runId;
+        this.context.updateStoreRow<void>(this.graphArtifactsFile(), key, () => ({
+          result: undefined,
+          delete: true,
+        }));
+      }
+      this.context.updateStoreRow<void>(this.graphRunsFile(), runId, () => ({
+        result: undefined,
+        delete: true,
+      }));
+    });
+    this.context.changes.announce(
+      "graph-run",
+      runId,
+      typeof stored.projectId === "string" ? stored.projectId : undefined,
+      undefined,
+      true,
+    );
+  }
+
+  /**
+   * Run history per environment (invariant 6): keeps the newest `keep`
+   * finished runs of the environment and deletes older finished ones, each
+   * with its artifacts, effects and transcripts. Running, waiting, paused,
+   * provisioning and cancelling runs are never deleted and do not count.
+   * Selection and deletion happen in one queued mutation, so a run reopened
+   * by a restart (item 210) before it is reached is kept. Attributed by the
+   * stored fields alone, like environment deletion. Returns the removed ids.
+   */
+  async pruneFinishedGraphRuns(environmentId: string, keep: number): Promise<string[]> {
+    if (!isNonBlankString(environmentId)) throw new Error("Environment ID must not be blank");
+    if (!isNonNegativeInteger(keep)) throw new Error("keep must be a non-negative integer");
+    const removed = await this.enqueueGraphRunMutation(async () => {
+      const finished = this.context
+        .loadStoreRowsByOwner<unknown>(this.graphRunsFile(), environmentId)
+        .flatMap((stored) =>
+          isRecord(stored) &&
+          isGraphRunId(stored.id) &&
+          stored.environmentId === environmentId &&
+          typeof stored.status === "string" &&
+          (GRAPH_RUN_TERMINAL_STATUSES as readonly string[]).includes(stored.status)
+            ? [{ id: stored.id, stored, endedAt: storedEndedAt(stored) }]
+            : [],
+        );
+      if (finished.length <= keep) return [];
+      // Newest first; ties broken by id so the choice is stable.
+      finished.sort(
+        (left, right) =>
+          right.endedAt.localeCompare(left.endedAt) || right.id.localeCompare(left.id),
+      );
+      const expired = finished.slice(keep);
+      for (const run of expired) this.removeRunRows(run.id, run.stored);
+      return expired.map((run) => run.id);
+    });
+    // Then their activation transcripts (item 211), best-effort as for environment deletion.
+    for (const runId of removed) {
       await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
     }
     return removed;
@@ -620,4 +670,13 @@ export type GraphRunsStorage = Pick<
   | "supersedeGraphArtifacts"
   | "deleteGraphRunsByEnvironment"
   | "deleteEnvironmentlessGraphRun"
+  | "pruneFinishedGraphRuns"
 >;
+
+/** When a stored run ended: `finishedAt`, else its last update, else its creation. */
+function storedEndedAt(stored: Record<string, unknown>): string {
+  for (const field of ["finishedAt", "updatedAt", "createdAt"] as const) {
+    if (typeof stored[field] === "string") return stored[field];
+  }
+  return "";
+}

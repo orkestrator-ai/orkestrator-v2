@@ -44,11 +44,13 @@ import {
   GRAPH_PROMPT_FILE_PATH_MAX_BYTES,
   type GraphPromptElement,
   type GraphPromptPort,
+  type GraphPromptScope,
   type GraphPromptValues,
 } from "./prompt-scope.js";
 import {
   type GraphPromptDiagnostic,
   GraphPromptDiagnostics,
+  type GraphPromptValueOrigin,
   graphPromptValueText,
   lookupGraphPromptPath,
   renderGraphPromptSource,
@@ -115,6 +117,58 @@ export function graphPromptFrameAttributes(
     ["type", port.typeLabel],
     ["render", mode],
   ];
+}
+
+/**
+ * The attributes of the inline frame around one value a template takes from
+ * an input (invariant 5): `port` (or `run-input` for `ticket`), and `path`,
+ * the value's place inside that input, when it is not the whole input. Both
+ * come from the template and the node's ports, never from the value.
+ */
+export function graphPromptValueFrameAttributes(
+  source: { port: string } | { runInput: string },
+  path: readonly string[],
+): [string, string][] {
+  const attributes: [string, string][] = [
+    "port" in source ? ["port", source.port] : ["run-input", source.runInput],
+  ];
+  if (path.length > 0) attributes.push(["path", path.join(".")]);
+  return attributes;
+}
+
+/**
+ * Which input a value at `origin` (its path from the template's root
+ * context) was taken from, and its path inside it; undefined for values that
+ * are not upstream content: parameters, `run`, `lens`, `branch`, and the
+ * `item.index`/`item.id` aliases the runtime writes. `input.<port>`, the
+ * `items` element (`item`) and `ticket` are upstream content.
+ */
+export function graphPromptUpstreamSource(
+  scope: Pick<GraphPromptScope, "itemsPort" | "ticketInput">,
+  origin: GraphPromptValueOrigin,
+): { source: { port: string } | { runInput: string }; path: readonly string[] } | undefined {
+  if (origin.alias) return undefined;
+  const [root, ...rest] = origin.path;
+  if (root === "input" && rest.length > 0) {
+    return { source: { port: rest[0]! }, path: rest.slice(1) };
+  }
+  if (root === "item" && scope.itemsPort !== undefined) {
+    return { source: { port: scope.itemsPort }, path: rest };
+  }
+  if (root === "ticket" && scope.ticketInput !== undefined) {
+    return { source: { runInput: scope.ticketInput }, path: rest };
+  }
+  return undefined;
+}
+
+/** The `frameValue` render option of a node template: frames every upstream value. */
+export function graphPromptUpstreamFrame(
+  scope: Pick<GraphPromptScope, "itemsPort" | "ticketInput">,
+): (origin: GraphPromptValueOrigin) => [string, string][] | undefined {
+  return (origin) => {
+    const upstream = graphPromptUpstreamSource(scope, origin);
+    return upstream ? graphPromptValueFrameAttributes(upstream.source, upstream.path) : undefined;
+  };
 }
 
 /** Top-level fields an `on-demand` input lists. */

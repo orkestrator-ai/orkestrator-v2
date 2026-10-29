@@ -19,7 +19,11 @@ import type {
 import { graphUtf8Bytes } from "./grammar.js";
 import { graphBuiltInPrompt } from "./prompt-built-ins.js";
 import { graphBuiltInPromptBindings, lintGraphNodePrompt } from "./prompt-lint.js";
-import { neutralizeGraphPromptText, renderGraphPromptInput } from "./prompt-render.js";
+import {
+  graphPromptUpstreamFrame,
+  neutralizeGraphPromptText,
+  renderGraphPromptInput,
+} from "./prompt-render.js";
 import { GRAPH_PROMPT_CAPABILITY_MAX_CHARS } from "./prompt-size.js";
 import {
   type GraphPromptNodeContext,
@@ -149,6 +153,8 @@ function renderUser(
   const { context, aliases } = graphPromptRenderContext(scope, input.values);
   const rendered = renderGraphPromptTemplate(template!, context, {
     escapeValue: escapeFramedEvidenceText,
+    // Every value taken from an input renders in its own inline frame (invariant 5).
+    frameValue: graphPromptUpstreamFrame(scope),
     escapeText: neutralizeGraphPromptText,
     partial: expand,
     lookup: { aliases, containers: CONTAINERS },

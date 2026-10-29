@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_RUN_FORMAT,
@@ -346,6 +346,7 @@ describe("the graph-run keyed domain", () => {
     service.resultAccepted({
       resultKey: `${fakeResultKey(first.id, key)}-report`,
       environmentId: "e1",
+      kind: "graph-output",
     });
     // An environment-wide result wake is not how graph runs are reached.
     service.wakeEnvironment("e1", "result-accepted");
@@ -354,7 +355,11 @@ describe("the graph-run keyed domain", () => {
     expect(observed(second.id)).toBe(before.second);
     expect(service.schedulingStatus()?.wakes["result-accepted"]).toBe(wakesBefore + 1);
     // A slot no graph run owns wakes nothing.
-    service.resultAccepted({ resultKey: "rk-unrelated-report", environmentId: "e1" });
+    service.resultAccepted({
+      resultKey: "rk-unrelated-report",
+      environmentId: "e1",
+      kind: "graph-output",
+    });
     await settleKeyedWork(time, [service]);
     expect(service.schedulingStatus()?.wakes["result-accepted"]).toBe(wakesBefore + 1);
   });
@@ -374,11 +379,24 @@ describe("the graph-run keyed domain", () => {
     // As if another process recorded the slot after this one's last read.
     (service as unknown as { resultKeys: GraphRunResultKeys }).resultKeys.forget(first.id);
     const wakes = service.schedulingStatus()?.wakes["result-accepted"] ?? 0;
+    // Another workflow's result (any kind but graph-output) never reads the store.
+    const list = spyOn(world.storage.graphRuns, "listGraphRuns");
     service.resultAccepted({
       resultKey: `${fakeResultKey(first.id, first.activations[0]!.key)}-report`,
       environmentId: "e1",
+      kind: "review-report",
     });
     await settleKeyedWork(time, [service]);
+    expect(list).not.toHaveBeenCalled();
+    expect(service.schedulingStatus()?.wakes["result-accepted"] ?? 0).toBe(wakes);
+    service.resultAccepted({
+      resultKey: `${fakeResultKey(first.id, first.activations[0]!.key)}-report`,
+      environmentId: "e1",
+      kind: "graph-output",
+    });
+    await settleKeyedWork(time, [service]);
+    expect(list).toHaveBeenCalledTimes(1);
+    list.mockRestore();
     expect(service.schedulingStatus()?.wakes["result-accepted"]).toBe(wakes + 1);
     expect(observed(first.id)).toBe(before.first + 1);
     expect(observed(second.id)).toBe(before.second);

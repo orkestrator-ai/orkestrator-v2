@@ -389,7 +389,7 @@ async function runMultiReviewBenchmark(
     },
     plan,
     roles: bindAllRoles(plan, width, ["claude", "codex"]),
-    params: { autoFix: false, autoPr: false, targetBranch: "main", reviewInstruction: "" },
+    params: { autoFix: false, autoPr: false, targetBranch: "main" },
     inputs: { target: graphTypeExample(plan, "workspace@1") },
   });
 

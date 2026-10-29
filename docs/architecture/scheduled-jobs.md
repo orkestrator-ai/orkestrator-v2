@@ -28,8 +28,9 @@ stalled workers" in one durable tool call and end its turn.
 ## Experimental switch
 
 Scheduling is experimental and off by default. `global.experimentalScheduling`
-(Settings → Experimental → Scheduling) turns it on for that backend. While it
-is off:
+(Settings → Experimental → Scheduling) turns it on for that backend. The
+switch is shown only when Settings is editing the window's own machine; the
+Schedules menu and actions use that same backend. While it is off:
 
 - Settings → Schedules is not offered.
 - Every `*_scheduled_job` registry command and every `schedule.*` public

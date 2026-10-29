@@ -215,8 +215,9 @@ function scheduleMutation(
       return { value: { scheduleId }, scope: `schedule:${scheduleId}`, intent: { scheduleId } };
     },
     async prepare(input, context) {
+      const scheduled = await service(context);
       if (action !== "schedule.delete") {
-        await guarded(async () => (await service(context)).get(actor(context), input.scheduleId));
+        await guarded(() => scheduled.get(actor(context), input.scheduleId));
       }
       return {
         async execute() {

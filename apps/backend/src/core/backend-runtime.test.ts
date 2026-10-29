@@ -23,7 +23,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 /**
  * Two backends in one process own separate state: whatever one registers is
- * invisible to the other (docs/todo/backend-structure/0011, 0066 and 0133).
+ * invisible to the other (docs/architecture/backend-runtime.md).
  */
 
 /** A promise and its resolver, for work held in flight. */

@@ -975,6 +975,62 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
+  for (const platform of [undefined, "codex"] as const) {
+    for (const modifier of ["metaKey", "ctrlKey"] as const) {
+      test(`${platform ?? "unassigned"} tab owns ${modifier}+I only while focused`, async () => {
+        const data: NativeAgentTabData = platform
+          ? identity(platform)
+          : { environmentId: "env-1", containerId: "container-1", isLocal: false };
+        const tab = (isActive: boolean, ownsGlobalShortcuts?: boolean) => (
+          <>
+            <div data-pane-leaf="">
+              <button type="button">Pane action</button>
+              <AgentNativeTab
+                tabId="focus-shortcut-tab"
+                data={data}
+                isActive={isActive}
+                ownsGlobalShortcuts={ownsGlobalShortcuts}
+              />
+            </div>
+            <div data-pane-leaf="">
+              <button type="button">Terminal pane</button>
+            </div>
+          </>
+        );
+        const view = render(tab(true));
+        const input = await screen.findByRole("textbox");
+        expect(input.getAttribute("contenteditable")).toBe("true");
+        const action = screen.getByRole("button", { name: "Pane action" });
+        const press = (target: Element) =>
+          fireEvent.keyDown(target, {
+            key: "i",
+            code: "KeyI",
+            [modifier]: true,
+          });
+        action.focus();
+        expect(press(action)).toBe(false);
+        expect(document.activeElement).toBe(input);
+        expect(press(input)).toBe(false);
+        const sibling = screen.getByRole("button", { name: "Terminal pane" });
+        sibling.focus();
+        expect(press(sibling)).toBe(true);
+        expect(document.activeElement).toBe(sibling);
+
+        view.rerender(tab(true, false));
+        action.focus();
+        expect(press(action)).toBe(true);
+        expect(document.activeElement).toBe(action);
+        view.rerender(tab(false));
+        expect(press(document.body)).toBe(true);
+        expect(document.activeElement).toBe(action);
+        view.rerender(tab(true));
+        action.focus();
+        expect(press(action)).toBe(false);
+        expect(document.activeElement).toBe(input);
+      });
+    }
+  }
+
   test("a resumed pipeline stage dispatches a manual message under its own request and tab identity", async () => {
     const stage = session("build", "stage-key", 0, {
       sdkSessionId: "claude-session",

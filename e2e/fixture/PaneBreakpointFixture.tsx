@@ -52,9 +52,13 @@ const root: PaneSplit = {
           type: "agent-native",
           displayTitle: "Codex",
           nativeAgentData: {
-            platform: "codex",
+            platform: new URLSearchParams(window.location.search).has("unassigned")
+              ? undefined
+              : "codex",
             environmentId: ENVIRONMENT_ID,
-            sessionId: identity.providerSessionId,
+            sessionId: new URLSearchParams(window.location.search).has("unassigned")
+              ? undefined
+              : identity.providerSessionId,
             isLocal: true,
           },
         },

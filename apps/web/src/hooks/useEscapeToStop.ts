@@ -1,4 +1,5 @@
 import { type RefObject, useEffect } from "react";
+import { isAgentShortcutInScope } from "./agent-shortcut-scope";
 
 interface UseEscapeToStopOptions {
   /** Only the visible tab should claim the Escape key. */
@@ -11,23 +12,6 @@ interface UseEscapeToStopOptions {
    * or when nothing has focus and no modal surface is open.
    */
   scopeRef: RefObject<HTMLElement | null>;
-}
-
-function isUnfocusedTarget(target: EventTarget | null): boolean {
-  // Keydown lands on the window, document or body when nothing has focus.
-  return (
-    !(target instanceof Node) ||
-    target === document ||
-    target === document.body ||
-    target === document.documentElement
-  );
-}
-
-function isOutsideModalOpen(pane: Element | null): boolean {
-  for (const modal of document.querySelectorAll('[aria-modal="true"]')) {
-    if (!pane || !modal.contains(pane)) return true;
-  }
-  return false;
 }
 
 /**
@@ -68,15 +52,7 @@ export function useEscapeToStop({
         return;
       }
 
-      const scope = scopeRef.current;
-      // PaneLeafContainer and pane-less hosts mark the full agent surface.
-      const pane = scope?.closest("[data-pane-leaf], [data-agent-scope]") ?? scope;
-      const target = event.target;
-      const insidePane = target instanceof Node && Boolean(pane?.contains(target));
-      const unfocused = isUnfocusedTarget(target) && !isOutsideModalOpen(pane);
-      if (!insidePane && !unfocused) {
-        return;
-      }
+      if (!isAgentShortcutInScope(event.target, scopeRef.current)) return;
 
       event.preventDefault();
       void onStop();

@@ -343,6 +343,13 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         keywords: ["queue", "queued", "steer", "arrow", "up", "down"],
       },
       {
+        id: "chat-focus-input",
+        description: "Focus the message input",
+        mac: ["⌘", "I"],
+        other: ["Ctrl", "I"],
+        keywords: ["composer", "prompt", "type"],
+      },
+      {
         id: "chat-find",
         description: "Find in the conversation",
         mac: ["⌘", "F"],

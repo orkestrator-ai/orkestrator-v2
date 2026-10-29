@@ -293,3 +293,70 @@ for (const modifier of ["Meta", "Control"]) {
     });
   }
 }
+
+for (const modifier of ["Meta", "Control"]) {
+  for (const unassigned of [false, true]) {
+    test(`${modifier}+I focuses the ${unassigned ? "fresh" : "assigned"} agent composer and leaves the terminal chord usable`, async ({
+      page,
+    }) => {
+      await page.goto(`/pane-breakpoint${unassigned ? "?unassigned" : ""}`);
+      // Both panes must be visible to exercise their actual shortcut ownership.
+      await page.setViewportSize({ width: 1024, height: 900 });
+      const agent = page
+        .locator("[data-pane-leaf]")
+        .filter({ has: page.locator('[contenteditable="true"]') });
+      const composer = agent.getByRole("textbox");
+      await expect(composer).toBeEditable();
+      const paneControl = agent.locator("button[aria-label^='Close ']").first().locator("..");
+      await paneControl.focus();
+      await expect(paneControl).toBeFocused();
+      await expect(agent).toHaveClass(/ring-primary/);
+      await page.keyboard.press(`${modifier}+i`);
+      await expect(composer).toBeFocused();
+      await page.keyboard.type("draft");
+      await page.keyboard.press("ArrowLeft");
+      const caret = () =>
+        composer.evaluate((input) => {
+          const selection = window.getSelection();
+          return {
+            inside: !!selection?.anchorNode && input.contains(selection.anchorNode),
+            offset: selection?.anchorOffset,
+          };
+        });
+      const before = await caret();
+      expect(before.inside).toBe(true);
+      expect(before.offset).toBe(4);
+      // The native contenteditable italic command must be suppressed, and the
+      // imperative focus call must preserve the existing caret.
+      await page.keyboard.press(`${modifier}+i`);
+      expect(await caret()).toEqual(before);
+      await page.keyboard.type("X");
+      await expect(composer).toHaveText("drafXt");
+      await expect(composer.locator("i, em")).toHaveCount(0);
+      expect(await composer.evaluate(() => document.queryCommandState("italic"))).toBe(false);
+
+      const terminalPane = page.locator("[data-pane-leaf]").filter({ has: page.locator(".xterm") });
+      const terminal = terminalPane.locator("textarea.xterm-helper-textarea");
+      await terminalPane.locator(".xterm-screen").click();
+      await terminal.focus();
+      await page.keyboard.press(`${modifier}+i`);
+      const composeBar = terminalPane.getByPlaceholder(
+        "Type a message (newlines become spaces)...",
+      );
+      await expect(composeBar).toBeVisible();
+      await expect(composeBar).toBeFocused();
+      await page.keyboard.type("terminal draft");
+      await expect(composeBar).toHaveValue("terminal draft");
+      await expect(composer).toHaveText("drafXt");
+      // Activate the chat pane through its input, then leave focus on the
+      // chrome so the shortcut has to move it back into the composer.
+      await composer.click();
+      await paneControl.focus();
+      await expect(paneControl).toBeFocused();
+      await expect(agent).toHaveClass(/ring-primary/);
+      await page.keyboard.press(`${modifier}+i`);
+      await expect(composer).toBeFocused();
+      await expect(composeBar).toHaveValue("terminal draft");
+    });
+  }
+}

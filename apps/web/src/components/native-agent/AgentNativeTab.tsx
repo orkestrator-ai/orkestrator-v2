@@ -373,6 +373,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         ) : null}
         <div className="min-h-0 flex-1">
           <UnassignedNativeAgentComposer
+            isActive={props.isActive}
+            ownsGlobalShortcuts={props.ownsGlobalShortcuts}
             tabId={props.tabId}
             environmentId={props.data.environmentId}
             containerId={props.data.containerId}

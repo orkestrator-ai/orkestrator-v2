@@ -86,6 +86,7 @@ import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
 import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
+import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useNativeAgentSession, type NativeAgentSendOptions } from "@/hooks/useNativeAgentSession";
@@ -2418,6 +2419,11 @@ export function SharedNativeAgentController({
     mentionMenuOpen: fileMentionMenuOpen,
   });
   useComposerMountFocus(inputRef, isActive);
+  useFocusComposerShortcut({
+    isActive: ownsGlobalShortcuts ?? isActive,
+    inputRef,
+    scopeRef: inputContainerRef,
+  });
 
   const forkPlan = useMemo(
     () =>

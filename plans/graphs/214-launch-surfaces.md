@@ -31,6 +31,7 @@ Graphs can be launched from everywhere the built-in flows can, and the coordinat
 - [x] Control MCP `list_graph_templates`, `launch_graph`, `get_graph_run`, `cancel_graph_run`. No authoring (D6).
 - [x] A `graph-run` association kind beside `build-pipeline` and `multi-review` (`packages/protocol/src/coordinator.ts`), with one status wake when a run ends or waits for a person.
 - [x] Scheduled jobs can launch a saved template.
+- [x] A `graph` schedule is created and edited from the CLI (`orkestrator schedule create|update --graph TEMPLATE …`) and from Settings → Schedules, not only through the public `schedule.create` input.
 
 ## Tests
 
@@ -38,6 +39,7 @@ Graphs can be launched from everywhere the built-in flows can, and the coordinat
 - [x] Control MCP tool tests, including refusal of authoring.
 - [x] One status wake per run end or wait.
 - [x] A scheduled launch.
+- [x] CLI and Settings build the stored `graph` action (flags, pinned roles or saved defaults, edits, refusals before submission).
 
 ## Done when
 
@@ -109,9 +111,43 @@ keys `complete`/`failed`/`cancelled`). Kept over 214's own reducer, which keyed 
 set and so would re-notify when one of two waits was answered. Terminal notices changed to
 `mode: "off"` (sent whatever the wake setting), as every other terminal workflow notice.
 
-**2026-10-29 · Not done.** No `orkestrator schedule` CLI flag creates a `graph` schedule action
-(the app's Schedules settings and the public `schedule.create` input take it). `graph launch` has
-no `--wait`. The coordinator wake was tested on the mail world, not with a live coordinator.
+**2026-10-29 · Not done.** ~~No `orkestrator schedule` CLI flag creates a `graph` schedule action
+(the app's Schedules settings and the public `schedule.create` input take it).~~ (done: see
+"Graph schedules in the CLI and Settings" below; the Settings list showed a `graph` schedule but
+could not create one either.) `graph launch` has no `--wait`. The coordinator wake was tested on the mail world, not with a live coordinator.
+
+**2026-10-29 · Graph schedules in the CLI and Settings** (branch `graphs-limits-schedules`). The
+stored action is unchanged: `{kind: "graph", request: ScheduleGraphLaunch}`, the launch request
+without `requestId` or `saveDefaults`, parsed by `parseGraphLaunchRequest` and refused at creation
+when the template is not launchable.
+
+- CLI: `orkestrator schedule create|update … --graph TEMPLATE --project P (--environment ENV |
+  --new-worktree | --new-container)` plus every other flag of `graph launch` (`--role`, `--focus`,
+  `--focus-file`, `--param`, `--input`, `--input-file`, `--ticket`, `--ticket-input`). The flag
+  list is shared (`GRAPH_LAUNCH_OPTIONS`, `GRAPH_LAUNCH_INPUT_FIELDS` in
+  `packages/cli/src/client/commands/graphs.ts`), the flags are checked by the same
+  `graphLaunchInput`, and `graphScheduleLaunchRequest` turns that `graph.launch` input into the
+  stored request: the template text becomes its `GraphTemplateRef`, a role given one model is a
+  single binding and several a panel (the launch service reads a single binding for a panel role
+  as a panel of one, so no `graph show` read is needed), `{agent}` becomes `{platform}`, and the
+  ticket `{taskId, input?}`. Roles and parameters left out take the saved launch defaults at fire
+  time. A graph-only flag without `--graph` is refused (`--role needs --graph`), as are two
+  actions. `schedule get` prints `graph <scope:id>` as the action.
+- Settings → Schedules: "Run a graph" is an ordinary action choice (`ScheduleGraphFields.tsx`,
+  pure rules in `graph-schedule-model.ts`). Project, template picker (non-launchable templates
+  listed disabled with the reason, as in the launch dialog), inputs (a Kanban ticket fills a
+  `ticket@1` input), environment (new worktree, new container or an existing environment), and a
+  "Use the saved launch defaults" toggle, on by default. On, the request leaves roles and
+  parameters out; off, the launch dialog's own role pickers (floors, typed-result support, panel
+  editors with lenses) and parameter fields pin them. Everything comes from `graph_launch_options`
+  compiled for the chosen environment, and the launch dialog's checks apply; a default the saved
+  values cannot fill is reported with "turn off saved defaults to set it here". Editing starts
+  from the stored request; a save that touched nothing in the action sends no action.
+- Tests: `packages/cli/tests/schedule-command.test.ts` (3 new: every flag into the stored request,
+  which the backend's parser accepts unchanged; an existing environment on `update`; seven
+  refusals before submission); `apps/web/src/components/settings/SchedulesSettings.test.tsx`
+  ("graph schedules": create with saved defaults, pin roles and parameters, edit untouched and
+  changed); `graph-schedule-model.test.ts` (5).
 
 **2026-10-29 · Agent testing.** Profile `graphs-214-launch` (`--fixture --no-agent-credentials
 --agent-platforms claude`), worktree `graphs-214-launch` at the 214 merge: `mise run test:logged --
@@ -132,3 +168,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Launch service, dialog and entry points, CLI, Control MCP tools, association and wakes (merged with 208), schedules, deferred workspace inputs, environment-less sweep, real-stack launch/switch/finish/return. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Graph schedules from the CLI (`schedule create|update --graph`) and Settings → Schedules (template, environment, inputs, saved defaults or pinned roles and parameters); tests; scheduled-jobs.md and public-cli.md. · complete; awaiting PR

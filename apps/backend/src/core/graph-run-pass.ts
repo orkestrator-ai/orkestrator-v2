@@ -60,7 +60,11 @@ import {
 } from "./graph-run-executors.js";
 import {
   graphRunActivity,
+  graphRunMeterError,
   graphRunSettled,
+  graphRunWallClockDeadline,
+  graphRunWallClockError,
+  graphRunWallClockExceeded,
   graphRunWorkspaceHold,
   graphSurplusBranches,
   missingGraphRunOutputs,
@@ -329,6 +333,7 @@ class GraphRunPass {
   async execute(): Promise<GraphRun> {
     try {
       if (this.run.status === "provisioning") await this.provision();
+      this.enforceWallClock();
       if (this.run.status === "cancelling") await this.cancelAdmitted();
       else if (!isGraphRunTerminal(this.run.status) && this.run.status !== "provisioning") {
         await this.observeAdmitted();
@@ -343,6 +348,19 @@ class GraphRunPass {
       this.memory.nextDelayMs = this.nextDelay(this.saved);
     }
     return this.saved;
+  }
+
+  /**
+   * `limits.maxWallClockMs`: a started run past its deadline fails with
+   * `budget-exceeded`. Its admitted work (running agents, waiting human
+   * nodes) is stopped through the executors with reason `run-failed`, as for
+   * any other run failure; a paused run counts too.
+   */
+  private enforceWallClock(): void {
+    const status = this.run.status;
+    if (status !== "running" && status !== "waiting" && status !== "paused") return;
+    if (!graphRunWallClockExceeded(this.run, this.deps.clock().getTime())) return;
+    this.failRun({ error: graphRunWallClockError(this.run), cause: "budget-exceeded" });
   }
 
   // ------------------------------------------------------------ provisioning
@@ -845,9 +863,9 @@ class GraphRunPass {
         workspaceKnown: this.deps.workspaceKnown(),
       });
       const at = this.at();
-      for (const key of decision.exhausted) {
+      for (const { key, meter } of decision.exhausted) {
         this.run = settleGraphActivation(this.run, key, "failed", at, {
-          error: `The run reached its limit of ${this.run.plan.limits.maxAgentSessions} agent sessions`,
+          error: graphRunMeterError(this.run, meter),
           cause: "budget-exceeded",
         });
       }
@@ -919,8 +937,22 @@ class GraphRunPass {
     if (next !== status) this.run = transitionGraphRun(this.run, next, at);
   }
 
-  /** When this run's next pass is due; null when nothing is owed until a wake. */
+  /**
+   * When this run's next pass is due; null when nothing is owed until a wake.
+   * Never later than the run's wall-clock deadline, so a run waiting on a
+   * person, or paused, still fails on time.
+   */
   private nextDelay(run: GraphRun): number | null {
+    const delay = this.cadenceDelay(run);
+    if (isGraphRunTerminal(run.status) || run.status === "cancelling") return delay;
+    const deadline = graphRunWallClockDeadline(run);
+    if (deadline === undefined) return delay;
+    // One millisecond past the deadline: the limit is exceeded strictly after it.
+    const untilDeadline = Math.max(0, deadline - this.deps.clock().getTime() + 1);
+    return delay === null ? untilDeadline : Math.min(delay, untilDeadline);
+  }
+
+  private cadenceDelay(run: GraphRun): number | null {
     if (isGraphRunTerminal(run.status)) return null;
     if (run.status === "provisioning" || run.status === "cancelling") {
       return this.deps.progressIntervalMs;

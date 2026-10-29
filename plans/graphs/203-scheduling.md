@@ -29,6 +29,7 @@ Each pass decides which activations may start, without breaking workspace safety
 - [x] Workspace locks: one writer at a time; no reader alongside a writer (D3).
 - [x] Admission through the work-admission pool and the per-provider caps (4/8/4/16).
 - [x] Enforce `limits.maxConcurrentAgents` and `limits.maxAgentSessions` at admission.
+- [x] Enforce `limits.maxTokens` (a soft meter over `usage.tokens`) at admission and `limits.maxWallClockMs` in the pass.
 - [x] Observe running activations every 3 s plus jitter.
 - [x] Skeleton for `graph-run-efficiency.bench.test.ts`.
 
@@ -37,6 +38,7 @@ Each pass decides which activations may start, without breaking workspace safety
 - [x] Ready-set unit tests over small plans.
 - [x] Locks keep a writer and a reader apart.
 - [x] Admission caps hold under a wide fan-out.
+- [x] Token and wall-clock limits: the meter lets running agents finish and then fails the next agent naming it; mock runs are not metered; a run past its wall clock fails and stops its agents and human waits, also when paused or waiting on a person.
 
 ## Done when
 
@@ -205,6 +207,44 @@ unchanged work saves nothing and observes each running branch once; at most 4 st
 observations in flight; retained history changes neither SQLite row fetches nor saves. Measured:
 1 row read and 1 SQLite row per running pass at every width; admission 3 SQLite rows, 2 saves.
 
+**2026-10-29 · Token and wall-clock limits** (closes the gap `docs/architecture/graphs.md` listed
+under "Known gaps"; branch `graphs-limits-schedules`). Both limits stay optional in the template
+(101) and were already compiled into `plan.limits` and shown; now the runtime enforces them.
+
+- `limits.maxTokens` is a soft meter over `run.usage.tokens`, the tokens finished agent
+  activations reported (`usage` on their reports, summed by `applyGraphActivationReport`). In
+  `selectGraphAdmissions`, once `usage.tokens >= maxTokens` (`graphRunTokensExhausted`) no ready
+  agent activation is admitted. While any agent activation of the run is still admitted it is
+  blocked (`GraphAdmissionBlock` `token-budget`), so the running agents finish and report; once
+  none runs it is `exhausted` and the pass fails it with `budget-exceeded` and
+  `graphRunMeterError` ("The run reached its token limit (limits.maxTokens N; M used), so no
+  further agent session starts"). Its `onFailure` then decides: the default `fail-run` fails the
+  run with that text after "Node X failed: ", `skip`/`route` carry on without it. Gates, merges,
+  system and human nodes are never metered. The meter never cancels running work. Mock runs are
+  never metered (their executors report no tokens, and the check skips `run.mock`).
+  `GraphAdmissionDecision.exhausted` is now `{key, meter: "agent-sessions" | "tokens"}[]`.
+- `limits.maxWallClockMs` counts from `startedAt` (paused time included: it bounds the run's
+  lifetime; provisioning before the first `running` is not counted). At the start of each pass
+  over a `running`, `waiting` or `paused` run, `graphRunWallClockExceeded` fails the run through
+  `failRun` with `budget-exceeded` and `graphRunWallClockError` ("The run exceeded its wall-clock
+  limit of 2 h (limits.maxWallClockMs)"). That is the ordinary run-failure path: waiting and
+  ready activations are cancelled, admitted ones (running agents, human nodes awaiting a person)
+  are stopped through their executor's `cancel` with reason `run-failed`, then the run settles
+  `failed`. No new cancel reason was needed. The pass's next delay is never later than the
+  deadline (plus 1 ms), so a run waiting on a person (30 s cadence) or paused (no cadence) is
+  woken in time. Helpers: `graphRunWallClockDeadline`, `graphRunWallClockExceeded`,
+  `graphRunWallClockError` in `graph-run-scheduling.ts`.
+- Run view: the header summary shows usage against the limits when the template sets them
+  ("1m 30s of 1h 0m 0s · 2.5k of 50k tokens"; `components/graph-run/graph-run-summary.ts`); a
+  mock run shows no token limit.
+- Tests: `apps/backend/src/core/graph-run-limits.test.ts` (9: the meter and its mock exemption,
+  blocked then exhausted admission, a running agent finishing before the run fails naming the
+  meter with no cancel and no start of the next agent, completion below the meter, a mock run
+  past the meter completing, the deadline arithmetic, an over-time run cancelling its agent with
+  `run-failed`, a paused run and a run waiting on a person woken at their deadline by the keyed
+  supervisor); `graph-run-summary.test.ts` (3). The fake executors take per-node token usage
+  (`FakeGraphExecutors.tokens`).
+
 **2026-10-29 · For later items.** 204: implement `agent` against this contract (session facts,
 idempotent `start` via the dispatch journal, `recover` via `provider-dispatch-recovery.ts`, report
 token usage deltas); the `GraphExecutorContext.binding` is the branch's model. 205: collect gaps
@@ -222,3 +262,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Ready set with iterations, carries, outlets, collect and `when`; loops, retries, timeouts; D3 workspace locks across runs; admission limits and per-operation caps; 3 s observation cadence; run statuses; benchmark skeleton; tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Enforced `limits.maxTokens` (soft meter at admission) and `limits.maxWallClockMs` (run fails, admitted work cancelled `run-failed`, deadline wakes paused and waiting runs); usage vs limits in the run view header; `graph-run-limits.test.ts`. · complete; awaiting PR

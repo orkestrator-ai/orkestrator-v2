@@ -1,11 +1,16 @@
-import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
+import { publicGraphTemplateRefText } from "@orkestrator/protocol/public-api-inputs-graph";
+import type {
+  ScheduleAction,
+  ScheduledJob,
+  ScheduledJobSummary,
+} from "@orkestrator/protocol/scheduled-jobs";
 import { describeScheduleTrigger } from "@orkestrator/protocol/scheduled-jobs";
 import { CliError } from "../errors.js";
 import { keyValues, table } from "../format.js";
 import { readTextSource } from "../inputs.js";
-import type { ClientIo } from "../io.js";
-import type { CommandSpec, OptionSpec } from "../spec.js";
+import type { CommandContext, CommandSpec, OptionSpec } from "../spec.js";
 import { oneOf, PROMPT_OPTIONS, REQUEST_ID_OPTION, stringOption, submit } from "./common.js";
+import { GRAPH_LAUNCH_OPTIONS, graphLaunchInput, graphScheduleLaunchRequest } from "./graphs.js";
 
 /**
  * `orkestrator schedule …`: scheduled jobs owned by the operator. The backend
@@ -133,8 +138,28 @@ const ACTION_OPTIONS: OptionSpec[] = [
     valueName: "JSON",
     description: "With --action: its input object.",
   },
+  {
+    name: "graph",
+    kind: "string",
+    valueName: "TEMPLATE",
+    description:
+      "Action: launch this saved graph template (builtin:ID, user:ID or project:FILE) with --project and one of --environment, --new-worktree, --new-container.",
+  },
+  {
+    name: "project",
+    kind: "string",
+    valueName: "PROJECT_ID",
+    description: "With --graph: the project the run belongs to.",
+  },
+  ...GRAPH_LAUNCH_OPTIONS.map((option) => ({
+    ...option,
+    description: `With --graph: ${option.description.charAt(0).toLowerCase()}${option.description.slice(1)}`,
+  })),
   ...PROMPT_OPTIONS,
 ];
+
+/** Flags that only describe a `--graph` launch. */
+const GRAPH_ONLY_OPTIONS = ["project", ...GRAPH_LAUNCH_OPTIONS.map((option) => option.name)];
 
 /** Every action-building flag fills the one `action` input property. */
 const ACTION_INPUT_FIELDS: Record<string, string> = Object.fromEntries(
@@ -165,16 +190,21 @@ function timingInput(options: Record<string, unknown>): Record<string, unknown> 
 }
 
 async function actionInput(
-  io: ClientIo,
+  context: CommandContext,
   options: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
-  const chosen = ["mail", "session", "launch-project", "action"].filter(
+  const io = context.io;
+  const chosen = ["mail", "session", "launch-project", "action", "graph"].filter(
     (name) => options[name] !== undefined,
   );
-  if (chosen.length === 0) return undefined;
   if (chosen.length > 1) {
     throw new CliError("invalid-input", `--${chosen.join(", --")} are mutually exclusive`);
   }
+  if (chosen[0] !== "graph") {
+    const stray = GRAPH_ONLY_OPTIONS.find((name) => isGiven(options[name]));
+    if (stray) throw new CliError("invalid-input", `--${stray} needs --graph`);
+  }
+  if (chosen.length === 0) return undefined;
   const prompt = () =>
     readTextSource(io, {
       file: options["prompt-file"],
@@ -217,6 +247,12 @@ async function actionInput(
     }
     case "session":
       return { kind: "prompt", sessionId: options.session, prompt: await prompt(), ...mode };
+    case "graph": {
+      // The same flags and checks as `graph launch`; the schedule stores the
+      // launch request and each fire launches it (`requestedBy: "schedule"`).
+      const launch = await graphLaunchInput(context, String(options.graph), options);
+      return { kind: "graph", request: graphScheduleLaunchRequest(launch) };
+    }
     case "launch-project": {
       const agent = stringOption(options, "agent");
       if (!agent) throw new CliError("invalid-input", "--launch-project needs --agent");
@@ -257,6 +293,18 @@ async function actionInput(
   }
 }
 
+/** A flag the parser filled: a value, a true boolean or a non-empty list. */
+function isGiven(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return value !== undefined && value !== false;
+}
+
+function actionText(action: ScheduleAction): string {
+  if (action.kind === "action") return action.action;
+  if (action.kind === "graph") return `graph ${publicGraphTemplateRefText(action.request.ref)}`;
+  return action.kind;
+}
+
 function lastOutcome(job: ScheduledJobSummary): string {
   const fire = job.activeFire ?? job.lastFire;
   if (!fire) return "-";
@@ -274,7 +322,7 @@ function scheduleLines(job: ScheduledJob): string[] {
       ["time zone", job.timeZone],
       ["next fire", job.nextFireAt ?? "-"],
       ["catch-up", `${job.catchUpMinutes} min`],
-      ["action", job.action.kind === "action" ? job.action.action : job.action.kind],
+      ["action", actionText(job.action)],
     ]),
     "",
     ...table(
@@ -403,9 +451,9 @@ export const scheduleCommands: CommandSpec[] = [
   {
     path: ["schedule", "create"],
     action: "schedule.create",
-    summary: "Schedule mail, a prompt, an environment launch or another action.",
+    summary: "Schedule mail, a prompt, an environment launch, a graph run or another action.",
     description:
-      "Give one of --at, --cron or --every, and one action: --mail ENV:TAB with --body, --session SES with --prompt, --launch-project P with --agent and --prompt, or --action NAME with --input-json.",
+      "Give one of --at, --cron or --every, and one action: --mail ENV:TAB with --body, --session SES with --prompt, --launch-project P with --agent and --prompt, --graph TEMPLATE with --project and where it runs (the flags of `graph launch`), or --action NAME with --input-json. A graph template must be launchable when the schedule is created; roles and parameters left out take its saved launch defaults when it fires.",
     positionals: [],
     options: [
       ...TIMING_OPTIONS,
@@ -418,13 +466,14 @@ export const scheduleCommands: CommandSpec[] = [
     examples: [
       'orkestrator schedule create --at 03:12 --mail env-1:startup-agent --body "Resume the stalled workers."',
       'orkestrator schedule create --cron "0 9 * * 1-5" --session ses_... --prompt "Summarise CI failures."',
+      'orkestrator schedule create --cron "0 2 * * *" --graph user:nightly-review --project p1 --new-worktree --role reviewer=claude,codex',
     ],
     async run(context, parsed) {
-      const action = await actionInput(context.io, parsed.options);
+      const action = await actionInput(context, parsed.options);
       if (!action)
         throw new CliError(
           "invalid-input",
-          "Choose an action: --mail, --session, --launch-project or --action",
+          "Choose an action: --mail, --session, --launch-project, --graph or --action",
         );
       const { session, result, receipt, warnings } = await submit<{
         scheduleId: string;
@@ -474,7 +523,7 @@ export const scheduleCommands: CommandSpec[] = [
     },
     idOutput: "schedule ID",
     async run(context, parsed) {
-      const action = await actionInput(context.io, parsed.options);
+      const action = await actionInput(context, parsed.options);
       const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
         context,
         "schedule.update",

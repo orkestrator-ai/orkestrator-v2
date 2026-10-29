@@ -41,6 +41,7 @@ Fan-out as a node setting and fan-in as a port policy, as D9 describes.
 - [x] Zip edges pair branches correctly.
 - [x] Panel × lenses cross product, samples, and per-branch model bindings.
 - [x] Item-id helper; consolidator prompt shows item ids and provenance validation accepts them.
+- [x] Seeded restart interleavings cover a replicated node and its collecting fan-in, with crashes landing mid fan-out.
 
 ## Done when
 
@@ -148,9 +149,35 @@ built-in inputs); add them to `createMultiReviewConsolidationPrompt` if parity n
 the item-id grammar, collect semantics and markers in `docs/architecture/graphs.md` (it has no
 runtime section yet; not written here).
 
+**2026-10-29 · Restart mid fan-out: seeded interleavings** (Phase 2 exit criterion "A backend
+restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover
+activations."; branch `graphs-limits-schedules`).
+`apps/backend/src/core/graph-node-agent-interleaving.test.ts` (204's seeded harness on the real
+agent executor, provider and dispatch journal) now picks one of two shapes per seed: the
+independent steps it had, or a fan-out: a replicated agent node `fan` (`panel` over 2–4 bound
+models, or `lenses` with 2–4 lenses) whose branches an agent `gather` collects (`list<…>` input,
+`collect: {wait: all-settled, minSuccessful: 1}`). Every branch and the collector get a script
+(complete, end without the result, cut short by a provider restart, fail). A fan-out seed always
+dies once during the branches' dispatch (operation 1..branches: sends race under the 4-start cap,
+so the crash lands while other branches are journaled, sending or running) and may die again
+anywhere later, the collector included; a crash may land the prompt anyway (late delivery) or
+have the provider retire it as lost. Invariants on every seed: journal before send; no request
+runs twice and no step or branch runs its original turn twice (branches identified by their lens
+or panel model); every run ends; every completed step, branch and collector has verified
+outputs; the collector received exactly the branches that completed (each verified); failures are
+explained by a script, a disruption or a collect shortfall. A coverage test asserts both axes,
+mid fan-out crashes and a collector completing after one. Default seeds raised from 16 to 24
+(about 2 s). Local run: `ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=3000` passed 3002/3002 (seeds
+1–3000, 114 s): 1498 fan-out seeds (724 panel, 774 lenses), every one with a crash while a branch
+was unsettled, 1105 of them with the collector completing afterwards; 3115 crashes, 974 late
+deliveries, 234 lost answers. A branch whose dispatch a crash left unprovable fails as
+"acceptance could not be confirmed" rather than being sent again; that is the at-most-once rule,
+not a regression.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Collect policies with failure markers and `first` cancellation, unified item ids in protocol (executor, merges, prompts, provenance), item ids in consolidator prompts, lens text for templates without `lens`, 32-branch runtime guard; tests incl. real agent executor. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Seeded interleavings extended to a replicated node (panel/lenses, 2–4 branches) with a collecting fan-in and crashes mid fan-out; 3000 seeds pass locally; Phase 2 exit criterion ticked. · complete; awaiting PR

@@ -202,7 +202,7 @@ not advertise at its version before sending it.
 | `mail mailboxes` | `mail.mailboxes` | agent-mail directory (refused while messaging is disabled) | read |
 | `mail send ENV TAB` | `mail.send` | external agent mail, inbox-only, never injected | metadata |
 | `schedule list/get` | `schedule.list/get` | `ScheduledJobService` ([scheduled-jobs.md](scheduled-jobs.md)) | read |
-| `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner | metadata |
+| `schedule create/update/pause/resume/run/delete` | `schedule.*` | `ScheduledJobService`; the schedule fires later as its owner. `create`/`update` build a mail, prompt, launch, graph (`--graph TEMPLATE` with the flags of `graph launch`; see [Graphs](#graphs)) or other action | metadata |
 | `permissions rules list` | `permission.rule.list` | `PermissionRuleStore` ([permission-rules.md](permission-rules.md)) | read |
 | `permissions rules remove` | `permission.rule.remove` | `PermissionRuleStore`; removal only, a rule is created only from an approval card | metadata |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
@@ -695,6 +695,16 @@ file of `--project`; `graph list` prints the references).
   defaults saved for the template in the project, then Settings, exactly as
   the app's launch dialog and the coordinator's `launch_graph` do: they all
   call `GraphRunLaunchService`.
+- `schedule create|update … --graph TEMPLATE --project P` schedules the same
+  launch: it takes every flag of `graph launch` above, checked the same way,
+  and stores `{kind: "graph", request}` (`graphScheduleLaunchRequest` in
+  `commands/graphs.ts`): the reference, the environment choice, a role given
+  one model as a single binding and several as a panel, parameters, inputs
+  and the ticket, without a request key (each fire supplies `sched:<fireId>`)
+  and without saving defaults. Roles and parameters left out take the saved
+  defaults when the schedule fires. `schedule.create` refuses a template
+  that is not launchable at creation. A graph flag without `--graph`, or
+  `--graph` beside another action, is refused before anything is sent.
 
 The client refuses malformed flags and references before sending anything
 (exit 2). Before admission the backend reads the template's launch options,

@@ -59,8 +59,6 @@ import {
   type GraphRunRewindBackend,
 } from "@/lib/backend/graph-runs";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
-import { formatTokenCount } from "@/lib/context-usage";
-import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -79,6 +77,7 @@ import {
   type GraphRunActionSpec,
 } from "./graph-run-actions";
 import { graphRunFlowModel, type GraphRunFlowNode } from "./graph-run-flow";
+import { graphRunHeaderSummary } from "./graph-run-summary";
 
 /**
  * A graph run tab ("Graph run" or the run's name; plan P2.11, D16, D17): the
@@ -469,18 +468,11 @@ function GraphRunView({
 
   const liveNodes = model.nodes.filter((node) => node.kind === "position");
   const reached = liveNodes.filter((node) => !node.placeholder && node.state !== "not-started");
-  const startMs = Date.parse(run.startedAt ?? run.createdAt);
-  const endMs = run.finishedAt ? Date.parse(run.finishedAt) : now;
-  const elapsed = Number.isFinite(startMs)
-    ? formatElapsedWithHours(Math.max(0, Math.floor((endMs - startMs) / 1_000)))
-    : null;
-  const summary = [
-    `${reached.length} of ${liveNodes.length} nodes`,
-    elapsed,
-    run.usage.tokens > 0 ? `${formatTokenCount(run.usage.tokens)} tokens` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const summary = graphRunHeaderSummary(run, {
+    reached: reached.length,
+    total: liveNodes.length,
+    now,
+  });
 
   if (!selected) return null;
   const selectedView = views.get(selected.id)!;

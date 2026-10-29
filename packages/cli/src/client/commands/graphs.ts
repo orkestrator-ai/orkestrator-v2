@@ -1,5 +1,6 @@
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { GRAPH_LAUNCH_BOUNDS } from "@orkestrator/protocol/graphs/launch";
+import type { GraphModelBinding } from "@orkestrator/protocol/graphs/run";
 import {
   REVIEW_LENS_INSTRUCTION_MAX_BYTES,
   reviewLensFromText,
@@ -18,6 +19,7 @@ import type {
   PublicGraphValidation,
   PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
+import type { ScheduleGraphLaunch } from "@orkestrator/protocol/scheduled-jobs";
 import { CliError } from "../errors.js";
 import { keyValues, table } from "../format.js";
 import { readTextSource } from "../inputs.js";
@@ -39,6 +41,93 @@ const PROJECT_OPTION: OptionSpec = {
   kind: "string",
   valueName: "PROJECT_ID",
   description: "Project ID (project list).",
+};
+
+/**
+ * What a launch takes besides the template and `--project`: where it runs,
+ * roles and focus, parameters, inputs and the ticket. `schedule create
+ * --graph` takes the same flags.
+ */
+export const GRAPH_LAUNCH_OPTIONS: OptionSpec[] = [
+  {
+    name: "environment",
+    kind: "string",
+    valueName: "ENV",
+    description: "Run in this existing environment of the project.",
+  },
+  {
+    name: "new-worktree",
+    kind: "boolean",
+    description: "Run in a new Git worktree environment the run creates.",
+  },
+  {
+    name: "new-container",
+    kind: "boolean",
+    description: "Run in a new restricted container environment the run creates.",
+  },
+  {
+    name: "role",
+    kind: "list",
+    valueName: "KEY=AGENT[/MODEL[@EFFORT]]",
+    description:
+      "A role's model (repeatable); a panel role's models separated by commas, e.g. reviewer=claude,codex/gpt-5.5@high.",
+  },
+  {
+    name: "focus",
+    kind: "list",
+    valueName: "ROLE[.N]=TEXT",
+    description:
+      "Focus (lens) for --role model N (default 1): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB).",
+  },
+  {
+    name: "focus-file",
+    kind: "list",
+    valueName: "ROLE[.N]=PATH",
+    description: "Read a --role model's focus from a local file, laid out like --focus.",
+  },
+  {
+    name: "param",
+    kind: "list",
+    valueName: "KEY=VALUE",
+    description: "A parameter value (repeatable); true, false, null and numbers are typed.",
+  },
+  {
+    name: "input",
+    kind: "list",
+    valueName: "NAME=JSON",
+    description: "A run input's JSON value (repeatable).",
+  },
+  {
+    name: "input-file",
+    kind: "list",
+    valueName: "NAME=PATH",
+    description: "Read a run input's JSON from a local file (repeatable); - reads stdin.",
+  },
+  {
+    name: "ticket",
+    kind: "string",
+    valueName: "TICKET_ID",
+    description: "A Kanban ticket bound as the template's ticket input (ticket list).",
+  },
+  {
+    name: "ticket-input",
+    kind: "string",
+    valueName: "NAME",
+    description: "The ticket input to fill when the template has several.",
+  },
+];
+
+/** `--flag` → the `graph.launch` input property it fills (for refusal messages). */
+export const GRAPH_LAUNCH_INPUT_FIELDS: Record<string, string> = {
+  "new-worktree": "newEnvironment",
+  "new-container": "newEnvironment",
+  role: "roles",
+  focus: "roles",
+  "focus-file": "roles",
+  param: "params",
+  input: "inputs",
+  "input-file": "inputs",
+  ticket: "ticketId",
 };
 
 const INPUT_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
@@ -295,6 +384,56 @@ export async function graphLaunchInput(
   };
 }
 
+/**
+ * The launch request a scheduled `graph` action stores (`ScheduleGraphLaunch`,
+ * item 214), from the `graph.launch` input {@link graphLaunchInput} built:
+ * the template text as a reference, one model per role as a single binding
+ * and several as a panel (the launch service reads a single binding for a
+ * panel as a panel of one), and the ticket as `{taskId, input?}`.
+ */
+export function graphScheduleLaunchRequest(input: Record<string, unknown>): ScheduleGraphLaunch {
+  const projectId = input.projectId as string;
+  const ref = parsePublicGraphTemplateRef(input.template, projectId);
+  if ("error" in ref) throw new CliError("invalid-input", ref.error);
+  const roles = input.roles as Record<string, RoleBinding[]> | undefined;
+  const binding = (member: RoleBinding): GraphModelBinding => ({
+    platform: member.agent as GraphModelBinding["platform"],
+    ...(member.model !== undefined ? { model: member.model } : {}),
+    ...(member.reasoningEffort !== undefined ? { reasoningEffort: member.reasoningEffort } : {}),
+    ...(member.lens
+      ? { lens: { label: member.lens.label, instruction: member.lens.instruction } }
+      : {}),
+  });
+  return {
+    ref,
+    projectId,
+    environment:
+      typeof input.environmentId === "string"
+        ? { kind: "existing", environmentId: input.environmentId }
+        : { kind: "new", create: input.newEnvironment === "container" ? "container" : "worktree" },
+    ...(roles
+      ? {
+          roles: Object.fromEntries(
+            Object.entries(roles).map(([key, members]) => [
+              key,
+              members.length === 1 ? binding(members[0]!) : members.map(binding),
+            ]),
+          ),
+        }
+      : {}),
+    ...(input.params ? { params: input.params as ScheduleGraphLaunch["params"] } : {}),
+    ...(input.inputs ? { inputs: input.inputs as Record<string, unknown> } : {}),
+    ...(typeof input.ticketId === "string"
+      ? {
+          ticket: {
+            taskId: input.ticketId,
+            ...(typeof input.ticketInput === "string" ? { input: input.ticketInput } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function actionLines(result: PublicGraphRunActionResult): string[] {
   return keyValues([
     ["run", result.runId],
@@ -519,87 +658,8 @@ export const graphCommands: CommandSpec[] = [
     positionals: [
       { name: "template", required: true, description: PUBLIC_GRAPH_TEMPLATE_REF_HELP },
     ],
-    options: [
-      PROJECT_OPTION,
-      {
-        name: "environment",
-        kind: "string",
-        valueName: "ENV",
-        description: "Run in this existing environment of the project.",
-      },
-      {
-        name: "new-worktree",
-        kind: "boolean",
-        description: "Run in a new Git worktree environment the run creates.",
-      },
-      {
-        name: "new-container",
-        kind: "boolean",
-        description: "Run in a new restricted container environment the run creates.",
-      },
-      {
-        name: "role",
-        kind: "list",
-        valueName: "KEY=AGENT[/MODEL[@EFFORT]]",
-        description:
-          "A role's model (repeatable); a panel role's models separated by commas, e.g. reviewer=claude,codex/gpt-5.5@high.",
-      },
-      {
-        name: "focus",
-        kind: "list",
-        valueName: "ROLE[.N]=TEXT",
-        description:
-          "Focus (lens) for --role model N (default 1): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB).",
-      },
-      {
-        name: "focus-file",
-        kind: "list",
-        valueName: "ROLE[.N]=PATH",
-        description: "Read a --role model's focus from a local file, laid out like --focus.",
-      },
-      {
-        name: "param",
-        kind: "list",
-        valueName: "KEY=VALUE",
-        description: "A parameter value (repeatable); true, false, null and numbers are typed.",
-      },
-      {
-        name: "input",
-        kind: "list",
-        valueName: "NAME=JSON",
-        description: "A run input's JSON value (repeatable).",
-      },
-      {
-        name: "input-file",
-        kind: "list",
-        valueName: "NAME=PATH",
-        description: "Read a run input's JSON from a local file (repeatable); - reads stdin.",
-      },
-      {
-        name: "ticket",
-        kind: "string",
-        valueName: "TICKET_ID",
-        description: "A Kanban ticket bound as the template's ticket input (ticket list).",
-      },
-      {
-        name: "ticket-input",
-        kind: "string",
-        valueName: "NAME",
-        description: "The ticket input to fill when the template has several.",
-      },
-      REQUEST_ID_OPTION,
-    ],
-    inputFields: {
-      "new-worktree": "newEnvironment",
-      "new-container": "newEnvironment",
-      role: "roles",
-      focus: "roles",
-      "focus-file": "roles",
-      param: "params",
-      input: "inputs",
-      "input-file": "inputs",
-      ticket: "ticketId",
-    },
+    options: [PROJECT_OPTION, ...GRAPH_LAUNCH_OPTIONS, REQUEST_ID_OPTION],
+    inputFields: GRAPH_LAUNCH_INPUT_FIELDS,
     idOutput: "graph run ID",
     async run(context, parsed) {
       const input = await graphLaunchInput(

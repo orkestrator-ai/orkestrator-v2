@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { publicSuccessEnvelope } from "@orkestrator/protocol/public-api";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
@@ -245,5 +246,118 @@ test("schedule CLI rejects invalid sources, durations and JSON before submission
     ["--at", "+1m", "--mail", "missing-tab", "--body", "x"],
   ])
     expect((await box.run(["schedule", "create", ...flags])).code).not.toBe(0);
+  expect(inputs()).toHaveLength(0);
+});
+
+test("schedule CLI builds a graph launch from the flags of graph launch", async () => {
+  const { box, inputs } = await fixture();
+  const inputFile = path.join(box.root, "brief.json");
+  await writeFile(inputFile, JSON.stringify("Nightly sweep"));
+  const run = await box.run([
+    "schedule",
+    "create",
+    "--cron",
+    "0 2 * * *",
+    "--name",
+    "Nightly review",
+    "--graph",
+    "user:nightly-review",
+    "--project",
+    "p1",
+    "--new-container",
+    "--role",
+    "builder=codex/gpt-5.5@high",
+    "--role",
+    "reviewer=claude,opencode/anthropic/claude-sonnet",
+    "--focus",
+    "reviewer.2=Security\nTrace untrusted input.",
+    "--param",
+    "rounds=2",
+    "--param",
+    "strict=true",
+    "--input-file",
+    `brief=${inputFile}`,
+    "--ticket",
+    "t1",
+    "--ticket-input",
+    "ticket",
+  ]);
+  expect(run.code).toBe(0);
+  const request = {
+    ref: { scope: "user", id: "nightly-review" },
+    projectId: "p1",
+    environment: { kind: "new", create: "container" },
+    roles: {
+      builder: { platform: "codex", model: "gpt-5.5", reasoningEffort: "high" },
+      reviewer: [
+        { platform: "claude" },
+        {
+          platform: "opencode",
+          model: "anthropic/claude-sonnet",
+          lens: { label: "Security", instruction: "Trace untrusted input." },
+        },
+      ],
+    },
+    params: { rounds: 2, strict: true },
+    inputs: { brief: "Nightly sweep" },
+    ticket: { taskId: "t1", input: "ticket" },
+  };
+  expect(inputs()).toEqual([
+    { cron: "0 2 * * *", name: "Nightly review", action: { kind: "graph", request } },
+  ]);
+  // The backend's own parser accepts it unchanged (what `schedule.create` stores).
+  expect(parseGraphLaunchRequest(request)).toEqual(request as never);
+});
+
+test("schedule CLI schedules a graph in an existing environment, and on update", async () => {
+  const { box, inputs } = await fixture();
+  const run = await box.run([
+    "schedule",
+    "update",
+    "sch_test",
+    "--graph",
+    "project:review.graph.json",
+    "--project",
+    "p1",
+    "--environment",
+    "env-1",
+  ]);
+  expect(run.code).toBe(0);
+  expect(inputs("schedule.update")).toEqual([
+    {
+      scheduleId: "sch_test",
+      action: {
+        kind: "graph",
+        request: {
+          ref: { scope: "project", projectId: "p1", path: ".orkestrator/graphs/review.graph.json" },
+          projectId: "p1",
+          environment: { kind: "existing", environmentId: "env-1" },
+        },
+      },
+    },
+  ]);
+});
+
+test("schedule CLI refuses a malformed graph schedule before submission", async () => {
+  const { box, inputs } = await fixture();
+  for (const [flags, message] of [
+    [["--graph", "user:x", "--new-worktree"], "--project is required"],
+    [["--graph", "user:x", "--project", "p1"], "Pass exactly one of"],
+    [["--graph", "nope", "--project", "p1", "--new-worktree"], "TEMPLATE"],
+    [
+      ["--graph", "user:x", "--project", "p1", "--new-worktree", "--role", "worker=nobody"],
+      "names agent",
+    ],
+    [["--mail", "env:tab", "--body", "x", "--role", "worker=claude"], "--role needs --graph"],
+    [["--session", "ses_x", "--prompt", "x", "--project", "p1"], "--project needs --graph"],
+    [
+      ["--graph", "user:x", "--project", "p1", "--new-worktree", "--action", "ticket.comment"],
+      "mutually exclusive",
+    ],
+  ] as const) {
+    const run = await box.run(["schedule", "create", "--at", "+1m", ...flags]);
+    expect(run.code).not.toBe(0);
+    expect(run.err).toContain(message);
+  }
   expect(inputs()).toHaveLength(0);
 });

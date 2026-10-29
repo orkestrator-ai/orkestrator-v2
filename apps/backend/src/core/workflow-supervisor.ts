@@ -63,6 +63,7 @@ export const KEYED_SCHEDULING_DOMAINS = [
   "multi-review",
   "native-queues",
   "backend-activity",
+  "graph-run",
 ] as const;
 export type KeyedSchedulingDomain = (typeof KEYED_SCHEDULING_DOMAINS)[number];
 
@@ -71,7 +72,9 @@ export type KeyedSchedulingDomain = (typeof KEYED_SCHEDULING_DOMAINS)[number];
  * their previous driver on the next backend start, e.g.
  * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=build-pipeline,multi-review`.
  * A domain runs exactly one driver: the switch is read once at construction,
- * so the new driver is never started when the old one is selected.
+ * so the new driver is never started when the old one is selected. `graph-run`
+ * has no previous driver: rolling it back disables graph runs (nothing is
+ * launched or advanced; stored runs stay readable and cancellable).
  */
 export const KEYED_SCHEDULING_ROLLBACK_ENV = "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK";
 

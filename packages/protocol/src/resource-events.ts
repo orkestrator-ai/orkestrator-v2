@@ -64,6 +64,12 @@ export const RESOURCE_KINDS = [
    * `graph_templates_list`. A hint only.
    */
   "graph-template",
+  /**
+   * A graph run changed (items 202, 203): created, advanced by a scheduler
+   * pass, cancelled, or deleted with its environment. The id is the run id;
+   * clients re-read the run. A hint only: the stored run is authoritative.
+   */
+  "graph-run",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

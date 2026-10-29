@@ -113,6 +113,8 @@ export type CommandContext = {
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
   /** The graph template library: scopes, trust and per-project ceilings (item 109). */
   graphTemplates?: import("./graph-template-service.js").GraphTemplateService;
+  /** Graph runs: launch, read, cancel, pause and resume (items 202, 203; launch surfaces 214). */
+  graphRuns?: import("./graph-run-service.js").GraphRunService;
 };
 
 export type CommandHandler = (

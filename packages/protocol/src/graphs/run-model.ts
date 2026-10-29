@@ -286,8 +286,13 @@ export interface NodeActivation {
   state: GraphActivationState;
   /** Input port → artifact id, or ids for a list port. */
   inputs: Record<string, string | string[]>;
-  /** Output port → the accepted artifact id. */
+  /**
+   * Output port → the accepted artifact id. A gate or human node forwards its
+   * inputs: the taken outlet's ports map to the input artifact ids.
+   */
   outputs: Record<string, string>;
+  /** Gate and human nodes: the outlet taken (consumers on other outlets are skipped). */
+  outlet?: string;
   session?: GraphActivationSession;
   /**
    * The policy the activation actually ran under, recorded before dispatch

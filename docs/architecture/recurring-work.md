@@ -113,7 +113,7 @@ reports the lost time once and every registered scheduler re-times its due
 work. Durable expiry keeps wall-clock semantics.
 
 **Keyed workflow supervision** (`workflow-supervisor.ts`). Feature planning,
-build pipelines, multi review and native prompt queues keep one
+build pipelines, multi review, graph runs and native prompt queues keep one
 due key per record that owes work, instead of listing the whole store each
 tick. Wakeups come from workflow-result acceptance, environment readiness and
 identity changes, provider transitions, enqueue and turn end, queue
@@ -173,9 +173,11 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, or `all`. A named domain
+  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
   runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`.
+  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
+  disables graph runs (launches are refused, nothing advances; stored runs stay
+  readable and can be cancelled).
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
@@ -216,6 +218,7 @@ the running attempt.
 | B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
+| B28 | `graph-run-tick` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts` | Keyed per run with an obligation (`provision`, `cancel`, `observe`, `advance`, `await-human`), 30 s discovery. A run that owes work passes every 1 s, a run waiting only for a person every 30 s. An accepted workflow result wakes only the run whose activation owns the slot. Passes hold a `workflow-provider` slot (target: the run's environment) except while provisioning or waiting for a person. A pass reads only its run's row and writes only when something changed. |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 

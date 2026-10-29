@@ -62,6 +62,7 @@ export const RECURRING_JOB_KINDS = [
   "multi-review-tick",
   "multi-review-lease-renewal",
   "feature-planning-tick",
+  "graph-run-tick",
   "validation-heartbeat",
   "storage-lock-heartbeat",
   // Backend: host samples, providers and transport.
@@ -363,6 +364,17 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // Step 08 keyed supervision: per-record 1 s passes, 30 s safety discovery.
   "feature-planning-tick": backend(
     "B17",
+    "interval",
+    "progress",
+    1_000,
+    "per-key-serial",
+    "storage-reconcile",
+  ),
+  // Step 08 keyed supervision of graph runs (item 202): one pass per run
+  // with an obligation every 1 s, 30 s while only a person can act; 30 s
+  // safety discovery.
+  "graph-run-tick": backend(
+    "B28",
     "interval",
     "progress",
     1_000,

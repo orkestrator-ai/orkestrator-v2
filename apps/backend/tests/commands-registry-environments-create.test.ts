@@ -623,7 +623,7 @@ printf '%s\n' '{"slug":"Offline Rename"}' > "$out"
     );
   });
 
-  test("lets an explicit first prompt bypass rename retry backoff", async () => {
+  test("lets an explicit first prompt bypass backoff while preserving the retry failure count", async () => {
     const environment = createEnvironment({
       id: "env-explicit-rename-retry",
       name: "20260415-123456",
@@ -636,6 +636,7 @@ printf '%s\n' '{"slug":"Offline Rename"}' > "$out"
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const now = spyOn(Date, "now").mockReturnValue(100_000);
 
     try {
       await withFakeCodex(
@@ -646,6 +647,7 @@ exit 1
 `,
         async (logPath) => {
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          now.mockReturnValue(110_000);
           await commands.get("prepare_environment_first_prompt")?.(
             { environmentId: environment.id, prompt: "Retry this prompt" },
             context,
@@ -655,9 +657,24 @@ exit 1
             "explicit first-prompt retry during backoff",
           );
           expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
+
+          // The explicit retry failed for the same intent, so automatic retries
+          // now wait 60 seconds from that failure instead of restarting at 30.
+          for (const timestamp of [140_000, 169_999]) {
+            now.mockReturnValue(timestamp);
+            await commands.get("reconcile_pending_environment_renames")?.({}, context);
+            expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(
+              2,
+            );
+          }
+
+          now.mockReturnValue(170_000);
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(3);
         },
       );
     } finally {
+      now.mockRestore();
       warn.mockRestore();
     }
   });

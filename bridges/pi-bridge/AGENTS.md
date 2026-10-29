@@ -161,6 +161,15 @@ none. A retried response that a later answer replaces adds nothing.
   and never an attach or a `lastAccessed` touch. The list is `stale` +
   `attachPending` when the policy loads extensions, else `ready`, and it never
   replaces rows an attach read.
+- A session whose policy denies `github.write` (every graph agent node) runs
+  its shell commands and the MCP servers the bridge starts without the GitHub
+  credential (`github-credential.ts`): `bash` and `powershell` are passed as
+  SDK `customTools` with a `spawnHook`, keeping the settings Pi's built-in
+  reads (command prefix, shell path) and `defaultActive: false` so the loadout
+  is the built-ins'. Withholding is fixed when a session is built, so it is
+  part of the MCP connection key and a policy that flips it rebuilds the
+  session at the next turn boundary. Extensions run in this process and keep
+  the credential; say so rather than claiming otherwise.
 - Project-local `.pi/` resources load only when the session's execution
   policy turns `projectResources` on, on both host and container runs. Host
   project resources are off by default. Enabling them permits repository MCP processes and Pi extensions

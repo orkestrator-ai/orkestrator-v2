@@ -14,6 +14,7 @@ import {
   nativeAgentPolicyForBridge,
   nativeAgentWithholdsGitHubCredential,
   withheldGitHubCredentialEnvironment,
+  WITHHELD_GITHUB_ENV_VARS,
   isNativeAgentUserMcpServerList,
   NATIVE_AGENT_USER_MCP_SELECTION,
   NATIVE_AGENT_USER_MCP_SERVERS_MAX,
@@ -228,7 +229,8 @@ describe("withholding the GitHub credential (item 209)", () => {
     };
     const withheld = withheldGitHubCredentialEnvironment(env, { ghConfigDir: "/tmp/empty-gh" });
     for (const name of GITHUB_CREDENTIAL_ENV_VARS) expect(withheld[name]).toBeUndefined();
-    expect(withheld.ORKESTRATOR_GITHUB_CREDENTIAL_FILE).toBeUndefined();
+    for (const name of WITHHELD_GITHUB_ENV_VARS) expect(withheld[name]).toBeUndefined();
+    expect(WITHHELD_GITHUB_ENV_VARS).toContain("ORKESTRATOR_GITHUB_CREDENTIAL_FILE");
     expect(Object.values(withheld).join("\n")).not.toContain("secret");
     expect(withheld.GH_CONFIG_DIR).toBe("/tmp/empty-gh");
     expect(withheld.PATH).toBe("/usr/bin");

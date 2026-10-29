@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_PLATFORMS } from "../agent-platforms.js";
+import { AGENT_PLATFORMS, type AgentPlatform } from "../agent-platforms.js";
 import type { NativeAgentExecutionPolicy } from "../native-agent.js";
 import {
   agentEnforcementHostForOs,
@@ -107,7 +107,7 @@ describe("enforcement tiers", () => {
         tier: "advisory",
         boundary: true,
         reason:
-          "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider.",
+          "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider. Codex withholds it from the session's commands; the shared app-server process keeps it.",
       },
       {
         axis: "mcp",
@@ -116,6 +116,21 @@ describe("enforcement tiers", () => {
         reason: "app-server disables every other configured server for this thread.",
       },
     ]);
+    // The credential is named only where the bridge withholds it (item 209).
+    const remoteReason = (platform: AgentPlatform) =>
+      agentPolicyEnforcement(profilePolicy("builder"), platform, sandboxed).axes.find(
+        (axis) => axis.axis === "remote",
+      )?.reason;
+    expect(remoteReason("claude")).toBe(
+      "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider.",
+    );
+    expect(remoteReason("pi")).toContain("Pi extensions run inside the bridge and keep it.");
+    for (const platform of ["opencode", "cursor"] as const) {
+      expect(remoteReason(platform)).toStartWith(
+        "Push and GitHub writes are held by Orkestrator's remote-ref guard, not by the provider.",
+      );
+      expect(remoteReason(platform)).toContain("keeps the GitHub credential");
+    }
     const verifier = agentPolicyEnforcement(profilePolicy("verifier"), "cursor", sandboxed);
     expect(verifier.axes.map((axis) => [axis.axis, axis.tier])).toEqual([
       ["workspace", "provider-configured"],

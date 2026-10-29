@@ -127,10 +127,25 @@ detected by a guard, and the activation records which (plan P2.9, D4, D12).
   `push-branch` or `open-pull-request` pushed are not counted. It cannot see a
   push to an unwatched remote or URL, a push of older commits, or GitHub
   writes that are not pushes.
-- **GitHub credential.** Graph agent policies deny `github.write`; the Claude
-  and Grok bridges then start the session without the GitHub credential
-  (see [agent engines](agent-engines.md)). Codex, OpenCode, Cursor and Pi do
-  not withhold it yet, and a container's runtime credential stays readable.
+- **GitHub credential.** Graph agent policies deny `github.write`, and the
+  session runs without the GitHub credential where the provider allows it
+  (`NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING`; mechanisms in
+  [agent engines](agent-engines.md)):
+
+  | Provider | Withheld from | Still holds it |
+  | --- | --- | --- |
+  | Claude | the CLI process of every query | the bridge process |
+  | Grok | the session's ACP child | the bridge process |
+  | Codex | every command the thread runs (per-thread `shell_environment_policy`) | the shared app-server process; a stdio MCP server whose entry names the variable |
+  | Pi | the session's `bash`/`powershell` and the MCP servers the bridge starts | the bridge process and the Pi extensions running in it (project resources on); a credential written literally into an `mcp.json` entry |
+  | OpenCode | nothing: one `opencode serve` per directory | every session |
+  | Cursor | nothing: the SDK runs in the bridge process | every session |
+
+  Everywhere, SSH keys, a container's runtime credential file and Git's
+  `insteadOf` rewrite stay readable, and a command can read an ancestor
+  process's environment. The remote axis therefore stays advisory on every
+  provider; its reason names the withheld credential only where it is
+  withheld and states the gap otherwise.
 - **The inspector** reads `activation.enforcement`, `enforcementReason` and
   `guards` (`graphActivationEnforcementView` labels them).
 

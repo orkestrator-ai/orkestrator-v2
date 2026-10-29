@@ -67,6 +67,22 @@ describe("PlanUsageSection", () => {
     expect(screen.getByText("12% used")).toBeTruthy();
   });
 
+  test("lists quota windows in label order whatever order they were reported in", async () => {
+    getPlanUsage.mockResolvedValue(
+      snapshot({
+        windows: [
+          { window: "weekly_fable", label: "Weekly Fable limit", usedPercent: 1 },
+          { window: "weekly", label: "Weekly limit", usedPercent: 2 },
+          { window: "five_hour", label: "5-hour limit", usedPercent: 3 },
+        ],
+      }),
+    );
+    render(<PlanUsageSection platform="opencode" />);
+    await screen.findByText("5-hour limit");
+    const labels = screen.getAllByText(/limit$/).map((element) => element.textContent);
+    expect(labels).toEqual(["5-hour limit", "Weekly Fable limit", "Weekly limit"]);
+  });
+
   test("shows the backend's explanation when a key is missing", async () => {
     getPlanUsage.mockResolvedValue(
       snapshot({

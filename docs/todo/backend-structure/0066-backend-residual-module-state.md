@@ -4,8 +4,9 @@ Checked against `main` at `8454d18b` plus the 0011 branch (2026-10-24). Done
 on `todo-0066-residual-module-state-40e8f98a7ef0` from `20f6de91`
 (2026-10-25). Every item below is done. The durable description now lives in
 [`backend-runtime.md`](../../architecture/backend-runtime.md); further module
-state found while doing this is listed in
-[0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md).
+state found while doing this was moved by todo 0133 (finished and deleted)
+and its residue is listed in
+[0390-backend-module-state-beyond-0133.md](0390-backend-module-state-beyond-0133.md).
 Delete this file and its index row once the branch has merged (decision 10).
 
 ## Task analysis
@@ -20,7 +21,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** The file is marked Finished and says to delete it with its index row once the branch merged (decision 10). It still holds rank 6 in the folder index, and `docs/README.md:38` links to it from the `backend-runtime.md` row as the place residue is tracked, although the open residue is now in 0133.
 
-**Context.** Follow-up from [0011](0011-backend-runtime-state-ownership.md); further module state is in [0133](0133-backend-module-state-beyond-0066.md). README rule: move durable behaviour into `architecture/`, delete the file, remove the row.
+**Context.** Follow-up from [0011](0011-backend-runtime-state-ownership.md); further module state was moved by 0133 (finished and deleted); residue is in [0390](0390-backend-module-state-beyond-0133.md). README rule: move durable behaviour into `architecture/`, delete the file, remove the row.
 
 **Investigation.** The branch merged as `f5e5c9a1` (#1253). The claims hold at HEAD: `BackendRuntime` owns `prMonitor` and `containerStates` (`apps/backend/src/core/backend-runtime.ts:39`, `:41`), `backend-runtime.test.ts` has the five new cases (`:177`, `:213`, `:239`, `:272`, `:303`), and neither `commands-container-exec.ts` nor `commands-pr-monitor.ts` is on the `import/no-mutable-exports` allowlist in `.oxlintrc.json`. `docs/architecture/backend-runtime.md` already describes every owner (`terminals.history`, `environments.fence`, `localServers.openCodeHostStart` and `piCatalog`, `prMonitor` with merge cleanup as a construction option, `containerStates`), the construction-option seams and the shutdown order of decision 6 (history timers cleared at `runtime.shutdown()`, collectors kept for the later awaited flush). Two reasons are not in it: decision 5 (the PR monitor's pool is created lazily because the process-wide diagnostics registry caps sources at 32) and decision 4 (it binds the latest caller's storage and emit). Both are the kind of detail a later change would undo by mistake.
 
@@ -240,9 +241,7 @@ Run on this host (macOS, Apple Silicon) on 2026-10-25:
      that wants two backends must still pass its own runtime.
 9. **Further module state goes to a new todo, 0133, rated Low.**
    - Options: widen this branch; leave it unrecorded; record it.
-   - Chosen: record it in
-     [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)
-     (tmux sessions and interactive terminals, account usage stores,
+   - Chosen: record it in 0133, since finished and deleted (tmux sessions and interactive terminals, account usage stores,
      public-API in-flight maps, OOM watcher, GitHub/Linear locks, and the
      host-wide Docker caches that may legitimately stay process-wide).
    - Why: this file's scope was its seven rows; the README forbids adding new
@@ -263,6 +262,6 @@ cleared by the owner's `shutdown()`.
 ## Related
 
 - [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md)
-- [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)
+- [0390-backend-module-state-beyond-0133.md](0390-backend-module-state-beyond-0133.md)
 - [0012-backend-core-domain-folders.md](0012-backend-core-domain-folders.md)
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

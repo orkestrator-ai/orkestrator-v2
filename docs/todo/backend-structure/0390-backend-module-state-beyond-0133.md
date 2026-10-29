@@ -1,7 +1,7 @@
 # Backend module state beyond 0133
 
-Found while doing
-[0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)
+Found while doing todo 0133 (finished and deleted; its durable
+description is in [`backend-runtime.md`](../../architecture/backend-runtime.md))
 on `todo-0133-backend-module-state-3cc0d753a9d5` from `863b5782`
 (2026-10-27). 0133 moved the rows it listed into `BackendRuntime`. A fresh scan
 of `apps/backend/src/core` for module-level `let`s and `Map`/`Set` singletons
@@ -77,7 +77,6 @@ backend per process, so none of this changes shipped behaviour.
 
 ## Related
 
-- [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)
 - [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md)
 - [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): moved the container log service row.
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

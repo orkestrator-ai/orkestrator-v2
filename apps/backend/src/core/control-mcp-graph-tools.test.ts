@@ -458,6 +458,12 @@ describe("coordinator graph tools", () => {
   });
 
   test("a coordinator schedules a graph through its own launch_graph", async () => {
+    // Scheduling is experimental and off by default; the schedule tools need it on.
+    const config = await storage.loadConfig();
+    await storage.saveConfig({
+      ...config,
+      global: { ...config.global, experimentalScheduling: true },
+    });
     const created = await call("create_schedule", {
       requestId: "nightly-schedule",
       at: "+1h",

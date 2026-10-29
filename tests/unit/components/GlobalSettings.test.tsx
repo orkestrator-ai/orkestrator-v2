@@ -2808,6 +2808,22 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("saves the experimental scheduling switch, off by default", async () => {
+    render(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable scheduling" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalScheduling: true }),
+        undefined,
+      );
+    });
+  });
+
   test("flushes a pending debounced edit when the form unmounts", async () => {
     const { unmount } = render(<GlobalSettings activeSection="general" />);
 

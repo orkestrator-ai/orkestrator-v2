@@ -24,8 +24,18 @@ export interface AgentMailToolCall {
   messageId?: string;
   subject?: string;
   body?: string;
-  /** The recipient: the address the tool resolved, or the one the agent wrote. */
-  to?: { environmentId: string; tabId?: string };
+  /**
+   * The recipient: the address the tool resolved, or the one the agent wrote.
+   * Mail to another node also carries the names that node reported, and the
+   * node's own name, since this node has no mailbox to look them up in.
+   */
+  to?: {
+    environmentId: string;
+    tabId?: string;
+    environmentName?: string;
+    tabName?: string;
+    node?: string;
+  };
   from?: MailActor;
   trust?: AgentMailTrust;
   placement?: AgentMailPlacement;
@@ -124,7 +134,15 @@ export function agentMailToolCall(part: ToolPart): AgentMailToolCall | null {
   const messageId = text(message?.id);
   const resolvedTo =
     message && typeof message.toEnvironmentId === "string" && typeof message.toTabId === "string"
-      ? { environmentId: message.toEnvironmentId, tabId: message.toTabId }
+      ? {
+          environmentId: message.toEnvironmentId,
+          tabId: message.toTabId,
+          ...(text(message.toEnvironmentName)
+            ? { environmentName: text(message.toEnvironmentName) }
+            : {}),
+          ...(text(message.toTabName) ? { tabName: text(message.toTabName) } : {}),
+          ...(text(message.node) ? { node: text(message.node) } : {}),
+        }
       : undefined;
   if (tool === "send_message" || tool === "reply_message") {
     const body = text(args.body);

@@ -512,6 +512,9 @@ export async function createControlMcp(
     isRecord(config.global) &&
     isRecord(config.global.agentMessaging) &&
     config.global.agentMessaging.enabled === true;
+  // Scheduling is experimental; its tools are listed only while it is on.
+  const schedulingEnabled =
+    isRecord(config) && isRecord(config.global) && config.global.experimentalScheduling === true;
   const operator = coordinatorScope ? undefined : operatorCaller?.(messagingEnabled);
   const mcp = new McpServer(
     { name: "orkestrator-control", version: "1.0.0" },
@@ -534,6 +537,7 @@ export async function createControlMcp(
   const server = filteredToolServer(mcp, (tool) => {
     if (coordinatorScope) {
       const capability = COORDINATOR_TOOL_CAPABILITY.get(tool);
+      if (capability === "schedules" && !schedulingEnabled) return false;
       return capability !== undefined && coordinatorScope.capabilities.includes(capability);
     }
     // Operator credentials: the original tools are part of every profile

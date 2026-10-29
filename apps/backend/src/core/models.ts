@@ -1060,6 +1060,13 @@ export interface AppConfig {
     terminalHistoryGlobalRetentionMb?: number;
     terminalHistoryRetentionDays?: number;
     experimentalCodexRawEventLogging?: boolean;
+    /**
+     * Experimental gate for scheduled jobs. Off (or absent) hides Settings →
+     * Schedules, refuses the schedule commands and public actions, withholds
+     * the agent and coordinator schedule tools and stops schedules firing;
+     * stored schedules are kept.
+     */
+    experimentalScheduling?: boolean;
     debugLogging?: boolean;
     /** Number of days production application logs remain on disk. */
     debugLogRetentionDays?: number;

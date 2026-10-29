@@ -57,6 +57,19 @@ function parseMailState(value: unknown): NodeMailState {
   };
 }
 
+/** A local tab's mail display name ("Claude 2"), or undefined when it has no mailbox. */
+async function mailboxDisplayName(
+  storage: StorageService,
+  environmentId: string,
+  tabId: string,
+): Promise<string | undefined> {
+  if (!tabId) return undefined;
+  const mailbox = await storage
+    .getAgentMailMailbox(environmentId, tabId, { limit: 1 })
+    .catch(() => null);
+  return mailbox?.descriptor.displayName || undefined;
+}
+
 /**
  * When a coordinator on this backend last contacted a local environment's tab:
  * launched or delegated to the environment, or mailed the tab. Associations
@@ -177,11 +190,13 @@ export class NodeCoordination {
         const project = environment
           ? await storage.getProject(environment.projectId).catch(() => null)
           : null;
+        const tabName = await mailboxDisplayName(storage, item.fromEnvironmentId, item.fromTabId);
         const hint = repositoryHint(project?.gitUrl);
         const mailbox = destination as Partial<CoordinatorMailbox>;
         return this.leafMail.enqueue(destination.controllerId as BackendId, {
           ...item,
           ...(environment?.name ? { fromEnvironmentName: environment.name } : {}),
+          ...(tabName ? { fromTabName: tabName } : {}),
           ...(hint ? { repositoryHint: hint } : {}),
           ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
             ? {
@@ -284,9 +299,13 @@ export class NodeCoordination {
    */
 
   /** Mail from a command node's coordinator to an agent on this node. */
-  async deliverIncoming(
-    args: Record<string, unknown>,
-  ): Promise<{ messageId: string; toTabId: string; placement: string }> {
+  async deliverIncoming(args: Record<string, unknown>): Promise<{
+    messageId: string;
+    toTabId: string;
+    toEnvironmentName: string;
+    toTabName?: string;
+    placement: string;
+  }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
     const controller = this.options.nodes
@@ -331,9 +350,17 @@ export class NodeCoordination {
     // An environment the coordinator talks to reports back to it, until
     // another coordinator contacts it.
     await this.leafMail.recordOrigin(toEnvironmentId, mailbox, { keepOrigin: true });
+    const toTabName = await mailboxDisplayName(
+      this.options.storage,
+      toEnvironmentId,
+      message.toTabId,
+    );
     return {
       messageId: message.id,
       toTabId: message.toTabId,
+      // The command node names the recipient in its transcript by these.
+      toEnvironmentName: environment.name,
+      ...(toTabName ? { toTabName } : {}),
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
     };
@@ -391,6 +418,7 @@ export class NodeCoordination {
       environmentId: string;
       tabId: string;
       environmentName?: string;
+      tabName?: string;
     };
   }): Promise<void> {
     const storage = this.options.storage;
@@ -444,7 +472,9 @@ export class NodeCoordination {
             projectId,
             environmentId: input.from.environmentId,
             tabId: input.from.tabId,
-            title: input.from.environmentName ?? null,
+            // Older leaves report no tab name; their environment's stands in.
+            title: input.from.tabName ?? input.from.environmentName ?? null,
+            ...(input.from.environmentName ? { environmentName: input.from.environmentName } : {}),
           }
         : { kind: "external" },
       {

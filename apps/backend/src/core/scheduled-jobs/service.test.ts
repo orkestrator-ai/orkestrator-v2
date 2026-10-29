@@ -10,6 +10,9 @@ import type {
 } from "@orkestrator/protocol/scheduled-jobs";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { StorageService } from "../storage.js";
+import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands-context.js";
+import { schedulingEnabled } from "../commands-registry-scheduled-jobs.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import { claimDueFire, settleFire, type FireResult } from "./model.js";
@@ -391,6 +394,111 @@ describe("two backends sharing a data directory", () => {
     clock.now += 120_000;
     await tick(service);
     expect(executor.fired).toHaveLength(0);
+  });
+});
+
+describe("experimental scheduling switch", () => {
+  test.each(["save_config", "update_global_config"])(
+    "%s wakes a started scheduler across on → off → on and preserves missed-fire rules",
+    async (command) => {
+      const clock = { now: T0 };
+      const { storage, executor } = await backend(await dataDir(), clock);
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({ ...config.global, experimentalScheduling: true });
+      const service = new ScheduledJobService({
+        store: storage.scheduledJobStore(),
+        executor: executor as unknown as ScheduledJobExecutor,
+        now: () => clock.now,
+        enabled: () => schedulingEnabled(storage),
+      });
+      const context = {
+        storage,
+        scheduledJobs: service,
+        runtime: {
+          terminals: { history: { configureRetention() {}, async pruneStorage() {} } },
+          diffStats: { async sync() {} },
+        },
+      } as unknown as CommandContext;
+      const save = async (enabled: boolean) => {
+        const current = await storage.loadConfig();
+        const global = { ...current.global, experimentalScheduling: enabled };
+        await createCommandRegistry().get(command)!(
+          command === "save_config" ? { config: { ...current, global } } : { global },
+          context,
+        );
+        await service.idle();
+      };
+      const first = (await service.create(OPERATOR, { at: "+1m", action: MAIL })).job;
+      const caughtUp = (
+        await service.create(OPERATOR, { at: "+2m", action: MAIL, catchUpMinutes: 10 })
+      ).job;
+      const expired = (
+        await service.create(OPERATOR, { at: "+2m", action: MAIL, catchUpMinutes: 1 })
+      ).job;
+      const paused = (
+        await service.create(OPERATOR, { everySeconds: 3600, action: MAIL, paused: true })
+      ).job;
+      const timer = installControlledTimeout(SAFETY_TICK_MS, { label: "scheduler safety tick" });
+      try {
+        service.start();
+        await service.idle();
+        clock.now += 60_000;
+        expect(timer.advance()).toBe(1);
+        await service.idle();
+        expect(service.get(OPERATOR, first.id).fires[0]?.state).toBe("succeeded");
+        expect(executor.fired).toHaveLength(1);
+
+        await save(false);
+        const saved = storage.scheduledJobStore().list();
+        clock.now = T0 + 5 * 60_000;
+        expect(timer.advance()).toBe(1);
+        await service.idle();
+        expect(executor.fired).toHaveLength(1);
+        expect(storage.scheduledJobStore().list()).toEqual(saved);
+
+        // Saving config must wake immediately, without advancing the safety timer.
+        await save(true);
+        expect(executor.fired).toHaveLength(2);
+        expect(service.get(OPERATOR, caughtUp.id)).toMatchObject({
+          state: "completed",
+          fires: [{ kind: "catch-up", state: "succeeded" }],
+        });
+        expect(service.get(OPERATOR, expired.id)).toMatchObject({
+          state: "completed",
+          fires: [{ state: "skipped", error: { code: "missed" } }],
+        });
+        expect(service.get(OPERATOR, paused.id)).toEqual(paused);
+      } finally {
+        await service.stop();
+        timer.assertDrained();
+        timer.restore();
+      }
+    },
+  );
+
+  test("nothing fires while scheduling is off; turning it on catches up within the window", async () => {
+    const dir = await dataDir();
+    const clock = { now: T0 };
+    const storage = new StorageService(dir);
+    await storage.init();
+    storages.push(storage);
+    const executor = new RecordingExecutor();
+    let enabled = false;
+    const service = new ScheduledJobService({
+      store: storage.scheduledJobStore(),
+      executor: executor as unknown as ScheduledJobExecutor,
+      now: () => clock.now,
+      enabled: async () => enabled,
+    });
+    const { job } = await service.create(OPERATOR, { at: "+1m", action: MAIL });
+    clock.now += 120_000;
+    await tick(service);
+    expect(executor.fired).toHaveLength(0);
+    expect(service.get(OPERATOR, job.id).state).toBe("active");
+
+    enabled = true;
+    await tick(service);
+    expect(executor.fired).toHaveLength(1);
   });
 });
 

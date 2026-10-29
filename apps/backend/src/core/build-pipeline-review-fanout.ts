@@ -5,7 +5,8 @@
  * stops being one agent answering the structured-review contract and becomes
  * the same fan-out Multi Review runs: N reviewers against one immutable review
  * package, then a consolidation turn that merges their reports into the single
- * {@link BuildPipeline.structuredReview} the address stage already consumes.
+ * {@link BuildPipeline.structuredReview} a single reviewer would have written,
+ * routed to Address or Verify by the same rule.
  * Nothing downstream of the review stage learns there was more than one
  * reviewer — that is the whole point of consolidating here rather than
  * teaching every later stage about a list.
@@ -196,7 +197,7 @@ export interface BuildPipelineReviewFanoutDeps {
 export type ReviewFanoutStep =
   /** Still working. The supervisor returns without touching the pipeline. */
   | { kind: "working" }
-  /** The consolidated report is on the pipeline; start the address stage. */
+  /** The consolidated report is on the pipeline; route it to Address or Verify. */
   | { kind: "consolidated" }
   /** The stage failed. The supervisor applies its usual failure handling. */
   | { kind: "failed"; error: string };

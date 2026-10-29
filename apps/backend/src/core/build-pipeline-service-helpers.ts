@@ -23,6 +23,7 @@ import {
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { StructuredReviewFindings } from "@orkestrator/protocol/structured-review";
 import {
   AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_SUMMARY_VERSION,
@@ -161,6 +162,22 @@ export function discardSessionReviewReports(pipeline: BuildPipeline): void {
   for (const session of pipeline.sessions) {
     if (session.phase === "review") delete session.reviewReport;
   }
+}
+
+/**
+ * The stage an accepted review hands over to. A report with issues or test
+ * coverage gaps goes to Address; a clean one has nothing to address and goes
+ * straight to Verify. The single reviewer's report and a reviewer panel's
+ * consolidated report follow this one rule.
+ */
+export function stageAfterReview(
+  report: StructuredReviewFindings,
+):
+  | { sessionPhase: "address"; phase: "addressing" }
+  | { sessionPhase: "verify"; phase: "verifying" } {
+  return report.issues.length > 0 || report.testCoverageGaps.length > 0
+    ? { sessionPhase: "address", phase: "addressing" }
+    : { sessionPhase: "verify", phase: "verifying" };
 }
 
 /**

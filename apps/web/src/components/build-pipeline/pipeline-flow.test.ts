@@ -377,6 +377,48 @@ describe("pipelineFlowModel", () => {
     expect(model.nodes.find((n) => n.id === "consolidation")?.state).toBe("complete");
   });
 
+  test("a clean panel review goes from Consolidation straight to Verify", () => {
+    const clean = { ...TEST_STRUCTURED_REVIEW_REPORT, issues: [], testCoverageGaps: [] };
+    const model = pipelineFlowModel(
+      build({
+        phase: "verifying",
+        reviewers: PANEL.slice(0, 2),
+        currentSessionIndex: 4,
+        structuredReview: clean,
+        sessions: [
+          session("build", "build", 0),
+          session("fix", "prep", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+          reviewer(0, "rev-1", 120),
+          reviewer(1, "rev-2", 120),
+          session("review", "consolidation", 180, {
+            label: "Consolidation",
+            reviewReport: clean,
+          }),
+          session("verify", "verify", 240, { status: "running", completedAt: undefined }),
+        ],
+        // Left over for the moment between opening Verify and dropping it.
+        reviewFanout: {
+          reviewers: [
+            { id: "r1", agent: "claude", model: "opus", status: "completed", sessionKey: "rev-1" },
+            { id: "r2", agent: "codex", model: "gpt", status: "completed", sessionKey: "rev-2" },
+          ],
+          report: clean,
+        },
+      }),
+    );
+    expect(line(model)).toEqual([
+      ["Ticket:complete"],
+      ["Setup:complete"],
+      ["Build:complete"],
+      ["Prepare:complete"],
+      ["Reviewer 1:complete", "Reviewer 2:complete"],
+      ["Consolidation:complete"],
+      ["Verify:running"],
+      ["Ship:not-started~"],
+      ["PR:not-started~"],
+    ]);
+  });
+
   test("historical failures keep only their own error", () => {
     const model = pipelineFlowModel(
       build({

@@ -293,6 +293,53 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("a clean consolidated report skips Address and goes straight to Verify", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.consolidationFindings = "clean";
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const verifying = await advanceUntil(service, read, started.id, "verifying");
+      expect(verifying.error ?? verifying.phase).toBe("verifying");
+      expect(verifying.structuredReview).toMatchObject({
+        reviewSummary: "Merged review.",
+        issues: [],
+        testCoverageGaps: [],
+      });
+      // The single-review path's rule: nothing to address, so no Address turn.
+      expect(verifying.sessions.some((session) => session.phase === "address")).toBe(false);
+      expect(provider.created.some((entry) => entry.phase === "address")).toBe(false);
+      expect(verifying.sessions[verifying.currentSessionIndex]?.phase).toBe("verify");
+      // The next stage opened before the fan-out record was dropped, as on the
+      // Address route.
+      expect(verifying.reviewFanout).toBeUndefined();
+    });
+  });
+
+  test("a consolidated report with only coverage gaps goes to Address", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.consolidationFindings = "coverage-gap";
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      expect(addressing.structuredReview?.issues).toEqual([]);
+      expect(addressing.structuredReview?.testCoverageGaps).toHaveLength(1);
+      expect(addressing.structuredReview?.testCoverageGaps[0]?.reviewModels).toEqual([
+        "claude/opus",
+      ]);
+      expect(addressing.sessions[addressing.currentSessionIndex]?.phase).toBe("address");
+      expect(addressing.reviewFanout).toBeUndefined();
+    });
+  });
+
   test("uses the review preparation model for package creation and consolidation, not fixing", async () => {
     await withPipeline(async ({ service, read, providers }) => {
       const started = await service.start({

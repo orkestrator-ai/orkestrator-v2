@@ -93,6 +93,11 @@ export function reportFor(summary: string, issueTitle?: string): StructuredRevie
   };
 }
 
+const COVERAGE_GAP = {
+  file: "src/app.ts",
+  untestedBehavior: "The inverted branch has no test.",
+};
+
 /**
  * A provider whose answer depends on which session asked.
  *
@@ -154,6 +159,12 @@ export class FanoutProvider implements BuildPipelineProvider {
   missingConsolidationResult = false;
   backgroundWorkLive = false;
   failingConsolidation = false;
+  /**
+   * What the consolidated report finds: one cited issue (the default), nothing
+   * at all, or only a test coverage gap. With `coverage-gap` every reviewer also
+   * reports the gap, so the consolidation has a source to cite.
+   */
+  consolidationFindings: "issue" | "clean" | "coverage-gap" = "issue";
   changingMessages = false;
   /** Every session's transcript content while `changingMessages` is off. */
   contentVersion = 1;
@@ -293,7 +304,10 @@ export class FanoutProvider implements BuildPipelineProvider {
       if (this.consolidationResultCalls <= this.invalidConsolidationResults) {
         return { ...base, value: {} as T };
       }
-      const merged = reportFor("Merged review.", "Consolidated finding");
+      const merged = reportFor(
+        "Merged review.",
+        this.consolidationFindings === "issue" ? "Consolidated finding" : undefined,
+      );
       const sourceId =
         this.consolidationResultCalls <=
         this.invalidConsolidationResults + this.unknownSourceConsolidationResults
@@ -308,13 +322,26 @@ export class FanoutProvider implements BuildPipelineProvider {
             reviewModels: null,
             reviewSourceIds: [sourceId],
           })),
+          testCoverageGaps:
+            this.consolidationFindings === "coverage-gap"
+              ? [
+                  {
+                    ...COVERAGE_GAP,
+                    reviewModels: null,
+                    reviewSourceIds: ["reviewer-1/coverage-gap-1"],
+                  },
+                ]
+              : [],
         } as T,
       };
     }
     if (sessionId.includes("review")) {
+      const report = reportFor(`Report from ${sessionId}`, "Reviewer finding");
       return {
         ...base,
-        value: reportFor(`Report from ${sessionId}`, "Reviewer finding") as T,
+        value: (this.consolidationFindings === "coverage-gap"
+          ? { ...report, testCoverageGaps: [COVERAGE_GAP] }
+          : report) as T,
       };
     }
     const phase = this.sessionPhases.get(sessionId);

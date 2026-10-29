@@ -54,6 +54,7 @@ import {
   attachBeforeDispatch,
   elapsedSince,
   elapsedSinceLatest,
+  stageAfterReview,
 } from "./build-pipeline-service-helpers.js";
 import {
   reviewValidationDiscoveryPrompt,
@@ -1401,18 +1402,23 @@ export class BuildPipelineSupervisor {
    * Applies one pass of the multi-model review stage.
    *
    * The fan-out reports what happened rather than mutating the phase itself,
-   * so that the transition into `addressing` stays where every other stage
-   * transition is, and a failure is raised the same way any other stage's is.
+   * so that the transition into `addressing` or `verifying` stays where every
+   * other stage transition is, and a failure is raised the same way any other stage's is.
    */
   async advanceReviewFanout(pipeline: BuildPipeline): Promise<void> {
     const step: ReviewFanoutStep = await this.reviewFanout().advance(pipeline);
     if (step.kind === "working") return;
     if (step.kind === "failed") throw new Error(step.error);
-    // The address stage opens first, and only then is the record dropped.
+    const report = pipeline.structuredReview ?? pipeline.reviewFanout?.report;
+    if (!report) throw new Error("The consolidated review report is missing");
+    // The consolidated report routes exactly as a single reviewer's does:
+    // Address when it has findings, otherwise straight to Verify.
+    const next = stageAfterReview(report);
+    // The next stage opens first, and only then is the record dropped.
     // Doing it the other way round leaves a window in which the phase is still
     // `reviewing` with nothing to drive it, which the branch above would have
     // to recover from by re-running every reviewer.
-    await this.startStage(pipeline, "address", "addressing");
+    await this.startStage(pipeline, next.sessionPhase, next.phase);
     // Everything downstream reads `structuredReview`, which the fan-out has
     // already written. Dropping the record keeps the snapshot from carrying a
     // completed fan-out through the rest of the run — and makes a later review
@@ -2294,12 +2300,8 @@ export class BuildPipelineSupervisor {
     pipeline.structuredReview = report;
     retainRoundReviewReport(pipeline, session, report);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
-    if (report.issues.length || report.testCoverageGaps.length) {
-      await this.startStage(pipeline, "address", "addressing");
-      await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
-      return;
-    }
-    await this.startStage(pipeline, "verify", "verifying");
+    const next = stageAfterReview(report);
+    await this.startStage(pipeline, next.sessionPhase, next.phase);
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
 }

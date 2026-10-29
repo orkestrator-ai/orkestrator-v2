@@ -4,7 +4,7 @@ Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
-2026-10-28).
+2026-10-28), and the shared review routing (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -53,6 +53,13 @@ a transcript.
   Address, Fix, conflict resolution and extra passes are never drawn ahead and
   never dimmed; they appear when they start. A finished or cancelled pipeline
   has nothing ahead.
+- **After review.** One rule routes both review paths (`stageAfterReview` in
+  `build-pipeline-service-helpers.ts`): the accepted report, a single
+  reviewer's or the panel's consolidated one, goes to Address when it has
+  issues or test coverage gaps, and straight to Verify when it has neither. So
+  a clean pass is followed by Verify on the line, with no Address node. The
+  fan-out opens the next stage before it drops `reviewFanout`, so a crash in
+  between never leaves `reviewing` with nothing to drive it.
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers
   with no session yet are nodes too. Once the pass is retired, each reviewer

@@ -18,7 +18,7 @@ the item ID (`gh pr list --search "graphs 107"`).
 | --- | --- | --- | --- | --- | --- |
 | 001 | [001-pipeline-reviewers-read-only.md](001-pipeline-reviewers-read-only.md) | 0 | not-started | — | Build Pipeline reviewers get plan mode and `readOnly`; a reusable git guard refuses commits; acceptance checks become a list per kind. |
 | 002 | [002-iteration-limit.md](002-iteration-limit.md) | 0 | in-progress | — | Coordinator `launch_build` uses `MAX_BUILD_PIPELINE_ITERATIONS` instead of a literal 20. |
-| 003 | [003-panel-review-routing.md](003-panel-review-routing.md) | 0 | not-started | — | A clean consolidated report skips Address on the panel path, as on the single-review path. |
+| 003 | [003-panel-review-routing.md](003-panel-review-routing.md) | 0 | in-progress | — | A clean consolidated report skips Address on the panel path, as on the single-review path. |
 | 004 | [004-typed-address-report.md](004-typed-address-report.md) | 0 | not-started | — | Address submits a `fix-result`; Verify reads it instead of the last assistant text, with a fallback for old runs. |
 | 005 | [005-reviewer-lenses.md](005-reviewer-lenses.md) | 0 | not-started | — | Per-reviewer focus (`lens`) in Multi Review and the pipeline panel; editable presets in Settings. |
 | 006 | [006-pipeline-stage-instructions.md](006-pipeline-stage-instructions.md) | 0 | not-started | — | `BuildStepConfig.instructions` (≤ 16 KiB) rendered as a framed section in each stage prompt. |
@@ -27,7 +27,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 
 - [ ] The pipeline review is read-only on every provider that supports it. The guard refuses a review that commits.
 - [x] The coordinator cannot request more iterations than the protocol accepts.
-- [ ] Clean reports skip Address on both review paths.
+- [x] Clean reports skip Address on both review paths.
 - [ ] Verify reads a typed Address report for new runs, and still reads old runs.
 - [ ] Lenses and per-stage instructions round-trip through launch, record, restart, the coordinator tools and the CLI. Lens presets can be edited in Settings, and editing one leaves recorded reviews unchanged.
 - [ ] `build-pipeline-view.md`, `review-preparation.md` and `coordinator.md` match the new behaviour.

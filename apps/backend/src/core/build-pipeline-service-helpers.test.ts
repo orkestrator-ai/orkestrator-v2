@@ -28,6 +28,7 @@ import {
   legacyTranscriptFingerprint,
   normalizeTranscriptFingerprint,
   resumePromptFor,
+  stageAfterReview,
   transcriptFingerprint,
 } from "./build-pipeline-service-helpers.js";
 
@@ -87,6 +88,24 @@ const cleanReview: StructuredReviewReport = {
   summaryOfChange: "Implemented the task.",
   reviewSummary: "No findings.",
 };
+
+describe("stageAfterReview", () => {
+  const issue = {} as StructuredReviewReport["issues"][number];
+  const gap = { file: "src/app.ts", untestedBehavior: "The error branch." };
+  test.each([
+    ["no findings", "Verify", [], []],
+    ["issues", "Address", [issue], []],
+    ["only coverage gaps", "Address", [], [gap]],
+  ] as const)("routes a report with %s to %s", (_name, stage, issues, testCoverageGaps) => {
+    expect(
+      stageAfterReview({ issues: [...issues], testCoverageGaps: [...testCoverageGaps] }),
+    ).toEqual(
+      stage === "Verify"
+        ? { sessionPhase: "verify", phase: "verifying" }
+        : { sessionPhase: "address", phase: "addressing" },
+    );
+  });
+});
 
 describe("conflict resolution resume prompt", () => {
   test("defers validation choices to repository instructions", () => {

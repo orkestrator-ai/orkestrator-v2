@@ -369,7 +369,8 @@ reviewer IDs.
   report keeps model labels, not source IDs. Multi Review stores it as
   `consolidationOverlap` beside `consolidatedReport` and clears both together.
   A Build Pipeline stores it as `reviewOverlap` on its Consolidation session,
-  because the fan-out record is dropped once addressing starts, and keeps it
+  because the fan-out record is dropped once the next stage (Address, or
+  Verify for a clean report) starts, and keeps it
   when report copies are discarded. Per run it counts the reviewers, the
   source findings, the source findings that were cited (the rest were
   dropped), the consolidated findings, and those only one reviewer

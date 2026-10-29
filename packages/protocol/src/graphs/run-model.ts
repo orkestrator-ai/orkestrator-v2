@@ -23,6 +23,7 @@ import type { PipelineTranscriptReference } from "../build-pipeline.js";
 import type { NativeAgentExecutionPolicy } from "../native-agent.js";
 import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan } from "./plan.js";
+import type { GraphMockRunOptions } from "./mock-pins.js";
 import type { GraphEnforcementTier, GraphScalarValue } from "./template-model.js";
 import type { GraphErrorCause } from "./types.js";
 import type { GraphAgentSessionState } from "./run-agent-session.js";
@@ -191,6 +192,8 @@ export interface GraphRun {
   status: GraphRunStatus;
   /** A mock run (P2.13): canned outputs, no provider sessions, no side effects. */
   mock: boolean;
+  /** Mock runs only: the effective pins and step delay (item 213, `graphs/mock-pins.ts`). */
+  mockOptions?: GraphMockRunOptions;
   /** Bounded history, superseded activations included. */
   activations: NodeActivation[];
   /** At most {@link GRAPH_RUN_BOUNDS.maxRewinds}. */

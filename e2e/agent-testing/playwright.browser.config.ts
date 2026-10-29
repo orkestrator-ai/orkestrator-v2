@@ -15,6 +15,7 @@ export default defineConfig({
     "design-canvas.spec.ts",
     "graph-designer.spec.ts",
     "graph-designer-editing.spec.ts",
+    "graph-designer-mock.spec.ts",
     "design-container-export.spec.ts",
     "design-live.spec.ts",
     "design-resume-clients-live.spec.ts",

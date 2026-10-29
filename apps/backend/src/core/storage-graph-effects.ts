@@ -19,9 +19,11 @@ const MAX_ERROR_CHARS = 2_000;
 /**
  * `intended`: recorded before the effect, not yet known to have happened.
  * `done`: happened; its data is what a retry or restart replays. `failed`:
- * did not happen (the next attempt tries again).
+ * did not happen (the next attempt tries again). `simulated`: a mock run's
+ * "would have run" record (item 213): the effect never happens, and its data
+ * (`{ wouldRun }`, `GraphMockWouldRun`) says what it would have done.
  */
-export type GraphEffectState = "intended" | "done" | "failed";
+export type GraphEffectState = "intended" | "done" | "failed" | "simulated";
 
 /** One side effect of a run's system nodes (item 207), journaled around the effect. */
 export interface GraphEffectRecord {
@@ -104,7 +106,10 @@ export function isGraphEffectRecord(value: unknown): value is GraphEffectRecord 
     (GRAPH_SYSTEM_ACTIONS as readonly unknown[]).includes(value.action) &&
     typeof value.nodeId === "string" &&
     typeof value.activation === "string" &&
-    (value.state === "intended" || value.state === "done" || value.state === "failed") &&
+    (value.state === "intended" ||
+      value.state === "done" ||
+      value.state === "failed" ||
+      value.state === "simulated") &&
     Number.isSafeInteger(value.attempts) &&
     typeof value.owner === "string" &&
     typeof value.intendedAt === "string" &&
@@ -247,6 +252,56 @@ export class GraphEffectsRepository {
   }
 
   /**
+   * Records a mock run's "would have run" effect (state `simulated`, settled
+   * at once). Idempotent per key: a record already there is returned as is,
+   * so a restarted mock activation does not record twice. Refused for a run
+   * that is not a mock run.
+   */
+  async recordSimulatedGraphEffect(
+    intent: GraphEffectIntent & { data: Record<string, unknown> },
+  ): Promise<GraphEffectRecord> {
+    if (!isGraphRunId(intent.runId)) {
+      throw new GraphStorageError("run-not-found", "Invalid run id");
+    }
+    checkKey(intent.key);
+    checkData(intent.data);
+    return this.enqueue(async () => {
+      const run = await this.repos.graphRuns.getGraphRun(intent.runId);
+      if (!run) throw new GraphStorageError("run-not-found", "The graph run does not exist");
+      if (!run.mock) {
+        throw new GraphStorageError("invalid-run", "Only a mock run records simulated effects");
+      }
+      await this.assertRunWritable(intent.runId);
+      return this.context.updateStoreRow<GraphEffectRecord>(
+        this.graphArtifactsFile(),
+        effectRowKey(intent.runId, intent.key),
+        (current) => {
+          if (isGraphEffectRecord(current) && current.key === intent.key) {
+            return { result: current };
+          }
+          const now = nowIso();
+          const record: GraphEffectRecord = {
+            effectFormatVersion: GRAPH_EFFECT_FORMAT_VERSION,
+            id: graphEffectRowId(intent.key),
+            runId: intent.runId,
+            key: intent.key,
+            action: intent.action,
+            nodeId: intent.nodeId,
+            activation: intent.activation,
+            state: "simulated",
+            attempts: 1,
+            owner: intent.owner,
+            intendedAt: now,
+            settledAt: now,
+            data: intent.data,
+          };
+          return { result: record, value: record };
+        },
+      );
+    });
+  }
+
+  /**
    * Settles a recorded intent. `done` keeps `data` (merged over what the
    * intent recorded) for replays; `failed` keeps a bounded error. A `done`
    * effect never changes again.
@@ -295,5 +350,9 @@ export class GraphEffectsRepository {
 /** The effect journal's entry points code outside the storage files calls. */
 export type GraphEffectsStorage = Pick<
   GraphEffectsRepository,
-  "getGraphEffect" | "listGraphEffects" | "beginGraphEffect" | "settleGraphEffect"
+  | "getGraphEffect"
+  | "listGraphEffects"
+  | "beginGraphEffect"
+  | "settleGraphEffect"
+  | "recordSimulatedGraphEffect"
 >;

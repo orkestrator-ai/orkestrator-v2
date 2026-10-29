@@ -15,6 +15,7 @@ import {
   GraphNodeExecutionFields,
   GraphSystemEditor,
 } from "./GraphKindEditors";
+import { GraphMockPinsEditor } from "./GraphMockPinsEditor";
 import { GraphPredicateEditor } from "./GraphPredicateEditor";
 import { GraphInputsEditor, GraphOutputsEditor } from "./GraphPortsEditor";
 import { GraphPromptEditor } from "./GraphPromptEditor";
@@ -26,19 +27,21 @@ import { CommitField, EditorTabs, FormSection, JsonField, TextField } from "./gr
 
 /**
  * The editable inspector of one node (report §7.2): its id, label and
- * description, then the form of its kind. An agent node's form has four tabs
- * (Prompt, Inputs/Outputs, Capabilities, Execution). The header's buttons are
+ * description, then the form of its kind. An agent node's form has five tabs
+ * (Prompt, Inputs/Outputs, Capabilities, Execution, Mock run); system and
+ * human nodes end with their mock-run pins (item 213). The header's buttons are
  * the keyboard equivalents of drawing on the canvas: "Connect to…" and
  * "Loop…" (also C and L on a focused node), and Delete.
  */
 
-type AgentTab = "prompt" | "ports" | "capabilities" | "execution";
+type AgentTab = "prompt" | "ports" | "capabilities" | "execution" | "mock";
 
 const AGENT_TABS: ReadonlyArray<{ value: AgentTab; label: string }> = [
   { value: "prompt", label: "Prompt" },
   { value: "ports", label: "Inputs/Outputs" },
   { value: "capabilities", label: "Capabilities" },
   { value: "execution", label: "Execution" },
+  { value: "mock", label: "Mock run" },
 ];
 
 function AgentEditor({ node }: { node: GraphAgentNode }) {
@@ -55,6 +58,7 @@ function AgentEditor({ node }: { node: GraphAgentNode }) {
       ) : null}
       {tab === "capabilities" ? <GraphCapabilitiesEditor node={node} /> : null}
       {tab === "execution" ? <GraphExecutionEditor node={node} /> : null}
+      {tab === "mock" ? <GraphMockPinsEditor node={node} /> : null}
     </div>
   );
 }
@@ -218,6 +222,7 @@ export function GraphNodeEditor({
           <GraphOutputsEditor node={node} />
           <GraphNodeExecutionFields node={node} />
           <WhenEditor node={node} />
+          <GraphMockPinsEditor node={node} />
         </>
       ) : null}
       {node.kind === "gate" ? (
@@ -244,6 +249,7 @@ export function GraphNodeEditor({
           />
           <GraphNodeExecutionFields node={node} />
           <WhenEditor node={node} />
+          <GraphMockPinsEditor node={node} />
         </>
       ) : null}
       {node.kind === "subgraph" ? (

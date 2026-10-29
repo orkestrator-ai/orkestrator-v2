@@ -78,6 +78,7 @@ import {
   type GraphRun,
   type GraphRunLimitViolation,
 } from "./run-model.js";
+import { checkGraphMockRunOptions } from "./mock-pins.js";
 import { GRAPH_ENFORCEMENT_TIERS } from "./template-model.js";
 import { GRAPH_AGENT_SESSION_FIELDS, checkGraphAgentSessionFields } from "./run-agent-session.js";
 import { GRAPH_ERROR_CAUSES } from "./types.js";
@@ -347,6 +348,7 @@ const RUN_FIELDS = [
   "bindings",
   "status",
   "mock",
+  "mockOptions",
   "activations",
   "rewinds",
   "loopIterations",
@@ -859,6 +861,13 @@ export function validateGraphRun(
   checkBindings(value.bindings, "bindings", errors);
   checkEnum(value.status, "status", errors, GRAPH_RUN_STATUSES);
   if (typeof value.mock !== "boolean") errors.add("mock", "type", "Expected a boolean");
+  if (value.mockOptions !== undefined) {
+    if (value.mock !== true) {
+      errors.add("mockOptions", "not_applicable", "Only a mock run carries mock options");
+    } else {
+      checkGraphMockRunOptions(value.mockOptions, "mockOptions", errors);
+    }
+  }
 
   const rewindIds = new Set<string>();
   if (

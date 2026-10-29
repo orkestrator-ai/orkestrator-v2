@@ -29,6 +29,7 @@ unless noted:
 | Built-ins (108) | `builtins/` | The three built-in templates, pinned to their engines by tests. Looped Review's engine is retired (`engineStatus: "retired"`). |
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
+| Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
 
 ## The Graphs designer (items 110 and 212)
@@ -249,6 +250,95 @@ loop while connecting). The real-stack paths are
 `graph-designer-editing.spec.ts` (212: the design bake-off built from a blank
 canvas, taint acknowledged, compiled clean, saved, rehydrated after a reload,
 and a lost save race saved as a copy), both in the browser suite.
+
+## Mock runs (item 213)
+
+A mock run tests a graph's control flow for free (report §7.5): it runs on the
+same scheduler as a real run (admission, retries, `onFailure`, loops, the
+record's bounds; gates and merges are the live executors), but its agent,
+system and human nodes are answered by mock executors registered with
+`{ mock: true }`, and the registry never lets a mock run fall back to a live
+`agent` or `system` executor. `GraphRun.mock` is true and
+`GraphRun.mockOptions` freezes the effective pins and step delay.
+
+**Answers.** Each output port of an agent or system node takes, in order: the
+activation's pin, else the type's `example`, else a value generated from its
+schema (`graphSchemaSample`, deterministic over the 102 subset: `const`, then
+`enum`, the first non-null `anyOf` branch, every object property, one array
+element, name-driven strings so format checks pass, `minimum` or 1, `true`).
+`graphMockValue` fits built-in values to the port (a decision's `choices`, the
+ticket input's criterion ids for a verdict, the run's commit for `headRef`)
+and checks them with `validateGraphArtifactValue`; a generated value that
+fails falls back to the example. Values are stored through the artifact store,
+so they pass the same validation as real ones; a pinned value that does not
+fails the activation with `invalid-result`.
+
+- *Agents* create no session and report no tokens, policy, baseline or guard
+  result: guards are no-ops on mock nodes. A writing agent's `workspace@1`
+  output is a fake commit, `graphMockWorkspace` (a deterministic SHA from the
+  run, activation and port on top of the input commit; nothing touches git).
+  A mock agent never asks a question.
+- *System nodes* never run an action handler. `workspace@1` passes the input
+  commit through, `review-package@2` is an unwritten mock file
+  (`GraphArtifactStore.putMockReference`, which `verify` accepts for mock
+  runs only), `pr-result@1` says no pull request was opened, and
+  `wait-for-checks` answers its pinned or example `check-summary@1` at once.
+  An action with `sideEffect` records "would have run" in the effect journal:
+  state `simulated`, key `would-run:<activation key>`, data
+  `{ wouldRun: GraphMockWouldRun }` (action, label, a one-line summary, the
+  parameters with defaults, facts such as branch, commit, target branch,
+  ticket move or recipient, and the input and output artifact ids).
+  `graph_run_effects {runId}` lists a run's effect rows.
+- *Human nodes* answer by themselves (approve; an `edit` form forwards the
+  value unedited; a `choose` form takes its first option), so a mock run
+  completes unattended. A pin takes another outlet (`{outlet, outputs?}`, the
+  edited value of an `edit` form) or `pause`s: the activation is handed to
+  the live human executor (item 208) and waits for a person; a launch with a
+  `pause` pin is refused while no human executor is registered.
+
+**Pins** (`GraphMockPins`: node id → sequence). The *n*-th activation of a
+node's branch (retries, iterations and restarts counted in record order)
+takes the *n*-th pin; the last repeats. A pin is `"example"`, `"generated"`,
+`{outputs: {port: value | null}}` (custom JSON; `null` leaves an optional port
+unproduced), `{fail: cause, message?}`, or, for human nodes, `{outlet,
+outputs?}` and `"pause"`. Gates and merges take none. Pins are stored on the
+template (`mockPins`, designer data outside the digest, like `layout`) and a
+launch's `pins` replace them node by node; `graphMockPinIssues` checks them
+against the ports (codes `mock-pin-unknown-node`, `mock-pin-node-kind`,
+`mock-pin-form`, `mock-pin-unknown-port`, `mock-pin-required-port`,
+`mock-pin-value`, `mock-pin-outlet`). "Verify: fail, fail, pass" is three
+custom verdicts on `verify`; the loop converges on iteration 3.
+
+**Launching** (`graph_run_mock {ref, projectId, environmentId?, inputs?,
+params?, roles?, pins?, panel?, stepMs?}`, `GraphMockRuns.launch`). The
+stored template is compiled under the project's ceiling; compile errors and
+built-ins (`engine`, duplicate first) are refused, but trust and pending
+acknowledgements are not needed (nothing runs). Unbound roles get
+placeholders (`claude`, model `mock`; panel roles `panel` of them, default
+2), missing run inputs their type's example. Without `environmentId` the run
+is environment-less: it never provisions an environment and starts
+`running`; executors see `environmentId: ""`. With one, it is listed and
+removed with that environment, and still touches nothing. A mock run holds no
+workspace locks (`graphRunLockedWorkspace`), so it never blocks a real run.
+`stepMs` (0–10,000) makes each mock activation report `running` for that long
+first, so the run view shows it moving. Retention: each environment-less
+launch keeps the newest 20 finished environment-less mock runs of the
+project (`deleteEnvironmentlessGraphRun`); a deleted project's are cancelled
+or deleted, and orphans are swept at startup. `usage.agentSessions` still
+counts admitted agent activations (the run's budget), not provider sessions.
+
+**Designer.** The header's **Mock run** button saves an unsaved or new draft
+first, launches the stored template with `stepMs` 1,000 and calls
+`requestGraphRunView({runId, projectId, environmentId, mock: true})`
+(`lib/graph-run-navigation.ts`); the run view (item 211) registers
+`onGraphRunViewRequested` and reads `takePendingGraphRunView()` when it
+mounts. Built-ins are disabled until duplicated. In the inspector, agent nodes
+have a **Mock run** tab and system and human nodes a **Mock run** section:
+the pinned-sequence editor (`GraphMockPinsEditor`), a list of runs, each one
+of example, generated (with a preview), custom JSON (starting from the
+examples), fail (with a cause) or, for human nodes, an outlet or a pause;
+`graphMockPinIssues` messages show under each run. Renaming or deleting a node
+moves or drops its pins.
 
 ## Canvas library decision (spike, 2026-10-29)
 

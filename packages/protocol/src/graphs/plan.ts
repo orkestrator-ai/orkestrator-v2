@@ -429,13 +429,14 @@ export function verifyGraphPlanDigest(plan: CompiledGraphPlan): boolean {
 }
 
 /**
- * The template's own digest: canonical JSON without `layout`, with nodes,
- * edges and loops sorted by id and types by reference, so reordering them
- * or moving nodes on the canvas keeps it. Independent of compile options, so
+ * The template's own digest: canonical JSON without the designer data
+ * (`layout`, `mockPins`), with nodes, edges and loops sorted by id and types
+ * by reference, so reordering them, moving nodes on the canvas or pinning
+ * mock outputs keeps it. Independent of compile options, so
  * it suits trust records (item 109).
  */
 export function graphTemplateDigest(template: GraphTemplateV1): string {
-  const { layout: _layout, ...rest } = template;
+  const { layout: _layout, mockPins: _mockPins, ...rest } = template;
   const byId = <T extends { id: string }>(list: readonly T[] | undefined) =>
     list === undefined ? undefined : [...list].sort((a, b) => compareStrings(a.id, b.id));
   const sorted = graphPlainJson({

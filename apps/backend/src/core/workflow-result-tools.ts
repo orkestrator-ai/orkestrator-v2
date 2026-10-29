@@ -453,20 +453,42 @@ async function brokerAttempt(
   scope: WorkflowResultCallerScope,
   capability: string,
   kind?: WorkflowResultKind,
+  resultKey?: string,
 ): Promise<string | null> {
   const authorized = await workflowResults.authenticateCapability(capability);
-  if (
-    !authorized ||
-    authorized.environmentId !== scope.environmentId ||
-    authorized.projectId !== scope.projectId
-  ) {
+  let key: string | undefined;
+  if (authorized) {
+    if (
+      authorized.environmentId !== scope.environmentId ||
+      authorized.projectId !== scope.projectId
+    ) {
+      return null;
+    }
+    key = authorized.workflowResultKey;
+  } else if (resultKey !== undefined) {
+    // A graph activation on the broker presents one capability for every
+    // output slot (item 204): it authorizes the slot the call names.
+    const activation =
+      typeof workflowResults.authenticateActivationCapability === "function"
+        ? await workflowResults.authenticateActivationCapability(capability)
+        : null;
+    if (
+      !activation ||
+      activation.environmentId !== scope.environmentId ||
+      activation.projectId !== scope.projectId ||
+      !activation.workflowResultKeys.includes(resultKey)
+    ) {
+      return null;
+    }
+    key = resultKey;
+  } else {
     return null;
   }
-  const binding = await workflowResults.binding(scope, authorized.workflowResultKey);
+  const binding = await workflowResults.binding(scope, key);
   if (binding?.provider !== "opencode" || (kind !== undefined && binding.kind !== kind)) {
     return null;
   }
-  return authorized.workflowResultKey;
+  return key;
 }
 
 /**
@@ -541,7 +563,13 @@ export function registerWorkflowResultBrokerTools(
       },
       async ({ resultKey, capability, result, validatedDigest }) => {
         try {
-          const expectedKey = await brokerAttempt(workflowResults, scope, capability, kind);
+          const expectedKey = await brokerAttempt(
+            workflowResults,
+            scope,
+            capability,
+            kind,
+            resultKey,
+          );
           if (!expectedKey) return resultResponse(capabilityDenied());
           if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
           return resultResponse(
@@ -578,7 +606,13 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability, result }) => {
       try {
-        const expectedKey = await brokerAttempt(workflowResults, scope, capability);
+        const expectedKey = await brokerAttempt(
+          workflowResults,
+          scope,
+          capability,
+          undefined,
+          resultKey,
+        );
         if (!expectedKey) return resultResponse(capabilityDenied());
         if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
         return resultResponse(await workflowResults.validate(scope, resultKey, result));
@@ -608,7 +642,13 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability }) => {
       try {
-        const expectedKey = await brokerAttempt(workflowResults, scope, capability);
+        const expectedKey = await brokerAttempt(
+          workflowResults,
+          scope,
+          capability,
+          undefined,
+          resultKey,
+        );
         if (!expectedKey) return resultResponse(capabilityDenied());
         if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
         const status = await workflowResults.status(scope, resultKey);

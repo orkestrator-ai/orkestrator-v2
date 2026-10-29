@@ -27,9 +27,11 @@ import {
   GRAPH_RUN_INPUT_PRODUCER,
   graphNodeBranches,
   isGraphRunTerminal,
+  replaceGraphActivation,
   type GraphRun,
   type GraphRunBindings,
   type GraphRunTemplateRef,
+  type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
 import { GraphTypeLibrary, validateGraphArtifactValue } from "@orkestrator/protocol/graphs/types";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
@@ -315,6 +317,32 @@ export class GraphRunService implements KeyedWorkflowOwner {
 
   // ------------------------------------------------------------ reads
 
+  /**
+   * The run and admitted activation whose current request owns a result slot
+   * key, from the stored record (an activation's tools resolve their
+   * activation this way; item 204). Null when no admitted activation of a run
+   * in the environment owns it.
+   */
+  async activationForResultKey(
+    environmentId: string,
+    resultKey: string,
+  ): Promise<{ run: GraphRun; activation: NodeActivation } | null> {
+    const owner = this.resultKeys.owner(resultKey);
+    const indexed = owner ? await this.storage.graphRuns.getGraphRun(owner.runId) : null;
+    const candidates =
+      indexed && GraphRunResultKeys.find(indexed, resultKey)
+        ? [indexed]
+        : await this.storage.graphRuns.listGraphRuns(environmentId);
+    for (const run of candidates) {
+      if (run.environmentId !== environmentId) continue;
+      const found = GraphRunResultKeys.find(run, resultKey);
+      if (!found) continue;
+      const activation = run.activations.find((entry) => entry.key === found.activationKey);
+      if (activation) return { run, activation };
+    }
+    return null;
+  }
+
   async get(runId: string): Promise<GraphRun | null> {
     const run = await this.storage.graphRuns.getGraphRun(runId);
     if (run) this.noteRecord(run);
@@ -506,6 +534,55 @@ export class GraphRunService implements KeyedWorkflowOwner {
     return run;
   }
 
+  /**
+   * A locked read-modify-write of one admitted activation from outside a pass:
+   * an agent's `ask_human` question and its answer (item 204; 208 shares the
+   * answer path). `change` returns the next activation, or null for nothing to
+   * do; it may not move the activation's state, outputs or identity, and an
+   * activation that is no longer admitted is refused. The run is then woken to
+   * observe the activation. Returns the stored activation.
+   */
+  async updateActivation(
+    runId: string,
+    activationKey: string,
+    change: (activation: NodeActivation, run: GraphRun) => NodeActivation | null,
+  ): Promise<NodeActivation> {
+    let updated: NodeActivation | undefined;
+    await this.mutate(runId, (current) => {
+      const activation = current.activations.find((entry) => entry.key === activationKey);
+      if (!activation) {
+        throw new GraphRunServiceError("not-found", "The run has no such activation");
+      }
+      if (!isGraphActivationAdmitted(activation.state)) {
+        throw new GraphRunServiceError(
+          "invalid-state",
+          `A ${activation.state} activation cannot be changed`,
+        );
+      }
+      const next = change(activation, current);
+      if (!next) {
+        updated = activation;
+        return null;
+      }
+      if (
+        next.key !== activation.key ||
+        next.state !== activation.state ||
+        JSON.stringify(next.outputs) !== JSON.stringify(activation.outputs)
+      ) {
+        throw new GraphRunServiceError(
+          "invalid-state",
+          "Only a pass moves an activation or records its outputs",
+        );
+      }
+      const replaced = replaceGraphActivation(current, activationKey, () => next);
+      if (!replaced.ok) throw new GraphRunServiceError("invalid-state", replaced.message);
+      updated = next;
+      return replaced.run;
+    });
+    this.requestObservation(runId, activationKey);
+    return updated!;
+  }
+
   /** Runs a pass now, under the run's lock (explicit commands, tests and benchmarks). */
   async advanceNow(runId: string): Promise<GraphRun | null> {
     return this.pass(runId, { signal: this.stopController.signal });
@@ -617,7 +694,13 @@ export class GraphRunService implements KeyedWorkflowOwner {
       return null;
     }
     const code = error instanceof GraphStorageError ? error.code : "error";
-    if (error instanceof GraphStorageError && error.limit !== undefined) {
+    // A revision conflict carries the revisions as limit/actual, but it is a
+    // lost race, not a bound: the next pass starts from the stored record.
+    if (
+      error instanceof GraphStorageError &&
+      error.limit !== undefined &&
+      error.code !== "revision-conflict"
+    ) {
       const failed = await this.failOnBound(runId, error).catch(() => null);
       if (failed) return failed;
     }

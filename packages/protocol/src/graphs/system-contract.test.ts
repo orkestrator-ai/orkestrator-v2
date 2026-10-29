@@ -61,7 +61,7 @@ describe("graph output result instruction", () => {
         noun: "review report",
         submitTool: "submit_report",
         validateTool: "validate_report",
-        statusTool: "result_status",
+        statusTool: "get_workflow_result_status",
         resultKey: "k",
         progress: "",
       }),
@@ -89,7 +89,7 @@ describe("graph output result instruction", () => {
       '- `brief` (design brief, optional): check it with `validate_brief` and submit it with `submit_brief`, resultKey "b".',
     );
     expect(text).toContain(
-      'call `result_status` with the output\'s resultKey and capability "cap"',
+      'call `get_workflow_result_status` with the output\'s resultKey and capability "cap"',
     );
     expect(text).toContain("`report_progress` with an output's resultKey");
     expect(text).toContain("(`brief`: `risks`)");

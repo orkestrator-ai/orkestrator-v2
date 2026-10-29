@@ -604,6 +604,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
+      ...(options.workflowResultKey !== undefined
+        ? { workflowResultKey: options.workflowResultKey }
+        : {}),
+      ...(options.workflowResultSlots !== undefined
+        ? { workflowResultSlots: options.workflowResultSlots }
+        : {}),
+      ...(options.workflowResultExtraTools !== undefined
+        ? { workflowResultExtraTools: options.workflowResultExtraTools }
+        : {}),
     });
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
     const parts = openCodePromptParts(shapedPrompt, options);
@@ -649,7 +658,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const workflowTool = options.workflowResultTool;
       const reviewEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
       // Grant inside the lock; another provider may have owned the preceding turn.
-      await this.workflowResults.begin(sessionId, options.requestId, workflowTool);
+      await this.workflowResults.begin(
+        sessionId,
+        options.requestId,
+        workflowTool,
+        workflowTool ? options.workflowResultExtraTools : undefined,
+      );
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt, options.requestId);
       this.actionRetry.beginTurn(sessionId);

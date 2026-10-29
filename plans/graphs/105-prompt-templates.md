@@ -41,7 +41,7 @@ Node prompts are user templates with no executable logic, rendered behind a lock
 ## Done when
 
 - [x] Prompt templates are merged with tests and used by [107](107-compiler.md).
-- [ ] Prompt templates are used by [204](204-agent-node-executor.md).
+- [x] Prompt templates are used by [204](204-agent-node-executor.md).
 
 ## Notes
 
@@ -196,6 +196,16 @@ that every case produces its code. Three codes had no test before: `prompt-templ
 (`{{{a}}}`), `prompt-template-invalid-tag` (`{{a b}}`) and `prompt-value-missing`. All codes are
 reachable; none removed.
 
+**2026-10-29 · Used by 204.** The agent executor renders every activation through
+`renderGraphNodePrompt` (`graph-agent-prompt.ts`), with built-in prompt text from today's builders
+(`graph-agent-builtins.ts`; `pull-request-description` and `resolve-conflicts` bind the new push-free
+`pullRequestDescriptionPrompt` and `resolveConflictsLocallyPrompt`). Changed here for 204:
+`GRAPH_RESULT_STATUS_TOOL` is the real `get_workflow_result_status` (106's names were provisional),
+`graphNodeResultSlots` skips `workspace@N` outputs (the runtime fills them from Git; no tool is
+minted), and `renderGraphNodePrompt`/`graphSystemContract` take `resultTools: "broker"` for
+OpenCode's generic `submit_graph_output`/`validate_workflow_result`. The registry's `backend`
+strings name the push-free builders. The Done-when box is ticked.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -204,3 +214,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Template engine, variables, five render modes in shared evidence frames, size estimator with bound tests, lints, built-in prompt registry, system contract and `renderGraphNodePrompt`; framing, unattended policy and result-instruction pieces moved to the protocol. · Work and tests done; the Done-when box waits for 107/204 and the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 runs the lints and size estimate; Done-when split, 107 half ticked. · 204 half open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Per-code prompt diagnostic coverage table. · 204 half of Done-when still open.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 204 renders agent prompts through `renderGraphNodePrompt`; status tool, workspace slots and broker tools settled for it. · complete; awaiting PR

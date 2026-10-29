@@ -79,6 +79,7 @@ import {
   type GraphRunLimitViolation,
 } from "./run-model.js";
 import { GRAPH_ENFORCEMENT_TIERS } from "./template-model.js";
+import { GRAPH_AGENT_SESSION_FIELDS, checkGraphAgentSessionFields } from "./run-agent-session.js";
 import { GRAPH_ERROR_CAUSES } from "./types.js";
 
 /** Errors reported per guard call. */
@@ -482,8 +483,10 @@ function checkSession(value: unknown, path: string, errors: FieldErrorCollector)
     "tokenCount",
     "cacheReadTokens",
     "transcript",
+    ...GRAPH_AGENT_SESSION_FIELDS,
   ];
   if (!checkObject(value, path, fields, errors)) return;
+  checkGraphAgentSessionFields(value, path, errors);
   checkEnum(value.agent, joinPath(path, "agent"), errors, AGENT_PLATFORMS);
   checkText(value.model, joinPath(path, "model"), errors, B.maxShortTextChars);
   checkText(value.effort, joinPath(path, "effort"), errors, B.maxShortTextChars);

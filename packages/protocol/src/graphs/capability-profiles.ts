@@ -646,7 +646,7 @@ export function graphGrantedActionNames(actions: GraphGrantedActions): string[] 
     ...new Set([
       ...actions.submit.map((port) => `submit_${port}`),
       ...actions.validate.map((port) => `validate_${port}`),
-      "result_status",
+      "get_workflow_result_status",
       ...(actions.reportProgress.length > 0 ? ["report_progress"] : []),
       ...(actions.readArtifact ? ["read_artifact"] : []),
       ...(actions.askHuman ? ["ask_human"] : []),

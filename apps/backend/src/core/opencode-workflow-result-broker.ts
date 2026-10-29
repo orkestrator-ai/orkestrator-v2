@@ -17,6 +17,7 @@ import {
   isOpenCodeWorkflowResultToolName,
   openCodeWorkflowResultDenyPermissionRules,
   openCodeWorkflowResultPermissionRules,
+  openCodeWorkflowResultTurnProblem,
 } from "./opencode-provider-helpers.js";
 import { openCodeMessageFinishReason } from "./opencode-turn-recovery.js";
 import {
@@ -52,12 +53,16 @@ export class OpenCodeWorkflowResultBroker {
     ) => Promise<T>,
   ) {}
 
-  async prepare(_sessionId: string, options: ProviderPrepareDispatchOptions = {}): Promise<void> {
+  async prepare(
+    _sessionId: string,
+    options: ProviderPrepareDispatchOptions & Pick<ProviderSendOptions, "workflowResultKey"> = {},
+  ): Promise<void> {
     const capability = options.agentMcp?.workflowResultCapability;
     if (
       Boolean(options.workflowResultTool) !== Boolean(capability) ||
       (options.workflowResultTool !== undefined &&
-        !isOpenCodeWorkflowResultToolName(options.workflowResultTool))
+        !isOpenCodeWorkflowResultToolName(options.workflowResultTool)) ||
+      openCodeWorkflowResultTurnProblem(options) !== null
     ) {
       throw new ProviderDispatchPreparationError(
         "OpenCode workflow-result tool configuration is incomplete",
@@ -118,11 +123,16 @@ export class OpenCodeWorkflowResultBroker {
   }
 
   /** Called under the dispatch lock immediately before writing the prompt. */
-  async begin(sessionId: string, requestId: string, selectedTool?: string): Promise<void> {
+  async begin(
+    sessionId: string,
+    requestId: string,
+    selectedTool?: string,
+    extraTools?: readonly string[],
+  ): Promise<void> {
     try {
       const session = await this.read(sessionId);
       const expectedPermission = selectedTool
-        ? openCodeWorkflowResultPermissionRules(selectedTool)
+        ? openCodeWorkflowResultPermissionRules(selectedTool, extraTools)
         : openCodeWorkflowResultDenyPermissionRules();
       const permission = hasEffectivePermissionRules(session.permission, expectedPermission)
         ? undefined

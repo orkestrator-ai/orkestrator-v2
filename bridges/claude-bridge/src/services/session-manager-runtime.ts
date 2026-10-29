@@ -22,6 +22,7 @@ import type {
   SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import type {
   ClaudeQueryControl,
   PermissionMode,
@@ -67,6 +68,8 @@ export interface ClaudeRuntimeTurn {
   recordBackgroundTaskHook: HookCallback;
   recordPreCompact: HookCallback;
   recordPostCompact: HookCallback;
+  /** The workflow-result attempt this turn declared, if any. */
+  workflowResultTurn(): WorkflowResultTurn | undefined;
   applyCommandChanges(toolUseId: string, change: MeasuredWorkspaceChange): void;
   /**
    * A newer turn now owns the root conversation. Frames for tools this turn

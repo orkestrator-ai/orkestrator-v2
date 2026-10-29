@@ -131,6 +131,16 @@ describe("ACP bridge", () => {
       { workflowResultTool: "submit_review_report" },
       { workflowResultTool: "anything", workflowResultKey: "11111111-1111-4111-8111-111111111111" },
       { workflowResultTool: "submit_review_report", workflowResultKey: "has spaces" },
+      {
+        workflowResultTool: "submit_a",
+        workflowResultKey: "11111111-1111-4111-8111-111111111111",
+        workflowResultSlots: [{ tool: "submit_b", resultKey: "other" }],
+      },
+      {
+        workflowResultTool: "submit_a",
+        workflowResultKey: "11111111-1111-4111-8111-111111111111",
+        workflowResultExtraTools: ["write_file"],
+      },
     ]) {
       const response = await nativeFetch(`${base}/session/${id}/prompt`, {
         method: "POST",

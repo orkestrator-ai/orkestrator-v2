@@ -170,6 +170,7 @@ but the template schema (101) caps every param string at `maxSystemParamStringBy
 a message over 2 KiB is `template-invalid` before the spec's bound applies. The designer shows
 and enforces the 2 KiB template bound; aligning the two (raise the template bound for system
 params or lower `messageChars`) is left to the coordinator.
+- 2026-10-29 (coordinator): `notify`'s `messageChars` bound lowered from 8,000 to 2,000 so it fits the template schema's 2 KiB cap on parameter strings; the designer and the compiler now agree.
 
 ## Progress log
 

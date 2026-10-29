@@ -1463,6 +1463,43 @@ when the environment policy is `deny` (refused) or `ask` (parked, then denied
 by the unattended interaction policy), and would keep them working if the turn
 were made read-only.
 
+### Graph activation turns (item 204)
+
+A graph agent activation has one result slot per output port, each with its
+own key, and may offer three extra tools on the same credential:
+`report_progress` (an output type with `items`), `read_artifact` (an input
+rendered `on-demand`) and `ask_human` (a node that opts in). The prompt body
+therefore declares the whole attempt: `workflowResultTool` and
+`workflowResultKey` name the first slot, as before, and
+`workflowResultSlots` (`[{ tool, resultKey }]`, up to 16) and
+`workflowResultExtraTools` (a subset of the three names) name the rest
+(`ProviderSendOptions`, `bridgePromptBody`; `parseWorkflowResultTurn` takes all
+four). A slot's tool is the per-port `submit_<port>` (its validation tool
+`validate_<port>`), or `submit_graph_output` on OpenCode. One predicate,
+`workflowResultTurnAllows(turn, tool, args)`, decides what the turn's own tools
+are: a submission or validation tool with its own slot's key, the status tool
+and `report_progress` with any of the turn's keys, and `read_artifact` and
+`ask_human` when listed.
+
+- **Grok, Pi:** gate with the predicate as they gate kind tools.
+- **Claude:** lets the turn's own per-port tools through `canUseTool` under
+  deny/ask policies; for a graph turn only, a PreToolUse hook refuses a result
+  tool named with another slot's key. A kind tool's turn keeps today's
+  behaviour: a mistyped key reaches the backend, whose refusal names the right
+  key.
+- **Cursor:** the in-process Orkestrator tools refuse, for a graph turn only, a
+  result-family call that is not the turn's own.
+- **Codex:** approves the attempt server as a whole through thread
+  configuration and never shows the bridge a call's arguments, so it cannot
+  gate by key; it checks that every slot's submission tool is offered (424
+  otherwise). The per-activation credential holds the keys on the backend.
+- **OpenCode:** its broker's tool list is fixed per environment, so it always
+  lists `submit_graph_output` and the three extra tools, hidden and denied by
+  default and enabled per turn. Graph outputs go through `submit_graph_output`
+  with each slot's key and one capability: the activation capability covers
+  every slot (`brokerAttempt` accepts it for a key it covers). Per-port names
+  are refused there.
+
 ### Provider qualification
 
 | Provider | Tool mode | Notes |

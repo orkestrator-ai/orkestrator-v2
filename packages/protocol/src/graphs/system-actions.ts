@@ -63,8 +63,11 @@ export const GRAPH_NOTIFY_TARGETS = ["coordinator", "tab"] as const;
 export const GRAPH_SYSTEM_PARAM_BOUNDS = Object.freeze({
   /** A Kanban comment (`update-ticket`). */
   commentChars: 2_000,
-  /** A mail body before any appended input (`notify`); agent mail caps the whole at 32 KiB. */
-  messageChars: 8_000,
+  /**
+   * A mail body before any appended input (`notify`). The template schema caps
+   * every parameter string at 2 KiB, so this stays within it.
+   */
+  messageChars: 2_000,
   /** A mail subject (agent mail's own cap). */
   subjectChars: 200,
   /** Ids and branch names. */

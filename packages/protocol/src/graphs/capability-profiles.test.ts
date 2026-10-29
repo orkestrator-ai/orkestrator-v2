@@ -384,7 +384,7 @@ describe("granted actions", () => {
     for (const name of [
       "submit_report",
       "validate_summary",
-      "result_status",
+      "get_workflow_result_status",
       "report_progress",
       "read_artifact",
       "ask_human",
@@ -403,7 +403,7 @@ describe("granted actions", () => {
       typeHasItems: () => false,
     });
     expect(graphGrantedActionNames(actions)).toEqual([
-      "result_status",
+      "get_workflow_result_status",
       "submit_result",
       "validate_result",
     ]);

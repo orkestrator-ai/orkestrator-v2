@@ -830,6 +830,8 @@ export async function systemWorld(
         artifacts,
         signal: new AbortController().signal,
         wake: () => undefined,
+        // System executors journal nothing mid-call; a no-op keeps the context complete.
+        journal: async () => undefined,
         now: () => self.now,
       };
     },

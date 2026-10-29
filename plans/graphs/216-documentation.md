@@ -81,6 +81,11 @@ Shipped behaviour is described in living docs, not only in this folder.
   template model calls them a "soft runtime meter"). No CLI flag or Settings form creates a `graph`
   schedule action. The human-node inactive-environment path has no real-stack run yet (the run
   view's has: `graph-run-view.spec.ts`).
+- 2026-10-29 · The first two are fixed on branch `graphs-limits-schedules`: the limits are enforced
+  ([203](203-scheduling.md) Notes, "Token and wall-clock limits") and graph schedules are created
+  from the CLI and Settings ([214](214-launch-surfaces.md) Notes, "Graph schedules in the CLI and
+  Settings"); `graphs.md` (Limits, Scheduling, Launch surfaces, Known gaps), the user guide,
+  `scheduled-jobs.md` and `public-cli.md` describe them.
 
 ## Progress log
 

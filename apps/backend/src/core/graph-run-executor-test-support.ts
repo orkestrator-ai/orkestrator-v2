@@ -139,6 +139,8 @@ export class FakeGraphExecutors {
   readonly failStart = new Map<string, "provider-error" | "invalid-result" | "timeout">();
   /** Activation key → outlet a person chose. */
   readonly answers = new Map<string, string>();
+  /** Node id → tokens its agent activations report when they complete (usage meter). */
+  readonly tokens = new Map<string, number>();
   /**
    * Agent starts report a session with one result key per output port
    * (`rk-<run and activation hash>-<port>`), and the compiled policy as applied.
@@ -306,7 +308,12 @@ export class FakeGraphExecutors {
       if (taken === undefined) return { state: "complete", outputs: {} };
       return { state: "complete", outlet: taken, outputs: this.forwarded(context) };
     }
-    return { state: "complete", outputs: await this.outputs(context) };
+    const tokens = node.kind === "agent" ? this.tokens.get(node.id) : undefined;
+    return {
+      state: "complete",
+      outputs: await this.outputs(context),
+      ...(tokens !== undefined ? { usage: { tokens } } : {}),
+    };
   }
 
   private executor(kind: GraphExecutableNodeKind): GraphNodeExecutor {

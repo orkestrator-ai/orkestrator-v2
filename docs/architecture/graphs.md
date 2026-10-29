@@ -83,9 +83,9 @@ two pieces of designer data the compiler and digest ignore: `layout?` (node id
   "container"}}` or `{kind: "none"}`.
 - **Limits**: `{maxAgentSessions (≤ 200), maxConcurrentAgents (≤ 32),
   maxTokens?, maxWallClockMs?}`. The compiler proves the worst case of the
-  first two fits and the runtime enforces them again; `maxTokens` and
-  `maxWallClockMs` are recorded in the plan but not enforced at run time (see
-  [Known gaps](#known-gaps)).
+  first two fits and the runtime enforces them again. `maxTokens` is a soft
+  meter and `maxWallClockMs` a deadline, both enforced at run time
+  ([Scheduling](#scheduling)).
 - **Acknowledgements**: `{kind: "taint" | "enforcement-floor", digest,
   acknowledgedAt, code?, note?}`, given only by the user in the designer.
 
@@ -703,7 +703,9 @@ before a prompt is sent and recovers through the bridge's dispatch journal
 re-sent under the same request id, `lost` fails the branch, anything else
 waits. System jobs restart under the effect journal. So a restart never
 re-dispatches blindly (`graph-run-journal.test.ts`,
-`graph-node-agent-interleaving.test.ts`). There is no controller lease;
+`graph-node-agent-interleaving.test.ts`, whose seeds include a replicated
+node of 2–4 panel or lens branches collected by a fan-in, with the backend
+dying during the branches' dispatch). There is no controller lease;
 safety rests on compare-and-swap everywhere.
 
 ### A pass
@@ -771,8 +773,25 @@ locks (`graphRunLockedWorkspace`).
 agent activations at once and `limits.maxAgentSessions` over the run's life
 (`usage.agentSessions`, counted at admission); an agent that can never get a
 session fails with `budget-exceeded`. A blocked activation waits with its
-block (`concurrency`, `workspace-lock`, `worktree-limit`, or `recovering`
-until the first discovery after a restart).
+block (`concurrency`, `token-budget`, `workspace-lock`, `worktree-limit`, or
+`recovering` until the first discovery after a restart).
+
+**Token and wall-clock limits.** `limits.maxTokens` is a soft meter over
+`usage.tokens`, the tokens finished agent activations reported. Once it is
+reached no new agent activation is admitted: while agents of the run are
+still running a ready one waits (`token-budget`) and the running ones finish;
+once none runs it fails with `budget-exceeded` and an error naming the meter
+(`limits.maxTokens N; M used`), and its `onFailure` decides the run (the
+default fails it). The meter never stops running work, never applies to
+gates, merges, system or human nodes, and never to a mock run (which reports
+no tokens). `limits.maxWallClockMs` counts from `startedAt`, paused time
+included. A pass over a running, waiting or paused run past it fails the run
+with `budget-exceeded` ("exceeded its wall-clock limit of …"): waiting work
+is cancelled and admitted work, running agents and human nodes awaiting a
+person alike, is stopped through the executors with reason `run-failed`. A
+run's next pass is never due later than its deadline, so a paused run or one
+waiting on a person still fails on time. The run view's header shows usage
+against both limits when the template sets them.
 
 ### Executors
 
@@ -1253,7 +1272,12 @@ defaults). `graph_run_launch` launches as `user`.
 - **Schedules**: a `graph` schedule action holds a launch request, validated
   when the schedule is created, and fires as `schedule` with `requestId`
   `sched:<fireId>`, so a replayed fire finds its run
-  ([scheduled-jobs.md](scheduled-jobs.md)).
+  ([scheduled-jobs.md](scheduled-jobs.md)). It is created and edited in
+  Settings → Schedules ("Run a graph": template, environment, inputs, and
+  either the saved launch defaults at fire time or pinned roles and
+  parameters; `ScheduleGraphFields.tsx`, `graph-schedule-model.ts`) and by
+  `orkestrator schedule create|update --graph TEMPLATE` with the flags of
+  `graph launch` ([public-cli.md](public-cli.md#graphs)).
 
 ## Describe a graph
 
@@ -1733,13 +1757,11 @@ environment is away, and a wait surviving a backend restart).
 - **Isolated branches** are confined by guards, not by the provider: bridges
   keep one working directory per process. A per-session working directory in
   every bridge is a follow-up.
-- **Schedules.** The Settings → Schedules list shows a `graph` schedule but
-  cannot create one, and the CLI has no flag that builds one; it is created
-  through the public `schedule.create` input. `graph launch` has no `--wait`.
-- **Token and wall-clock limits.** `limits.maxTokens` and
-  `limits.maxWallClockMs` are compiled into the plan and shown, but no runtime
-  code enforces them; only `maxAgentSessions` and `maxConcurrentAgents` are
-  enforced. Usage tokens are metered on the run.
+- **CLI waiting.** `graph launch` has no `--wait`; follow a run with
+  `graph status`.
+- **Token meter granularity.** `limits.maxTokens` reads the tokens an agent
+  activation reports when it finishes, so the agents running when the meter
+  is reached finish and can take the run past it (a soft limit by design).
 - **Built-ins** keep their own engines; engine-only behaviours are not
   expressible as templates (item 108 Notes). Item 301 built Multi Review on the
   graph runtime behind the `multiReviewEngine` setting (and

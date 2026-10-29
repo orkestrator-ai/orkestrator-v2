@@ -49,6 +49,12 @@ import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/stores";
+import {
+  graphScheduleRequest,
+  initialGraphScheduleForm,
+  type GraphScheduleForm,
+} from "./graph-schedule-model";
+import { ScheduleGraphFields } from "./ScheduleGraphFields";
 
 /**
  * Settings → Schedules: every scheduled job on this backend, who owns it,
@@ -408,7 +414,7 @@ function HistoryDialog({ job, onClose }: { job: ScheduledJob; onClose: () => voi
 }
 
 type TimingMode = "once" | "cron" | "interval";
-/** `graph`: a scheduled graph launch (item 214), kept as created; edit it from the CLI. */
+/** `graph`: a scheduled graph launch (item 214), edited in {@link ScheduleGraphFields}. */
 type ActionMode = "mail" | "prompt" | "launch" | "action" | "graph";
 
 interface FormState {
@@ -495,7 +501,11 @@ function initialForm(job: ScheduledJob | undefined): FormState {
   return base;
 }
 
-function buildAction(form: FormState, original?: ScheduleAction): ScheduleAction {
+function buildAction(
+  form: FormState,
+  graph: GraphScheduleForm,
+  original?: ScheduleAction,
+): ScheduleAction {
   const [environmentId = "", tabId = ""] = form.mailbox.split("\n");
   switch (form.actionMode) {
     case "mail":
@@ -531,8 +541,7 @@ function buildAction(form: FormState, original?: ScheduleAction): ScheduleAction
         baseBranch: form.baseBranch.trim() || undefined,
       };
     case "graph":
-      if (original?.kind !== "graph") throw new Error("Schedule graph launches from the CLI");
-      return original;
+      return { kind: "graph", request: graphScheduleRequest(graph) };
     case "action": {
       let input: unknown;
       try {
@@ -586,6 +595,9 @@ function ScheduleDialog({
   onClose: (changed: boolean) => void;
 }) {
   const [form, setForm] = useState<FormState>(() => initialForm(job));
+  const [graph, setGraph] = useState<GraphScheduleForm>(() =>
+    initialGraphScheduleForm(job?.action),
+  );
   const [mailboxes, setMailboxes] = useState<MailboxDescriptor[]>([]);
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -617,10 +629,13 @@ function ScheduleDialog({
       "actionName",
       "actionInput",
     ];
-    const actionChanged = !original || actionFields.some((key) => form[key] !== original[key]);
+    const actionChanged =
+      !original ||
+      actionFields.some((key) => form[key] !== original[key]) ||
+      (form.actionMode === "graph" && graph.touched);
     let action: ScheduleAction | undefined;
     try {
-      action = actionLocked || !actionChanged ? undefined : buildAction(form, job?.action);
+      action = actionLocked || !actionChanged ? undefined : buildAction(form, graph, job?.action);
     } catch (error) {
       setProblem(errorText(error));
       return;
@@ -800,10 +815,8 @@ function ScheduleDialog({
                 <SelectItem value="mail">Send agent mail</SelectItem>
                 <SelectItem value="prompt">Prompt an agent tab</SelectItem>
                 <SelectItem value="launch">Launch an environment</SelectItem>
+                <SelectItem value="graph">Run a graph</SelectItem>
                 <SelectItem value="action">Other public action</SelectItem>
-                {form.actionMode === "graph" ? (
-                  <SelectItem value="graph">Run a graph</SelectItem>
-                ) : null}
               </SelectContent>
             </Select>
             {actionLocked ? (
@@ -916,6 +929,9 @@ function ScheduleDialog({
                 />
               </div>
             </>
+          ) : null}
+          {form.actionMode === "graph" && !actionLocked ? (
+            <ScheduleGraphFields form={graph} projects={projects} onChange={setGraph} />
           ) : null}
           {form.actionMode === "action" ? (
             <>

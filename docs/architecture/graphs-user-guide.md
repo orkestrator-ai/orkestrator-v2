@@ -178,10 +178,15 @@ cannot launch.
   it. It cannot create or edit templates. It is told when a run waits for a
   person and when it ends.
 - **Schedules**: a schedule can launch a saved graph at a set time
-  ([scheduled-jobs.md](scheduled-jobs.md)). Settings → Schedules lists such a
-  schedule but cannot create one; it is created through the public
-  `schedule.create` action with a `graph` action. A coordinator schedules its
-  own `launch_graph` instead.
+  ([scheduled-jobs.md](scheduled-jobs.md)). In Settings → Schedules choose
+  **New schedule**, then the action **Run a graph**: pick the project, a
+  template that can be launched, where each run works and its inputs. Leave
+  **Use the saved launch defaults** on to give each run the roles and
+  parameters last saved for the template (Run graph… saves them), or turn it
+  off to pin them in the schedule. From the CLI: `orkestrator schedule create
+  --cron "0 2 * * *" --graph user:<id> --project <id> --new-worktree`, with
+  the same `--role`, `--param` and `--input` flags as `graph launch`. A
+  coordinator schedules its own `launch_graph` instead.
 
 ## Watching a run
 
@@ -259,6 +264,12 @@ You can trust a colleague's key from the preview (**Trust key**).
 
 - At most 32 branches per replicated node, 8 for isolated branch worktrees.
 - Loops always have a bound.
+- A template's limits hold at run time: at most `maxAgentSessions` agent
+  sessions, `maxConcurrentAgents` at once, and, when set, a token budget
+  (`maxTokens`: once reached, agents already running finish but no new one
+  starts) and a wall-clock limit (`maxWallClockMs`: the run fails and its
+  running steps stop once it has run that long, paused time included). The
+  run's header shows usage against them.
 - Results are checked against their type when the agent submits them; an
   agent gets a few chances to correct a refused result.
 - Agent nodes never push or write to GitHub; put a Push branch or Open pull

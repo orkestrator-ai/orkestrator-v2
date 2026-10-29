@@ -43,9 +43,15 @@
  *    admitted agent activations at once, and `limits.maxAgentSessions` agent
  *    activations over the run's life (`usage.agentSessions`, counted at
  *    admission). An agent activation that can never get a session fails with
- *    `budget-exceeded`. The per-operation caps (4 starting, 8 observing, 4 per
- *    provider, ceiling 16) and the shared `workflow-provider` pool apply in
- *    the pass (`graph-run-pass.ts`).
+ *    `budget-exceeded`. `limits.maxTokens` is a soft meter over
+ *    `usage.tokens` (what finished agent activations reported): once reached,
+ *    no new agent activation is admitted while the agents already running
+ *    finish, and a ready agent activation then fails with `budget-exceeded`
+ *    naming the meter (its `onFailure` decides the run). Mock runs report no
+ *    tokens and are never metered. The per-operation caps (4 starting, 8
+ *    observing, 4 per provider, ceiling 16) and the shared
+ *    `workflow-provider` pool apply in the pass (`graph-run-pass.ts`), which
+ *    also enforces `limits.maxWallClockMs` ({@link graphRunWallClockExceeded}).
  *
  * The compiler already proves the worst case fits these limits and that no
  * reader and writer can overlap; the runtime checks are the enforcement, so
@@ -554,6 +560,8 @@ export class GraphWorkspaceLocks {
 export type GraphAdmissionBlock =
   /** `limits.maxConcurrentAgents` agent activations are admitted. */
   | "concurrency"
+  /** `limits.maxTokens` is reached; agents already running finish first. */
+  | "token-budget"
   /** A writer holds the workspace, or this writer waits for readers (D3). */
   | "workspace-lock"
   /** The environment already runs its most isolated branch worktrees (item 403). */
@@ -568,11 +576,69 @@ export interface GraphAdmissionCandidate {
   agent: boolean;
 }
 
+/** The run limit an agent activation can never be admitted under. */
+export type GraphRunMeter = "agent-sessions" | "tokens";
+
 export interface GraphAdmissionDecision {
   admit: GraphAdmissionCandidate[];
   blocked: { key: string; reason: GraphAdmissionBlock }[];
-  /** Agent activations the session budget can never admit: fail them (`budget-exceeded`). */
-  exhausted: string[];
+  /** Agent activations a run budget can never admit: fail them (`budget-exceeded`). */
+  exhausted: { key: string; meter: GraphRunMeter }[];
+}
+
+/**
+ * True when the run's token meter is reached (`limits.maxTokens`, a soft
+ * limit over the tokens finished agent activations reported). Mock runs are
+ * never metered: their executors report no tokens.
+ */
+export function graphRunTokensExhausted(run: Pick<GraphRun, "plan" | "usage" | "mock">): boolean {
+  const max = run.plan.limits.maxTokens;
+  return max !== undefined && !run.mock && run.usage.tokens >= max;
+}
+
+/** Why an exhausted agent activation fails, naming the meter (bounded; no payload). */
+export function graphRunMeterError(
+  run: Pick<GraphRun, "plan" | "usage">,
+  meter: GraphRunMeter,
+): string {
+  return meter === "tokens"
+    ? `The run reached its token limit (limits.maxTokens ${run.plan.limits.maxTokens}; ${run.usage.tokens} used), so no further agent session starts`
+    : `The run reached its limit of ${run.plan.limits.maxAgentSessions} agent sessions (limits.maxAgentSessions)`;
+}
+
+/**
+ * The wall-clock deadline of a started run (`limits.maxWallClockMs` after
+ * `startedAt`), in epoch milliseconds; undefined without the limit or before
+ * the run started. Paused time counts: the limit bounds the run's lifetime.
+ */
+export function graphRunWallClockDeadline(
+  run: Pick<GraphRun, "plan" | "startedAt">,
+): number | undefined {
+  const max = run.plan.limits.maxWallClockMs;
+  if (max === undefined || run.startedAt === undefined) return undefined;
+  const started = Date.parse(run.startedAt);
+  return Number.isFinite(started) ? started + max : undefined;
+}
+
+/** True when a started run has run past `limits.maxWallClockMs` at `now`. */
+export function graphRunWallClockExceeded(
+  run: Pick<GraphRun, "plan" | "startedAt">,
+  now: number,
+): boolean {
+  const deadline = graphRunWallClockDeadline(run);
+  return deadline !== undefined && now > deadline;
+}
+
+/** Why a run failed on its wall clock (bounded; no payload). */
+export function graphRunWallClockError(run: Pick<GraphRun, "plan">): string {
+  const max = run.plan.limits.maxWallClockMs ?? 0;
+  return `The run exceeded its wall-clock limit of ${formatGraphDuration(max)} (limits.maxWallClockMs)`;
+}
+
+function formatGraphDuration(ms: number): string {
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000} h`;
+  if (ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return `${Math.round(ms / 1_000)} s`;
 }
 
 /**
@@ -592,6 +658,7 @@ export function selectGraphAdmissions(
       isGraphActivationAdmitted(activation.state) && nodes.get(activation.nodeId)?.kind === "agent",
   ).length;
   let sessions = run.usage.agentSessions;
+  const tokensExhausted = graphRunTokensExhausted(run);
   let writerWaiting = false;
   for (const activation of run.activations) {
     if (activation.state !== "ready") continue;
@@ -599,7 +666,13 @@ export function selectGraphAdmissions(
     if (!node) continue;
     const agent = node.kind === "agent";
     if (agent && sessions >= run.plan.limits.maxAgentSessions) {
-      decision.exhausted.push(activation.key);
+      decision.exhausted.push({ key: activation.key, meter: "agent-sessions" });
+      continue;
+    }
+    if (agent && tokensExhausted) {
+      // Soft meter: the agents already running finish (and report) first.
+      if (agents > 0) decision.blocked.push({ key: activation.key, reason: "token-budget" });
+      else decision.exhausted.push({ key: activation.key, meter: "tokens" });
       continue;
     }
     if (agent && agents >= run.plan.limits.maxConcurrentAgents) {

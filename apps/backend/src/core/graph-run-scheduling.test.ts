@@ -509,7 +509,9 @@ describe("admission caps", () => {
       others: { writers: 0, readers: 0 },
       workspaceKnown: true,
     });
-    expect(decision.exhausted).toEqual(["consolidate#iter=1#attempt=1"]);
+    expect(decision.exhausted).toEqual([
+      { key: "consolidate#iter=1#attempt=1", meter: "agent-sessions" },
+    ]);
     expect(decision.admit).toEqual([]);
   });
 });

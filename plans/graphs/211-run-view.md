@@ -3,12 +3,12 @@ id: 211
 title: "Run view"
 phase: 2
 plan: "P2.11"
-status: in-progress
+status: done
 depends_on: [201, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -77,3 +77,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks, item 208) · 210 rewind wiring and 208 human slot connected; Actions ticked. · Real-stack inactive-path run after 213/214.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Real-stack inactive path rerun with 208's human scenario; Resume now clicked in the tab test; Done when ticked with evidence. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · run view shows admission blocks · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

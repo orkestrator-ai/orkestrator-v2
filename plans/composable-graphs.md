@@ -1,10 +1,12 @@
 # Composable agent graphs plan
 
 Status: proposed 2026-10-29; all decisions confirmed with the maintainer on
-2026-10-29. Phases 0–2 and the Phase 4 items 401–405 are built, and Phase 3's
-graph-runtime Multi Review is built behind a setting (default unchanged, D23);
-406 is dropped (D24) and 501 waits on Phase 3 (D25). Item status is in
-[`plans/graphs/000-index.md`](graphs/000-index.md).
+2026-10-29. Delivered in
+[#1436](https://github.com/orkestrator-ai/orkestrator-v2/pull/1436): Phases 0
+and 1 are complete; Phase 2 is built, with two exit criteria waiting on live
+runs (D28, and Grok, Cursor and Linux); Phase 3's graph-runtime Multi Review is
+built behind a setting with the default unchanged (D23); Phase 4 items 401–405
+are built, 406 is dropped (D24); 501 waits on Phase 3 (D25).
 
 Work items and their status: [`plans/graphs/000-index.md`](graphs/000-index.md).
 Each Pn.m section below is one numbered file there (P1.7 is `107`).

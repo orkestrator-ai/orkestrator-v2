@@ -3,12 +3,12 @@ id: 203
 title: "Scheduling"
 phase: 2
 plan: "P2.3"
-status: in-progress
+status: done
 depends_on: [202]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -285,3 +285,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Ready set with iterations, carries, outlets, collect and `when`; loops, retries, timeouts; D3 workspace locks across runs; admission limits and per-operation caps; 3 s observation cadence; run statuses; benchmark skeleton; tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Enforced `limits.maxTokens` (soft meter at admission) and `limits.maxWallClockMs` (run fails, admitted work cancelled `run-failed`, deadline wakes paused and waiting runs); usage vs limits in the run view header; `graph-run-limits.test.ts`. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · cross-engine workspace holders (`workspace-writers.ts`), persisted admission blocks · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

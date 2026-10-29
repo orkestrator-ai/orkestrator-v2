@@ -3,12 +3,12 @@ id: 215
 title: "\"Describe a graph\""
 phase: 2
 plan: "P2.15"
-status: in-progress
+status: done
 depends_on: [103, 107, 212]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -120,3 +120,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Result kind, backend job service, prompt, designer dialog and tests; work and test boxes ticked. · Live-model run in a dev:test profile for "Done when".
 - 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · Live describe run in a dev:test designer: compiling unsaved draft; Done when ticked. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

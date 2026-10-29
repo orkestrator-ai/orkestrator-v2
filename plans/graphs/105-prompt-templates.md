@@ -3,12 +3,12 @@ id: 105
 title: "Prompt templates"
 phase: 1
 plan: "P1.5"
-status: in-progress
+status: done
 depends_on: [101, 102, 106]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -245,3 +245,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Per-code prompt diagnostic coverage table. · 204 half of Done-when still open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 204 renders agent prompts through `renderGraphNodePrompt`; status tool, workspace slots and broker tools settled for it. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · inline evidence frames for every upstream template value, estimator and property tests, instruction text; `discovery-review` instruction input for 301 · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

@@ -3,12 +3,12 @@ id: 007
 title: "CLI build pipeline launch"
 phase: 0
 plan: "P0.6"
-status: in-progress
+status: done
 depends_on: [006]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -137,3 +137,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · coordinator · Created to close 006's open CLI box and the Phase 0 exit criterion's CLI half. · Implement.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · `build.*` public actions, recovery, `orkestrator build launch|list|get|cancel` with per-step instructions and lenses, CLI round trip through a real backend; docs updated; 006's CLI box and the exit criterion ticked. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

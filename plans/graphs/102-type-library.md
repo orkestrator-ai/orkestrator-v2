@@ -3,12 +3,12 @@ id: 102
 title: "Type library and custom types"
 phase: 1
 plan: "P1.2"
-status: in-progress
+status: done
 depends_on: [101]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -196,3 +196,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Type library, validators, schema subset, schema from example, assignability, transforms, adapters, families, custom-type guard, decision choices; shared validators moved into the protocol; tests. · Work and tests done; the Done-when box waits for 107 to use the library and for the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the library; Done-when ticked. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Exported the schema-subset error-code list, typed every error site, added the per-code coverage table. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

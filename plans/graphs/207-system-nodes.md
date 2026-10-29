@@ -8,7 +8,7 @@ depends_on: [201, 203]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -212,3 +212,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · All eight system actions, the provisioner, compile-time param/port rules, the effect journal and `validation-results@1`, with tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Designer (212) now reads `GRAPH_SYSTEM_ACTION_SPECS`; notify message bound inconsistency recorded. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · `run-validation` accepts an ancestor's plan (repair loops failed live at iteration 2); live §9.4 loop converged; live bake-off ran to the PR description (PR node not run). · Every system node live, including `open-pull-request` with the user's approval.
+- 2026-10-29 · coordinator · Partly delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; open boxes remain (see Notes). · As recorded in the open boxes.

@@ -3,12 +3,12 @@ id: 108
 title: "Built-in templates"
 phase: 1
 plan: "P1.8"
-status: in-progress
+status: done
 depends_on: [107, 001, 003, 004, 005]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -36,7 +36,7 @@ The three built-in flows are described in the template model, so users can see a
 
 ## Done when
 
-- [ ] Built-in templates are merged and pinned.
+- [x] Built-in templates are merged and pinned (pinned by `graph-builtin-templates.test.ts`; merged with the pull request that sets this item done).
 
 ## Notes
 
@@ -212,3 +212,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Three built-ins with `engine`, engine stage tables and exported decisions, pinning tests (mutation-checked on both sides); Looped Review described as retired. · complete; awaiting PR (maintainer to confirm Looped Review stays a built-in)
 - 2026-10-29 · coordinator · The maintainer kept Looped Review as a retired built-in (D26). · Awaiting PR.
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

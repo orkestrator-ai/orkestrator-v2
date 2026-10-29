@@ -3,12 +3,12 @@ id: 101
 title: "Template schema"
 phase: 1
 plan: "P1.1"
-status: in-progress
+status: done
 depends_on: []
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -193,3 +193,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Template model, guards, bounds, predicate shape, §9 example fixtures, exports, lint boundary and tests; compiler box added to 107. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Noted why the guard has no typed code list, and which nested-check codes the documented list omits. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

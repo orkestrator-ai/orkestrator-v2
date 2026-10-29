@@ -8,7 +8,7 @@ depends_on: [001, 106, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -297,3 +297,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · Live conformance on Claude, Codex, OpenCode and Pi: shown tiers matched, every enforced claim held, pushes caught by the remote-ref guard; Done when ticked. · complete; awaiting PR
 - 2026-10-29 · coordinator · Un-ticked Done-when: the tiers matched on every provider that could run (Claude, Codex, OpenCode, Pi on macOS), but Grok, Cursor and Linux have not been run live, so "every provider" is not yet shown. · Run Grok, Cursor and a Linux host when credentials and a host are available (todo 0031 task 10).
 - 2026-10-29 · Claude Opus 5.5 (guard polish, `graphs-guard-polish`) · Live findings fixed: identical-commit attribution through per-repository push evidence (precise for separate clones, explicit ambiguous failure for worktrees of one repository); neutral read-only refusal wording for non-coordinator Claude turns. · complete; awaiting PR
+- 2026-10-29 · coordinator · Partly delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; open boxes remain (see Notes). · As recorded in the open boxes.

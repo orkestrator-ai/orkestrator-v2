@@ -3,12 +3,12 @@ id: 004
 title: "A typed Address report"
 phase: 0
 plan: "P0.4"
-status: in-progress
+status: done
 depends_on: []
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -121,3 +121,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Address opens a `fix-result` slot; Verify reads the bounded `fixResult` as an evidence frame; marker-based text fallback counted as a compatibility path; inspector shows the report; docs updated. · complete; awaiting PR
 - 2026-10-29 · coordinator · Ticked the Phase 0 exit criterion "Verify reads a typed Address report" in the index, citing this item's tests. · Awaiting PR.
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

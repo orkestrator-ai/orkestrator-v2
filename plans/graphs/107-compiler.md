@@ -3,12 +3,12 @@ id: 107
 title: "Compiler"
 phase: 1
 plan: "P1.7"
-status: in-progress
+status: done
 depends_on: [101, 102, 104, 105, 106]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -280,3 +280,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Compiler passes, plan with digests, cost, lints, taint and acknowledgements, 103's port rules, per-code tests, example acknowledgements; 102 box ticked, 104/105 boxes split. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Recorded the per-code coverage evidence for the Phase 1 exit criterion. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Item 401: `replicate-items-unsupported` replaced by `replicate-items-input` in the table and the per-code tests. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

@@ -3,12 +3,12 @@ id: 002
 title: "Align the iteration limit"
 phase: 0
 plan: "P0.2"
-status: in-progress
+status: done
 depends_on: []
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -64,3 +64,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Tool schema uses the protocol constant with a clear refusal message; schema-pinning test added (evidence for the Phase 0 exit criterion: `apps/backend/src/core/control-mcp-server.test.ts`); no other literal limits found. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

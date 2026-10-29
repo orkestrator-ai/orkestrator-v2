@@ -3,12 +3,12 @@ id: 205
 title: "Replication and collection"
 phase: 2
 plan: "P2.5"
-status: in-progress
+status: done
 depends_on: [204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -181,3 +181,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Collect policies with failure markers and `first` cancellation, unified item ids in protocol (executor, merges, prompts, provenance), item ids in consolidator prompts, lens text for templates without `lens`, 32-branch runtime guard; tests incl. real agent executor. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Seeded interleavings extended to a replicated node (panel/lenses, 2–4 branches) with a collecting fan-in and crashes mid fan-out; 3000 seeds pass locally; Phase 2 exit criterion ticked. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

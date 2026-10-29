@@ -3,12 +3,12 @@ id: 208
 title: "Human nodes"
 phase: 2
 plan: "P2.8"
-status: in-progress
+status: done
 depends_on: [203, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -73,3 +73,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Human executor, answers (`graph_run_answer` human form, `graph_run_pending`), implicit `error` port for timeouts, sidebar activity and attention, coordinator `graph-run` status wake, run view panel and edit form, 210 wiring, tests; real-stack read-side spec passes. · Real-stack inactive-path scenario once 213/214 provide a launch path.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Real-stack inactive-environment path (command answer while away, run-view answer after return, reloads) and opt-in profile-restart case in `graph-run-view.spec.ts`: pass. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · attention failures logged by code or name, never message · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

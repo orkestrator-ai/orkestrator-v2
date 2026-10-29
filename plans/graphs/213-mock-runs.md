@@ -3,12 +3,12 @@ id: 213
 title: "Mock runs"
 phase: 2
 plan: "P2.13"
-status: in-progress
+status: done
 depends_on: [204, 206, 207]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -195,3 +195,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Mock executors, schema-driven generator and pins in protocol, would-have-run records, environment-less `graph_run_mock`, designer button and pin editor; tests and docs; real-stack designer check passed. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Integration fix after 402/208: §9.3 mock-runs with its inlined Multi Review; pins accept plan ids (inlined nodes); real 208 human executor in tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Item 401: §9.4 mock run uses `items` fan-out as written. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

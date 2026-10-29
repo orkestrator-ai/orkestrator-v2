@@ -3,12 +3,12 @@ id: 104
 title: "Predicates"
 phase: 1
 plan: "P1.4"
-status: in-progress
+status: done
 depends_on: [101, 102]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -158,3 +158,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the type checker; Done-when split, 107 half ticked. · 206 half open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Typed per-code coverage tables for the type checker and the evaluator. · 206 half of Done-when still open.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 206 uses the evaluator (gates) and the list filter (edge transforms); 206 half ticked. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

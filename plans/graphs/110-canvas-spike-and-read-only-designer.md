@@ -3,12 +3,12 @@ id: 110
 title: "Canvas spike and read-only designer"
 phase: 1
 plan: "P1.10"
-status: in-progress
+status: done
 depends_on: [107, 108, 109]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -147,3 +147,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Spike recorded (React Flow 12.12.0) in Notes and `docs/architecture/graphs.md`; the spike ran before 107–109 landed, which its Notes allow. · Build the read-only designer.
 - 2026-10-29 · Claude Opus 5.5 · Read-only designer: tab, library with trust, React Flow canvas, inspector, compile panel, import/export, Duplicate and JSON editing; component, store and Playwright tests; complete; awaiting PR.
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

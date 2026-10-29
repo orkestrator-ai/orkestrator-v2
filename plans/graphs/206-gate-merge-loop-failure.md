@@ -3,12 +3,12 @@ id: 206
 title: "Gate, merge, loop and failure handling"
 phase: 2
 plan: "P2.6"
-status: in-progress
+status: done
 depends_on: [104, 203]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -157,3 +157,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Gate and merge executors, edge transforms and budget checks at delivery, routed `error@1`, loop done reasons, skip and carry fixes in the ready set, `itemSources`; tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · writers default to `fail-run`, replicated readers keep `skip` · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

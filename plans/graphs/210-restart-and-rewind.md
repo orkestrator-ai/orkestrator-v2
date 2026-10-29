@@ -3,12 +3,12 @@ id: 210
 title: "Restart and rewind"
 phase: 2
 plan: "P2.10"
-status: in-progress
+status: done
 depends_on: [201, 203, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -127,3 +127,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Restart scope, restart, code rewind (shared Git module, journaled reset, pass hook), commands and web wrappers, with tests (`run-rewind.test.ts`, `graph-run-rewind.test.ts`) that evidence the Phase 2 restart and code-rewind exit criteria. · complete; awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

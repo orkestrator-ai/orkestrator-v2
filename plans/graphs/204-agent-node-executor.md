@@ -3,12 +3,12 @@ id: 204
 title: "Agent node executor and the shared branch runner"
 phase: 2
 plan: "P2.4"
-status: in-progress
+status: done
 depends_on: [103, 105, 106, 203]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -183,3 +183,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Graph agent node executor on the runner: policy and tier first, journaled dispatch, per-port slots and activation tools, `ask_human`, session continue, workspace outputs, bridges taught per-port tools, push-free built-ins; tests incl. seeded restart interleavings. · complete; awaiting PR
 - 2026-10-29 · coordinator · Ticked the Phase 2 exit criterion on unchanged engine suites, citing this item's commits. · Awaiting PR.
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · graph activations log under `[graph-agent]` · awaiting PR
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

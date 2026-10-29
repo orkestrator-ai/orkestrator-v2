@@ -3,12 +3,12 @@ id: 401
 title: "`items` fan-out"
 phase: 4
 plan: "Phase 4"
-status: in-progress
+status: done
 depends_on: [205]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
 branch: "implement-graph-tasks-17b1f79c6e44-r1"
-pr: ""
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1436"
 updated: 2026-10-29
 ---
 
@@ -220,3 +220,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Compiler, run record, runtime expansion, prompts, provenance, mock runs, run view, designer, tests and docs. · complete; awaiting PR
 - 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.
 - 2026-10-29 · coordinator · The maintainer approved the design note as built (D22). · Awaiting PR.
+- 2026-10-29 · coordinator · Delivered in https://github.com/orkestrator-ai/orkestrator-v2/pull/1436; status done. · None.

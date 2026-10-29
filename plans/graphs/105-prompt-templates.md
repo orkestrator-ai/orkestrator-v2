@@ -40,7 +40,8 @@ Node prompts are user templates with no executable logic, rendered behind a lock
 
 ## Done when
 
-- [ ] Prompt templates are merged with tests and used by [107](107-compiler.md) and [204](204-agent-node-executor.md).
+- [x] Prompt templates are merged with tests and used by [107](107-compiler.md).
+- [ ] Prompt templates are used by [204](204-agent-node-executor.md).
 
 ## Notes
 
@@ -174,9 +175,18 @@ markdown template: `describe-pr` reads the brief in `markdown` mode, which other
 
 **2026-10-29 · Open box.** "Done when" stays unticked: 107 and 204 have not started, and there is no PR.
 
+**2026-10-29 · Used by 107; box split.** `graphs/lint.ts` runs `lintGraphNodePrompt` on every agent
+node with the compiler's `portTypes` (delivered types after transforms) and `listItems` (the
+producers' worst-case fan-out, so a three-lens fan-in is sized as three, not 32), the compiled
+capabilities and the caller's ceiling (`promptCeilingBytes`, default 160 KiB). `prompt-*` codes
+pass through unchanged, pinned to `nodes[i].prompt(.template)` with `offset`/`length`/`port`. The
+plan's input `render` is `graphPromptEffectiveMode` of the same scope. The Done-when box is split:
+the 107 half is ticked, the 204 half stays open.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Template engine, variables, five render modes in shared evidence frames, size estimator with bound tests, lints, built-in prompt registry, system contract and `renderGraphNodePrompt`; framing, unattended policy and result-instruction pieces moved to the protocol. · Work and tests done; the Done-when box waits for 107/204 and the PR.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 runs the lints and size estimate; Done-when split, 107 half ticked. · 204 half open.

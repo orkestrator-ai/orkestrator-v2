@@ -80,6 +80,7 @@
     "./git-remote-url": "./src/git-remote-url.ts",
     "./graphs/artifact-type-def": "./src/graphs/artifact-type-def.ts",
     "./graphs/capability-profiles": "./src/graphs/capability-profiles.ts",
+    "./graphs/compile": "./src/graphs/compile.ts",
     "./graphs/examples": "./src/graphs/examples.ts",
     "./graphs/grammar": "./src/graphs/grammar.ts",
     "./graphs/predicates": "./src/graphs/predicates.ts",

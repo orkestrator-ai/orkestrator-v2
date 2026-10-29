@@ -45,6 +45,9 @@ describe("preview terminal process roots", () => {
     async () => {
       const harness = await createPreviewHarness();
       const runtime = new BackendRuntime({ emit: () => undefined });
+      const originalShell = process.env.SHELL;
+      // This tests managed process roots, not the host user's interactive shell setup.
+      process.env.SHELL = "/bin/sh";
       try {
         await harness.addLocalEnvironment("a");
         await harness.storage.updateEnvironment("a", { worktreePath: harness.dir });
@@ -69,6 +72,8 @@ describe("preview terminal process roots", () => {
         await pty.terminate();
         expect(runtime.terminals.localProcessRoots()).toEqual([]);
       } finally {
+        if (originalShell === undefined) delete process.env.SHELL;
+        else process.env.SHELL = originalShell;
         await runtime.terminals.terminateSessionsForEnvironment("a");
         runtime.shutdown();
         await harness.cleanup();

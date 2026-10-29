@@ -98,6 +98,7 @@ import {
   ingressPorts,
 } from "./container-network.js";
 import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js";
+import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   EGRESS_OVERRIDE_ENV,
@@ -677,6 +678,7 @@ export async function createDockerContainer(
       );
     }
   }
+  rememberNetworkOwner(containerId, gatewayId);
   context.runtime.containerStates.invalidate();
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   if (stagedInputs) {

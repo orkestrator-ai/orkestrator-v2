@@ -3,8 +3,10 @@ import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
-import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
-import { registerTranscriptArtifactPdfCommands } from "./transcript-artifacts/commands-pdf.js";
+import {
+  registerTranscriptArtifactCommands,
+  registerTranscriptArtifactPdfCommands,
+} from "./transcript-artifacts/index.js";
 import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
 import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import type {
@@ -24,7 +26,10 @@ import {
   renameEnvironmentFromPrompt,
 } from "./commands-helpers.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
-import { PendingRenameFailureLog } from "./pending-rename-failure-log.js";
+import {
+  PendingRenameFailureLog,
+  pendingRenameRetryDelayMs,
+} from "./pending-rename-failure-log.js";
 import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
@@ -189,10 +194,14 @@ export function createCommandRegistry(
         if (renamed) pendingEnvironmentRenameFailures.succeeded(environmentId);
       })
       .catch((error) => {
-        // Keep the durable intent and bound automatic retries. Authentication or
-        // model outages must not spin `codex exec` on the two-second backend sweep.
-        pendingEnvironmentRenameRetryAt.set(environmentId, Date.now() + 30_000);
-        pendingEnvironmentRenameFailures.failed(environmentId, intent, error);
+        // Keep the durable intent and back off automatic retries. A signed-out,
+        // missing or offline Codex must not spawn `codex exec` every 30 seconds
+        // for as long as the environment runs.
+        const failures = pendingEnvironmentRenameFailures.failed(environmentId, intent, error);
+        pendingEnvironmentRenameRetryAt.set(
+          environmentId,
+          Date.now() + pendingRenameRetryDelayMs(failures),
+        );
         throw error;
       })
       .finally(() => {
@@ -259,13 +268,16 @@ export function createCommandRegistry(
     const environments = await context.storage.loadEnvironments();
     const tasks: Promise<void>[] = [];
     let pending = 0;
-    pendingEnvironmentRenameFailures.retainOnly(
-      new Set(
-        environments
-          .filter((environment) => environment.pendingRenamePrompt?.trim())
-          .map((environment) => environment.id),
-      ),
+    const withIntent = new Set(
+      environments
+        .filter((environment) => environment.pendingRenamePrompt?.trim())
+        .map((environment) => environment.id),
     );
+    // A cleared intent restarts its backoff, so its retry time goes with its count.
+    pendingEnvironmentRenameFailures.retainOnly(withIntent);
+    for (const environmentId of Array.from(pendingEnvironmentRenameRetryAt.keys())) {
+      if (!withIntent.has(environmentId)) pendingEnvironmentRenameRetryAt.delete(environmentId);
+    }
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.pendingRenamePrompt?.trim()) continue;
       pending += 1;

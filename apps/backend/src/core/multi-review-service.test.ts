@@ -62,7 +62,7 @@ import { codexConnection, httpProvider } from "./agent-provider-test-support.js"
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
-} from "./looped-review-prompts.js";
+} from "./review-prompts.js";
 import {
   MissingMultiReviewAddressSessionError,
   MultiReviewAddressDispatchError,
@@ -78,8 +78,8 @@ const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 const REVIEW_FINGERPRINT = "a".repeat(64);
 
 async function stableReviewInvoker<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args!) as T;
-  if (command === "verify_looped_review_package") return { valid: true } as T;
+  if (command === "generate_review_package") return testGeneratedReviewPackage(args!) as T;
+  if (command === "verify_review_package") return { valid: true } as T;
   if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
   return {
     head: REVIEW_HEAD,
@@ -10314,9 +10314,7 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect([...provider.sends.values()][0]?.options.schema).toEqual(
         REVIEW_VALIDATION_PLAN_SCHEMA,
       );
-      expect(commands.some((entry) => entry.command === "generate_looped_review_package")).toBe(
-        false,
-      );
+      expect(commands.some((entry) => entry.command === "generate_review_package")).toBe(false);
       provider.statusValue = "idle";
       await service.advanceNow(started.id);
       const reviewing = (await snapshot(started.id))!;
@@ -10371,18 +10369,16 @@ test("Multi Review prepares and consolidates with its review model before openin
         mode: "build",
         readOnly: true,
       });
-      expect(
-        commands.filter((entry) => entry.command === "generate_looped_review_package"),
-      ).toHaveLength(1);
+      expect(commands.filter((entry) => entry.command === "generate_review_package")).toHaveLength(
+        1,
+      );
       // A live checkout change must not invalidate the immutable evidence after preparation.
       expect(
         commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
       ).toHaveLength(1);
       // One verification per phase — fan-out admission and consolidation —
       // independent of how many reviewers the panel has.
-      expect(
-        commands.filter((entry) => entry.command === "verify_looped_review_package"),
-      ).toHaveLength(2);
+      expect(commands.filter((entry) => entry.command === "verify_review_package")).toHaveLength(2);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
@@ -10695,7 +10691,7 @@ test("MultiReviewService stops validation and advances with partial evidence", a
             ),
           } as T;
         }
-        if (command === "generate_looped_review_package") {
+        if (command === "generate_review_package") {
           packagedArgs = args;
           packagedPreparation = args!.preparation;
         }
@@ -10871,7 +10867,7 @@ test("MultiReviewService clears a stop request when partial-evidence packaging f
     },
     {
       invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-        if (command === "generate_looped_review_package") {
+        if (command === "generate_review_package") {
           throw new Error("Partial validation package could not be sealed");
         }
         return stableReviewInvoker<T>(command, args);
@@ -11113,9 +11109,7 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
       await service.advanceNow(started.id);
       const firstRun = (await snapshot(started.id))!.reviewers[0]!;
       expect(firstRun.status).toBe("running");
-      expect(commands.filter((command) => command === "verify_looped_review_package")).toHaveLength(
-        1,
-      );
+      expect(commands.filter((command) => command === "verify_review_package")).toHaveLength(1);
 
       const restarted = await service.restartReviewer(started.id, firstRun.id);
       expect(restarted.phase).toBe("reviewing");
@@ -11131,9 +11125,7 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
         true,
       );
       expect(reviewSends.at(-1)?.prompt).toContain(reviewing.reviewPackage!.filePath);
-      expect(commands.filter((command) => command === "verify_looped_review_package")).toHaveLength(
-        2,
-      );
+      expect(commands.filter((command) => command === "verify_review_package")).toHaveLength(2);
     },
     {
       packageFlow: true,
@@ -11217,7 +11209,7 @@ test("failed package generation blocks reviewers and retry runs preparation agai
     {
       packageFlow: true,
       invoke: async (command, args) => {
-        if (command === "generate_looped_review_package" && blocked)
+        if (command === "generate_review_package" && blocked)
           throw new Error("Review package preparation requires a clean worktree");
         return stableReviewInvoker(command, args);
       },
@@ -11258,7 +11250,7 @@ test("package tampering fails closed and retry discards reports before preparing
     {
       packageFlow: true,
       invoke: async (command, args) =>
-        command === "verify_looped_review_package"
+        command === "verify_review_package"
           ? ({ valid, reason: "hash mismatch" } as never)
           : stableReviewInvoker(command, args),
     },

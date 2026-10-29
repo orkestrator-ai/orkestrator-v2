@@ -1,4 +1,5 @@
-import { lstatSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +9,13 @@ import { join } from "node:path";
 // process can tell which leftovers belong to a process that has exited. Every
 // prefix opts in explicitly: a sweep only ever looks at the prefixes its caller
 // names.
+
+/**
+ * The temporary directory a test process had before `tests/private-tmpdir.ts`
+ * gave it a private one. Sweeps without an explicit root look there as well,
+ * so leftovers from before a process went private are still found.
+ */
+export const PARENT_TMPDIR_ENV = "ORKESTRATOR_TEST_PARENT_TMPDIR";
 
 /** Six characters `mkdtemp` appends to the template. */
 const OWNED_SUFFIX = /^([1-9]\d*)-[A-Za-z0-9]{6}$/;
@@ -28,9 +36,16 @@ export interface SweepStaleTempDirsOptions {
    * such directories alone.
    */
   legacyMaxAgeMs?: number;
+  /** Directory to sweep (default: the temporary directory and its parent, see `PARENT_TMPDIR_ENV`). */
   root?: string;
   now?: number;
   isProcessAlive?: (pid: number) => boolean;
+  /**
+   * Whether a live process still uses a directory that is otherwise stale (a
+   * browser outlives the process that launched it). `true` keeps it. Omit to
+   * decide on owner and age alone.
+   */
+  isInUse?: (directory: string) => boolean;
 }
 
 /** Path prefix for `mkdtemp`/`mkdtempSync` that records this process as owner. */
@@ -59,7 +74,11 @@ export function isProcessAlive(pid: number): boolean {
  * the owners, and a failure only leaves a directory for the next sweep.
  */
 export function sweepStaleTempDirs(options: SweepStaleTempDirsOptions): string[] {
-  const root = options.root ?? tmpdir();
+  if (options.root === undefined) {
+    const roots = new Set([tmpdir(), process.env[PARENT_TMPDIR_ENV] || tmpdir()]);
+    return [...roots].flatMap((root) => sweepStaleTempDirs({ ...options, root }));
+  }
+  const root = options.root;
   const now = options.now ?? Date.now();
   const alive = options.isProcessAlive ?? isProcessAlive;
   const prefixes = typeof options.prefix === "string" ? [options.prefix] : options.prefix;
@@ -92,6 +111,7 @@ export function sweepStaleTempDirs(options: SweepStaleTempDirsOptions): string[]
       try {
         const info = lstatSync(target);
         if (!info.isDirectory() || now - info.mtimeMs <= maxAgeMs) break;
+        if (options.isInUse?.(target)) break;
         rmSync(target, { recursive: true, force: true });
         removed.push(target);
       } catch {
@@ -101,4 +121,44 @@ export function sweepStaleTempDirs(options: SweepStaleTempDirsOptions): string[]
     }
   }
   return removed;
+}
+
+/**
+ * A check for whether any visible live process names a directory, or a path
+ * inside it, on its command line (a browser's `--user-data-dir`). The process
+ * list is read once, on the first call; a list that cannot be read counts
+ * every directory as in use.
+ */
+export function namedByLiveProcess(): (directory: string) => boolean {
+  let commandLines: string | null | undefined;
+  return (directory) => {
+    commandLines ??= readLiveCommandLines();
+    return commandLines === null || commandLines.includes(directory);
+  };
+}
+
+function readLiveCommandLines(): string | null {
+  if (process.platform === "linux") {
+    try {
+      const lines: string[] = [];
+      for (const entry of readdirSync("/proc")) {
+        if (!/^\d+$/.test(entry)) continue;
+        try {
+          lines.push(readFileSync(`/proc/${entry}/cmdline`, "utf8").replaceAll("\0", " "));
+        } catch {
+          // Exited during the scan, or not readable.
+        }
+      }
+      return lines.join("\n");
+    } catch {
+      return null;
+    }
+  }
+  const result = spawnSync("ps", ["-axww", "-o", "args="], {
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  return result.status === 0 ? result.stdout : null;
 }

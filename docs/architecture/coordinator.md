@@ -12,8 +12,8 @@ What is still missing — mainly provider parity and live qualification — live
 [0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
-worker-surface follow-ups (other nodes, status wakes for looped review
-and feature planning) in
+worker-surface follow-ups (other nodes, status wakes for feature
+planning) in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
@@ -1235,7 +1235,6 @@ The other surfaces act on this node only; their `nodeId` variants are in
 | `edit_worker_tab` | Focus, move (to a pane from `list_tabs`) or close one tab. | No receipt: each edit states the end state, so a retry is a no-op. Closing a tab that is gone succeeds. | Closing never deletes a conversation (`teardown_tab`'s retain-history close). It is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report. A terminal tab closes with whatever its process is doing. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
-| `start_looped_review`, `get_looped_review`, `cancel_looped_review` | The **Looped review** button: one agent reviews, fixes and repeats, then opens a PR. Omitted agent and model use the Review action's saved default. Opens the review's tab in the worker. | Replays; a retry after a crash reattaches to the review that attempt started (created after the receipt) instead of starting another. | The Looped Review tab; Cancel there or `cancel_looped_review`. Commits it made stay. No status wake: the result says to schedule a check. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
@@ -1436,8 +1435,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   decline, remote routing and restart (`node-coordination-agents-md.test.ts`);
   the dialog (`AgentsMdApprovalDialog.test.tsx`, web, and
   `e2e/AgentsMdApproval.spec.ts` in a real browser)
-- worker surfaces (terminal, browser, tab edits, looped review, feature
-  plans, custom fix, reviewer tabs, the root-changes request and receipts):
+- worker surfaces (terminal, browser, tab edits, feature plans, custom fix, reviewer tabs, the root-changes request and receipts):
   `coordinator-surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding

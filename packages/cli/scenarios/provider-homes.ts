@@ -298,5 +298,8 @@ export async function prepareIsolatedBackendEnvironment(
     ...providerHomes,
     ...INHERITED_AGENT_TOOL_ENV,
     ORKESTRATOR_CONTROL_MCP_DISABLED: "1",
+    // Each scenario's backend is a new Docker owner stopped soon after boot;
+    // its boot host-reachability probe would leave a network nothing reaps.
+    ORKESTRATOR_HOST_REACHABILITY_CHECK: options.env?.ORKESTRATOR_HOST_REACHABILITY_CHECK ?? "off",
   };
 }

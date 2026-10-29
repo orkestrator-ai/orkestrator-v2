@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, BrainCircuit, Layers3 } from "lucide-react";
+import { Bot, BrainCircuit } from "lucide-react";
 import type {
   AgentModel,
   AgentModelRef,
@@ -16,13 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import {
   mergeReorderedFavoriteModels,
@@ -40,7 +33,6 @@ import {
   type AgentModelOption,
   type LaunchAgent,
 } from "@/lib/agent-launch";
-import { LOOPED_REVIEW_DEFAULT_ALLOWANCE } from "@/stores/loopedReviewStore";
 import { cn } from "@/lib/utils";
 
 export type ReviewTabType = LaunchAgent;
@@ -56,7 +48,6 @@ export interface ReviewLaunchSelection {
   model: string;
   reasoningEffort?: string;
   fastMode?: boolean;
-  passAllowance?: number;
 }
 
 export const REVIEW_TAB_OPTIONS: Array<{
@@ -117,7 +108,6 @@ interface ReviewLaunchDialogProps {
   preferredModels?: Partial<Record<ReviewAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<ReviewAgent, string>>;
   preferredFastModes?: Partial<Record<ReviewAgent, boolean>>;
-  kind?: "review" | "looped";
   busy?: boolean;
   onConfirm: (selection: ReviewLaunchSelection) => void;
 }
@@ -130,7 +120,6 @@ export function ReviewLaunchDialog({
   preferredModels,
   preferredReasoningEfforts,
   preferredFastModes,
-  kind = "review",
   busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
@@ -170,7 +159,6 @@ export function ReviewLaunchDialog({
       preferredFastModes,
     ),
   );
-  const [passAllowance, setPassAllowance] = useState(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   const wasOpenRef = useRef(false);
 
   useLayoutEffect(() => {
@@ -200,7 +188,6 @@ export function ReviewLaunchDialog({
         preferredFastModes,
       ),
     );
-    setPassAllowance(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   }, [
     catalog,
     defaultEnabledTabType,
@@ -263,15 +250,8 @@ export function ReviewLaunchDialog({
   const summary = useMemo(() => {
     const label = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.label;
     const effort = effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`;
-    return [
-      label,
-      selectedModel?.name ?? model,
-      effort,
-      kind === "looped" ? `${passAllowance} initial passes` : "one pass",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  }, [effectiveEffort, kind, model, passAllowance, selectedModel?.name, tabType]);
+    return [label, selectedModel?.name ?? model, effort, "one pass"].filter(Boolean).join(" · ");
+  }, [effectiveEffort, model, selectedModel?.name, tabType]);
 
   const handleAgentChange = (nextAgent: ReviewAgent) => {
     if (nextAgent === agent) return;
@@ -309,8 +289,6 @@ export function ReviewLaunchDialog({
     handleModelSelect({ platform: agent, id: nextModel, label: nextModel });
   };
 
-  const title = kind === "looped" ? "Configure looped code review" : "Configure code review";
-
   return (
     <Dialog
       open={open}
@@ -322,18 +300,12 @@ export function ReviewLaunchDialog({
         <DialogHeader className="m-0 shrink-0 border-b border-divider bg-background px-5 pb-4 pt-5 sm:m-0 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              {kind === "looped" ? (
-                <Layers3 className="size-4" />
-              ) : (
-                <BrainCircuit className="size-4" />
-              )}
+              <BrainCircuit className="size-4" />
             </span>
-            {title}
+            Configure code review
           </DialogTitle>
           <DialogDescription>
-            {kind === "looped"
-              ? "Run fresh native review sessions, reconcile and fix their pooled findings, then create a PR."
-              : "Run one native review and return its report directly in Markdown."}
+            Run one native review and return its report directly in Markdown.
           </DialogDescription>
         </DialogHeader>
 
@@ -348,7 +320,6 @@ export function ReviewLaunchDialog({
               model: selectedModel?.id ?? model,
               reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
               fastMode: speedAvailable ? fastMode : undefined,
-              ...(kind === "looped" ? { passAllowance: Number(passAllowance) } : {}),
             });
           }}
         >
@@ -367,7 +338,7 @@ export function ReviewLaunchDialog({
               aria-label="Review configuration"
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
             >
-              <Step number={1} icon={<Bot className="size-4" />} last={kind !== "looped"}>
+              <Step number={1} icon={<Bot className="size-4" />} last>
                 {/* The visible label has to read the same as the trigger's
                   `ariaLabel`, or speech input cannot address the control by
                   the name a sighted user can see. */}
@@ -411,37 +382,6 @@ export function ReviewLaunchDialog({
                 )}
               </Step>
 
-              {kind === "looped" && (
-                <Step number={2} icon={<Layers3 className="size-4" />} last>
-                  <Label
-                    htmlFor="review-pass-allowance"
-                    className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
-                  >
-                    Initial review-pass allowance
-                  </Label>
-                  <Select value={passAllowance} onValueChange={setPassAllowance}>
-                    <SelectTrigger
-                      id="review-pass-allowance"
-                      className="h-11 w-full border-zinc-700/80 bg-input-surface"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
-                        <SelectItem key={value} value={String(value)}>
-                          {value} {value === 1 ? "pass" : "passes"}
-                          {value === LOOPED_REVIEW_DEFAULT_ALLOWANCE ? " (default)" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
-                    A round stops early when reconciliation changes nothing. After fixes, the next
-                    allowance is halved and rounded up.
-                  </p>
-                </Step>
-              )}
-
               <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
                 <span className="text-zinc-500">Launch:</span> {summary}
               </div>
@@ -457,13 +397,7 @@ export function ReviewLaunchDialog({
                 Cancel
               </Button>
               <Button type="submit" disabled={busy}>
-                {busy
-                  ? kind === "looped"
-                    ? "Starting looped review…"
-                    : "Starting review…"
-                  : kind === "looped"
-                    ? "Start looped review"
-                    : "Start review"}
+                {busy ? "Starting review…" : "Start review"}
               </Button>
             </DialogFooter>
           </fieldset>

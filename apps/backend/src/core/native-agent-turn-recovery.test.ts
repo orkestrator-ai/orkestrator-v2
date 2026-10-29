@@ -153,7 +153,7 @@ describe("NativeAgentTurnRecovery", () => {
     expect(recovery.appliesTo({ agent: AGENT })).toBe(true);
     expect(recovery.appliesTo({ agent: AGENT, origin: "interactive-native" })).toBe(true);
     expect(recovery.appliesTo({ agent: AGENT, origin: "build-pipeline" })).toBe(false);
-    expect(recovery.appliesTo({ agent: AGENT, origin: "looped-review" })).toBe(false);
+    expect(recovery.appliesTo({ agent: AGENT, origin: "automated-review" })).toBe(false);
     expect(recovery.appliesTo({ agent: "codex" })).toBe(false);
   });
 

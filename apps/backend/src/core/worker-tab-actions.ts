@@ -16,8 +16,7 @@ import {
 
 /**
  * Backend edits to a worker's pane layout on a coordinator's behalf: open or
- * navigate a browser tab, open a looped-review tab, and focus, close or move
- * any tab. The authoritative layout is edited directly, as
+ * navigate a browser tab, and focus, close or move any tab. The authoritative layout is edited directly, as
  * `openMultiReviewTab` does, so the edit lands whether or not the worker is
  * on screen; a renderer that has it loaded follows the `pane-layout`
  * announcement. Each write is a compare-and-set that recomputes the edit on
@@ -216,31 +215,6 @@ export function openWorkerBrowserTab(
       };
       return true;
     },
-  );
-}
-
-/** Open or focus a looped review's tab, as the Looped review button does. */
-export function openLoopedReviewTab(
-  storage: StorageService,
-  input: { environmentId: string; workflowId: string },
-): Promise<WorkerTabUi> {
-  return openTab(
-    storage,
-    input.environmentId,
-    (tab) =>
-      tab.type === "looped-review" &&
-      isRecord(tab.loopedReviewTabData) &&
-      tab.loopedReviewTabData.workflowId === input.workflowId,
-    (environment) => ({
-      id: `looped-review:${input.workflowId}`,
-      type: "looped-review",
-      displayTitle: "Looped Review",
-      loopedReviewTabData: {
-        environmentId: environment.id,
-        workflowId: input.workflowId,
-        isLocal: environment.environmentType === "local",
-      },
-    }),
   );
 }
 

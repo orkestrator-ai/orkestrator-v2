@@ -814,8 +814,6 @@ export async function deletePaneLayout(
   });
 }
 
-// --- Looped Code Review Workflow Commands ---
-
 /** One entry of a directory on the machine running the Orkestrator backend. */
 export interface HostDirectoryEntry {
   name: string;

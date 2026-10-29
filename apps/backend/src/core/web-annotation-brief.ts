@@ -32,6 +32,7 @@ import {
   WEB_ANNOTATION_WORKSPACE_DIRECTORY,
   webAnnotationProducerSource,
   webAnnotationRequestMarker,
+  webAnnotationSourceHintFields,
   webAnnotationUtf8Bytes,
   type WebAnnotationAnchor,
   type WebAnnotationAsset,
@@ -365,7 +366,7 @@ function sectionValues(
         ...(evidence?.sourceHints?.length
           ? {
               sourceHints: evidence.sourceHints.map((hint) => ({
-                ...hint,
+                ...webAnnotationSourceHintFields(hint),
                 note: "candidate location only; verify in the repository",
               })),
             }

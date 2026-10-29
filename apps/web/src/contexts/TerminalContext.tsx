@@ -6,13 +6,7 @@ import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 export type TerminalTabType =
   "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "root";
 export type CreatableTabType =
-  | TerminalTabType
-  | "agent-native"
-  | "browser"
-  | "design-canvas"
-  | "looped-review"
-  | "multi-review"
-  | "pull-request";
+  TerminalTabType | "agent-native" | "browser" | "design-canvas" | "multi-review" | "pull-request";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
@@ -24,7 +18,6 @@ export type TabType =
   | "agent-native"
   | "claude-tmux"
   | "claude-build"
-  | "looped-review"
   | "multi-review"
   | "pull-request";
 
@@ -67,8 +60,6 @@ export interface CreateTabOptions {
   initialUrl?: string;
   /** The pull request a `pull-request` tab shows, and the view to open on. */
   pullRequest?: import("@/types/paneLayout").PullRequestTabData;
-  /** Existing authoritative workflow opened by a looped-review tab. */
-  loopedReviewId?: string;
   /** Existing authoritative workflow opened by a Multi Review tab. */
   multiReviewId?: string;
   /** Reviewer transcript opened inside an existing Multi Review workflow. */

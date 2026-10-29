@@ -564,47 +564,14 @@ describe("ReviewLaunchDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
   });
 
-  test("configures looped review with allowance 6 by default and supports 1 through 10", () => {
-    const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
-    render(
-      <ReviewLaunchDialog
-        kind="looped"
-        open
-        onOpenChange={() => undefined}
-        defaultTabType="codex"
-        catalog={catalog}
-        onConfirm={onConfirm}
-      />,
-    );
-
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Configure looped code review" })).toBeTruthy();
-    const allowance = screen.getByRole("combobox", {
-      name: "Initial review-pass allowance",
-    });
-    expect(allowance.textContent).toContain("6");
-
-    expect(screen.getAllByRole("option", { name: /pass/ })).toHaveLength(10);
-    fireEvent.click(screen.getByRole("option", { name: /^10 passes/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
-
-    expect(onConfirm).toHaveBeenCalledWith({
-      tabType: "codex",
-      model: "codex-a",
-      reasoningEffort: undefined,
-      passAllowance: 10,
-    });
-  });
-
   test("disables dismissal, the picker, and submission while a launch is busy", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const { onConfirm } = renderDialog({
-      kind: "looped",
       busy: true,
       onOpenChange,
     });
 
-    const startButton = screen.getByRole("button", { name: "Starting looped review…" });
+    const startButton = screen.getByRole("button", { name: "Starting review…" });
     const cancelButton = screen.getByRole("button", { name: "Cancel" });
     expect((startButton as HTMLButtonElement).disabled).toBe(true);
     expect((cancelButton as HTMLButtonElement).disabled).toBe(true);
@@ -771,7 +738,7 @@ describe("ReviewLaunchDialog", () => {
     expect(modelItem(/OpenCode B/)).toBeTruthy();
   });
 
-  test("orders models favourites-first in the looped dialog too", () => {
+  test("orders stored favourite models first", () => {
     const config = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -783,7 +750,6 @@ describe("ReviewLaunchDialog", () => {
       },
     });
     renderDialog({
-      kind: "looped",
       catalog: openCodeCatalog,
       preferredModels: { opencode: "provider/model-a" },
     });
@@ -814,11 +780,11 @@ describe("ReviewLaunchDialog step markers", () => {
   }
 
   test("renders every icon badge as an identically shaped, non-shrinking circle", () => {
-    const { container } = renderDialog({ kind: "looped" });
+    const { container } = renderDialog();
 
     const badges = iconBadges(container);
-    // One header badge + two steps (looped adds the pass-allowance step).
-    expect(badges).toHaveLength(3);
+    // One header badge + one step.
+    expect(badges).toHaveLength(2);
     for (const badge of badges) {
       expect(badge.className).toContain("rounded-full");
       // Without shrink-0 a flex sibling can squash the circle into an ellipse.
@@ -828,17 +794,17 @@ describe("ReviewLaunchDialog step markers", () => {
   });
 
   test("sizes every badge glyph consistently", () => {
-    const { container } = renderDialog({ kind: "looped" });
+    const { container } = renderDialog();
 
     const glyphs = iconBadges(container).map((badge) => badge.querySelector("svg"));
-    expect(glyphs).toHaveLength(3);
+    expect(glyphs).toHaveLength(2);
     for (const glyph of glyphs) {
       expect(glyph).not.toBeNull();
       expect(glyph!.getAttribute("class")).toContain("size-4");
     }
   });
 
-  test("drops the second step and its connector for a one-pass review", () => {
+  test("renders a single step with no connector", () => {
     const { container } = renderDialog();
 
     // Steps are decorative, so they are hidden from the accessibility tree.
@@ -848,12 +814,6 @@ describe("ReviewLaunchDialog step markers", () => {
     expect(iconBadges(container)).toHaveLength(2);
     // A single step has nothing to connect to.
     expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(0);
-  });
-
-  test("connects both steps for a looped review", () => {
-    const { container } = renderDialog({ kind: "looped" });
-
-    expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(1);
   });
 });
 
@@ -902,22 +862,6 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
 
     expect(picker().textContent).toContain("Claude A");
     expect(picker().textContent).toContain("Default");
-  });
-
-  test("resets the pass allowance when it is reopened", () => {
-    const { props, rerender } = renderDialog({ kind: "looped" });
-
-    fireEvent.click(screen.getByRole("option", { name: /^10 passes/ }));
-    expect(
-      screen.getByRole("combobox", { name: "Initial review-pass allowance" }).textContent,
-    ).toContain("10");
-
-    rerender(<ReviewLaunchDialog {...props} open={false} />);
-    rerender(<ReviewLaunchDialog {...props} open />);
-
-    expect(
-      screen.getByRole("combobox", { name: "Initial review-pass allowance" }).textContent,
-    ).toContain("6");
   });
 
   test("keeps an in-progress selection when the catalog is refreshed while open", () => {
@@ -1115,19 +1059,6 @@ describe("ReviewLaunchDialog summary", () => {
     });
 
     expect(screen.getByText(/Claude Native · Claude A · high effort · one pass/)).toBeTruthy();
-  });
-
-  test("summarises a looped review and tracks the pass allowance", () => {
-    renderDialog({ kind: "looped" });
-
-    expect(
-      screen.getByText(/Claude Native · Claude A · default effort · 6 initial passes/),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("option", { name: /^3 passes/ }));
-    expect(
-      screen.getByText(/Claude Native · Claude A · default effort · 3 initial passes/),
-    ).toBeTruthy();
   });
 
   test("names the provider chosen in the picker in the summary", () => {

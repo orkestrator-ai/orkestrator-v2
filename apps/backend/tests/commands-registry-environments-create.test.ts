@@ -3,6 +3,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import {
   PENDING_RENAME_FAILED_MESSAGE,
   PENDING_RENAME_RECOVERED_MESSAGE,
+  PENDING_RENAME_STILL_FAILING_MESSAGE,
 } from "../src/core/pending-rename-failure-log";
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -512,6 +513,69 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
     }
   });
 
+  test("backs off a signed-out Codex from 30 seconds to a 30-minute cap and keeps the intent", async () => {
+    const environment = createEnvironment({
+      id: "env-rename-signed-out",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+      worktreePath: undefined,
+      pendingRenamePrompt: "Name this while signed out",
+    });
+    const { context } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    let clock = 1_000_000;
+    const now = spyOn(Date, "now").mockImplementation(() => clock);
+
+    try {
+      // Fails the way a signed-out Codex does, on every call.
+      await withFakeCodex(
+        `#!/bin/sh
+printf 'invoke\n' >> "$FAKE_CODEX_LOG"
+printf '401 Unauthorized: Missing bearer or basic authentication in header\n' >&2
+exit 1
+`,
+        async (logPath) => {
+          const invocations = async () =>
+            (await fs.readFile(logPath, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+          const reconcile = () =>
+            commands.get("reconcile_pending_environment_renames")?.({}, context);
+
+          await reconcile();
+          expect(await invocations()).toBe(1);
+
+          const waits = [30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000];
+          for (const [index, wait] of waits.entries()) {
+            clock += wait - 1;
+            await reconcile();
+            expect(await invocations()).toBe(index + 1);
+            clock += 1;
+            await reconcile();
+            expect(await invocations()).toBe(index + 2);
+          }
+
+          // Naming never gives up: the generated name and the intent stay, so
+          // a later sign-in still produces a generated name.
+          expect(environment.name).toBe("20260415-123456");
+          expect(environment.pendingRenamePrompt).toBe("Name this while signed out");
+          // One full line, then counts at the 2nd, 4th and 8th failure.
+          expect(warn.mock.calls.map(([message]) => message)).toEqual([
+            PENDING_RENAME_FAILED_MESSAGE,
+            PENDING_RENAME_STILL_FAILING_MESSAGE,
+            PENDING_RENAME_STILL_FAILING_MESSAGE,
+            PENDING_RENAME_STILL_FAILING_MESSAGE,
+          ]);
+          expect(JSON.stringify(warn.mock.calls)).not.toContain("signed out");
+        },
+      );
+    } finally {
+      now.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   test("does not repeat name generation when an unreachable origin is ignored", async () => {
     const worktreePath = await createGitRepoOnBranch("timestamp-name");
     await runGit(worktreePath, ["remote", "add", "origin", "/definitely/missing/origin.git"]);
@@ -559,7 +623,7 @@ printf '%s\n' '{"slug":"Offline Rename"}' > "$out"
     );
   });
 
-  test("lets an explicit first prompt bypass rename retry backoff", async () => {
+  test("lets an explicit first prompt bypass backoff while preserving the retry failure count", async () => {
     const environment = createEnvironment({
       id: "env-explicit-rename-retry",
       name: "20260415-123456",
@@ -572,6 +636,7 @@ printf '%s\n' '{"slug":"Offline Rename"}' > "$out"
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const now = spyOn(Date, "now").mockReturnValue(100_000);
 
     try {
       await withFakeCodex(
@@ -582,6 +647,8 @@ exit 1
 `,
         async (logPath) => {
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
+          now.mockReturnValue(110_000);
           await commands.get("prepare_environment_first_prompt")?.(
             { environmentId: environment.id, prompt: "Retry this prompt" },
             context,
@@ -591,9 +658,24 @@ exit 1
             "explicit first-prompt retry during backoff",
           );
           expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
+
+          // The explicit retry failed for the same intent, so automatic retries
+          // now wait 60 seconds from that failure instead of restarting at 30.
+          for (const timestamp of [140_000, 169_999]) {
+            now.mockReturnValue(timestamp);
+            await commands.get("reconcile_pending_environment_renames")?.({}, context);
+            expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(
+              2,
+            );
+          }
+
+          now.mockReturnValue(170_000);
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(3);
         },
       );
     } finally {
+      now.mockRestore();
       warn.mockRestore();
     }
   });

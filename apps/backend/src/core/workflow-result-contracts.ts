@@ -20,14 +20,14 @@ import type {
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import {
-  LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+  REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
   parseFixResult,
   parsePrResult,
   parseReviewPreparationResult,
-} from "./looped-review-prompts.js";
+} from "./review-prompts.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 
 const MAX_ISSUES = 32;
@@ -609,7 +609,7 @@ export function workflowResultJsonSchema(
     if (kind === "review-preparation") return REVIEW_PREPARATION_RESULT_JSON_SCHEMA;
     if (kind === "review-report" || kind === "consolidated-review")
       return STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
-    if (kind === "review-reconciliation") return LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA;
+    if (kind === "review-reconciliation") return REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA;
     if (kind === "fix-result") return REVIEW_FIX_RESULT_JSON_SCHEMA;
     if (kind === "verification-result") return VERIFICATION_VERDICT_SCHEMA;
     if (kind === "pr-result") return REVIEW_PR_RESULT_JSON_SCHEMA;

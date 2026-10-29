@@ -9,7 +9,7 @@ import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol
 import {
   createPipelineEnvironmentGit,
   createEnvironmentCommandRunner,
-  generateLoopedReviewPackage,
+  generateReviewPackage,
   parseGitPorcelainPaths,
   parseReviewArtifactStatOutput,
   REVIEW_ARTIFACT_STAT_SCRIPT,
@@ -134,7 +134,7 @@ function validationEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("generateLoopedReviewPackage", () => {
+describe("generateReviewPackage", () => {
   test("retries timed-out review package status without fsmonitor", async () => {
     const { worktree, storage } = await reviewEnvironment();
     const runtime = new BackendRuntime({ emit: () => undefined });
@@ -151,7 +151,7 @@ describe("generateLoopedReviewPackage", () => {
     );
     try {
       await fs.writeFile(path.join(worktree, "untracked.txt"), "new\n");
-      const reference = await generateLoopedReviewPackage(
+      const reference = await generateReviewPackage(
         "env-1",
         "timeout-package",
         1,
@@ -178,7 +178,7 @@ describe("generateLoopedReviewPackage", () => {
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
     await fs.writeFile(path.join(worktree, "untracked.txt"), "new\n");
 
-    const reference = await generateLoopedReviewPackage(
+    const reference = await generateReviewPackage(
       "env-1",
       "package-1",
       1,
@@ -208,7 +208,7 @@ describe("generateLoopedReviewPackage", () => {
     await git(worktree, "commit", "-m", "feat: change");
     await writeValidationArtifacts(worktree, "1 pass\n", "");
 
-    const reference = await generateLoopedReviewPackage(
+    const reference = await generateReviewPackage(
       "env-1",
       "package-1",
       1,
@@ -258,7 +258,7 @@ describe("generateLoopedReviewPackage", () => {
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
     await git(worktree, "commit", "-am", "feat: change");
 
-    const reference = await generateLoopedReviewPackage(
+    const reference = await generateReviewPackage(
       "env-1",
       "package-1",
       1,
@@ -301,7 +301,7 @@ describe("generateLoopedReviewPackage", () => {
     );
 
     await expect(
-      generateLoopedReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
+      generateReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
         storage,
         runtime: new BackendRuntime({ emit: () => undefined }),
       } as never),
@@ -322,7 +322,7 @@ describe("generateLoopedReviewPackage", () => {
     await fs.symlink(outside, path.join(worktree, ARTIFACT_DIRECTORY, "validation-01.stderr.txt"));
 
     await expect(
-      generateLoopedReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
+      generateReviewPackage("env-1", "package-1", 1, "main", [validationEntry()], [], [], {
         storage,
         runtime: new BackendRuntime({ emit: () => undefined }),
       } as never),
@@ -332,7 +332,7 @@ describe("generateLoopedReviewPackage", () => {
   test("keeps validation drift that is no longer dirty when the package is sealed", async () => {
     const { worktree, storage } = await reviewEnvironment();
 
-    const reference = await generateLoopedReviewPackage(
+    const reference = await generateReviewPackage(
       "env-1",
       "package-1",
       1,
@@ -354,16 +354,10 @@ describe("generateLoopedReviewPackage", () => {
     const { worktree, storage } = await reviewEnvironment();
     await git(worktree, "mv", "tracked.txt", "renamed.txt");
 
-    const reference = await generateLoopedReviewPackage(
-      "env-1",
-      "package-1",
-      1,
-      "main",
-      [],
-      [],
-      [],
-      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
-    );
+    const reference = await generateReviewPackage("env-1", "package-1", 1, "main", [], [], [], {
+      storage,
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    } as never);
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
     ) as ReviewPackage;
@@ -380,16 +374,10 @@ describe("generateLoopedReviewPackage", () => {
       reason: "Changed since the review snapshot",
     }));
 
-    const reference = await generateLoopedReviewPackage(
-      "env-1",
-      "package-1",
-      1,
-      "main",
-      [],
-      notes,
-      [],
-      { storage, runtime: new BackendRuntime({ emit: () => undefined }) } as never,
-    );
+    const reference = await generateReviewPackage("env-1", "package-1", 1, "main", [], notes, [], {
+      storage,
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    } as never);
     const written = JSON.parse(
       await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
     ) as ReviewPackage;
@@ -419,7 +407,7 @@ describe("generateLoopedReviewPackage", () => {
       { stdoutPath: null },
     ]) {
       await expect(
-        generateLoopedReviewPackage(
+        generateReviewPackage(
           "env-1",
           "package-1",
           1,

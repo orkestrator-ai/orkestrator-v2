@@ -14,6 +14,10 @@ import { reviewLensDraftError } from "@/components/review/ReviewLensField";
 import { reviewLensPresetsError } from "./agent/ReviewLensPresetsEditor";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
 import {
+  MULTI_REVIEW_DEFAULT_ENGINE,
+  type MultiReviewEngine,
+} from "@orkestrator/protocol/multi-review";
+import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
   type CoordinatorResearchMcpServer,
@@ -138,6 +142,8 @@ interface CoreFieldsSnapshot {
   reviewInstruction: string;
   /** Resolved: the shipped five when none are stored. */
   reviewLensPresets: ReviewLensPreset[];
+  /** Which runtime runs new Multi Reviews (item 301); absent is bespoke. */
+  multiReviewEngine: MultiReviewEngine;
 }
 
 /** The same fields as `CoreFieldsSnapshot`, read from the persisted config. */
@@ -187,6 +193,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     webClientEnabled: global.webClientEnabled ?? true,
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
     reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
+    multiReviewEngine: global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
   };
 }
 
@@ -268,6 +275,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
+    global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
     // Canonical shape, so an edit that only reorders keys is not a change.
     normalizeAgentSettings(global.agentSettings),
   ]);
@@ -374,6 +382,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [reviewLensPresets, setReviewLensPresets] = useState(() =>
     resolveReviewLensPresets(global.reviewLensPresets),
   );
+  const [multiReviewEngine, setMultiReviewEngine] = useState<MultiReviewEngine>(
+    global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
+  );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(
@@ -468,6 +479,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setReviewLensPresets(resolveReviewLensPresets(global.reviewLensPresets));
+    setMultiReviewEngine(global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
   }, [global]);
 
   // Entering the web-client section starts a fresh status load, and entering
@@ -645,6 +657,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
+      multiReviewEngine,
     }),
     [
       cpuCores,
@@ -678,6 +691,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
+      multiReviewEngine,
     ],
   );
   const localCoreSignature = useMemo(() => JSON.stringify(localCoreFields), [localCoreFields]);
@@ -850,6 +864,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
         reviewInstruction?: string;
         reviewLensPresets?: ReviewLensPreset[];
+        multiReviewEngine?: MultiReviewEngine;
       } = {
         containerResources: { cpuCores, memoryGb },
         envFilePatterns: patterns,
@@ -890,6 +905,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         notificationSounds: global.notificationSounds,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
+        multiReviewEngine,
       };
 
       if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
@@ -1158,6 +1174,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setReviewInstruction,
     reviewLensPresets,
     setReviewLensPresets,
+    multiReviewEngine,
+    setMultiReviewEngine,
     webClientStatus,
     setWebClientStatus,
     webClientApplyError,

@@ -99,6 +99,25 @@ describe("the engine setting", () => {
     expect(configuredMultiReviewEngine("other", {})).toBe("bespoke");
   });
 
+  test("the app setting is stored, validated, and kept by a save that omits it", async () => {
+    const w = await world();
+    const storage = w.fixture.storage;
+    const config = await storage.loadConfig();
+    expect(config.global.multiReviewEngine).toBeUndefined();
+    await storage.updateGlobalConfig({ ...config.global, multiReviewEngine: "graph" });
+    expect((await storage.loadConfig()).global.multiReviewEngine).toBe("graph");
+    // A renderer save that predates the setting does not reset it.
+    const { multiReviewEngine: _omitted, ...withoutEngine } = (await storage.loadConfig()).global;
+    await storage.updateGlobalConfig(withoutEngine);
+    expect((await storage.loadConfig()).global.multiReviewEngine).toBe("graph");
+    await expect(
+      storage.updateGlobalConfig({
+        ...config.global,
+        multiReviewEngine: "turbo" as unknown as "graph",
+      }),
+    ).rejects.toThrow(/bespoke or graph/);
+  });
+
   test("run ids map back to their workflow and to nothing else", () => {
     expect(multiReviewWorkflowIdOfRun(multiReviewGraphRunId("w-1"))).toBe("w-1");
     expect(multiReviewWorkflowIdOfRun("launch-abc")).toBeUndefined();

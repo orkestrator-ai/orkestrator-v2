@@ -98,6 +98,7 @@ import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/prot
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { ReviewLensPresetsEditor } from "./agent/ReviewLensPresetsEditor";
+import { MultiReviewEngineSetting } from "./agent/MultiReviewEngineSetting";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
@@ -326,6 +327,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setReviewInstruction,
     reviewLensPresets,
     setReviewLensPresets,
+    multiReviewEngine,
+    setMultiReviewEngine,
     webClientStatus,
     setWebClientStatus,
     setWebClientApplyError,
@@ -447,6 +450,14 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <ReviewLensPresetsEditor
           presets={reviewLensPresets}
           onChange={setReviewLensPresets}
+          disabled={isSaving}
+        />
+      </div>
+
+      <div className="border-t border-zinc-800/80 pt-5">
+        <MultiReviewEngineSetting
+          value={multiReviewEngine}
+          onChange={setMultiReviewEngine}
           disabled={isSaving}
         />
       </div>

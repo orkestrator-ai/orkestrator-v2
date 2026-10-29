@@ -1180,6 +1180,22 @@ group and the caller: an operator's choice is honoured, and an aggregate run
 with a private `TMPDIR` can be inspected afterwards for leftovers. Before
 2026-10-26 Turbo dropped it and those groups fell back to `/tmp`.
 
+Every Bun test process, and the runner of the `test:browser` Playwright suites,
+then moves to a private `TMPDIR` of its own, `ork-test-tmp-<pid>-<random>`
+(`tests/private-tmpdir.ts`, loaded by `tests/isolate-tmpdir.ts` after the
+other isolation preloads). It is made in the process's temporary directory,
+except on macOS, where it goes under `/private/tmp`: inside the 49-character
+per-user directory, test Unix sockets passed the 104-byte limit. Children inherit it, so a Playwright browser profile
+(`playwright_chromiumdev_profile-*`, a name with no owner in it) or anything
+else a test leaves lands inside a directory a later run can attribute and
+remove. The preload removes its directory when its `afterAll` runs unless a
+live process still names it; a killed process's directory is removed by the
+next test process once the owner has exited and the directory is an hour old
+(0248). A test that needs the shared temporary directory reads
+`ORKESTRATOR_TEST_PARENT_TMPDIR`. For a leak hunt like 0247's, set
+`ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
+for inspection.
+
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
 run and uses them to schedule slow files earlier on future runs. The profiles

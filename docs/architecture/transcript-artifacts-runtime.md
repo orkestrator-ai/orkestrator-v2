@@ -214,7 +214,9 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   cannot be inspected, its recorded scratch is retained. Older scratch
   without an identity uses a day-long limit while its PID is live, as do
   names without a PID: a backend killed during a job, or stopped while an exit was
-  still unverified, leaves its scratch behind. The watchdog
+  still unverified, leaves its scratch behind. A stop that leaves scratch
+  logs `worker scratch left for startup recovery` with only a count and the
+  isolation mode, and the next start logs how many it removed. The watchdog
   lives in the backend, kills the whole process tree on deadline or memory
   breach (single process over 1 GiB or tree over 4 GiB, sampled every
   500 ms), and verifies exit before freeing the slot. Network denial is

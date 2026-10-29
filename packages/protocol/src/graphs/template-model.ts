@@ -198,6 +198,11 @@ export interface GraphOutputPortSpec {
   required?: boolean;
   /** Outputs of a consolidating node (report §5.9). */
   provenance?: GraphProvenanceMode;
+  /**
+   * `decision@N` outputs only: the options `choice` must be one of (report
+   * §5.3), such as a gate's branch values or the lens keys being judged.
+   */
+  choices?: string[];
 }
 
 // ----------------------------------------------------------------- execution

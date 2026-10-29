@@ -18,6 +18,7 @@ import {
   GraphNameScope,
   checkGraphBoolean,
   checkGraphDescription,
+  checkGraphEnumValue,
   checkGraphFieldPath,
   checkGraphId,
   checkGraphInteger,
@@ -163,6 +164,7 @@ const OUTPUT_PORT_FIELDS = [
   "description",
   "required",
   "provenance",
+  "choices",
 ] as const;
 
 function checkPort(
@@ -205,7 +207,30 @@ function checkPort(
       errors,
       GRAPH_PROVENANCE_MODES,
     );
+    if (value.choices !== undefined) {
+      checkDecisionChoices(value.choices, joinPath(path, "choices"), errors, value.type);
+    }
   }
+}
+
+/** A decision output's options: 2 to 32 distinct enum-grammar values. */
+function checkDecisionChoices(
+  value: unknown,
+  path: string,
+  errors: FieldErrorCollector,
+  type: unknown,
+): void {
+  const parsed = typeof type === "string" ? parseGraphTypeRef(type) : null;
+  if (parsed && (parsed.name !== "decision" || parsed.listDepth > 0)) {
+    errors.add(path, "not_applicable", "choices apply only to decision outputs");
+    return;
+  }
+  if (!checkGraphList(value, path, errors, { min: 2, max: B.maxEnumOptions })) return;
+  const scope = new GraphNameScope(errors, "choice");
+  (value as unknown[]).forEach((choice, index) => {
+    const choicePath = joinPath(path, index);
+    if (checkGraphEnumValue(choice, choicePath, errors)) scope.add(choice, choicePath);
+  });
 }
 
 /** Check a node's port list; returns the valid port names. */

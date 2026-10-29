@@ -14,6 +14,7 @@ import {
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 import type {
   WorkflowResultKind,
   WorkflowResultSlotInput,
@@ -406,153 +407,8 @@ function validateReconciliationContext(
   return issues.slice(0, MAX_ISSUES);
 }
 
-function schemaTypeMatches(type: unknown, value: unknown): boolean {
-  if (type === "object") return record(value);
-  if (type === "array") return Array.isArray(value);
-  if (type === "string") return typeof value === "string";
-  if (type === "number") return typeof value === "number" && Number.isFinite(value);
-  if (type === "integer") return Number.isSafeInteger(value);
-  if (type === "boolean") return typeof value === "boolean";
-  if (type === "null") return value === null;
-  return true;
-}
-
-/** Bounded validator for the JSON-Schema subset used by workflow result contracts. */
-export function validateWorkflowJsonSchema(
-  schema: JsonSchema | undefined,
-  value: unknown,
-): WorkflowResultValidationIssue[] {
-  if (!schema) return [];
-  const issues: WorkflowResultValidationIssue[] = [];
-  const visit = (
-    candidateSchema: unknown,
-    candidate: unknown,
-    path: string,
-    depth: number,
-  ): void => {
-    if (issues.length >= MAX_ISSUES) return;
-    if (depth > 32) {
-      issues.push(issue(path, "too_deep", "Result exceeds the maximum nesting depth"));
-      return;
-    }
-    if (!record(candidateSchema)) return;
-    if (Array.isArray(candidateSchema.anyOf)) {
-      const alternatives = candidateSchema.anyOf;
-      if (
-        !alternatives.some(
-          (alternative) =>
-            validateWorkflowJsonSchema(alternative as JsonSchema, candidate).length === 0,
-        )
-      ) {
-        issues.push(issue(path, "invalid_type", "Value does not match any allowed shape"));
-      }
-      return;
-    }
-    if (candidateSchema.const !== undefined && candidate !== candidateSchema.const) {
-      issues.push(
-        issue(path, "invalid_value", `Value must equal ${JSON.stringify(candidateSchema.const)}`),
-      );
-      return;
-    }
-    if (Array.isArray(candidateSchema.enum) && !candidateSchema.enum.includes(candidate)) {
-      issues.push(
-        issue(
-          path,
-          "invalid_enum",
-          `Value must be one of ${candidateSchema.enum.map(String).join(", ")}`,
-        ),
-      );
-      return;
-    }
-    if (!schemaTypeMatches(candidateSchema.type, candidate)) {
-      issues.push(issue(path, "invalid_type", `Expected ${String(candidateSchema.type)}`));
-      return;
-    }
-    if (typeof candidate === "number") {
-      if (typeof candidateSchema.minimum === "number" && candidate < candidateSchema.minimum)
-        issues.push(issue(path, "too_small", `Value must be at least ${candidateSchema.minimum}`));
-      if (typeof candidateSchema.maximum === "number" && candidate > candidateSchema.maximum)
-        issues.push(issue(path, "too_large", `Value must be at most ${candidateSchema.maximum}`));
-    }
-    if (typeof candidate === "string") {
-      if (
-        typeof candidateSchema.minLength === "number" &&
-        candidate.length < candidateSchema.minLength
-      )
-        issues.push(
-          issue(
-            path,
-            "too_short",
-            `Text must contain at least ${candidateSchema.minLength} characters`,
-          ),
-        );
-      if (
-        typeof candidateSchema.maxLength === "number" &&
-        candidate.length > candidateSchema.maxLength
-      )
-        issues.push(
-          issue(
-            path,
-            "too_long",
-            `Text must contain at most ${candidateSchema.maxLength} characters`,
-          ),
-        );
-    }
-    if (Array.isArray(candidate) && candidateSchema.items !== undefined) {
-      if (
-        typeof candidateSchema.minItems === "number" &&
-        candidate.length < candidateSchema.minItems
-      )
-        issues.push(
-          issue(
-            path,
-            "too_few_items",
-            `Array must contain at least ${candidateSchema.minItems} items`,
-          ),
-        );
-      if (
-        typeof candidateSchema.maxItems === "number" &&
-        candidate.length > candidateSchema.maxItems
-      )
-        issues.push(
-          issue(
-            path,
-            "too_many_items",
-            `Array must contain at most ${candidateSchema.maxItems} items`,
-          ),
-        );
-      candidate
-        .slice(0, 4096)
-        .forEach((entry, index) =>
-          visit(candidateSchema.items, entry, `${path}[${index}]`, depth + 1),
-        );
-      if (candidate.length > 4096)
-        issues.push(issue(path, "too_many_items", "Array exceeds the validation item limit"));
-      return;
-    }
-    if (!record(candidate)) return;
-    const properties = record(candidateSchema.properties) ? candidateSchema.properties : {};
-    const required = Array.isArray(candidateSchema.required)
-      ? candidateSchema.required.filter((key): key is string => typeof key === "string")
-      : [];
-    for (const key of required) {
-      if (!Object.hasOwn(candidate, key))
-        issues.push(issue(`${path}.${key}`, "missing_field", "Required field is missing"));
-    }
-    if (candidateSchema.additionalProperties === false) {
-      for (const key of Object.keys(candidate)) {
-        if (!Object.hasOwn(properties, key))
-          issues.push(issue(`${path}.${key}`, "unknown_field", "Field is not allowed"));
-      }
-    }
-    for (const [key, propertySchema] of Object.entries(properties)) {
-      if (Object.hasOwn(candidate, key))
-        visit(propertySchema, candidate[key], `${path}.${key}`, depth + 1);
-    }
-  };
-  visit(schema, value, "$", 0);
-  return issues.slice(0, MAX_ISSUES);
-}
+// Shared with the browser so graph designers validate examples the same way.
+export { validateWorkflowJsonSchema };
 
 export function workflowResultJsonSchema(
   kind: WorkflowResultKind,

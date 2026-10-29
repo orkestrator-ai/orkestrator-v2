@@ -595,7 +595,11 @@ function designBakeOff(): GraphTemplateV1 {
           },
         ],
         outputs: [
-          { name: "decision", type: "decision@1" },
+          {
+            name: "decision",
+            type: "decision@1",
+            choices: ["simplicity", "performance", "security"],
+          },
           { name: "brief", type: "design-brief@1", provenance: "cite" },
         ],
       },

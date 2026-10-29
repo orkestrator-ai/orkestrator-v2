@@ -37,7 +37,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 101 | [101-template-schema.md](101-template-schema.md) | 1 | in-progress | — | `GraphTemplateV1` and its parts, with hand-written guards and bounds, in `packages/protocol/src/graphs/template.ts`. |
-| 102 | [102-type-library.md](102-type-library.md) | 1 | not-started | 101 | Built-in artifact types mapped to existing schemas, custom `ArtifactTypeDef`, the cross-provider schema subset, schema from example. |
+| 102 | [102-type-library.md](102-type-library.md) | 1 | in-progress | 101 | Built-in artifact types mapped to existing schemas, custom `ArtifactTypeDef`, the cross-provider schema subset, schema from example. |
 | 103 | [103-result-kind-registry.md](103-result-kind-registry.md) | 1 | not-started | 001 | Registry replaces the result-kind `switch` statements; new `graph-output` kind with per-port submit tools; generic provenance validator. |
 | 104 | [104-predicates.md](104-predicates.md) | 1 | not-started | 101, 102 | JSON predicate language: operators, typed paths, a total and bounded evaluator. |
 | 105 | [105-prompt-templates.md](105-prompt-templates.md) | 1 | not-started | 101, 102, 106 | Logic-less templates, five render modes, evidence frames, size estimates, lints, the locked system contract. |

@@ -30,6 +30,7 @@ A pure compiler that turns a template into a frozen, hashed plan, or explains ex
 - [ ] `graphs/cost.ts`: best-case and worst-case agent sessions and peak parallelism.
 - [ ] Port option `firstIterationFrom` for loops (report §9.2).
 - [ ] `graphs/lint.ts` collects prompt and template lints into the same diagnostics.
+- [ ] Reference checks the template guard leaves to the compiler (see [101](101-template-schema.md) Notes), and rejection of `subgraph` nodes until [402](402-subgraphs.md).
 
 ## Tests
 

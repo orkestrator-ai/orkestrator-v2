@@ -1,5 +1,6 @@
 import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
+import { registerGraphLaunchCommands } from "./commands-registry-graph-launch.js";
 import {
   registerGraphRunCommands,
   registerGraphRunRewindCommands,
@@ -362,6 +363,7 @@ export function createCommandRegistry(
   registerWorkflowResultCommands(register);
   registerGraphTemplateCommands(register);
   registerGraphRunCommands(register);
+  registerGraphLaunchCommands(register);
   registerGraphRunRewindCommands(register);
   registerTeardownCommands(register, dependencies);
   // Last: the public contract composes the commands registered above.

@@ -53,6 +53,7 @@ import {
 } from "./graph-project-templates.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import type { AppConfig, Project } from "./models.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { GraphTemplatesStorage } from "./storage.js";
 
@@ -105,6 +106,8 @@ interface CompileContext {
   ceiling: GraphCapabilityCeiling;
   providers?: AgentPlatform[];
   host: AgentEnforcementHost;
+  /** The launch environment's resolved policy (item 214); design time uses the compiler's default. */
+  environment?: NativeAgentExecutionPolicy;
   key: string;
 }
 
@@ -204,7 +207,13 @@ export class GraphTemplateService {
    */
   async compile(
     target: { ref: GraphTemplateRef } | { template: unknown },
-    input: { projectId?: string; includePlan?: boolean; forLaunch?: boolean } = {},
+    input: {
+      projectId?: string;
+      includePlan?: boolean;
+      forLaunch?: boolean;
+      /** The launch environment's resolved execution policy (item 214). */
+      environment?: NativeAgentExecutionPolicy;
+    } = {},
   ): Promise<GraphTemplateCompileResponse> {
     if ("template" in target) {
       if (input.forLaunch) {
@@ -232,7 +241,10 @@ export class GraphTemplateService {
     // A launch judges providers on the host as it is now (item 209): the
     // sandbox may have stopped working since the last probe.
     if (input.forLaunch) this.host = this.hostSource();
-    const context = await this.compileContext(projectIdFor(target.ref, input.projectId));
+    const context = await this.compileContext(
+      projectIdFor(target.ref, input.projectId),
+      input.environment,
+    );
     const result = this.compileResolved(resolved, context);
     const response = compileResponse(
       this.summary(resolved, context),
@@ -253,14 +265,25 @@ export class GraphTemplateService {
   }
 
   /**
-   * For launch surfaces (item 214): refuses an untrusted template, and returns
-   * the plan (null when the template has errors; check `launchable`).
+   * For launch surfaces (item 214): refuses an untrusted template and an
+   * engine template, compiles under the launch environment's own policy
+   * (`environment`) and the project's ceiling, and returns the plan (null
+   * when the template has errors; check `launchable`).
    */
   async compileForLaunch(
     ref: GraphTemplateRef,
     projectId?: string,
+    environment?: NativeAgentExecutionPolicy,
   ): Promise<GraphTemplateCompileResponse & { plan: CompiledGraphPlan | null }> {
-    const response = await this.compile({ ref }, { projectId, includePlan: true, forLaunch: true });
+    const response = await this.compile(
+      { ref },
+      {
+        projectId,
+        includePlan: true,
+        forLaunch: true,
+        ...(environment ? { environment } : {}),
+      },
+    );
     return { ...response, plan: response.plan ?? null };
   }
 
@@ -589,7 +612,10 @@ export class GraphTemplateService {
     );
   }
 
-  private async compileContext(projectId: string | undefined): Promise<CompileContext> {
+  private async compileContext(
+    projectId: string | undefined,
+    environment?: NativeAgentExecutionPolicy,
+  ): Promise<CompileContext> {
     let ceiling: GraphCapabilityCeiling = DEFAULT_GRAPH_CAPABILITY_CEILING;
     if (projectId) {
       await this.requireProject(projectId);
@@ -602,7 +628,8 @@ export class GraphTemplateService {
       ceiling,
       ...(providers ? { providers } : {}),
       host,
-      key: JSON.stringify([ceiling, providers ?? null, host.claudeSandbox]),
+      ...(environment ? { environment } : {}),
+      key: JSON.stringify([ceiling, providers ?? null, host.claudeSandbox, environment ?? null]),
     };
   }
 
@@ -670,6 +697,7 @@ function compileOptions(context: CompileContext) {
     ceiling: context.ceiling,
     host: context.host,
     ...(context.providers ? { providers: context.providers } : {}),
+    ...(context.environment ? { environment: context.environment } : {}),
   };
 }
 

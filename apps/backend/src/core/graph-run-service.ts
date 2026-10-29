@@ -32,6 +32,7 @@ import {
   replaceGraphActivation,
   type GraphRun,
   type GraphRunBindings,
+  type GraphRunLaunchInfo,
   type GraphRunTemplateRef,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
@@ -133,6 +134,8 @@ export interface GraphRunLaunch {
   inputs?: Record<string, unknown>;
   /** A mock run (item 213): mock executors only, no sessions, no side effects. */
   mock?: boolean;
+  /** Who launched it and how (item 214): ids only. */
+  launch?: GraphRunLaunchInfo;
 }
 
 export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
@@ -436,6 +439,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       template: { ...launch.template },
       plan,
       bindings: { roles: structuredClone(launch.roles), params, inputs: {} },
+      ...(launch.launch ? { launch: structuredClone(launch.launch) } : {}),
       status: running ? "running" : "provisioning",
       mock: launch.mock ?? false,
       activations: [],

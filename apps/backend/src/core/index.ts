@@ -155,7 +155,10 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import { coordinatorProviderQualification } from "./coordinator-providers.js";
+import {
+  coordinatorProviderQualification,
+  defaultCoordinatorHostCapabilities,
+} from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -181,6 +184,9 @@ import { GraphArtifactStore } from "./graph-artifacts.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { GraphRunService } from "./graph-run-service.js";
+import { GraphRunLaunchService } from "./graph-run-launch.js";
+import { launchSettingsTiers } from "./control-shared-actions.js";
+import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
@@ -215,6 +221,8 @@ export class OrkestratorBackend {
   private readonly graphRuns: GraphRunService;
   private readonly graphSystemExecutor: GraphNodeSystemExecutor;
   private readonly graphAgents: GraphAgentWiring;
+  /** Launches saved templates from every surface (item 214). */
+  private readonly graphLaunches: GraphRunLaunchService;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1196,6 +1204,27 @@ export class OrkestratorBackend {
       captureTranscript: createGraphRunTranscriptCapture({ storage }),
     });
     context.graphQuestions = this.graphAgents.questions;
+    // Every launch surface (item 214) goes through one service.
+    this.graphLaunches = new GraphRunLaunchService({
+      storage,
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      settingsTiers: (projectId, environment) =>
+        launchSettingsTiers(
+          invokeCommand,
+          projectId,
+          environment ? (environment as unknown as Record<string, unknown>) : undefined,
+        ),
+      // Result tools when the rollout admits them, structured output otherwise.
+      structuredResults: (platform) =>
+        this.workflowResultRollout.allows(platform, "graph-output") ||
+        STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(platform),
+      linkTicket: async (taskId, environmentId) => {
+        await invokeCommand("update_kanban_task", { taskId, environmentId });
+      },
+      host: () => defaultCoordinatorHostCapabilities(),
+    });
+    context.graphLaunches = this.graphLaunches;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -1696,6 +1725,13 @@ export class OrkestratorBackend {
     // Non-blocking: the first discovery recovers every run with an obligation.
     await this.graphRuns.init().catch((error) => {
       console.warn("[backend] Failed to restore graph runs:", error);
+    });
+    // Runs that ended before they had an environment are bounded (item 214).
+    void this.graphLaunches.sweep().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to sweep graph runs without an environment:",
+        error instanceof Error ? error.name : "error",
+      );
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",

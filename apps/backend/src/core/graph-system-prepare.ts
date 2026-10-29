@@ -118,6 +118,26 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     return run.plan.template.name;
   }
 
+  /**
+   * Links the run's Kanban ticket to the environment it now has (item 214),
+   * so `update-ticket` finds it. A launch on an existing environment links at
+   * launch; this covers a run that created its own. Best-effort: a ticket
+   * deleted meanwhile does not stop the run.
+   */
+  private async linkTicket(run: Readonly<GraphRun>, environmentId: string): Promise<void> {
+    const taskId = run.launch?.ticket?.taskId;
+    if (!taskId || run.mock) return;
+    try {
+      await this.deps.invoke("update_kanban_task", { taskId, environmentId });
+    } catch (error) {
+      console.warn(
+        "[graphs] Could not link the run's ticket to its environment:",
+        run.id,
+        error instanceof Error ? error.name : "error",
+      );
+    }
+  }
+
   async provision(
     run: Readonly<GraphRun>,
     _signal: AbortSignal,
@@ -126,8 +146,11 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     | { state: "ready"; environmentId: string }
     | { state: "failed"; error: string }
   > {
-    const create =
-      run.plan.workspace.kind === "environment" ? run.plan.workspace.create : undefined;
+    // The launch's choice (item 214) first, then the template's default.
+    const kind =
+      run.launch?.create ??
+      (run.plan.workspace.kind === "environment" ? run.plan.workspace.create?.kind : undefined);
+    const create = kind ? { kind } : undefined;
     if (!create) {
       return {
         state: "failed",
@@ -156,6 +179,7 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     }
     if (environment.status === "running") {
       this.started.delete(run.id);
+      await this.linkTicket(run, environment.id);
       return { state: "ready", environmentId: environment.id };
     }
     if (environment.status === "error") {

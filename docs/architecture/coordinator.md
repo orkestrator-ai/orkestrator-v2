@@ -207,7 +207,10 @@ platform holds the read-only boundary is named rather than flattened to
 available/unavailable. The single table is
 `apps/backend/src/core/coordinator-providers.ts`. Every gate — workspace
 service, runtime resolver, bridge launcher, trusted session input — consults
-it.
+it. Its tier and reason come from the shared enforcement matrix
+(`agentPolicyEnforcement` in `packages/protocol/src/graphs/capability-enforcement.ts`)
+asked about the coordinator's own policy, so a graph node with a read-only
+capability profile is rated by exactly the same rules as a coordinator.
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
@@ -557,6 +560,10 @@ Fedora (SELinux) and Docker containers
 Do not reintroduce a platform literal at any of the gates listed above — that
 is what previously let a platform be half-qualified, allowed to hold a
 conversation but refused a bridge.
+
+Change a tier in the read-only boundary of `capability-enforcement.ts`, never
+in `coordinator-providers.ts`: the coordinator and graph nodes share it, and
+`coordinator-providers.test.ts` fails if the two disagree.
 
 Moving a platform to `enforced` is a claim that the provider or the OS blocks
 the mutation whatever the agent attempts. It requires both:

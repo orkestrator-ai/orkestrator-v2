@@ -41,7 +41,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 103 | [103-result-kind-registry.md](103-result-kind-registry.md) | 1 | not-started | 001 | Registry replaces the result-kind `switch` statements; new `graph-output` kind with per-port submit tools; generic provenance validator. |
 | 104 | [104-predicates.md](104-predicates.md) | 1 | not-started | 101, 102 | JSON predicate language: operators, typed paths, a total and bounded evaluator. |
 | 105 | [105-prompt-templates.md](105-prompt-templates.md) | 1 | not-started | 101, 102, 106 | Logic-less templates, five render modes, evidence frames, size estimates, lints, the locked system contract. |
-| 106 | [106-capability-profiles.md](106-capability-profiles.md) | 1 | not-started | 101 | Profiles compiled to `NativeAgentExecutionPolicy`, new capabilities, no push for agents, per-provider enforcement matrix. |
+| 106 | [106-capability-profiles.md](106-capability-profiles.md) | 1 | in-progress | 101 | Profiles compiled to `NativeAgentExecutionPolicy`, new capabilities, no push for agents, per-provider enforcement matrix. |
 | 107 | [107-compiler.md](107-compiler.md) | 1 | not-started | 101, 102, 104, 105, 106 | `compile()` → frozen plan with digest, diagnostics for every rule in report §7.4, cost estimate, `firstIterationFrom`. |
 | 108 | [108-builtin-templates.md](108-builtin-templates.md) | 1 | not-started | 107, 001, 003, 004, 005 | Multi Review, Build Pipeline and Looped Review described as templates, pinned to their engines by tests. |
 | 109 | [109-template-storage-and-trust.md](109-template-storage-and-trust.md) | 1 | not-started | 101, 107 | `graph-templates` store, project templates with digest trust, per-project capability ceiling, template commands. |

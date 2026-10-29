@@ -832,6 +832,25 @@ decoder together.
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
 | OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note | A deny rule for `webfetch` after every allow; `websearch` and `codesearch` denied, or allowed by name when search is allowed |
 
+`NATIVE_AGENT_CAPABILITIES` (`packages/protocol/src/native-agent-capabilities.ts`)
+also names `git.commit`, `git.push`, `github.write`, `subagents`,
+`mcp:<server>` (deny only) and `orkestrator:<group>` (held by the backend's
+credential scope, never sent to a bridge), for graph capability profiles.
+Every released bridge validates a policy against the original six names and
+drops a policy it cannot validate, so the HTTP bridge provider sends
+`nativeAgentPolicyForBridge`'s wire form: `deny` keeps the six, the newer
+names travel in `capabilityPolicy.extendedDeny`, which older validators
+ignore, and bridges read both through `nativeAgentDeniedCapabilities`. Claude
+translates the newer names into `disallowedTools` (`Task`/`Agent`,
+`mcp__<server>__*`, `Bash(git push *)`-style command rules), OpenCode into
+permission rules (`task`, `<server>_*`, bash patterns), and Cursor removes
+`task` for `subagents`. Elsewhere an `mcp:<server>` denial turns project
+resources off instead, and git and GitHub denials are held by a shell denial
+where the policy has one, otherwise by the post-hoc guards. A Claude
+read-only turn keeps the session's extra denials. How strongly each platform
+holds a policy is `agentPolicyEnforcement`
+(`packages/protocol/src/graphs/capability-enforcement.ts`).
+
 A sandbox's network switch (`networkAccess`) only governs commands the agent
 runs on this machine. Hosted web search and fetch run on the vendor's servers,
 so only removing the tools stops them; that is what the last column does, and

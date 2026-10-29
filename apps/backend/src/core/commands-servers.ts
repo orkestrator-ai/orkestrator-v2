@@ -29,6 +29,7 @@ import {
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { existsSync, promises as seedFs } from "node:fs";
 import { seedFilesDir } from "./nodes/index.js";
+import { transcriptMediaPins } from "./transcript-media-pins.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -1572,6 +1573,17 @@ export async function deleteEnvironment(
             error instanceof Error ? error.name : "unknown",
           );
         });
+      // Saved copies of the images its transcripts showed.
+      if (typeof storage.getDataDir === "function") {
+        await transcriptMediaPins(storage.getDataDir())
+          .deleteEnvironment(environmentId)
+          .catch((error: unknown) => {
+            console.warn(
+              `[backend] transcript media pin cleanup failed for ${environmentId}:`,
+              error instanceof Error ? error.name : "unknown",
+            );
+          });
+      }
       // Schedules its agents own go with it; others' schedules aimed at it pause.
       try {
         context.scheduledJobs?.environmentDeleted(environmentId);

@@ -139,6 +139,16 @@ describe("NativeAgentService transcript projection", () => {
           expect(readDetails.fileDataUrl).toBe(
             `data:image/png;base64,${Buffer.from("image-0").toString("base64")}`,
           );
+          expect(readDetails.fileSnapshot).toMatchObject({ status: "pinned" });
+
+          // The agent overwrites the file: this message keeps what it showed.
+          await fs.writeFile(imagePaths[0]!, "image-0 retaken");
+          const reread = await service.getProjectionToolDetails({
+            ...owner,
+            detailRef: projected[extensions.length]!.imageDetailRef as string,
+          });
+          expect(reread.fileDataUrl).toBe(readDetails.fileDataUrl);
+          expect(reread.fileSnapshot).toEqual(readDetails.fileSnapshot);
           await expect(
             service.getProjectionToolDetails({
               ...other,

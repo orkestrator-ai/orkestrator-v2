@@ -43,6 +43,12 @@ export function useRichTranscriptScope(): RichTranscriptScope | null {
 export interface RichMessageIdentity {
   messageId: string;
   role: "user" | "assistant" | "system";
+  /**
+   * The display row's clock (ISO). For a coalesced row this is its latest
+   * activity, so "the file changed after this message" is never claimed for a
+   * change the row itself could have shown.
+   */
+  createdAt?: string;
 }
 
 export const RichMessageContext = createContext<RichMessageIdentity | null>(null);

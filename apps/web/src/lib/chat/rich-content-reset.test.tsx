@@ -255,16 +255,25 @@ describe("protected rich content clearing", () => {
 
 test("superseded media bytes cannot restore the cache or delete a replacement inflight read", async () => {
   const { resolveMediaUrl } = await import("./rich-markdown/media-resolver");
-  let finishA!: (value: string) => void;
-  let finishB!: (value: string) => void;
+  let finishA!: (value: unknown) => void;
+  let finishB!: (value: unknown) => void;
   const ref = { path: "/workspace-storage/same.png" };
+  // Pinned bytes are the cacheable kind; a live read is never cached.
+  const pin = { environmentId: "env-1", logicalSessionKey: "tab-1", messageId: "m1" };
+  const pinned = (dataBase64: string) => ({
+    status: "pinned",
+    capturedAt: "2026-10-29T00:00:00.000Z",
+    sha256: "0".repeat(64),
+    byteLength: dataBase64.length,
+    dataBase64,
+  });
   invokeMock.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
         finishA = resolve;
       }),
   );
-  const a = resolveMediaUrl(ref, { cacheImage: true });
+  const a = resolveMediaUrl(ref, { cacheImage: true, pin });
   const rejected = a.catch((error: unknown) => error);
   clearProtectedRichContent("credentials");
   invokeMock.mockImplementationOnce(
@@ -273,11 +282,11 @@ test("superseded media bytes cannot restore the cache or delete a replacement in
         finishB = resolve;
       }),
   );
-  const b = resolveMediaUrl(ref, { cacheImage: true });
-  finishA("OLD");
+  const b = resolveMediaUrl(ref, { cacheImage: true, pin });
+  finishA(pinned("OLD"));
   expect(await rejected).toMatchObject({ name: "AbortError" });
-  expect(resolveMediaUrl(ref, { cacheImage: true })).toBe(b);
-  finishB("NEW");
+  expect(resolveMediaUrl(ref, { cacheImage: true, pin })).toBe(b);
+  finishB(pinned("NEW"));
   await expect(b).resolves.toContain("NEW");
-  await expect(resolveMediaUrl(ref, { cacheImage: true })).resolves.toContain("NEW");
+  await expect(resolveMediaUrl(ref, { cacheImage: true, pin })).resolves.toContain("NEW");
 });

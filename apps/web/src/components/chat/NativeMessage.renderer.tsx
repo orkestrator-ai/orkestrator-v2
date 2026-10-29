@@ -189,7 +189,11 @@ export function MessagePart(props: Parameters<typeof MessagePartContent>[0]) {
   const richIdentity = useMemo(
     () =>
       sourceMessageId && displayMessage
-        ? { messageId: sourceMessageId, role: displayMessage.role }
+        ? {
+            messageId: sourceMessageId,
+            role: displayMessage.role,
+            ...(displayMessage.createdAt ? { createdAt: displayMessage.createdAt } : {}),
+          }
         : null,
     [displayMessage, sourceMessageId],
   );

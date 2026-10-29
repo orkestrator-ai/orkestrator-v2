@@ -24,6 +24,7 @@ import type {
   NativeAgentRuntimeSteerJournal,
   NativeAgentSteerRejectedOutcome,
 } from "./native-agent-steer-rejection.js";
+import type { TranscriptMediaSnapshot } from "./transcript-media-pins.js";
 
 export * from "./native-agent-steer-rejection.js";
 export * from "./native-agent-policy-effects.js";
@@ -2316,6 +2317,12 @@ export interface NativeAgentToolDetails {
    * its opaque, session-scoped exact-path reference.
    */
   fileDataUrl?: string;
+  /**
+   * Provenance of a provider-reported local image's `fileDataUrl`: the copy
+   * saved when the reference was first expanded, or the file as it is now.
+   * Absent for inline bytes, which never change.
+   */
+  fileSnapshot?: TranscriptMediaSnapshot;
   toolDiff?: {
     filePath?: string;
     additions?: number;

@@ -14,14 +14,15 @@ import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
-  imagePreviewCacheKey,
   isImagePreviewUnavailable,
   markImagePreviewUnavailable,
   readImagePreviewCache,
   readImagePreviewDimensions,
+  readImagePreviewSnapshot,
   writeImagePreviewDimensions,
 } from "@/lib/chat/image-preview-cache";
-import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
+import { useMediaSnapshotNote } from "@/lib/chat/media-snapshot";
+import { useRichMessageIdentity, useRichTranscriptScope } from "@/lib/chat/rich-identity";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import {
   galleryItems,
@@ -32,7 +33,9 @@ import {
   getSafeContainerRelativePath,
   isAbsoluteHostPath,
   isRemoteMediaUrl,
-  resolveMediaUrl,
+  mediaCacheKey,
+  resolveMedia,
+  type MediaPinScope,
 } from "@/lib/chat/rich-markdown/media-resolver";
 import {
   base64Prefix,
@@ -41,6 +44,7 @@ import {
 } from "@/lib/chat/rich-markdown/media-types";
 import { MediaGalleryDialog } from "@/components/chat/rich/MediaGallery";
 import { FilePreview } from "@/components/chat/rich/FilePreview";
+import { MediaSnapshotBadge } from "@/components/chat/rich/MediaSnapshotBadge";
 import {
   cacheToolDetails,
   cachedToolDetails,
@@ -175,9 +179,26 @@ export function FilePart({
   onLoadUnavailable?: () => void;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
-  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl, detailRef);
+  const messageId = useRichMessageIdentity()?.messageId;
+  const scope = useRichTranscriptScope();
+  // The message this image belongs to: its local file is pinned to the
+  // version this message first showed.
+  const pin = useMemo<MediaPinScope | undefined>(
+    () =>
+      scope && messageId
+        ? {
+            environmentId: scope.environmentId,
+            logicalSessionKey: scope.logicalSessionKey,
+            messageId,
+          }
+        : undefined,
+    [messageId, scope],
+  );
+  const cacheKey = mediaCacheKey({ path, fileUrl, detailRef, containerId }, pin);
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
+  const [snapshot, setSnapshot] = useState(() => readImagePreviewSnapshot(cacheKey, imageSrc));
+  const snapshotNote = useMediaSnapshotNote(snapshot);
   const [loading, setLoading] = useState(false);
   const [decodedImage, setDecodedImage] = useState(() => {
     const dimensions = readImagePreviewDimensions(cacheKey, imageSrc);
@@ -188,7 +209,7 @@ export function FilePart({
   const [loadError, setLoadError] = useState<"unavailable" | "too-large" | null>(null);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const galleryGroup = useRichMessageIdentity()?.messageId ?? "detached";
+  const galleryGroup = messageId ?? "detached";
   // Held in a ref rather than closed over: putting the callback in `loadImage`'s
   // dependencies would rebuild it whenever the owner re-rendered, and the eager
   // effect keyed on that identity would then retry a read that has already
@@ -212,7 +233,10 @@ export function FilePart({
     if (imageLoadRef.current) return imageLoadRef.current;
 
     const cached = readImagePreviewCache(cacheKey);
-    if (cached) return Promise.resolve(cached);
+    if (cached) {
+      setSnapshot(readImagePreviewSnapshot(cacheKey, cached));
+      return Promise.resolve(cached);
+    }
 
     setLoading(true);
     setLoadError(null);
@@ -220,16 +244,18 @@ export function FilePart({
       try {
         // The shared, environment-scoped resolver: deferred detail, inline
         // data, remote URL, or a backend-confined workspace/host read.
-        const url = await resolveMediaUrl(
+        const resolved = await resolveMedia(
           { path, fileUrl, detailRef, containerId },
           {
             loadToolDetails,
             detailCache: { read: cachedToolDetails, write: cacheToolDetails },
             cacheImage: true,
+            pin,
           },
         );
-        assertDecodableImage(url);
-        return url;
+        assertDecodableImage(resolved.url);
+        setSnapshot(resolved.snapshot ?? null);
+        return resolved.url;
       } catch (err) {
         console.error("[NativeMessage] Failed to load image preview:", err, {
           path,
@@ -254,7 +280,7 @@ export function FilePart({
       }
     });
     return request;
-  }, [cacheKey, isImage, path, fileUrl, containerId, detailRef, loadToolDetails]);
+  }, [cacheKey, isImage, path, fileUrl, containerId, detailRef, loadToolDetails, pin]);
 
   useEffect(() => {
     if (!eagerPreview || !isImage || imageSrc || isRemoteMediaUrl(fileUrl)) return;
@@ -318,7 +344,7 @@ export function FilePart({
       <button
         ref={buttonRef}
         onClick={handleClick}
-        aria-label={`Open full image: ${displayName}`}
+        aria-label={`Open full image: ${displayName}${snapshotNote ? `. ${snapshotNote.description}` : ""}`}
         aria-busy={loading}
         data-image-presentation={showThumbnailTile ? "thumbnail" : "chip"}
         className={cn(
@@ -363,6 +389,9 @@ export function FilePart({
         ) : (
           <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
+        {showThumbnailTile && imageSrc && !loadError && snapshotNote ? (
+          <MediaSnapshotBadge note={snapshotNote} />
+        ) : null}
         {showThumbnailTile &&
         hideThumbnailCaption &&
         loadedImageSrc === imageSrc &&

@@ -6,6 +6,7 @@ import type { NativeMessage as NativeMessageType } from "../../../apps/web/src/l
 import type { LegacyPayloadSummary } from "../../../apps/web/src/lib/backend/changes";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { mockWriteText } from "../../mocks/clipboard";
+import { RichTranscriptScopeContext } from "../../../apps/web/src/lib/chat/rich-identity";
 import {
   type CreateFileTabOptions,
   TerminalProvider,
@@ -15,6 +16,13 @@ import {
 const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
 const mockReadContainerFileBase64 = mock(async () => "container-image-base64");
+const mockPinTranscriptMedia = mock(async (_input: Record<string, unknown>) => ({
+  status: "pinned" as const,
+  capturedAt: "2026-03-07T12:00:01.000Z",
+  sha256: "0".repeat(64),
+  byteLength: 12,
+  dataBase64: "pinned-base64",
+}));
 // Backend change commands. Legacy rows are measured by the backend; by default
 // it has nothing to say, so rows show their path and raw output only.
 const mockMeasureLegacyToolPayload = mock(
@@ -28,6 +36,7 @@ mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
+  pinTranscriptMedia: mockPinTranscriptMedia,
   measureLegacyToolPayload: mockMeasureLegacyToolPayload,
   getToolChangePresentations: mockGetToolChangePresentations,
   getChangeView: mockGetChangeView,
@@ -132,6 +141,7 @@ describe("NativeMessage", () => {
     mockReadFileBase64.mockImplementation(async () => "image-base64");
     mockReadContainerFileBase64.mockReset();
     mockReadContainerFileBase64.mockImplementation(async () => "container-image-base64");
+    mockPinTranscriptMedia.mockClear();
     mockWriteText.mockReset();
     mockWriteText.mockImplementation(async () => {});
     mockMeasureLegacyToolPayload.mockReset();
@@ -3292,7 +3302,7 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
   });
 
-  test("reuses a decoded preview when a virtualized row remounts", async () => {
+  test("reads a file again when a row outside a transcript remounts", async () => {
     const message: NativeMessageType = {
       id: "msg-preview-cache-remount",
       role: "user",
@@ -3306,13 +3316,58 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
 
     first.unmount();
+    // The file changed meanwhile: a live read is never served from the cache.
+    mockReadFileBase64.mockImplementation(async () => "changed-base64");
     render(<NativeMessage message={message} />);
 
-    // Painted from the cache on the first render, with no second backend read.
-    expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src")).toBe(
-      "data:image/png;base64,image-base64",
+    await waitFor(() =>
+      expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src")).toBe(
+        "data:image/png;base64,changed-base64",
+      ),
     );
-    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(2);
+    expect(mockPinTranscriptMedia).not.toHaveBeenCalled();
+  });
+
+  test("reuses a pinned preview when a virtualized transcript row remounts", async () => {
+    const message: NativeMessageType = {
+      id: "msg-preview-pin-remount",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/pinned.png" }],
+    };
+    const scope = {
+      backendId: "backend-1",
+      environmentId: "env-1",
+      logicalSessionKey: "tab-1",
+      generation: "g1",
+    };
+    const inTranscript = () => (
+      <RichTranscriptScopeContext.Provider value={scope}>
+        <NativeMessage message={message} />
+      </RichTranscriptScopeContext.Provider>
+    );
+
+    const first = render(inTranscript());
+    expect(await screen.findByAltText("Thumbnail: pinned.png")).toBeTruthy();
+    expect(mockPinTranscriptMedia).toHaveBeenCalledTimes(1);
+    expect(mockPinTranscriptMedia.mock.calls[0]?.[0]).toEqual({
+      environmentId: "env-1",
+      logicalSessionKey: "tab-1",
+      messageId: "msg-preview-pin-remount",
+      path: "/tmp/pinned.png",
+    });
+
+    first.unmount();
+    render(inTranscript());
+
+    // Painted from the cache on the first render, with no second backend read.
+    expect(screen.getByAltText("Thumbnail: pinned.png").getAttribute("src")).toBe(
+      "data:image/png;base64,pinned-base64",
+    );
+    expect(mockPinTranscriptMedia).toHaveBeenCalledTimes(1);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
   });
 
   test("keeps preview caches for the same path in different containers apart", async () => {

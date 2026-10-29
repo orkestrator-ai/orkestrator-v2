@@ -211,6 +211,46 @@ describe("validateGraphRun", () => {
     expect(codes(validateGraphRun(run))).toEqual([]);
   });
 
+  test("checks the guard baseline's paths and upstream refs (item 209)", () => {
+    const baseline = {
+      headRef: COMMIT_A,
+      pathsDigest: "e".repeat(64),
+      pathCount: 1,
+      paths: ["notes.md"],
+      capturedAt: RUN_FIXTURE_AT,
+      upstream: [{ remote: "origin", ref: "refs/heads/main", sha: null }],
+    };
+    const valid = graphRunFixture({
+      activations: [activationFixture({ nodeId: "build" }, { state: "running", baseline })],
+    });
+    expect(codes(validateGraphRun(valid))).toEqual([]);
+    const invalid = graphRunFixture({
+      activations: [
+        activationFixture(
+          { nodeId: "build" },
+          {
+            state: "running",
+            baseline: {
+              ...baseline,
+              pathCount: 2,
+              paths: Array.from({ length: 65 }, (_, index) => `f${index}`),
+              capturedAt: "yesterday",
+              upstream: [{ remote: "-x", ref: "refs/heads/main", sha: "nope" }],
+            },
+          },
+        ),
+      ],
+    });
+    expect(codes(validateGraphRun(invalid))).toEqual(
+      expect.arrayContaining([
+        "activations[0].baseline.paths:too_many",
+        "activations[0].baseline.capturedAt:timestamp",
+        "activations[0].baseline.upstream[0].remote:pattern",
+        "activations[0].baseline.upstream[0].sha:pattern",
+      ]),
+    );
+  });
+
   test("refuses a frozen plan that no longer matches its digest", () => {
     const run = graphRunFixture();
     run.plan.limits.maxAgentSessions = 1;

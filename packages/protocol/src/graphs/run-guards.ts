@@ -555,6 +555,71 @@ function checkGuardResult(value: unknown, path: string, errors: FieldErrorCollec
   }
 }
 
+/** Remote names Git accepts in practice, without spaces or control characters. */
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+
+function checkBaseline(value: unknown, path: string, errors: FieldErrorCollector): void {
+  const fields = ["headRef", "pathsDigest", "pathCount", "paths", "capturedAt", "upstream"];
+  if (!checkObject(value, path, fields, errors)) return;
+  checkPattern(
+    value.headRef,
+    joinPath(path, "headRef"),
+    errors,
+    GRAPH_COMMIT_PATTERN,
+    64,
+    "a full commit SHA",
+  );
+  checkPattern(
+    value.pathsDigest,
+    joinPath(path, "pathsDigest"),
+    errors,
+    GRAPH_DIGEST_PATTERN,
+    64,
+    "a SHA-256 hex digest",
+  );
+  checkCount(value.pathCount, joinPath(path, "pathCount"), errors, 0, 1_000_000, true);
+  if (value.paths !== undefined) {
+    const pathsPath = joinPath(path, "paths");
+    if (checkArray(value.paths, pathsPath, errors, { max: B.maxBaselinePaths })) {
+      value.paths.forEach((entry, index) =>
+        checkText(entry, joinPath(pathsPath, index), errors, B.maxBaselinePathChars, false),
+      );
+      if (typeof value.pathCount === "number" && value.pathCount !== value.paths.length) {
+        errors.add(pathsPath, "mismatch", "The kept paths disagree with pathCount");
+      }
+    }
+  }
+  checkTimestamp(value.capturedAt, joinPath(path, "capturedAt"), errors, true);
+  if (value.upstream !== undefined) {
+    const upstreamPath = joinPath(path, "upstream");
+    if (checkArray(value.upstream, upstreamPath, errors, { max: B.maxBaselineUpstreamRefs })) {
+      value.upstream.forEach((entry, index) => {
+        const entryPath = joinPath(upstreamPath, index);
+        if (!checkObject(entry, entryPath, ["remote", "ref", "sha"], errors)) return;
+        checkPattern(
+          entry.remote,
+          joinPath(entryPath, "remote"),
+          errors,
+          REMOTE_NAME,
+          128,
+          "a remote name",
+        );
+        checkText(entry.ref, joinPath(entryPath, "ref"), errors, B.maxShortTextChars, false);
+        if (entry.sha !== null) {
+          checkPattern(
+            entry.sha,
+            joinPath(entryPath, "sha"),
+            errors,
+            GRAPH_COMMIT_PATTERN,
+            64,
+            "a full commit SHA or null",
+          );
+        }
+      });
+    }
+  }
+}
+
 const ACTIVATION_FIELDS = [
   "key",
   "nodeId",
@@ -646,27 +711,8 @@ function checkActivation(
     );
   }
   checkText(value.enforcementReason, joinPath(path, "enforcementReason"), errors, 512);
-  if (value.baseline !== undefined) {
-    const baselinePath = joinPath(path, "baseline");
-    if (checkObject(value.baseline, baselinePath, ["headRef", "pathsDigest"], errors)) {
-      checkPattern(
-        value.baseline.headRef,
-        joinPath(baselinePath, "headRef"),
-        errors,
-        GRAPH_COMMIT_PATTERN,
-        64,
-        "a full commit SHA",
-      );
-      checkPattern(
-        value.baseline.pathsDigest,
-        joinPath(baselinePath, "pathsDigest"),
-        errors,
-        GRAPH_DIGEST_PATTERN,
-        64,
-        "a SHA-256 hex digest",
-      );
-    }
-  }
+  if (value.baseline !== undefined)
+    checkBaseline(value.baseline, joinPath(path, "baseline"), errors);
   if (value.guards !== undefined) {
     const guardsPath = joinPath(path, "guards");
     if (checkArray(value.guards, guardsPath, errors, { max: B.maxGuardResults })) {

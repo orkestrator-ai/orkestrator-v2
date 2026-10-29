@@ -1,4 +1,9 @@
-import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORMS,
+  isAgentPlatform,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
+import { graphRoleProviderChoices } from "@orkestrator/protocol/graphs/agent-enforcement";
 import {
   DEFAULT_GRAPH_CAPABILITY_CEILING,
   graphCapabilityCeilingIssues,
@@ -74,7 +79,10 @@ export interface GraphTemplateServiceOptions {
   storage: GraphTemplateServiceStorage;
   /** Built-in templates; default the protocol registry (item 108 fills it). */
   builtins?: () => readonly GraphTemplateV1[];
-  /** What this host offers provider sandboxes; probed once on first use. */
+  /**
+   * What this host offers provider sandboxes; probed on first use and again
+   * for every launch compile.
+   */
   host?: () => AgentEnforcementHost;
   /** Project-template watching (tests inject; `null` disables it). */
   startWatch?: StartGraphProjectWatch | null;
@@ -221,15 +229,27 @@ export class GraphTemplateService {
         "A built-in template runs on its own engine; duplicate it to run a copy as a graph",
       );
     }
+    // A launch judges providers on the host as it is now (item 209): the
+    // sandbox may have stopped working since the last probe.
+    if (input.forLaunch) this.host = this.hostSource();
     const context = await this.compileContext(projectIdFor(target.ref, input.projectId));
     const result = this.compileResolved(resolved, context);
-    return compileResponse(
+    const response = compileResponse(
       this.summary(resolved, context),
       result,
       context,
       resolved.trust,
       input.includePlan,
     );
+    if (!input.forLaunch || !result.plan) return response;
+    return {
+      ...response,
+      providerChoices: graphRoleProviderChoices(
+        result.plan,
+        context.host,
+        context.providers ?? AGENT_PLATFORMS,
+      ),
+    };
   }
 
   /**

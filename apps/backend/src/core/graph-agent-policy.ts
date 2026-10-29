@@ -16,12 +16,15 @@
  * an ordinary turn whose policy still denies file writes, the shell and
  * fetching. Its tier is then at most `provider-configured` — Claude's own
  * permission rules hold those denials, not its read-only turn — and the
- * reason says so.
+ * reason says so. The judgement itself is the protocol's
+ * `graphAgentNodeEnforcement`, shared with the launch pickers.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
-  agentEnforcementTierSatisfies,
-  agentPolicyEnforcement,
+  graphAgentFloorMessage,
+  graphAgentNodeEnforcement,
+} from "@orkestrator/protocol/graphs/agent-enforcement";
+import {
   compileGraphCapabilities,
   type AgentEnforcementHost,
   type CompiledGraphCapabilities,
@@ -33,28 +36,16 @@ import type { GraphEnforcementTier } from "@orkestrator/protocol/graphs/template
 import type { Environment } from "./models.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 
-export const GRAPH_RESEARCHER_ON_CLAUDE_REASON =
-  "Runs as an ordinary Claude turn so hosted web search stays available; file writes, the shell and fetching are denied by Claude's permission rules, not by its read-only turn.";
+export {
+  GRAPH_RESEARCHER_ON_CLAUDE_REASON,
+  graphAgentReadOnlyTurn,
+} from "@orkestrator/protocol/graphs/agent-enforcement";
 
 export interface GraphAgentPolicyDecision {
   compiled: CompiledGraphCapabilities;
   turnMode: GraphAgentTurnMode;
   enforcement: GraphEnforcementTier;
   enforcementReason?: string;
-}
-
-const TIER_ORDER: readonly GraphEnforcementTier[] = ["advisory", "provider-configured", "enforced"];
-
-function weaker(left: GraphEnforcementTier, right: GraphEnforcementTier): GraphEnforcementTier {
-  return TIER_ORDER.indexOf(left) <= TIER_ORDER.indexOf(right) ? left : right;
-}
-
-/** Whether a compiled policy runs as a read-only turn on `platform` (see the module note). */
-export function graphAgentReadOnlyTurn(
-  compiled: Pick<CompiledGraphCapabilities, "readOnly" | "webSearch">,
-  platform: AgentPlatform,
-): boolean {
-  return compiled.readOnly && !(platform === "claude" && compiled.webSearch);
 }
 
 /** Compiles the node's capabilities for this environment and judges the tier on `platform`. */
@@ -80,33 +71,25 @@ export function graphAgentPolicy(input: {
         environment: resolveEnvironmentExecutionPolicy(input.environment, "build-pipeline"),
         ...(input.ceiling ? { ceiling: input.ceiling } : {}),
       });
-  const readOnlyTurn = graphAgentReadOnlyTurn(compiled, input.platform);
-  const judged = agentPolicyEnforcement(compiled.policy, input.platform, input.host);
-  if (compiled.readOnly && !readOnlyTurn) {
-    const tier = weaker(judged.tier, "provider-configured");
-    return {
-      compiled,
-      turnMode: "build",
-      enforcement: tier,
-      enforcementReason: GRAPH_RESEARCHER_ON_CLAUDE_REASON,
-    };
-  }
+  // The same judgement the launch pickers make (`graphRoleProviderChoices`).
+  const judged = graphAgentNodeEnforcement(compiled, input.platform, input.host);
   return {
     compiled,
-    turnMode: readOnlyTurn ? "read-only" : "build",
+    turnMode: judged.turnMode,
     enforcement: judged.tier,
-    ...(judged.reason ? { enforcementReason: judged.reason.slice(0, 512) } : {}),
+    ...(judged.reason ? { enforcementReason: judged.reason } : {}),
   };
 }
 
 /**
- * The node's enforcement floor check at dispatch (P2.9 re-checks it; item
- * 209 owns the guard). Null when the tier meets the floor.
+ * The node's enforcement floor check at dispatch (P2.9, item 209), judged on
+ * the live host. Null when the tier meets the floor; otherwise the message
+ * the activation fails with, naming the provider, tier, floor and reason.
  */
 export function graphAgentFloorProblem(
-  node: Pick<GraphPlanAgentNode, "minEnforcement">,
-  tier: GraphEnforcementTier,
+  node: Pick<GraphPlanAgentNode, "id" | "label" | "minEnforcement">,
+  platform: AgentPlatform,
+  enforcement: { tier: GraphEnforcementTier; reason?: string },
 ): string | null {
-  if (!node.minEnforcement || agentEnforcementTierSatisfies(tier, node.minEnforcement)) return null;
-  return `The provider's enforcement is ${tier}, below this step's floor (${node.minEnforcement})`;
+  return graphAgentFloorMessage(node, platform, enforcement);
 }

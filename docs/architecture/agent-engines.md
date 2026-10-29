@@ -847,7 +847,17 @@ permission rules (`task`, `<server>_*`, bash patterns), and Cursor removes
 `task` for `subagents`. Elsewhere an `mcp:<server>` denial turns project
 resources off instead, and git and GitHub denials are held by a shell denial
 where the policy has one, otherwise by the post-hoc guards. A Claude
-read-only turn keeps the session's extra denials. How strongly each platform
+read-only turn keeps the session's extra denials. A session whose policy
+denies `github.write` (every graph agent node) gets no GitHub credential where
+the bridge builds a per-session environment: Claude (per query,
+`runtimeEnvironmentForSessionQuery`) and Grok (per child, `providerEnv`) drop
+the token variables and the managed credential file, point `GH_CONFIG_DIR` at
+an empty directory and reset Git's credential helpers
+(`withheldGitHubCredentialEnvironment`). Codex, OpenCode, Cursor and Pi share
+one process environment per bridge or server and do not withhold it yet; in a
+container the runtime credential file and Git's `insteadOf` rewrite stay
+readable to every agent. The graph remote-ref guard (item 209) is the
+backstop. How strongly each platform
 holds a policy is `agentPolicyEnforcement`
 (`packages/protocol/src/graphs/capability-enforcement.ts`).
 

@@ -187,6 +187,7 @@ import {
 } from "./workspace-code-rewind.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
+import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
 
@@ -1144,10 +1145,11 @@ export class OrkestratorBackend {
     this.graphRuns.executors.register(createGraphMergeExecutor());
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
+    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
     this.graphSystemExecutor = new GraphNodeSystemExecutor({
       storage,
       invoke: invokeCommand,
-      shell: createGraphEnvironmentShell(context.runtime.environments.fence),
+      shell: graphShell,
       prMonitor: {
         state: (environmentId) =>
           context.runtime.prMonitor.service
@@ -1176,6 +1178,16 @@ export class OrkestratorBackend {
       refreshToolResults: () => this.workflowResultRollout.refresh(),
       ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      // The guards (item 209): the worktree probe defaults to `invoke`.
+      lsRemote: (environment, args) =>
+        graphShell.remoteGit(environment, "ls-remote", args, { timeoutMs: 60_000 }),
+      systemPushes: async (runId) =>
+        new Set(
+          (await storage.graphEffects.listGraphEffects(runId)).flatMap((effect) => {
+            const commit = graphPushedCommitOfEffectKey(effect.key);
+            return commit ? [commit] : [];
+          }),
+        ),
       projectNotes: async (projectId) =>
         (await storage.kanban.getProjectNotes(projectId)).content || undefined,
       artifactDispatch,

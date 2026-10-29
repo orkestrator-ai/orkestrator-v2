@@ -409,4 +409,48 @@ describe("capability ceiling", () => {
         .code,
     ).toBe("invalid-request");
   });
+
+  test("a launch compile re-probes the host and returns the providers each role may use", async () => {
+    await fixture.close();
+    let probes = 0;
+    let sandbox = true;
+    fixture = await createGraphTemplateFixture({
+      host: () => {
+        probes += 1;
+        return sandbox
+          ? { claudeSandbox: true }
+          : { claudeSandbox: false, claudeSandboxReason: "No bubblewrap here." };
+      },
+    });
+    const { service, storage } = fixture;
+    const config = await storage.loadConfig();
+    await storage.saveConfig({
+      ...config,
+      global: { ...config.global, enabledAgentPlatforms: ["claude", "grok"] },
+    });
+    const saved = await service.save(sampleGraphTemplate("launchable"));
+    const before = await service.compileForLaunch(saved.summary.ref);
+    const reviewer = before.providerChoices?.find((entry) => entry.role === "reviewer");
+    expect(reviewer?.floor).toBe("provider-configured");
+    // Only the enabled providers are offered.
+    expect(reviewer?.choices.map((entry) => entry.platform)).toEqual(["claude", "grok"]);
+    const choice = (platform: string, from = reviewer) =>
+      from?.choices.find((entry) => entry.platform === platform);
+    expect(choice("claude")).toMatchObject({ tier: "enforced", allowed: true });
+    // Grok only advises the model: the picker does not offer it (D4).
+    expect(choice("grok")).toMatchObject({ tier: "advisory", allowed: false });
+    expect(choice("grok")?.blockedBy?.floor).toBe("provider-configured");
+
+    sandbox = false;
+    const probesBefore = probes;
+    const after = await service.compileForLaunch(saved.summary.ref);
+    expect(probes).toBe(probesBefore + 1);
+    const dropped = choice(
+      "claude",
+      after.providerChoices?.find((entry) => entry.role === "reviewer"),
+    );
+    expect(dropped?.tier).toBe("provider-configured");
+    // An ordinary compile returns no choices.
+    expect((await service.compile({ ref: saved.summary.ref })).providerChoices).toBeUndefined();
+  });
 });

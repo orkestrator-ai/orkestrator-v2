@@ -29,14 +29,12 @@
  * - **`session: "continue"`** sends the turn into the provider session of the
  *   activation it continues (the compiler proved the §5.2 constraints).
  */
-import { createHash } from "node:crypto";
 import type {
   AgentEnforcementHost,
   GraphCapabilityCeiling,
 } from "@orkestrator/protocol/graphs/capability-profiles";
 import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
-  GRAPH_COMMIT_PATTERN,
   isGraphAgentAnswerUndelivered,
   isGraphAgentQuestionOpen,
   type GraphActivationSession,
@@ -50,6 +48,13 @@ import type { AgentBranchPollGate, AgentBranchRecord } from "./agent-branch-type
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import {
+  GraphAgentGuardError,
+  GraphAgentGuards,
+  graphEnforcementGuardResult,
+  mergeGraphGuardResults,
+  type GraphLsRemote,
+} from "./graph-agent-guards.js";
 import { graphAgentFloorProblem, graphAgentPolicy } from "./graph-agent-policy.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-questions.js";
@@ -67,6 +72,7 @@ import type { Environment } from "./models.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
+import type { WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import {
   GraphAgentBranchHost,
   type GraphAgentCallFacts,
@@ -109,8 +115,18 @@ export interface GraphAgentExecutorDependencies {
   ceiling?(projectId: string): Promise<GraphCapabilityCeiling | undefined>;
   /** What the enforcement matrix may assume about the host (Claude's sandbox). */
   enforcementHost?(environment: Environment): AgentEnforcementHost;
-  /** Reads Git in the environment (baselines, `workspace@1` outputs). */
+  /** Reads Git in the environment (the remote-ref guard, `workspace@1` outputs). */
   environmentGit?: EnvironmentGit;
+  /**
+   * Observes the worktree for the guards (item 209): the backend's
+   * `get_environment_uncommitted_paths`. Without one every activation fails
+   * before dispatch, because its guards could never certify it.
+   */
+  workspaceProbe?: WorkspaceSnapshotProbe;
+  /** `git ls-remote` with the environment's credentials (the remote-ref guard). */
+  lsRemote?: GraphLsRemote;
+  /** Commits the run's system nodes pushed, which the remote-ref guard never blames on an agent. */
+  systemPushes?(runId: string): Promise<ReadonlySet<string>>;
   /** The branch the work targets (built-in prompts). Default the environment's base branch. */
   targetBranch?(environment: Environment): string;
   projectNotes?(projectId: string): Promise<string | undefined>;
@@ -162,10 +178,23 @@ export function graphContinuedSource(
 export class GraphAgentNodeExecutor implements GraphNodeExecutor {
   readonly kind = "agent" as const;
   readonly progressTracker: MultiReviewProgressTracker;
+  /** The read-only and remote-ref guards (item 209). */
+  readonly guards: GraphAgentGuards;
   private readonly pendingConsumptions = new Map<string, () => Promise<void>>();
 
   constructor(private readonly dependencies: GraphAgentExecutorDependencies) {
     this.progressTracker = dependencies.progressTracker ?? new MultiReviewProgressTracker();
+    this.guards = new GraphAgentGuards({
+      probe:
+        dependencies.workspaceProbe ??
+        (async () => ({
+          status: "unknown",
+          reason: "the backend has no worktree probe for graph steps",
+        })),
+      ...(dependencies.environmentGit ? { git: dependencies.environmentGit } : {}),
+      ...(dependencies.lsRemote ? { lsRemote: dependencies.lsRemote } : {}),
+      ...(dependencies.systemPushes ? { systemPushes: dependencies.systemPushes } : {}),
+    });
   }
 
   start(context: GraphExecutorContext): Promise<GraphActivationReport> {
@@ -279,16 +308,20 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
       await this.dependencies.refreshToolResults?.();
 
     // Policy and tier before anything else (recorded before the session).
+    // Until the session exists they are judged afresh on the live host, so a
+    // tier that dropped since launch (the sandbox stopped working) fails the
+    // activation here, before anything is dispatched (P2.9).
     const ceiling = await this.dependencies.ceiling?.(context.run.projectId);
+    const platform = session?.agent ?? binding.platform;
     const decision = graphAgentPolicy({
       node,
       environment,
       ...(ceiling ? { ceiling } : {}),
-      platform: session?.agent ?? binding.platform,
+      platform,
       host: this.enforcementHost(environment),
     });
     const facts: GraphAgentCallFacts =
-      activation.policy && activation.enforcement
+      session && activation.policy && activation.enforcement
         ? {
             policy: activation.policy,
             enforcement: activation.enforcement,
@@ -296,6 +329,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
               ? { enforcementReason: activation.enforcementReason }
               : {}),
             ...(activation.baseline ? { baseline: activation.baseline } : {}),
+            ...(activation.guards ? { guards: activation.guards } : {}),
           }
         : {
             policy: decision.compiled.policy,
@@ -303,19 +337,24 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
             ...(decision.enforcementReason
               ? { enforcementReason: decision.enforcementReason }
               : {}),
+            ...(activation.guards ? { guards: activation.guards } : {}),
           };
     if (!session) {
-      const floor = graphAgentFloorProblem(node, facts.enforcement);
-      if (floor) {
-        return failed(floor, "guard-violation", {
-          policy: facts.policy,
-          enforcement: facts.enforcement,
-          ...(facts.enforcementReason ? { enforcementReason: facts.enforcementReason } : {}),
-        });
-      }
-      if (!facts.baseline && node.workspaceAccess !== "none") {
-        const baseline = await this.baseline(context.environmentId);
-        if (baseline) facts.baseline = baseline;
+      const problem = graphAgentFloorProblem(node, platform, {
+        tier: decision.enforcement,
+        ...(decision.enforcementReason ? { reason: decision.enforcementReason } : {}),
+      });
+      facts.guards = mergeGraphGuardResults(facts.guards, [
+        graphEnforcementGuardResult(node, platform, decision, problem, context.now()),
+      ]);
+      if (problem) return failed(problem, "guard-violation", facts);
+      // Every guard fails closed: no baseline, no dispatch.
+      try {
+        facts.baseline = await this.guards.capture(environment, node);
+      } catch (error) {
+        if (!(error instanceof GraphAgentGuardError)) throw error;
+        facts.guards = mergeGraphGuardResults(facts.guards, error.results);
+        return failed(error.message, "guard-violation", facts);
       }
     }
 
@@ -426,27 +465,5 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
     return environment.environmentType === "local"
       ? defaultCoordinatorHostCapabilities()
       : { claudeSandbox: false };
-  }
-
-  /** The workspace state before dispatch, for the guards (item 209) and `baseRef`. */
-  private async baseline(
-    environmentId: string,
-  ): Promise<{ headRef: string; pathsDigest: string } | undefined> {
-    const git = this.dependencies.environmentGit;
-    if (!git) return undefined;
-    try {
-      const headRef = (await git(environmentId, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
-      if (!GRAPH_COMMIT_PATTERN.test(headRef)) return undefined;
-      const status = await git(environmentId, [
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-      ]);
-      return { headRef, pathsDigest: createHash("sha256").update(status).digest("hex") };
-    } catch {
-      // Best-effort here; item 209's guards fail closed where they need one.
-      return undefined;
-    }
   }
 }

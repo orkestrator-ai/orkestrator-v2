@@ -1,14 +1,19 @@
 /**
  * Installs the graph agent executor (item 204) on a backend: the executor on
  * `graphRuns.executors`, the activation tool host on the agent tools server,
- * and the question service the `graph_run_answer` command answers through.
+ * the question service the `graph_run_answer` command answers through, and
+ * the read-only guard's submit-time check on `graph-output` slots (item 209).
  * Kept apart from `index.ts` so the backend wiring is one call.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { GraphCapabilityCeiling } from "@orkestrator/protocol/graphs/capability-profiles";
+import type {
+  AgentEnforcementHost,
+  GraphCapabilityCeiling,
+} from "@orkestrator/protocol/graphs/capability-profiles";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import type { GraphLsRemote } from "./graph-agent-guards.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
 import { GraphAgentQuestions } from "./graph-agent-questions.js";
 import {
@@ -20,16 +25,22 @@ import { GraphAgentNodeExecutor, type GraphAgentExecutorDependencies } from "./g
 import type { GraphRunService } from "./graph-run-service.js";
 import type { Environment } from "./models.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultReader } from "./workflow-result-service.js";
+import type { WorkflowResultReader, WorkflowResultService } from "./workflow-result-service.js";
+import { commandWorkspaceProbe, type WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
 import { GRAPH_RUN_OBSERVATION_MS } from "./graph-run-pass.js";
+
+/** Immediate probe attempts per guard observation, as the pipeline's guard uses. */
+const GRAPH_GUARD_PROBE_ATTEMPTS = 3;
 
 export interface GraphAgentWiringInput {
   graphRuns: GraphRunService;
   artifacts: GraphArtifactStore;
   storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
   invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-  workflowResults?: GraphAgentExecutorDependencies["workflowResults"] & WorkflowResultReader;
+  workflowResults?: GraphAgentExecutorDependencies["workflowResults"] &
+    WorkflowResultReader &
+    Partial<Pick<WorkflowResultService, "addAcceptanceCheck">>;
   providerDependencies?: ProviderDependencies;
   agentTools?: {
     workflowResultConnection?: NonNullable<
@@ -45,6 +56,14 @@ export interface GraphAgentWiringInput {
   refreshToolResults?(): Promise<void>;
   ceiling?(projectId: string): Promise<GraphCapabilityCeiling | undefined>;
   environmentGit?: EnvironmentGit;
+  /** The guards' worktree probe; default `get_environment_uncommitted_paths` through `invoke`. */
+  workspaceProbe?: WorkspaceSnapshotProbe;
+  /** `git ls-remote` with the environment's credentials (the remote-ref guard). */
+  lsRemote?: GraphLsRemote;
+  /** Commits the run's system nodes pushed (their `push:<branch>:<sha>` effects). */
+  systemPushes?(runId: string): Promise<ReadonlySet<string>>;
+  /** What the enforcement matrix may assume about the host; default the live probe. */
+  enforcementHost?(environment: Environment): AgentEnforcementHost;
   projectNotes?(projectId: string): Promise<string | undefined>;
   artifactDispatch?: ArtifactTurnDispatch;
   /** Tests: provider instances instead of bridges. */
@@ -101,6 +120,15 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     ...(input.refreshToolResults ? { refreshToolResults: input.refreshToolResults } : {}),
     ...(input.ceiling ? { ceiling: input.ceiling } : {}),
     ...(input.environmentGit ? { environmentGit: input.environmentGit } : {}),
+    workspaceProbe:
+      input.workspaceProbe ??
+      commandWorkspaceProbe(
+        (command, args) => input.invoke(command, args),
+        GRAPH_GUARD_PROBE_ATTEMPTS,
+      ),
+    ...(input.lsRemote ? { lsRemote: input.lsRemote } : {}),
+    ...(input.systemPushes ? { systemPushes: input.systemPushes } : {}),
+    ...(input.enforcementHost ? { enforcementHost: input.enforcementHost } : {}),
     ...(input.projectNotes ? { projectNotes: input.projectNotes } : {}),
     ...(input.artifactDispatch ? { artifactDispatch: input.artifactDispatch } : {}),
     // The idle-result grace is counted on the run's observation cadence.
@@ -115,6 +143,23 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     })(),
   });
   const unregister = input.graphRuns.executors.register(executor);
+  // The read-only guard's submit-time check, scoped to graph activations'
+  // own result keys: another owner's `graph-output` attempt is let through.
+  const unregisterCheck = input.workflowResults?.addAcceptanceCheck?.(
+    "graph-output",
+    executor.guards.acceptanceCheck(async (attempt) => {
+      const found = await input.graphRuns.activationForResultKey(
+        attempt.environmentId,
+        attempt.resultKey,
+      );
+      if (!found) return null;
+      const { run, activation } = found;
+      if (activation.state !== "running" && activation.state !== "awaiting-human") return null;
+      const node = run.plan.nodes.find((entry) => entry.id === activation.nodeId);
+      if (node?.kind !== "agent") return null;
+      return { environmentId: attempt.environmentId, node, baseline: activation.baseline };
+    }),
+  );
   const toolHost = new GraphAgentToolHost({
     runs: input.graphRuns,
     artifacts: input.artifacts,
@@ -128,6 +173,7 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     providers,
     dispose: () => {
       unregister();
+      unregisterCheck?.();
       tools?.setGraphActivationToolHost?.(null);
       providers.shutdown();
     },

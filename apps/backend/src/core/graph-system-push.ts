@@ -46,6 +46,12 @@ export function graphPushEffectKey(branch: string, headRef: string): string {
   return `push:${branch}:${headRef}`;
 }
 
+/** The commit a push effect key names, or null for another effect (the remote-ref guard, item 209). */
+export function graphPushedCommitOfEffectKey(key: string): string | null {
+  const match = /^push:.+:([0-9a-f]{40}(?:[0-9a-f]{24})?)$/.exec(key);
+  return match ? match[1]! : null;
+}
+
 /** Rewinds a completed forced push has already consumed. */
 async function consumedRewinds(ctx: GraphSystemActionContext): Promise<Set<string>> {
   const effects = await ctx.deps.storage.graphEffects.listGraphEffects(ctx.run.id);

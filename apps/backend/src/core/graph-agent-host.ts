@@ -10,7 +10,9 @@ import { randomUUID } from "node:crypto";
 import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_COMMIT_PATTERN,
+  type GraphActivationBaseline,
   type GraphActivationSession,
+  type GraphGuardResult,
   type GraphAgentProgressItem,
   type GraphAgentQuestion,
   type GraphAgentTurnMode,
@@ -42,6 +44,11 @@ import { readProviderStatus } from "./agent-provider-contract.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import {
+  GraphAgentGuardError,
+  mergeGraphGuardResults,
+  type GraphAgentGuards,
+} from "./graph-agent-guards.js";
 import { graphAgentPolicy } from "./graph-agent-policy.js";
 import {
   graphInputItemIds,
@@ -104,12 +111,15 @@ export interface GraphAgentCallFacts {
   policy: NativeAgentExecutionPolicy;
   enforcement: NonNullable<NodeActivation["enforcement"]>;
   enforcementReason?: string;
-  baseline?: { headRef: string; pathsDigest: string };
+  baseline?: GraphActivationBaseline;
+  /** The activation's guard results (item 209), newest per guard. */
+  guards?: GraphGuardResult[];
 }
 
 /** What the host needs from its executor across calls. */
 export interface GraphAgentHostOwner {
   readonly progressTracker: MultiReviewProgressTracker;
+  readonly guards: GraphAgentGuards;
   deferConsumption(key: string, consume: () => Promise<void>): void;
   finishConsumption(key: string): void;
 }
@@ -142,6 +152,8 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   /** Output port → accepted artifact id, filled on acceptance. */
   readonly outputs: Record<string, string> = {};
   private failure: AgentBranchFailureKind | undefined;
+  /** A guard failed the turn when its result was consumed (item 209). */
+  private guardViolated = false;
   private results: GraphAgentResults | undefined;
   private inputs: GraphAgentInputs | undefined;
   private lightSources:
@@ -534,8 +546,14 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     });
   }
 
-  /** Stores each accepted value, then the runtime-filled `workspace@1` outputs. */
+  /**
+   * Certifies the turn (item 209), then stores each accepted value and the
+   * runtime-filled `workspace@1` outputs. A guard that fails throws before
+   * any artifact exists; the runner fails the branch with its message and the
+   * evidence stays in the activation's guard results.
+   */
   async acceptResult(_branch: AgentBranchRecord, data: unknown): Promise<void> {
+    await this.certifyGuards();
     const results = await this.slots();
     const values = (data ?? {}) as Record<string, unknown>;
     const { run, activation } = this.context;
@@ -583,6 +601,25 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         },
       });
       this.outputs[port.name] = artifact.id;
+    }
+  }
+
+  private async certifyGuards(): Promise<void> {
+    const facts = this.input.facts;
+    try {
+      const results = await this.executor.guards.certify({
+        environment: this.input.environment,
+        node: this.input.node,
+        baseline: facts.baseline,
+        runId: this.context.run.id,
+      });
+      facts.guards = mergeGraphGuardResults(facts.guards, results);
+    } catch (error) {
+      if (error instanceof GraphAgentGuardError) {
+        facts.guards = mergeGraphGuardResults(facts.guards, error.results);
+        this.guardViolated = true;
+      }
+      throw error;
     }
   }
 
@@ -707,6 +744,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         ? { enforcementReason: facts.enforcementReason }
         : {}),
       ...(facts.baseline ? { baseline: facts.baseline } : {}),
+      ...(facts.guards ? { guards: facts.guards } : {}),
       ...(session ? { session } : {}),
     };
   }
@@ -728,7 +766,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
           ...common,
           state,
           error: branch.error ?? "The step failed",
-          cause: graphAgentFailureCause(this.failure),
+          cause: this.guardViolated ? "guard-violation" : graphAgentFailureCause(this.failure),
         };
       case "cancelled":
         return { ...common, state };

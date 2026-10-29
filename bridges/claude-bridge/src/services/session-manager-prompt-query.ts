@@ -39,7 +39,7 @@ import {
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
+import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -236,7 +236,8 @@ export async function resolveQueryPlan(
     testHooks?.afterAttachmentInitialValidation,
   );
 
-  const queryEnvironment = await runtimeEnvironmentForAgentQuery();
+  // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
+  const queryEnvironment = await runtimeEnvironmentForSessionQuery(policy);
   const liveSettings = claudeLiveSettings({
     model: options?.model,
     permissionMode,

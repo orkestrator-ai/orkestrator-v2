@@ -42,6 +42,7 @@ import {
   claudeReadOnlyAllowedTools,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
+  readOnlyRefusalRole,
 } from "./read-only-policy.js";
 import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import {
@@ -495,7 +496,16 @@ export function claudeQueryOptions(
               {
                 hooks: [
                   recordingHookDenials(
-                    createCoordinatorReadOnlyHook(policy, undefined, readOnlyCommandSandbox),
+                    createCoordinatorReadOnlyHook(policy, undefined, {
+                      ...(readOnlyCommandSandbox
+                        ? { commandSandbox: readOnlyCommandSandbox.commandSandbox }
+                        : {}),
+                      // A graph reviewer or pipeline review is not a coordinator.
+                      role: readOnlyRefusalRole(
+                        session.executionPolicy,
+                        options?.readOnly === true,
+                      ),
+                    }),
                     session.id,
                   ),
                 ],

@@ -336,7 +336,14 @@ export class FakeGraphRepo {
   readonly commits = new Map<string, FakeCommit>();
   readonly reflog: Array<{ sha: string; at: number }> = [];
   /** Remote → ref → sha. `origin` starts with the run branch at HEAD. */
-  readonly remotes = new Map<string, Map<string, string>>();
+  readonly remotes: Map<string, Map<string, string>>;
+  /**
+   * Remote-tracking refs (`refs/remotes/<remote>/<branch>`) with their
+   * reflogs, newest first, and local tags. Shared by sibling worktrees of one
+   * repository, separate for separate clones.
+   */
+  readonly tracking: Map<string, Array<{ sha: string; at: number; subject: string }>>;
+  readonly tags: Map<string, string>;
   /** False: the worktree probe answers `unknown` (the baseline cannot be established). */
   probeAvailable = true;
   /** False: `ls-remote` fails. */
@@ -344,9 +351,22 @@ export class FakeGraphRepo {
   lsRemoteCalls = 0;
   private counter = 0;
 
-  constructor(head = AGENT_TEST_COMMIT) {
+  constructor(
+    head = AGENT_TEST_COMMIT,
+    shared: {
+      /** The same remotes as another repository (one `origin` for two environments). */
+      remotes?: FakeGraphRepo["remotes"];
+      /** The same refs as another repository: two worktrees of one repository. */
+      refsOf?: FakeGraphRepo;
+    } = {},
+  ) {
     this.head = head;
-    this.remotes.set("origin", new Map([[`refs/heads/${this.branch}`, head]]));
+    this.remotes = shared.remotes ?? shared.refsOf?.remotes ?? new Map();
+    this.tracking = shared.refsOf?.tracking ?? new Map();
+    this.tags = shared.refsOf?.tags ?? new Map();
+    if (!this.remotes.has("origin")) {
+      this.remotes.set("origin", new Map([[`refs/heads/${this.branch}`, head]]));
+    }
   }
 
   /** A new commit on HEAD, made now. */
@@ -365,10 +385,24 @@ export class FakeGraphRepo {
     this.reflog.unshift({ sha: to, at: Math.floor(Date.now() / 1000) });
   }
 
-  push(remote: string, ref: string, sha = this.head): void {
+  /**
+   * `git push <remote> <sha>:<ref>` from this repository: the remote's ref
+   * moves, and a branch's remote-tracking ref records "update by push" (a
+   * tag pushes the local tag). `byUrl` pushes to the remote's URL, which
+   * records nothing locally.
+   */
+  push(remote: string, ref: string, sha = this.head, options: { byUrl?: boolean } = {}): void {
     const refs = this.remotes.get(remote) ?? new Map<string, string>();
     refs.set(ref, sha);
     this.remotes.set(remote, refs);
+    if (options.byUrl) return;
+    if (ref.startsWith("refs/tags/")) this.tags.set(ref, sha);
+    if (ref.startsWith("refs/heads/")) {
+      const tracking = `refs/remotes/${remote}/${ref.slice("refs/heads/".length)}`;
+      const log = this.tracking.get(tracking) ?? [];
+      log.unshift({ sha, at: Math.floor(Date.now() / 1000), subject: "update by push" });
+      this.tracking.set(tracking, log);
+    }
   }
 
   readonly git = async (_environmentId: string, args: string[]): Promise<string> => {
@@ -378,6 +412,17 @@ export class FakeGraphRepo {
     if (command === "status") return "";
     if (command === "remote") return [...this.remotes.keys()].join("\n");
     if (command === "config") throw new Error("not set");
+    if (command === "for-each-ref") {
+      const ref = rest.at(-1)!;
+      const sha = this.tags.get(ref) ?? this.tracking.get(ref)?.[0]?.sha;
+      return sha ? `${ref} ${sha} \n` : "";
+    }
+    if (command === "log" && rest.includes("-g") && !rest.includes("HEAD")) {
+      const ref = rest.filter((arg) => arg !== "--").at(-1)!;
+      return (this.tracking.get(ref) ?? [])
+        .map((entry) => `${entry.sha} ${ref}@{${entry.at}} ${entry.subject}`)
+        .join("\n");
+    }
     if (command === "log" && rest.includes("-g")) {
       return this.reflog
         .map((entry) => `${entry.sha} ${this.commits.get(entry.sha)?.time ?? 0} HEAD@{${entry.at}}`)

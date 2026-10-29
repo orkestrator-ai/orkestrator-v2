@@ -6,6 +6,7 @@
  * Kept apart from `index.ts` so the backend wiring is one call.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type {
   AgentEnforcementHost,
   GraphCapabilityCeiling,
@@ -14,6 +15,10 @@ import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type { BuildPipelineProvider, ProviderDependencies } from "./build-pipeline-provider.js";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import type { GraphLsRemote } from "./graph-agent-guards.js";
+import {
+  graphGuardPeerSource,
+  type GraphGuardPeerSource,
+} from "./graph-agent-remote-attribution.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
 import { GraphAgentQuestions } from "./graph-agent-questions.js";
 import {
@@ -36,7 +41,11 @@ const GRAPH_GUARD_PROBE_ATTEMPTS = 3;
 export interface GraphAgentWiringInput {
   graphRuns: GraphRunService;
   artifacts: GraphArtifactStore;
-  storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
+  storage: {
+    getEnvironment(environmentId: string): Promise<Environment | null>;
+    /** The stored runs, for the remote-ref guard's peers. */
+    graphRuns?: { listAllGraphRuns(): Promise<GraphRun[]> };
+  };
   invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   workflowResults?: GraphAgentExecutorDependencies["workflowResults"] &
     WorkflowResultReader &
@@ -64,6 +73,8 @@ export interface GraphAgentWiringInput {
   lsRemote?: GraphLsRemote;
   /** Commits the run's system nodes pushed (their `push:<branch>:<sha>` effects). */
   systemPushes?(runId: string): Promise<ReadonlySet<string>>;
+  /** Activations whose turns overlapped; default every stored run (`graphGuardPeerSource`). */
+  guardPeers?: GraphGuardPeerSource;
   /** What the enforcement matrix may assume about the host; default the live probe. */
   enforcementHost?(environment: Environment): AgentEnforcementHost;
   projectNotes?(projectId: string): Promise<string | undefined>;
@@ -133,6 +144,13 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
       ),
     ...(input.lsRemote ? { lsRemote: input.lsRemote } : {}),
     ...(input.systemPushes ? { systemPushes: input.systemPushes } : {}),
+    ...((input.guardPeers ?? input.storage.graphRuns)
+      ? {
+          guardPeers:
+            input.guardPeers ??
+            graphGuardPeerSource({ listRuns: () => input.storage.graphRuns!.listAllGraphRuns() }),
+        }
+      : {}),
     ...(input.enforcementHost ? { enforcementHost: input.enforcementHost } : {}),
     ...(input.projectNotes ? { projectNotes: input.projectNotes } : {}),
     ...(input.artifactDispatch ? { artifactDispatch: input.artifactDispatch } : {}),

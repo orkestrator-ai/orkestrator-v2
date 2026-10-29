@@ -1040,6 +1040,21 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
   capture). Pushes by the run's own system nodes are not counted. It cannot
   see a push to an unwatched remote or URL, a push of older commits, or GitHub
   writes that are not pushes.
+  Commits are content-addressed, so two steps in sibling environments that
+  make the same change on the same parent in the same second make one commit
+  id. When another activation whose turn overlapped (any run;
+  `graphGuardPeerSource`, at most 16) created the same commit, the push is
+  attributed through each repository's own record of it
+  (`graph-agent-remote-attribution.ts`): the remote-tracking ref's reflog
+  entry "update by push" to that commit within the step's window, or the
+  local tag. The step whose repository recorded the push is failed and the
+  other passes, its result naming the peer. Where Git cannot tell, the guard
+  fails closed with outcome `unavailable` and a detail beginning "cannot be
+  attributed (ambiguous)" that names the peer and the reason: two local
+  environments of one project are worktrees of one repository and share
+  remote-tracking refs, tags and their reflogs; a push by URL or with reflogs
+  off is recorded nowhere; two steps in one checkout share its HEAD reflog. A
+  peer that cannot be read never clears a step.
 - **GitHub credential.** Graph agent policies deny `github.write`, and the
   session runs without the GitHub credential where the provider allows it
   (`NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING`; mechanisms in
@@ -1668,6 +1683,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 | `GRAPH_PROVENANCE_BOUNDS` sources, issues | 4,096, 32 | P`provenance.ts` |
 | `GRAPH_RUN_TRANSCRIPT_CAPTURE_INTERVAL_MS` | 15 s | `graph-run-transcripts.ts` |
 | Remote-ref guard: remotes, `ls-remote` attempts, listed refs, created commits, reflog entries | 8, 3, 100,000, 1,000, 200 | `graph-agent-guards.ts` |
+| Remote-ref attribution: peers, refs attributed one by one, tracking-ref reflog entries | 16, 20, 50 | `graph-agent-remote-attribution.ts` |
 | `GRAPH_WAIT_FOR_CHECKS_DEFAULT_MINUTES`/`MAX_MINUTES`; `GRAPH_CHECKS_NONE_GRACE_MS` | 60/360 min; 120 s | P`system-actions.ts`, `graph-system-checks.ts` |
 | `run-validation` `outputBytes`; `GRAPH_SYSTEM_PARAM_BOUNDS` comment, message, subject | 1–32 KiB (8 KiB); 2,000, 2,000, 200 chars | P`system-actions.ts` |
 | System job inline wait, safety observation | 2 s, 30 s | `graph-node-system.ts` |

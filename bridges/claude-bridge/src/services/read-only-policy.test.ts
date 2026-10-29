@@ -9,6 +9,7 @@ import {
   createCoordinatorReadOnlyHook,
   effectiveExecutionPolicy,
   isReadOnlyShellCommand,
+  readOnlyRefusalRole,
 } from "./read-only-policy.js";
 
 const coordinatorPolicy: NativeAgentExecutionPolicy = coordinatorProcessPolicy();
@@ -504,6 +505,57 @@ describe("Claude coordinator read-only policy", () => {
     expect(isReadOnlyShellCommand("git", { commandSandbox: "required" }).reason).toBe(
       "Coordinator is read-only, so `git` is not available here. Delegate it to a worker environment.",
     );
+  });
+
+  test("a read-only turn that is not a coordinator is refused in neutral words", async () => {
+    // Same decisions, different speaker: a graph reviewer has no worker to
+    // delegate to and is not a coordinator.
+    const options = { commandSandbox: "required", role: "read-only" } as const;
+    const refusals = [
+      isReadOnlyShellCommand("git commit -m x", options).reason,
+      isReadOnlyShellCommand("git push origin HEAD", options).reason,
+      isReadOnlyShellCommand("touch file", options).reason,
+      isReadOnlyShellCommand("sort -o out in", options).reason,
+      isReadOnlyShellCommand("ls | wc", options).reason,
+      isReadOnlyShellCommand("bin/cat x", options).reason,
+      isReadOnlyShellCommand("git status", { role: "read-only" }).reason,
+    ];
+    expect(refusals[0]).toBe("This session is read-only, so `git commit` is not available here.");
+    expect(refusals[1]).toBe("This session is read-only, so `git push` is not available here.");
+    const hook = createCoordinatorReadOnlyHook(coordinatorPolicy, [], options);
+    const reasons: string[] = [];
+    for (const [tool_name, tool_input] of [
+      ["Write", {}],
+      ["Monitor", {}],
+      ["mcp__project__tool", {}],
+      ["Bash", { command: "rm -rf src" }],
+      ["Bash", { command: "ls", dangerouslyDisableSandbox: true }],
+    ] as const) {
+      const output = (await hook(
+        { hook_event_name: "PreToolUse", tool_name, tool_input } as never,
+        undefined as never,
+        { signal: new AbortController().signal } as never,
+      )) as { hookSpecificOutput?: { permissionDecisionReason?: string } };
+      reasons.push(output.hookSpecificOutput?.permissionDecisionReason ?? "");
+    }
+    expect(reasons[0]).toBe("This session is read-only, so Write is not available.");
+    for (const reason of [...refusals, ...reasons]) {
+      expect(reason).toBeTruthy();
+      expect(reason).not.toMatch(/coordinator|worker environment|delegat/i);
+    }
+  });
+
+  test("the refusal role follows the process and the turn, not the policy id alone", () => {
+    const coordinatorEnv = { [BRIDGE_EXECUTION_POLICY_ENV]: "coordinator-read-only" };
+    // A coordinator bridge speaks as a coordinator, whatever the turn.
+    expect(readOnlyRefusalRole(undefined, true, coordinatorEnv)).toBe("coordinator");
+    // An ordinary bridge's `readOnly` turn (a graph reviewer, a pipeline review).
+    expect(readOnlyRefusalRole(undefined, true, {})).toBe("read-only");
+    expect(readOnlyRefusalRole(coordinatorPolicy, true, {})).toBe("read-only");
+    // A session that runs under the coordinator policy outright.
+    expect(readOnlyRefusalRole(coordinatorPolicy, false, {})).toBe("coordinator");
+    // The default wording stays the coordinator's.
+    expect(isReadOnlyShellCommand("touch x").reason).toContain("Coordinator is read-only");
   });
 
   test("an empty command is not a mutation", () => {

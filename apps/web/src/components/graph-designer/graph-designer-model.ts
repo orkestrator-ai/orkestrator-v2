@@ -8,6 +8,7 @@ import {
 } from "@orkestrator/protocol/graphs/compile";
 import {
   graphNodeOutlets,
+  graphNodeOutputSpecs,
   isGraphRunInputRef,
   type GraphEdgeSource,
   type GraphEnforcementTier,
@@ -28,6 +29,7 @@ import {
   layoutGraphTemplate,
   type GraphDesignerLayout,
 } from "./graph-designer-layout";
+import { graphDesignerNodeOf } from "./graph-designer-subgraphs";
 
 /**
  * The Graphs designer's projection of a template (plus, when it compiled, its
@@ -137,6 +139,15 @@ export function indexGraphDiagnostics(
     general: [],
   };
   for (const diagnostic of diagnostics) {
+    // A node, edge or loop inlined from a sub-graph (`review/plan`) is shown
+    // on the sub-graph node itself (item 402).
+    const inlined = [diagnostic.nodeId, diagnostic.edgeId, diagnostic.loopId].find(
+      (id) => id !== undefined && id.includes("/"),
+    );
+    if (inlined !== undefined) {
+      push(index.nodes, graphDesignerNodeOf(inlined), diagnostic);
+      continue;
+    }
     if (diagnostic.nodeId) push(index.nodes, diagnostic.nodeId, diagnostic);
     if (diagnostic.edgeId) push(index.edges, diagnostic.edgeId, diagnostic);
     if (diagnostic.loopId) push(index.loops, diagnostic.loopId, diagnostic);
@@ -339,8 +350,7 @@ function sourceType(template: GraphTemplateV1, source: GraphEdgeSource): string 
     // An outlet forwards the node's input of that name.
     return node.inputs?.find((input) => input.name === source.port)?.type;
   }
-  const outputs = "outputs" in node ? node.outputs : undefined;
-  return outputs?.find((output) => output.name === source.port)?.type;
+  return graphNodeOutputSpecs(node).find((output) => output.name === source.port)?.type;
 }
 
 interface Endpoint {
@@ -420,8 +430,7 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
     const loopBox = loopId ? layout.loops.get(loopId) : undefined;
     const planNode = planNodes.get(node.id);
     const inputs = (node.inputs ?? []).map((port) => portView("in", port, library));
-    const outputs =
-      "outputs" in node ? (node.outputs ?? []).map((port) => portView("out", port, library)) : [];
+    const outputs = graphNodeOutputSpecs(node).map((port) => portView("out", port, library));
     const outlets = (graphNodeOutlets(node) ?? []).map((name) => ({
       name,
       handleId: `outlet:${name}`,

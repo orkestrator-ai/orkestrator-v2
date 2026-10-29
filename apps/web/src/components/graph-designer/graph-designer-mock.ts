@@ -45,17 +45,26 @@ export function setGraphMockPins(
   return next;
 }
 
-/** `mockPins` after a node rename or removal (`to` null removes it). */
+/**
+ * `mockPins` after a node rename or removal (`to` null removes it). Pins on
+ * nodes inlined from a sub-graph node (`<from>/...`, item 402) follow it.
+ */
 export function moveGraphMockPins(
   pins: GraphMockPins | undefined,
   from: string,
   to: string | null,
 ): GraphMockPins | undefined {
-  if (!pins || !Object.hasOwn(pins, from)) return pins;
+  const prefix = `${from}/`;
+  if (!pins || !Object.keys(pins).some((id) => id === from || id.startsWith(prefix))) return pins;
   const next: GraphMockPins = {};
   for (const [id, sequence] of Object.entries(pins)) {
-    if (id !== from) next[id] = sequence;
-    else if (to !== null) next[to] = sequence;
+    if (id === from) {
+      if (to !== null) next[to] = sequence;
+    } else if (id.startsWith(prefix)) {
+      if (to !== null) next[`${to}/${id.slice(prefix.length)}`] = sequence;
+    } else {
+      next[id] = sequence;
+    }
   }
   return Object.keys(next).length > 0 ? next : undefined;
 }

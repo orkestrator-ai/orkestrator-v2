@@ -15,8 +15,11 @@
  * - Every agent profile, `custom` included, denies `git.push` and
  *   `github.write` (D12): only system nodes push or write to GitHub. There is
  *   no `shipper`; conflict resolution uses `builder`, which commits locally.
+ * - `mcp:<server>` in `allow` grants that user MCP server to the node's
+ *   session (item 404); every compiled policy selects its servers through
+ *   `capabilityPolicy.userMcpServers`, so a node gets none unless granted.
  * - `checkGraphCapabilities` gives the compiler (item 107) its diagnostics:
- *   remote writes asked for, MCP grants (deny only until item 404), allows
+ *   remote writes asked for, MCP grants a provider cannot deliver, allows
  *   that change nothing, and `workspaceAccess` that disagrees with the
  *   profile.
  * - `graphGrantedActions` lists the Orkestrator actions an activation's
@@ -27,9 +30,13 @@
  * re-exported here, so `@orkestrator/protocol/graphs/capability-profiles` is
  * the one import for all of it. Browser-safe.
  */
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "../agent-platforms.js";
 import {
   compareNativeAgentCapabilities,
   isNativeAgentCapability,
+  NATIVE_AGENT_USER_MCP_SELECTION,
+  NATIVE_AGENT_USER_MCP_SERVERS_MAX,
+  nativeAgentUserMcpSelectionDelivered,
   nativeAgentDeniedCapabilities,
   nativeAgentDenialsAreReadOnly,
   nativeAgentMcpServer,
@@ -281,6 +288,12 @@ export interface CompiledGraphCapabilities {
   readOnly: boolean;
   /** Orkestrator tool groups the node opted into and the ceiling admits. */
   orkestratorGroups: NativeAgentOrkestratorCapabilityGroup[];
+  /**
+   * User MCP servers granted to the node's session (item 404), sorted: its
+   * `mcp:<server>` allows that no layer denies. The policy's
+   * `capabilityPolicy.userMcpServers`; empty means no user server.
+   */
+  mcpServers: string[];
   /** What the profile and node would have had but the ceiling removed (sorted). */
   removedByCeiling: GraphCapabilityName[];
   /** What the profile and node would have had but the environment does not give (sorted). */
@@ -321,8 +334,8 @@ export function compileGraphCapabilities(
   const ceiling = input.ceiling ?? DEFAULT_GRAPH_CAPABILITY_CEILING;
 
   // The profile layer: its denials, the node's extra denials, then the node's
-  // carve-outs. Remote writes can never be carved out (D12), and an MCP
-  // server has nothing to carve until per-session servers exist (item 404).
+  // carve-outs. Remote writes can never be carved out (D12). An MCP server is
+  // a grant rather than a carve-out (item 404), collected separately.
   const profileDeny = new Set<string>(definition.deny);
   let profileSearch = definition.allow.includes("web.search");
   for (const capability of input.spec.deny ?? []) {
@@ -331,6 +344,7 @@ export function compileGraphCapabilities(
     if (capability === "web.search") profileSearch = false;
   }
   const requestedGroups = new Set<NativeAgentOrkestratorCapabilityGroup>();
+  const requestedServers = new Set<string>();
   for (const capability of input.spec.allow ?? []) {
     const group = nativeAgentOrkestratorGroup(capability);
     if (group) {
@@ -338,7 +352,11 @@ export function compileGraphCapabilities(
       continue;
     }
     if ((REMOTE_DENIALS as readonly string[]).includes(capability)) continue;
-    if (nativeAgentMcpServer(capability)) continue;
+    const server = nativeAgentMcpServer(capability);
+    if (server) {
+      requestedServers.add(server);
+      continue;
+    }
     if (capability === "web.search") {
       profileDeny.delete("web.search");
       profileSearch = true;
@@ -384,6 +402,17 @@ export function compileGraphCapabilities(
     (group) => requestedGroups.has(group) && !deny.has(`orkestrator:${group}`),
   );
 
+  // A grant survives only where no layer denies the server; the node's own
+  // denial wins over its own grant. Bounded like the wire form.
+  const mcpServers = [...requestedServers]
+    .filter((server) => !deny.has(`mcp:${server}`))
+    .sort()
+    .slice(0, NATIVE_AGENT_USER_MCP_SERVERS_MAX);
+  const serversRemovedBy = (layer: CapabilityLayer) =>
+    [...requestedServers]
+      .filter((server) => layer.deny.has(`mcp:${server}`))
+      .map((server) => `mcp:${server}` as const);
+
   const denied = sortCapabilities(deny as Set<NativeAgentCapability>);
   const readOnly = nativeAgentDenialsAreReadOnly(denied);
   const policy: NativeAgentExecutionPolicy = {
@@ -403,6 +432,7 @@ export function compileGraphCapabilities(
     capabilityPolicy: {
       deny: denied,
       ...(webSearch && deny.has("network") ? { allow: ["web.search"] } : {}),
+      userMcpServers: [...mcpServers],
     },
   };
   return {
@@ -412,13 +442,16 @@ export function compileGraphCapabilities(
     webSearch,
     readOnly,
     orkestratorGroups,
+    mcpServers,
     removedByCeiling: sortCapabilities([
       ...removed(ceilingLayer),
       ...groupsRemovedBy(ceilingLayer),
+      ...serversRemovedBy(ceilingLayer),
     ]),
     removedByEnvironment: sortCapabilities([
       ...removed(environment),
       ...groupsRemovedBy(environment),
+      ...serversRemovedBy(environment),
     ]),
     ...(readOnly ? { defaultMinEnforcement: "provider-configured" as const } : {}),
   };
@@ -468,6 +501,7 @@ export function graphMinEnforcementLowered(
 export const GRAPH_CAPABILITY_ISSUE_CODES = [
   "capability-remote-write",
   "capability-mcp-grant",
+  "capability-mcp-grant-read-only",
   "capability-allow-unused",
   "capability-workspace-write-denied",
   "capability-workspace-read-writable",
@@ -479,7 +513,18 @@ export interface GraphCapabilityIssue {
   severity: "error" | "warning";
   /** The override the issue is about, when there is one. */
   capability?: GraphCapabilityName;
+  /** The provider the issue is about (`capability-mcp-grant`). */
+  provider?: AgentPlatform;
   message: string;
+}
+
+export interface GraphCapabilityCheckOptions {
+  /**
+   * The enabled providers. A user MCP grant gets one `capability-mcp-grant`
+   * warning per provider that cannot deliver it (item 404); without the
+   * list, none.
+   */
+  providers?: readonly AgentPlatform[];
 }
 
 /** Whether a spec asks for push or GitHub writes, which no agent node may hold (D12). */
@@ -535,10 +580,52 @@ export function checkGraphWorkspaceAccess(
   return [];
 }
 
+/**
+ * The diagnostics for a node's user MCP grants (item 404): one warning per
+ * enabled provider that cannot deliver them on the node's turn kind, and one
+ * for a read-only node, whose granted servers run outside its read-only
+ * boundary. A grant the node also denies is no grant.
+ */
+function checkGraphMcpGrants(
+  spec: GraphCapabilitySpec,
+  options: GraphCapabilityCheckOptions,
+): GraphCapabilityIssue[] {
+  const granted = (spec.allow ?? []).filter(
+    (capability) => nativeAgentMcpServer(capability) && !spec.deny?.includes(capability),
+  );
+  if (granted.length === 0) return [];
+  const issues: GraphCapabilityIssue[] = [];
+  const readOnly = compileGraphCapabilities({
+    spec,
+    environment: UNRESTRICTED_ENVIRONMENT,
+  }).readOnly;
+  const servers = granted.join(", ");
+  for (const provider of options.providers ?? []) {
+    if (nativeAgentUserMcpSelectionDelivered(provider, readOnly)) continue;
+    issues.push({
+      code: "capability-mcp-grant",
+      severity: "warning",
+      capability: granted[0]!,
+      provider,
+      message: `${AGENT_PLATFORM_LABELS[provider]} cannot give this node ${servers}: ${NATIVE_AGENT_USER_MCP_SELECTION[provider].gap ?? "it cannot select MCP servers per session."}`,
+    });
+  }
+  if (readOnly) {
+    issues.push({
+      code: "capability-mcp-grant-read-only",
+      severity: "warning",
+      capability: granted[0]!,
+      message: `${servers} ${granted.length === 1 ? "runs" : "run"} outside this read-only node's boundary: an MCP server acts with your rights (a local one is a program on this machine). The workspace guard still checks the workspace afterwards.`,
+    });
+  }
+  return issues;
+}
+
 /** Every capability diagnostic for one agent node, in a stable order. */
 export function checkGraphCapabilities(
   spec: GraphCapabilitySpec,
   workspaceAccess: GraphWorkspaceAccess,
+  options: GraphCapabilityCheckOptions = {},
 ): GraphCapabilityIssue[] {
   const issues: GraphCapabilityIssue[] = [];
   const definition = GRAPH_CAPABILITY_PROFILE_DEFINITIONS[spec.profile];
@@ -551,12 +638,8 @@ export function checkGraphCapabilities(
         message: `Agent nodes never hold ${capability}: pushing and GitHub writes are system nodes (D12). Add a push-branch or open-pull-request node instead.`,
       });
     } else if (nativeAgentMcpServer(capability)) {
-      issues.push({
-        code: "capability-mcp-grant",
-        severity: "error",
-        capability,
-        message: `${capability} can only be denied until nodes can be given their own MCP servers.`,
-      });
+      // A grant (item 404); judged per provider below.
+      continue;
     } else if (
       !nativeAgentOrkestratorGroup(capability) &&
       !(definition.deny as readonly string[]).includes(capability) &&
@@ -574,6 +657,7 @@ export function checkGraphCapabilities(
       });
     }
   }
+  issues.push(...checkGraphMcpGrants(spec, options));
   issues.push(...checkGraphWorkspaceAccess(spec, workspaceAccess));
   return issues;
 }
@@ -724,10 +808,20 @@ export function describeGraphCapabilities(input: GraphCapabilityStatementInput):
     "You cannot push or write to GitHub (pull requests, comments, labels); Orkestrator's system steps do that after you finish.",
   );
   if (denied.has("subagents")) lines.push("You cannot start sub-agents.");
-  const servers = compiled.denied
-    .map((capability) => nativeAgentMcpServer(capability))
-    .filter((server): server is string => server !== undefined);
-  if (servers.length > 0) lines.push(`You cannot use these MCP servers: ${servers.join(", ")}.`);
+  // A policy compiled before item 404 selects nothing; its denials still apply.
+  const selected = compiled.policy.capabilityPolicy?.userMcpServers;
+  if (selected) {
+    lines.push(
+      selected.length > 0
+        ? `Of the user's own MCP servers you have only ${selected.join(", ")}.`
+        : "You have none of the user's own MCP servers.",
+    );
+  } else {
+    const servers = compiled.denied
+      .map((capability) => nativeAgentMcpServer(capability))
+      .filter((server): server is string => server !== undefined);
+    if (servers.length > 0) lines.push(`You cannot use these MCP servers: ${servers.join(", ")}.`);
+  }
   const groups = actions
     ? actions.orkestrator.map((entry) => entry.group)
     : compiled.orkestratorGroups;

@@ -48,15 +48,23 @@ describe("graph_run_mock", () => {
     const result = await run<GraphMockLaunchResult>("graph_run_mock", {
       ref,
       projectId: world.projectId,
-      pins: { approve: [{ outlet: "approved" }] },
+      // A pin may name a node inlined from the Multi Review sub-graph (item 402).
+      pins: { approve: [{ outlet: "approved" }], "review/consolidate": ["generated"] },
     });
     expect(result.run).toMatchObject({ mock: true, projectId: world.projectId, status: "running" });
     expect(result.run.environmentId).toBeUndefined();
     expect(result.exampleInputs.sort()).toEqual(["target", "ticket"]);
-    expect(result.placeholderRoles).toContain("designer");
-    expect(result.pins).toEqual({ approve: [{ outlet: "approved" }] });
+    // The parent's roles, the ones it binds into the sub-graph included.
+    expect(result.placeholderRoles).toEqual(
+      expect.arrayContaining(["designer", "preparer", "reviewer", "consolidator", "describer"]),
+    );
+    expect(result.pins).toEqual({
+      approve: [{ outlet: "approved" }],
+      "review/consolidate": ["generated"],
+    });
     const stored = await world.storage.graphRuns.getGraphRun(result.run.id);
     expect(stored?.bindings.roles.designer).toEqual({ platform: "claude", model: "mock" });
+    expect(stored?.mockOptions?.pins?.["review/consolidate"]).toEqual(["generated"]);
     // A panel role gets two placeholders by default, or `panel` of them.
     const review = await world.save({
       ...graphTemplateExample("multi-review"),

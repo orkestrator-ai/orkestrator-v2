@@ -21,6 +21,7 @@ import {
 } from "@orkestrator/protocol/graphs/template";
 import { Button } from "@/components/ui/button";
 import { GraphEnforcementMatrix, useGraphNodeCapabilities } from "./GraphEnforcementMatrix";
+import { GraphMcpServersEditor } from "./GraphMcpServersEditor";
 import { GRAPH_ENFORCEMENT_LABELS } from "./graph-designer-model";
 import { useGraphEditor, useGraphNodeEdit } from "./graph-editor-context";
 import { FormSection, JsonField, SelectField } from "./graph-form-controls";
@@ -28,8 +29,8 @@ import { FormSection, JsonField, SelectField } from "./graph-form-controls";
 /**
  * The capabilities form of an agent node (report §6.2–§6.4, item 106):
  * profile, workspace access and isolation (item 403), per-capability allow
- * and deny overrides (which
- * only narrow), the minimum enforcement tier with D4's lowered-floor
+ * and deny overrides (which only narrow), the user MCP servers the node is
+ * granted (item 404), the minimum enforcement tier with D4's lowered-floor
  * acknowledgement, and the per-provider enforcement matrix of the result.
  * Push and GitHub writes are never an agent's (D12).
  */
@@ -265,6 +266,8 @@ export function GraphCapabilitiesEditor({ node }: { node: GraphAgentNode }) {
           onCommit={(value) => setSpec("Edit capabilities JSON", value as GraphCapabilitySpec)}
         />
       </FormSection>
+
+      <GraphMcpServersEditor spec={node.capabilities} compiled={compiled} onChange={setSpec} />
 
       <FormSection title="Minimum enforcement">
         <SelectField

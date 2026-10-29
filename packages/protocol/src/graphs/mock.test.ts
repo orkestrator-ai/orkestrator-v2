@@ -24,6 +24,7 @@ import {
 import { graphRunFixture } from "./run-fixtures.test-support.js";
 import { validateGraphRun } from "./run.js";
 import { validateGraphSchemaValue } from "./schema-subset.js";
+import { graphBuiltinTemplateResolver } from "./subgraphs.js";
 import { validateGraphTemplate } from "./template.js";
 import { GraphTypeLibrary, graphBuiltInTypes, validateGraphArtifactValue } from "./types.js";
 
@@ -303,6 +304,10 @@ describe("pins", () => {
         verify: [{ outputs: { text: "x".repeat(GRAPH_MOCK_PIN_BOUNDS.maxPinBytes) } }],
       }),
     ).toContain("pins.verify[0]:too_large");
+    // Plan ids: a pin may target a node inlined from a sub-graph (item 402).
+    expect(shapeErrors({ "review/fix": ["example"], "a/b/c": ["generated"] })).toEqual([]);
+    expect(shapeErrors({ "review//fix": ["example"] })).toEqual(["pins.review//fix:pattern"]);
+    expect(shapeErrors({ "/fix": ["example"] })).toEqual(["pins./fix:pattern"]);
     expect(parseGraphMockPins({ verify: ["passed"] })).toEqual({
       ok: false,
       errors: ["pins.verify[0]: Expected one of: example, generated, pause"],
@@ -385,6 +390,41 @@ describe("graphMockPinIssues", () => {
         verify: [{ outputs: { verdict, code: null } }],
       }).map((issue) => issue.code),
     ).toEqual(["mock-pin-required-port"]);
+  });
+
+  test("pins on inlined nodes are checked against the plan, deferred on the template", () => {
+    const fix = [{ outputs: { code: null } }] as GraphMockPins[string];
+    const target = graphMockPinTargetFromTemplate(template);
+    // The template does not know Multi Review's nodes until it is inlined.
+    expect(
+      graphMockPinIssues(target, { "review/fix": fix, "review/nowhere": ["example"] }),
+    ).toEqual([]);
+    // A prefix that is not a sub-graph node names nothing.
+    expect(
+      graphMockPinIssues(target, { "judge/fix": ["example"] }).map((issue) => issue.code),
+    ).toEqual(["mock-pin-unknown-node"]);
+    expect(graphMockPinIssues(target, { review: ["example"] }).map((issue) => issue.code)).toEqual([
+      "mock-pin-node-kind",
+    ]);
+    const plan = compile(template, { resolveTemplate: graphBuiltinTemplateResolver }).plan!;
+    const planned = graphMockPinTargetFromPlan(plan);
+    expect(
+      graphMockPinIssues(planned, {
+        "review/consolidate": ["generated"],
+        "review/fix": [{ fail: "provider-error" }, "example"],
+      }),
+    ).toEqual([]);
+    expect(
+      graphMockPinIssues(planned, {
+        "review/nowhere": ["example"],
+        "review/fix": fix,
+        "review/has-findings": ["example"],
+      }).map((issue) => [issue.nodeId, issue.code]),
+    ).toEqual([
+      ["review/nowhere", "mock-pin-unknown-node"],
+      ["review/fix", "mock-pin-required-port"],
+      ["review/has-findings", "mock-pin-node-kind"],
+    ]);
   });
 
   test("a human edit value is checked against the edited input's type", () => {

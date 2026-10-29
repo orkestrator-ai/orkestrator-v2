@@ -11,6 +11,7 @@ import type {
 } from "@/stores/graphDesignerStore";
 import { cn } from "@/lib/utils";
 import { graphDiagnosticCounts } from "./graph-designer-model";
+import { graphDesignerNodeOf } from "./graph-designer-subgraphs";
 
 /**
  * The compile panel (report §7.4): every diagnostic, pinned to the node, edge
@@ -36,6 +37,11 @@ const SEVERITY_TONE = {
 
 /** Where a diagnostic points, as a selection; null when it names no node, edge or loop. */
 export function graphDiagnosticTarget(diagnostic: GraphCompileDiagnostic): GraphDesignerSelection {
+  // Inlined from a sub-graph (item 402): select the sub-graph node.
+  const inlined = [diagnostic.nodeId, diagnostic.edgeId, diagnostic.loopId].find(
+    (id) => id !== undefined && id.includes("/"),
+  );
+  if (inlined !== undefined) return { kind: "node", id: graphDesignerNodeOf(inlined) };
   if (diagnostic.edgeId) return { kind: "edge", id: diagnostic.edgeId };
   if (diagnostic.nodeId) return { kind: "node", id: diagnostic.nodeId };
   if (diagnostic.loopId) return { kind: "loop", id: diagnostic.loopId };
@@ -133,7 +139,9 @@ function PendingAcknowledgements({
               <button
                 type="button"
                 className="min-w-0 flex-1 text-left hover:underline"
-                onClick={() => onSelect({ kind: "node", id: ref.nodeId }, true)}
+                onClick={() =>
+                  onSelect({ kind: "node", id: graphDesignerNodeOf(ref.nodeId) }, true)
+                }
               >
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {ref.code} · {ref.nodeId}

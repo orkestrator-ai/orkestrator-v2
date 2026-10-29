@@ -1,5 +1,6 @@
 import { graphSchemaAtPath, graphSchemaNonNull } from "@orkestrator/protocol/graphs/schema-subset";
 import {
+  graphNodeOutputSpecs,
   isGraphRunInputRef,
   type GraphEdgeSource,
   type GraphLayoutPoint,
@@ -119,7 +120,7 @@ function resolve(library: GraphTypeLibrary, ref: string): GraphValueType | null 
 }
 
 function outputsOf(node: GraphNodeSpec) {
-  return "outputs" in node ? (node.outputs ?? []) : [];
+  return graphNodeOutputSpecs(node);
 }
 
 /** Does `to` reach `from` along edges (so `from → to` would close a cycle)? */
@@ -330,7 +331,13 @@ export function graphConnectionVerdict(
 
   const target = graphNodeById(template, targetEnd.node);
   if (!target) return { ok: false, reason: "That node no longer exists" };
-  if (target.kind === "subgraph") return { ok: false, reason: "Sub-graphs come in Phase 4" };
+  if (target.kind === "subgraph" && targetEnd.handle === GRAPH_NEW_PORT_HANDLE) {
+    // Its ports are the child template's run inputs (item 402).
+    return {
+      ok: false,
+      reason: "A sub-graph's inputs come from its template; connect to one of them",
+    };
+  }
 
   // The `+` handle: a new input port of the delivered type.
   if (targetEnd.handle === GRAPH_NEW_PORT_HANDLE) {

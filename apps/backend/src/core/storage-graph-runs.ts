@@ -516,7 +516,7 @@ export class GraphRunsRepository {
    */
   async deleteEnvironmentlessGraphRun(runId: string): Promise<boolean> {
     if (!isGraphRunId(runId)) return false;
-    return this.enqueueGraphRunMutation(async () => {
+    const removed = await this.enqueueGraphRunMutation(async () => {
       const stored = this.context.loadStoreRow(this.graphRunsFile(), runId);
       if (!isRecord(stored)) return false;
       if (stored.environmentId !== undefined) {
@@ -555,6 +555,11 @@ export class GraphRunsRepository {
       );
       return true;
     });
+    // Then its activation transcripts (item 211), best-effort as for environment deletion.
+    if (removed) {
+      await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
+    }
+    return removed;
   }
 
   /**

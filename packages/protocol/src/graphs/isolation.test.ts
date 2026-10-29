@@ -8,6 +8,7 @@ import { compile } from "./compile.js";
 import { agentOf, baseTemplate } from "./compile-fixtures.test-support.js";
 import {
   GRAPH_ISOLATION_BOUNDS,
+  graphBranchNodeSegment,
   graphBranchWorktreePath,
   graphBranchWorktreeRef,
   graphMainWorkspaceAccess,
@@ -27,7 +28,8 @@ import {
   POLICY_FIXTURE,
 } from "./run-fixtures.test-support.js";
 import { graphSystemContract } from "./system-contract.js";
-import { validateGraphTemplate } from "./template.js";
+import { validateGraphTemplate, type GraphTemplateV1 } from "./template.js";
+import { resolverOf } from "./subgraph-fixtures.test-support.js";
 import { compileGraphCapabilities } from "./capability-profiles.js";
 import { graphNodeGrantedActions } from "./system-contract.js";
 import { GraphTypeLibrary } from "./types.js";
@@ -50,6 +52,21 @@ describe("names", () => {
     expect(graphBranchWorktreeRef(RUN, { nodeId: "a", iteration: 1, branchKey: "item:3" })).toBe(
       `orkestrator-graph/${RUN}/a/i1/item_3`,
     );
+  });
+
+  test("an inlined sub-graph's node id (item 402) stays one segment: '/' becomes '--'", () => {
+    const position = { nodeId: "bake/implement", iteration: 1, branchKey: "sample.1" };
+    const path = graphBranchWorktreePath(RUN, position);
+    expect(path).toBe(`.orkestrator/graph-branches/${RUN}/bake--implement/i1/sample.1`);
+    expect(graphBranchWorktreeRef(RUN, position)).toBe(
+      `orkestrator-graph/${RUN}/bake--implement/i1/sample.1`,
+    );
+    expect(graphBranchNodeSegment("outer/inner/fix")).toBe("outer--inner--fix");
+    // Distinct ids never collide: a graph id holds no "--".
+    expect(graphBranchNodeSegment("a/b-c")).not.toBe(graphBranchNodeSegment("a-b/c"));
+    expect(parseGraphBranchWorktreePath(path)).toEqual({ runId: RUN });
+    expect(parseGraphBranchWorktreePath(path.replace("bake--implement", "bake---x"))).toBeNull();
+    expect(() => graphBranchNodeSegment("a//b")).toThrow();
   });
 
   test("names refuse ids outside their grammar", () => {
@@ -155,6 +172,46 @@ describe("the compiler", () => {
     // Unisolated nodes carry no field, so earlier plans keep their digests.
     expect("isolation" in result.plan!.nodes.find((node) => node.id === "judge")!).toBe(false);
     expect(result.plan!.nodes.find((node) => node.id === "select")!.workspaceAccess).toBe("write");
+  });
+
+  test("an isolated node inlined from a sub-graph (item 402) keeps its isolation", () => {
+    const child = graphCompetingImplementationsTemplate();
+    child.revision = 1;
+    const parent: GraphTemplateV1 = {
+      ...graphCompetingImplementationsTemplate(),
+      id: "parent",
+      roles: [{ key: "worker", multiplicity: "one" }],
+      outputs: [{ name: "code", type: "workspace@1", from: { node: "bake", port: "code" } }],
+      nodes: [
+        {
+          id: "bake",
+          kind: "subgraph",
+          template: { scope: "user", id: "competing-implementations", revision: 1 },
+          roles: { builder: "worker", judge: "worker" },
+          inputs: [
+            { name: "ticket", type: "ticket@1" },
+            { name: "target", type: "workspace@1" },
+          ],
+          outputs: [{ name: "code", type: "workspace@1" }],
+        },
+      ],
+      edges: [
+        { id: "ticket", from: { input: "ticket" }, to: { node: "bake", port: "ticket" } },
+        { id: "target", from: { input: "target" }, to: { node: "bake", port: "target" } },
+      ],
+    };
+    const result = compile(parent, { resolveTemplate: resolverOf(child) });
+    expect(result.diagnostics.filter((entry) => entry.severity === "error")).toEqual([]);
+    expect(result.plan!.nodes.find((node) => node.id === "bake/implement")).toMatchObject({
+      isolation: "worktree",
+    });
+    expect(
+      graphBranchWorktreePath("r1", {
+        nodeId: "bake/implement",
+        iteration: 1,
+        branchKey: "sample.3",
+      }),
+    ).toBe(".orkestrator/graph-branches/r1/bake--implement/i1/sample.3");
   });
 
   test("without isolation the same template has a replicated writer (D3)", () => {

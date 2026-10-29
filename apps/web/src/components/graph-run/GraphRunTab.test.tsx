@@ -388,7 +388,8 @@ describe("GraphRunTab actions", () => {
       { nodeId: "plan" },
       { inputs: { code: "artifact-target" }, outputs: { code: "artifact-code" } },
     );
-    stored = reviewRun([planDone, act({ nodeId: "package" })]);
+    // Code rewinds need a quiet workspace: the run is paused (item 210).
+    stored = reviewRun([planDone, act({ nodeId: "package" })], { status: "paused" });
     renderTab({ rewindBackend: rewind });
     await screen.findByTestId("graph-run-title");
     fireEvent.click(faceOf("plan"));

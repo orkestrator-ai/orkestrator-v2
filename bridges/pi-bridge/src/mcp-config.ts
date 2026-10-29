@@ -17,6 +17,13 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
+import {
+  nativeAgentDeniedCapabilities,
+  nativeAgentMcpServer,
+  nativeAgentRestrictsUserMcp,
+  nativeAgentUserMcpGrant,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { isObject, nonBlank } from "./state.js";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -335,22 +342,50 @@ function mergeMcpConfigEntries(
   return servers;
 }
 
+/**
+ * Which configured (user or project) servers a session under `policy` may
+ * start (graphs item 404): its `userMcpServers` selection minus its
+ * `mcp:<server>` denials, matched on the id Pi gives a server (its name
+ * sanitized the way `sanitizeMcpName` does, so `my.docs` and `my_docs` are
+ * one server here as they are in Pi). `undefined` when the policy narrows
+ * nothing, so an ordinary session starts every configured server.
+ */
+export function piUserMcpServerFilter(
+  policy: NativeAgentExecutionPolicy | undefined,
+): ((id: string) => boolean) | undefined {
+  if (!nativeAgentRestrictsUserMcp(policy)) return undefined;
+  const ids = (names: readonly string[]) =>
+    new Set(names.map(sanitizeMcpName).filter((id): id is string => id !== undefined));
+  const denied = ids(
+    nativeAgentDeniedCapabilities(policy)
+      .map(nativeAgentMcpServer)
+      .filter((name): name is string => name !== undefined),
+  );
+  const grant = nativeAgentUserMcpGrant(policy);
+  const granted = grant ? ids(grant) : undefined;
+  return (id) => !denied.has(id) && (granted ? granted.has(id) : true);
+}
+
 export async function resolvePiMcpServers(input: {
   agentDir: string;
   cwd: string;
   projectResources: boolean;
   agentMcp?: AgentMcpConnection;
   env?: NodeJS.ProcessEnv;
+  /** Which configured servers may start (`piUserMcpServerFilter`); all when absent. */
+  allowServer?: (id: string) => boolean;
 }): Promise<ResolvedMcpServer[]> {
   const env = input.env ?? process.env;
   const user = await loadMcpConfigFile(join(input.agentDir, "mcp.json"), "user", env);
   const project = input.projectResources
     ? await loadMcpConfigFile(join(input.cwd, ".pi", "mcp.json"), "project", env)
     : [];
+  // A server outside the session's selection is never started, so none of
+  // its tools is registered through the `orkestrator-mcp` extension.
   const fileServers = mergeMcpConfigEntries([
     { scope: "user", entries: user },
     { scope: "project", entries: project },
-  ]);
+  ]).filter((server) => input.allowServer?.(server.id) ?? true);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
   const artifacts = orkestratorArtifactMcpServer(input.agentMcp);
   const research = researchMcpServers(env);

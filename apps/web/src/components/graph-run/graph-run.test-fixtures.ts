@@ -140,3 +140,55 @@ export const POLICY: NonNullable<NodeActivation["policy"]> = {
   projectResources: false,
   networkAccess: "restricted",
 };
+
+/** A one-human-node template (item 208): `check` reads the `brief` run input. */
+export function humanPlan(form: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  const result = compile({
+    format: "orkestrator.graph",
+    formatVersion: 1,
+    id: "people",
+    revision: 1,
+    name: "People",
+    parameters: [],
+    roles: [],
+    inputs: [{ name: "brief", type: "text@1" }],
+    outputs: [],
+    workspace: { kind: "environment" },
+    nodes: [
+      {
+        id: "check",
+        kind: "human",
+        label: "Check the brief",
+        form,
+        inputs: [{ name: "brief", type: "text@1" }],
+        ...extra,
+      },
+    ],
+    edges: [{ id: "in", from: { input: "brief" }, to: { node: "check", port: "brief" } }],
+    limits: { maxAgentSessions: 1, maxConcurrentAgents: 1 },
+  });
+  if (!result.plan) throw new Error("The human test template must compile");
+  return result.plan;
+}
+
+/** A run of {@link humanPlan} with the given activations. */
+export function humanRunOf(
+  plan: CompiledGraphPlan,
+  activations: NodeActivation[],
+  overrides: Partial<GraphRun> = {},
+): GraphRun {
+  return {
+    ...runOf("multi-review"),
+    template: {
+      id: plan.template.id,
+      revision: plan.template.revision,
+      digest: plan.templateDigest,
+    },
+    plan,
+    bindings: { roles: {}, params: {}, inputs: { brief: "artifact-brief" } },
+    loopIterations: {},
+    activations,
+    status: "waiting",
+    ...overrides,
+  };
+}

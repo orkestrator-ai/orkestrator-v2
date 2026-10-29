@@ -2,7 +2,8 @@
  * Compiler pass 1: the template guard's errors, custom types, type
  * resolution and every cross-reference the guard leaves to the compiler
  * (item 101's Notes): edge and carry endpoints, outlets, roles, loop
- * members, run outputs, the `error` port, and the Phase 4 rejections.
+ * members, run outputs, the `error` port, and `items` replication (item 401).
+ * Sub-graphs are inlined before this pass (compile-subgraphs, item 402).
  */
 import { canonicalJson } from "../canonical-json.js";
 import { FieldErrorCollector, type FieldError } from "../field-validation.js";
@@ -15,6 +16,7 @@ import {
   type GraphNodeSpec,
   type GraphPortTarget,
   type GraphReplicateAxis,
+  graphHumanRoutesFailures,
   graphNodeOutlets,
   isGraphRunInputRef,
 } from "./template-model.js";
@@ -140,6 +142,13 @@ export function resolveGraphPortTypes(state: GraphCompileState): void {
         }),
       );
     });
+    if (graphHumanRoutesFailures(node)) {
+      // A human node's failures (a timeout) route to its implicit `error` port.
+      state.outputTypes.set(
+        portKey(node.id, "error"),
+        resolve("error@1", { nodeId: node.id, port: "error", path: `${path}.onFailure` }),
+      );
+    }
     if (!("outputs" in node)) continue;
     (node.outputs ?? []).forEach((port, index) => {
       state.outputTypes.set(
@@ -188,6 +197,14 @@ export function checkGraphSource(
   }
   const outlets = graphNodeOutlets(entry.node);
   if (outlets) {
+    if (
+      source.outlet === undefined &&
+      source.port === "error" &&
+      graphHumanRoutesFailures(entry.node)
+    ) {
+      // A human node's routed failure (a timeout): `error@1`, outside its outlets.
+      return true;
+    }
     if (source.outlet === undefined) {
       diagnostics.add(
         "outlet-required",
@@ -418,17 +435,10 @@ export function isGraphReservedOutputPortName(name: string): boolean {
   return GRAPH_RESERVED_OUTPUT_PORT_NAMES.includes(name);
 }
 
-/** Phase 4 rejections and the `error` port. */
+/** `replicate: items` (until item 401), agent output names and the `error` port. */
 export function checkGraphNodeRules(state: GraphCompileState): void {
   const { diagnostics } = state;
   for (const { node, path } of state.nodes.values()) {
-    if (node.kind === "subgraph") {
-      diagnostics.add(
-        "subgraph-unsupported",
-        "Sub-graph nodes are not yet supported (Phase 4, item 402); add the template's nodes directly for now",
-        { nodeId: node.id, path: `${path}.kind` },
-      );
-    }
     axesOf(node).forEach((axis, axisIndex) => {
       if (axis.over !== "items") return;
       const cross = "replicate" in node && node.replicate?.over === "cross";
@@ -442,6 +452,7 @@ export function checkGraphNodeRules(state: GraphCompileState): void {
       );
     });
     if (!("outputs" in node)) {
+      if (node.kind === "human") continue; // its `error` port is implicit
       if ("onFailure" in node && node.onFailure === "route") {
         diagnostics.add(
           "route-without-error-port",

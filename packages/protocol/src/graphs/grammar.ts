@@ -117,6 +117,21 @@ export const GRAPH_TEMPLATE_BOUNDS = Object.freeze({
 /** Kebab-case slug: template, node, edge, loop, role, lens, type and built-in names. */
 export const GRAPH_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 /**
+ * Plan node, edge and loop ids (item 402): graph ids joined by `/` where a
+ * sub-graph was inlined (`review/consolidate`, `outer/inner/fix`), at most
+ * {@link GRAPH_PLAN_ID_MAX_CHARS} characters. A template's own ids never
+ * contain `/`, so a plan id names its nesting exactly.
+ */
+export const GRAPH_PLAN_ID_PATTERN =
+  /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/;
+export const GRAPH_PLAN_ID_MAX_CHARS = 128;
+/** What a plan holds once its sub-graphs are inlined (item 402). */
+export const GRAPH_PLAN_BOUNDS = Object.freeze({
+  maxNodes: 4 * GRAPH_TEMPLATE_BOUNDS.maxNodes,
+  maxEdges: 4 * GRAPH_TEMPLATE_BOUNDS.maxEdges,
+  maxLoops: 4 * GRAPH_TEMPLATE_BOUNDS.maxLoops,
+} as const);
+/**
  * Identifier: port, parameter, run input and outlet names. They become MCP tool
  * names (`submit_<port>`), prompt variables and predicate path roots.
  */
@@ -173,6 +188,14 @@ export function isGraphId(value: unknown): value is string {
     typeof value === "string" &&
     value.length <= GRAPH_TEMPLATE_BOUNDS.maxIdChars &&
     GRAPH_ID_PATTERN.test(value)
+  );
+}
+
+export function isGraphPlanId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= GRAPH_PLAN_ID_MAX_CHARS &&
+    GRAPH_PLAN_ID_PATTERN.test(value)
   );
 }
 
@@ -466,7 +489,8 @@ export function checkGraphRecord(
   value: unknown,
   path: string,
   errors: FieldErrorCollector,
-  options: { max: number; key: "id" | "key" },
+  /** `plan-id`: a plan node id, which may name an inlined node (`review/fix`, item 402). */
+  options: { max: number; key: "id" | "key" | "plan-id" },
 ): Array<[string, unknown]> | null {
   if (!isPlainRecord(value)) {
     errors.add(path, "type", "Expected an object");
@@ -480,12 +504,21 @@ export function checkGraphRecord(
   const valid: Array<[string, unknown]> = [];
   for (const [key, entry] of entries) {
     const keyPath = joinPath(path, key);
-    const ok = options.key === "id" ? isGraphId(key) : isGraphKey(key);
+    const ok =
+      options.key === "id"
+        ? isGraphId(key)
+        : options.key === "plan-id"
+          ? isGraphPlanId(key)
+          : isGraphKey(key);
     if (!ok) {
       errors.add(
         keyPath,
         "pattern",
-        options.key === "id" ? "Key must be a kebab-case id" : "Key must be an identifier",
+        options.key === "id"
+          ? "Key must be a kebab-case id"
+          : options.key === "plan-id"
+            ? "Key must be a kebab-case node id, or an inlined node's (sub-graph/node)"
+            : "Key must be an identifier",
       );
       continue;
     }

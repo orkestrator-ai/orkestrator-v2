@@ -25,6 +25,7 @@
  * gate fails only when an input artifact cannot be read.
  */
 import type { GraphPlanGateNode } from "@orkestrator/protocol/graphs/compile";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import {
   evaluateGraphPredicate,
   type GraphPredicateEnvironment,
@@ -84,7 +85,8 @@ async function runGate(context: GraphExecutorContext): Promise<GraphActivationRe
   }
   const decision = chooseGraphGateOutlet(node, {
     values,
-    params: run.bindings.params,
+    // An inlined gate reads its sub-graph's parameters (item 402).
+    params: graphPlanScopeParams(run.plan, node.subgraph, run.bindings.params),
     run: { iteration: activation.iteration },
   });
   const outputs = Object.fromEntries(

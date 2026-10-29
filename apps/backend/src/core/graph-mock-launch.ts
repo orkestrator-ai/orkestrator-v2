@@ -258,7 +258,7 @@ export class GraphMockRuns {
       Object.values(pins).some((sequence) => sequence.includes("pause")) &&
       !this.deps.runs.executors.resolve("human")
     ) {
-      invalid("A pause pin waits for a person, and this backend cannot run human nodes yet");
+      invalid("A pause pin waits for a person, and this backend cannot run human nodes");
     }
     const { roles, placeholders } = graphMockRoles(plan, input.roles, input.panel);
     const { inputs, examples } = graphMockInputs(plan, input.inputs);

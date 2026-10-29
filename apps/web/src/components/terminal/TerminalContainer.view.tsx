@@ -41,6 +41,11 @@ import { isDesignFilePath, openDesignFile } from "@/components/design/design-ope
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
+import {
+  onGraphRunViewRequested,
+  takePendingGraphRunView,
+  type GraphRunViewRequest,
+} from "@/lib/graph-run-navigation";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -1975,6 +1980,28 @@ export function TerminalContainer({
     setCreateFileTab,
     setOpenFilePaths,
     environmentId,
+  ]);
+
+  // Launched and mock graph runs open here (items 213, 214): the active
+  // environment's pane answers requests naming it, and picks up one made
+  // while it was not on screen.
+  useEffect(() => {
+    if (!isActive || !isEnvironmentRunning || !(containerId || isLocalEnvironmentReady)) return;
+    const open = (request: GraphRunViewRequest): boolean =>
+      request.environmentId === environmentId &&
+      handleCreateTab("graph-run", {
+        graphRun: { runId: request.runId, ...(request.title ? { title: request.title } : {}) },
+      });
+    const pending = takePendingGraphRunView(environmentId);
+    if (pending) open(pending);
+    return onGraphRunViewRequested(open);
+  }, [
+    isActive,
+    isEnvironmentRunning,
+    containerId,
+    isLocalEnvironmentReady,
+    environmentId,
+    handleCreateTab,
   ]);
 
   // A file opened from the project board's files panel names this

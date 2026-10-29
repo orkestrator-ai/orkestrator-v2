@@ -26,16 +26,19 @@ unless noted:
 | Prompts (105) | `prompts.ts`, `prompt-*.ts`, `system-contract.ts` | Logic-less prompt templates, render modes, size estimates and lints. |
 | Capability profiles (106) | `capability-profiles.ts`, `capability-enforcement.ts` | Profiles compiled to a `NativeAgentExecutionPolicy`; `agentPolicyEnforcementMatrix` rates each provider `enforced`, `provider-configured` or `advisory`. |
 | Compiler (107) | `compile.ts` and `compile-*.ts`, `plan.ts`, `cost.ts` | `compile(template, options)` returns diagnostics (located by `nodeId`, `edgeId`, `loopId`, `path`), a hashed plan when there are no errors, and a cost estimate (best and worst agent sessions, peak parallelism). It never throws. |
+| Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts`; backend `graph-template-service.ts`; web `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` | A template used as one node of another: the compiler inlines it with namespaced ids (below). |
 | Built-ins (108) | `builtins/` | The three built-in templates, pinned to their engines by tests. Looped Review's engine is retired (`engineStatus: "retired"`). |
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Sharing and review (405) | `sharing.ts`; backend `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graph-sharing.ts`; web `lib/backend/graph-template-sharing.ts`, designer `GraphShareDialogs.tsx`, `GraphTemplateReviewPanel.tsx` | Share bundles (`orkestrator.graph-bundle` v1: the template with its custom types, `graphTemplateDigest`, a whole-content digest, optional Ed25519 signature by the installation's key). A tampered bundle is refused; anything else imports as a user template only after the user confirms its digest, shown with a capability summary. Untrusted and changed project templates are reviewed with that summary and a diff against the last approved copy, then approved or rejected. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
 | Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
+| Per-node user MCP servers (404) | `native-agent-capabilities.ts` (`userMcpServers`, `NATIVE_AGENT_USER_MCP_SELECTION`), `capability-profiles.ts`; each bridge's MCP loader; backend `opencode-user-mcp.ts`; designer `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` | A node gets none of the user's own MCP servers unless `mcp:<server>` grants one; each provider loads exactly the granted ones where it can (below). |
 | Isolated branch worktrees (403) | `isolation.ts`, `isolation-template.ts`; backend `graph-branch-worktrees.ts`, `graph-system-select.ts` | A replicated writer with `isolation: "worktree"` runs each branch in its own Git worktree; `select-workspace` moves the run's branch to the judged one; a janitor removes what branches no longer need (below). |
 
 | Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
 | Run view (211) | `run-view.ts`; backend `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts`; web `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` | The `graph-run` tab: a run on the shared flow graph with an inspector and controls, rehydrated from revisioned snapshots (below). |
+| Launching (214) | `launch.ts`; backend `graph-run-launch.ts`, `commands-registry-graph-launch.ts`; web `lib/backend/graph-launch.ts`, `components/graph-launch/` | One launch service behind the launch dialog, the designer's Run, the CLI, the coordinator's Control MCP tools and scheduled jobs (below). |
 
 ## Guards and enforcement (item 209)
 
@@ -85,6 +88,51 @@ detected by a guard, and the activation records which (plan P2.9, D4, D12).
   `guards` (`graphActivationEnforcementView` labels them).
 
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts`; backend `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `graph-describe` store; web `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` | A designer agent drafts a template from the user's description; the `graph-template` result kind checks it with the guard and the compiler; the draft opens unsaved (below). |
+
+## Per-node user MCP servers (item 404)
+
+A graph node gets **none** of the user's own MCP servers unless it is granted
+them: `mcp:<server>` in a node's `allow` grants that server for the node's
+session, in `deny` (the node's, the project ceiling's or the environment's)
+removes it, and a denial wins. `compileGraphCapabilities` puts the result on
+every compiled policy as `capabilityPolicy.userMcpServers` (sorted, `[]` for
+none; `CompiledGraphCapabilities.mcpServers` is the same list). The field only
+**selects** among the servers the user configured in each provider's own files
+(the Settings "MCP servers" section); it never carries a definition, so a
+template, including a project template, can name a server but cannot add one
+or change its command, URL, environment or headers. Reserved Orkestrator
+servers are not user servers and are never filtered. Nothing new is logged:
+names only.
+
+How each provider loads exactly the selection (`NATIVE_AGENT_USER_MCP_SELECTION`):
+
+| Provider | Mechanism | Grant delivered on | MCP axis |
+| --- | --- | --- | --- |
+| Claude | inline `mcpServers` filtered to the grant plus `strictMcpConfig: true`, so the CLI reads no MCP file itself and no plugin server loads; granted tools are approved up front unless the policy asks, and a read-only turn's hook admits them | ordinary and read-only turns | provider-configured |
+| Codex | `config/read` lists the effective `mcp_servers`; every other configured server gets `mcp_servers.<name>.enabled = false` on `thread/start`/`resume`/`fork`, a granted one `default_tools_approval_mode = "approve"` unless the policy asks; an unreadable table or an undisableable name refuses the thread | ordinary and read-only turns | provider-configured |
+| Pi | the bridge's own MCP client starts only the granted servers; the read-only gate admits their tools by exact registered name | ordinary and read-only turns | enforced |
+| OpenCode | one shared `opencode serve` per directory: the session's permission rules deny `<server>_*` for every server `mcp.status` lists outside the grant (re-applied when the list changes; an unreadable list refuses the session). The other servers still run | ordinary and read-only turns | provider-configured |
+| Cursor | no settings source (each would load all its servers); the bridge reads `~/.cursor/mcp.json` (and `.cursor/mcp.json` with project resources) and passes the granted servers inline. Such a session also loses the user's and project's Cursor rules and plugins | ordinary turns only; read-only turns load only Orkestrator's server | provider-configured |
+| Grok | none: Grok loads every server in its own configuration and ACP `session/new` can only add | never | advisory |
+
+The MCP axis is secondary: it never lowers the node's tier. The compiler warns
+`capability-mcp-grant` once per enabled provider that cannot deliver a node's
+grant (Grok always, Cursor for a read-only node), and
+`capability-mcp-grant-read-only` when a read-only node is granted a server: an
+MCP server acts with the user's rights, outside the read-only boundary, and
+the workspace guard still checks the workspace afterwards. Bridges older than
+item 404 ignore `userMcpServers` and load every configured server. A Codex
+thread whose selection changes while app-server still has it loaded keeps the
+old configuration until `reloadThread`; graph sessions are new per activation.
+Saves in the MCP servers settings still report graph sessions like any other
+session (the apply plan does not know the selection), so a saved change to an
+ungranted server reads "pending" for one that will never load it.
+
+The designer's capabilities form lists the user-scope servers of every
+provider (`loadConfiguredUserMcpServers`, from the MCP management snapshot
+commands) with Off, Grant and Deny per server and the providers each is
+configured for; a name the node already uses but the user has not configured
+stays listed as "not configured".
 
 ## The Graphs designer (items 110 and 212)
 
@@ -180,8 +228,12 @@ sub-graphs and to the run outputs, and lets loop members leave their frame.
   the eight actions, labelled, described and marked "side effect" from 207's
   `GRAPH_SYSTEM_ACTION_SPECS`; a new node gets the spec's required inputs and
   the outputs the template can name, `graph-designer-system-actions.ts`),
-  Gate, Merge, Human, Loop region (wraps the selected node) and Sub-graph
-  (disabled, Phase 4). A node is added at the centre of the view and selected.
+  Gate, Merge, Human, Loop region (wraps the selected node) and Sub-graph (a
+  menu of the saved templates by scope, never the one being edited; an
+  untrusted project template is listed disabled). A node is added at the
+  centre of the view and selected. A sub-graph node is read first, pinned to
+  its digest and revision, and gets the child's run inputs and outputs as
+  ports and the child's roles the template lacks.
   A new agent gets a role of its own name, which follows its first rename.
 - *Connecting.* `graphConnectionVerdict(template, library, from, to)` decides
   what a connection becomes, using 102's `graphTypeAssignability` on the
@@ -312,7 +364,7 @@ name, in the tab chrome; D17). The designer lists the environment's runs under
 its library (`GraphRunsList`); a row calls
 `createTab("graph-run", { graphRun: { runId, title } })`, and there is one tab
 per run (`openGraphRunTab`, `components/graph-run/graph-run-open-tab.ts`).
-Item 214 adds the launch entry points. The pane layout keeps only
+Item 214 adds the launch entry points ("Launching" below). The pane layout keeps only
 `TabInfo.graphRunData = { runId, title? }`; the component is lazy-loaded from
 `PaneLeafContainer`.
 
@@ -327,7 +379,8 @@ commands, with shapes in `@orkestrator/protocol/graphs/run-view`:
 | `graph_run_retry`, `graph_run_skip` | `{runId, activationKey}` | `{status: "changed", run}` |
 | `graph_run_artifact` | `{runId, artifactId}` | the envelope; the value inline up to 512 KiB (else `valueOmitted: "too-large"`); a reference artifact's file metadata and descriptor, never the file |
 | `graph_run_transcript` | `{runId, activationKey, fromIndex?, maxBytes?}` | one window (default 2 MiB, at most 4 MiB) of the activation's stored transcript, or `none` |
-| `graph_run_answer` | item 204 | answers an agent's `ask_human` question |
+| `graph_run_answer` | item 204: `{runId, activationKey, questionId, kind, text?, choice?}`; item 208: `{runId, activationKey, waitId, decision, outlet?, value?, note?}` | answers an agent's `ask_human` question (`{activationKey, question}`) or a waiting human node (`{activationKey, human}`) |
+| `graph_run_pending` | `{runId}` or `{environmentId}` | `GraphRunPendingInteraction[]`: every open human wait and `ask_human` question of the run (or of the environment's live runs), derived from the stored record |
 
 Refusals throw `GraphRunServiceError` (`invalid-request`, `not-found`,
 `invalid-state`, `disabled`). Snapshots go through `graphRunViewSnapshot`,
@@ -362,8 +415,8 @@ the inspector can show the earlier ones.
 
 **Inspector** (`GraphRunInspector`): Details and Transcript views. Details
 holds the agent's `ask_human` question with `GraphQuestionAnswerForm` (choices,
-free text, decline; reusable by item 208's human nodes), the human node slot
-(`GraphHumanNodePanel`, which item 208 fills with approve, edit and choose),
+free text, decline), the human node's `GraphHumanNodePanel` (item 208; see
+"Human nodes"),
 the error and its cause, the profile, the enforcement tier actually applied and
 `enforcementReason`, the sandbox policy and turn mode, guard results with their
 paths, the session's agent, tokens and times, provisional `report_progress`
@@ -388,14 +441,142 @@ and deleting a run with its environment deletes its transcripts.
 and in the inspector): Retry (a failed position of a live run, as a new
 attempt; `graph_run_retry` records a user `restart` rewind over the lineage
 descendants and the never-started markers derived from the failure), Restart
-from here and Rewind code to here… (item 210's backend, through
-`GraphRunRewindBackend` in `lib/backend/graph-runs.ts`; the rewind opens a
-preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
+from here and Rewind code to here… (item 210's wrappers in
+`lib/backend/graph-run-rewind.ts`, behind `GraphRunRewindBackend` in
+`lib/backend/graph-runs.ts`; offered by 210's `graphRunRestartBlocker`, and
+Rewind code to here stays listed but disabled with `graphRunCodeRewindBlocker`'s
+reason, such as "Pause the run first", when only the code rewind is refused;
+the rewind opens a preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
 `ready` position, held back by a pause, a workspace lock or the run's limits),
 Open session (the agent's provider session in a native tab that refuses to
 start a fresh one), and the run-wide Pause, Resume and Cancel (with a
 confirmation). Mock runs are labelled "Mock run" in the header and "mock" in
 the list.
+
+## Launching (item 214)
+
+Every entry point launches the same run through one backend service,
+`GraphRunLaunchService` (`apps/backend/src/core/graph-run-launch.ts`), with
+the request shape in `@orkestrator/protocol/graphs/launch`
+(`GraphLaunchRequest`: `ref`, `projectId`, `environment`, `roles?`,
+`params?`, `inputs?`, `ticket?`, `saveDefaults?`, `requestId?`). The surface
+supplies the origin (`requestedBy`: `user`, `cli`, `coordinator` or
+`schedule`, plus `scheduleId`); a request body can never claim one. The run
+records it, ids only, as `GraphRun.launch = {requestedBy, create?, ticket?,
+scheduleId?}`.
+
+**What a launch does.**
+
+1. *Resolve and compile.* `GraphTemplateService.compileForLaunch(ref,
+   projectId, environment)` refuses an untrusted or changed project template
+   (`untrusted`), a built-in on its own engine (`engine-template`) and, since
+   the request names a stored `ref` only, any unsaved draft. The template is
+   compiled under the **real** launch environment's execution policy (an
+   existing environment's own, or the policy a new worktree or restricted
+   container gets; `resolveEnvironmentExecutionPolicy(..., "build-pipeline")`)
+   and the project's ceiling, so `plan.context.environment` is what the run's
+   agents get. Compile errors or pending acknowledgements are
+   `not-launchable`.
+2. *Bind roles.* Each role takes the request's binding, else the defaults
+   saved for this template in this project (while every provider they name is
+   still enabled and the shape still fits), else the settings defaults read as
+   item 108 decided (`graphRoleDefaultBindings`): a one-model role takes the
+   first `defaultsFrom` action key with a usable saved platform, else the
+   app's default agent; a panel takes one position per key (an unset key
+   takes the first key's binding), then one per `additionalReviewers` entry,
+   and a panel that reads `additionalReviewers` takes the saved reviewer
+   lenses by position. Panels take 1..`maxPanel` models. A panel member may
+   carry a `lens` (`GraphModelBinding.lens`, P0.5's reviewer lens, copied at
+   launch); a template lens axis wins over it, otherwise its prompt renders it
+   as the branch's focus.
+3. *Check bindings* (`invalid-binding`): the provider is enabled, meets the
+   `minEnforcement` floor of every node bound to its role on this host
+   (`graphRoleProviderChoices` / `graphBindingFloorProblems`, item 209, the
+   same judgement dispatch re-checks), and can return the role's typed
+   results (result tools when the rollout admits `graph-output`, structured
+   output otherwise; a role whose nodes only produce `workspace@1` needs
+   neither).
+4. *Parameters and inputs* (`invalid-launch`): `graphLaunchParams` takes the
+   given value, then the saved one, then the declared default, and checks each
+   against its declaration. Run inputs must be value types. `ticket: {taskId,
+   input?}` fills the template's (only, or named) `ticket@1` input through
+   `graphTicketFromTaskSnapshot`, with the ticket's own criterion ids. An empty
+   `workspace@1` input is filled from the environment's branch and HEAD: at
+   launch for an existing environment, and by the provisioner for a new one
+   (its ready report carries the HEAD and the pass stores the input before the
+   run starts; a new environment without a commit fails the run).
+5. *Create.* `GraphRunService.create` on an existing environment, or with no
+   environment for a new one (D7): the provisioner (item 207) creates the
+   kind the launch chose (`launch.create`, before the template's
+   `workspace.create`). The ticket is linked to the run's environment
+   (`update_kanban_task {environmentId}`) at launch, or by the provisioner
+   when it creates one; a mock run never links.
+
+`requestId` derives the run id (`launch-<sha256(project, key)>`), so a
+repeat returns the run it created (`repeated: true`) and a repeat with a
+different template or environment is `conflict`. Refusal codes are
+`GRAPH_LAUNCH_ERROR_CODES`, the same on every surface.
+
+**Defaults.** `saveDefaults: true` stores the roles, parameters and
+environment kind per template per project in the `graph-templates` store's
+`projects` row (`launchDefaults`, keyed by `graphTemplateRefKey`, at most 64
+per project, least recently saved dropped first). `graph_launch_options`
+returns them as `saved` and starts every picker from them.
+
+**Commands.** `graph_launch_options {ref, projectId, environmentId?,
+create?}` → `GraphLaunchOptions` (per role every enabled provider with its
+tier, `available` and an `unavailableReason`; parameters; inputs with
+`ticket`, `launchable` and `autoFill`; the environment default; the compile
+cost; saved defaults). `graph_run_launch {…GraphLaunchRequest}` →
+`GraphLaunchResult {runId, projectId, environmentId?, status, template,
+repeated}`, launched as `user`.
+
+**Surfaces.** All of them call the same service, so every entry point
+launches the same run:
+
+- *The launch dialog* (`components/graph-launch/GraphLaunchDialog.tsx`,
+  generated from `GraphLaunchOptions`): a template picker when opened without
+  one, inputs (a `ticket@1` input takes a Kanban ticket; `workspace@1` inputs
+  say they come from the run's environment), one picker per role offering
+  only `available` providers and showing every provider's tier and why one is
+  not offered, panel editors with a lens per member (item 005's
+  `ReviewLensField` and presets), parameters (toggles, numbers, enums, text),
+  the environment choice and the cost estimate (`graphLaunchCostEstimate`,
+  the compile cost scaled by the bound panel sizes). It starts from the saved
+  defaults and launches with `saveDefaults: true`.
+- *Entry points* (D17): "Run graph…" in the environment action bar
+  (`RunGraphButton`), "Run graph…" on a Kanban card (the ticket as input),
+  and "Run" in the designer header (a dirty or new draft is saved first; it
+  launches the stored template). After a launch, `openLaunchedGraphRun`
+  (`components/graph-launch/open-launched-run.ts`) asks for the run's tab
+  through item 213's `requestGraphRunView` (`lib/graph-run-navigation.ts`),
+  the same path Mock run uses; the active environment's terminal container
+  answers requests naming it, and one made while that environment is off
+  screen waits until it is shown again.
+- *The CLI*: `orkestrator graph list | show | validate | launch | status |
+  cancel` over the `graph.*` public actions
+  ([public-cli.md](public-cli.md#graphs)), launched as `cli` with a
+  `requestId` derived from the public request key.
+- *The coordinator* (D6): Control MCP `list_graph_templates`, `launch_graph`,
+  `get_graph_run` and `cancel_graph_run` (`control-mcp-graph-tools.ts`,
+  `coordinator-graph-actions.ts`), launched as `coordinator`. There is no
+  tool that creates, saves, edits, duplicates, imports or describes a
+  template. A launch reserves a `graph-run` workflow association before it
+  acts; the status wake (item 208's `graph-run-coordinator-status.ts`) sends
+  one notice per wait for a person and one when the run ends (terminal
+  notices whatever the wake setting, as for every workflow).
+- *Schedules*: a `graph` schedule action ([scheduled-jobs.md](scheduled-jobs.md))
+  holds a launch request, validated when the schedule is created, and fires
+  as `schedule` with `requestId` `sched:<fireId>`, so a fire replayed after a
+  restart finds its run instead of launching twice.
+
+**Runs that end without an environment.** A failed provisioning leaves a run
+no environment deletion will remove. `GraphRunLaunchService.sweep()` (at
+startup and after every launch) keeps at most 20 such terminal runs per
+project and none that ended more than 7 days ago
+(`storage.graphRuns.deleteEnvironmentlessGraphRun`, shared with item 213, which refuses a
+run with an environment or one still going). Mock runs keep item 213's own
+retention and are skipped.
 
 ## Describe a graph (item 215)
 
@@ -615,7 +796,13 @@ launch's `pins` replace them node by node; `graphMockPinIssues` checks them
 against the ports (codes `mock-pin-unknown-node`, `mock-pin-node-kind`,
 `mock-pin-form`, `mock-pin-unknown-port`, `mock-pin-required-port`,
 `mock-pin-value`, `mock-pin-outlet`). "Verify: fail, fail, pass" is three
-custom verdicts on `verify`; the loop converges on iteration 3.
+custom verdicts on `verify`; the loop converges on iteration 3. Keys are plan
+node ids, so a pin may target a node inlined from a sub-graph
+(`review/consolidate`, item 402): the template's own check defers those (the
+child is not inlined in the designer) and the launch checks them against the
+compiled plan. Inlined nodes read their parameters in their sub-graph's scope
+(`graphPlanScopeParams`), so a parent parameter passed through (§9.3's
+`autoFix`) reaches the inlined Fix's `when`.
 
 **Launching** (`graph_run_mock {ref, projectId, environmentId?, inputs?,
 params?, roles?, pins?, panel?, stepMs?}`, `GraphMockRuns.launch`). The
@@ -646,7 +833,136 @@ the pinned-sequence editor (`GraphMockPinsEditor`), a list of runs, each one
 of example, generated (with a preview), custom JSON (starting from the
 examples), fail (with a cause) or, for human nodes, an outlet or a pause;
 `graphMockPinIssues` messages show under each run. Renaming or deleting a node
-moves or drops its pins.
+moves or drops its pins, and those of the nodes inlined from it (`<id>/...`).
+
+## Human nodes (item 208)
+
+A person takes part in a run at an explicit point (P2.8, D15, report §6.8).
+Shapes and validation are in `@orkestrator/protocol/graphs/run`
+(`run-human.ts`); the executor and the answers are in
+`apps/backend/src/core/graph-node-human.ts`.
+
+**Forms.** `approve` takes `approved` or `rejected`; `edit` does the same, and
+an approval may carry an edited value of the form's `edit` input; `choose`
+takes one option's outlet. A decided node forwards its single-value inputs as
+its outputs, as a gate does, with an edited value in place of the original.
+
+**The wait.** The executor's first call records `activation.human`
+(`GraphHumanWait {id, form, openedAt, answer?}`, a fresh UUID) and reports the
+activation `awaiting-human`; the pass then makes the run `waiting` when nothing
+else is admitted. The executor is observed only when woken
+(`observeAfterMs: null`), or at the node's deadline. The wait is in the run
+record, so it survives a backend restart (recovery observes it) and any view
+rehydrates it. A restart of the node (item 210) supersedes the activation; its
+wait dies with it.
+
+**Answers.** `graph_run_answer` with a `waitId` goes to `GraphHumanAnswers`,
+which checks `graphHumanAnswerProblem` (the activation waits, the wait id is
+this attempt's, it is unanswered, the decision fits the form, the note and an
+edited value are within bounds), stores an edited value as a new artifact of
+the original's type (validated against it, with the producing port's `choices`
+for `decision@1`; lineage: the original; producer: the human activation on the
+edited port; an unchanged value stores nothing), then records the answer under
+the run's lock through `GraphRunService.updateActivation`, checking again, which
+wakes the run to observe the activation. A refused answer records nothing
+(invariant 10). `ask_human` answers share the command and the locked update.
+
+**Timeouts.** Without `timeoutMs` the run waits indefinitely, paused rather
+than failed. With one, a human node's default `onFailure` is `route`
+(`graphHumanRoutesFailures`), which gives it an implicit `error` port carrying
+`error@1` (`GRAPH_HUMAN_ERROR_PORT`; edges read it as `{node, port: "error"}`
+without an outlet, and the designer draws it as an output). The timeout
+arrives as `cancel(…, "timeout")`; the pass fails the activation with cause
+`timeout`, the planner routes `error@1`, and the outlets' consumers are
+skipped. An answer recorded before the deadline still wins. `onFailure:
+fail-run` opts out of the route.
+
+**Where a wait shows.**
+
+- The run view: the face reads "waiting for you" and the inspector's
+  `GraphHumanNodePanel` renders the shared `GraphQuestionAnswerForm` (choices
+  Approve/Reject or the options, an optional note, no decline) and, for `edit`,
+  `GraphArtifactValueEditor`: the type's form for a flat object schema
+  (strings, enums, numbers, booleans, lists of strings, optionally nullable),
+  else JSON, checked live with `validateGraphArtifactValue`.
+- The sidebar (`graph-run-attention.ts`): the environment's `graph-run`
+  activity source is `working`, `waiting` or `idle`
+  (`graphRunEnvironmentActivity`), and each new wait (human wait or question
+  id) records one content-free attention key (`graph-run:<sha256>`), which
+  lights the unread badge with reason `agent_question` once. It runs on
+  `graph-run` changes (debounced per run) and reconciles every environment at
+  start. `GraphRunAttention.onWaitOpened` reports each wait the first time it
+  is recorded.
+- The coordinator (`graph-run-coordinator-status.ts`, observed by
+  `coordinator-status-wakes.ts` for `graph-run` associations): one notice per
+  wait (the key names the newest open wait and when it opened; a wait is news
+  only when it opened after the last one reported), and one when the run
+  completes, fails or is cancelled. Item 214 records the association when the
+  coordinator launches a run.
+
+## Sub-graphs (item 402)
+
+A `subgraph` node uses another template as one node (report §4.1, §4.2, D5).
+The compiler inlines it before every other pass, so the plan, the runtime,
+restart and rewind only ever see ordinary nodes.
+
+- **Reference.** `template: { scope, id, revision?, digest?, path? }`: a
+  built-in, a user template, or a project template of the compiling project
+  (`path` pins the file; without it the id must name one file). A `digest`
+  (`graphTemplateDigest`) or `revision` that no longer matches is
+  `subgraph-digest-mismatch`, so a child edit never silently changes a parent
+  that pinned it; an unpinned child is `subgraph-unpinned` (info). Either way
+  a run freezes the plan it launched with.
+- **Resolution** is injected: `compile(template, { resolveTemplate })` takes a
+  synchronous `GraphTemplateResolver` (`subgraphs.ts`). The default resolves
+  built-ins from code. The backend (`GraphTemplateService.subgraphResolution`)
+  reads every child ahead, nested ones included: built-ins, user templates,
+  and the project's templates only while trusted at their current digest
+  (else `untrusted`); its compile cache key includes each child's digest, so
+  an edited child recompiles its parents. The designer fetches user and
+  project children once per project (`graph-designer-subgraphs.ts`, store
+  `subgraphTemplates`), drops them when the library is re-read, and
+  recompiles open drafts.
+- **Inlining** (`compile-subgraphs.ts`). Child nodes, edges and loops get plan
+  ids `<subgraph node>/<child id>` (`GRAPH_PLAN_ID_PATTERN`, at most 128
+  characters; activation keys, artifact producers, rewinds and loop-iteration
+  keys accept them, and a loop `until` path may start with one). A parent edge
+  into `s.p` becomes one edge per child edge from run input `p` (transforms
+  concatenated); an edge out of `s.q` reads the child output's own source
+  (gate outlets included); run outputs, carries, `firstIterationFrom` and
+  parent `until` roots are rewritten the same way. Child roles map through
+  `roles` or by key (same multiplicity, panel no wider than the child's).
+  Child parameters bind to literals or `{ param }` of the parent, else their
+  defaults. Child types merge (`subgraph-type-conflict`). Nesting is bounded
+  (`GRAPH_SUBGRAPH_MAX_DEPTH` 4, `subgraph-recursive`, `GRAPH_PLAN_BOUNDS`).
+  The child's limits, layout and acknowledgements are dropped: cost is summed
+  on the flat graph against the parent's limits, and the parent acknowledges
+  taint and floor warnings on inlined nodes. A child's capabilities only
+  narrow: inlined agents compile against the parent's ceiling.
+- **Not supported on the node itself** (`subgraph-unsupported`): `replicate`,
+  `when`, `retry`, `timeoutMs`, `onFailure`, a child with loops inside a
+  parent loop, and a session continued from the sub-graph. A sub-graph that
+  cannot be inlined stays an opaque node (its ports are still checked) and the
+  compile has an error.
+- **Diagnostics** on inlined entries carry the plan id (`review/plan`) and a
+  path in the author's terms (`nodes[4]>nodes[0].prompt.template`); the
+  designer shows them on the sub-graph node.
+- **Plan and runtime.** `plan.subgraphs` (absent when there are none) records
+  each instance: id, parent instance, the resolved child (scope, id, revision,
+  digest, name, engine), its parameter definitions and resolved scope, role
+  map, inlined node ids and port map; inlined nodes and loops carry
+  `subgraph`. The runtime reads an inlined node's parameters through
+  `graphPlanScopeParams` (agent prompts, `when`, gates, loop `until`).
+- **Multi Review as a block.** A built-in child's `engine` is ignored when it
+  is inlined: a copy of its nodes runs on the graph runtime
+  (`subgraph-engine-copy`, info), D5's "duplicate to customise" done
+  implicitly. The built-in gained optional outputs `clean` and `fixed` (the
+  branch the review ends on) so a parent can ship it itself; the report §9.3
+  example does, and runs end to end (`graph-run-subgraphs.test.ts`).
+- **Designer.** The node form (`GraphSubgraphEditor`) shows the child and its
+  pin (Pin current version, Update ports from template), a binding per child
+  parameter (default, value, or one of the parent's parameters) and role, the
+  ports, and the plan nodes it became.
 
 ## Canvas library decision (spike, 2026-10-29)
 

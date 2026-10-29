@@ -35,6 +35,8 @@ import {
   GRAPH_DIGEST_PATTERN,
   GRAPH_ID_PATTERN,
   GRAPH_KEY_PATTERN,
+  GRAPH_PLAN_ID_MAX_CHARS,
+  GRAPH_PLAN_ID_PATTERN,
   GRAPH_TEMPLATE_BOUNDS,
   checkBoundedJson,
   graphUtf8Bytes,
@@ -73,6 +75,7 @@ import {
   GRAPH_RUN_FORMAT,
   GRAPH_RUN_FORMAT_VERSION,
   GRAPH_RUN_INPUT_PRODUCER,
+  GRAPH_RUN_LAUNCHERS,
   GRAPH_RUN_STATUSES,
   GRAPH_TEMPLATE_SCOPES,
   type GraphArtifact,
@@ -82,6 +85,7 @@ import {
 import { checkGraphMockRunOptions } from "./mock-pins.js";
 import { GRAPH_ENFORCEMENT_TIERS } from "./template-model.js";
 import { GRAPH_AGENT_SESSION_FIELDS, checkGraphAgentSessionFields } from "./run-agent-session.js";
+import { checkGraphHumanWait } from "./run-human.js";
 import { GRAPH_ERROR_CAUSES } from "./types.js";
 
 /** Errors reported per guard call. */
@@ -347,6 +351,7 @@ const RUN_FIELDS = [
   "template",
   "plan",
   "bindings",
+  "launch",
   "status",
   "mock",
   "mockOptions",
@@ -391,7 +396,9 @@ function checkPlan(
 }
 
 function checkBinding(value: unknown, path: string, errors: FieldErrorCollector): void {
-  if (!checkObject(value, path, ["platform", "model", "reasoningEffort", "fastMode"], errors)) {
+  if (
+    !checkObject(value, path, ["platform", "model", "reasoningEffort", "fastMode", "lens"], errors)
+  ) {
     return;
   }
   if (!isAgentPlatform(value.platform)) {
@@ -402,6 +409,37 @@ function checkBinding(value: unknown, path: string, errors: FieldErrorCollector)
   if (value.fastMode !== undefined && typeof value.fastMode !== "boolean") {
     errors.add(joinPath(path, "fastMode"), "type", "Expected a boolean");
   }
+  if (
+    value.lens !== undefined &&
+    checkObject(value.lens, joinPath(path, "lens"), ["label", "instruction"], errors)
+  ) {
+    checkText(value.lens.label, joinPath(path, "lens.label"), errors, B.maxShortTextChars, false);
+    // The instruction is prose: line breaks are allowed.
+    if (checkRequired(value.lens.instruction, joinPath(path, "lens.instruction"), errors)) {
+      checkString(value.lens.instruction, joinPath(path, "lens.instruction"), errors, {
+        min: 1,
+        max: B.maxLensInstructionChars,
+      });
+    }
+  }
+}
+
+function checkLaunch(value: unknown, errors: FieldErrorCollector): void {
+  if (value === undefined) return;
+  if (!checkObject(value, "launch", ["requestedBy", "create", "ticket", "scheduleId"], errors)) {
+    return;
+  }
+  checkEnum(value.requestedBy, "launch.requestedBy", errors, GRAPH_RUN_LAUNCHERS);
+  if (value.create !== undefined) {
+    checkEnum(value.create, "launch.create", errors, ["worktree", "container"] as const);
+  }
+  if (
+    value.ticket !== undefined &&
+    checkObject(value.ticket, "launch.ticket", ["taskId"], errors)
+  ) {
+    checkText(value.ticket.taskId, "launch.ticket.taskId", errors, B.maxIdChars, false);
+  }
+  checkText(value.scheduleId, "launch.scheduleId", errors, B.maxIdChars);
 }
 
 function checkBindings(value: unknown, path: string, errors: FieldErrorCollector): void {
@@ -669,6 +707,7 @@ const ACTIVATION_FIELDS = [
   "outputs",
   "outlet",
   "session",
+  "human",
   "policy",
   "enforcement",
   "enforcementReason",
@@ -734,6 +773,7 @@ function checkActivation(
     );
   }
   if (value.session !== undefined) checkSession(value.session, joinPath(path, "session"), errors);
+  if (value.human !== undefined) checkGraphHumanWait(value.human, joinPath(path, "human"), errors);
   if (value.policy !== undefined && !isNativeAgentExecutionPolicy(value.policy)) {
     errors.add(joinPath(path, "policy"), "type", "Expected a native agent execution policy");
   }
@@ -807,7 +847,14 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
     "a rewind id",
   );
   checkEnum(value.kind, joinPath(path, "kind"), errors, GRAPH_REWIND_KINDS);
-  checkPattern(value.nodeId, joinPath(path, "nodeId"), errors, GRAPH_ID_PATTERN, 64, "a node id");
+  checkPattern(
+    value.nodeId,
+    joinPath(path, "nodeId"),
+    errors,
+    GRAPH_PLAN_ID_PATTERN,
+    GRAPH_PLAN_ID_MAX_CHARS,
+    "a node id",
+  );
   if (!parseGraphActivationKey(value.activation)) {
     errors.add(joinPath(path, "activation"), "pattern", "Must be an activation key");
   }
@@ -952,6 +999,7 @@ export function validateGraphRun(
     }
   }
   checkBindings(value.bindings, "bindings", errors);
+  checkLaunch(value.launch, errors);
   checkEnum(value.status, "status", errors, GRAPH_RUN_STATUSES);
   if (typeof value.mock !== "boolean") errors.add("mock", "type", "Expected a boolean");
   if (value.mockOptions !== undefined) {
@@ -1007,7 +1055,7 @@ export function validateGraphRun(
     "loopIterations",
     errors,
     B.maxLoops,
-    GRAPH_ID_PATTERN,
+    GRAPH_PLAN_ID_PATTERN,
   );
   const loopIds = plan ? new Set(plan.loops.map((loop) => loop.id)) : null;
   for (const [loop, iteration] of loops ?? []) {
@@ -1080,7 +1128,14 @@ function checkProducer(value: unknown, path: string, errors: FieldErrorCollector
       errors.add(joinPath(path, "activation"), "mismatch", "A run input has no activation");
     }
   } else {
-    checkPattern(value.nodeId, joinPath(path, "nodeId"), errors, GRAPH_ID_PATTERN, 64, "a node id");
+    checkPattern(
+      value.nodeId,
+      joinPath(path, "nodeId"),
+      errors,
+      GRAPH_PLAN_ID_PATTERN,
+      GRAPH_PLAN_ID_MAX_CHARS,
+      "a node id",
+    );
     const parts = parseGraphActivationKey(value.activation);
     if (!parts) {
       errors.add(joinPath(path, "activation"), "pattern", "Must be an activation key");

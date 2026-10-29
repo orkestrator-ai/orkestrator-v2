@@ -584,7 +584,12 @@ export function graphForcePushRewind(
   rewinds: readonly GraphRewind[],
   pushedAfter: ReadonlySet<string>,
 ): { rewindId: string; upstream: string } | null {
-  const rewind = rewinds.findLast((entry) => entry.kind === "rewind-code" && entry.code);
+  // A reverse scan, not `findLast`: the bridges' TypeScript lib predates it.
+  let rewind: GraphRewind | undefined;
+  for (let index = rewinds.length - 1; index >= 0 && !rewind; index -= 1) {
+    const entry = rewinds[index]!;
+    if (entry.kind === "rewind-code" && entry.code) rewind = entry;
+  }
   const code = rewind?.code;
   if (!rewind || !code?.upstream || !code.upstreamCommitsDropped) return null;
   return pushedAfter.has(rewind.id) ? null : { rewindId: rewind.id, upstream: code.upstream };

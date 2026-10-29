@@ -383,6 +383,10 @@ already knows (persisted native sessions) and never creates a session.
 
 Coordinator sessions (by policy, or by their coordinator runtime id, which
 matches no environment) are `blocked-policy`: they load no user MCP servers.
+Graph agent sessions load only the servers their node was granted
+(`capabilityPolicy.userMcpServers`, [graphs.md](graphs.md#per-node-user-mcp-servers-item-404));
+the apply plan does not read that selection yet, so a save to a server the
+node was not granted is still reported for its session.
 Project-scope changes are `blocked-policy` for sessions whose policy excludes
 project resources. Container sessions are `restart-required` for backend-user
 changes the entrypoint copies: Claude's `.claude.json` is staged again before

@@ -17,6 +17,7 @@ import {
   isNativeAgentCapability,
   NATIVE_AGENT_EXTENDED_DENY_MAX,
   NATIVE_AGENT_EXTENDED_DENY_MAX_CHARS,
+  isNativeAgentUserMcpServerList,
   type NativeAgentCapability,
 } from "./native-agent-capabilities.js";
 import type {
@@ -1466,11 +1467,20 @@ export interface NativeAgentExecutionPolicy {
    * (`nativeAgentPolicyForBridge`): their validators ignore the field, while
    * `nativeAgentDeniedCapabilities` reads both. Entries this build does not
    * know are tolerated there and skipped, never treated as an error.
+   *
+   * `userMcpServers` selects the configured MCP servers the session may load
+   * (item 404): exactly these names, `[]` for none. Absent keeps every server
+   * the session's configuration provides. It only filters what the bridge
+   * already reads from the user's own files; it never carries a definition.
+   * Reserved Orkestrator servers are not user servers and are unaffected. An
+   * `mcp:<server>` denial wins over a listed name
+   * (`nativeAgentUserMcpGrant`). Older bridges ignore the field.
    */
   capabilityPolicy?: {
     deny: NativeAgentCapability[];
     allow?: NativeAgentCapability[];
     extendedDeny?: string[];
+    userMcpServers?: string[];
   };
   networkAccess: "restricted" | "full";
   /** Outer firewall retained when an optional provider sandbox runs in a container. */
@@ -1538,7 +1548,9 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
                 typeof item === "string" &&
                 item.length > 0 &&
                 item.length <= NATIVE_AGENT_EXTENDED_DENY_MAX_CHARS,
-            )))))
+            ))) &&
+        (capabilityPolicy.userMcpServers === undefined ||
+          isNativeAgentUserMcpServerList(capabilityPolicy.userMcpServers))))
   );
 }
 

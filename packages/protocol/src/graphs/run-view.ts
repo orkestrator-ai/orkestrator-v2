@@ -20,7 +20,8 @@
  * | `graph_run_retry`, `graph_run_skip` | `{runId, activationKey}` | {@link GraphRunGetResult} (`changed`) |
  * | `graph_run_artifact` | `{runId, artifactId}` | {@link GraphRunArtifactView} |
  * | `graph_run_transcript` | `{runId, activationKey, fromIndex?, maxBytes?}` | {@link GraphRunTranscriptView} |
- * | `graph_run_answer` | item 204 | the activation's question |
+ * | `graph_run_answer` | items 204, 208 (`waitId`: a human node) | the activation's question or wait |
+ * | `graph_run_pending` | `{runId}` or `{environmentId}` | `GraphRunPendingInteraction[]` (`run-human.ts`) |
  *
  * Browser-safe: no `node:`/`bun:` imports.
  */

@@ -332,6 +332,28 @@ describe("the janitor", () => {
   });
 });
 
+describe("namespaced node ids (item 402)", () => {
+  test("an isolated node inlined from a sub-graph gets one worktree directory and a valid branch", async () => {
+    const repo = new FakeBranchRepo(new FakeGraphRepo(BASE));
+    const environment = graphEnvironmentFixture({ worktreePath: "/root" }) as Environment;
+    const created = await repo
+      .service()
+      .create(
+        environment,
+        { id: RUN },
+        { nodeId: "bake/implement", iteration: 1, branchKey: "sample.1" },
+        BASE,
+      );
+    expect(created.path).toBe(`.orkestrator/graph-branches/${RUN}/bake--implement/i1/sample.1`);
+    expect(created.branch).toBe(`orkestrator-graph/${RUN}/bake--implement/i1/sample.1`);
+    expect(await repo.service().list(environment)).toEqual([
+      { path: created.path, branch: created.branch },
+    ]);
+    expect(await repo.service().removeRun(environment, RUN)).toBe(0);
+    expect(repo.worktrees.size).toBe(0);
+  });
+});
+
 describe("the worktree guard", () => {
   async function guarded(change: (repo: FakeBranchRepo, path: string) => void) {
     const main = new FakeGraphRepo(BASE);

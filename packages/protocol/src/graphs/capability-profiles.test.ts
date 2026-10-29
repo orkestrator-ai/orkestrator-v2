@@ -116,6 +116,8 @@ describe("capability profiles", () => {
     expect(researcher.policy.capabilityPolicy).toEqual({
       deny: researcher.denied,
       allow: ["web.search"],
+      // Graph nodes get no user MCP server unless granted (item 404).
+      userMcpServers: [],
     });
     expect(compile({ profile: "observer" }).webSearch).toBe(false);
     // Everything but the capability policy is the environment's.
@@ -285,7 +287,7 @@ describe("capability profiles", () => {
 });
 
 describe("capability checks for the compiler", () => {
-  test("rejects push and GitHub writes, and MCP grants", () => {
+  test("rejects push and GitHub writes; an MCP grant is not an error", () => {
     const spec: GraphCapabilitySpec = {
       profile: "custom",
       allow: ["git.push", "github.write", "mcp:docs"],
@@ -297,7 +299,6 @@ describe("capability checks for the compiler", () => {
     ).toEqual([
       ["capability-remote-write", "git.push"],
       ["capability-remote-write", "github.write"],
-      ["capability-mcp-grant", "mcp:docs"],
     ]);
   });
 
@@ -426,6 +427,7 @@ describe("capability statement", () => {
         "- You have no network access; hosted web search and web fetch are off.",
         "- You cannot create commits.",
         "- You cannot push or write to GitHub (pull requests, comments, labels); Orkestrator's system steps do that after you finish.",
+        "- You have none of the user's own MCP servers.",
         "- Nobody is watching this step: do not ask the user questions; decide, and say what you assumed.",
         "- Some of these limits are not enforced by your provider. They are checked after you finish, and a violation fails this step.",
       ].join("\n"),
@@ -444,7 +446,19 @@ describe("capability statement", () => {
     expect(builder).toContain("You may create, edit and delete files");
     expect(builder).toContain("You may commit your work locally.");
     expect(builder).toContain("You cannot start sub-agents.");
-    expect(builder).toContain("You cannot use these MCP servers: docs.");
+    expect(builder).toContain("You have none of the user's own MCP servers.");
+    const granted = describeGraphCapabilities({
+      compiled: compile({ profile: "builder", allow: ["mcp:docs", "mcp:linear"] }),
+    });
+    expect(granted).toContain("Of the user's own MCP servers you have only docs, linear.");
+    // A plan compiled before item 404 selects nothing; its denials still show.
+    const old = compile({ profile: "builder", deny: ["mcp:docs"] });
+    const { userMcpServers: _, ...legacyCapabilities } = old.policy.capabilityPolicy!;
+    expect(
+      describeGraphCapabilities({
+        compiled: { ...old, policy: { ...old.policy, capabilityPolicy: legacyCapabilities } },
+      }),
+    ).toContain("You cannot use these MCP servers: docs.");
     expect(builder).toContain("creating and updating tickets");
     expect(builder).not.toContain("not enforced");
 
@@ -466,5 +480,69 @@ describe("capability statement", () => {
     });
     expect(asking).toContain("ask_human");
     expect(asking).toContain("You cannot start sub-agents.");
+  });
+});
+
+describe("user MCP grants (item 404)", () => {
+  test("allow grants a server; deny, the ceiling and the environment remove it", () => {
+    const granted = compile({ profile: "builder", allow: ["mcp:linear", "mcp:docs"] });
+    expect(granted.mcpServers).toEqual(["docs", "linear"]);
+    expect(granted.policy.capabilityPolicy?.userMcpServers).toEqual(["docs", "linear"]);
+    expect(compile({ profile: "builder" }).mcpServers).toEqual([]);
+
+    const denied = compile({ profile: "builder", allow: ["mcp:docs"], deny: ["mcp:docs"] });
+    expect(denied.mcpServers).toEqual([]);
+    expect(denied.denied).toContain("mcp:docs");
+
+    const ceiling = compile({ profile: "builder", allow: ["mcp:docs", "mcp:linear"] }, host, {
+      deny: ["mcp:docs"],
+    });
+    expect(ceiling.mcpServers).toEqual(["linear"]);
+    expect(ceiling.removedByCeiling).toContain("mcp:docs");
+
+    const environment = compile(
+      { profile: "reviewer", allow: ["mcp:docs"] },
+      { ...host, capabilityPolicy: { deny: ["mcp:docs"] } },
+    );
+    expect(environment.mcpServers).toEqual([]);
+    expect(environment.removedByEnvironment).toContain("mcp:docs");
+  });
+
+  test("a grant never carves anything else out of the profile", () => {
+    const observer = compile({ profile: "observer", allow: ["mcp:docs"] });
+    expect(observer.denied).toEqual(compile({ profile: "observer" }).denied);
+    expect(observer.readOnly).toBe(true);
+    expect(observer.mcpServers).toEqual(["docs"]);
+  });
+
+  test("warns once per enabled provider that cannot deliver the grant", () => {
+    const writer = checkGraphCapabilities({ profile: "builder", allow: ["mcp:docs"] }, "write", {
+      providers: ["claude", "codex", "cursor", "grok", "opencode", "pi"],
+    });
+    expect(writer.map((issue) => [issue.code, issue.provider, issue.severity])).toEqual([
+      ["capability-mcp-grant", "grok", "warning"],
+    ]);
+    expect(writer[0]?.message).toContain("Grok Build cannot give this node mcp:docs");
+
+    const reader = checkGraphCapabilities({ profile: "reviewer", allow: ["mcp:docs"] }, "read", {
+      providers: ["claude", "cursor"],
+    });
+    expect(reader.map((issue) => [issue.code, issue.provider])).toEqual([
+      ["capability-mcp-grant", "cursor"],
+      ["capability-mcp-grant-read-only", undefined],
+    ]);
+    // Supported everywhere asked: no per-provider warning, and no grant no warning.
+    expect(
+      checkGraphCapabilities({ profile: "builder", allow: ["mcp:docs"] }, "write", {
+        providers: ["claude", "codex", "pi"],
+      }),
+    ).toEqual([]);
+    expect(
+      checkGraphCapabilities(
+        { profile: "reviewer", allow: ["mcp:docs"], deny: ["mcp:docs"] },
+        "read",
+        { providers: ["grok"] },
+      ),
+    ).toEqual([]);
   });
 });

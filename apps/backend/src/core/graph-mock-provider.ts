@@ -191,7 +191,7 @@ export class GraphMockHumanExecutor implements GraphNodeExecutor {
     return {
       state: "failed",
       cause: "system-error",
-      error: "Mock run: a pause pin needs human nodes, which this backend cannot run yet",
+      error: "Mock run: a pause pin needs human nodes, which this backend cannot run",
     };
   }
 

@@ -8,7 +8,8 @@
  * repository, created from the commit its `workspace@1` input names, on its
  * own branch:
  *
- * - worktree `.orkestrator/graph-branches/<run>/<node>/i<iteration>/<branch>`,
+ * - worktree `.orkestrator/graph-branches/<run>/<node>/i<iteration>/<branch>`
+ *   (an inlined sub-graph's `outer/inner` node id written `outer--inner`),
  *   relative to the environment root (`/workspace` in a container), inside
  *   the Git-excluded `.orkestrator/` directory;
  * - branch `orkestrator-graph/<run>/<node>/i<iteration>/<branch>`.
@@ -21,7 +22,7 @@
  */
 import type { GraphActivationKeyParts } from "./run-identity.js";
 import { isGraphBranchKey, isGraphRunId } from "./run-identity.js";
-import { GRAPH_ID_PATTERN } from "./grammar.js";
+import { isGraphPlanId } from "./grammar.js";
 import type { GraphWorkspaceAccess, GraphWorkspaceIsolation } from "./template-model.js";
 
 export const GRAPH_ISOLATION_BOUNDS = Object.freeze({
@@ -81,13 +82,24 @@ function branchSegment(branchKey: string): string {
   return branchKey.replaceAll(":", "_");
 }
 
+/**
+ * A plan node id as one path segment and ref component. An inlined
+ * sub-graph's node id joins graph ids with `/` (item 402); a graph id never
+ * holds `--`, so `/` → `--` stays one component and is reversible
+ * (`review/fix` → `review--fix`).
+ */
+export function graphBranchNodeSegment(nodeId: string): string {
+  if (!isGraphPlanId(nodeId)) throw new Error("Invalid graph node id");
+  return nodeId.replaceAll("/", "--");
+}
+
 function leaf(position: BranchPosition): string {
-  if (!GRAPH_ID_PATTERN.test(position.nodeId)) throw new Error("Invalid graph node id");
+  const node = graphBranchNodeSegment(position.nodeId);
   if (!Number.isSafeInteger(position.iteration) || position.iteration < 1) {
     throw new Error("Invalid loop iteration");
   }
   if (!isGraphBranchKey(position.branchKey)) throw new Error("Invalid branch key");
-  return `${position.nodeId}/i${position.iteration}/${branchSegment(position.branchKey)}`;
+  return `${node}/i${position.iteration}/${branchSegment(position.branchKey)}`;
 }
 
 /** `.orkestrator/graph-branches/<run>`. */
@@ -120,7 +132,7 @@ export function parseGraphBranchWorktreePath(value: unknown): { runId: string } 
   const parts = value.slice(prefix.length).split("/");
   if (parts.length !== 4) return null;
   const [runId, nodeId, iteration, branch] = parts as [string, string, string, string];
-  if (!isGraphRunId(runId) || !GRAPH_ID_PATTERN.test(nodeId)) return null;
+  if (!isGraphRunId(runId) || !isGraphPlanId(nodeId.replaceAll("--", "/"))) return null;
   if (
     !/^i[1-9][0-9]{0,3}$/.test(iteration) ||
     !/^[A-Za-z0-9][A-Za-z0-9._+_-]{0,95}$/.test(branch)

@@ -221,6 +221,13 @@ worktrees for replicated writers, with this date and reason.
   graph branches"); `docs/development/disk-usage.md` rows;
   `docs/architecture/environment-deletion.md` step 7.
 
+**2026-10-29 · Merged with graphs-integration (402, 208, 213, 214, 404, 405).**
+An inlined sub-graph's plan node id holds `/` (`bake/implement`); worktree
+paths and branch names write it as `--` (`graphBranchNodeSegment`), one path
+segment and a valid ref component, reversible because a graph id never holds
+`--`. An isolated node inside a sub-graph compiles and keeps its isolation
+(`isolation.test.ts`).
+
 **2026-10-29 · Deviations and limits.**
 
 - Local branch worktrees live inside the environment root, not in

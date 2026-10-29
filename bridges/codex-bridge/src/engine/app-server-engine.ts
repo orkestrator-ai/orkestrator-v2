@@ -29,6 +29,7 @@ import {
 } from "@orkestrator/protocol/transcript-artifacts";
 import {
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
+  nativeAgentRestrictsUserMcp,
   normalizePendingSignIn,
   type NativeAgentPendingSignIn,
 } from "@orkestrator/protocol/native-agent";
@@ -84,6 +85,8 @@ import {
   codexProjectTrustConfig,
   codexRequestUserInputConfig,
   codexToolHistoryGaps,
+  codexConfiguredMcpServerNames,
+  codexUserMcpThreadConfig,
 } from "../codex-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
 import {
@@ -670,6 +673,17 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
  * own token rather than a credential the user configured for it.
  */
 const CODEX_ACCOUNT_MCP_SERVER = "codex_apps";
+
+/**
+ * MCP servers that are not the user's: Orkestrator's injected ones and
+ * Codex's own account connector. A user MCP selection never disables them.
+ */
+const RESERVED_CODEX_MCP_SERVER_NAMES: ReadonlySet<string> = new Set([
+  "orkestrator",
+  "orkestrator-design",
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+  CODEX_ACCOUNT_MCP_SERVER,
+]);
 
 /**
  * Whether a startup failure is the Codex account's sign-in lapsing.
@@ -1637,6 +1651,50 @@ export class AppServerEngine implements CodexEngine {
     return codexProjectSkillsConfig(listed);
   }
 
+  /**
+   * Thread configuration that loads exactly the configured MCP servers the
+   * policy selects (graphs item 404): the effective `mcp_servers` table is
+   * read back for the thread's directory, and every server outside the
+   * selection is disabled for this thread (`codexUserMcpThreadConfig`). An
+   * unreadable configuration refuses the thread: running it would load every
+   * server. A policy that narrows nothing costs no request.
+   *
+   * Applied on `thread/start`, `thread/resume` and `thread/fork`. A resume of
+   * a thread app-server still has loaded ignores overrides, so a selection
+   * that changes on a live thread needs `reloadThread`; a graph activation's
+   * session is new and keeps one policy for life.
+   */
+  private async userMcpThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!nativeAgentRestrictsUserMcp(config.policy)) return {};
+    const result = await this.supervisor.requestOnGeneration<{ config?: unknown }>(
+      generation,
+      "config/read",
+      { cwd: config.cwd ?? this.options.cwd },
+    );
+    const configured = codexConfiguredMcpServerNames(result?.config);
+    if (!configured) {
+      throw new Error(
+        "Codex did not report its MCP server configuration, so this session's MCP selection could not be applied",
+      );
+    }
+    return codexUserMcpThreadConfig(config.policy, configured, RESERVED_CODEX_MCP_SERVER_NAMES);
+  }
+
+  /** Thread configuration from the policy that app-server has to be asked for. */
+  private async policyThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    const [skills, mcp] = await Promise.all([
+      this.projectResourceThreadConfig(generation, config),
+      this.userMcpThreadConfig(generation, config),
+    ]);
+    return { ...skills, ...mcp };
+  }
+
   private toThreadParams(
     config: EngineTurnConfig,
     extraConfig: Record<string, unknown> = {},
@@ -1852,7 +1910,7 @@ export class AppServerEngine implements CodexEngine {
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
-    const extra = await this.projectResourceThreadConfig(generation, options.config);
+    const extra = await this.policyThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1865,7 +1923,7 @@ export class AppServerEngine implements CodexEngine {
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
-    const extra = await this.projectResourceThreadConfig(generation, options.config);
+    const extra = await this.policyThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1928,7 +1986,7 @@ export class AppServerEngine implements CodexEngine {
     // The whole source, not just the forked prefix: stricter, and it needs no
     // rollout the fork may not have written yet.
     await this.assertNoToolHistory(threadId, config, false);
-    const extra = await this.projectResourceThreadConfig(generation, config);
+    const extra = await this.policyThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;

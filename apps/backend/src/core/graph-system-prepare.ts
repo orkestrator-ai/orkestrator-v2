@@ -15,7 +15,7 @@
  *   starts from as `workspace@1`. Once per run, node and iteration: a retry or
  *   restart replays the recorded commit.
  */
-import type { GraphRunProvisioner } from "./graph-run-pass.js";
+import { graphDeferredWorkspaceInputs, type GraphRunProvisioner } from "./graph-run-pass.js";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import {
   GraphSystemActionError,
@@ -87,6 +87,11 @@ export interface GraphRunProvisionerDependencies {
     };
   };
   invoke: GraphSystemInvoke;
+  /**
+   * The new environment's branch and HEAD, for `workspace@1` run inputs the
+   * launch deferred to it (item 214). Absent: a run with one fails to start.
+   */
+  workspaceHead?(environment: Environment): Promise<{ branch: string; headRef: string }>;
   /** Monotonic milliseconds (tests). */
   monotonic?: () => number;
 }
@@ -118,16 +123,35 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     return run.plan.template.name;
   }
 
+  /**
+   * Links the run's Kanban ticket to the environment it now has (item 214),
+   * so `update-ticket` finds it. A launch on an existing environment links at
+   * launch; this covers a run that created its own. Best-effort: a ticket
+   * deleted meanwhile does not stop the run.
+   */
+  private async linkTicket(run: Readonly<GraphRun>, environmentId: string): Promise<void> {
+    const taskId = run.launch?.ticket?.taskId;
+    if (!taskId || run.mock) return;
+    try {
+      await this.deps.invoke("update_kanban_task", { taskId, environmentId });
+    } catch (error) {
+      console.warn(
+        "[graphs] Could not link the run's ticket to its environment:",
+        run.id,
+        error instanceof Error ? error.name : "error",
+      );
+    }
+  }
+
   async provision(
     run: Readonly<GraphRun>,
     _signal: AbortSignal,
-  ): Promise<
-    | { state: "pending" }
-    | { state: "ready"; environmentId: string }
-    | { state: "failed"; error: string }
-  > {
-    const create =
-      run.plan.workspace.kind === "environment" ? run.plan.workspace.create : undefined;
+  ): ReturnType<GraphRunProvisioner["provision"]> {
+    // The launch's choice (item 214) first, then the template's default.
+    const kind =
+      run.launch?.create ??
+      (run.plan.workspace.kind === "environment" ? run.plan.workspace.create?.kind : undefined);
+    const create = kind ? { kind } : undefined;
     if (!create) {
       return {
         state: "failed",
@@ -156,6 +180,14 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     }
     if (environment.status === "running") {
       this.started.delete(run.id);
+      await this.linkTicket(run, environment.id);
+      if (graphDeferredWorkspaceInputs(run).length > 0 && this.deps.workspaceHead) {
+        const head = await this.deps.workspaceHead(environment);
+        if (!COMMIT.test(head.headRef)) {
+          return { state: "failed", error: "The run's environment has no commit to start from" };
+        }
+        return { state: "ready", environmentId: environment.id, workspace: head };
+      }
       return { state: "ready", environmentId: environment.id };
     }
     if (environment.status === "error") {

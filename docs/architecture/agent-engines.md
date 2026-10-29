@@ -834,7 +834,7 @@ decoder together.
 
 `NATIVE_AGENT_CAPABILITIES` (`packages/protocol/src/native-agent-capabilities.ts`)
 also names `git.commit`, `git.push`, `github.write`, `subagents`,
-`mcp:<server>` (deny only) and `orkestrator:<group>` (held by the backend's
+`mcp:<server>` and `orkestrator:<group>` (held by the backend's
 credential scope, never sent to a bridge), for graph capability profiles.
 Every released bridge validates a policy against the original six names and
 drops a policy it cannot validate, so the HTTP bridge provider sends
@@ -844,9 +844,10 @@ ignore, and bridges read both through `nativeAgentDeniedCapabilities`. Claude
 translates the newer names into `disallowedTools` (`Task`/`Agent`,
 `mcp__<server>__*`, `Bash(git push *)`-style command rules), OpenCode into
 permission rules (`task`, `<server>_*`, bash patterns), and Cursor removes
-`task` for `subagents`. Elsewhere an `mcp:<server>` denial turns project
-resources off instead, and git and GitHub denials are held by a shell denial
-where the policy has one, otherwise by the post-hoc guards. A Claude
+`task` for `subagents`. Codex, Cursor and Pi hold an `mcp:<server>` denial
+through the user MCP selection below; on Grok it turns project resources off
+instead. Git and GitHub denials are held by a shell denial where the policy
+has one, otherwise by the post-hoc guards. A Claude
 read-only turn keeps the session's extra denials. A session whose policy
 denies `github.write` (every graph agent node) gets no GitHub credential where
 the bridge builds a per-session environment: Claude (per query,
@@ -860,6 +861,50 @@ readable to every agent. The graph remote-ref guard (item 209) is the
 backstop. How strongly each platform
 holds a policy is `agentPolicyEnforcement`
 (`packages/protocol/src/graphs/capability-enforcement.ts`).
+
+### User MCP servers per session (graphs item 404)
+
+`capabilityPolicy.userMcpServers` selects the configured (user, or with
+project resources project) MCP servers a session may load: exactly those
+names, `[]` for none, minus any `mcp:<server>` denial; absent keeps every
+configured server. Graph agent nodes always carry it (default `[]`). It is a
+filter over what each bridge already reads from the user's own files and never
+carries a definition; reserved Orkestrator servers are never filtered. Older
+bridges ignore the field. `NATIVE_AGENT_USER_MCP_SELECTION` records what each
+platform does:
+
+- **Claude** (`userMcpServerFilter`, `claudeUserMcpQueryOptions` in
+  `services/mcp-config.ts`): the inline set is filtered and the query sets
+  `strictMcpConfig`, because the CLI otherwise loads the servers of every
+  settings source itself (see [MCP server management](mcp-management.md)).
+  Plugin MCP servers therefore never load for a selecting session. A read-only
+  turn keeps the selection (`readOnlyTurnPolicy`) and its hook admits only the
+  granted servers' tools.
+- **Codex** (`codexUserMcpThreadConfig`): the engine reads the effective
+  `mcp_servers` through `config/read` and sets
+  `mcp_servers.<name>.enabled = false` for every other configured server on
+  `thread/start`, `thread/resume` and `thread/fork`; a granted server gets
+  `default_tools_approval_mode = "approve"` unless the policy asks. An
+  unreadable table, or a server to disable whose name is not a bare key,
+  refuses the thread. A loaded thread ignores resume overrides, so a changed
+  selection needs `reloadThread`.
+- **Pi** (`piUserMcpServerFilter`): the bridge's own MCP client starts only
+  the selected servers; the read-only gate admits a granted server's tools by
+  exact registered name (`isGrantedUserMcpTool`).
+- **Cursor** (`cursorUserMcpServerFilter`, `cursorSettingSources`): a
+  selecting session gets no settings source and the selected servers inline
+  from `~/.cursor/mcp.json` (plus `.cursor/mcp.json` with project resources).
+  Gap: it also runs without the user's and the project's Cursor rules and
+  plugins; read-only attaches keep loading only Orkestrator's server, so a
+  grant is not delivered there.
+- **OpenCode** (`opencode-user-mcp.ts`): servers cannot be attached per
+  session in the shared `opencode serve`, so the session's permission rules
+  deny `<server>_*` for every server `mcp.status` lists outside the selection,
+  re-applied at each turn when the list changes; an unreadable list refuses
+  the session. The servers' processes still run.
+- **Grok**: not supported. Grok loads every server of its own configuration
+  and ACP `session/new` `mcpServers` can only add servers, so a selecting
+  session on Grok still loads all of them (rated `advisory`).
 
 A sandbox's network switch (`networkAccess`) only governs commands the agent
 runs on this machine. Hosted web search and fetch run on the vendor's servers,

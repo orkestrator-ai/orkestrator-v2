@@ -34,6 +34,7 @@ import {
   type GraphLoopCarry,
   type GraphLoopRegion,
   type GraphNodeSpec,
+  type GraphParameter,
   type GraphRole,
   type GraphRunInputSpec,
   type GraphSystemAction,
@@ -42,6 +43,8 @@ import {
   isGraphRunInputRef,
 } from "./template-model.js";
 import { GraphTypeLibrary, type GraphValueType } from "./types.js";
+import type { GraphInlinedSubgraph, GraphSubgraphInlineResult } from "./compile-subgraphs.js";
+import { graphBuiltinTemplateResolver, type GraphTemplateResolver } from "./subgraphs.js";
 
 // ---------------------------------------------------------------- options
 
@@ -74,6 +77,12 @@ export interface GraphCompileOptions {
   host?: AgentEnforcementHost;
   /** Nominal rendered-input bytes per prompt before a warning; default 160 KiB. */
   promptCeilingBytes?: number;
+  /**
+   * Finds the templates sub-graph nodes name (item 402). Default
+   * `graphBuiltinTemplateResolver`: built-ins resolve from code, user and
+   * project templates are `subgraph-unresolved`.
+   */
+  resolveTemplate?: GraphTemplateResolver;
 }
 
 export const GRAPH_COMPILE_DEFAULT_ENVIRONMENT: Readonly<NativeAgentExecutionPolicy> =
@@ -96,6 +105,7 @@ export interface ResolvedGraphCompileOptions {
   environment: NativeAgentExecutionPolicy;
   host: AgentEnforcementHost;
   promptCeilingBytes: number;
+  resolveTemplate: GraphTemplateResolver;
 }
 
 export function resolveGraphCompileOptions(
@@ -108,6 +118,7 @@ export function resolveGraphCompileOptions(
     environment: options.environment ?? GRAPH_COMPILE_DEFAULT_ENVIRONMENT,
     host: options.host ?? GRAPH_COMPILE_DEFAULT_HOST,
     promptCeilingBytes: options.promptCeilingBytes ?? GRAPH_PROMPT_INPUT_CEILING_BYTES,
+    resolveTemplate: options.resolveTemplate ?? graphBuiltinTemplateResolver,
   };
 }
 
@@ -181,7 +192,7 @@ export function graphNodeWorkspaceAccess(node: GraphNodeSpec): GraphWorkspaceAcc
       return node.workspaceAccess;
     case "system":
       return GRAPH_SYSTEM_ACTION_WORKSPACE[node.action];
-    // A sub-graph may hold writers; until item 402 inlines it, assume it does.
+    // A sub-graph that could not be inlined (item 402) may hold writers.
     case "subgraph":
       return "write";
     default:
@@ -246,10 +257,27 @@ export class GraphCompileState {
     pending: GraphPlanAcknowledgementRef[];
   } = { accepted: [], pending: [] };
 
+  /** The author's template; `template` is it with its sub-graphs inlined (item 402). */
+  readonly source: GraphTemplateV1;
+  /** Inlined sub-graph instances, outermost first. */
+  readonly subgraphs: readonly GraphInlinedSubgraph[];
+  /** Inlined node or loop id → its innermost sub-graph instance. */
+  readonly nodeSubgraph: ReadonlyMap<string, string>;
+  readonly loopSubgraph: ReadonlyMap<string, string>;
+  private readonly subgraphParameters = new Map<string, readonly GraphParameter[]>();
+
   constructor(
     readonly template: GraphTemplateV1,
     readonly options: ResolvedGraphCompileOptions,
+    inlined?: { source: GraphTemplateV1; result: GraphSubgraphInlineResult },
   ) {
+    this.source = inlined?.source ?? template;
+    this.subgraphs = inlined?.result.subgraphs ?? [];
+    this.nodeSubgraph = inlined?.result.nodeSubgraph ?? new Map();
+    this.loopSubgraph = inlined?.result.loopSubgraph ?? new Map();
+    for (const instance of this.subgraphs) {
+      this.subgraphParameters.set(instance.id, instance.parameters);
+    }
     const defs: ArtifactTypeDef[] = [];
     for (const def of [...(template.types ?? []), ...options.types]) {
       const ref = `${def.name}@${def.version}`;
@@ -264,6 +292,27 @@ export class GraphCompileState {
     for (const role of template.roles) this.roles.set(role.key, role);
     template.inputs.forEach((spec, index) => this.runInputs.set(spec.name, { spec, index }));
     (template.loops ?? []).forEach((loop, index) => this.loops.set(loop.id, { loop, index }));
+  }
+
+  /**
+   * The parameters a node's prompt, `when` and gate branches read: an inlined
+   * node reads its child template's own (item 402).
+   */
+  parametersOf(nodeId: string): readonly GraphParameter[] {
+    const instance = this.nodeSubgraph.get(nodeId);
+    return (
+      (instance === undefined ? undefined : this.subgraphParameters.get(instance)) ??
+      this.template.parameters
+    );
+  }
+
+  /** The parameters a loop's `until` reads. */
+  loopParametersOf(loopId: string): readonly GraphParameter[] {
+    const instance = this.loopSubgraph.get(loopId);
+    return (
+      (instance === undefined ? undefined : this.subgraphParameters.get(instance)) ??
+      this.template.parameters
+    );
   }
 
   nodeAt(id: string): GraphDiagnosticLocation {

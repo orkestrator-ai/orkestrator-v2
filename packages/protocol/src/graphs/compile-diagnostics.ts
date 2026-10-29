@@ -65,9 +65,63 @@ export const GRAPH_COMPILE_DIAGNOSTICS = Object.freeze({
     summary:
       "Panel roles are for panel replication only, and panel replication needs a panel role.",
   },
+  // Sub-graphs (item 402).
+  "subgraph-unresolved": {
+    severity: "error",
+    summary:
+      "A sub-graph's template does not resolve: missing, untrusted, ambiguous or invalid (`detail`).",
+  },
+  "subgraph-digest-mismatch": {
+    severity: "error",
+    summary: "A sub-graph pins a digest or revision its template no longer has.",
+  },
+  "subgraph-recursive": {
+    severity: "error",
+    summary: "A sub-graph's template contains itself, directly or through other sub-graphs.",
+  },
+  "subgraph-depth": {
+    severity: "error",
+    summary: "Sub-graphs are nested deeper than the bound.",
+  },
+  "subgraph-too-large": {
+    severity: "error",
+    summary: "Inlining the sub-graphs exceeds the plan's node, edge, loop or id-length bounds.",
+  },
+  "subgraph-port-mismatch": {
+    severity: "error",
+    summary: "A sub-graph node's ports do not match its template's run inputs and outputs.",
+  },
+  "subgraph-param-binding": {
+    severity: "error",
+    summary:
+      "A sub-graph parameter binding names no parameter, does not fit its type, or is missing.",
+  },
+  "subgraph-role-binding": {
+    severity: "error",
+    summary: "A sub-graph role is unbound, or bound to a role of another multiplicity or size.",
+  },
+  "subgraph-type-conflict": {
+    severity: "error",
+    summary: "A sub-graph's template defines a custom type differently from this template.",
+  },
+  "subgraph-workspace": {
+    severity: "error",
+    summary: "A sub-graph needs an environment and this template has none.",
+  },
   "subgraph-unsupported": {
     severity: "error",
-    summary: "Sub-graph nodes are not yet supported (Phase 4, item 402).",
+    summary:
+      "A sub-graph node uses something inlining cannot keep: replicate, when, retry, timeout, onFailure, a loop inside a loop, or a session continued from it.",
+  },
+  "subgraph-unpinned": {
+    severity: "info",
+    summary:
+      "A sub-graph compiles against its template's latest revision; pin a digest to freeze it.",
+  },
+  "subgraph-engine-copy": {
+    severity: "info",
+    summary:
+      "A built-in sub-graph runs here as a copy on the graph runtime, not on its engine (D5).",
   },
   "replicate-items-unsupported": {
     severity: "error",
@@ -337,6 +391,11 @@ export class GraphCompileDiagnostics {
   omitted = 0;
   /** Every error, kept or omitted. */
   errorCount = 0;
+  /**
+   * Rewrites paths of the template the passes see into the author's template
+   * (item 402: an inlined node's `nodes[k]` becomes `nodes[3]>nodes[1]`).
+   */
+  mapPath: ((path: string) => string) | null = null;
 
   add(
     code: GraphCompileDiagnosticCode,
@@ -348,6 +407,14 @@ export class GraphCompileDiagnostics {
   }
 
   push(diagnostic: GraphCompileDiagnostic): void {
+    const path = diagnostic.path;
+    this.adopt(
+      this.mapPath && path !== undefined ? { ...diagnostic, path: this.mapPath(path) } : diagnostic,
+    );
+  }
+
+  /** Keep a diagnostic whose path is already in the author's terms. */
+  adopt(diagnostic: GraphCompileDiagnostic): void {
     if (diagnostic.severity === "error") this.errorCount++;
     if (this.list.length >= GRAPH_COMPILE_MAX_DIAGNOSTICS) {
       this.omitted++;

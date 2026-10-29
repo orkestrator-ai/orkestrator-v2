@@ -52,6 +52,7 @@ import type {
   GraphLens,
 } from "@orkestrator/protocol/graphs/template";
 import { GraphTypeLibrary, type GraphValueType } from "@orkestrator/protocol/graphs/types";
+import { graphPlanScopeParams, graphPlanSubgraph } from "@orkestrator/protocol/graphs/subgraphs";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import {
   graphBuiltInPromptText,
@@ -212,13 +213,30 @@ export function graphAgentBranchValues(
   if (position < 0) return {};
   const branch = branches[position]!;
   const lensAxis = node.replicate.axes.find((axis) => axis.over === "lenses");
+  // A template lens wins; otherwise a panel member's own lens (item 214).
   const lens =
     branch.lens !== undefined && lensAxis?.over === "lenses"
       ? lensAxis.lenses.find((entry) => entry.key === branch.lens)
-      : undefined;
+      : panelMemberLens(run, branch);
   return {
     ...(lens ? { lens: { key: lens.key, label: lens.label, instruction: lens.instruction } } : {}),
     branch: { index: position + 1, key: branch.key, count: branches.length },
+  };
+}
+
+/** The lens a panel member was launched with, keyed by its panel position. */
+function panelMemberLens(
+  run: Readonly<GraphRun>,
+  branch: { role: string; panelIndex?: number },
+): GraphLens | undefined {
+  if (branch.panelIndex === undefined) return undefined;
+  const bound = run.bindings.roles[branch.role];
+  const member = Array.isArray(bound) ? bound[branch.panelIndex] : undefined;
+  if (!member?.lens) return undefined;
+  return {
+    key: `panel-${branch.panelIndex + 1}`,
+    label: member.lens.label,
+    instruction: member.lens.instruction,
   };
 }
 
@@ -303,7 +321,8 @@ export async function loadGraphAgentInputs(
   }
   const values: GraphPromptValues = {
     inputs,
-    params: run.bindings.params,
+    // An inlined node reads its sub-graph's parameters (item 402).
+    params: graphPlanScopeParams(run.plan, node.subgraph, run.bindings.params),
     run: { iteration: activation.iteration },
     ...graphAgentBranchValues(run, node, activation),
     ...(Object.keys(files).length > 0 ? { files } : {}),
@@ -383,7 +402,7 @@ function promptContext(run: Readonly<GraphRun>, node: GraphPlanAgentNode) {
   return {
     node: graphPlanAgentTemplateNode(node),
     template: {
-      parameters: run.plan.parameters,
+      parameters: graphPlanSubgraph(run.plan, node.subgraph)?.parameters ?? run.plan.parameters,
       inputs: run.plan.inputs.map((input) => ({ name: input.name, type: input.type })),
       types: run.plan.types,
     },
@@ -427,6 +446,11 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
       if (port) outputs[output.name] = port.name;
     }
     const { lens, branch } = input.inputs.values;
+    const scopeParams = graphPlanScopeParams(
+      input.run.plan,
+      node.subgraph,
+      input.run.bindings.params,
+    );
     builtInText = graphBuiltInPromptText({
       builtIn: node.prompt.builtIn as GraphBuiltInPromptId,
       inputs: input.inputs.builtInInputs ?? {},
@@ -435,8 +459,8 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
       ...(input.notes ? { notes: input.notes } : {}),
       ...(lens ? { lens } : {}),
       ...(branch ? { branch: { index: branch.index, count: branch.count } } : {}),
-      ...(typeof input.run.bindings.params.instruction === "string"
-        ? { instruction: input.run.bindings.params.instruction }
+      ...(typeof scopeParams.instruction === "string"
+        ? { instruction: scopeParams.instruction }
         : {}),
     });
   }

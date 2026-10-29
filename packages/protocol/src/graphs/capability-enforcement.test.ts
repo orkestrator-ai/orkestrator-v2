@@ -90,6 +90,7 @@ describe("enforcement tiers", () => {
       ["network", "enforced", true],
       ["commit", "enforced", true],
       ["remote", "enforced", true],
+      ["mcp", "provider-configured", false],
     ]);
   });
 
@@ -108,12 +109,19 @@ describe("enforcement tiers", () => {
         reason:
           "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider.",
       },
+      {
+        axis: "mcp",
+        tier: "provider-configured",
+        boundary: false,
+        reason: "app-server disables every other configured server for this thread.",
+      },
     ]);
     const verifier = agentPolicyEnforcement(profilePolicy("verifier"), "cursor", sandboxed);
     expect(verifier.axes.map((axis) => [axis.axis, axis.tier])).toEqual([
       ["workspace", "provider-configured"],
       ["commit", "advisory"],
       ["remote", "advisory"],
+      ["mcp", "provider-configured"],
     ]);
   });
 
@@ -189,5 +197,48 @@ describe("enforcement tiers", () => {
         agentEnforcementHostForOs("linux"),
       ).reason,
     ).toContain("has not shown");
+  });
+});
+
+describe("user MCP selection axis (item 404)", () => {
+  test("every graph policy carries a secondary MCP axis that never lowers the tier", () => {
+    const granted = compileGraphCapabilities({
+      spec: { profile: "reviewer", allow: ["mcp:docs"] },
+      environment: host,
+    }).policy;
+    const plain = profilePolicy("reviewer");
+    expect(tiers(granted)).toEqual(tiers(plain));
+    const mcp = Object.fromEntries(
+      AGENT_PLATFORMS.map((platform) => [
+        platform,
+        agentPolicyEnforcement(granted, platform, sandboxed).axes.find(
+          (axis) => axis.axis === "mcp",
+        ),
+      ]),
+    );
+    expect(Object.values(mcp).every((axis) => axis?.boundary === false)).toBe(true);
+    expect(
+      Object.fromEntries(Object.entries(mcp).map(([platform, axis]) => [platform, axis?.tier])),
+    ).toEqual({
+      claude: "provider-configured",
+      codex: "provider-configured",
+      cursor: "provider-configured",
+      grok: "advisory",
+      opencode: "provider-configured",
+      pi: "enforced",
+    });
+    expect(mcp.grok?.reason).toContain("every MCP server");
+  });
+
+  test("a deny-only policy on a bridge that names servers is held there", () => {
+    const denyOnly = { ...host, capabilityPolicy: { deny: ["mcp:docs" as const] } };
+    const axis = (platform: "codex" | "pi" | "cursor") =>
+      agentPolicyEnforcement(denyOnly, platform, sandboxed).axes.find((a) => a.axis === "mcp")
+        ?.tier;
+    expect([axis("codex"), axis("pi"), axis("cursor")]).toEqual([
+      "provider-configured",
+      "enforced",
+      "provider-configured",
+    ]);
   });
 });

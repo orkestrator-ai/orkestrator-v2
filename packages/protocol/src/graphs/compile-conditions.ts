@@ -75,11 +75,14 @@ function inputRoots(state: GraphCompileState, node: GraphNodeSpec): GraphPredica
 
 /** `when`, gate branches and loop `until`. */
 export function checkGraphConditions(state: GraphCompileState): void {
-  const parameters = state.template.parameters;
   for (const { node, path } of state.nodes.values()) {
     const needsScope = node.when !== undefined || node.kind === "gate";
     if (!needsScope) continue;
-    const scope = graphNodePredicateScope(inputRoots(state, node), parameters, state.library);
+    const scope = graphNodePredicateScope(
+      inputRoots(state, node),
+      state.parametersOf(node.id),
+      state.library,
+    );
     const at = { nodeId: node.id };
     if (node.when !== undefined) reportPredicate(state, node.when, scope, `${path}.when`, at);
     if (node.kind === "gate") {
@@ -110,7 +113,7 @@ export function checkGraphConditions(state: GraphCompileState): void {
           };
         });
       });
-    const scope = graphLoopPredicateScope(outputs, parameters, state.library);
+    const scope = graphLoopPredicateScope(outputs, state.loopParametersOf(loop.id), state.library);
     reportPredicate(state, loop.until, scope, `loops[${index}].until`, { loopId: loop.id });
   }
 }

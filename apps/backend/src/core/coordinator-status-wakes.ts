@@ -6,7 +6,9 @@
  * coordinator creates or prompts and then waits on: a Multi Review reaching a
  * state that needs a decision, a build pipeline ending or stopping on an
  * error, a run that stalls, a delegated tab blocked on an approval or a
- * question (named from its pending interactions when they can be read).
+ * question (named from its pending interactions when they can be read), and
+ * a graph run that waits on a person or ends (item 208; the reduction is in
+ * `graph-run-coordinator-status.ts`, one notice per wait).
  *
  * Ownership is the durable workflow association recorded when the coordinator
  * launched or prompted the resource, never anything the user started. Each
@@ -41,6 +43,10 @@ import {
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { StorageService } from "./storage.js";
+import {
+  graphRunCoordinatorStatus,
+  graphRunWaitNoticeIsNew,
+} from "./graph-run-coordinator-status.js";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 
 /** How long a notice waits for others before waking the coordinator. */
@@ -590,7 +596,9 @@ export function renderCoordinatorStatusNotice(
       ? "Multi Review"
       : resource.kind === "build-pipeline"
         ? "Build pipeline"
-        : "Worker";
+        : resource.kind === "graph-run"
+          ? "Graph run"
+          : "Worker";
   const label = resource.label ? ` ${boundedLine(resource.label, MAX_LABEL_CHARS)}` : "";
   const subject = boundedLine(`${name}${label} ${status.headline}`, 160);
   const where =
@@ -839,7 +847,13 @@ export class CoordinatorStatusWakes {
   }
 
   private onResourceChange(change: ResourceChange): void {
-    if (change.resource !== "multi-review" && change.resource !== "build-pipeline") return;
+    if (
+      change.resource !== "multi-review" &&
+      change.resource !== "build-pipeline" &&
+      change.resource !== "graph-run"
+    )
+      return;
+    if (change.deleted) return;
     const kind = change.resource;
     const key = `${kind}\0${change.id}`;
     if (this.changeTimers.has(key)) return;
@@ -877,7 +891,7 @@ export class CoordinatorStatusWakes {
 
   /** Observe one workflow now (on `nodeId`, or this node). Cheap when no coordinator owns it. */
   observeWorkflow(
-    kind: "multi-review" | "build-pipeline",
+    kind: "multi-review" | "build-pipeline" | "graph-run",
     resourceId: string,
     nodeId?: string,
   ): Promise<void> {
@@ -910,7 +924,9 @@ export class CoordinatorStatusWakes {
       const mode = await this.mode();
       for (const association of state.workflows) {
         if (
-          (association.kind === "multi-review" || association.kind === "build-pipeline") &&
+          (association.kind === "multi-review" ||
+            association.kind === "build-pipeline" ||
+            association.kind === "graph-run") &&
           !association.pending &&
           !association.terminalNotifiedAt
         ) {
@@ -970,6 +986,10 @@ export class CoordinatorStatusWakes {
     association: CoordinatorWorkflowAssociation,
     mode: CoordinatorStatusWakeMode,
   ): Promise<void> {
+    if (association.kind === "graph-run") {
+      await this.observeGraphRun(workspaces, association, mode);
+      return;
+    }
     const kind = association.kind === "build-pipeline" ? "build-pipeline" : "multi-review";
     const remote = association.nodeId ? this.remote : null;
     if (association.nodeId && !remote) return;
@@ -1048,6 +1068,51 @@ export class CoordinatorStatusWakes {
     await this.recordNotice(association.id, status.key);
     if (status.terminal)
       await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
+  }
+
+  /**
+   * A graph run the coordinator launched (item 208): it waits on a person (one
+   * notice per wait) or it ended. Graph runs on other nodes are not observed
+   * yet; a node-held run's association is skipped until the relay carries them.
+   */
+  private async observeGraphRun(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    if (association.nodeId) return;
+    const run = await this.storage.graphRuns.getGraphRun(association.resourceId);
+    if (!run) return;
+    const status = graphRunCoordinatorStatus(run);
+    if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
+    if (association.statusNotice?.key === status.key) {
+      if (status.terminal)
+        await this.storage.coordinators.markCoordinatorWorkflowNotified(
+          association.id,
+          run.revision,
+        );
+      return;
+    }
+    // A wait already reported stays reported while a newer one is answered.
+    if (!graphRunWaitNoticeIsNew(status.key, association.statusNotice?.key)) return;
+    const label = run.environmentId
+      ? (await this.storage.getEnvironment(run.environmentId))?.name
+      : undefined;
+    const delivered = await this.deliver(
+      workspaces,
+      association,
+      {
+        kind: "graph-run",
+        id: run.id,
+        ...(run.environmentId ? { environmentId: run.environmentId } : {}),
+        label: `${run.plan.template.name}${label ? ` in ${label}` : ""}`,
+      },
+      status,
+    );
+    if (!delivered) return;
+    await this.recordNotice(association.id, status.key);
+    if (status.terminal)
+      await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, run.revision);
   }
 
   /**

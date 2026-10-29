@@ -155,9 +155,36 @@ session (no transcript); `mockOptions.stepMs` (designer: 1,000 ms) makes them vi
 `GraphRunLaunch.mock` + `mockOptions` for a launch surface's own mock option. `requestGraphRunView`
 works for real runs too. The designer's Run button can sit beside "Mock run" in the header.
 
+**2026-10-29 · After 402 (sub-graphs) and 208 (human nodes) merged.** Five mock-run tests failed
+on the integration merge. Cause: the test helper `designBakeOffWithoutSubgraph` stripped §9.3's
+`review` node by its old edge ids (`build-review`, `review-describe`, `review-pr`); 402 renamed
+them (`review-describe-clean`/`-fixed`, `review-pr-clean`/`-fixed`), so edges to the deleted node
+stayed and the template no longer compiled (`unknown-node`), failing every test that launches
+§9.3. Fix: the helper is gone and §9.3 now mock-runs as written, with Multi Review inlined
+(`review/plan` … `review/pr`): the mock executors needed no change for it (they read no template
+parameters; `when`, gates and loops already read the sub-graph scope through
+`graphPlanScopeParams` since 402), and the inlined `run-validation-and-seal` and the parent's
+`open-pull-request` leave `simulated` records while the inlined `review/pr` is skipped
+(`autoPr: false`). Expectation changed where the new shape changes it: a rejected approval now
+*completes* (the `pr` run output is optional since 402) with build, `review/plan`, `describe-pr`
+and `pr` skipped and no "would have run" record. Production fix: pin keys are plan ids, so a pin
+can target an inlined node (`review/consolidate`): `checkGraphMockPins` checks keys with
+`isGraphPlanId` (new `checkGraphRecord` key mode `plan-id` in `grammar.ts`; previously
+`graph_run_mock {pins: {"review/x": …}}` was refused and a run carrying one failed its guard),
+`GraphMockPinTarget.subgraphs` lets the template's (designer's) check defer `<sub-graph>/…` pins
+to the launch's check against the compiled plan, and the designer's `moveGraphMockPins` carries
+`<id>/…` pins along when a sub-graph node is renamed or removed. With 208 in, the test world
+registers the real `createGraphHumanExecutor` and `GraphHumanAnswers` instead of a stand-in, and
+the pause test now answers the paused wait and sees the mock run complete; the "cannot run human
+nodes yet" messages lost their "yet". New tests: §9.3 with `autoFix: false` (the passed-through
+parameter skips the inlined Fix, no PR, no PR record), an inlined pin driving the review's `clean`
+branch into the PR, inlined pin checks at launch, `graph_run_mock` accepting an inlined pin and
+freezing it, protocol pin-key and deferral cases, and the designer rename/remove case.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Mock executors, schema-driven generator and pins in protocol, would-have-run records, environment-less `graph_run_mock`, designer button and pin editor; tests and docs; real-stack designer check passed. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Integration fix after 402/208: §9.3 mock-runs with its inlined Multi Review; pins accept plan ids (inlined nodes); real 208 human executor in tests. · complete; awaiting PR

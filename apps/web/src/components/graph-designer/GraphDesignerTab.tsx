@@ -11,6 +11,7 @@ import {
   Network,
   PackageOpen,
   PencilRuler,
+  Play,
   PlayCircle,
   Share2,
   ShieldAlert,
@@ -65,10 +66,13 @@ import { GraphInspector } from "./GraphInspector";
 import { GraphJsonEditor } from "./GraphJsonEditor";
 import { GraphLibraryList } from "./GraphLibraryList";
 import { GraphRunsList } from "@/components/graph-run/GraphRunsList";
+import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
+import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { GraphShareExportDialog, GraphShareImportDialog } from "./GraphShareDialogs";
 import { GraphTemplateReviewPanel } from "./GraphTemplateReviewPanel";
 import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
 import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
+import { graphSubgraphChoices } from "./graph-designer-subgraphs";
 import { GraphEditorContext } from "./graph-editor-context";
 import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
 
@@ -172,6 +176,8 @@ export function GraphDesignerTab({
   );
 
   const [importOpen, setImportOpen] = useState(false);
+  // "Run" (item 214): the stored template the launch dialog is open for.
+  const [launchRef, setLaunchRef] = useState<GraphTemplateRef | null>(null);
   // Item 405: share bundles and the project template review.
   const [shareOpen, setShareOpen] = useState(false);
   const [bundleImportOpen, setBundleImportOpen] = useState(false);
@@ -277,6 +283,19 @@ export function GraphDesignerTab({
     () => graphTemplateTypeLibrary(shownTemplate ?? blankGraphTemplate()),
     [shownTemplate],
   );
+  // Saved templates the palette offers as sub-graphs: never the one being edited.
+  const libraryTemplates = library?.result?.templates;
+  const draftId = draft?.id ?? null;
+  const subgraphs = useMemo(
+    () => ({
+      projectId,
+      choices: graphSubgraphChoices(
+        libraryTemplates ?? [],
+        draftId === null ? null : { scope: "user", id: draftId },
+      ),
+    }),
+    [libraryTemplates, draftId, projectId],
+  );
   const editing = useGraphDesignerEditing({
     tabId,
     draft,
@@ -285,6 +304,7 @@ export function GraphDesignerTab({
     providers,
     ...(ceiling ? { ceiling } : {}),
     onSelect,
+    subgraphs,
   });
 
   // The draft compiles in the browser shortly after each edit (the live panel).
@@ -365,18 +385,31 @@ export function GraphDesignerTab({
     return () => window.removeEventListener("keydown", listener);
   }, [isActive, editingNow]);
 
-  // A mock run (item 213) launches a stored template: an unsaved or new draft is saved first.
+  // Run (item 214) and Mock run (item 213) launch a stored template: an
+  // unsaved or new draft is saved first (a launch reads the stored revision,
+  // never the canvas). Null when the save did not happen; the editing bar
+  // says why.
+  const storedRef = async (): Promise<GraphTemplateRef | null> => {
+    let ref = view.selected ?? null;
+    if (editor && (editor.isNew || graphDraftDirty(editor))) {
+      const saved = await saveDraft(tabId);
+      if (!saved) return null;
+      persistSelected(saved.summary.ref);
+      ref = saved.summary.ref;
+    }
+    return ref;
+  };
+  const launchable =
+    compile?.launchable === true && (editor !== null || summary?.launchable === true);
+  const runTemplate = () =>
+    run("prepare the launch", async () => {
+      const ref = await storedRef();
+      if (ref) setLaunchRef(ref);
+    });
   const mockRun = () =>
     run("start a mock run", async () => {
       if (!projectId) return;
-      let ref = view.selected;
-      if (editor && (editor.isNew || graphDraftDirty(editor))) {
-        const saved = await saveDraft(tabId);
-        // The editing bar says why a save did not happen.
-        if (!saved) return;
-        persistSelected(saved.summary.ref);
-        ref = saved.summary.ref;
-      }
+      const ref = await storedRef();
       if (!ref) return;
       const result = await launchGraphMockRun({
         ref,
@@ -388,6 +421,7 @@ export function GraphDesignerTab({
         projectId,
         environmentId,
         mock: true,
+        ...(summary?.name ? { title: summary.name } : {}),
       });
       toast.success("Mock run started", {
         description: `${opened ? "" : `Run ${result.run.id.slice(0, 8)}. `}No provider sessions, no tokens, no pull requests or ticket changes.`,
@@ -570,6 +604,24 @@ export function GraphDesignerTab({
               <CopyPlus className="size-3.5" />
             )}
             Duplicate
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!projectId || !launchable || busy !== null}
+            title={
+              launchable
+                ? "Launch this template (unsaved edits are saved first)"
+                : "Only a trusted template that compiles without errors or pending acknowledgements can run"
+            }
+            onClick={() => void runTemplate()}
+          >
+            {busy === "prepare the launch" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            Run
           </Button>
           {summary?.scope === "user" && !view.editor ? (
             <>
@@ -852,6 +904,18 @@ export function GraphDesignerTab({
           return result;
         }}
       />
+      {projectId && launchRef && (
+        <GraphLaunchDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setLaunchRef(null);
+          }}
+          projectId={projectId}
+          template={launchRef}
+          environmentId={environmentId}
+          onLaunched={(result) => openLaunchedGraphRun({ result, environmentId })}
+        />
+      )}
     </div>
   );
 }

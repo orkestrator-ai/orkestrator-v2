@@ -9,7 +9,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97e`.
 1. **Split `apps/backend/src/core/storage.test.ts` by topic**: 4,322 lines, 22 top-level `describe` blocks. Status: open.
 2. **Split `apps/backend/tests/storage.test.ts` by area**: 3,206 lines, one `describe` with 82 tests. Status: open.
 3. **Split `storage-agent-mail.test.ts` along the agent mail collaborators**: 2,292 lines. Status: open.
-4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md)). Status: open.
+4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md)). Status: open.
 5. **Qualification**: the same test counts before and after, then `mise run test`. Status: open (after 1 to 4).
 
 ### 1. Split `apps/backend/src/core/storage.test.ts` by topic
@@ -70,7 +70,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97e`.
 
 **Problem.** The file is 2,481 lines. On the shared Linux host, its test `raw StorageDatabase writers outside StorageService > name the store they write` (`:1904`) also exceeds Bun's 5,000 ms default under load, in aggregates and alone, both on branches and on clean `origin/main`.
 
-**Context.** The full diagnosis is in flake [1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md). `AGENTS.md` ("Flaky Test Tracking") forbids hiding a flake by loosening the test.
+**Context.** The full diagnosis is in flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md). `AGENTS.md` ("Flaky Test Tracking") forbids hiding a flake by loosening the test.
 
 **Investigation.** The file has an analysis library (about 1,700 lines of helpers: `analyzeStorageWriters`, `rawDatabaseWrites`, `parse`, `walk`) and three `describe` blocks: `StorageService store writers` (`:1703`), the raw-writer block (`:1899`) and `store writer analysis` (`:2061`, the fixtures that test the analysis itself).
 
@@ -123,4 +123,4 @@ The raw-writer block's first test builds `rawDatabaseWrites(backendSources(), â€
 
 - [0214-storage-files-over-size-limit.md](0214-storage-files-over-size-limit.md): split the sources and recommended this follow-up.
 - [0163-storage-facade-size.md](0163-storage-facade-size.md): the agent mail collaborators.
-- Flake [1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md).
+- Flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md).

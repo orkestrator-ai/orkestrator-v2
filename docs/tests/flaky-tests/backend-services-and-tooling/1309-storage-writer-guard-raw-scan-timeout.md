@@ -1,6 +1,6 @@
 # Storage writer guard's backend-wide raw-writer scan times out under host load
 
-- **ID:** 1304
+- **ID:** 1309
 - **Status:** open
 - **Observed:** 2026-10-26 to 2026-10-28 in aggregate runs on the shared Linux host;
   diagnosed 2026-10-29 on the todo 0214 follow-up branch

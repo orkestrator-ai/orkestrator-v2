@@ -11,7 +11,7 @@ layout"). The branch merged as #1321 (`e8c1b2af9`). A second delegation
 (`todo-0214-storage-file-split-2054bfb3bc39`, 2026-10-29, on `main` at
 `79f3bc97e`) found the splits already on `main`. It re-ran the qualification,
 diagnosed the writer-guard timeouts (flake
-[1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md))
+[1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md))
 and moved the leftover test files to
 [0930](0930-storage-test-files-over-size-limit.md). Delete this file and its
 index row once that branch merges (decision 12).
@@ -253,7 +253,7 @@ These runs are on `todo-0214-storage-file-split-2054bfb3bc39`, on `main` at
   scan test took 1.44 s, so it didn't time out. No source changed, so with and
   without this branch are the same tree. The timeout reproduces only under the
   host load recorded in flake
-  [1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md).
+  [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md).
 - `mise run test`, at load average about 3.5–7: exit 0 (4 min 26 s). The
   Codex protocol lockfile, bridges (97 s), root and agent-support (204 s) and
   workspace (266 s) groups all passed, including `storage-writer-guards`.
@@ -384,7 +384,7 @@ Task 3. `name the store they write` pays for the whole backend-wide raw-writer
 scan, which parses and walks 820 files in about 1.4–1.9 s of CPU at idle. On the
 shared 12-core host at load 34–46 that time passes the 5 s default. The details
 are in flake
-[1304](../../tests/flaky-tests/backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md),
+[1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md),
 and cases 1290 and 1295 now link to it. Raising the timeout or skipping the test
 would loosen the test, which `AGENTS.md` forbids. Making the scan cheaper
 changes the guard's analysis code, which is beyond a docs-only follow-up. It is

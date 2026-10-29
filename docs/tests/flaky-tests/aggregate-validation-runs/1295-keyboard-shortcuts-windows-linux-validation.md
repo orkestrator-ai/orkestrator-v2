@@ -38,7 +38,7 @@ skip was changed. The aggregate result remains failed. No passing full
 ## Diagnosis (2026-10-29)
 
 The `storage-writer-guards.test.ts` timeouts here are diagnosed in
-[1304](../backend-services-and-tooling/1304-storage-writer-guard-raw-scan-timeout.md):
+[1309](../backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md):
 the test runs a CPU-bound scan of the whole backend source within the 5 s
 default budget, and the scan only finishes in time when the host is lightly
 loaded.

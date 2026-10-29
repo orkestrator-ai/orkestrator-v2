@@ -1,6 +1,7 @@
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { setActivity } from "./test-provider.js";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   PUBLIC_API_SCHEMA_VERSION,
   type PublicActionResponse,
@@ -23,6 +24,57 @@ import { controlMcpAuthority, requestKey } from "./operation-ledger.js";
  */
 
 afterEach(cleanupNodeTopologies);
+
+test("topology cleanup removes every harness even when a node service fails to stop", async () => {
+  const first = await topology();
+  const second = await topology();
+  const originalStop = first.commandNode.service.stop.bind(first.commandNode.service);
+  const stop = spyOn(first.commandNode.service, "stop").mockImplementation(async () => {
+    await originalStop();
+    throw new Error("stop failed");
+  });
+  const leafStop = spyOn(first.leafNode.service, "stop");
+  const secondStop = spyOn(second.commandNode.service, "stop");
+  try {
+    await expect(cleanupNodeTopologies()).rejects.toThrow("Failed to clean up");
+    expect(leafStop).toHaveBeenCalledTimes(1);
+    expect(secondStop).toHaveBeenCalledTimes(1);
+    for (const harness of [
+      first.command,
+      first.leaf.harness,
+      second.command,
+      second.leaf.harness,
+    ]) {
+      expect(existsSync(harness.root)).toBe(false);
+      expect(existsSync(harness.dataDir)).toBe(false);
+    }
+    await expect(cleanupNodeTopologies()).resolves.toBeUndefined();
+  } finally {
+    stop.mockRestore();
+    leafStop.mockRestore();
+    secondStop.mockRestore();
+  }
+});
+
+test("a late command-node invocation cannot reopen removed leaf storage after network stop", async () => {
+  const { network, leafNode, leaf, command } = await topology();
+  const request = () =>
+    network.fetch(`${leafNode.origin}/__orkestrator/invoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${leafNode.token}` },
+      body: JSON.stringify({ command: "get_projects", args: {} }),
+    });
+  // The same command reaches real storage before shutdown.
+  expect((await request()).ok).toBe(true);
+  const received = leafNode.received.length;
+  await network.stop();
+  await cleanupNodeTopologies();
+  await expect(request()).rejects.toThrow("fetch failed");
+  expect(leafNode.received).toHaveLength(received);
+  expect(existsSync(leaf.harness.dataDir)).toBe(false);
+  expect(existsSync(leaf.harness.root)).toBe(false);
+  expect(existsSync(command.root)).toBe(false);
+});
 
 describe("node.list", () => {
   test("names this node and each leaf, and whether actions can be sent to it", async () => {

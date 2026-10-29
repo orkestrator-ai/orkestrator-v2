@@ -89,7 +89,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 - [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs.
 - [x] A mock run of every example template passes with zero provider sessions. (evidence: [213](213-mock-runs.md) Notes, "Tests"; `apps/backend/src/core/graph-mock-provider.test.ts`, "mock runs of the report §9 examples" and "mock runs of the built-ins' duplicates")
 - [x] The inactive-environment test passes for the run view and human nodes. (evidence: [211](211-run-view.md) and [208](208-human-nodes.md) Notes, "Agent testing"; `e2e/agent-testing/graph-run-view.spec.ts` "a graph launched from Run graph… finishes while its environment is away and rehydrates" and "a human approval waits while its environment is away and is answered later", 3 passed on profile `graphs-208-realstack`)
-- [ ] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction.
+- [x] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction. (evidence: [204](204-agent-node-executor.md) Notes; 204's commits `6a1d7623e` and `71d437437` touch none of the `multi-review*`, `review-fanout*` or `build-pipeline*` test and bench files, and those suites pass in `mise run test` on `graphs-integration`)
 
 ## Phase 3: Multi Review on the graph runtime
 

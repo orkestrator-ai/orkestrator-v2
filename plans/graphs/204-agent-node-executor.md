@@ -174,3 +174,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Extracted `AgentBranchRunner` from the reviewer fan-out, behaviour-neutral. · Graph agent executor next.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Graph agent node executor on the runner: policy and tier first, journaled dispatch, per-port slots and activation tools, `ask_human`, session continue, workspace outputs, bridges taught per-port tools, push-free built-ins; tests incl. seeded restart interleavings. · complete; awaiting PR
+- 2026-10-29 · coordinator · Ticked the Phase 2 exit criterion on unchanged engine suites, citing this item's commits. · Awaiting PR.

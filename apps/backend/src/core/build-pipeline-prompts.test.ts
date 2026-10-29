@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
-  LOOPED_REVIEW_MAX_CONTEXT_BYTES,
-  LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
-  LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
+  REVIEW_MAX_CONTEXT_BYTES,
+  REVIEW_MAX_CONTEXT_LIST_ENTRIES,
+  REVIEW_MAX_CONTEXT_TEXT_LENGTH,
 } from "@orkestrator/protocol/review-workflow";
 import {
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
@@ -37,7 +37,7 @@ import {
 } from "./build-pipeline-prompts.js";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import type { LegacyReviewPackage, ReviewPackage } from "@orkestrator/protocol/review-workflow";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 
 function contractIssue(
   overrides: Partial<ReviewContractValidationIssue> = {},
@@ -80,33 +80,27 @@ function pipeline(): BuildPipeline {
 describe("build pipeline prompts", () => {
   test("bounds persisted ticket context and records every reduction", () => {
     const value = pipeline();
-    value.taskSnapshot.title = "t".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1);
-    value.taskSnapshot.description = "😀".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    value.taskSnapshot.title = "t".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1);
+    value.taskSnapshot.description = "😀".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
     value.taskSnapshot.comments = Array.from(
-      { length: LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES + 172 },
+      { length: REVIEW_MAX_CONTEXT_LIST_ENTRIES + 172 },
       (_, index) => ({ text: `comment-${index}-${"x".repeat(8_000)}` }),
     );
     value.taskSnapshot.images = Array.from(
-      { length: LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES + 1 },
+      { length: REVIEW_MAX_CONTEXT_LIST_ENTRIES + 1 },
       (_, index) => ({ filename: `image-${index}.png`, data: "redacted" }),
     );
 
     const bounded = buildPipelineReviewPackageContext(
       value,
-      "n".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1),
+      "n".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1),
     );
 
-    expect(bounded.context.ticketTitle?.length).toBeLessThanOrEqual(
-      LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
-    );
-    expect(bounded.context.comments?.length).toBeLessThanOrEqual(
-      LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
-    );
-    expect(bounded.context.imageNames?.length).toBeLessThanOrEqual(
-      LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
-    );
+    expect(bounded.context.ticketTitle?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    expect(bounded.context.comments?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_LIST_ENTRIES);
+    expect(bounded.context.imageNames?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_LIST_ENTRIES);
     expect(Buffer.byteLength(JSON.stringify(bounded.context), "utf8")).toBeLessThanOrEqual(
-      LOOPED_REVIEW_MAX_CONTEXT_BYTES,
+      REVIEW_MAX_CONTEXT_BYTES,
     );
     expect(bounded.limitations.join("\n")).toContain("Ticket title was truncated");
     expect(bounded.limitations.join("\n")).toContain("Ticket comments was truncated");

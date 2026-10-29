@@ -9,9 +9,9 @@
  * verified exit. The outcome resolves exactly once; exit verification is
  * reported separately so the runner releases capacity only afterwards.
  */
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +19,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
+import { isProcessAlive, processStartIdentity } from "../process-identity.js";
 import { killTree, treeResidentBytes } from "./preview-process-tree.js";
 import type { WorkerEvent, WorkerJobPackage, WorkerResult } from "./preview-worker-protocol.js";
 
@@ -138,38 +139,7 @@ export const PREVIEW_SCRATCH_STALE_MS = 60 * 60_000;
 export const LEGACY_PREVIEW_SCRATCH_STALE_MS = 24 * 60 * 60_000;
 const SCRATCH_OWNER_FILE = ".ork-preview-owner";
 
-/** A PID alone is not an identity: it can belong to a later process. */
-function processStartIdentity(pid: number): string | null {
-  try {
-    if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const startTicks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-      const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      return startTicks ? `${boot}:${startTicks}` : null;
-    }
-    const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 1_000,
-      maxBuffer: 4096,
-      env: { ...process.env, LC_ALL: "C" },
-    });
-    return result.status === 0 ? result.stdout.trim() || null : null;
-  } catch {
-    return null;
-  }
-}
-
 let backendStartIdentity: string | null | undefined;
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but belongs to someone else.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
 
 /**
  * Startup recovery for process isolation, the counterpart of

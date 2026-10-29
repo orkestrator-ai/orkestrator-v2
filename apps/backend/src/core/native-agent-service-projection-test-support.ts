@@ -366,7 +366,7 @@ export function pendingInteractionSnapshot(
       id: `interaction-${index}`,
       provider: "codex",
       kind,
-      origin: "looped-review",
+      origin: "automated-review",
       sessionId: "provider-session",
       state: "pending",
       revision: 1,

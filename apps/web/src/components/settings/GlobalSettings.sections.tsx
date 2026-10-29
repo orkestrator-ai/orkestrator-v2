@@ -447,8 +447,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Code review instruction
             </h3>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              Applied to normal, build-pipeline, and looped native reviews. Orkestrator adds the
-              fixed safety, workflow, and output-schema contract around it.
+              Applied to normal, Multi Review, and build-pipeline native reviews. Orkestrator adds
+              the fixed safety, workflow, and output-schema contract around it.
             </p>
           </div>
           <span

@@ -2,6 +2,7 @@
 // Renderer tests use tests/setup.ts, which installs Happy DOM and native mocks.
 import "./isolate-git-config";
 import "./isolate-worktree-dir";
+import "./isolate-tmpdir";
 import { installBoundedConsoleDiagnostics } from "./bounded-console-diagnostics";
 import { setClaudeLinuxSandboxStatusForTests } from "@orkestrator/protocol/node/claude-linux-sandbox";
 

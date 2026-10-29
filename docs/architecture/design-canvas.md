@@ -195,7 +195,14 @@ jobs) with fair round-robin across environments and canvases, priority
 (queue 15 s, launch 15 s, context 5 s, run/capture 15 s, cleanup 3 s, overall
 45 s). Each job gets a fresh isolated context: all requests aborted, service
 workers blocked, downloads disabled, the nonce CSP bootstrap, deterministic
-viewport/scale/color scheme/reduced motion. Browser generations are tracked so
+viewport/scale/color scheme/reduced motion. Playwright makes each browser's
+profile in the backend's temporary directory and removes it only from this
+process, so the renderer records every profile it launches in
+`<data dir>/design-browser-profiles/` (`design/browser-profiles.ts`) and drops
+the record once Playwright has removed the profile. At start-up the service
+removes recorded profiles whose backend and browser have both exited, that are
+over an hour old and that no live process names; an unrecorded profile is
+never touched, because other tools use the same name. Browser generations are tracked so
 a late disconnect from an old process cannot retire a new one; a dead
 generation fails its jobs exactly once. Health distinguishes missing
 executable, launch failure, saturation, recovery and ready, and is probed on

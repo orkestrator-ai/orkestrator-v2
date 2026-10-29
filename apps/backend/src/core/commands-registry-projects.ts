@@ -314,8 +314,6 @@ export function registerProjectCommands(
           return { command: "get_pane_layout", args: { environmentId: change.id } };
         case "build-pipeline":
           return { command: "get_build_pipeline", args: { pipelineId: change.id } };
-        case "looped-review":
-          return { command: "get_looped_review_workflow", args: { workflowId: change.id } };
         case "multi-review":
           return { command: "get_multi_review_workflow", args: { workflowId: change.id } };
         case "kanban":

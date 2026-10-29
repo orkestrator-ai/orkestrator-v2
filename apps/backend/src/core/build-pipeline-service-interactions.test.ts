@@ -45,7 +45,7 @@ import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
 
 const cleanReview: StructuredReviewReport = {
@@ -278,10 +278,10 @@ async function withService(
         paths: [...controls.uncommittedPaths],
       } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       return testGeneratedReviewPackage(args) as T;
     }
-    if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "verify_review_package") return { valid: true } as T;
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -2571,23 +2571,6 @@ describe("BuildPipelineService", () => {
             outcome: "auto-declined" as const,
             providerResolvedAt: now,
           },
-          {
-            id: "looped-review-journal",
-            interactionId: "looped-review-question",
-            provider: "claude" as const,
-            kind: "question" as const,
-            sessionId: session.sdkSessionId,
-            state: "provider-resolved" as const,
-            claim: {
-              workflowType: "looped-review" as const,
-              workflowId: started.id,
-              phase: "building",
-              fence: session.sessionKey,
-              claimedAt: now - 1,
-            },
-            outcome: "auto-declined" as const,
-            providerResolvedAt: now,
-          },
         ],
       }));
 
@@ -2607,9 +2590,6 @@ describe("BuildPipelineService", () => {
           outcome: "auto-declined",
         });
         expect(entries.find((entry) => entry.id === "orphan-journal")).toMatchObject({
-          state: "provider-resolved",
-        });
-        expect(entries.find((entry) => entry.id === "looped-review-journal")).toMatchObject({
           state: "provider-resolved",
         });
       } finally {

@@ -25,7 +25,6 @@ import {
 import {
   WORKFLOW_SNAPSHOT_KINDS,
   adaptBuildPipeline,
-  adaptLoopedReview,
   adaptMultiReview,
   type AdaptedWorkflow,
   type WorkflowSnapshotKind,
@@ -34,7 +33,6 @@ import {
 /** The subset of StorageService the collector reads. */
 export interface WorkflowRecordReader {
   getMultiReviewWorkflow(id: string): Promise<WorkflowRecord | null>;
-  getLoopedReviewWorkflow(id: string): Promise<WorkflowRecord | null>;
   getBuildPipeline(id: string): Promise<(WorkflowRecord & { projectId: string }) | null>;
 }
 
@@ -64,7 +62,7 @@ const ROLE_ORDER: Record<WorkflowSnapshotNodeV1["role"], number> = {
 function notFound(): ArtifactFailure {
   return new ArtifactFailure(
     artifactError("not_found", "Workflow run not found", {
-      suggestion: "Check workflowId (multi-review, looped-review or build-pipeline) and runId.",
+      suggestion: "Check workflowId (multi-review or build-pipeline) and runId.",
     }),
   );
 }
@@ -87,12 +85,6 @@ export class WorkflowSnapshotCollector {
       switch (kind) {
         case "multi-review": {
           const record = await this.reader.getMultiReviewWorkflow(runId);
-          return record
-            ? { record, projectId: (record.snapshot as { projectId?: unknown } | null)?.projectId }
-            : null;
-        }
-        case "looped-review": {
-          const record = await this.reader.getLoopedReviewWorkflow(runId);
           return record
             ? { record, projectId: (record.snapshot as { projectId?: unknown } | null)?.projectId }
             : null;
@@ -217,8 +209,6 @@ function adapt(
   switch (kind) {
     case "multi-review":
       return adaptMultiReview(runId, snapshot);
-    case "looped-review":
-      return adaptLoopedReview(runId, snapshot);
     case "build-pipeline":
       return adaptBuildPipeline(runId, snapshot);
   }

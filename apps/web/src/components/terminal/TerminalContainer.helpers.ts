@@ -164,7 +164,6 @@ export const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   pi: true,
   // Not startup agents: pipeline/review surfaces and non-agent tabs.
   "claude-build": false,
-  "looped-review": false,
   "multi-review": false,
   browser: false,
   "design-canvas": false,

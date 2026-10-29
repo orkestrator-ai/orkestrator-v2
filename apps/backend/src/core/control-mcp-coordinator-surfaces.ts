@@ -16,7 +16,7 @@ import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool
 
 /**
  * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
- * tmux tab, a browser preview, tab editing, looped review, the PR tab,
+ * tmux tab, a browser preview, tab editing, the PR tab,
  * feature-plan launch, the request to copy the checkout's uncommitted changes into a
  * worker, and the proposal to save decisions to AGENTS.md. None of them
  * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
@@ -38,7 +38,7 @@ const WRITE = {
   openWorldHint: false,
 };
 
-/** Looped reviews and feature plans settle without waking the coordinator. */
+/** Feature plans settle without waking the coordinator. */
 const NO_STATUS_WAKE = {
   delivery: "async",
   wake: "This conversation is not woken when it settles. Finish your turn and tell the user it is running; if you need to act on the result, schedule a check with create_schedule rather than waiting.",
@@ -52,9 +52,6 @@ export const COORDINATOR_SURFACE_TOOL_CAPABILITIES: ReadonlyArray<readonly [stri
   ["request_root_changes", "environments"],
   // Main coordinator only: side agents' credentials lack `environments`.
   ["propose_agents_md_update", "environments"],
-  ["start_looped_review", "multi-review"],
-  ["get_looped_review", "multi-review"],
-  ["cancel_looped_review", "multi-review"],
   ["create_pr", "multi-review"],
   ["launch_feature_plan", "tickets"],
   ["get_feature_plan", "tickets"],
@@ -248,57 +245,6 @@ export function registerCoordinatorSurfaceTools(
         nextStep: "Finish your turn now. Do not poll.",
       });
     },
-  );
-
-  server.registerTool(
-    "start_looped_review",
-    {
-      title: "Start a looped review in a worker",
-      description:
-        "The Looped review button: one agent reviews the worker's branch, fixes what it finds, and repeats until it is clean or the pass allowance is spent, then opens a PR. It commits in the worker, never merges, and opens its tab in the worker. One per worker at a time. Omit agent, model and reasoningEffort to use the Review action's saved default, and targetBranch and reviewInstruction to use the repository's PR base branch and the saved review instruction.",
-      inputSchema: z
-        .object({
-          requestId,
-          environmentId,
-          agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]).optional(),
-          model: z.string().trim().min(1).max(512).optional(),
-          reasoningEffort: z.string().trim().min(1).max(128).optional(),
-          targetBranch: z.string().trim().min(1).max(500).optional(),
-          reviewInstruction: z.string().max(100_000).optional(),
-          allowance: z.number().int().min(1).max(20).optional(),
-        })
-        .strict(),
-      annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
-    },
-    async (input) =>
-      toolResult({
-        ...(await call("start_coordinator_looped_review", { input })),
-        ...NO_STATUS_WAKE,
-      }),
-  );
-
-  server.registerTool(
-    "get_looped_review",
-    {
-      title: "Get a looped review",
-      description: "Read a looped review's phase, round count and PR state.",
-      inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }).strict(),
-      annotations: readAnnotations(),
-    },
-    async ({ workflowId }) =>
-      toolResult(await call("get_coordinator_looped_review", { workflowId })),
-  );
-
-  server.registerTool(
-    "cancel_looped_review",
-    {
-      title: "Cancel a looped review",
-      description: "Cancel a looped review in a worker of this project. Commits it made stay.",
-      inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }).strict(),
-      annotations: { ...WRITE, destructiveHint: true },
-    },
-    async ({ workflowId }) =>
-      toolResult(await call("cancel_coordinator_looped_review", { workflowId })),
   );
 
   server.registerTool(

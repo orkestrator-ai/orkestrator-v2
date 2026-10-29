@@ -4,33 +4,36 @@ Checked against `main` at `863b5782` (2026-10-27).
 
 The worker surfaces built for
 [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
-(terminal, browser, tab edits, reviewer tabs, custom fix, looped review,
-feature plans, the root-changes request) act on this node only, and two of
-them never wake the coordinator. This file holds the work those decisions
+(terminal, browser, tab edits, reviewer tabs, custom fix, feature plans,
+the root-changes request) act on this node only, and feature plans never
+wake the coordinator. (A looped review surface was also built; it was removed
+with the Looped Review feature.) This file holds the work those decisions
 left.
 
 ## Task analysis
 
 Analysed 2026-10-28 against `main` at `79f3bc97`.
 
-Nothing in the file is done. Since it was written, `create_pr` (#1394,
+Merge reconciliation against `main` at `f8caffa71` (2026-10-29): Looped Review
+was removed, so tasks 1, 3 and 5 below now cover the surviving surfaces and
+feature plans only. The remaining tasks are open. Since this file was written, `create_pr` (#1394,
 `153de25b`) and `propose_agents_md_update` (#1355, `536394f7`) gained
 `nodeId`; neither was on this file's list, but `create_pr`'s relay is now the
 nearest template for task 1.
 
 ### Tasks
 
-1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `start_looped_review`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: open.
+1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: open.
 2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open.
-3. **Status wakes for looped reviews and feature plans**: an association kind for each, listed by `list_workflows`, with status-wake rules. Status: open.
+3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: open.
 4. **Live `surfaces` scenario**: a scenario in `mise run test:agent:coordinator` that calls each tool once on a real stack. Status: open (needs a live provider).
-5. **Adopting looped reviews and feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (depends on 3).
+5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (depends on 3).
 
 ### 1. Worker surfaces on other nodes
 
 **Problem.** A coordinator on a command node can launch, message and review
 workers on its leaf nodes, but cannot open a terminal or browser in them, edit
-their tabs, start a looped review, run a custom fix or open a reviewer's tab.
+their tabs, run a custom fix or open a reviewer's tab.
 
 **Context.** Every surface command is on `NODE_EXCLUDED_COMMANDS`
 (`apps/backend/src/core/nodes/node-routing.ts:71-84`), so none crosses a node
@@ -46,11 +49,10 @@ controller commands are workspace-excluded
 (`node-routing.ts:123-130`), so only a command node's coordinator can call
 them.
 
-**Investigation.** The six tools take no `nodeId`:
-`launch_terminal`, `open_worker_browser`, `edit_worker_tab` and
-`start_looped_review` in
-`apps/backend/src/core/control-mcp-coordinator-surfaces.ts:78-110`, `:111-136`,
-`:137-155` and `:253-279`; `custom_fix_multi_review` in
+**Investigation.** Four tools take no `nodeId`:
+`launch_terminal`, `open_worker_browser` and `edit_worker_tab` in
+`apps/backend/src/core/control-mcp-coordinator-surfaces.ts`;
+`custom_fix_multi_review` in
 `apps/backend/src/core/control-mcp-review-actions.ts:289-319`.
 `open_multi_review` does take `nodeId`, but refuses it together with
 `reviewerId` (`control-mcp-review-actions.ts:261-262`: "Reviewer tabs open on
@@ -65,9 +67,9 @@ never resubmits it (`node-routing.ts:17-18`, `NodeOutcomeUnknownError` in
 **Decisions.**
 
 - **How should each surface reach the leaf?**
-  - **One controller command per surface on the leaf, called like `create_controller_pr` (recommended).** Add `launch_controller_terminal`, `open_controller_browser`, `edit_controller_worker_tab` and `start_controller_looped_review` (with get and cancel), each workspace-excluded; extend `coordinator_node_multi_review_surface` with `reviewer` and `custom-fix` surfaces for the two Multi Review tools.
+  - **One controller command per surface on the leaf, called like `create_controller_pr` (recommended).** Add `launch_controller_terminal`, `open_controller_browser`, `edit_controller_worker_tab`, each workspace-excluded; extend `coordinator_node_multi_review_surface` with `reviewer` and `custom-fix` surfaces for the two Multi Review tools.
     - Pros: each command checks its own scope on the leaf; reuses the receipt and request-ID derivation `create_pr` already proves; the two Multi Review surfaces fit the existing relay.
-    - Cons: five or six new leaf commands to keep in step with the local ones; an older leaf refuses them, so the tool must report "update that node".
+    - Cons: three new leaf commands to keep in step with the local ones; an older leaf refuses them, so the tool must report "update that node".
   - **A generic relay that forwards the local surface command to the leaf.**
     - Pros: one code path for every surface.
     - Cons: the local commands check coordinator scope against this node's store, which the leaf does not have; it would re-open the commands `NODE_EXCLUDED_COMMANDS` keeps closed.
@@ -111,10 +113,10 @@ for.
     - Pros: no new code; a pushed branch already reaches a remote worker.
     - Cons: the user loses the feature exactly where workers usually run.
 
-### 3. Status wakes for looped reviews and feature plans
+### 3. Status wakes for feature plans
 
-**Problem.** A coordinator that starts a looped review or a feature plan is
-never told when it finishes. `list_workflows` does not show them.
+**Problem.** A coordinator that starts a feature plan is never told when it
+finishes. `list_workflows` does not show it.
 
 **Context.** `CoordinatorWorkflowAssociation.kind` is
 `"environment" | "build-pipeline" | "multi-review"`
@@ -122,26 +124,25 @@ never told when it finishes. `list_workflows` does not show them.
 `multi-review` and `build-pipeline` resource changes
 (`apps/backend/src/core/coordinator-status-wakes.ts:842`).
 
-**Investigation.** Still true. Both tools return `NO_STATUS_WAKE`
-(`control-mcp-coordinator-surfaces.ts:41-45`), which tells the coordinator to
-schedule a check with `create_schedule`. The receipts for both are stored
-(`coordinator-surface-actions.ts:304-431`, `:473-515`), but no association is
-written.
+**Investigation.** The feature-plan tool returns `NO_STATUS_WAKE`
+(`control-mcp-coordinator-surfaces.ts`), which tells the coordinator to
+schedule a check with `create_schedule`. Its receipts are stored
+(`coordinator-surface-actions.ts`), but no association is written.
 
 **Decisions.**
 
 - **How should the workflows be associated?**
-  - **Two new association kinds, `looped-review` and `feature-plan` (recommended).**
+  - **A new association kind, `feature-plan` (recommended).**
     - Pros: `list_workflows`, status wakes and adoption all key on the kind; ownership, budget and restart handling come with it.
-    - Cons: an older backend sharing the data directory may not expect the new kinds; its coordinator store reader must skip or keep unknown kinds rather than fail.
+    - Cons: an older backend sharing the data directory may not expect the new kind; its coordinator store reader must skip or keep unknown kinds rather than fail.
   - **Reuse `multi-review` with a subtype field.**
     - Pros: no new kind for old readers.
-    - Cons: every Multi Review rule would have to branch on the subtype; a looped review has no reviewers or consolidation.
+    - Cons: every Multi Review rule would have to branch on the subtype; a feature plan has no reviewers or consolidation.
 - **Which states wake?**
-  - **Looped review: ready, PR opened, failed and cancelled; feature plan: planning reply ready and failed (recommended).**
-    - Pros: the states the file named, plus cancel, which the coordinator can cause itself; one wake per settled state, deduplicated by `CoordinatorStatusNoticeRecord.key`.
-    - Cons: each looped-review round does not wake, so long loops stay quiet until they settle.
-  - **Every round of a looped review.**
+  - **Planning reply ready and failed (recommended).**
+    - Pros: the settled states the file names; one wake per settled state, deduplicated by `CoordinatorStatusNoticeRecord.key`.
+    - Cons: progress stays quiet until the plan settles.
+  - **Every feature-plan progress update.**
     - Pros: progress is visible.
     - Cons: many wakes for one task; goes against "nothing mid-turn wakes the coordinator".
 
@@ -174,9 +175,9 @@ needs a person or the spec to approve the node action request.
     - Pros: quick and stable.
     - Cons: skips the dialog, which is the part the user relies on.
 
-### 5. Adopting looped reviews and feature plans (open question)
+### 5. Adopting feature plans (open question)
 
-**Problem.** If the conversation that started a looped review or feature plan
+**Problem.** If the conversation that started a feature plan
 closes, nothing else can receive its status.
 
 **Context.** `adopt_workflow` takes an `associationId`
@@ -184,17 +185,17 @@ closes, nothing else can receive its status.
 associated workflows can be adopted.
 
 **Investigation.** Without task 3 there is nothing to adopt. With it, adoption
-works on the new kinds unless it is filtered out.
+works on the new kind unless it is filtered out.
 
 **Decisions.**
 
 - **Should they be adoptable?**
   - **Yes, as soon as task 3 gives them associations (recommended).**
     - Pros: same rule as every other coordinator workflow; no special case.
-    - Cons: a second conversation can take over a looped review it did not start (as it can for a Multi Review today).
+    - Cons: a second conversation can take over a feature plan it did not start (as it can for a Multi Review today).
   - **No.**
     - Pros: none beyond less to test.
-    - Cons: a closed conversation's looped review never reports again.
+    - Cons: a closed conversation's feature plan never reports again.
 
 ## Current state
 
@@ -206,8 +207,8 @@ works on the new kinds unless it is filtered out.
   (`apps/backend/src/core/control-mcp-review-actions.ts:261-262`).
   `create_pr` and `propose_agents_md_update` are the exceptions: both take
   `nodeId` and act on the leaf through its own commands.
-- Looped reviews and feature plans have no `CoordinatorWorkflowAssociation`
-  kind, so `list_workflows` does not list them and status wakes
+- Feature plans have no `CoordinatorWorkflowAssociation` kind, so
+  `list_workflows` does not list them and status wakes
   (`coordinator-status-wakes.ts`) never report them. Their tool results say
   so and point at `create_schedule`.
 
@@ -216,16 +217,16 @@ works on the new kinds unless it is filtered out.
 ### Code
 
 1. **The same tools on other nodes.** `nodeId` on `launch_terminal`,
-   `open_worker_browser`, `edit_worker_tab`, `start_looped_review`,
+   `open_worker_browser`, `edit_worker_tab`,
    `custom_fix_multi_review` and `open_multi_review` with `reviewerId`,
    relayed like `launch_coordinator_node_multi_review` (or, closer still,
    `create_pr`), with the outcome-unknown path a lost answer needs.
    `request_root_changes` across nodes needs the patch to travel from this
    node's checkout to a leaf worker (or the leaf's own checkout to be the
    source). See tasks 1 and 2.
-2. **Status wakes for looped reviews and feature plans.** An association
-   kind for each, listed by `list_workflows`, and status-wake rules (ready,
-   PR opened, failed; planning reply ready) with the same ownership, budget
+2. **Status wakes for feature plans.** An association kind, listed by
+   `list_workflows`, and status-wake rules (planning reply ready, failed)
+   with the same ownership, budget
    and restart guarantees as Multi Review. See task 3.
 
 ### Qualification
@@ -242,7 +243,7 @@ works on the new kinds unless it is filtered out.
 
 ## Open questions
 
-- Should a looped review or feature plan started by the coordinator be
+- Should a feature plan started by the coordinator be
   adoptable like other workflows (`adopt_workflow`)? See task 5.
 
 ## Related

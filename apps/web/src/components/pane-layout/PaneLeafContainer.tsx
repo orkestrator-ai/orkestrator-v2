@@ -40,6 +40,9 @@ const LazyMultiReviewTab = lazy(async () => ({
 const LazyPullRequestPaneTab = lazy(async () => ({
   default: (await import("./PullRequestPaneTab")).PullRequestPaneTab,
 }));
+const LazyGraphDesignerTab = lazy(async () => ({
+  default: (await import("@/components/graph-designer/GraphDesignerTab")).GraphDesignerTab,
+}));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
@@ -294,6 +297,23 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
                     if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
                   }}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "graph-designer") {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyGraphDesignerTab
+                  tabId={tab.id}
+                  environmentId={environmentId}
+                  data={tab.graphDesignerData ?? {}}
+                  isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>
             );

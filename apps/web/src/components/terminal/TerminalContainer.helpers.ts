@@ -167,6 +167,7 @@ export const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   "multi-review": false,
   browser: false,
   "design-canvas": false,
+  "graph-designer": false,
   "pull-request": false,
   file: false,
   plain: false,

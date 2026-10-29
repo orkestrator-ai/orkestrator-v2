@@ -49,6 +49,7 @@ import {
   ListChecks,
   Loader2,
   MessagesSquare,
+  Network,
   PanelLeft,
   Play,
   Plus,
@@ -917,6 +918,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     tabCount={tabCount}
                     createTab={createTab}
                   />
+
+                  <ToolbarTooltipTrigger
+                    tooltip={
+                      <>
+                        <p>Graphs</p>
+                        <p className="text-xs text-muted-foreground">
+                          Browse, inspect and import graph templates
+                        </p>
+                      </>
+                    }
+                  >
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => createTab?.("graph-designer")}
+                      disabled={!selectedEnvironment}
+                      aria-label="Graphs"
+                    >
+                      <Network className="h-4 w-4" />
+                      {isGrid && <span className="truncate text-xs">Graphs</span>}
+                    </Button>
+                  </ToolbarTooltipTrigger>
 
                   <ToolbarTooltipTrigger
                     tooltip={

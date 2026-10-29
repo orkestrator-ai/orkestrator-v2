@@ -48,15 +48,15 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 107 | [107-compiler.md](107-compiler.md) | 1 | in-progress | 101, 102, 104, 105, 106 | `compile()` → frozen plan with digest, diagnostics for every rule in report §7.4, cost estimate, `firstIterationFrom`. |
 | 108 | [108-builtin-templates.md](108-builtin-templates.md) | 1 | in-progress | 107, 001, 003, 004, 005 | Multi Review, Build Pipeline and Looped Review described as templates, pinned to their engines by tests. |
 | 109 | [109-template-storage-and-trust.md](109-template-storage-and-trust.md) | 1 | in-progress | 101, 107 | `graph-templates` store, project templates with digest trust, per-project capability ceiling, template commands. |
-| 110 | [110-canvas-spike-and-read-only-designer.md](110-canvas-spike-and-read-only-designer.md) | 1 | not-started | 107, 108, 109 | Time-boxed React Flow vs in-house spike; read-only `graph-designer` tab with library, canvas, inspector, compile panel, JSON import and export. |
+| 110 | [110-canvas-spike-and-read-only-designer.md](110-canvas-spike-and-read-only-designer.md) | 1 | in-progress | 107, 108, 109 | Time-boxed React Flow vs in-house spike; read-only `graph-designer` tab with library, canvas, inspector, compile panel, JSON import and export. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
 - [x] All three built-in templates compile cleanly. The pinning tests fail when either the engine or the template changes alone (evidence: [108](108-builtin-templates.md) Notes, "How the pins work").
 - [ ] The result-kind registry change is behaviour-neutral, as shown by the unchanged conformance suites.
 - [ ] Compiler, predicate, prompt and schema-subset modules have unit tests for every diagnostic code.
-- [ ] The designer shows the built-in templates and imported user templates, with diagnostics pinned to nodes and edges.
-- [ ] The canvas library is chosen and the decision is recorded.
+- [x] The designer shows the built-in templates and imported user templates, with diagnostics pinned to nodes and edges (evidence: [110](110-canvas-spike-and-read-only-designer.md) Notes, "Tests and evidence"; `e2e/agent-testing/graph-designer.spec.ts`).
+- [x] The canvas library is chosen and the decision is recorded (evidence: [110](110-canvas-spike-and-read-only-designer.md) Notes, "Spike result"; [`docs/architecture/graphs.md`](../../docs/architecture/graphs.md#canvas-library-decision-spike-2026-10-29)).
 
 ## Phase 2: graph runtime and editable designer
 

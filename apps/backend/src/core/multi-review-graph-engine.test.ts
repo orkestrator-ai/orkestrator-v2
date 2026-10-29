@@ -87,12 +87,12 @@ describe("the engine setting", () => {
   test("the override wins over the setting; an unknown override is ignored", () => {
     expect(configuredMultiReviewEngine(undefined, {})).toBe("bespoke");
     expect(configuredMultiReviewEngine("graph", {})).toBe("graph");
-    expect(configuredMultiReviewEngine("bespoke", { ORKESTRATOR_MULTI_REVIEW_ENGINE: "graph" })).toBe(
-      "graph",
-    );
-    expect(configuredMultiReviewEngine("graph", { ORKESTRATOR_MULTI_REVIEW_ENGINE: "Bespoke" })).toBe(
-      "bespoke",
-    );
+    expect(
+      configuredMultiReviewEngine("bespoke", { ORKESTRATOR_MULTI_REVIEW_ENGINE: "graph" }),
+    ).toBe("graph");
+    expect(
+      configuredMultiReviewEngine("graph", { ORKESTRATOR_MULTI_REVIEW_ENGINE: "Bespoke" }),
+    ).toBe("bespoke");
     expect(configuredMultiReviewEngine("graph", { ORKESTRATOR_MULTI_REVIEW_ENGINE: "fast" })).toBe(
       "graph",
     );
@@ -142,7 +142,10 @@ describe("a graph-engine Multi Review", () => {
       ],
       reviewModel: { agent: "claude", model: "haiku" },
     });
-    const launched = await w.drive(workflow.id, (current) => current.graphRun?.projectedRevision !== undefined);
+    const launched = await w.drive(
+      workflow.id,
+      (current) => current.graphRun?.projectedRevision !== undefined,
+    );
     const run = await w.run(launched);
     expect(run.template).toMatchObject({ id: "multi-review", scope: "built-in" });
     expect(run.plan.template.engine).toBeUndefined();
@@ -218,7 +221,11 @@ describe("a graph-engine Multi Review", () => {
   test("a failed reviewer is carried, not a blocker", async () => {
     const w = await world();
     scriptReview(w, { findings: false });
-    w.fakes.failBranches.set("review/panel.2", ["provider-error", "provider-error", "provider-error"]);
+    w.fakes.failBranches.set("review/panel.2", [
+      "provider-error",
+      "provider-error",
+      "provider-error",
+    ]);
     const settled = await w.settle((await w.start()).id);
     expect(settled.phase).toBe("ready");
     expect(settled.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "failed"]);

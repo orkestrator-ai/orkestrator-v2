@@ -63,6 +63,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import { graphReviewCoverageGapIds } from "./graph-agent-builtins.js";
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { parseFixResult } from "./review-prompts.js";
 import {
   attributeReportFindings,
@@ -204,16 +205,8 @@ function digest(value: string | undefined): string | undefined {
 // ---------------------------------------------------------------- reviewers
 
 function selectionOf(reviewer: ReviewerRecord): Partial<ReviewerRecord> {
-  const {
-    id,
-    agent,
-    model,
-    reasoningEffort,
-    fastMode,
-    lens,
-    modelUnpinned,
-    modelSubstitution,
-  } = reviewer;
+  const { id, agent, model, reasoningEffort, fastMode, lens, modelUnpinned, modelSubstitution } =
+    reviewer;
   return {
     id,
     agent,
@@ -372,7 +365,8 @@ async function readConsolidation(
   reviewers: readonly ReviewerRecord[],
   read: MultiReviewGraphArtifactReader,
 ): Promise<
-  { report: StructuredReviewReport; overlap: MultiReviewWorkflow["consolidationOverlap"] } | undefined
+  | { report: StructuredReviewReport; overlap: MultiReviewWorkflow["consolidationOverlap"] }
+  | undefined
 > {
   const value = artifactValue(await read(consolidate.outputs.report!));
   // Unreadable: the record keeps no report, and a run that completes without
@@ -521,7 +515,15 @@ function projectAutoPr(
   const describe = latest.get(slot(N.describePr));
   const pr = latest.get(slot(N.pr));
   const gate = latest.get(slot(N.hasFindings));
-  const basis = gate?.outlet === "clean" ? { basis: "clean-review" as const } : {};
+  // A Fix-authorized launch names the Fix it follows, as `queueAutoPr` does,
+  // so status notices never present it as the outcome of a later Fix.
+  const fixIdentity = multiReviewFixIdentity(workflow.fixSession);
+  const basis =
+    gate?.outlet === "clean"
+      ? { basis: "clean-review" as const }
+      : fixIdentity
+        ? { fixIdentity }
+        : {};
   const requestId = `${run.id}:pr`;
   const attempts = Math.max(0, (pr?.attempt ?? 1) - 1);
   const reached = (activation: NodeActivation | undefined) =>
@@ -552,14 +554,6 @@ function projectAutoPr(
         }
       : { ...basis, state: "pending", requestId, ...(attempts > 0 ? { attempts } : {}) };
     return;
-  }
-  if (pr?.state === "skipped" && (workflow.fixResult || gate?.outlet === "clean")) {
-    workflow.autoPrLaunch = {
-      ...basis,
-      state: "skipped",
-      requestId,
-      message: "No completed Fix authorized a pull request",
-    };
   }
 }
 

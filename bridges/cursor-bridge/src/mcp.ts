@@ -1,9 +1,15 @@
 import { promises as fs } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { McpServerConfig, SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
-import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentAllowsUserMcpServer,
+  nativeAgentRestrictsUserMcp,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentMcpServer,
+} from "@orkestrator/protocol/native-agent";
 import { workingDirectory } from "./config.js";
 import { COORDINATOR_SKILLS_SERVER } from "./coordinator-skills.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
@@ -84,6 +90,44 @@ export interface CursorMcpResolutionPolicy {
   readOnly?: boolean;
   /** Session-level project-resource decision. False skips repository servers. */
   projectResources?: boolean;
+  /**
+   * The session selects its configured servers (graphs item 404,
+   * `cursorUserMcpServerFilter`). The bridge then reads the user's
+   * `~/.cursor/mcp.json` (and, with project resources, `.cursor/mcp.json`)
+   * itself and keeps only the servers this admits, because the SDK would
+   * otherwise load every server of its settings sources.
+   */
+  userServers?: (name: string) => boolean;
+  /** Home directory holding `.cursor/mcp.json`; the process's own when absent. */
+  configHome?: string;
+}
+
+/**
+ * Which configured servers a session under `policy` may load (graphs item
+ * 404): its `userMcpServers` selection minus its `mcp:<server>` denials.
+ * `undefined` when the policy selects nothing and denies no server, so an
+ * ordinary session keeps the SDK's own settings-source loading.
+ */
+export function cursorUserMcpServerFilter(
+  policy: NativeAgentExecutionPolicy | undefined,
+): ((name: string) => boolean) | undefined {
+  if (!nativeAgentRestrictsUserMcp(policy)) return undefined;
+  return (name) => nativeAgentAllowsUserMcpServer(policy, name);
+}
+
+/**
+ * The SDK settings sources of an attach. A read-only coordinator loads none,
+ * and so does a session that selects its MCP servers: every source would
+ * also load its servers, and the SDK has no per-server switch. The cost is
+ * that such a session also runs without the user's and the project's Cursor
+ * rules and plugins.
+ */
+export function cursorSettingSources(
+  policy: Pick<NativeAgentExecutionPolicy, "projectResources">,
+  options: { readOnly: boolean; selectsServers: boolean },
+): Array<"user" | "project" | "team" | "plugins"> {
+  if (options.readOnly || options.selectsServers) return [];
+  return policy.projectResources ? ["user", "project", "team", "plugins"] : ["user"];
 }
 
 /**
@@ -103,7 +147,20 @@ export async function cursorMcpServers(
   policy?: CursorMcpResolutionPolicy,
 ): Promise<Record<string, McpServerConfig>> {
   const allowProject = policy?.readOnly !== true && policy?.projectResources === true;
-  const servers = allowProject ? await readProjectMcpServers() : {};
+  const select = policy?.readOnly !== true ? policy?.userServers : undefined;
+  const servers: Record<string, McpServerConfig> = select
+    ? Object.fromEntries(
+        Object.entries({
+          // The project file wins a same-name entry, as it does in Cursor.
+          ...(await readMcpServersFile(
+            join(policy?.configHome ?? homedir(), ".cursor", "mcp.json"),
+          )),
+          ...(allowProject ? await readProjectMcpServers() : {}),
+        }).filter(([name]) => select(name)),
+      )
+    : allowProject
+      ? await readProjectMcpServers()
+      : {};
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (url && token) {
@@ -736,8 +793,11 @@ function parseMcpToolName(
     : undefined;
 }
 
-async function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {
-  const path = resolve(workingDirectory, ".cursor", "mcp.json");
+function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {
+  return readMcpServersFile(resolve(workingDirectory, ".cursor", "mcp.json"));
+}
+
+async function readMcpServersFile(path: string): Promise<Record<string, McpServerConfig>> {
   try {
     const stat = await fs.stat(path);
     if (stat.size > MAX_MCP_CONFIG_BYTES) return {};

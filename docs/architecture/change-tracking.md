@@ -84,6 +84,17 @@ resolved to (`baselineVersion: "<ref>@<oid>"`). A ref that could not be
 resolved is labelled `ref:<name>` with reason `baseline-mutable-ref`. A failed
 scan keeps the last measurement marked stale; it never publishes zero.
 
+A user-chosen base (`Environment.diffBaseOverride`) wins over those rules.
+Right-clicking (or long-pressing) the Changes tab opens a picker with a branch
+and then one of its first-parent commits, listed by subject. The choice is
+stored as a full SHA, so it stays put when the branch moves, and
+`environmentBaselineCommit` returns it everywhere: scans, the sidebar badge, the
+panel list and file revert. The typical use is to merge the target branch, then
+pick its tip so only this branch's own work shows. Commands:
+`list_environment_diff_base_branches`, `list_environment_diff_base_commits`,
+`set_environment_diff_base` (`commands-registry-diff-base.ts`,
+`diff-base-override.ts`); null `ref` and `commit` restore the automatic base.
+
 ## Module map
 
 | Layer | Location |

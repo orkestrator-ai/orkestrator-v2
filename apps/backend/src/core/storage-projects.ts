@@ -15,6 +15,7 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
+import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
 import type { EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -811,6 +812,12 @@ export class ProjectsRepository {
         } else {
           throw new Error("Invalid environment diff baseline");
         }
+      }
+      if ("diffBaseOverride" in updates) {
+        const value = updates.diffBaseOverride;
+        // Explicit null, like diffBaseline: renderers merge field-by-field.
+        environment.diffBaseOverride =
+          value === null || value === undefined ? null : parseEnvironmentDiffBaseOverride(value);
       }
       if ("worktreeMove" in updates) {
         const value = updates.worktreeMove;

@@ -218,14 +218,83 @@ export interface EnvironmentDiffBaseline {
   commit: string;
 }
 
+/**
+ * A commit the user chose to measure an environment's changes from, in place of
+ * the automatic baseline. Typically the tip of the target branch after merging
+ * it in, so the Changes panel shows only what this branch adds on top of it.
+ *
+ * `commit` is a full SHA so the comparison stays put when the branch it was
+ * picked from moves. `ref` and `subject` are kept for display only.
+ */
+export interface EnvironmentDiffBaseOverride {
+  /** Full ref the commit was picked from, e.g. `refs/remotes/origin/main`. */
+  ref: string;
+  commit: string;
+  /** The commit's subject when it was picked. */
+  subject?: string;
+}
+
+/** A branch offered as the source of a diff base override. */
+export interface DiffBaseBranch {
+  /** Full ref, e.g. `refs/heads/main` or `refs/remotes/origin/main`. */
+  ref: string;
+  /** Short name, e.g. `main` or `origin/main`. */
+  name: string;
+  kind: "local" | "remote";
+}
+
+/** A commit offered as a diff base, newest first along the branch's first parents. */
+export interface DiffBaseCommit {
+  commit: string;
+  subject: string;
+  author: string;
+  /** Committer date, ISO 8601. */
+  committedAt: string;
+}
+
+/** `refs/heads/main` → `main`, `refs/remotes/origin/main` → `origin/main`. */
+export function shortDiffBaseRefName(ref: string): string {
+  return ref.replace(/^refs\/(?:heads|remotes)\//, "");
+}
+
+export const MAX_DIFF_BASE_SUBJECT_LENGTH = 500;
+const MAX_DIFF_BASE_REF_LENGTH = 1_024;
+
+/**
+ * Validates a stored or submitted override, normalising its commit and subject.
+ * Throws on anything that is not a full SHA picked from a branch ref.
+ */
+export function parseEnvironmentDiffBaseOverride(value: unknown): EnvironmentDiffBaseOverride {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Invalid environment diff base override");
+  }
+  const record = value as { ref?: unknown; commit?: unknown; subject?: unknown };
+  const commit = typeof record.commit === "string" ? record.commit.trim() : "";
+  const ref = typeof record.ref === "string" ? record.ref.trim() : "";
+  if (
+    !/^[0-9a-f]{40}$/i.test(commit) ||
+    ref.length > MAX_DIFF_BASE_REF_LENGTH ||
+    !/^refs\/(?:heads|remotes)\/[^\x00-\x20\x7f]+$/.test(ref)
+  ) {
+    throw new Error("Invalid environment diff base override");
+  }
+  const subject =
+    typeof record.subject === "string"
+      ? record.subject.trim().slice(0, MAX_DIFF_BASE_SUBJECT_LENGTH)
+      : "";
+  return { ref, commit: commit.toLowerCase(), ...(subject ? { subject } : {}) };
+}
+
 interface BaselineEnvironment {
   createdFromCommit?: string | null;
   diffBaseline?: EnvironmentDiffBaseline | null;
+  diffBaseOverride?: EnvironmentDiffBaseOverride | null;
 }
 
 /**
- * The commit an environment's changes are measured from: where its branch now
- * leaves the branch it targets, falling back to the commit it was created from.
+ * The commit an environment's changes are measured from: the commit the user
+ * picked ({@link EnvironmentDiffBaseOverride}), else where its branch now leaves
+ * the branch it targets, else the commit it was created from.
  *
  * Measuring from the creation commit alone counts every commit the branch later
  * took in from its target as the environment's own work. A worker launched from
@@ -235,6 +304,9 @@ interface BaselineEnvironment {
 export function environmentBaselineCommit(
   environment: BaselineEnvironment | undefined | null,
 ): string | undefined {
+  // A base the user picked wins over every automatic rule.
+  const override = normaliseRef(environment?.diffBaseOverride?.commit);
+  if (override) return override;
   const createdFromCommit = normaliseRef(environment?.createdFromCommit);
   if (!createdFromCommit) return undefined;
   const baseline = environment?.diffBaseline;

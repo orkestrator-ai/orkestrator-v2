@@ -5,6 +5,8 @@ import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
 import { FilesPanelPullRequests } from "./FilesPanelPullRequests";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
+import { DiffBaseDialog } from "./DiffBaseDialog";
+import { DiffBaseNotice } from "./DiffBaseNotice";
 import { useFilesPanelStore, useUIStore } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
@@ -25,6 +27,7 @@ export function FilesPanel() {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const targetBranch = useFilesPanelStore((state) => state.targetBranch);
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
+  const [diffBaseDialogOpen, setDiffBaseDialogOpen] = useState(false);
 
   // Initialize the files panel data loading
   const {
@@ -154,6 +157,7 @@ export function FilesPanel() {
         onRefresh={refresh}
         changeEnvironmentId={changeEnvironmentId}
         targetId={environmentId}
+        onChooseDiffBase={() => setDiffBaseDialogOpen(true)}
       />
       {!isFilesPanelFileTab(activeTab) ? (
         <FilesPanelPullRequests targetId={environmentId} />
@@ -161,6 +165,12 @@ export function FilesPanel() {
         <>
           {syncNotice && <FreshnessIndicator notice={syncNotice} variant="strip" />}
           {remoteNotice && <FreshnessIndicator notice={remoteNotice} variant="strip" />}
+          {activeTab === "changes" && (
+            <DiffBaseNotice
+              environmentId={changeEnvironmentId}
+              onChange={() => setDiffBaseDialogOpen(true)}
+            />
+          )}
           <ScrollArea className="min-h-0 flex-1">
             {activeTab === "changes" ? (
               <ChangesView
@@ -187,6 +197,11 @@ export function FilesPanel() {
           </ScrollArea>
         </>
       )}
+      <DiffBaseDialog
+        environmentId={changeEnvironmentId}
+        open={diffBaseDialogOpen}
+        onOpenChange={setDiffBaseDialogOpen}
+      />
       <FileActionDialog
         action={pendingAction}
         targetRef={targetBranch}

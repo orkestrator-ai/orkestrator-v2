@@ -1,4 +1,5 @@
 import { registerChangeCommands } from "./commands-registry-changes.js";
+import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
@@ -334,6 +335,7 @@ export function createCommandRegistry(
   registerTerminalCommands(register, dependencies);
   registerUserCommandCommands(register);
   registerChangeCommands(register);
+  registerDiffBaseCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);

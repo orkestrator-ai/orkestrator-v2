@@ -15,6 +15,7 @@ import {
   serializeFramedEvidence,
   stripSystemInstructions,
   wrapGraphEvidenceFrame,
+  wrapGraphInlineEvidenceFrame,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
 
@@ -166,5 +167,15 @@ describe("evidence escaping", () => {
     expect(wrapGraphEvidenceFrame([["port", "a"]], "body")).toBe(
       `<orkestrator-evidence port="a">\nbody\n${GRAPH_EVIDENCE_FRAME_CLOSE}`,
     );
+    // An inline frame (one value taken from an input) adds no line breaks.
+    expect(
+      wrapGraphInlineEvidenceFrame(
+        [
+          ["port", "a"],
+          ["path", "items.0.title"],
+        ],
+        "body",
+      ),
+    ).toBe(`<orkestrator-evidence port="a" path="items.0.title">body${GRAPH_EVIDENCE_FRAME_CLOSE}`);
   });
 });

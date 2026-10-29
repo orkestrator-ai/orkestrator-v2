@@ -14,6 +14,7 @@ import {
   agentBranchErrorMessage,
   agentBranchNowIso,
   type AgentBranchRecord,
+  AGENT_BRANCH_LOG_PREFIX,
 } from "./agent-branch-types.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import type { EfficiencyEvent } from "./multi-review-efficiency.js";
@@ -92,6 +93,10 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
     return this.context.host;
   }
 
+  private get logPrefix(): string {
+    return this.host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX;
+  }
+
   private stallWarningMs(): number {
     return this.host.stallWarningMs ?? DEFAULT_STALL_WARNING_MS;
   }
@@ -123,7 +128,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
       );
     } catch (error) {
       console.warn(
-        "[review-fanout] Mirroring a reviewer transcript failed:",
+        `${this.logPrefix} Mirroring a reviewer transcript failed:`,
         agentBranchErrorMessage(error),
       );
     }
@@ -184,7 +189,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
     } catch (error) {
       if (isAgentBranchFenceError(error)) throw error;
       console.warn(
-        "[review-fanout] Reading reviewer token usage failed:",
+        `${this.logPrefix} Reading reviewer token usage failed:`,
         agentBranchErrorMessage(error),
       );
       return false;
@@ -333,7 +338,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
       });
     } catch (error) {
       console.warn(
-        `[review-fanout] Could not nudge an uncommitted result: ${agentBranchErrorMessage(error)}`,
+        `${this.logPrefix} Could not nudge an uncommitted result: ${agentBranchErrorMessage(error)}`,
       );
     }
   }

@@ -10,6 +10,7 @@ import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { humanActivation, humanRun } from "./graph-node-human-test-support.js";
 import {
   GraphRunAttention,
+  graphAttentionErrorReason,
   graphRunAttentionKey,
   graphRunEnvironmentActivity,
   type GraphRunWaitOpened,
@@ -145,5 +146,20 @@ describe("graph run attention", () => {
     expect(environment.agentActivitySources?.["graph-run"]?.state).toBe("waiting");
     expect(environment.hasUnreadWork).toBe(false);
     expect(opened).toEqual([]);
+  });
+});
+
+describe("graph run attention logs", () => {
+  test("a failure is logged by code or name, never by message", () => {
+    const secret = "prompt text that must not reach a log";
+    expect(
+      graphAttentionErrorReason(Object.assign(new Error(secret), { code: "run-not-found" })),
+    ).toBe("run-not-found");
+    expect(graphAttentionErrorReason(new TypeError(secret))).toBe("TypeError");
+    expect(graphAttentionErrorReason(Object.assign(new Error(secret), { code: secret }))).toBe(
+      "Error",
+    );
+    expect(graphAttentionErrorReason(secret)).toBe("error");
+    expect(graphAttentionErrorReason(null)).toBe("error");
   });
 });

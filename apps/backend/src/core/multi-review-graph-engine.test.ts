@@ -5,12 +5,21 @@
  * controls and the manual Fix after the run settles.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { GRAPH_RUN_INPUT_PRODUCER } from "@orkestrator/protocol/graphs/run";
+import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import { isMultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { loadGraphAgentInputs } from "./graph-agent-prompt.js";
+import type { GraphArtifactStore } from "./graph-artifacts.js";
 import {
   configuredMultiReviewEngine,
+  multiReviewGraphInputs,
   multiReviewGraphRunId,
   multiReviewWorkflowIdOfRun,
 } from "./multi-review-graph-engine.js";
+import {
+  MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT,
+  multiReviewGraphInstructionProblem,
+} from "./multi-review-graph-template.js";
 import {
   graphReviewGap,
   graphReviewIssue,
@@ -141,10 +150,76 @@ describe("the engine setting", () => {
     expect(isMultiReviewWorkflow(graph)).toBe(true);
   });
 
-  test("a review instruction longer than a graph parameter stays on the bespoke engine", async () => {
+  test("a review instruction past the old 4 KiB parameter runs on the graph engine", async () => {
     const w = await world();
-    const workflow = await w.start({ reviewInstruction: "x".repeat(5_000) });
-    expect(workflow.engine).toBeUndefined();
+    scriptReview(w, { findings: false });
+    w.fakes.held.add("review");
+    // Longer than a graph string parameter holds (4 KiB): it is a run input now.
+    const instruction = "Check every parser branch for unbounded reads.\n".repeat(120);
+    expect(new TextEncoder().encode(instruction).length).toBeGreaterThan(4_096);
+    const workflow = await w.start({ reviewInstruction: instruction });
+    expect(workflow.engine).toBe("graph");
+    const reviewing = await w.drive(workflow.id, (current) => current.phase === "reviewing");
+    const run = await w.run(reviewing);
+    expect(run.bindings.params).not.toHaveProperty("reviewInstruction");
+    const inputId = run.bindings.inputs[MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT]!;
+    const stored = await w.fixture.storage.graphRuns.getGraphArtifact(run.id, inputId);
+    expect(stored).toMatchObject({
+      type: "markdown@1",
+      producer: { activation: GRAPH_RUN_INPUT_PRODUCER },
+      body: { value: { markdown: instruction } },
+    });
+    // Every reviewer's activation receives it on its `instruction` port, and
+    // the built-in reads it as the review's instruction (a run input).
+    const node = run.plan.nodes.find((entry) => entry.id === "review") as GraphPlanAgentNode;
+    const reviews = run.activations.filter((activation) => activation.nodeId === "review");
+    expect(reviews).toHaveLength(2);
+    for (const activation of reviews) {
+      expect(activation.inputs.instruction).toBe(inputId);
+      const inputs = await loadGraphAgentInputs(run, node, activation, {
+        verify: async (runId, artifactId) => {
+          const artifact = await w.fixture.storage.graphRuns.getGraphArtifact(runId, artifactId);
+          return artifact
+            ? { ok: true, artifact }
+            : { ok: false, code: "missing", message: "missing" };
+        },
+      } as Pick<GraphArtifactStore, "verify">);
+      expect(inputs.builtInInputs?.instruction).toMatchObject({
+        port: "instruction",
+        type: "markdown@1",
+        value: { markdown: instruction },
+        runInput: true,
+      });
+    }
+  });
+
+  test("a review instruction past the run input's budget refuses the start", async () => {
+    const w = await world();
+    // Within Multi Review's own limit (100,000 characters), past markdown@1's 128 KiB.
+    const instruction = "é".repeat(70_000);
+    expect(multiReviewGraphInstructionProblem(instruction)).toMatch(/at most 131072 bytes/);
+    await expect(w.start({ reviewInstruction: instruction })).rejects.toThrow(
+      /too long for Multi Review on the graph runtime/,
+    );
+    // Nothing was recorded, and the bespoke engine still takes it.
+    w.setEngine("bespoke");
+    const bespoke = await w.start({ reviewInstruction: instruction });
+    expect(bespoke.engine).toBeUndefined();
+    expect(bespoke.reviewInstruction).toBe(instruction);
+  });
+
+  test("no instruction: no run input", async () => {
+    const w = await world();
+    scriptReview(w, { findings: false });
+    w.fakes.held.add("review");
+    const workflow = await w.start();
+    const reviewing = await w.drive(workflow.id, (current) => current.phase === "reviewing");
+    const run = await w.run(reviewing);
+    expect(run.bindings.inputs).not.toHaveProperty(MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT);
+    for (const activation of run.activations.filter((entry) => entry.nodeId === "review")) {
+      expect(activation.inputs).not.toHaveProperty("instruction");
+    }
+    expect(multiReviewGraphInputs({ reviewInstruction: "   " })).toEqual({});
   });
 });
 
@@ -173,8 +248,8 @@ describe("a graph-engine Multi Review", () => {
       autoFix: true,
       autoPr: false,
       targetBranch: "main",
-      reviewInstruction: "Look at the parser",
     });
+    expect(run.bindings.inputs[MULTI_REVIEW_GRAPH_INSTRUCTION_INPUT]).toBeDefined();
     expect(run.bindings.roles.preparer).toEqual({ platform: "claude", model: "haiku" });
     expect(run.bindings.roles.consolidator).toEqual({ platform: "claude", model: "haiku" });
     expect(run.bindings.roles.fixer).toEqual({ platform: "claude", model: "opus" });

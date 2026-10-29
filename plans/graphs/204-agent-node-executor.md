@@ -167,6 +167,13 @@ key on its cadence.
 transcript capture: the executor calls `captureTranscript` on settling turns and records the
 returned reference; 211 supplies it.
 
+**2026-10-29 · Audit: log prefix.** The shared branch runner logged graph
+activations under `[review-fanout]`. `AgentBranchHost.logPrefix` (default
+`AGENT_BRANCH_LOG_PREFIX`, `[review-fanout]`) now prefixes the runner's,
+commit queue's and observation's lines; `GraphAgentHost` sets `[graph-agent]`
+and the describe host `[graph-describe]`. Review logs are unchanged. Test:
+`agent-branch-log-prefix.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -175,3 +182,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Extracted `AgentBranchRunner` from the reviewer fan-out, behaviour-neutral. · Graph agent executor next.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Graph agent node executor on the runner: policy and tier first, journaled dispatch, per-port slots and activation tools, `ask_human`, session continue, workspace outputs, bridges taught per-port tools, push-free built-ins; tests incl. seeded restart interleavings. · complete; awaiting PR
 - 2026-10-29 · coordinator · Ticked the Phase 2 exit criterion on unchanged engine suites, citing this item's commits. · Awaiting PR.
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · graph activations log under `[graph-agent]` · awaiting PR

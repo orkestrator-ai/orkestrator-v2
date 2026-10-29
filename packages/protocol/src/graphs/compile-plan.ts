@@ -181,9 +181,14 @@ function planNode(
     outputs,
     ...(node.when !== undefined ? { when: node.when } : {}),
     workspaceAccess: graphNodeWorkspaceAccess(node),
+    // `fail-run` is the default for writers (P2.6), replicated or not: an
+    // isolated replicated writer's failed branch is not quietly dropped.
+    // Replicated readers default to `skip`, so one failed reviewer does not
+    // sink the panel.
     onFailure: graphHumanRoutesFailures(node)
       ? "route"
-      : (("onFailure" in node ? node.onFailure : undefined) ?? (replicated ? "skip" : "fail-run")),
+      : (("onFailure" in node ? node.onFailure : undefined) ??
+        (replicated && graphNodeWorkspaceAccess(node) !== "write" ? "skip" : "fail-run")),
     retry: execution?.retry
       ? { attempts: execution.retry.attempts, on: [...execution.retry.on] }
       : { attempts: 1, on: [] },

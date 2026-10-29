@@ -288,8 +288,10 @@ input: the preparer is `reviewModel` (else `fixModel`), the reviewer panel is
 the reviewers in order with their lenses, the consolidator is
 `consolidationModel` (else the preparer), the fixer is `fixModel`, and the
 pull request describer takes the saved `pr` default. `autoFix` and `autoPr`
-are the run's parameters. A review instruction longer than a graph parameter
-holds (4 KiB) starts on the bespoke engine instead.
+are the run's parameters. The review instruction is the run's optional
+`reviewInstruction` input (`markdown@1`, up to 128 KiB encoded); a longer one
+refuses the start while the graph engine is selected, and never switches
+engines.
 
 The record stays the read model. Each supervision pass reads the run by id and,
 when its revision moved, projects it onto the record under the controller lease

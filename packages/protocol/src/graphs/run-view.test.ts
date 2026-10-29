@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { activationFixture, graphRunFixture } from "./run-fixtures.test-support.js";
+import { validateGraphRun } from "./run-guards.js";
 import {
   compareGraphRunsNewestFirst,
+  graphActivationBlockText,
   graphActivationRetryRefusal,
   graphActivationSkipRefusal,
   graphRunActions,
@@ -138,5 +140,51 @@ describe("user actions", () => {
     expect(graphActivationSkipRefusal({ ...run, status: "complete" }, ready)).toMatch(
       /complete run/,
     );
+  });
+});
+
+describe("admission blocks (D3 across engines)", () => {
+  test("read as what the activation waits for, naming the engine and its use", () => {
+    expect(
+      graphActivationBlockText({
+        reason: "external-workflow",
+        holder: "build-pipeline",
+        holderAccess: "write",
+      }),
+    ).toBe("Waiting: Build Pipeline is writing this environment");
+    expect(
+      graphActivationBlockText({
+        reason: "external-workflow",
+        holder: "multi-review",
+        holderAccess: "read",
+      }),
+    ).toBe("Waiting: Multi Review is reading this environment");
+    expect(graphActivationBlockText({ reason: "external-workflow" })).toBe(
+      "Waiting: Another workflow is using this environment",
+    );
+    expect(graphActivationBlockText({ reason: "workspace-lock" })).toMatch(/another graph step/);
+    expect(graphActivationBlockText({ reason: "concurrency" })).toMatch(/concurrent agents/);
+  });
+
+  test("the run record accepts a block and refuses an unknown one", () => {
+    const blocked = (block: unknown) =>
+      graphRunFixture({
+        activations: [
+          activationFixture({ nodeId: "build" }, {
+            state: "ready",
+            blocked: block,
+          } as never),
+        ],
+      });
+    expect(
+      validateGraphRun(
+        blocked({ reason: "external-workflow", holder: "build-pipeline", holderAccess: "write" }),
+      ).ok,
+    ).toBe(true);
+    expect(validateGraphRun(blocked({ reason: "recovering" })).ok).toBe(true);
+    const invalid = validateGraphRun(blocked({ reason: "external-workflow", holder: "terminal" }));
+    expect(invalid.ok).toBe(false);
+    expect(validateGraphRun(blocked({ reason: "elsewhere" })).ok).toBe(false);
+    expect(validateGraphRun(blocked({ reason: "recovering", note: "x" })).ok).toBe(false);
   });
 });

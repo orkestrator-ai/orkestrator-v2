@@ -25,6 +25,7 @@ import { graphUtf8Bytes } from "./grammar.js";
 import {
   GRAPH_PROMPT_ESCAPE_FACTOR,
   type GraphPromptSizeBound,
+  type GraphPromptTargetUse,
   analyzeGraphPromptTemplate,
   graphPromptHeaviestPath,
   graphPromptTemplateBound,
@@ -43,6 +44,7 @@ import {
   graphPromptOnDemandFields,
   graphPromptOnDemandHint,
   graphPromptOnDemandMaxArtifacts,
+  graphPromptValueFrameAttributes,
   neutralizeGraphPromptText,
 } from "./prompt-render.js";
 import {
@@ -194,6 +196,35 @@ export function estimateGraphPromptInput(port: GraphPromptPort): GraphPromptSize
   };
 }
 
+/**
+ * The longest inline frame (open and close tags) a variable resolving through
+ * `use` writes around its value; 0 for a value that is not upstream content.
+ * A list index in the frame's `path` has fewer digits than half the source's
+ * byte bound, since every element of a JSON list takes at least two bytes.
+ */
+export function graphPromptValueFrameMaxBytes(
+  scope: Pick<GraphPromptScope, "itemsPort" | "ticketInput" | "sources">,
+  use: Pick<GraphPromptTargetUse, "source" | "path">,
+): number {
+  const source: { port: string } | { runInput: string } | undefined = use.source.startsWith(
+    "input.",
+  )
+    ? { port: use.source.slice("input.".length) }
+    : use.source === "item" && scope.itemsPort !== undefined
+      ? { port: scope.itemsPort }
+      : use.source === "ticket" && scope.ticketInput !== undefined
+        ? { runInput: scope.ticketInput }
+        : undefined;
+  if (!source) return 0;
+  const bytes = scope.sources.get(use.source)?.bytes ?? 0;
+  const index = "9".repeat(String(Math.max(1, Math.ceil(bytes / 2))).length);
+  const path = use.path.map((segment) => (segment === "[]" ? index : segment));
+  return (
+    utf8(graphEvidenceFrameOpen(graphPromptValueFrameAttributes(source, path))) +
+    utf8(GRAPH_EVIDENCE_FRAME_CLOSE)
+  );
+}
+
 export interface GraphPromptInputEstimate extends GraphPromptSizeBound {
   port: string;
   mode: GraphRenderMode;
@@ -227,6 +258,7 @@ export function estimateGraphPromptTemplateSize(
   const bound = graphPromptTemplateBound(analysis, scope.sources, {
     textBytes: (text) => utf8(neutralizeGraphPromptText(text)),
     partial: (port) => perPort.get(port),
+    valueFrameBytes: (use) => graphPromptValueFrameMaxBytes(scope, use),
   });
   const inputs = [...perPort].map(([port, estimate]) => ({
     port,

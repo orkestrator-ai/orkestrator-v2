@@ -51,6 +51,43 @@ describe("variables", () => {
   });
 });
 
+describe("value origins", () => {
+  test("frameValue sees each value's path from the root, through sections and aliases", () => {
+    const seen: string[] = [];
+    const result = renderGraphPromptSource(
+      "{{#list}}{{name}}{{#tags}}{{.}}{{/tags}}{{outer}}{{/list}}{{#obj}}{{a}}{{/obj}}{{alias.x}}{{obj.a}}",
+      { list: [{ name: "n", tags: ["t"] }], outer: "o", obj: { a: "A" } },
+      {
+        lookup: { aliases: new Map([["alias.x", 1]]) },
+        frameValue: (origin) => {
+          seen.push(`${origin.alias ? "alias:" : ""}${origin.path.join(".")}`);
+          return origin.path[0] === "obj" ? [["port", "obj"]] : undefined;
+        },
+      },
+    );
+    expect(seen).toEqual([
+      "list.0.name",
+      "list.0.tags.0",
+      "outer",
+      "obj.a",
+      "alias:alias.x",
+      "obj.a",
+    ]);
+    expect(result.text).toBe(
+      'nto<orkestrator-evidence port="obj">A</orkestrator-evidence>1<orkestrator-evidence port="obj">A</orkestrator-evidence>',
+    );
+  });
+
+  test("a name that does not resolve renders as written, unframed", () => {
+    const result = renderGraphPromptSource(
+      "{{missing}}",
+      {},
+      { frameValue: () => [["port", "x"]] },
+    );
+    expect(result.text).toBe("{{missing}}");
+  });
+});
+
 describe("code-like templates render literally", () => {
   const cases: [string, unknown][] = [
     ["{{constructor}}", {}],

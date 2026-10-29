@@ -122,6 +122,12 @@ export interface GraphBuiltInPromptInputValue {
    * evidence matches a bespoke Multi Review's.
    */
   acceptedReport?: boolean;
+  /**
+   * The artifact is a run input (its producer is `$input`): a value the
+   * launching user gave. Only such an artifact may fill an input the builder
+   * writes as instructions (the review's `instruction`, item 301).
+   */
+  runInput?: boolean;
 }
 
 export interface GraphBuiltInPromptContext {
@@ -143,10 +149,12 @@ export interface GraphBuiltInPromptContext {
   /** A user instruction param, when the template passes one (e.g. a review instruction). */
   instruction?: string;
   /**
-   * A `reviewInstruction` param (item 301): the review's own instruction. Only
-   * the discovery review reads it, and it wins over `instruction` there, so a
+   * A `reviewInstruction` param: the review's own instruction. Only the
+   * discovery review reads it, and it wins over `instruction` there, so a
    * template can instruct its reviewers without turning its Fix into a custom
-   * fix.
+   * fix. Item 301's runs launched since 2026-10-29 carry the instruction as
+   * the discovery review's `instruction` run input instead, which wins over
+   * both; the param is still read for runs whose frozen plan declares it.
    */
   reviewInstruction?: string;
 }
@@ -221,7 +229,8 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
         inputs,
         context,
         notes,
-        context.reviewInstruction?.trim() ? context.reviewInstruction : instruction,
+        inputs.runInputText("instruction") ??
+          (context.reviewInstruction?.trim() ? context.reviewInstruction : instruction),
       );
     case "consolidation":
       return consolidationText(inputs, target);
@@ -564,6 +573,22 @@ class BuiltInInputs {
     if (bound === undefined) return [];
     if (!isEntryList(bound)) this.fail(`expects a list on its ${name} input`);
     return bound;
+  }
+
+  /**
+   * The text of a `text@1` or `markdown@1` input the builder writes as the
+   * user's own instruction: undefined when the input is absent or blank. It
+   * must be a run input, because the builder places it outside any evidence
+   * frame (invariant 5): an upstream node's text there is refused.
+   */
+  runInputText(name: string): string | undefined {
+    const entry = this.optional(name);
+    if (!entry) return undefined;
+    if (entry.runInput !== true) this.fail(`takes its ${name} input from a run input only`);
+    const value = this.builtInValue<Record<string, unknown>>(entry);
+    const text = value.markdown ?? value.text;
+    if (typeof text !== "string") this.fail(`got no text on its ${name} input`);
+    return text.trim() ? text : undefined;
   }
 
   /** A built-in type's value, held to the type's budgets, schema and domain check. */

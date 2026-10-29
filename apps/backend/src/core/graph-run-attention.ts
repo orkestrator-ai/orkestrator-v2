@@ -182,9 +182,9 @@ export class GraphRunAttention {
       this.timers.setTimeout(() => {
         this.changeTimers.delete(change.id);
         void this.observeRun(change.id).catch((error: unknown) => {
+          // A code or error name only: a message may quote run content (invariant 9).
           console.warn(
-            "[graph-runs] Could not update the sidebar for a run:",
-            error instanceof Error ? error.message : error,
+            `[graph-runs] Could not update the sidebar for run ${change.id} (${graphAttentionErrorReason(error)})`,
           );
         });
       }, this.debounceMs),
@@ -266,4 +266,21 @@ export class GraphRunAttention {
     if (current === desired || (current === undefined && desired === "idle")) return;
     await this.storage.setEnvironmentAgentActivity(environmentId, desired, this.now(), "graph-run");
   }
+}
+
+const ERROR_REASON = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * A bounded, content-free reason for a log line: the error's `code` when it
+ * has a short identifier-like one (a storage refusal's), else its `name`,
+ * else "error". Never the message.
+ */
+export function graphAttentionErrorReason(error: unknown): string {
+  if (error && typeof error === "object") {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && ERROR_REASON.test(code)) return code;
+    const name = (error as { name?: unknown }).name;
+    if (typeof name === "string" && ERROR_REASON.test(name)) return name;
+  }
+  return "error";
 }

@@ -461,3 +461,16 @@ export function wrapGraphEvidenceFrame(
 ): string {
   return `${graphEvidenceFrameOpen(attributes)}\n${escapedBody}\n${GRAPH_EVIDENCE_FRAME_CLOSE}`;
 }
+
+/**
+ * One value taken from an input, framed inline (item 105, invariant 5):
+ * `<orkestrator-evidence port="note" path="title">…</orkestrator-evidence>`,
+ * with no line breaks added, so a template's sentence reads on around it.
+ * The body must already be escaped ({@link escapeFramedEvidenceText}).
+ */
+export function wrapGraphInlineEvidenceFrame(
+  attributes: readonly (readonly [string, string])[],
+  escapedBody: string,
+): string {
+  return `${graphEvidenceFrameOpen(attributes)}${escapedBody}${GRAPH_EVIDENCE_FRAME_CLOSE}`;
+}

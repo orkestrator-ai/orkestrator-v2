@@ -65,6 +65,14 @@ export const GRAPH_LAUNCH_BOUNDS = Object.freeze({
   maxEnvironmentlessRunsPerProject: 20,
   /** ... and none that ended longer ago than this. */
   environmentlessRunRetentionMs: 7 * 24 * 60 * 60 * 1_000,
+  /**
+   * Finished runs kept per environment (invariant 6, run history): after a
+   * run finishes, and at startup, the oldest finished runs beyond this are
+   * deleted with their artifacts, effects and transcripts. Unfinished runs
+   * are never deleted and do not count. Deleting the environment removes the
+   * rest.
+   */
+  maxFinishedRunsPerEnvironment: 100,
 });
 
 /**

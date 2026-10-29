@@ -108,7 +108,8 @@ describe("WorkflowResultService", () => {
 
   test("announces a first acceptance after its commit, once, to isolated listeners", async () => {
     const resultKey = await prepare();
-    const seen: { resultKey: string; environmentId: string; committed: boolean }[] = [];
+    const seen: { resultKey: string; environmentId: string; kind: string; committed: boolean }[] =
+      [];
     service.onAccepted(() => {
       throw new Error("a faulty listener must not fail the submission");
     });
@@ -125,7 +126,10 @@ describe("WorkflowResultService", () => {
     // A duplicate submission of the same result is not a new acceptance.
     expect(await service.submit(scope, resultKey, value)).toMatchObject({ duplicate: true });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(seen).toEqual([{ resultKey, environmentId: "env-1", committed: true }]);
+    // The event names the slot's kind, so a listener can skip other kinds unread.
+    expect(seen).toEqual([
+      { resultKey, environmentId: "env-1", kind: "feature-plan-state", committed: true },
+    ]);
     unsubscribe();
     const second = await prepare();
     await service.submit(scope, second, value);

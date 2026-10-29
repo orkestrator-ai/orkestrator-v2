@@ -28,6 +28,7 @@ import {
   boundGraphError,
   isGraphActivationTerminal,
   replaceGraphActivation,
+  type GraphActivationBlock,
   type GraphActivationState,
   type GraphRun,
   type GraphRunStatus,
@@ -231,8 +232,9 @@ export function settleGraphActivation(
     ) {
       throw new GraphRunTransitionError(`A ${activation.state} activation cannot become ${state}`);
     }
+    const { blocked: _blocked, ...rest } = activation;
     return {
-      ...activation,
+      ...rest,
       state,
       finishedAt: at,
       ...(failure ? { error: boundGraphError(failure.error) } : {}),
@@ -249,7 +251,9 @@ export function admitGraphActivation(run: GraphRun, key: string, agentSession: b
     if (activation.state !== "ready") {
       throw new GraphRunTransitionError(`A ${activation.state} activation cannot be admitted`);
     }
-    return { ...activation, state: "admitting" };
+    // Admission ends the wait: the block it recorded goes with it.
+    const { blocked: _blocked, ...rest } = activation;
+    return { ...rest, state: "admitting" };
   });
   if (!replaced.ok) throw new GraphRunTransitionError(replaced.message);
   if (!agentSession) return replaced.run;
@@ -257,4 +261,34 @@ export function admitGraphActivation(run: GraphRun, key: string, agentSession: b
     ...replaced.run,
     usage: { ...replaced.run.usage, agentSessions: replaced.run.usage.agentSessions + 1 },
   };
+}
+
+/**
+ * Records why a `ready` activation was not admitted (the run view shows it).
+ * Returns the same run when the block is unchanged or the activation is not
+ * ready, so a pass that changes nothing saves nothing.
+ */
+export function markGraphActivationBlocked(
+  run: GraphRun,
+  key: string,
+  block: GraphActivationBlock,
+): GraphRun {
+  const current = run.activations.find((activation) => activation.key === key);
+  if (!current || current.state !== "ready") return run;
+  if (
+    current.blocked?.reason === block.reason &&
+    current.blocked.holder === block.holder &&
+    current.blocked.holderAccess === block.holderAccess
+  ) {
+    return run;
+  }
+  const replaced = replaceGraphActivation(run, key, (activation) => ({
+    ...activation,
+    blocked: {
+      reason: block.reason,
+      ...(block.holder ? { holder: block.holder } : {}),
+      ...(block.holderAccess ? { holderAccess: block.holderAccess } : {}),
+    },
+  }));
+  return replaced.ok ? replaced.run : run;
 }

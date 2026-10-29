@@ -263,7 +263,7 @@ async function caseRun(entry: EvaluationCase): Promise<CaseRun> {
         fixer: { platform: "claude", model: "fixer" },
         describer: { platform: "claude", model: "describer" },
       },
-      params: { autoFix: false, autoPr: false, targetBranch: TARGET_BRANCH, reviewInstruction: "" },
+      params: { autoFix: false, autoPr: false, targetBranch: TARGET_BRANCH },
       inputs: {},
     },
     loopIterations: {},

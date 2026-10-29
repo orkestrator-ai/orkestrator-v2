@@ -18,6 +18,7 @@ import {
   graphActivationBranch,
   type GraphRun,
 } from "@orkestrator/protocol/graphs/run";
+import { graphActivationBlockText } from "@orkestrator/protocol/graphs/run-view";
 import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
 import type { GraphNodeKind } from "@orkestrator/protocol/graphs/template";
 import {
@@ -74,6 +75,10 @@ export function graphRunNodeStatusLabel(node: GraphRunFlowNode, run: GraphRun): 
       : "Not started yet";
   }
   const state = node.activation?.state;
+  // A ready position the pass could not admit says why (D3 across engines, limits).
+  if (state === "ready" && node.activation?.blocked && run.status !== "paused") {
+    return graphActivationBlockText(node.activation.blocked);
+  }
   if (state === "ready" || state === "waiting") return "Queued";
   if (state === "admitting") return "Starting";
   return STATE_LABEL[node.state];

@@ -62,6 +62,12 @@ Users watch and control a run in the same visual language as Multi Review and th
 - 2026-10-29 · Agent testing, real stack: the launch → switch away → finish → return scenario 214 added to `graph-run-view.spec.ts` ("a graph launched from Run graph… finishes while its environment is away and rehydrates") passed again on profile `graphs-208-realstack` (3 passed, 1 opt-in skipped; `output/agent-testing/graphs-208-realstack/browser/results.json`), with the human-node scenario of item 208 (answer from the run view after returning, reloads). 214's first pass: profile `graphs-214-launch`, 2/2 (see 214's Notes).
 - 2026-10-29 · Done when, evidence. Observe: projection and face tests (`graph-run-flow.test.ts`, `GraphRunTab.test.tsx` "faces", "inspector", "rehydration"), the read side and two launched runs on a real stack. Control, each action through the view: retry, pause, resume and cancel (`GraphRunTab.test.tsx` "retry, pause, resume and cancel go to the backend…"; Resume was only checked for presence before, it is now clicked and its snapshot applied), restart from here and rewind code to here with its preview ("restart and rewind code use the restart backend…"), skip and open session ("skip is offered for a queued position…"), approve, edit and choose (`GraphHumanNodePanel.test.tsx`), an agent's question ("answers an agent's question through graph_run_answer"); availability rules in `graph-run-actions.test.ts`; backend commands in `commands-registry-graph-runs.test.ts`, `commands-registry-graph-human.test.ts`, `graph-run-user-actions.test.ts`, `graph-run-rewind.test.ts`. On a real stack only approve was driven through the view (208's scenario); retry, restart, rewind, skip, pause, resume, cancel, edit and choose are proven at component and command level, not by a Playwright run (a credential-free template cannot fail an agent branch, and these need no live check beyond the gateway, which the approve path exercises).
 
+**2026-10-29 · Audit: admission blocks in the run view.** A ready activation's
+`blocked` reads through `graphActivationBlockText` (`run-view.ts`) in the flow
+graph's status pill and the inspector's "Waiting" section, e.g. "Waiting:
+Build Pipeline is writing this environment"; neither shows while the run is
+paused. Tests: `run-view.test.ts`, `GraphRunTab.test.tsx`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -70,3 +76,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Run view: commands, retry/skip, transcript capture, `graph-run` tab, projection, inspector, actions, tests, read-side browser spec. · Connect 210 rewind wrappers and 208 human slot after merge; real-stack inactive-path run after 213/214.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks, item 208) · 210 rewind wiring and 208 human slot connected; Actions ticked. · Real-stack inactive-path run after 213/214.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Real-stack inactive path rerun with 208's human scenario; Resume now clicked in the tab test; Done when ticked with evidence. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · run view shows admission blocks · awaiting PR

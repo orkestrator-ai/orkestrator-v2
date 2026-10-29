@@ -67,7 +67,10 @@ import {
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_RUN_BOUNDS,
   isGraphActivationTerminal,
+  type GraphActivationBlock,
+  type GraphActivationBlockReason,
   type GraphRun,
+  type GraphWorkspaceHolderKind,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
 import {
@@ -557,17 +560,30 @@ export class GraphWorkspaceLocks {
 
 // ---------------------------------------------------------------- admission
 
-export type GraphAdmissionBlock =
-  /** `limits.maxConcurrentAgents` agent activations are admitted. */
-  | "concurrency"
-  /** `limits.maxTokens` is reached; agents already running finish first. */
-  | "token-budget"
-  /** A writer holds the workspace, or this writer waits for readers (D3). */
-  | "workspace-lock"
-  /** The environment already runs its most isolated branch worktrees (item 403). */
-  | "worktree-limit"
-  /** Startup recovery has not yet seeded the other runs' locks. */
-  | "recovering";
+/**
+ * Why a ready activation waits (persisted on it as `blocked`):
+ *
+ * - `concurrency`: `limits.maxConcurrentAgents` agent activations are admitted;
+ * - `token-budget`: `limits.maxTokens` is reached; agents already running finish first;
+ * - `workspace-lock`: another graph writer holds the workspace, or this writer
+ *   waits for graph readers (D3);
+ * - `external-workflow`: another engine (a Build Pipeline, a bespoke Multi
+ *   Review) holds the workspace in a way this access cannot share (D3 across
+ *   engines, `workspace-writers.ts`);
+ * - `worktree-limit`: the environment already runs its most isolated branch
+ *   worktrees (item 403);
+ * - `recovering`: startup recovery has not yet seeded the other runs' (or the
+ *   other engines') holds.
+ */
+export type GraphAdmissionBlock = GraphActivationBlockReason;
+
+/** What the other engines hold on a run's workspace (`WorkspaceWriters.externalHold`). */
+export interface GraphExternalWorkspaceHold extends GraphWorkspaceHold {
+  /** The engine of the first holder (a writer before readers), named in the block. */
+  holder?: GraphWorkspaceHolderKind;
+  /** Whether that holder writes or reads. */
+  holderAccess?: "write" | "read";
+}
 
 export interface GraphAdmissionCandidate {
   key: string;
@@ -581,7 +597,7 @@ export type GraphRunMeter = "agent-sessions" | "tokens";
 
 export interface GraphAdmissionDecision {
   admit: GraphAdmissionCandidate[];
-  blocked: { key: string; reason: GraphAdmissionBlock }[];
+  blocked: ({ key: string } & GraphActivationBlock)[];
   /** Agent activations a run budget can never admit: fail them (`budget-exceeded`). */
   exhausted: { key: string; meter: GraphRunMeter }[];
 }
@@ -645,10 +661,16 @@ function formatGraphDuration(ms: number): string {
  * Chooses which ready activations to admit now, in record order (plan order
  * within a round). `others` is what other runs hold on this run's workspace;
  * `workspaceKnown` is false until startup recovery seeded the lock table.
+ * `external` is what other engines hold there (absent: nothing; null: not
+ * known yet, so workspace access waits as `recovering`).
  */
 export function selectGraphAdmissions(
   run: GraphRun,
-  options: { others: GraphWorkspaceHold; workspaceKnown: boolean },
+  options: {
+    others: GraphWorkspaceHold;
+    workspaceKnown: boolean;
+    external?: GraphExternalWorkspaceHold | null;
+  },
 ): GraphAdmissionDecision {
   const nodes = new Map(run.plan.nodes.map((node) => [node.id, node]));
   const decision: GraphAdmissionDecision = { admit: [], blocked: [], exhausted: [] };
@@ -682,7 +704,7 @@ export function selectGraphAdmissions(
     const access = graphMainWorkspaceAccess(node);
     const worktree = graphNodeIsolated(node);
     if (access !== "none") {
-      if (!options.workspaceKnown) {
+      if (!options.workspaceKnown || options.external === null) {
         decision.blocked.push({ key: activation.key, reason: "recovering" });
         continue;
       }
@@ -692,6 +714,20 @@ export function selectGraphAdmissions(
       };
       if (writerWaiting || !graphWorkspaceAllows(held, access)) {
         decision.blocked.push({ key: activation.key, reason: "workspace-lock" });
+        if (access === "write") writerWaiting = true;
+        continue;
+      }
+      // D3 across engines: a Build Pipeline or bespoke Multi Review using the
+      // checkout counts as one more holder, so its writer excludes every graph
+      // access and its reader excludes graph writers.
+      const external = options.external;
+      if (external && !graphWorkspaceAllows(external, access)) {
+        decision.blocked.push({
+          key: activation.key,
+          reason: "external-workflow",
+          ...(external.holder ? { holder: external.holder } : {}),
+          ...(external.holderAccess ? { holderAccess: external.holderAccess } : {}),
+        });
         if (access === "write") writerWaiting = true;
         continue;
       }

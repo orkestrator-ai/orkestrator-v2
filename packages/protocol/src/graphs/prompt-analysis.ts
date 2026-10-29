@@ -17,7 +17,9 @@
  * renders it once per iteration: that is its weight. Summing weights along
  * every path of a source's access trie and taking the heaviest path bounds the
  * source's share: `weight × bytes`. Text renders once per execution of its
- * frame. The bound holds for any value within the source's budget and schema.
+ * frame. A node template writes each value taken from an input inside an
+ * inline evidence frame; the frame's bytes count once per execution of the
+ * tag. The bound holds for any value within the source's budget and schema.
  * Browser-safe.
  */
 import type { GraphJsonSchema } from "./artifact-type-def.js";
@@ -415,6 +417,11 @@ export interface GraphPromptBoundOptions {
   textBytes: (text: string) => number;
   /** A partial's bound per expansion. */
   partial?: (port: string) => GraphPromptSizeBound | undefined;
+  /**
+   * Bytes a variable writes around its value when it resolves through `use`
+   * (a node template's inline evidence frame); 0 when it writes it bare.
+   */
+  valueFrameBytes?: (use: GraphPromptTargetUse) => number;
 }
 
 /**
@@ -462,6 +469,11 @@ export function graphPromptTemplateBound(
     if (occurrence.kind !== "variable") continue;
     if (occurrence.mayRenderRaw)
       fixed += options.textBytes(occurrence.node.raw) * occurrence.executions;
+    if (options.valueFrameBytes && occurrence.uses.length > 0) {
+      // One execution resolves through one use: the largest frame bounds it.
+      const frame = Math.max(...occurrence.uses.map((use) => options.valueFrameBytes!(use)));
+      fixed = cap(fixed + frame * occurrence.executions);
+    }
     for (const use of occurrence.uses) {
       const entries = bySource.get(use.source) ?? [];
       entries.push({ path: use.path, weight: use.weight });

@@ -133,6 +133,18 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         description: "The sealed review package every reviewer shares.",
       },
       ticketInput(false),
+      {
+        // Item 301: Multi Review's review instruction, as a run input. The
+        // backend writes it where today's reviewer prompt has the user's
+        // instruction, so it must come from a run input (the launching user),
+        // never from an upstream node.
+        name: "instruction",
+        types: ["text", "markdown"],
+        required: false,
+        render: "markdown",
+        description:
+          "The review's own instruction, from a run input: what the reviewers should focus on.",
+      },
     ],
     outputs: [
       {

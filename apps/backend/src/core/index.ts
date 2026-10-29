@@ -198,6 +198,7 @@ import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
 } from "./workspace-code-rewind.js";
+import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
@@ -1075,6 +1076,9 @@ export class OrkestratorBackend {
       return false;
     });
     context.projectGit = this.projectGit;
+    // D3 across engines: graph runs and Build Pipelines consult one projection
+    // of who uses each checkout (bespoke Multi Reviews are tracked too).
+    const workspaceWriters = new WorkspaceWriters(storage);
     this.buildPipelines = new BuildPipelineService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1099,6 +1103,7 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        workspaceWriters,
       },
     );
     context.buildPipelines = this.buildPipelines;
@@ -1178,6 +1183,10 @@ export class OrkestratorBackend {
           ).trim(),
         }),
       }),
+      externalWorkspace: {
+        ready: () => workspaceWriters.ready(),
+        hold: (environmentId) => workspaceWriters.externalHold(environmentId),
+      },
       // Code rewinds (item 210) share the pipeline's Git port and reservation.
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
       codeRewindReservation: (run, operation) =>
@@ -1196,6 +1205,9 @@ export class OrkestratorBackend {
           run: operation,
         }),
     });
+    workspaceWriters.setGraphHoldProbe((environmentId) =>
+      this.graphRuns.workspaceHold(environmentId),
+    );
     // Gates and merges are deterministic (item 206); mock runs use them too.
     this.graphRuns.executors.register(createGraphGateExecutor());
     this.graphRuns.executors.register(createGraphMergeExecutor());

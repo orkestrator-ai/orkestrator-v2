@@ -175,6 +175,32 @@ export class GraphArtifactStore {
     return this.dependencies.storage.graphRuns;
   }
 
+  /**
+   * Removes the reference artifact directories of runs whose records were
+   * deleted (run-history pruning), while the environment exists. A stopped
+   * container is skipped, as for environment deletion. Never throws.
+   */
+  async removeRunFiles(
+    environmentId: string,
+    runIds: readonly string[],
+  ): Promise<{ removed: number; failed: number }> {
+    if (runIds.length === 0) return { removed: 0, failed: 0 };
+    try {
+      const environment = await this.dependencies.storage.getEnvironment(environmentId);
+      if (!environment || environment.deletionRequestedAt) return { removed: 0, failed: 0 };
+      if (environment.environmentType !== "local" && environment.status !== "running") {
+        return { removed: 0, failed: 0 };
+      }
+      return await removeGraphRunArtifactFiles(
+        environment,
+        this.createRunner(environment, this.dependencies.fence),
+        runIds,
+      );
+    } catch {
+      return { removed: 0, failed: runIds.length };
+    }
+  }
+
   private async requireRun(runId: string): Promise<GraphRun> {
     const run = await this.runs.getGraphRun(runId);
     if (!run) throw new GraphStorageError("run-not-found", "The graph run does not exist");

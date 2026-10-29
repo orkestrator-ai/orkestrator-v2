@@ -12,6 +12,7 @@ import {
   agentBranchErrorMessage,
   type AgentBranchHost,
   type AgentBranchRecord,
+  AGENT_BRANCH_LOG_PREFIX,
 } from "./agent-branch-types.js";
 import type { EfficiencyEvent } from "./multi-review-efficiency.js";
 
@@ -37,6 +38,8 @@ export class AgentBranchCommitQueue {
   constructor(
     private readonly save: () => Promise<void>,
     private readonly record: AgentBranchRecordEvent,
+    /** The host's log prefix (`[review-fanout]`, `[graph-agent]`). */
+    private readonly logPrefix = AGENT_BRANCH_LOG_PREFIX,
   ) {}
 
   /**
@@ -109,7 +112,7 @@ export class AgentBranchCommitQueue {
     } catch (error) {
       if (isAgentBranchFenceError(error)) throw error;
       console.warn(
-        "[review-fanout] Checkpointing reviewer observations failed:",
+        `${this.logPrefix} Checkpointing reviewer observations failed:`,
         agentBranchErrorMessage(error),
       );
     }

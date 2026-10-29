@@ -166,9 +166,26 @@ which matters for worktrees deletion keeps (project home). With the other enviro
 never got an environment (failed provisioning) is not environment-keyed: 214/202 must clean those
 up with their launch.
 
+**2026-10-29 · Audit: run history bound (invariant 6).** Runs tied to an
+environment had no count cap until the environment was deleted. An environment
+now keeps at most `GRAPH_LAUNCH_BOUNDS.maxFinishedRunsPerEnvironment` (100)
+finished runs. `pruneFinishedGraphRuns(environmentId, keep)` selects, inside
+one queued run mutation, the oldest finished runs (by `finishedAt`, else
+`updatedAt`, from the stored fields) beyond `keep` and deletes each with its
+artifact, usage and effect rows (shared `removeRunRows`, which also fixed the
+environment-less path leaving the usage row), then their transcripts.
+Unfinished runs (running, waiting, paused, provisioning, cancelling) are never
+deleted and do not count. `GraphRunService.pruneRunHistory` runs it in the
+background after a save leaves a run finished (coalesced per environment;
+shutdown waits) and when a discovery, at startup and every 30 s, counts an
+environment over the bound, then removes the pruned runs' sealed reference
+files (`GraphArtifactStore.removeRunFiles`, best effort). Tests:
+`storage-graph-runs.test.ts` ("run history …"), `graph-run-history.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Run record, stores, artifact store with on-disk hash verification (host and container), budgets, 103's remaining validators, environment deletion; tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · run history bound: 100 finished runs per environment, pruned after a run finishes and at startup with artifacts, effects, transcripts and files · awaiting PR

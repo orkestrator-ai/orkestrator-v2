@@ -138,6 +138,8 @@ export function graphDescribeRepairPrompt(
 export class GraphDescribeBranchHost implements AgentBranchHost<AgentBranchRecord> {
   readonly workflowId: string;
   readonly sessionPhase = "review";
+  /** The shared runner logs this activation's lines under the graph prefix. */
+  readonly logPrefix = "[graph-describe]";
   readonly mode = "plan" as const;
   readonly wording = GRAPH_DESCRIBE_WORDING;
   readonly progress: MultiReviewProgressTracker;

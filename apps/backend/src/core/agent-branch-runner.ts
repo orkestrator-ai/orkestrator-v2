@@ -64,6 +64,7 @@ import {
   agentBranchNowIso,
   type AgentBranchHost,
   type AgentBranchRecord,
+  AGENT_BRANCH_LOG_PREFIX,
 } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
@@ -103,12 +104,13 @@ export async function attachAgentBeforeDispatch(
   provider: BuildPipelineProvider,
   providerSessionId: string,
   options?: ProviderPrepareDispatchOptions,
+  logPrefix: string = AGENT_BRANCH_LOG_PREFIX,
 ): Promise<void> {
   try {
     await provider.prepareDispatch?.(providerSessionId, options);
   } catch (error) {
     console.warn(
-      "[review-fanout] Attaching the agent before dispatch failed:",
+      `${logPrefix} Attaching the agent before dispatch failed:`,
       agentBranchErrorMessage(error),
     );
   }
@@ -187,7 +189,11 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
 
   constructor(private readonly host: AgentBranchHost<B>) {
     const record = (event: Omit<EfficiencyEvent, "owner">) => this.record(event);
-    this.commits = new AgentBranchCommitQueue(() => host.save(), record);
+    this.commits = new AgentBranchCommitQueue(
+      () => host.save(),
+      record,
+      host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX,
+    );
     this.context = { host, commits: this.commits, record };
     this.observer = new AgentBranchObserver(this.context);
   }
@@ -516,6 +522,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         provider,
         providerSessionId,
         turnAgentMcp ? { agentMcp: turnAgentMcp, ...resultTurn.prepare } : undefined,
+        host.logPrefix,
       );
       // Other branches may be committing concurrently; this branch's own
       // journal is what matters. Its `dispatching` write is durable once this
@@ -819,7 +826,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         if (this.isFatal(error)) throw error;
         host.stageResultConsumption?.(requestId);
         console.warn(
-          `[review-fanout] Deferred result consumption: ${agentBranchErrorMessage(error)}`,
+          `${host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX} Deferred result consumption: ${agentBranchErrorMessage(error)}`,
         );
       }
     }

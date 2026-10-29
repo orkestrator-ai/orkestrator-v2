@@ -333,6 +333,24 @@ rendering are bounded and never throw.
   `json-frame` (framed JSON), `markdown` (the type's markdown template,
   escaped), `summary` (`field: value` lines), `file` (path, SHA-256 and size of
   a reference artifact) or `on-demand` (ids and a `read_artifact` hint).
+- **Inline value frames** (invariant 5). Every variable whose value is taken
+  from an input artifact renders inside its own frame on the line:
+  `Title: <orkestrator-evidence port="note" path="title">…</orkestrator-evidence>`.
+  That covers `input.<port>…`, the `items` element (`item…`, framed under its
+  port), `ticket…` (framed as `run-input="<name>"`) and every name resolved
+  inside a section over one of them, wherever the element is found
+  (`{{title}}` inside `{{#input.notes}}` frames as `path="2.title"`; an
+  element field named `params` shadows the root and is framed too). The body
+  is escaped like a frame's text (`&lt;`/`&gt;`; objects as framed JSON);
+  attributes come only from the template and the node's ports. The renderer
+  tracks each context level's path from the root (`GraphPromptValueOrigin`,
+  the `frameValue` render option); `graphPromptUpstreamFrame` decides.
+  Trusted values are written bare: `params.*` (the template's defaults or
+  launch values the user typed), `run.iteration`, `branch.*`, the
+  `item.index`/`item.id` aliases the runtime writes, and `lens.*` (lenses come
+  from the template or the launch, never from upstream). Type markdown
+  templates and summaries render inside their input's block frame, so they
+  add no inline frames.
 - **Built-in prompts** (`GRAPH_BUILT_IN_PROMPT_IDS`): `review-package-preparation`,
   `discovery-review`, `consolidation`, `fix-review-issues`, `address-review`,
   `build`, `pipeline-fix`, `verify`, `pull-request-description` and
@@ -352,7 +370,10 @@ rendering are bounded and never throw.
   function.
 - **Size and lints.** `estimateGraphNodePromptSize` reports the nominal and
   worst-case bytes against the 160 KiB input ceiling, with fan-in list sizes
-  from the producers' branches. Lints (`prompt-lint.ts`) flag unbound and
+  from the producers' branches. Each inline value frame counts once per
+  execution of its tag (`graphPromptValueFrameMaxBytes`, list indices at
+  their widest), so both figures still bound the render (property tests in
+  `prompt-size.test.ts`). Lints (`prompt-lint.ts`) flag unbound and
   unknown variables, branch variables before large shared inputs (cache
   prefix), prose-only output instructions, profile contradictions, unused
   inputs and built-in prompt mismatches. All codes are in
@@ -620,7 +641,7 @@ Four record stores (`storage-stores.ts`; details in [storage.md](storage.md)):
 | Store | Rows | Owner |
 | --- | --- | --- |
 | `graph-templates` | collections `templates` (one user template per row, revision CAS), `projects` (ceiling, trust records, `launchDefaults`), `sharing` (signing keys), `approvals` (approved copies and rejections per project) | project rows deleted with the project |
-| `graph-runs` | one `GraphRun` per run, revision compare-and-swap; writes announce `graph-run` | the environment (deleted with it); environment-less runs by retention |
+| `graph-runs` | one `GraphRun` per run, revision compare-and-swap; writes announce `graph-run` | the environment (deleted with it; at most 100 finished runs kept per environment); environment-less runs by retention |
 | `graph-artifacts` | one row per artifact, a per-run usage row that enforces the budgets, and the effect journal (`<run>/effect:<sha256 of key>`) | the run |
 | `graph-describe` | the latest "Describe a graph" job per environment | the environment |
 
@@ -645,6 +666,22 @@ refused (`newer-format`), never rewritten. Errors are `GraphStorageError` with
 a code and, for bounds, `GRAPH_RUN_LIMIT_CODES`. Environment deletion removes
 the runs' reference files first (best effort), then run, artifact, usage and
 effect rows in one transaction per run, then their transcripts.
+
+**Run history** (invariant 6). An environment keeps at most
+`GRAPH_LAUNCH_BOUNDS.maxFinishedRunsPerEnvironment` (100) finished runs
+(`complete`, `failed`, `cancelled`, mock runs included).
+`pruneFinishedGraphRuns(environmentId, keep)` selects the oldest finished
+runs past the bound by end time (`finishedAt`, else `updatedAt`) and deletes
+each with its artifact, usage and effect rows, in the same queued mutation,
+so a run a restart reopened meanwhile is kept; their transcripts go after.
+Running, waiting, paused, provisioning and cancelling runs are never deleted
+and do not count. `GraphRunService` prunes in the background after a save
+leaves a run finished (coalesced per environment; shutdown waits for it) and
+whenever discovery, at startup and every 30 s, counts an environment over the
+bound; it logs only the count and the environment id. The pruned runs'
+sealed reference files are then removed from the workspace
+(`GraphArtifactStore.removeRunFiles`, best effort as for environment
+deletion; a stopped container's are left to environment deletion).
 
 **Artifacts** (`graph-artifacts.ts`, invariants 3 and 4). Every artifact is
 validated against its type from the frozen plan before it is stored, and is
@@ -683,7 +720,11 @@ obligations:
 | `await-human` | only `awaiting-human` activations admitted | 30 s safety, without a provider slot; answers wake the run |
 
 `result-accepted` wakes only the run that owns the accepted slot
-(`GraphRunResultKeys` maps each admitted activation's result keys to it).
+(`GraphRunResultKeys` maps each admitted activation's result keys to it). The
+acceptance event carries the slot's kind; graph activations open only
+`graph-output` slots, so any other kind returns before the index or the store
+is read, and only an unindexed `graph-output` key reads the environment's
+runs.
 Environment and provider transitions wake the environment's runs.
 `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=graph-run` disables graph runs: nothing
 is launched or advanced, stored runs stay readable and cancellable.
@@ -769,12 +810,36 @@ reader beside a writer, across every run on the environment
 An isolated branch holds a reader on the run's workspace. A mock run holds no
 locks (`graphRunLockedWorkspace`).
 
+**Across engines** (`workspace-writers.ts`). Build Pipelines and bespoke Multi
+Reviews count as holders of the checkout: a pipeline writes in Build, Fix,
+package preparation, Address, Verify (its shell may write build outputs), PR,
+conflict resolution and setup, and reads while reviewing (a session still
+running counts by its own stage); a bespoke Multi Review writes while
+preparing or fixing and reads while reviewing or consolidating (a graph-engine
+review holds the graph lock instead). A graph step that cannot share with them
+waits with block `external-workflow`, which names the engine and whether it
+writes or reads; graph readers wait for an external writer too, since D3 puts
+no reader beside a writer and a read-only node's git guard would otherwise
+fail on the other engine's edits. A pipeline stage claims the checkout
+(`WorkspaceWriters.claim`) before it saves or opens its session, and waits
+without failing (`WorkspaceBusyError`, retried on its next pass) while a graph
+run writes the environment, or reads it when the stage writes. The projection
+is in memory: one scan of each store on first use, then the pipeline's record
+notes and resource changes (stale revisions ignored); a pass or a stage start
+reads a map, and each side checks and claims without an await in between.
+Until it is seeded a graph step waits as `recovering`. Interactive agent tabs
+are not tracked (see Known gaps).
+
 **Admission** (`selectGraphAdmissions`): `limits.maxConcurrentAgents` admitted
 agent activations at once and `limits.maxAgentSessions` over the run's life
 (`usage.agentSessions`, counted at admission); an agent that can never get a
 session fails with `budget-exceeded`. A blocked activation waits with its
-block (`concurrency`, `token-budget`, `workspace-lock`, `worktree-limit`, or
-`recovering` until the first discovery after a restart).
+block (`concurrency`, `token-budget`, `workspace-lock`, `external-workflow`,
+`worktree-limit`, or `recovering` until the first discovery after a restart).
+Each pass records a ready activation's block on it (`NodeActivation.blocked =
+{reason, holder?, holderAccess?}`, cleared on admission or settle), and the
+run view shows it (`graphActivationBlockText`: "Waiting: Build Pipeline is
+writing this environment").
 
 **Token and wall-clock limits.** `limits.maxTokens` is a soft meter over
 `usage.tokens`, the tokens finished agent activations reported. Once it is
@@ -910,7 +975,9 @@ answered | declined, text?, choice?}` and are recorded under the run's lock.
 - **Failure.** The latest failed activation of a position is retried (a new
   attempt, the same inputs) while `retry.attempts` allow (default 1, no
   retry) and its cause is in `retry.on`. Then `onFailure`: `fail-run` (the
-  default; replicated nodes default to `skip`, timed human nodes to `route`)
+  default, and always the default for writers, isolated replicated writers
+  included; replicated readers and nodes without workspace access default to
+  `skip`, timed human nodes to `route`)
   fails the run and stops its other work; `skip` delivers
   nothing, so consumers skip; `route` stores an `error@1` artifact on the
   node's `error` port, whose consumers run while the other outputs' consumers
@@ -1579,12 +1646,20 @@ what the graph runtime gained for it.
   generation, the bespoke budget. Permits live in memory only, expire after
   30 minutes, and are revoked by any failed verification of the artifact and
   by a restart in the run.
-- **`targetBranch` and `reviewInstruction` parameters.** A string parameter
-  `targetBranch` in an agent node's scope names the branch its prompt reviews
-  against, ahead of the environment's base branch (`graph-agent-host.ts`). A
-  `reviewInstruction` parameter is read by the discovery review only and wins
-  over `instruction` there, so a template can instruct its reviewers without
-  turning its Fix into a custom Fix.
+- **`targetBranch` parameter and the review instruction input.** A string
+  parameter `targetBranch` in an agent node's scope names the branch its
+  prompt reviews against, ahead of the environment's base branch
+  (`graph-agent-host.ts`). The `discovery-review` built-in reads an optional
+  `instruction` input (`text@1` or `markdown@1`) as the review's own
+  instruction, where today's reviewer prompt has it, so a template can
+  instruct its reviewers without turning its Fix into a custom Fix. It must
+  come from a run input (an upstream node's text there is refused, invariant
+  5). Item 301 wires its optional `reviewInstruction` run input
+  (`markdown@1`, up to 128 KiB) to it. When the graph engine is selected, an
+  instruction past that budget refuses the start
+  (`MultiReviewGraphEngineError`); it never switches engines. The older
+  `reviewInstruction` string parameter is still read, after the input, for
+  runs whose frozen plan declares it.
 
 ## Bounds
 
@@ -1684,7 +1759,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 | `GRAPH_LIBRARY_BOUNDS` project files, file bytes, project bytes, user templates, user bytes, trust records | 64, 1 MiB, 16 MiB, 200, 32 MiB, 128 | P`library.ts` |
 | Project template watcher: settle, watched projects | 250 ms, 32 | B`graph-project-templates.ts` |
 | `GRAPH_SHARING_BOUNDS` bundle, author, trusted keys, approved text per template/project, diff lines | 2 MiB, 120, 64, 256 KiB/4 MiB, 400 | P`sharing.ts` |
-| `GRAPH_LAUNCH_BOUNDS` saved defaults, request id, input bytes, environment-less runs, retention | 64, 128, 256 KiB, 20, 7 days | P`launch.ts` |
+| `GRAPH_LAUNCH_BOUNDS` saved defaults, request id, input bytes, environment-less runs, retention, finished runs per environment | 64, 128, 256 KiB, 20, 7 days, 100 | P`launch.ts` |
 | `GRAPH_MOCK_PIN_BOUNDS` nodes, pins per node, pin bytes, all pins, `maxStepMs` | 100, 20, 64 KiB, 256 KiB, 10 s | P`mock-pins.ts` |
 | `GRAPH_MOCK_RUNS_RETAINED`, `GRAPH_MOCK_DEFAULT_PANEL`, `GRAPH_RUN_EFFECTS_LIMIT` | 20, 2, 500 | B`graph-mock-launch.ts`, `commands-registry-graph-mock.ts` |
 | `GRAPH_DESCRIBE_BOUNDS` description, base draft, examples, issues | 8,000 chars, 64 KiB, 16 KiB, 32 | P`describe.ts` |
@@ -1717,10 +1792,15 @@ The plan's invariants come on top of every invariant in the root `AGENTS.md`.
    type validation and provenance at submit; the artifact store validates
    again before storing; mock values go through the same store.
 5. **Upstream content is untrusted.** Inputs reach prompts only through
-   evidence frames; the locked system contract states the rule; taint reaching
-   a side effect needs an acknowledgement.
+   evidence frames: a partial's block frame, or an inline frame around each
+   value a template variable takes from an input (`prompt-render.test.ts`);
+   the locked system contract states the rule; taint reaching a side effect
+   needs an acknowledgement. Built-in prompts follow their builders (see
+   Known gaps).
 6. **Everything is bounded.** See [Bounds](#bounds); appends past a run bound
-   fail the run with `budget-exceeded` rather than evicting.
+   fail the run with `budget-exceeded` rather than evicting. Run history is
+   bounded per environment (100 finished runs, oldest pruned first; see
+   Storage).
 7. **Capabilities only narrow.** `compileGraphCapabilities` unions denials of
    profile, node, ceiling and environment and keeps the environment's sandbox
    and approvals; push and GitHub writes are denied on every agent node; MCP
@@ -1729,8 +1809,12 @@ The plan's invariants come on top of every invariant in the root `AGENTS.md`.
    captured fails the activation before dispatch; a violation fails it and
    keeps the evidence in `guards`.
 9. **Logs and metrics never carry payloads.** Graph modules log ids, codes,
-   states, counts and bytes; receipts, notices and summaries (CLI, coordinator,
-   attention keys) are content-free.
+   states, counts and bytes (a failure is logged by its code or error name,
+   never its message: `graphAttentionErrorReason`); receipts, notices and
+   summaries (CLI, coordinator, attention keys) are content-free. Graph
+   activations on the shared branch runner log under `[graph-agent]`
+   (`AgentBranchHost.logPrefix`; "Describe a graph" under `[graph-describe]`),
+   review fan-outs keep `[review-fanout]`.
 
 Root `AGENTS.md`'s background-work invariants apply too: a run is
 backend-owned and keeps going while its environment is inactive or its tab is
@@ -1757,11 +1841,22 @@ environment is away, and a wait surviving a backend restart).
 - **Isolated branches** are confined by guards, not by the provider: bridges
   keep one working directory per process. A per-session working directory in
   every bridge is a follow-up.
+- **Built-in prompts keep their builders' framing** (invariant 5). A
+  `{ builtIn }` node sends the text today's flows send: Multi Review's
+  consolidation and findings frames, and the ticket snapshot written into the
+  build, fix and verify prompts as the bespoke pipeline writes it. Inputs the
+  built-in does not read are appended in block frames, and the discovery
+  review's instruction is taken only from a run input. A user template frames
+  every upstream value.
 - **CLI waiting.** `graph launch` has no `--wait`; follow a run with
   `graph status`.
 - **Token meter granularity.** `limits.maxTokens` reads the tokens an agent
   activation reports when it finishes, so the agents running when the meter
   is reached finish and can take the run past it (a soft limit by design).
+- **Cross-engine locking** covers graph runs, Build Pipelines and bespoke
+  Multi Reviews. Interactive agent tabs (Multi Review's interactive Fix tab
+  included) are not tracked, and a bespoke Multi Review does not itself wait
+  for a graph writer before preparing or fixing.
 - **Built-ins** keep their own engines; engine-only behaviours are not
   expressible as templates (item 108 Notes). Item 301 built Multi Review on the
   graph runtime behind the `multiReviewEngine` setting (and

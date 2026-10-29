@@ -434,4 +434,88 @@ describe("graph-artifacts store", () => {
     expect(await storage.graphRuns.getGraphRun("run-2")).not.toBeNull();
     expect(await storage.graphRuns.listGraphArtifacts("run-2")).toHaveLength(1);
   });
+
+  test("run history keeps the newest finished runs per environment and never an unfinished one", async () => {
+    const storage = await openStorage();
+    const at = (second: number) => `2026-10-29T00:00:${String(second).padStart(2, "0")}.000Z`;
+    // Finished runs, out of creation order: the end time decides.
+    const finished: [string, GraphRun["status"], number][] = [
+      ["old-a", "complete", 10],
+      ["old-b", "failed", 11],
+      ["new-a", "cancelled", 30],
+      ["new-b", "complete", 20],
+    ];
+    for (const [id, status, second] of finished) {
+      const created = await storage.graphRuns.createGraphRun(
+        graphRunFixture({ id, createdAt: at(1) }),
+      );
+      await storage.graphRuns.putGraphArtifact(graphArtifactFixture(id));
+      await storage.graphEffects.beginGraphEffect({
+        runId: id,
+        key: "push:main:abc",
+        action: "push-branch",
+        nodeId: "push",
+        activation: "push#iter=1#attempt=1",
+        owner: "process-1",
+      });
+      await storage.graphRuns.saveGraphRun(
+        {
+          ...created,
+          status,
+          startedAt: at(1),
+          finishedAt: at(second),
+          updatedAt: at(second),
+          ...(status === "failed" ? { error: "x", errorCause: "system-error" as const } : {}),
+        },
+        created.revision,
+      );
+    }
+    // Unfinished runs, older than everything: never deleted, never counted.
+    for (const [id, status] of [
+      ["live", "running"],
+      ["held", "paused"],
+      ["asking", "waiting"],
+    ] as const) {
+      const created = await storage.graphRuns.createGraphRun(
+        graphRunFixture({ id, createdAt: at(0) }),
+      );
+      if (status !== "running") {
+        await storage.graphRuns.saveGraphRun({ ...created, status }, created.revision);
+      }
+    }
+    // Another environment's finished run is not this environment's history.
+    await storage.graphRuns.createGraphRun(
+      graphRunFixture({
+        id: "elsewhere",
+        environmentId: "e2",
+        status: "complete",
+        finishedAt: at(1),
+      }),
+    );
+
+    expect(await storage.graphRuns.pruneFinishedGraphRuns("e1", 2)).toEqual(["old-b", "old-a"]);
+    expect((await storage.graphRuns.listGraphRuns("e1")).map((run) => run.id).sort()).toEqual([
+      "asking",
+      "held",
+      "live",
+      "new-a",
+      "new-b",
+    ]);
+    for (const id of ["old-a", "old-b"]) {
+      expect(await storage.graphRuns.listGraphArtifacts(id)).toEqual([]);
+      expect((await storage.graphRuns.graphArtifactUsage(id)).artifacts).toBe(0);
+      expect(await storage.graphEffects.listGraphEffects(id)).toEqual([]);
+    }
+    expect(await storage.graphRuns.listGraphArtifacts("new-b")).toHaveLength(1);
+    expect(await storage.graphEffects.listGraphEffects("new-b")).toHaveLength(1);
+    // Within the bound: nothing to do. Zero keeps no finished run at all.
+    expect(await storage.graphRuns.pruneFinishedGraphRuns("e1", 2)).toEqual([]);
+    expect(await storage.graphRuns.pruneFinishedGraphRuns("e1", 0)).toEqual(["new-a", "new-b"]);
+    expect((await storage.graphRuns.listGraphRuns("e1")).map((run) => run.id).sort()).toEqual([
+      "asking",
+      "held",
+      "live",
+    ]);
+    expect(await storage.graphRuns.getGraphRun("elsewhere")).not.toBeNull();
+  });
 });

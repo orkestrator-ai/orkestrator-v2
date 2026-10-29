@@ -40,6 +40,7 @@ import {
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
 import {
+  GRAPH_RUN_INPUT_PRODUCER,
   graphActivationBranch,
   graphArtifactItemIds,
   graphItemList,
@@ -516,6 +517,7 @@ function builtInInputs(
         // A submitted report keeps the provider schema's null placeholders;
         // consolidation reads it as Multi Review accepts a reviewer's report.
         ...(review ? { acceptedReport: true } : {}),
+        ...(artifact.producer.activation === GRAPH_RUN_INPUT_PRODUCER ? { runInput: true } : {}),
       };
     });
     result[input.name] = input.list ? values : values[0]!;

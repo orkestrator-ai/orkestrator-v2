@@ -38,6 +38,7 @@ export interface CollectorDeps {
       environmentId: string;
       tabId: string;
       environmentName?: string;
+      tabName?: string;
     };
   }): Promise<void>;
 }
@@ -148,6 +149,7 @@ export class NodeMailCollector {
               environmentId: item.fromEnvironmentId,
               tabId: item.fromTabId,
               ...(item.fromEnvironmentName ? { environmentName: item.fromEnvironmentName } : {}),
+              ...(item.fromTabName ? { tabName: item.fromTabName } : {}),
             },
           });
           delivered.push(item.seq);

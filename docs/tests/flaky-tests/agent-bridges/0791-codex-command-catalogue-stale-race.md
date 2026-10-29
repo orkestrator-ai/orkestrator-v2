@@ -202,3 +202,17 @@ No catalogue implementation, assertion, deadline or skip changed.
 
 The exact `mise run test` rerun passed all four groups (exit 0, 148.3 s),
 logged as `review-default-rerun`.
+
+## Scheduling switch review — 2026-10-29
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer mismatch
+at line 273 (124.55 ms): expected `stale`, received `ready`. The complete
+unchanged owner passed alone (exit 0, 1.4 s):
+
+```sh
+mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence: `validation-04.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
+No implementation, assertion, deadline or skip changed in this owner.

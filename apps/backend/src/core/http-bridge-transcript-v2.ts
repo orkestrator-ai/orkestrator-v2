@@ -135,6 +135,7 @@ function summarySnapshot(
     historyEpoch: historyEpoch(value.generation, value.contentEpoch),
     freshness: value.freshness,
     representation: "summary",
+    historyPageable: value.capabilities.pages,
     ...(historyCursor
       ? {
           historyCursor,

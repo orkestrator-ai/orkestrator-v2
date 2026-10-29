@@ -123,7 +123,7 @@ revoke what it saved") was not met for it.
     arm for any decision, retired decisions rejected),
     `server-request-router.test.ts` (approving a request that proposes
     amendments sends `accept`), `sse-replay.test.ts` (the route's 400) and
-    `apps/backend/src/core/agent-provider-interactions.test.ts` (an older
+    `apps/backend/src/core/agent-provider-interactions-codex.test.ts` (an older
     bridge's amendments are neither offered nor sent).
   - Live, credit-free:
     `bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts`

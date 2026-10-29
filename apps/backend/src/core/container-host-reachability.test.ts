@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   CONTAINER_HOST_REACHABILITY_CHANGED_EVENT,
   containerHostReachabilityNeedsAttention,
@@ -231,17 +231,22 @@ function fakeRunner(script: {
   activeUnits?: string[];
   /** Names `docker network ls` lists for the owner and probe-role labels. */
   labelledNetworks?: string[];
+  labelledContainers?: string[];
   /** Holds each probe `docker run` until the test settles it. */
   holdProbes?: Array<() => void>;
+  /** Defers or rejects a specific command without involving Docker. */
+  onCall?: (call: Call, timeoutMs: number | undefined) => Promise<void>;
 }) {
   const calls: Call[] = [];
   let probeImagePresent = script.probeImagePresent ?? true;
   const run: NonNullable<ContainerHostReachabilityDependencies["run"]> = async (
     command,
     args = [],
+    options,
   ) => {
     const call = [command, ...args];
     calls.push(call);
+    await script.onCall?.(call, options?.timeoutMs);
     const ok = (stdout = "") => ({ stdout, stderr: "" });
     if (command === "systemctl") {
       const unit = args[1] ?? "";
@@ -276,7 +281,7 @@ function fakeRunner(script: {
       return ok("netid\n");
     }
     if (sub === "network" && rest[0] === "rm") return ok();
-    if (sub === "ps") return ok("");
+    if (sub === "ps") return ok((script.labelledContainers ?? []).join("\n"));
     if (sub === "rm") return ok();
     if (sub === "run") {
       const hold = script.holdProbes;
@@ -699,6 +704,14 @@ async function until(predicate: () => boolean): Promise<void> {
   expect(predicate()).toBe(true);
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const PROBE_NETWORK = "ork-owner-reach-probe-net";
 const isNetworkRemoval = (call: Call) =>
   call[1] === "network" && call[2] === "rm" && call[3] === PROBE_NETWORK;
@@ -719,7 +732,7 @@ describe("shutdown and stale probe cleanup", () => {
     await svc.dispose(5);
     const after = runner.calls.slice(before);
     expect(after).toEqual([
-      ["docker", "rm", "-f", ...probeNames],
+      ...probeNames.map((name) => ["docker", "rm", "-f", name]),
       ["docker", "network", "rm", PROBE_NETWORK],
     ]);
     // The cut-short check winds down; once closed, a later check starts nothing.
@@ -742,13 +755,16 @@ describe("shutdown and stale probe cleanup", () => {
     await checked;
     expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(2);
     // The leftover removal before create, then the check's own `finally`;
-    // shutdown added no removal of its own.
+    // shutdown added no network removal of its own. Each settling run also
+    // removes its name in case an earlier shutdown rm preceded its creation.
     const probeNames = new Set(
       runner.calls
         .filter((call) => call[1] === "run")
         .map((call) => call[call.indexOf("--name") + 1]),
     );
-    expect(runner.calls.some((call) => call[1] === "rm" && probeNames.has(call[3]))).toBe(false);
+    expect(runner.calls.filter((call) => call[1] === "rm" && probeNames.has(call[3]))).toHaveLength(
+      2,
+    );
   });
 
   test("a check still preparing when shutdown begins never creates a probe network", async () => {
@@ -765,6 +781,223 @@ describe("shutdown and stale probe cleanup", () => {
     await checked;
     expect(runner.calls.some((call) => call[1] === "network" && call[2] === "create")).toBe(false);
     expect(runner.calls.some((call) => call[1] === "run")).toBe(false);
+  });
+
+  for (const phase of ["initial removal", "create", "subnet inspection"] as const) {
+    test(`shutdown during network ${phase} prevents late probes and cleans up`, async () => {
+      const entered = deferred();
+      const release = deferred();
+      let exists = false;
+      let held = false;
+      const runner = fakeRunner({
+        onCall: async (call) => {
+          const isCreate = call[1] === "network" && call[2] === "create";
+          const isSubnet =
+            call[1] === "network" && call[2] === "inspect" && call.at(-1) === PROBE_NETWORK;
+          if (
+            !held &&
+            ((phase === "initial removal" && isNetworkRemoval(call)) ||
+              (phase === "create" && isCreate) ||
+              (phase === "subnet inspection" && isSubnet))
+          ) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          if (isCreate) exists = true;
+          if (isNetworkRemoval(call)) {
+            if (!exists) throw new Error("No such network");
+            exists = false;
+          }
+        },
+      });
+      const { svc, logs } = service({ runner });
+      const checked = svc.check("boot");
+      await entered.promise;
+      let finished = false;
+      const disposed = svc.dispose(0).then(() => {
+        finished = true;
+      });
+      await until(() => logs.some((line) => line.includes("awaiting probe network preparation")));
+      expect(finished).toBe(false);
+      // No early shutdown removal while a future create could still succeed.
+      expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(1);
+      release.resolve();
+      await Promise.all([checked, disposed]);
+      expect(exists).toBe(false);
+      expect(runner.calls.filter((call) => call[1] === "run")).toEqual([]);
+      expect(runner.calls.filter((call) => call[2] === "create")).toHaveLength(
+        phase === "initial removal" ? 0 : 1,
+      );
+    });
+  }
+
+  for (const createFails of [false, true]) {
+    test(`network preparation beyond the shutdown budget gets late cleanup (create fails=${createFails})`, async () => {
+      const entered = deferred();
+      const release = deferred();
+      let exists = false;
+      const runner = fakeRunner({
+        onCall: async (call) => {
+          if (call[1] === "network" && call[2] === "create") {
+            entered.resolve();
+            await release.promise;
+            exists = true;
+            // The daemon can create a network even if its client reports failure.
+            if (createFails) throw new Error("client disconnected");
+          }
+          if (isNetworkRemoval(call)) {
+            if (!exists) throw new Error("No such network");
+            exists = false;
+          }
+        },
+      });
+      const { svc, logs } = service({ runner });
+      const checked = svc.check("boot");
+      await entered.promise;
+      // Drive only the shutdown preparation deadline without a wall-clock wait.
+      const schedule = globalThis.setTimeout;
+      let expire: (() => void) | undefined;
+      const interceptTimer = Object.assign((...args: Parameters<typeof setTimeout>) => {
+        const [handler, ms, ...handlerArgs] = args;
+        if (ms === 21_000) {
+          expire = () => {
+            handler(...handlerArgs);
+          };
+          return schedule(() => undefined, 60_000);
+        }
+        return schedule(handler, ms, ...handlerArgs);
+      }, schedule);
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(interceptTimer);
+      try {
+        const disposed = svc.dispose(0);
+        await until(() => expire !== undefined);
+        expire!();
+        await disposed;
+        expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(1);
+        expect(logs.some((line) => line.includes("deferring probe network cleanup"))).toBe(true);
+      } finally {
+        timer.mockRestore();
+        release.resolve();
+        await checked;
+      }
+      expect(exists).toBe(false);
+      expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(2);
+      expect(runner.calls.filter((call) => call[1] === "run")).toEqual([]);
+    });
+  }
+
+  test("a late container creation is removed after an early not-found shutdown removal", async () => {
+    const held: Array<() => void> = [];
+    const live = new Set<string>();
+    const runner = fakeRunner({
+      holdProbes: held,
+      probeOutput: (call) => {
+        live.add(call[call.indexOf("--name") + 1]!);
+        return CURL_HTTP_405;
+      },
+      onCall: async (call) => {
+        if (call[1] === "rm" && !live.delete(call[3]!)) throw new Error("No such container");
+        if (isNetworkRemoval(call) && live.size > 0) throw new Error("active endpoints");
+      },
+    });
+    const { svc } = service({ runner });
+    const checked = svc.check("boot");
+    await until(() => held.length === 2);
+    await svc.dispose(0);
+    for (const release of held) release();
+    await checked;
+    expect(live.size).toBe(0);
+    for (const call of runner.calls.filter((call) => call[1] === "run")) {
+      const name = call[call.indexOf("--name") + 1]!;
+      expect(runner.calls.filter((call) => call[1] === "rm" && call[3] === name)).toHaveLength(2);
+    }
+  });
+
+  for (const timedOut of [false, true]) {
+    test(`shutdown continues after container removal failure and retries endpoints (timeout=${timedOut})`, async () => {
+      const held: Array<() => void> = [];
+      const removals: Call[] = [];
+      let firstName: string | undefined;
+      let networkAttempts = 0;
+      const runner = fakeRunner({
+        holdProbes: held,
+        onCall: async (call, timeoutMs) => {
+          if (call[1] === "rm") {
+            expect(timeoutMs).toBe(5_000);
+            expect(call).toHaveLength(4);
+            removals.push(call);
+            firstName ??= call[3];
+            if (removals.length === 1) throw new CommandFailedError("removal failed", { timedOut });
+          }
+          // Ignore the normal leftover removal before the network is created.
+          if (isNetworkRemoval(call) && held.length === 2) {
+            expect(timeoutMs).toBe(5_000);
+            networkAttempts += 1;
+            if (networkAttempts === 1) throw new Error("active endpoints");
+          }
+        },
+      });
+      const { svc, logs } = service({ runner });
+      const checked = svc.check("boot");
+      await until(() => held.length === 2);
+      await svc.dispose(0);
+      expect(removals.map((call) => call[3])).toEqual([firstName, expect.any(String), firstName]);
+      expect(removals[1]![3]).not.toBe(firstName);
+      expect(networkAttempts).toBe(2);
+      expect(logs.some((line) => line.includes("shutdown probe container removal failed"))).toBe(
+        true,
+      );
+      expect(logs.some((line) => line.includes("shutdown probe network removal failed"))).toBe(
+        true,
+      );
+      for (const release of held) release();
+      await checked;
+    });
+  }
+
+  test("permanent shutdown cleanup failures log and stop after one network retry", async () => {
+    const held: Array<() => void> = [];
+    let networkAttempts = 0;
+    let containerAttempts = 0;
+    const runner = fakeRunner({
+      holdProbes: held,
+      onCall: async (call, timeoutMs) => {
+        if (call[1] === "rm" || (isNetworkRemoval(call) && held.length === 2)) {
+          expect(timeoutMs).toBe(5_000);
+          if (call[1] === "rm") containerAttempts += 1;
+          else networkAttempts += 1;
+          throw new CommandFailedError("Docker deadline", { timedOut: true });
+        }
+      },
+    });
+    const { svc, logs } = service({ runner });
+    const checked = svc.check("boot");
+    await until(() => held.length === 2);
+    await svc.dispose(0);
+    expect(containerAttempts).toBe(4);
+    expect(networkAttempts).toBe(2);
+    expect(
+      logs.filter((line) => line.includes("shutdown probe network removal failed")),
+    ).toHaveLength(2);
+    for (const release of held) release();
+    await checked;
+  });
+
+  test("shutdown skips the rootless loopback retry after the first probes settle", async () => {
+    const held: Array<() => void> = [];
+    const runner = fakeRunner({ holdProbes: held, probeOutput: () => BUSYBOX_TIMEOUT });
+    const { svc } = service({
+      runner,
+      detectTopology: async () => ({ kind: "local-engine", rootless: true }),
+    });
+    const checked = svc.check("boot");
+    await until(() => held.length === 2);
+    const disposed = svc.dispose(60_000);
+    for (const release of held) release();
+    await Promise.all([checked, disposed]);
+    expect(runner.calls.filter((call) => call[1] === "run")).toHaveLength(2);
+    expect(runner.calls.some((call) => call.includes("host.docker.internal:10.0.2.2"))).toBe(false);
   });
 
   test("shutdown with no check running touches no Docker", async () => {
@@ -799,5 +1032,51 @@ describe("shutdown and stale probe cleanup", () => {
       // createProbeNetwork's own leftover removal.
       [PROBE_NETWORK],
     ]);
+  });
+  test("a refused stale container does not skip the remaining container or network", async () => {
+    const runner = fakeRunner({
+      labelledContainers: ["refused-container", "later-container"],
+      labelledNetworks: ["ork-owner-reach-old-net"],
+      onCall: async (call) => {
+        if (call[1] === "rm" && call[3] === "refused-container") throw new Error("removal refused");
+      },
+    });
+    const { svc } = service({ runner });
+    expect((await svc.check("boot")).status).toBe("reachable");
+    expect(runner.calls).toContainEqual(["docker", "rm", "-f", "later-container"]);
+    expect(runner.calls).toContainEqual(["docker", "network", "rm", "ork-owner-reach-old-net"]);
+  });
+
+  test("a refused stale network does not skip later networks or the host check", async () => {
+    const refused = "ork-owner-reach-attached-net";
+    const later = "ork-owner-reach-old-net";
+    const runner = fakeRunner({
+      labelledNetworks: [refused, later],
+      onCall: async (call) => {
+        if (call[1] === "network" && call[2] === "rm" && call[3] === refused) {
+          throw new Error("active endpoints");
+        }
+      },
+    });
+    const { svc } = service({ runner });
+    expect((await svc.check("boot")).status).toBe("reachable");
+    expect(runner.calls).toContainEqual(["docker", "network", "rm", later]);
+  });
+
+  test("stale network listing failure leaves host checking best effort", async () => {
+    const runner = fakeRunner({
+      onCall: async (call) => {
+        if (
+          call[1] === "network" &&
+          call[2] === "ls" &&
+          call.some((arg) => arg.startsWith("label="))
+        ) {
+          throw new Error("listing unavailable");
+        }
+      },
+    });
+    const { svc } = service({ runner });
+    expect((await svc.check("boot")).status).toBe("reachable");
+    expect(runner.calls.filter((call) => call[1] === "run")).toHaveLength(2);
   });
 });

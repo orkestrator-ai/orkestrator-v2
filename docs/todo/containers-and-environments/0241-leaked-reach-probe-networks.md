@@ -154,13 +154,28 @@ Made 2026-10-28 while implementing this file together with
   Desktop it removed a leftover of its own owner and left another owner's
   probe network in place.
 
+### Tasks 2 and 3: shutdown races and cleanup failures (2026-10-29)
+
+- **Chose:** wait for network preparation through its existing command deadline
+  before shutdown removes the network, check for closure before launching
+  probes, and clean up late network and container completions. Remove tracked
+  containers one per call, retry failed container removals and the network once
+  if Docker refuses the network, and keep stale-container removals independent.
+- **Why:** removing a name before Docker creates it can report not found and
+  then leak the later resource; one failed container removal must not skip
+  others or strand their network. Calls remain bounded. If preparation exceeds
+  even its command deadline, its continuation cleans up when it eventually
+  settles; an unresponsive daemon or SIGKILL still requires the owner reaper.
+  Deterministic fake-runner cases cover these races and failure paths. Task 4's
+  Linux qualification remains open.
+
 ### Task 5: the owner-agnostic sweep
 
 - **Chose:** nothing; left open for the user, as asked. The host's existing
   networks were not touched.
 
-
-qualifying [0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md).
+Seen on omarchy-hp while qualifying
+[0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md).
 
 ## Current state
 

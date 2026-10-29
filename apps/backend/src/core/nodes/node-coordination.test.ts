@@ -116,6 +116,11 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     expect(incoming.route).toBe("coordinator");
     expect(incoming.placement).toBe("pending-inject");
     expect(delivered.placement).toBe("pending-inject");
+    // The command node's transcript names the recipient by environment and tab.
+    const tabName = (await world.storage.getAgentMailMailbox(worker.environmentId, worker.tabId))
+      .descriptor.displayName;
+    expect(tabName).toBeTruthy();
+    expect(delivered).toMatchObject({ toEnvironmentName: "worker", toTabName: tabName });
 
     // The agent answers "coordinator": it goes to the command node that asked.
     const router = world.storage.nodeMailRouter!;
@@ -136,6 +141,7 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       expect.objectContaining({
         body: "All tests pass.",
         fromEnvironmentName: "worker",
+        fromTabName: tabName,
         toCoordinator: { environmentId: "coordinator:c1:conv-1", tabId: "coord-tab" },
       }),
     ]);
@@ -242,6 +248,7 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
                     fromEnvironmentId: "leaf-env",
                     fromEnvironmentName: "worker",
                     fromTabId: "startup-agent",
+                    fromTabName: "Claude 2",
                     toCoordinator: { environmentId: main.environmentId, tabId: main.tabId },
                     body: "All tests pass.",
                     bytes: 15,
@@ -293,6 +300,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
       nodeId: "bk_leaf",
       environmentId: "leaf-env",
       tabId: "startup-agent",
+      // Named like a local worker: its environment and its tab.
+      environmentName: "worker",
+      title: "Claude 2",
     });
     expect(message.trust).toBe("same-project");
     expect(message.placement).toBe("pending-inject");

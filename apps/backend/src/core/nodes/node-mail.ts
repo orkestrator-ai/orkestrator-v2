@@ -47,6 +47,8 @@ export interface OutboxItem {
   fromEnvironmentId: string;
   fromTabId: string;
   fromEnvironmentName?: string;
+  /** The sending tab's display name, e.g. "Claude 2". */
+  fromTabName?: string;
   /** The leaf project's repository identity, to find the coordinator on the command node. */
   repositoryHint?: string;
   /** Present when the destination conversation is known (origin or thread). */

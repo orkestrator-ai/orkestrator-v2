@@ -1,9 +1,11 @@
-import type { NativeMessage, NativeMessagePart } from "./native-message-types";
+import type { NativeMessage, NativeMessagePart, PeerMailAddress } from "./native-message-types";
 import {
   AGENT_MAIL_TRUST_CLASSES,
+  agentMailAddressLabel,
   agentMailboxId,
   agentMailKind,
   agentMailParticipantKey,
+  formatAgentMailAddressLabel,
   normalizeAgentMailNotice,
   type AgentMailMessage,
   type MailActor,
@@ -152,24 +154,72 @@ export function isPeerMailCarrierContent(content: string): boolean {
   return content.trimStart().startsWith(PEER_MAIL_CARRIER_OPEN);
 }
 
+/**
+ * The agent tab a mail sender is, when it is one: a tab here or an agent on
+ * another node. Coordinators, the person and workflows have no address.
+ */
+export function agentMailSenderAddress(from: MailActor): PeerMailAddress | undefined {
+  if (from.kind === "tab") {
+    return {
+      environmentId: from.environmentId,
+      tabId: from.tabId,
+      ...(from.title ? { tabName: from.title } : {}),
+    };
+  }
+  if (from.kind === "node" && from.role === "agent") {
+    // Mail from before nodes reported environment names titled the sender
+    // with its environment's name.
+    const environmentName = from.environmentName ?? from.title;
+    return {
+      environmentId: from.environmentId,
+      tabId: from.tabId,
+      ...(environmentName ? { environmentName } : {}),
+      ...(from.environmentName && from.title ? { tabName: from.title } : {}),
+      node: from.nodeName,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * An agent tab as mail names it, `fix-login-bug · Claude 2`, with the node
+ * for one on another node. `environmentName` stands in for a name the address
+ * does not carry, such as the environment store's.
+ */
+export function agentMailAddressText(address: PeerMailAddress, environmentName?: string): string {
+  const label = formatAgentMailAddressLabel(
+    agentMailAddressLabel({
+      ...address,
+      environmentName: address.environmentName ?? environmentName,
+    }),
+  );
+  return address.node ? `${label} on ${address.node}` : label;
+}
+
 /** The name a transcript gives a mail sender. */
-export function agentMailSenderLabel(from: MailActor): string {
-  return from.kind === "user"
-    ? "You"
-    : from.kind === "external"
-      ? "External client"
-      : from.kind === "system"
-        ? "Orkestrator workflow"
-        : from.kind === "coordinator"
-          ? from.title || "Project coordinator"
-          : from.kind === "node"
-            ? `${from.title || (from.role === "coordinator" ? "Project coordinator" : from.tabId)} on ${from.nodeName}`
-            : from.title || `${from.environmentId} / ${from.tabId}`;
+export function agentMailSenderLabel(from: MailActor, environmentName?: string): string {
+  const address = agentMailSenderAddress(from);
+  if (address) return agentMailAddressText(address, environmentName);
+  switch (from.kind) {
+    case "user":
+      return "You";
+    case "external":
+      return "External client";
+    case "system":
+      return "Orkestrator workflow";
+    case "coordinator":
+      return from.title || "Project coordinator";
+    case "node":
+      return `${from.title || "Project coordinator"} on ${from.nodeName}`;
+    case "tab":
+      return from.title || from.tabId;
+  }
 }
 
 export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): NativeMessage {
   const kind = agentMailKind(message);
   const sender = agentMailSenderLabel(message.from);
+  const address = agentMailSenderAddress(message.from);
   // The heading occupies exactly one line of `content`; see
   // `splitPeerMailNativeMessageContent`.
   const subject = message.subject?.replace(/\s*[\r\n]+\s*/g, " ");
@@ -194,6 +244,7 @@ export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): Na
       messageId: message.id,
       kind,
       sender,
+      ...(address ? { address } : {}),
       ...(subject ? { subject } : {}),
       warning,
       body: message.body,
@@ -247,6 +298,14 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
     }
   }
   const from = value.from;
+  // Carrier metadata comes from transcript JSON, not a typed MailActor.
+  // Nullable names are valid, but other types cannot reach the label formatter.
+  if (
+    (from.title != null && typeof from.title !== "string") ||
+    (from.environmentName != null && typeof from.environmentName !== "string")
+  ) {
+    return null;
+  }
   if (
     from.kind !== "user" &&
     from.kind !== "external" &&

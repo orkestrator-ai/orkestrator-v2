@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { EMPTY_AGENT_MAIL_DRAFT, useAgentMailStore } from "@/stores/agentMailStore";
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
+  agentMailParticipantLabel,
   agentMailStatus,
   deliverNowNotice,
   formatAgentMailTime,
@@ -220,12 +221,14 @@ export function AgentMailConversationView({
         <div className="min-w-0 flex-1">
           <SheetTitle className="flex items-center gap-1.5">
             {left && <ParticipantIcon participant={left} />}
-            <span className="truncate">{left?.displayName ?? "Conversation"}</span>
+            <span className="truncate">
+              {left ? agentMailParticipantLabel(left) : "Conversation"}
+            </span>
             {right && (
               <>
                 <span className="text-muted-foreground">↔</span>
                 <ParticipantIcon participant={right} />
-                <span className="truncate">{right.displayName}</span>
+                <span className="truncate">{agentMailParticipantLabel(right)}</span>
               </>
             )}
           </SheetTitle>
@@ -309,7 +312,7 @@ export function AgentMailConversationView({
                 <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                   {untrusted && <ShieldAlert className="h-3 w-3 text-amber-300" />}
                   <span className="truncate font-medium text-foreground/80">
-                    {sender?.displayName ?? "Unknown sender"}
+                    {sender ? agentMailParticipantLabel(sender) : "Unknown sender"}
                   </span>
                   <span className="shrink-0 tabular-nums">
                     {formatAgentMailTime(message.createdAt)}
@@ -395,8 +398,8 @@ export function AgentMailConversationView({
                   void send();
                 }
               }}
-              placeholder={`Message ${recipient.displayName}`}
-              aria-label={`Message ${recipient.displayName}`}
+              placeholder={`Message ${agentMailParticipantLabel(recipient)}`}
+              aria-label={`Message ${agentMailParticipantLabel(recipient)}`}
               className="min-h-20 text-xs"
             />
             <div className="flex justify-end">
@@ -408,7 +411,7 @@ export function AgentMailConversationView({
           </form>
         ) : (
           <p className="border-t border-zinc-800 p-3 text-center text-[11px] text-muted-foreground">
-            {recipient.displayName} can no longer receive messages.
+            {agentMailParticipantLabel(recipient)} can no longer receive messages.
           </p>
         )
       ) : conversation ? (
@@ -428,7 +431,7 @@ export function AgentMailConversationView({
                   })
                 }
               >
-                Message {participant.displayName}
+                Message {agentMailParticipantLabel(participant)}
               </Button>
             ))}
         </div>

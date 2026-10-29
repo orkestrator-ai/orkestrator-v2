@@ -26,6 +26,12 @@ import {
   withPanel,
 } from "./compile-fixtures.test-support.js";
 import { graphTemplateExample } from "./examples.js";
+import {
+  auditNode,
+  childTemplate,
+  parentTemplate,
+  resolverOf,
+} from "./subgraph-fixtures.test-support.js";
 import type {
   ArtifactTypeDef,
   GraphLoopRegion,
@@ -77,6 +83,67 @@ function withPush(
     to: { node: "push", port: "code" },
   });
   return node;
+}
+
+/** `child` with a sub-graph node inlining itself. */
+function selfNestingChild(): GraphTemplateV1 {
+  const child = childTemplate();
+  child.nodes.push({
+    id: "again",
+    kind: "subgraph",
+    template: { scope: "user", id: "child" },
+    inputs: [{ name: "code", type: "workspace@1" }],
+  });
+  child.edges.push({
+    id: "code-again",
+    from: { input: "code" },
+    to: { node: "again", port: "code" },
+  });
+  return child;
+}
+
+/** `level-1` … `level-<n>`: each inlines the next as `inner`; the last is `child`'s shape. */
+function nestingChain(levels: number): GraphTemplateV1[] {
+  const chain: GraphTemplateV1[] = [];
+  for (let level = 1; level <= levels; level++) {
+    const template = childTemplate();
+    template.id = `level-${level}`;
+    template.name = `Level ${level}`;
+    if (level < levels) {
+      template.nodes = [
+        template.nodes[0]!,
+        {
+          id: "inner",
+          kind: "subgraph",
+          template: { scope: "user", id: `level-${level + 1}` },
+          roles: { checker: "checker", fixer: "fixer" },
+          inputs: [{ name: "code", type: "workspace@1" }],
+        },
+      ];
+      template.edges = [
+        template.edges[0]!,
+        { id: "code-inner", from: { input: "code" }, to: { node: "inner", port: "code" } },
+      ];
+      template.outputs = [template.outputs![0]!];
+    }
+    chain.push(template);
+  }
+  return chain;
+}
+
+/** `child` whose nodes have 64-character ids, so `<64-char id>/<64-char id>` is too long. */
+function longIdChild(): GraphTemplateV1 {
+  const child = childTemplate();
+  const long = (id: string) => `${id}${"-y".repeat(Math.floor((64 - id.length) / 2))}`;
+  const rename = new Map(child.nodes.map((node) => [node.id, long(node.id)]));
+  for (const node of child.nodes) node.id = rename.get(node.id)!;
+  for (const edge of child.edges) {
+    edge.to.node = rename.get(edge.to.node)!;
+    if ("node" in edge.from) edge.from.node = rename.get(edge.from.node)!;
+  }
+  for (const output of child.outputs!) output.from.node = rename.get(output.from.node)!;
+  delete child.layout;
+  return child;
 }
 
 const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case> = {
@@ -166,21 +233,109 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     },
     expect: { nodeId: "review" },
   },
-  "subgraph-unsupported": {
-    mutate: (t) => {
-      t.nodes.push({
-        id: "inner",
-        kind: "subgraph",
-        template: { scope: "builtin", id: "multi-review" },
-        inputs: [{ name: "target", type: "workspace@1" }],
-      });
-      t.edges.push({
-        id: "build-inner",
-        from: { node: "build", port: "code" },
-        to: { node: "inner", port: "target" },
-      });
+  // ------------------------------------------------------------ sub-graphs (item 402)
+  "subgraph-unresolved": {
+    from: () => parentTemplate(auditNode({ template: { scope: "user", id: "gone" } })),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].template", detail: "not-found" },
+  },
+  "subgraph-digest-mismatch": {
+    from: () =>
+      parentTemplate(
+        auditNode({ template: { scope: "user", id: "child", digest: "0".repeat(64) } }),
+      ),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].template.digest" },
+  },
+  "subgraph-recursive": {
+    from: () => parentTemplate(),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(selfNestingChild()) },
+    expect: { nodeId: "audit/again", path: "nodes[1]>nodes[3].template" },
+  },
+  "subgraph-depth": {
+    from: () =>
+      parentTemplate(
+        auditNode({
+          template: { scope: "user", id: "level-1" },
+          outputs: [{ name: "report", type: "review-report@1" }],
+        }),
+      ),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(...nestingChain(5)) },
+    expect: {
+      nodeId: "audit/inner/inner/inner/inner",
+      path: "nodes[1]>nodes[1]>nodes[1]>nodes[1]>nodes[1].template",
     },
-    expect: { nodeId: "inner", path: "nodes[2].kind" },
+  },
+  "subgraph-too-large": {
+    from: () => parentTemplate(auditNode({ id: `a${"-x".repeat(31)}b` })),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(longIdChild()) },
+    expect: { path: "nodes[1].id" },
+  },
+  "subgraph-port-mismatch": {
+    from: () =>
+      parentTemplate(
+        auditNode({
+          outputs: [{ name: "report", type: "fix-result@1" }],
+        }),
+      ),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", port: "report", path: "nodes[1].outputs[0].type" },
+  },
+  "subgraph-param-binding": {
+    from: () => parentTemplate(auditNode({ params: { depth: 9 } })),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].params.depth" },
+  },
+  "subgraph-role-binding": {
+    from: () => parentTemplate(auditNode({ roles: { checker: "panel", fixer: "worker" } })),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].roles.checker" },
+  },
+  "subgraph-type-conflict": {
+    from: () => parentTemplate(),
+    mutate: (t) => {
+      t.types = [THING];
+    },
+    options: {
+      resolveTemplate: resolverOf({
+        ...childTemplate(),
+        types: [{ ...THING, budgets: { maxBytes: 8192 } }],
+      }),
+    },
+    expect: { nodeId: "audit", path: "nodes[1]>types[0]" },
+  },
+  "subgraph-workspace": {
+    from: () => parentTemplate(),
+    mutate: (t) => {
+      t.workspace = { kind: "none" };
+    },
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].template" },
+  },
+  "subgraph-unsupported": {
+    from: () => parentTemplate(auditNode({ when: { path: "params.flag", op: "eq", value: true } })),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", path: "nodes[1].when" },
+  },
+  "subgraph-unpinned": {
+    from: () => parentTemplate(),
+    mutate: () => {},
+    options: { resolveTemplate: resolverOf(childTemplate()) },
+    expect: { nodeId: "audit", severity: "info", path: "nodes[1].template" },
+  },
+  "subgraph-engine-copy": {
+    from: () => graphTemplateExample("design-bake-off"),
+    mutate: () => {},
+    expect: { nodeId: "review", severity: "info", path: "nodes[4].template" },
   },
   "replicate-items-unsupported": {
     from: () => graphTemplateExample("failure-diagnosis"),

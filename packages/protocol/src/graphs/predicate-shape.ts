@@ -28,6 +28,7 @@ import {
   GRAPH_TEMPLATE_BOUNDS as B,
   checkGraphFieldPath,
   checkGraphList,
+  isGraphPlanId,
   checkGraphText,
   checkPresent,
 } from "./grammar.js";
@@ -111,6 +112,28 @@ export interface GraphNotPredicate {
 export type GraphPredicate =
   GraphLeafPredicate | GraphAllPredicate | GraphAnyPredicate | GraphNotPredicate;
 
+/**
+ * A leaf's dotted path. Its first segment may also be a plan node id with
+ * `/` (item 402): a loop `until` inside an inlined sub-graph reads
+ * `review/verify.verdict.complete`. A root that names no node is still
+ * `unknown_root` to the type checker.
+ */
+function checkPredicatePath(value: unknown, path: string, errors: FieldErrorCollector): void {
+  if (typeof value === "string" && value.length <= B.maxPathChars) {
+    const dot = value.indexOf(".");
+    const root = dot < 0 ? value : value.slice(0, dot);
+    if (root.includes("/") && isGraphPlanId(root)) {
+      if (dot < 0) {
+        errors.add(path, "pattern", "Must be a dotted field path such as review/verify.verdict");
+        return;
+      }
+      checkGraphFieldPath(`n${value.slice(dot)}`, path, errors);
+      return;
+    }
+  }
+  checkGraphFieldPath(value, path, errors);
+}
+
 function checkScalar(value: unknown, path: string, errors: FieldErrorCollector): boolean {
   if (!checkPresent(value, path, errors)) return false;
   if (value === null || typeof value === "boolean") return true;
@@ -184,7 +207,7 @@ function checkNode(
         ? ["path", "op"]
         : ["path", "op", "value"];
   if (!checkObject(value, path, fields, errors)) return;
-  checkGraphFieldPath(value.path, joinPath(path, "path"), errors);
+  checkPredicatePath(value.path, joinPath(path, "path"), errors);
   const valuePath = joinPath(path, "value");
   if (op === "count") {
     if (checkPresent(value.compare, joinPath(path, "compare"), errors)) {

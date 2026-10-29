@@ -149,8 +149,10 @@ function planNode(
     },
   );
   const execution = "retry" in node ? node : undefined;
+  const subgraph = state.nodeSubgraph.get(node.id);
   const base = {
     id: node.id,
+    ...(subgraph !== undefined ? { subgraph } : {}),
     ...(node.label !== undefined ? { label: node.label } : {}),
     ...(node.description !== undefined ? { description: node.description } : {}),
     order,
@@ -228,7 +230,7 @@ export function assembleGraphPlan(
   cost: GraphCompileCost,
   taint: Map<string, GraphPlanTaint>,
 ): CompiledGraphPlan {
-  const { template } = state;
+  const { template, source } = state;
   const order = state.order!;
   const edges = [...state.edges].sort((a, b) => compareStrings(a.edge.id, b.edge.id));
   const edgeOrder = new Map(edges.map(({ edge }, index) => [edge.id, index]));
@@ -252,13 +254,14 @@ export function assembleGraphPlan(
     format: GRAPH_PLAN_FORMAT,
     formatVersion: GRAPH_PLAN_FORMAT_VERSION,
     compilerVersion: GRAPH_COMPILER_VERSION,
-    templateDigest: graphTemplateDigest(template),
+    // The author's template, not the flat one the passes checked (item 402).
+    templateDigest: graphTemplateDigest(source),
     template: {
-      id: template.id,
-      revision: template.revision,
-      name: template.name,
-      ...(template.description !== undefined ? { description: template.description } : {}),
-      ...(template.engine !== undefined ? { engine: template.engine } : {}),
+      id: source.id,
+      revision: source.revision,
+      name: source.name,
+      ...(source.description !== undefined ? { description: source.description } : {}),
+      ...(source.engine !== undefined ? { engine: source.engine } : {}),
     },
     parameters: template.parameters,
     roles: template.roles,
@@ -306,6 +309,7 @@ export function assembleGraphPlan(
       .sort((a, b) => compareStrings(a.loop.id, b.loop.id))
       .map(({ loop }) => ({
         id: loop.id,
+        ...(state.loopSubgraph.has(loop.id) ? { subgraph: state.loopSubgraph.get(loop.id)! } : {}),
         ...(loop.label !== undefined ? { label: loop.label } : {}),
         members: graphLoopMembers(state, loop.id),
         entry: graphLoopEntries(state, loop.id),
@@ -318,6 +322,14 @@ export function assembleGraphPlan(
           type: plan(graphSourceType(state, carry.from)),
         })),
       })),
+    ...(state.subgraphs.length > 0
+      ? {
+          subgraphs: state.subgraphs.map((instance) => ({
+            ...instance,
+            nodes: order.filter((id) => id.startsWith(`${instance.id}/`)),
+          })),
+        }
+      : {}),
     limits: { ...template.limits },
     cost,
     acknowledgements: {

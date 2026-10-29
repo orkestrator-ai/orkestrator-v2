@@ -35,6 +35,8 @@ import {
   GRAPH_DIGEST_PATTERN,
   GRAPH_ID_PATTERN,
   GRAPH_KEY_PATTERN,
+  GRAPH_PLAN_ID_MAX_CHARS,
+  GRAPH_PLAN_ID_PATTERN,
   GRAPH_TEMPLATE_BOUNDS,
   checkBoundedJson,
   graphUtf8Bytes,
@@ -715,7 +717,14 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
     "a rewind id",
   );
   checkEnum(value.kind, joinPath(path, "kind"), errors, GRAPH_REWIND_KINDS);
-  checkPattern(value.nodeId, joinPath(path, "nodeId"), errors, GRAPH_ID_PATTERN, 64, "a node id");
+  checkPattern(
+    value.nodeId,
+    joinPath(path, "nodeId"),
+    errors,
+    GRAPH_PLAN_ID_PATTERN,
+    GRAPH_PLAN_ID_MAX_CHARS,
+    "a node id",
+  );
   if (!parseGraphActivationKey(value.activation)) {
     errors.add(joinPath(path, "activation"), "pattern", "Must be an activation key");
   }
@@ -904,7 +913,7 @@ export function validateGraphRun(
     "loopIterations",
     errors,
     B.maxLoops,
-    GRAPH_ID_PATTERN,
+    GRAPH_PLAN_ID_PATTERN,
   );
   const loopIds = plan ? new Set(plan.loops.map((loop) => loop.id)) : null;
   for (const [loop, iteration] of loops ?? []) {
@@ -977,7 +986,14 @@ function checkProducer(value: unknown, path: string, errors: FieldErrorCollector
       errors.add(joinPath(path, "activation"), "mismatch", "A run input has no activation");
     }
   } else {
-    checkPattern(value.nodeId, joinPath(path, "nodeId"), errors, GRAPH_ID_PATTERN, 64, "a node id");
+    checkPattern(
+      value.nodeId,
+      joinPath(path, "nodeId"),
+      errors,
+      GRAPH_PLAN_ID_PATTERN,
+      GRAPH_PLAN_ID_MAX_CHARS,
+      "a node id",
+    );
     const parts = parseGraphActivationKey(value.activation);
     if (!parts) {
       errors.add(joinPath(path, "activation"), "pattern", "Must be an activation key");

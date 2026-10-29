@@ -18,11 +18,12 @@ import {
 import { GraphPredicateEditor } from "./GraphPredicateEditor";
 import { GraphInputsEditor, GraphOutputsEditor } from "./GraphPortsEditor";
 import { GraphPromptEditor } from "./GraphPromptEditor";
+import { GraphSubgraphEditor } from "./GraphSubgraphEditor";
 import { graphLoopOf, removeGraphNode, renameGraphNode } from "./graph-designer-edits";
 import { GRAPH_NODE_KIND_LABELS, graphNodeTitle } from "./graph-designer-model";
 import { graphNodePredicateScopeFor } from "./graph-designer-scopes";
 import { useGraphEditor, useGraphNodeEdit } from "./graph-editor-context";
-import { CommitField, EditorTabs, FormSection, JsonField, TextField } from "./graph-form-controls";
+import { CommitField, EditorTabs, FormSection, TextField } from "./graph-form-controls";
 
 /**
  * The editable inspector of one node (report §7.2): its id, label and
@@ -94,7 +95,7 @@ export function GraphNodeEditor({
   node: GraphNodeSpec;
   diagnostics: readonly GraphCompileDiagnostic[] | undefined;
 }) {
-  const { template, edit, select, command } = useGraphEditor();
+  const { template, edit, select, command, projectId } = useGraphEditor();
   const editNode = useGraphNodeEdit(node.id);
   const Icon = GRAPH_NODE_KIND_ICONS[node.kind];
   const loop = graphLoopOf(template, node.id);
@@ -247,23 +248,7 @@ export function GraphNodeEditor({
         </>
       ) : null}
       {node.kind === "subgraph" ? (
-        <FormSection title="Sub-graph">
-          <p className="text-[11px] text-muted-foreground">
-            Sub-graphs arrive in Phase 4 (item 402); until then the compiler refuses them. Edit as
-            JSON, or replace the node.
-          </p>
-          <JsonField
-            label="Node as JSON"
-            value={node}
-            rows={10}
-            onCommit={(value) =>
-              editNode("Edit sub-graph JSON", (current) => ({
-                ...(value as GraphNodeSpec),
-                id: current.id,
-              }))
-            }
-          />
-        </FormSection>
+        <GraphSubgraphEditor node={node} projectId={projectId ?? null} />
       ) : null}
     </div>
   );

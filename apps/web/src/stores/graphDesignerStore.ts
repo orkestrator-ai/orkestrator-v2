@@ -22,6 +22,7 @@ import {
 import {
   parseGraphTemplate,
   validateGraphTemplate,
+  type GraphTemplateRef as GraphSubgraphRef,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
 import {
@@ -38,6 +39,15 @@ import {
   acknowledgeGraphWarning,
   graphIdFrom,
 } from "@/components/graph-designer/graph-designer-edits";
+import {
+  graphDesignerSubgraphKey,
+  graphDesignerSubgraphResolver,
+  graphSubgraphLibraryRef,
+  graphSubgraphRefsToFetch,
+  graphSubgraphResolutionFor,
+  type GraphDesignerSubgraphEntry,
+} from "@/components/graph-designer/graph-designer-subgraphs";
+import { graphBuiltInTemplate } from "@orkestrator/protocol/graphs/builtins";
 import {
   EMPTY_GRAPH_HISTORY,
   pushGraphHistory,
@@ -131,6 +141,16 @@ export interface GraphDraftCompileContext {
 interface GraphDesignerState {
   libraries: Map<string, GraphDesignerLibrary>;
   tabs: Map<string, GraphDesignerTabState>;
+  /**
+   * Sub-graph children read for browser compiles (item 402), by
+   * `graphDesignerSubgraphKey`. Re-read whenever the library is.
+   */
+  subgraphTemplates: Map<string, GraphDesignerSubgraphEntry>;
+  /** Reads one sub-graph child (once; later calls share the result). */
+  loadSubgraphTemplate: (
+    projectId: string | null,
+    ref: GraphSubgraphRef,
+  ) => Promise<GraphDesignerSubgraphEntry>;
   loadLibrary: (projectId: string | null) => Promise<void>;
   /** Shows a template in a tab: reads it and compiles it in the backend. */
   openTemplate: (tabId: string, ref: GraphTemplateRef, projectId: string | null) => Promise<void>;
@@ -283,6 +303,11 @@ export function graphDraftDirty(editor: GraphDesignerEditor | null): boolean {
   return editor !== null && (editor.isNew || editor.draft !== editor.saved);
 }
 
+/** Sub-graph reads in flight, by cache key: concurrent compiles share one. */
+const subgraphLoads = new Map<string, Promise<GraphDesignerSubgraphEntry>>();
+/** Each tab's last draft-compile context, to recompile when a child changes. */
+const compileContexts = new Map<string, GraphDraftCompileContext>();
+
 export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => {
   const tab = (tabId: string) => get().tabs.get(tabId) ?? EMPTY_TAB;
   const patchTab = (tabId: string, patch: Partial<GraphDesignerTabState>) =>
@@ -361,9 +386,64 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
     );
   };
 
+  const setSubgraph = (key: string, entry: GraphDesignerSubgraphEntry | null) =>
+    set((state) => {
+      const subgraphTemplates = new Map(state.subgraphTemplates);
+      if (entry) subgraphTemplates.set(key, entry);
+      else subgraphTemplates.delete(key);
+      return { subgraphTemplates };
+    });
+
   return {
     libraries: new Map(),
     tabs: new Map(),
+    subgraphTemplates: new Map(),
+
+    loadSubgraphTemplate: async (projectId, ref) => {
+      const key = graphDesignerSubgraphKey(projectId, ref);
+      const pending = subgraphLoads.get(key);
+      if (pending) return pending;
+      const cached = get().subgraphTemplates.get(key);
+      if (cached?.status === "ready") return cached;
+      const load = (async (): Promise<GraphDesignerSubgraphEntry> => {
+        if (ref.scope === "builtin") {
+          const builtIn = graphBuiltInTemplate(ref.id);
+          return builtIn
+            ? {
+                status: "ready",
+                resolution: { template: builtIn.template },
+                template: builtIn.template,
+              }
+            : { status: "ready", resolution: { missing: "not-found" } };
+        }
+        const summaries = get().libraries.get(graphDesignerLibraryKey(projectId))?.result
+          ?.templates;
+        const libraryRef = graphSubgraphLibraryRef(ref, projectId, summaries ?? []);
+        if ("missing" in libraryRef) {
+          return { status: "ready", resolution: { missing: libraryRef.missing } };
+        }
+        try {
+          const detail = await getGraphTemplate(libraryRef, projectId ? { projectId } : {});
+          return {
+            status: "ready",
+            resolution: graphSubgraphResolutionFor(detail.summary, detail.template),
+            template: detail.template,
+            summary: detail.summary,
+          };
+        } catch {
+          return { status: "ready", resolution: { missing: "not-found" } };
+        }
+      })();
+      subgraphLoads.set(key, load);
+      setSubgraph(key, { status: "loading" });
+      try {
+        const entry = await load;
+        setSubgraph(key, entry);
+        return entry;
+      } finally {
+        subgraphLoads.delete(key);
+      }
+    },
 
     loadLibrary: async (projectId) => {
       const key = graphDesignerLibraryKey(projectId);
@@ -378,6 +458,25 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
       try {
         const result = await listGraphTemplates(projectId ? { projectId } : {});
         mark({ status: "ready", result, error: null });
+        // A library read is the moment a child may have changed: drop what
+        // sub-graph compiles read, and recompile the open drafts.
+        const prefix = `${key}|`;
+        const stale = [...get().subgraphTemplates.keys()].filter((entry) =>
+          entry.startsWith(prefix),
+        );
+        if (stale.length > 0) {
+          set((state) => {
+            const subgraphTemplates = new Map(state.subgraphTemplates);
+            for (const entry of stale) subgraphTemplates.delete(entry);
+            return { subgraphTemplates };
+          });
+          for (const [tabId, state] of get().tabs) {
+            const context = compileContexts.get(tabId);
+            if (state.editor && context && graphDesignerLibraryKey(state.projectId) === key) {
+              get().compileDraft(tabId, context);
+            }
+          }
+        }
       } catch (error) {
         mark({ status: "error", result: previous?.result ?? null, error: errorText(error) });
       }
@@ -494,13 +593,23 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
     },
 
     compileDraft: (tabId, context) => {
-      const editor = tab(tabId).editor;
+      const current = tab(tabId);
+      const editor = current.editor;
       if (!editor) return;
+      compileContexts.set(tabId, context);
+      // Sub-graph children not read yet are fetched, then the draft compiles again.
+      const entries = get().subgraphTemplates;
+      for (const ref of graphSubgraphRefsToFetch(editor.draft, entries, current.projectId)) {
+        void get()
+          .loadSubgraphTemplate(current.projectId, ref)
+          .then(() => get().compileDraft(tabId, context));
+      }
       const result = compile(editor.draft, {
         ...(context.providers && context.providers.length > 0
           ? { providers: [...context.providers] }
           : {}),
         ...(context.ceiling ? { ceiling: context.ceiling } : {}),
+        resolveTemplate: graphDesignerSubgraphResolver(entries, current.projectId),
       });
       // A newer edit may have landed meanwhile; the next debounce compiles it.
       if (tab(tabId).editor?.draft !== editor.draft) return;

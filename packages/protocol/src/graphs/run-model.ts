@@ -21,7 +21,7 @@
 import type { AgentPlatform } from "../agent-platforms.js";
 import type { PipelineTranscriptReference } from "../build-pipeline.js";
 import type { NativeAgentExecutionPolicy } from "../native-agent.js";
-import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
+import { GRAPH_PLAN_BOUNDS, GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan } from "./plan.js";
 import type { GraphEnforcementTier, GraphScalarValue } from "./template-model.js";
 import type { GraphErrorCause } from "./types.js";
@@ -70,7 +70,8 @@ export const GRAPH_RUN_BOUNDS = Object.freeze({
   maxParams: GRAPH_TEMPLATE_BOUNDS.maxParameters,
   maxParamStringBytes: GRAPH_TEMPLATE_BOUNDS.maxStringParameterBytes,
   maxInputs: GRAPH_TEMPLATE_BOUNDS.maxRunInputs,
-  maxLoops: GRAPH_TEMPLATE_BOUNDS.maxLoops,
+  /** A plan's loops, sub-graphs inlined. */
+  maxLoops: GRAPH_PLAN_BOUNDS.maxLoops,
   maxIteration: GRAPH_TEMPLATE_BOUNDS.maxLoopIterations,
 } as const);
 

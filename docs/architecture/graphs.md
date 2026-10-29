@@ -26,6 +26,7 @@ unless noted:
 | Prompts (105) | `prompts.ts`, `prompt-*.ts`, `system-contract.ts` | Logic-less prompt templates, render modes, size estimates and lints. |
 | Capability profiles (106) | `capability-profiles.ts`, `capability-enforcement.ts` | Profiles compiled to a `NativeAgentExecutionPolicy`; `agentPolicyEnforcementMatrix` rates each provider `enforced`, `provider-configured` or `advisory`. |
 | Compiler (107) | `compile.ts` and `compile-*.ts`, `plan.ts`, `cost.ts` | `compile(template, options)` returns diagnostics (located by `nodeId`, `edgeId`, `loopId`, `path`), a hashed plan when there are no errors, and a cost estimate (best and worst agent sessions, peak parallelism). It never throws. |
+| Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts`; backend `graph-template-service.ts`; web `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` | A template used as one node of another: the compiler inlines it with namespaced ids (below). |
 | Built-ins (108) | `builtins/` | The three built-in templates, pinned to their engines by tests. Looped Review's engine is retired (`engineStatus: "retired"`). |
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
@@ -125,8 +126,12 @@ sub-graphs and to the run outputs, and lets loop members leave their frame.
   the eight actions, labelled, described and marked "side effect" from 207's
   `GRAPH_SYSTEM_ACTION_SPECS`; a new node gets the spec's required inputs and
   the outputs the template can name, `graph-designer-system-actions.ts`),
-  Gate, Merge, Human, Loop region (wraps the selected node) and Sub-graph
-  (disabled, Phase 4). A node is added at the centre of the view and selected.
+  Gate, Merge, Human, Loop region (wraps the selected node) and Sub-graph (a
+  menu of the saved templates by scope, never the one being edited; an
+  untrusted project template is listed disabled). A node is added at the
+  centre of the view and selected. A sub-graph node is read first, pinned to
+  its digest and revision, and gets the child's run inputs and outputs as
+  ports and the child's roles the template lacks.
   A new agent gets a role of its own name, which follows its first rename.
 - *Connecting.* `graphConnectionVerdict(template, library, from, to)` decides
   what a connection becomes, using 102's `graphTypeAssignability` on the
@@ -249,6 +254,70 @@ loop while connecting). The real-stack paths are
 `graph-designer-editing.spec.ts` (212: the design bake-off built from a blank
 canvas, taint acknowledged, compiled clean, saved, rehydrated after a reload,
 and a lost save race saved as a copy), both in the browser suite.
+
+## Sub-graphs (item 402)
+
+A `subgraph` node uses another template as one node (report §4.1, §4.2, D5).
+The compiler inlines it before every other pass, so the plan, the runtime,
+restart and rewind only ever see ordinary nodes.
+
+- **Reference.** `template: { scope, id, revision?, digest?, path? }`: a
+  built-in, a user template, or a project template of the compiling project
+  (`path` pins the file; without it the id must name one file). A `digest`
+  (`graphTemplateDigest`) or `revision` that no longer matches is
+  `subgraph-digest-mismatch`, so a child edit never silently changes a parent
+  that pinned it; an unpinned child is `subgraph-unpinned` (info). Either way
+  a run freezes the plan it launched with.
+- **Resolution** is injected: `compile(template, { resolveTemplate })` takes a
+  synchronous `GraphTemplateResolver` (`subgraphs.ts`). The default resolves
+  built-ins from code. The backend (`GraphTemplateService.subgraphResolution`)
+  reads every child ahead, nested ones included: built-ins, user templates,
+  and the project's templates only while trusted at their current digest
+  (else `untrusted`); its compile cache key includes each child's digest, so
+  an edited child recompiles its parents. The designer fetches user and
+  project children once per project (`graph-designer-subgraphs.ts`, store
+  `subgraphTemplates`), drops them when the library is re-read, and
+  recompiles open drafts.
+- **Inlining** (`compile-subgraphs.ts`). Child nodes, edges and loops get plan
+  ids `<subgraph node>/<child id>` (`GRAPH_PLAN_ID_PATTERN`, at most 128
+  characters; activation keys, artifact producers, rewinds and loop-iteration
+  keys accept them, and a loop `until` path may start with one). A parent edge
+  into `s.p` becomes one edge per child edge from run input `p` (transforms
+  concatenated); an edge out of `s.q` reads the child output's own source
+  (gate outlets included); run outputs, carries, `firstIterationFrom` and
+  parent `until` roots are rewritten the same way. Child roles map through
+  `roles` or by key (same multiplicity, panel no wider than the child's).
+  Child parameters bind to literals or `{ param }` of the parent, else their
+  defaults. Child types merge (`subgraph-type-conflict`). Nesting is bounded
+  (`GRAPH_SUBGRAPH_MAX_DEPTH` 4, `subgraph-recursive`, `GRAPH_PLAN_BOUNDS`).
+  The child's limits, layout and acknowledgements are dropped: cost is summed
+  on the flat graph against the parent's limits, and the parent acknowledges
+  taint and floor warnings on inlined nodes. A child's capabilities only
+  narrow: inlined agents compile against the parent's ceiling.
+- **Not supported on the node itself** (`subgraph-unsupported`): `replicate`,
+  `when`, `retry`, `timeoutMs`, `onFailure`, a child with loops inside a
+  parent loop, and a session continued from the sub-graph. A sub-graph that
+  cannot be inlined stays an opaque node (its ports are still checked) and the
+  compile has an error.
+- **Diagnostics** on inlined entries carry the plan id (`review/plan`) and a
+  path in the author's terms (`nodes[4]>nodes[0].prompt.template`); the
+  designer shows them on the sub-graph node.
+- **Plan and runtime.** `plan.subgraphs` (absent when there are none) records
+  each instance: id, parent instance, the resolved child (scope, id, revision,
+  digest, name, engine), its parameter definitions and resolved scope, role
+  map, inlined node ids and port map; inlined nodes and loops carry
+  `subgraph`. The runtime reads an inlined node's parameters through
+  `graphPlanScopeParams` (agent prompts, `when`, gates, loop `until`).
+- **Multi Review as a block.** A built-in child's `engine` is ignored when it
+  is inlined: a copy of its nodes runs on the graph runtime
+  (`subgraph-engine-copy`, info), D5's "duplicate to customise" done
+  implicitly. The built-in gained optional outputs `clean` and `fixed` (the
+  branch the review ends on) so a parent can ship it itself; the report §9.3
+  example does, and runs end to end (`graph-run-subgraphs.test.ts`).
+- **Designer.** The node form (`GraphSubgraphEditor`) shows the child and its
+  pin (Pin current version, Update ports from template), a binding per child
+  parameter (default, value, or one of the parent's parameters) and role, the
+  ports, and the plan nodes it became.
 
 ## Canvas library decision (spike, 2026-10-29)
 

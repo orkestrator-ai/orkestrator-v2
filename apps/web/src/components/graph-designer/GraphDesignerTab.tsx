@@ -52,6 +52,7 @@ import { GraphJsonEditor } from "./GraphJsonEditor";
 import { GraphLibraryList } from "./GraphLibraryList";
 import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
 import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
+import { graphSubgraphChoices } from "./graph-designer-subgraphs";
 import { GraphEditorContext } from "./graph-editor-context";
 import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
 
@@ -246,6 +247,19 @@ export function GraphDesignerTab({
     () => graphTemplateTypeLibrary(shownTemplate ?? blankGraphTemplate()),
     [shownTemplate],
   );
+  // Saved templates the palette offers as sub-graphs: never the one being edited.
+  const libraryTemplates = library?.result?.templates;
+  const draftId = draft?.id ?? null;
+  const subgraphs = useMemo(
+    () => ({
+      projectId,
+      choices: graphSubgraphChoices(
+        libraryTemplates ?? [],
+        draftId === null ? null : { scope: "user", id: draftId },
+      ),
+    }),
+    [libraryTemplates, draftId, projectId],
+  );
   const editing = useGraphDesignerEditing({
     tabId,
     draft,
@@ -254,6 +268,7 @@ export function GraphDesignerTab({
     providers,
     ...(ceiling ? { ceiling } : {}),
     onSelect,
+    subgraphs,
   });
 
   // The draft compiles in the browser shortly after each edit (the live panel).

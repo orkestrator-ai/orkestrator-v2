@@ -6,12 +6,14 @@ import {
   type CompiledGraphPlan,
   type GraphCompileDiagnostic,
   type GraphPlanNode,
+  type GraphPlanSubgraph,
 } from "@orkestrator/protocol/graphs/compile";
 import {
   isGraphRunInputRef,
   type GraphAgentNode,
   type GraphEdgeSource,
   type GraphNodeSpec,
+  type GraphSubgraphNode,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
 import { graphTypeFamily } from "@orkestrator/protocol/graphs/types";
@@ -134,6 +136,75 @@ function Fields({ rows }: { rows: Array<[string, ReactNode] | null | false> }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+/**
+ * A sub-graph's parameter bindings: the compiled scope when there is one
+ * (defaults filled in), else what the node binds.
+ */
+function subgraphParamsText(
+  node: GraphSubgraphNode,
+  inlined: GraphPlanSubgraph | undefined,
+): string {
+  const entries = inlined
+    ? Object.entries(inlined.params).map(([key, source]) =>
+        "param" in source ? `${key} ← params.${source.param}` : `${key} = ${String(source.value)}`,
+      )
+    : Object.entries(node.params ?? {}).map(([key, binding]) =>
+        binding !== null && typeof binding === "object"
+          ? `${key} ← params.${binding.param}`
+          : `${key} = ${String(binding)}`,
+      );
+  return entries.length > 0 ? entries.join(", ") : "defaults";
+}
+
+/** A sub-graph node (item 402): its child, pin, bindings and the plan nodes it became. */
+function SubgraphDetails({
+  node,
+  plan,
+}: {
+  node: GraphSubgraphNode;
+  plan: GraphInspectorProps["plan"];
+}) {
+  const inlined = plan?.subgraphs?.find((instance) => instance.id === node.id);
+  const ref = node.template;
+  return (
+    <Section title="Sub-graph">
+      <Fields
+        rows={[
+          [
+            "Template",
+            <span key="Template" className="font-mono">
+              {inlined?.template.name ? `${inlined.template.name} · ` : ""}
+              {ref.scope}:{ref.path ?? ref.id}
+            </span>,
+          ],
+          [
+            "Pinned",
+            ref.digest
+              ? `revision ${ref.revision ?? "?"} (${ref.digest.slice(0, 12)}…)`
+              : "no: each compile uses the current version",
+          ],
+          inlined?.template.engine ? ["Engine", "ignored: a copy runs on the graph runtime"] : null,
+          ["Parameters", subgraphParamsText(node, inlined)],
+          [
+            "Roles",
+            Object.entries(inlined?.roles ?? node.roles ?? {})
+              .map(([inner, outer]) => (inner === outer ? inner : `${inner} → ${outer}`))
+              .join(", ") || "same names",
+          ],
+          inlined
+            ? [
+                "Inlined as",
+                <span key="Inlined" className="font-mono" data-graph-subgraph-nodes="">
+                  {inlined.nodes.join(", ")}
+                </span>,
+              ]
+            : null,
+        ]}
+      />
+    </Section>
   );
 }
 
@@ -362,11 +433,7 @@ function NodeInspector({
           <Json value={node.form} />
         </Section>
       ) : null}
-      {node.kind === "subgraph" ? (
-        <Section title="Sub-graph">
-          <Json value={{ template: node.template, params: node.params, roles: node.roles }} />
-        </Section>
-      ) : null}
+      {node.kind === "subgraph" ? <SubgraphDetails node={node} plan={plan} /> : null}
       <Section title="Inputs">
         <PortList
           ports={node.inputs ?? []}

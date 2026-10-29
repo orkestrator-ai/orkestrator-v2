@@ -28,6 +28,11 @@ import {
 } from "./graph-designer-edits";
 import type { GraphEditorCommand, GraphEditorContextValue } from "./graph-editor-context";
 import { GRAPH_NODE_KIND_LABELS } from "./graph-designer-model";
+import {
+  graphSubgraphPinnedRef,
+  graphSubgraphRefFor,
+  type GraphSubgraphChoice,
+} from "./graph-designer-subgraphs";
 
 /**
  * The editable designer's wiring (item 212): the canvas editor (connect,
@@ -42,8 +47,10 @@ export function useGraphDesignerEditing(options: {
   providers: readonly AgentPlatform[];
   ceiling?: GraphCapabilityCeiling;
   onSelect: (selection: GraphDesignerSelection, focus?: boolean) => void;
+  /** The project and saved templates the palette offers as sub-graphs (item 402). */
+  subgraphs?: { projectId: string | null; choices: readonly GraphSubgraphChoice[] };
 }) {
-  const { tabId, draft, library, compile, providers, ceiling, onSelect } = options;
+  const { tabId, draft, library, compile, providers, ceiling, onSelect, subgraphs } = options;
   const edit = useGraphDesignerStore((state) => state.edit);
   const acknowledge = useGraphDesignerStore((state) => state.acknowledge);
   const [dialog, setDialog] = useState<{ command: GraphEditorCommand; nodeId: string } | null>(
@@ -121,6 +128,44 @@ export function useGraphDesignerEditing(options: {
         );
         onSelect({ kind: "node", id: result.nodeId }, true);
       },
+      ...(subgraphs
+        ? {
+            subgraphChoices: subgraphs.choices,
+            addSubgraph: (summary, position) => {
+              const ref = graphSubgraphRefFor(summary);
+              void useGraphDesignerStore
+                .getState()
+                .loadSubgraphTemplate(subgraphs.projectId, ref)
+                .then((entry) => {
+                  if (entry.status !== "ready" || !("template" in entry.resolution)) {
+                    toast.error(`Could not add ${summary.name}`, {
+                      description:
+                        entry.status === "ready" && "missing" in entry.resolution
+                          ? `The template is ${entry.resolution.missing}`
+                          : "The template could not be read",
+                    });
+                    return;
+                  }
+                  const child = entry.resolution.template;
+                  let nodeId: string | null = null;
+                  editDraft(`Add sub-graph ${child.name}`, (template) => {
+                    const result = addGraphNode(
+                      template,
+                      {
+                        kind: "subgraph",
+                        ref: graphSubgraphPinnedRef(ref, child, entry.summary),
+                        child,
+                      },
+                      position,
+                    );
+                    nodeId = result.nodeId;
+                    return result.template;
+                  });
+                  if (nodeId) onSelect({ kind: "node", id: nodeId }, true);
+                });
+            },
+          }
+        : {}),
       wrapInLoop: (nodeId) => {
         const result = createGraphLoop(draft, [nodeId]);
         editDraft(`Wrap ${nodeId} in a loop`, () => result.template);
@@ -128,7 +173,7 @@ export function useGraphDesignerEditing(options: {
       },
       command: (command, nodeId) => setDialog({ command, nodeId }),
     };
-  }, [draft, library, connect, editDraft, onSelect]);
+  }, [draft, library, connect, editDraft, onSelect, subgraphs]);
 
   const context = useMemo<GraphEditorContextValue | null>(
     () =>
@@ -144,9 +189,21 @@ export function useGraphDesignerEditing(options: {
             select: (selection) => onSelect(selection, true),
             acknowledge: (ref) => acknowledge(tabId, ref),
             command: (command, nodeId) => setDialog({ command, nodeId }),
+            ...(subgraphs ? { projectId: subgraphs.projectId } : {}),
           }
         : null,
-    [draft, library, compile, providers, ceiling, editDraft, onSelect, acknowledge, tabId],
+    [
+      draft,
+      library,
+      compile,
+      providers,
+      ceiling,
+      editDraft,
+      onSelect,
+      acknowledge,
+      tabId,
+      subgraphs,
+    ],
   );
 
   const chooseLoop = useCallback(

@@ -19,6 +19,7 @@ import {
   type OnNodeDrag,
   type XYPosition,
 } from "@xyflow/react";
+import type { GraphTemplateSummary } from "@orkestrator/protocol/graphs/library";
 import type { GraphLayoutPoint } from "@orkestrator/protocol/graphs/template";
 import type { GraphDesignerSelection } from "@/stores/graphDesignerStore";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ import { GRAPH_CANVAS_NODE_TYPES, GraphCanvasConnectContext } from "./GraphCanva
 import { GraphPalette } from "./GraphPalette";
 import type { GraphConnectEnd, GraphConnectionVerdict } from "./graph-designer-connect";
 import type { GraphPaletteItem } from "./graph-designer-edits";
+import type { GraphSubgraphChoice } from "./graph-designer-subgraphs";
 import { GRAPH_NODE_WIDTH } from "./graph-designer-layout";
 import type { GraphEditorCommand } from "./graph-editor-context";
 import {
@@ -69,6 +71,10 @@ export interface GraphCanvasEditor {
   ) => void;
   remove: (selection: NonNullable<GraphDesignerSelection>) => void;
   add: (item: GraphPaletteItem, position: GraphLayoutPoint) => void;
+  /** Saved templates the palette offers as sub-graphs (item 402). */
+  subgraphChoices?: readonly GraphSubgraphChoice[];
+  /** Reads the picked template, then adds it as a sub-graph node. */
+  addSubgraph?: (summary: GraphTemplateSummary, position: GraphLayoutPoint) => void;
   wrapInLoop: (nodeId: string) => void;
   command: (command: GraphEditorCommand, nodeId: string) => void;
 }
@@ -527,6 +533,13 @@ function GraphCanvasInner({
                   onAdd={(item) => editor.add(item, viewportCenter())}
                   wrapTarget={selectedNode}
                   onWrapInLoop={(nodeId) => editor.wrapInLoop(nodeId)}
+                  {...(editor.subgraphChoices ? { subgraphs: editor.subgraphChoices } : {})}
+                  {...(editor.addSubgraph
+                    ? {
+                        onAddSubgraph: (summary: GraphTemplateSummary) =>
+                          editor.addSubgraph?.(summary, viewportCenter()),
+                      }
+                    : {})}
                 />
               </Panel>
               <Panel position="bottom-center">

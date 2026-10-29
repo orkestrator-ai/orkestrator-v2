@@ -90,6 +90,7 @@ import {
   type GraphPredicate,
 } from "@orkestrator/protocol/graphs/predicates";
 import { graphActivationKey, type NodeActivation } from "@orkestrator/protocol/graphs/run";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import type {
   GraphCollectPolicy,
   GraphEdgeSource,
@@ -653,7 +654,7 @@ export function computeGraphReadySet(
         } else {
           const decision = evaluateGraphPredicate(node.when, {
             values: scope.values,
-            params: view.run.bindings.params,
+            params: graphPlanScopeParams(view.run.plan, node.subgraph, view.run.bindings.params),
             run: { iteration },
           });
           next = activation(

@@ -309,7 +309,7 @@ describe("GraphCanvas, editable (item 212)", () => {
     const palette = container.querySelector("[data-graph-palette]") as HTMLElement;
     fireEvent.click(within(palette).getByRole("button", { name: /Gate/ }));
     expect(editor.add.mock.calls[0]![0]).toEqual({ kind: "gate" });
-    // Loop region needs a selected node; sub-graphs wait for Phase 4.
+    // Loop region needs a selected node; Sub-graph needs saved templates to offer.
     expect(
       (within(palette).getByRole("button", { name: /Loop region/ }) as HTMLButtonElement).disabled,
     ).toBe(true);

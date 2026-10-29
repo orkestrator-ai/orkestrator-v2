@@ -114,6 +114,25 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         required: false,
         from: port("pr", "pr"),
       },
+      // The branch the review ends on, for a parent that inlines Multi Review
+      // and ships it itself (item 402): exactly one of the two arrives, on
+      // exclusive outlets, like the two producers into `describe-pr.code`.
+      {
+        name: "clean",
+        type: "workspace@1",
+        label: "Reviewed branch (clean)",
+        description: "The reviewed branch, when the consolidated report has no findings.",
+        required: false,
+        from: port("has-findings", "code", "clean"),
+      },
+      {
+        name: "fixed",
+        type: "workspace@1",
+        label: "Fixed branch",
+        description: "The Fix's commit, when a Fix ran and completed.",
+        required: false,
+        from: port("fix-complete", "code", "complete"),
+      },
     ],
     workspace: { kind: "environment" },
     nodes: [

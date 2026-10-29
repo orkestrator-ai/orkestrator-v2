@@ -7,8 +7,12 @@ import {
   listResult,
   userDetail,
 } from "@/components/graph-designer/graph-designer.test-fixtures";
+import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import { addGraphNode, blankGraphTemplate } from "@/components/graph-designer/graph-designer-edits";
+import { GRAPH_DESIGNER_HISTORY_LIMIT } from "@/components/graph-designer/graph-designer-history";
 import {
   graphDesignerTab,
+  graphDraftDirty,
   isGraphRevisionConflict,
   parseGraphDraft,
   useGraphDesignerStore,
@@ -216,8 +220,9 @@ describe("graphDesignerStore", () => {
     expect(calls("graph_templates_list")).toEqual([{ projectId: "p" }, { projectId: "p" }]);
   });
 
-  describe("JSON editor", () => {
+  describe("editor", () => {
     const mine = userDetail({ ...pipeline.template, id: "mine", name: "Mine" }, 4);
+    const rename = (name: string) => (template: GraphTemplateV1) => ({ ...template, name });
 
     async function openMine() {
       install({
@@ -225,9 +230,10 @@ describe("graphDesignerStore", () => {
         graph_template_compile: () => compileResponse(mine.template),
       });
       await useGraphDesignerStore.getState().openTemplate("tab-1", mine.summary.ref, null);
+      useGraphDesignerStore.getState().openEditor("tab-1");
     }
 
-    test("opens only for user templates, on the stored revision's canonical text", async () => {
+    test("opens only for user templates, on the stored revision", async () => {
       install({
         graph_template_get: () => pipeline,
         graph_template_compile: () => compileResponse(pipeline.template),
@@ -237,46 +243,79 @@ describe("graphDesignerStore", () => {
       expect(graphDesignerTab("tab-b").editor).toBeNull();
 
       await openMine();
-      useGraphDesignerStore.getState().openEditor("tab-1");
-      expect(graphDesignerTab("tab-1").editor).toMatchObject({
-        text: graphTemplateExportText(mine.template),
-        baseRevision: 4,
-        conflict: false,
-      });
+      const editor = graphDesignerTab("tab-1").editor!;
+      expect(editor).toMatchObject({ baseRevision: 4, isNew: false, conflict: false });
+      expect(editor.draft).toBe(mine.template);
+      expect(graphDraftDirty(editor)).toBe(false);
     });
 
-    test("compiles the draft in the browser, reporting JSON errors and schema errors apart", async () => {
+    test("records each edit as an undo step, coalescing typing in one field", async () => {
       await openMine();
       const store = useGraphDesignerStore.getState();
-      store.openEditor("tab-1");
-      const broken = structuredClone(mine.template);
-      broken.loops![0]!.maxIterations = 11;
-      store.editDraft("tab-1", JSON.stringify(broken));
+      store.edit("tab-1", "Name", rename("M"), { coalesce: "name" });
+      store.edit("tab-1", "Name", rename("Mi"), { coalesce: "name" });
+      store.edit("tab-1", "Name", rename("Min"), { coalesce: "name" });
+      store.edit("tab-1", "Description", (template) => ({ ...template, description: "x" }));
+      let editor = graphDesignerTab("tab-1").editor!;
+      expect(editor.history.past.map((entry) => entry.label)).toEqual(["Name", "Description"]);
+      expect(graphDraftDirty(editor)).toBe(true);
+      // A recipe that returns the same template is no edit.
+      store.edit("tab-1", "Nothing", (template) => template);
+      expect(graphDesignerTab("tab-1").editor!.history.past).toHaveLength(2);
+
+      expect(store.undo("tab-1")).toBe("Description");
+      expect(store.undo("tab-1")).toBe("Name");
+      editor = graphDesignerTab("tab-1").editor!;
+      expect(editor.draft.name).toBe("Mine");
+      expect(editor.draft).toBe(mine.template);
+      expect(graphDraftDirty(editor)).toBe(false);
+      expect(store.undo("tab-1")).toBeNull();
+
+      expect(store.redo("tab-1")).toBe("Name");
+      expect(graphDesignerTab("tab-1").editor!.draft.name).toBe("Min");
+      // A new edit after an undo drops the redo branch.
+      store.edit("tab-1", "Other", rename("Other"));
+      expect(graphDesignerTab("tab-1").editor!.history.future).toEqual([]);
+      expect(store.redo("tab-1")).toBeNull();
+    });
+
+    test("bounds the undo history", async () => {
+      await openMine();
+      const store = useGraphDesignerStore.getState();
+      for (let index = 0; index < GRAPH_DESIGNER_HISTORY_LIMIT + 25; index++) {
+        store.edit("tab-1", `Edit ${index}`, rename(`Name ${index}`));
+      }
+      const past = graphDesignerTab("tab-1").editor!.history.past;
+      expect(past).toHaveLength(GRAPH_DESIGNER_HISTORY_LIMIT);
+      expect(past[0]!.label).toBe("Edit 25");
+    });
+
+    test("compiles the draft in the browser", async () => {
+      await openMine();
+      const store = useGraphDesignerStore.getState();
+      store.edit("tab-1", "Bound", (template) => {
+        const next = structuredClone(template);
+        next.loops![0]!.maxIterations = 11;
+        return next;
+      });
       store.compileDraft("tab-1", { providers: ["claude", "codex"] });
-      let tab = graphDesignerTab("tab-1");
+      const tab = graphDesignerTab("tab-1");
       expect(tab.compile?.source).toBe("browser");
       expect(tab.compile?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
         "loop-bound-exceeded",
       );
       expect(tab.compile?.plan).toBeNull();
-
-      store.editDraft("tab-1", '{"format": ');
-      store.compileDraft("tab-1", {});
-      tab = graphDesignerTab("tab-1");
-      expect(tab.editor?.parseErrors[0]?.code).toBe("invalid_json");
-      // The last compile stays until the text parses again.
-      expect(tab.compile?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
-        "loop-bound-exceeded",
-      );
-
-      store.editDraft("tab-1", JSON.stringify({ ...mine.template, nodes: "nope" }));
-      store.compileDraft("tab-1", {});
-      tab = graphDesignerTab("tab-1");
-      expect(tab.editor?.parseErrors).toEqual([]);
-      expect(tab.compile?.diagnostics[0]?.code).toBe("template-invalid");
+      // A refresh from the backend (a change, a safety check) keeps the draft's compile.
+      install({
+        graph_template_get: () => mine,
+        graph_template_compile: () => compileResponse(mine.template),
+      });
+      await store.refreshTab("tab-1");
+      expect(graphDesignerTab("tab-1")).toMatchObject({ compileStatus: "ready" });
+      expect(graphDesignerTab("tab-1").compile?.source).toBe("browser");
     });
 
-    test("saves with compare-and-swap on the base revision and rebases on success", async () => {
+    test("saves with compare-and-swap on the base revision and continues on the stored template", async () => {
       await openMine();
       const saved = userDetail({ ...mine.template, name: "Renamed" }, 5);
       install({
@@ -284,56 +323,128 @@ describe("graphDesignerStore", () => {
         graph_templates_list: () => listResult([saved.summary]),
       });
       const store = useGraphDesignerStore.getState();
-      store.openEditor("tab-1");
-      store.editDraft("tab-1", JSON.stringify({ ...mine.template, name: "Renamed" }));
-      expect(await store.saveDraft("tab-1")).toBe(true);
+      store.edit("tab-1", "Name", rename("Renamed"));
+      expect(await store.saveDraft("tab-1")).toEqual(saved);
       const save = calls("graph_template_save")[0]!;
       expect(save.expectedRevision).toBe(4);
-      expect((save.template as { name: string }).name).toBe("Renamed");
+      expect(save.template as GraphTemplateV1).toMatchObject({ name: "Renamed", revision: 4 });
       const tab = graphDesignerTab("tab-1");
       expect(tab.detail).toEqual(saved);
       expect(tab.editor).toMatchObject({ baseRevision: 5, conflict: false, saving: false });
+      expect(graphDraftDirty(tab.editor)).toBe(false);
+      // The history survives the save, so the edit can still be undone.
+      expect(tab.editor!.history.past).toHaveLength(1);
     });
 
-    test("keeps the text and reports a conflict when someone saved first", async () => {
+    test("keeps the draft on a conflict, then saves it as a copy", async () => {
       await openMine();
-      const latest = userDetail({ ...mine.template, name: "Theirs" }, 6);
+      const copy = userDetail({ ...mine.template, id: "mine-copy", name: "Ours (copy)" }, 1);
       install({
         graph_template_save: () => {
-          throw Object.assign(
-            new Error("Template mine is at revision 6, not 4; reload it before saving"),
-            { code: "revision-conflict" },
-          );
+          throw new Error("Template mine is at revision 6, not 4; reload it before saving");
         },
-        graph_template_get: () => latest,
+        graph_template_import: () => ({ ok: true, detail: copy }),
+        graph_templates_list: () => listResult([copy.summary]),
       });
       const store = useGraphDesignerStore.getState();
-      store.openEditor("tab-1");
-      const text = JSON.stringify({ ...mine.template, name: "Ours" });
-      store.editDraft("tab-1", text);
-      expect(await store.saveDraft("tab-1")).toBe(false);
+      store.edit("tab-1", "Name", rename("Ours"));
+      expect(await store.saveDraft("tab-1")).toBeNull();
       let tab = graphDesignerTab("tab-1");
-      expect(tab.editor).toMatchObject({ text, conflict: true, saving: false, baseRevision: 4 });
-      expect(tab.editor?.error).toContain("revision 4");
+      expect(tab.editor).toMatchObject({ conflict: true, saving: false, baseRevision: 4 });
+      expect(tab.editor!.draft.name).toBe("Ours");
+      expect(tab.editor!.error).toContain("revision 4");
 
-      await store.reloadDraft("tab-1");
+      expect(await store.saveDraftAsCopy("tab-1")).toEqual(copy);
+      const imported = JSON.parse(calls("graph_template_import")[0]!.text as string);
+      expect(imported).toMatchObject({ id: "mine-copy", name: "Ours (copy)", revision: 0 });
       tab = graphDesignerTab("tab-1");
-      expect(tab.editor).toMatchObject({
-        text: graphTemplateExportText(latest.template),
-        baseRevision: 6,
-        conflict: false,
-      });
+      expect(tab.selected).toEqual(copy.summary.ref);
+      expect(tab.editor).toMatchObject({ baseRevision: 1, conflict: false, isNew: false });
     });
 
-    test("refuses to save text that is not a template", async () => {
+    test("reload after a conflict starts again from the latest revision", async () => {
       await openMine();
+      const latest = userDetail({ ...mine.template, name: "Theirs" }, 6);
+      install({ graph_template_get: () => latest });
+      const store = useGraphDesignerStore.getState();
+      store.edit("tab-1", "Name", rename("Ours"));
+      await store.reloadDraft("tab-1");
+      const editor = graphDesignerTab("tab-1").editor!;
+      expect(editor).toMatchObject({ baseRevision: 6, conflict: false });
+      expect(editor.draft.name).toBe("Theirs");
+      expect(editor.history.past).toEqual([]);
+    });
+
+    test("a new draft saves as a new template, and refuses to save while incomplete", async () => {
       install({});
       const store = useGraphDesignerStore.getState();
-      store.openEditor("tab-1");
-      store.editDraft("tab-1", "not json");
-      expect(await store.saveDraft("tab-1")).toBe(false);
+      store.openDraft("tab-n", blankGraphTemplate({ id: "fresh", name: "Fresh" }), "project-1");
+      let tab = graphDesignerTab("tab-n");
+      expect(tab.selected).toBeNull();
+      expect(tab.editor).toMatchObject({ isNew: true, baseRevision: 0 });
+      expect(graphDraftDirty(tab.editor)).toBe(true);
+      // No nodes yet: the template guard refuses it before anything is sent.
+      expect(await store.saveDraft("tab-n")).toBeNull();
       expect(calls("graph_template_save")).toHaveLength(0);
-      expect(graphDesignerTab("tab-1").editor?.error).toBe("Fix the errors before saving.");
+      expect(graphDesignerTab("tab-n").editor!.saveErrors.map((error) => error.path)).toContain(
+        "nodes",
+      );
+
+      store.edit(
+        "tab-n",
+        "Add",
+        (template) => addGraphNode(template, { kind: "agent" }, { x: 0, y: 0 }).template,
+      );
+      const saved = userDetail(graphDesignerTab("tab-n").editor!.draft, 1);
+      install({
+        graph_template_save: () => saved,
+        graph_templates_list: () => listResult([saved.summary]),
+      });
+      expect(await store.saveDraft("tab-n")).toEqual(saved);
+      expect(calls("graph_template_save")[0]).toMatchObject({
+        expectedRevision: 0,
+        projectId: "project-1",
+      });
+      tab = graphDesignerTab("tab-n");
+      expect(tab.selected).toEqual(saved.summary.ref);
+      expect(tab.editor).toMatchObject({ isNew: false, baseRevision: 1 });
+    });
+
+    test("a new draft whose id is taken offers a copy", async () => {
+      install({
+        graph_template_save: () => {
+          throw new Error("Template fresh is at revision 2, not 0; reload it before saving");
+        },
+      });
+      const store = useGraphDesignerStore.getState();
+      store.openDraft(
+        "tab-n",
+        addGraphNode(blankGraphTemplate({ id: "fresh" }), { kind: "agent" }, { x: 0, y: 0 })
+          .template,
+        null,
+      );
+      expect(await store.saveDraft("tab-n")).toBeNull();
+      expect(graphDesignerTab("tab-n").editor).toMatchObject({ conflict: true });
+      expect(graphDesignerTab("tab-n").editor!.error).toContain("already exists");
+    });
+
+    test("records an acknowledgement against the warning's digest as an undoable edit", async () => {
+      await openMine();
+      const store = useGraphDesignerStore.getState();
+      const digest = "a".repeat(64);
+      store.acknowledge("tab-1", {
+        kind: "taint",
+        digest,
+        code: "taint-reaches-side-effect",
+        nodeId: "build",
+      });
+      const editor = graphDesignerTab("tab-1").editor!;
+      expect(editor.draft.acknowledgements).toEqual([
+        expect.objectContaining({ kind: "taint", digest, code: "taint-reaches-side-effect" }),
+      ]);
+      expect(editor.history.past.at(-1)!.label).toContain("Acknowledge");
+      store.undo("tab-1");
+      expect(graphDesignerTab("tab-1").editor!.draft.acknowledgements).toBeUndefined();
     });
   });
 

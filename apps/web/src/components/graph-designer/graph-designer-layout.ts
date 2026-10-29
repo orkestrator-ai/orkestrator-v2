@@ -136,12 +136,18 @@ function templatePlacesEveryNode(
  * column and gives every loop its own band of rows, so a loop's frame holds
  * only its members; nodes outside loops share the last band.
  */
-export function layoutGraphTemplate(template: GraphTemplateV1): GraphDesignerLayout {
+export function layoutGraphTemplate(
+  template: GraphTemplateV1,
+  options: { alwaysIo?: boolean } = {},
+): GraphDesignerLayout {
   const order = graphTemplateOrder(template);
   const boxes = new Map<string, GraphLayoutBox>();
-  const height = (id: string) => graphNodeHeight(portRows(template, id));
-  const hasInputs = template.inputs.length > 0;
-  const hasOutputs = (template.outputs?.length ?? 0) > 0;
+  // The editable canvas adds a "+ input" row to every face and always shows
+  // both ends, so a first input or output can be drawn.
+  const extraRow = options.alwaysIo === true ? 1 : 0;
+  const height = (id: string) => graphNodeHeight(portRows(template, id) + extraRow);
+  const hasInputs = options.alwaysIo === true || template.inputs.length > 0;
+  const hasOutputs = options.alwaysIo === true || (template.outputs?.length ?? 0) > 0;
   const ioHeight = (count: number) => graphNodeHeight(count);
 
   const loopOf = new Map<string, string>();
@@ -177,7 +183,7 @@ export function layoutGraphTemplate(template: GraphTemplateV1): GraphDesignerLay
         x: maxX + LAYER_GAP,
         y: minY,
         width: GRAPH_IO_NODE_WIDTH,
-        height: ioHeight(template.outputs!.length),
+        height: ioHeight(template.outputs?.length ?? 0),
       });
     }
   } else {
@@ -244,7 +250,7 @@ export function layoutGraphTemplate(template: GraphTemplateV1): GraphDesignerLay
         x: (lastLayer + offset + 1) * (GRAPH_NODE_WIDTH + LAYER_GAP),
         y: 0,
         width: GRAPH_IO_NODE_WIDTH,
-        height: ioHeight(template.outputs!.length),
+        height: ioHeight(template.outputs?.length ?? 0),
       });
     }
   }

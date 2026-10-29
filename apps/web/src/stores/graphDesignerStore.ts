@@ -19,7 +19,11 @@ import {
   type GraphTemplatesListResult,
   type GraphTemplateSummary,
 } from "@orkestrator/protocol/graphs/library";
-import { parseGraphTemplate, type GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import {
+  parseGraphTemplate,
+  validateGraphTemplate,
+  type GraphTemplateV1,
+} from "@orkestrator/protocol/graphs/template";
 import {
   compileGraphTemplateInBackend,
   duplicateGraphTemplate,
@@ -30,18 +34,31 @@ import {
   saveGraphTemplate,
   setGraphTemplateTrust,
 } from "@/lib/backend/graph-templates";
+import {
+  acknowledgeGraphWarning,
+  graphIdFrom,
+} from "@/components/graph-designer/graph-designer-edits";
+import {
+  EMPTY_GRAPH_HISTORY,
+  pushGraphHistory,
+  redoGraphHistory,
+  undoGraphHistory,
+  type GraphEditHistory,
+} from "@/components/graph-designer/graph-designer-history";
 
 /**
- * State of the Graphs designer (item 110): the template library per project
- * and, per designer tab, the template shown, its compile result, the canvas
- * selection and the JSON editor of a user template.
+ * State of the Graphs designer (items 110 and 212): the template library per
+ * project and, per designer tab, the template shown, its compile result, the
+ * canvas selection and the editor of a user template.
  *
  * Every template, summary and compile result is a backend snapshot: the
  * library and the shown template are re-read on mount, on `graph-template`
  * changes and on view safety checks, so a remounted or reloaded tab shows the
- * same thing. Only an unsaved JSON draft lives here alone, and it is compiled
- * in the browser with the same compiler (107); a stored template is compiled
- * by the backend, under the project's capability ceiling (D18).
+ * same thing. Only an unsaved draft lives here alone (with its bounded undo
+ * history), and it is compiled in the browser with the same compiler (107);
+ * a stored template is compiled by the backend, under the project's
+ * capability ceiling (D18). Saving compares and swaps on the revision the
+ * edit started from; a lost race keeps the draft and offers a copy.
  */
 
 export type GraphDesignerSelection =
@@ -70,14 +87,20 @@ export interface GraphDesignerCompile {
 }
 
 export interface GraphDesignerEditor {
-  /** The JSON being edited. */
-  text: string;
-  /** The store revision the edit started from; saving compares and swaps on it. */
+  /** The template being edited (item 212). Client-only until saved. */
+  draft: GraphTemplateV1;
+  /** The template as last loaded or saved; `draft !== saved` means unsaved edits. */
+  saved: GraphTemplateV1 | null;
+  /** The store revision the edit started from; saving compares and swaps on it (0: new). */
   baseRevision: number;
-  /** Why the text is not a template (JSON or schema), when it is not. */
-  parseErrors: FieldError[];
+  /** Never saved: "New graph", or a draft opened from elsewhere ("Describe a graph"). */
+  isNew: boolean;
+  /** Bounded undo/redo over template edits. */
+  history: GraphEditHistory;
   saving: boolean;
   error: string | null;
+  /** The template guard's reasons the last save was refused before sending. */
+  saveErrors: FieldError[];
   /** The last save lost a compare-and-swap: someone saved a newer revision. */
   conflict: boolean;
 }
@@ -131,15 +154,38 @@ interface GraphDesignerState {
     action: "approve" | "revoke",
     tabId?: string,
   ) => Promise<void>;
+  /** Starts editing the shown user template on the canvas. */
   openEditor: (tabId: string) => void;
+  /**
+   * Opens `template` as an unsaved draft (never saved: Save creates it).
+   * "New graph" passes a blank template; "Describe a graph" (215) its result.
+   */
+  openDraft: (tabId: string, template: GraphTemplateV1, projectId: string | null) => void;
+  /** Leaves the editor, dropping unsaved edits. */
   closeEditor: (tabId: string) => void;
-  editDraft: (tabId: string, text: string) => void;
-  /** Compiles the draft in the browser; called debounced by the editor. */
+  /**
+   * One undoable edit: `recipe` returns the next template (the same object
+   * for no change). Edits with one `coalesce` key in quick succession are one
+   * undo step (typing in a field).
+   */
+  edit: (
+    tabId: string,
+    label: string,
+    recipe: (template: GraphTemplateV1) => GraphTemplateV1,
+    options?: { coalesce?: string },
+  ) => void;
+  undo: (tabId: string) => string | null;
+  redo: (tabId: string) => string | null;
+  /** Compiles the draft in the browser; called debounced by the tab. */
   compileDraft: (tabId: string, context: GraphDraftCompileContext) => void;
-  /** Saves the draft with compare-and-swap on its base revision. */
-  saveDraft: (tabId: string) => Promise<boolean>;
+  /** Saves the draft with compare-and-swap on its base revision; the saved detail, or null. */
+  saveDraft: (tabId: string) => Promise<GraphTemplateDetail | null>;
+  /** Saves the draft as a new user template (after a conflict, or to fork it). */
+  saveDraftAsCopy: (tabId: string) => Promise<GraphTemplateDetail | null>;
   /** Drops the draft's edits and starts again from the stored template. */
   reloadDraft: (tabId: string) => Promise<void>;
+  /** Records the user's acknowledgement of a warning in the draft (§5.13, D4). */
+  acknowledge: (tabId: string, ref: GraphPlanAcknowledgementRef) => void;
 }
 
 const EMPTY_TAB: GraphDesignerTabState = Object.freeze({
@@ -214,6 +260,29 @@ export function parseGraphDraft(
     : { ok: false, errors: parsed.errors, value: JSON.parse(text) };
 }
 
+function freshEditor(
+  template: GraphTemplateV1,
+  revision: number,
+  isNew: boolean,
+): GraphDesignerEditor {
+  return {
+    draft: template,
+    saved: template,
+    baseRevision: revision,
+    isNew,
+    history: EMPTY_GRAPH_HISTORY,
+    saving: false,
+    error: null,
+    saveErrors: [],
+    conflict: false,
+  };
+}
+
+/** Unsaved edits in the tab's editor (a new draft always counts). */
+export function graphDraftDirty(editor: GraphDesignerEditor | null): boolean {
+  return editor !== null && (editor.isNew || editor.draft !== editor.saved);
+}
+
 export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => {
   const tab = (tabId: string) => get().tabs.get(tabId) ?? EMPTY_TAB;
   const patchTab = (tabId: string, patch: Partial<GraphDesignerTabState>) =>
@@ -234,6 +303,21 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
   const patchEditor = (tabId: string, patch: Partial<GraphDesignerEditor>) => {
     const editor = tab(tabId).editor;
     if (editor) patchTab(tabId, { editor: { ...editor, ...patch } });
+  };
+
+  /** After a save: the editor continues on the stored template (history kept). */
+  const rebase = (tabId: string, saved: GraphTemplateDetail) => {
+    const editor = tab(tabId).editor;
+    patchTab(tabId, {
+      detail: saved,
+      selected: saved.summary.ref,
+      detailStatus: "ready",
+      detailError: null,
+      editor: {
+        ...freshEditor(saved.template, saved.summary.revision, false),
+        history: editor?.history ?? EMPTY_GRAPH_HISTORY,
+      },
+    });
   };
 
   const load = async (tabId: string, ref: GraphTemplateRef, projectId: string | null) => {
@@ -264,7 +348,10 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
         : { detail: null, detailStatus: "error", detailError: errorText(detail.reason) },
     );
     // A draft being edited keeps its own browser compile.
-    if (tab(tabId).editor) return;
+    if (tab(tabId).editor) {
+      patchIfCurrent(tabId, request, { compileStatus: "ready", compileError: null });
+      return;
+    }
     patchIfCurrent(
       tabId,
       request,
@@ -348,41 +435,76 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
     openEditor: (tabId) => {
       const detail = tab(tabId).detail;
       if (!detail || detail.summary.scope !== "user") return;
+      patchTab(tabId, { editor: freshEditor(detail.template, detail.summary.revision, false) });
+    },
+
+    openDraft: (tabId, template, projectId) => {
+      const draft = { ...structuredClone(template), revision: 0 };
+      delete draft.engine;
       patchTab(tabId, {
-        editor: {
-          text: graphTemplateExportText(detail.template),
-          baseRevision: detail.summary.revision,
-          parseErrors: [],
-          saving: false,
-          error: null,
-          conflict: false,
-        },
+        projectId,
+        selected: null,
+        detail: null,
+        detailStatus: "idle",
+        detailError: null,
+        compile: null,
+        compileStatus: "idle",
+        compileError: null,
+        selection: null,
+        request: tab(tabId).request + 1,
+        editor: { ...freshEditor(draft, 0, true), saved: null },
       });
     },
 
     closeEditor: (tabId) => {
-      patchTab(tabId, { editor: null });
-      void get().refreshTab(tabId);
+      const wasNew = tab(tabId).editor?.isNew ?? false;
+      patchTab(tabId, { editor: null, ...(wasNew ? { compile: null, selection: null } : {}) });
+      if (!wasNew) void get().refreshTab(tabId);
     },
 
-    editDraft: (tabId, text) => patchEditor(tabId, { text, error: null }),
+    edit: (tabId, label, recipe, options = {}) => {
+      const editor = tab(tabId).editor;
+      if (!editor) return;
+      const next = recipe(editor.draft);
+      if (next === editor.draft) return;
+      patchEditor(tabId, {
+        draft: next,
+        history: pushGraphHistory(editor.history, editor.draft, label, options),
+        error: null,
+        saveErrors: [],
+      });
+    },
+
+    undo: (tabId) => {
+      const editor = tab(tabId).editor;
+      if (!editor) return null;
+      const step = undoGraphHistory(editor.history, editor.draft);
+      if (!step) return null;
+      patchEditor(tabId, { draft: step.template, history: step.history, error: null });
+      return step.label;
+    },
+
+    redo: (tabId) => {
+      const editor = tab(tabId).editor;
+      if (!editor) return null;
+      const step = redoGraphHistory(editor.history, editor.draft);
+      if (!step) return null;
+      patchEditor(tabId, { draft: step.template, history: step.history, error: null });
+      return step.label;
+    },
 
     compileDraft: (tabId, context) => {
       const editor = tab(tabId).editor;
       if (!editor) return;
-      const parsed = parseGraphDraft(editor.text);
-      if (!parsed.ok && parsed.value === undefined) {
-        patchEditor(tabId, { parseErrors: parsed.errors });
-        return;
-      }
-      const result = compile(parsed.ok ? parsed.template : parsed.value, {
+      const result = compile(editor.draft, {
         ...(context.providers && context.providers.length > 0
           ? { providers: [...context.providers] }
           : {}),
         ...(context.ceiling ? { ceiling: context.ceiling } : {}),
       });
+      // A newer edit may have landed meanwhile; the next debounce compiles it.
+      if (tab(tabId).editor?.draft !== editor.draft) return;
       patchTab(tabId, {
-        editor: { ...tab(tabId).editor!, parseErrors: [] },
         compile: {
           source: "browser",
           ok: result.ok,
@@ -401,41 +523,80 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
     saveDraft: async (tabId) => {
       const current = tab(tabId);
       const editor = current.editor;
-      if (!editor || editor.saving) return false;
-      const parsed = parseGraphDraft(editor.text);
-      if (!parsed.ok) {
-        patchEditor(tabId, { parseErrors: parsed.errors, error: "Fix the errors before saving." });
-        return false;
+      if (!editor || editor.saving) return null;
+      const template = { ...editor.draft, revision: editor.baseRevision };
+      const guard = validateGraphTemplate(template);
+      if (!guard.ok) {
+        patchEditor(tabId, {
+          saveErrors: guard.errors,
+          error: "The template is not complete yet; fix these before saving.",
+        });
+        return null;
       }
-      patchEditor(tabId, { saving: true, error: null, conflict: false });
+      patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
       try {
-        const saved = await saveGraphTemplate(parsed.template, {
+        const saved = await saveGraphTemplate(template, {
           expectedRevision: editor.baseRevision,
           ...(current.projectId ? { projectId: current.projectId } : {}),
         });
-        patchTab(tabId, {
-          detail: saved,
-          selected: saved.summary.ref,
-          editor: {
-            text: graphTemplateExportText(saved.template),
-            baseRevision: saved.summary.revision,
-            parseErrors: [],
-            saving: false,
-            error: null,
-            conflict: false,
-          },
-        });
+        rebase(tabId, saved);
         void get().loadLibrary(current.projectId);
-        return true;
+        return saved;
       } catch (error) {
+        const conflict = isGraphRevisionConflict(error);
         patchEditor(tabId, {
           saving: false,
-          conflict: isGraphRevisionConflict(error),
-          error: isGraphRevisionConflict(error)
-            ? `Someone saved this template since you started editing (your edit is based on revision ${editor.baseRevision}). Your text is kept: copy what you need, then reload the latest revision.`
+          conflict,
+          error: conflict
+            ? editor.isNew
+              ? `A template with the id ${editor.draft.id} already exists. Save as a copy, or change the id.`
+              : `Someone saved this template since you started editing (your edit is based on revision ${editor.baseRevision}). Your edits are kept: save them as a copy, or reload the latest revision.`
             : errorText(error),
         });
-        return false;
+        return null;
+      }
+    },
+
+    saveDraftAsCopy: async (tabId) => {
+      const current = tab(tabId);
+      const editor = current.editor;
+      if (!editor || editor.saving) return null;
+      const draft = editor.draft;
+      const copy: GraphTemplateV1 = {
+        ...draft,
+        id: editor.isNew ? draft.id : graphIdFrom(`${draft.id}-copy`, "graph-copy"),
+        name: editor.isNew ? draft.name : `${draft.name} (copy)`.slice(0, 200),
+        revision: 0,
+      };
+      const guard = validateGraphTemplate(copy);
+      if (!guard.ok) {
+        patchEditor(tabId, {
+          saveErrors: guard.errors,
+          error: "The template is not complete yet; fix these before saving.",
+        });
+        return null;
+      }
+      patchEditor(tabId, { saving: true, error: null, saveErrors: [], conflict: false });
+      try {
+        // Import picks a free id when the copy's is taken.
+        const result = await importGraphTemplate(
+          graphTemplateExportText(copy),
+          current.projectId ? { projectId: current.projectId } : {},
+        );
+        if (!result.ok) {
+          patchEditor(tabId, {
+            saving: false,
+            saveErrors: result.errors,
+            error: "The copy was refused.",
+          });
+          return null;
+        }
+        rebase(tabId, result.detail);
+        void get().loadLibrary(current.projectId);
+        return result.detail;
+      } catch (error) {
+        patchEditor(tabId, { saving: false, error: errorText(error) });
+        return null;
       }
     },
 
@@ -448,15 +609,14 @@ export const useGraphDesignerStore = create<GraphDesignerState>()((set, get) => 
       );
       patchTab(tabId, {
         detail,
-        editor: {
-          text: graphTemplateExportText(detail.template),
-          baseRevision: detail.summary.revision,
-          parseErrors: [],
-          saving: false,
-          error: null,
-          conflict: false,
-        },
+        editor: freshEditor(detail.template, detail.summary.revision, false),
       });
+    },
+
+    acknowledge: (tabId, ref) => {
+      get().edit(tabId, `Acknowledge ${ref.code}`, (template) =>
+        acknowledgeGraphWarning(template, ref),
+      );
     },
   };
 });

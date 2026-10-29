@@ -1,12 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Braces, ClipboardCopy, CopyPlus, Download, FileUp, Loader2, Network } from "lucide-react";
+import {
+  Braces,
+  ClipboardCopy,
+  CopyPlus,
+  Download,
+  FileUp,
+  FilePlus2,
+  Loader2,
+  Network,
+  PencilRuler,
+} from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   graphTemplateRefKey,
   type GraphTemplateRef,
   type GraphTemplateSummary,
 } from "@orkestrator/protocol/graphs/library";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { writeText } from "@/lib/native/clipboard";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
@@ -16,29 +36,51 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   EMPTY_GRAPH_DESIGNER_TAB,
   graphDesignerLibraryKey,
-  parseGraphDraft,
+  graphDraftDirty,
   useGraphDesignerStore,
   type GraphDesignerSelection,
 } from "@/stores/graphDesignerStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphCanvas } from "./GraphCanvas";
+import { GraphConnectDialog, GraphLoopDialog } from "./GraphCommandDialogs";
 import { GraphCompilePanel } from "./GraphCompilePanel";
+import { GraphEditorToolbar } from "./GraphEditorToolbar";
 import { GraphImportDialog } from "./GraphImportDialog";
 import { GraphInspector } from "./GraphInspector";
 import { GraphJsonEditor } from "./GraphJsonEditor";
 import { GraphLibraryList } from "./GraphLibraryList";
-import { buildGraphCanvasModel } from "./graph-designer-model";
+import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
+import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
+import { GraphEditorContext } from "./graph-editor-context";
+import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
 
 /**
- * The Graphs designer tab (item 110, "Graphs" in the UI): the template
- * library, a read-only canvas, the inspector and the compile panel, with JSON
- * import and export, Duplicate, and JSON editing of user templates.
+ * The Graphs designer tab ("Graphs" in the UI): the template library, the
+ * canvas, the inspector and the compile panel, with JSON import and export
+ * and Duplicate (item 110). User templates, and new ones ("New graph"), are
+ * edited on the canvas (item 212): palette, connections, forms, undo, a live
+ * browser compile, and Save with compare-and-swap.
  *
  * The tab keeps only the template it shows in the pane layout; everything
  * else is re-read from the backend when it mounts, when a `graph-template`
- * change is announced and on view safety checks (invariants 1 and 3).
+ * change is announced and on view safety checks (invariants 1 and 3). An
+ * unsaved draft lives only in the designer store.
  */
+
+/** Wait this long after the last edit before compiling the draft in the browser. */
+export const GRAPH_DRAFT_COMPILE_DELAY_MS = 250;
+
+function isTextTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  return (
+    element.tagName === "INPUT" ||
+    element.tagName === "TEXTAREA" ||
+    element.tagName === "SELECT" ||
+    element.isContentEditable
+  );
+}
 
 const SCOPE_LABELS = { builtin: "Built-in", user: "Yours", project: "Project" } as const;
 
@@ -91,6 +133,20 @@ export function GraphDesignerTab({
   const exportTemplate = useGraphDesignerStore((state) => state.exportTemplate);
   const setTrust = useGraphDesignerStore((state) => state.setTrust);
   const openEditor = useGraphDesignerStore((state) => state.openEditor);
+  const openDraft = useGraphDesignerStore((state) => state.openDraft);
+  const closeEditor = useGraphDesignerStore((state) => state.closeEditor);
+  const compileDraft = useGraphDesignerStore((state) => state.compileDraft);
+  const saveDraft = useGraphDesignerStore((state) => state.saveDraft);
+  const saveDraftAsCopy = useGraphDesignerStore((state) => state.saveDraftAsCopy);
+  const reloadDraft = useGraphDesignerStore((state) => state.reloadDraft);
+  const undo = useGraphDesignerStore((state) => state.undo);
+  const redo = useGraphDesignerStore((state) => state.redo);
+  const acknowledge = useGraphDesignerStore((state) => state.acknowledge);
+  const [jsonOpen, setJsonOpen] = useState(false);
+  // Leaving unsaved edits asks first; this is what to do once confirmed.
+  const [pendingDiscard, setPendingDiscard] = useState<{ label: string; run: () => void } | null>(
+    null,
+  );
 
   const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -126,15 +182,36 @@ export function GraphDesignerTab({
   // The pane layout names the template (a reload, or "open in Graphs").
   const wantedKey = data.selected ? graphTemplateRefKey(data.selected) : null;
   const shownKey = view.selected ? graphTemplateRefKey(view.selected) : null;
+  // Each ref the pane layout names is acted on once: the tab may move on by
+  // itself (a save as copy, a new draft) before the layout catches up.
+  const handledKeyRef = useRef<string | null>(null);
+  const newDraft = view.editor?.isNew ?? false;
   useEffect(() => {
-    if (!data.selected || wantedKey === shownKey) return;
+    if (!data.selected || newDraft || wantedKey === handledKeyRef.current) return;
+    handledKeyRef.current = wantedKey;
+    if (wantedKey === shownKey) return;
     void openTemplate(tabId, data.selected, projectId);
-  }, [data.selected, wantedKey, shownKey, openTemplate, tabId, projectId]);
+  }, [data.selected, wantedKey, shownKey, newDraft, openTemplate, tabId, projectId]);
 
-  const open = (summary: GraphTemplateSummary) => {
-    persistSelected(summary.ref);
-    void openTemplate(tabId, summary.ref, projectId);
+  const dirty = graphDraftDirty(view.editor);
+  /** Runs `action` now, or after the user agrees to drop unsaved edits. */
+  const guardDiscard = (label: string, action: () => void) => {
+    if (dirty) setPendingDiscard({ label, run: action });
+    else action();
   };
+
+  const open = (summary: GraphTemplateSummary) =>
+    guardDiscard(`open ${summary.name}`, () => {
+      persistSelected(summary.ref);
+      void openTemplate(tabId, summary.ref, projectId);
+    });
+
+  const newGraph = () =>
+    guardDiscard("start a new graph", () => {
+      usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+      openDraft(tabId, blankGraphTemplate(), projectId);
+      setJsonOpen(false);
+    });
 
   const onSelect = useCallback(
     (selection: GraphDesignerSelection, focus = false) => select(tabId, selection, focus),
@@ -149,12 +226,9 @@ export function GraphDesignerTab({
   const summary = detail?.summary ?? null;
   const ceiling = library?.result?.ceiling;
 
-  // An open JSON editor shows its draft whenever the draft is a template.
-  const draft = useMemo(
-    () => (view.editor ? parseGraphDraft(view.editor.text) : null),
-    [view.editor],
-  );
-  const shownTemplate = draft?.ok ? draft.template : (detail?.template ?? null);
+  const editor = view.editor;
+  const draft = editor?.draft ?? null;
+  const shownTemplate = draft ?? detail?.template ?? null;
   const compile = view.compile;
   const model = useMemo(
     () =>
@@ -163,10 +237,34 @@ export function GraphDesignerTab({
             template: shownTemplate,
             plan: compile?.plan ?? null,
             diagnostics: compile?.diagnostics ?? [],
+            editable: draft !== null,
           })
         : null,
-    [shownTemplate, compile],
+    [shownTemplate, compile, draft],
   );
+  const typeLibrary = useMemo(
+    () => graphTemplateTypeLibrary(shownTemplate ?? blankGraphTemplate()),
+    [shownTemplate],
+  );
+  const editing = useGraphDesignerEditing({
+    tabId,
+    draft,
+    library: typeLibrary,
+    compile,
+    providers,
+    ...(ceiling ? { ceiling } : {}),
+    onSelect,
+  });
+
+  // The draft compiles in the browser shortly after each edit (the live panel).
+  useEffect(() => {
+    if (!draft) return;
+    const timer = setTimeout(
+      () => compileDraft(tabId, { providers, ...(ceiling ? { ceiling } : {}) }),
+      GRAPH_DRAFT_COMPILE_DELAY_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [tabId, draft, providers, ceiling, compileDraft]);
 
   const run = async (label: string, action: () => Promise<void>) => {
     setBusy(label);
@@ -178,6 +276,63 @@ export function GraphDesignerTab({
       setBusy(null);
     }
   };
+  const save = () =>
+    run("save the template", async () => {
+      const saved = await saveDraft(tabId);
+      if (saved) {
+        persistSelected(saved.summary.ref);
+        toast.success(`Saved ${saved.summary.name}`, {
+          description: `Revision ${saved.summary.revision}`,
+        });
+      }
+    });
+
+  const saveAsCopy = () =>
+    run("save a copy", async () => {
+      const saved = await saveDraftAsCopy(tabId);
+      if (saved) {
+        persistSelected(saved.summary.ref);
+        toast.success(`Saved as ${saved.summary.name}`, { description: `Id ${saved.summary.id}` });
+      }
+    });
+
+  const stepHistory = (direction: "undo" | "redo") => {
+    const label = direction === "undo" ? undo(tabId) : redo(tabId);
+    if (label)
+      toast.message(`${direction === "undo" ? "Undid" : "Redid"}: ${label}`, { duration: 1500 });
+  };
+
+  // Undo, redo and save while the designer is the active tab: on the window,
+  // so they work after a dialog closes and focus falls back to the page.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const onShortcut = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (!editor || !(event.metaKey || event.ctrlKey) || event.defaultPrevented) return;
+    const target = event.target as Node | null;
+    const inDesigner = Boolean(target && rootRef.current?.contains(target));
+    if (!inDesigner && target !== document.body && target !== document.documentElement) return;
+    const key = event.key.toLowerCase();
+    if (key === "s") {
+      event.preventDefault();
+      void save();
+      return;
+    }
+    // Text fields keep their own undo.
+    if (isTextTarget(event.target)) return;
+    if (key === "z") {
+      event.preventDefault();
+      stepHistory(event.shiftKey ? "redo" : "undo");
+    } else if (key === "y") {
+      event.preventDefault();
+      stepHistory("redo");
+    }
+  });
+  const editingNow = editor !== null;
+  useEffect(() => {
+    if (!isActive || !editingNow) return;
+    const listener = (event: globalThis.KeyboardEvent) => onShortcut(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, [isActive, editingNow]);
 
   const duplicate = () =>
     run("duplicate the template", async () => {
@@ -185,7 +340,7 @@ export function GraphDesignerTab({
       const copy = await duplicateTemplate(tabId, summary, projectId);
       persistSelected(copy.summary.ref);
       toast.success(`Duplicated as ${copy.summary.name}`, {
-        description: "Your copy runs on the graph runtime; edit it as JSON.",
+        description: "Your copy runs on the graph runtime; edit it on the canvas.",
       });
     });
 
@@ -219,25 +374,39 @@ export function GraphDesignerTab({
   return (
     <div
       data-graph-designer=""
+      data-graph-designer-editing={editor ? "" : undefined}
       className={cn(
         "@container absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background",
         !isActive && "hidden",
       )}
+      ref={rootRef}
     >
       <header className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
         <Network aria-hidden className="size-4 text-indigo-400" />
         <h2 className="text-sm font-semibold text-foreground">Graphs</h2>
-        {summary ? (
+        {editor?.isNew ? (
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span aria-hidden>/</span>
             <span data-graph-designer-title="" className="truncate font-medium text-foreground">
-              {summary.name}
+              {editor.draft.name}
+            </span>
+            <span className="shrink-0">(new, unsaved)</span>
+          </span>
+        ) : summary ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span aria-hidden>/</span>
+            <span data-graph-designer-title="" className="truncate font-medium text-foreground">
+              {editor ? editor.draft.name : summary.name}
             </span>
             <span className="shrink-0">({SCOPE_LABELS[summary.scope]})</span>
             {summary.readOnly ? <span className="shrink-0">· read-only</span> : null}
           </span>
         ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={newGraph}>
+            <FilePlus2 className="size-3.5" />
+            New graph
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
             <FileUp className="size-3.5" />
             Import JSON…
@@ -279,13 +448,56 @@ export function GraphDesignerTab({
             Duplicate
           </Button>
           {summary?.scope === "user" && !view.editor ? (
-            <Button variant="outline" size="sm" onClick={() => openEditor(tabId)}>
-              <Braces className="size-3.5" />
-              Edit as JSON
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setJsonOpen(true);
+                  openEditor(tabId);
+                }}
+              >
+                <Braces className="size-3.5" />
+                Edit as JSON
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setJsonOpen(false);
+                  openEditor(tabId);
+                }}
+              >
+                <PencilRuler className="size-3.5" />
+                Edit
+              </Button>
+            </>
           ) : null}
         </div>
       </header>
+      {editor ? (
+        <GraphEditorToolbar
+          editor={editor}
+          storedRevision={editor.isNew ? null : (detail?.summary.revision ?? null)}
+          jsonOpen={jsonOpen}
+          onUndo={() => stepHistory("undo")}
+          onRedo={() => stepHistory("redo")}
+          onSave={() => void save()}
+          onSaveAsCopy={() => void saveAsCopy()}
+          onReload={() => guardDiscard("reload the latest revision", () => void reloadDraft(tabId))}
+          onToggleJson={() => setJsonOpen((value) => !value)}
+          onArrange={() =>
+            useGraphDesignerStore
+              .getState()
+              .edit(tabId, "Arrange automatically", arrangeGraphLayout)
+          }
+          onClose={() =>
+            guardDiscard("stop editing", () => {
+              closeEditor(tabId);
+              setJsonOpen(false);
+            })
+          }
+        />
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto @4xl:flex-row @4xl:overflow-hidden">
         <aside className="flex max-h-60 min-h-0 w-full shrink-0 flex-col border-b border-border @4xl:max-h-none @4xl:w-64 @4xl:border-r @4xl:border-b-0">
@@ -304,8 +516,9 @@ export function GraphDesignerTab({
           <div className="relative min-h-[18rem] flex-1 bg-flow-canvas">
             {model && shown ? (
               <GraphCanvas
-                key={shownKey ?? "none"}
+                key={editor ? "editing" : (shownKey ?? "none")}
                 model={model}
+                {...(editing.canvasEditor ? { editor: editing.canvasEditor } : {})}
                 selection={view.selection}
                 focusRequest={view.focusRequest}
                 isActive={isActive}
@@ -328,22 +541,31 @@ export function GraphDesignerTab({
             )}
           </div>
           <GraphCompilePanel
-            className="h-48 shrink-0"
+            className={editor ? "h-56 shrink-0" : "h-48 shrink-0"}
             compile={compile}
             status={view.compileStatus}
             error={view.compileError}
             onSelect={onSelect}
+            {...(editor ? { onAcknowledge: (ref) => acknowledge(tabId, ref) } : {})}
           />
         </main>
 
-        <aside className="flex min-h-0 w-full shrink-0 flex-col border-t border-border @4xl:w-80 @4xl:border-t-0 @4xl:border-l">
-          {view.editor ? (
+        <aside
+          className={cn(
+            "flex min-h-0 w-full shrink-0 flex-col border-t border-border @4xl:border-t-0 @4xl:border-l",
+            editor ? "@4xl:w-96" : "@4xl:w-80",
+          )}
+        >
+          {editor && jsonOpen ? (
             <div className="flex min-h-80 flex-col @4xl:min-h-0 @4xl:flex-[3]">
               <GraphJsonEditor
-                tabId={tabId}
-                editor={view.editor}
-                providers={providers}
-                {...(ceiling ? { ceiling } : {})}
+                draft={editor.draft}
+                onChange={(template) =>
+                  useGraphDesignerStore
+                    .getState()
+                    .edit(tabId, "Edit JSON", () => template, { coalesce: "json" })
+                }
+                onClose={() => setJsonOpen(false)}
               />
             </div>
           ) : null}
@@ -351,22 +573,91 @@ export function GraphDesignerTab({
             <div
               className={cn(
                 "flex min-h-0 flex-col",
-                view.editor ? "border-t border-border @4xl:flex-[2]" : "flex-1",
+                editor && jsonOpen ? "border-t border-border @4xl:flex-[2]" : "flex-1",
               )}
             >
-              <GraphInspector
-                template={shownTemplate}
-                plan={compile?.plan ?? null}
-                diagnostics={model.diagnostics}
-                selection={view.selection}
-                {...(ceiling ? { ceiling } : {})}
-                providers={providers}
-                onSelect={onSelectAndFocus}
-              />
+              {editing.context ? (
+                <GraphEditorContext.Provider value={editing.context}>
+                  <GraphInspector
+                    template={shownTemplate}
+                    plan={compile?.plan ?? null}
+                    diagnostics={model.diagnostics}
+                    selection={view.selection}
+                    {...(ceiling ? { ceiling } : {})}
+                    providers={providers}
+                    onSelect={onSelectAndFocus}
+                    editing={{ idEditable: editor?.isNew ?? false }}
+                  />
+                </GraphEditorContext.Provider>
+              ) : (
+                <GraphInspector
+                  template={shownTemplate}
+                  plan={compile?.plan ?? null}
+                  diagnostics={model.diagnostics}
+                  selection={view.selection}
+                  {...(ceiling ? { ceiling } : {})}
+                  providers={providers}
+                  onSelect={onSelectAndFocus}
+                />
+              )}
             </div>
           ) : null}
         </aside>
       </div>
+
+      {draft ? (
+        <>
+          <GraphConnectDialog
+            open={editing.dialog?.command === "connect"}
+            onOpenChange={(open) => {
+              if (!open) editing.setDialog(null);
+            }}
+            template={draft}
+            library={typeLibrary}
+            nodeId={editing.dialog?.nodeId ?? null}
+            onConnect={editing.connect}
+          />
+          <GraphLoopDialog
+            open={editing.dialog?.command === "loop"}
+            onOpenChange={(open) => {
+              if (!open) editing.setDialog(null);
+            }}
+            template={draft}
+            nodeId={editing.dialog?.nodeId ?? null}
+            onChoose={(choice) => {
+              if (editing.dialog) editing.chooseLoop(editing.dialog.nodeId, choice);
+            }}
+          />
+        </>
+      ) : null}
+
+      <AlertDialog
+        open={pendingDiscard !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDiscard(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The draft has edits that are not saved. To {pendingDiscard?.label}, they are dropped.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = pendingDiscard?.run;
+                setPendingDiscard(null);
+                action?.();
+              }}
+            >
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <GraphImportDialog
         open={importOpen}

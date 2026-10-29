@@ -1,8 +1,9 @@
-import { memo } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { createContext, memo, useContext, useMemo } from "react";
+import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { Bot, Boxes, Cog, GitMerge, type LucideIcon, Split, UserRound } from "lucide-react";
 import type { GraphEnforcementTier, GraphNodeKind } from "@orkestrator/protocol/graphs/template";
 import { cn } from "@/lib/utils";
+import type { GraphConnectEnd, GraphConnectionVerdict } from "./graph-designer-connect";
 import {
   GRAPH_ENFORCEMENT_LABELS,
   GRAPH_TYPE_FAMILY_COLORS,
@@ -17,9 +18,74 @@ import {
 /**
  * Node faces of the Graphs designer canvas (report §7.2): the title, then
  * `{role} · {profile}`, then the enforcement and replication badges, then the
- * typed ports. Port handles carry their type family's colour. Read-only in
- * Phase 1: no handle is connectable.
+ * typed ports. Port handles carry their type family's colour. A replicated
+ * node draws as a stacked card with its "×N" badge (D9).
+ *
+ * Read-only (item 110) no handle is connectable. On the editable canvas
+ * (item 212) the faces read the connection being dragged (`useConnection`)
+ * and ask the canvas which of their handles could take it: compatible
+ * handles stay connectable and light up, the rest dim and refuse the drop.
  */
+
+/** Set by the editable canvas; null on the read-only one. */
+export interface GraphCanvasConnectContextValue {
+  verdict: (from: GraphConnectEnd, to: GraphConnectEnd) => GraphConnectionVerdict;
+}
+
+export const GraphCanvasConnectContext = createContext<GraphCanvasConnectContextValue | null>(null);
+
+interface DragOrigin {
+  node: string;
+  handle: string;
+  type: "source" | "target";
+}
+
+/** The handle a connection drag started from, or null; stable while the pointer moves. */
+function useDragOrigin(enabled: boolean): DragOrigin | null {
+  const origin = useConnection((connection) =>
+    enabled && connection.inProgress && connection.fromHandle
+      ? {
+          node: connection.fromNode.id,
+          handle: connection.fromHandle.id ?? "",
+          type: connection.fromHandle.type,
+        }
+      : null,
+  );
+  return origin && "node" in origin ? (origin as DragOrigin) : null;
+}
+
+type HandleState = "idle" | "origin" | "compatible" | "incompatible";
+
+/** Per own handle: can the connection in progress end here? */
+function useHandleStates(
+  nodeId: string,
+  handles: ReadonlyArray<{ id: string; type: "source" | "target" }>,
+) {
+  const connect = useContext(GraphCanvasConnectContext);
+  const origin = useDragOrigin(connect !== null);
+  return useMemo(() => {
+    const states = new Map<string, { state: HandleState; reason?: string }>();
+    for (const handle of handles) {
+      if (!connect || !origin) {
+        states.set(handle.id, { state: "idle" });
+      } else if (origin.node === nodeId && origin.handle === handle.id) {
+        states.set(handle.id, { state: "origin" });
+      } else if (origin.type === handle.type) {
+        states.set(handle.id, { state: "incompatible" });
+      } else {
+        const verdict = connect.verdict(
+          { node: origin.node, handle: origin.handle },
+          { node: nodeId, handle: handle.id },
+        );
+        states.set(
+          handle.id,
+          verdict.ok ? { state: "compatible" } : { state: "incompatible", reason: verdict.reason },
+        );
+      }
+    }
+    return { editable: connect !== null, states };
+  }, [connect, origin, nodeId, handles]);
+}
 
 export const GRAPH_NODE_KIND_ICONS: Readonly<Record<GraphNodeKind, LucideIcon>> = Object.freeze({
   agent: Bot,
@@ -83,34 +149,120 @@ function handleStyle(port: Pick<GraphDesignerPortView, "family" | "required">) {
   };
 }
 
-function PortRow({ port, side }: { port: GraphDesignerPortView; side: "in" | "out" }) {
+function connectAttributes(state: HandleState | undefined) {
+  return state && state !== "idle" ? { "data-graph-connect": state } : {};
+}
+
+function rowTone(state: HandleState | undefined) {
+  return cn(state === "incompatible" && "opacity-30", state === "compatible" && "text-foreground");
+}
+
+function handleRing(state: HandleState | undefined) {
+  return state === "compatible"
+    ? { boxShadow: "0 0 0 3px rgba(129, 140, 248, 0.55)" }
+    : state === "incompatible"
+      ? { opacity: 0.4 }
+      : {};
+}
+
+function PortRow({
+  port,
+  side,
+  editable = false,
+  state,
+  reason,
+}: {
+  port: GraphDesignerPortView;
+  side: "in" | "out";
+  editable?: boolean;
+  state?: HandleState;
+  reason?: string;
+}) {
   return (
     <div
       data-graph-port={port.handleId}
       data-graph-type-family={port.family}
+      {...connectAttributes(state)}
       className={cn(
-        "relative flex h-5 min-w-0 items-center text-[11px] text-muted-foreground",
+        "relative flex h-5 min-w-0 items-center text-[11px] text-muted-foreground transition-opacity",
         side === "in" ? "pl-3" : "justify-end pr-3",
+        rowTone(state),
       )}
-      title={`${port.name}: ${port.type}${port.required ? "" : " (optional)"}`}
+      title={reason ?? `${port.name}: ${port.type}${port.required ? "" : " (optional)"}`}
     >
       <Handle
         type={side === "in" ? "target" : "source"}
         position={side === "in" ? Position.Left : Position.Right}
         id={port.handleId}
-        isConnectable={false}
-        style={handleStyle(port)}
+        isConnectable={editable}
+        isConnectableStart={editable}
+        isConnectableEnd={editable && state !== "incompatible"}
+        style={{ ...handleStyle(port), ...handleRing(state) }}
       />
       <span className="truncate">{port.label ?? port.name}</span>
     </div>
   );
 }
 
+/** The `+` handle: dropping a connection here adds a port of the delivered type. */
+function NewPortRow({
+  label,
+  state,
+  reason,
+}: {
+  label: string;
+  state?: HandleState;
+  reason?: string;
+}) {
+  return (
+    <div
+      data-graph-port="in:+"
+      {...connectAttributes(state)}
+      className={cn(
+        "relative flex h-5 min-w-0 items-center pl-3 text-[11px] text-muted-foreground/80 italic transition-opacity",
+        rowTone(state),
+      )}
+      title={reason ?? "Drop a connection here to add a port of its type"}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in:+"
+        isConnectable
+        isConnectableStart={false}
+        isConnectableEnd={state !== "incompatible"}
+        style={{
+          width: 10,
+          height: 10,
+          background: "var(--color-flow-node)",
+          border: "2px dashed #a1a1aa",
+          ...handleRing(state),
+        }}
+      />
+      <span className="truncate">{label}</span>
+    </div>
+  );
+}
+
+function faceHandles(data: GraphCanvasTemplateNode["data"]) {
+  return [
+    ...data.inputs.map((port) => ({ id: port.handleId, type: "target" as const })),
+    ...(data.newInput ? [{ id: "in:+", type: "target" as const }] : []),
+    ...data.outputs.map((port) => ({ id: port.handleId, type: "source" as const })),
+    ...data.outlets.map((outlet) => ({ id: outlet.handleId, type: "source" as const })),
+  ];
+}
+
 function GraphNodeFaceImpl({ data, selected }: NodeProps<GraphCanvasTemplateNode>) {
   const Icon = GRAPH_NODE_KIND_ICONS[data.kind];
   const { errors, warnings } = data.diagnostics;
-  const rows = Math.max(data.inputs.length, data.outputs.length + data.outlets.length);
-  return (
+  const rows = Math.max(
+    data.inputs.length + (data.newInput ? 1 : 0),
+    data.outputs.length + data.outlets.length,
+  );
+  const handles = useMemo(() => faceHandles(data), [data]);
+  const { editable, states } = useHandleStates(data.nodeId, handles);
+  const face = (
     <div
       data-graph-node={data.kind}
       data-graph-node-id={data.nodeId}
@@ -175,46 +327,106 @@ function GraphNodeFaceImpl({ data, selected }: NodeProps<GraphCanvasTemplateNode
         <div className="grid grid-cols-2 border-t border-border/60 py-1">
           <div className="min-w-0">
             {data.inputs.map((port) => (
-              <PortRow key={port.handleId} port={port} side="in" />
+              <PortRow
+                key={port.handleId}
+                port={port}
+                side="in"
+                editable={editable}
+                state={states.get(port.handleId)?.state}
+                reason={states.get(port.handleId)?.reason}
+              />
             ))}
+            {data.newInput ? (
+              <NewPortRow
+                label="+ input"
+                state={states.get("in:+")?.state}
+                reason={states.get("in:+")?.reason}
+              />
+            ) : null}
           </div>
           <div className="min-w-0">
             {data.outputs.map((port) => (
-              <PortRow key={port.handleId} port={port} side="out" />
+              <PortRow
+                key={port.handleId}
+                port={port}
+                side="out"
+                editable={editable}
+                state={states.get(port.handleId)?.state}
+                reason={states.get(port.handleId)?.reason}
+              />
             ))}
-            {data.outlets.map((outlet) => (
-              <div
-                key={outlet.handleId}
-                data-graph-port={outlet.handleId}
-                className="relative flex h-5 min-w-0 items-center justify-end pr-3 text-[11px] text-muted-foreground italic"
-                title={`Outlet ${outlet.name}: forwards this node's inputs when taken`}
-              >
-                <Handle
-                  type="source"
-                  position={Position.Right}
-                  id={outlet.handleId}
-                  isConnectable={false}
-                  style={{
-                    width: 10,
-                    height: 10,
-                    background: "var(--color-flow-node)",
-                    border: "2px solid #a1a1aa",
-                  }}
-                />
-                <span className="truncate">→ {outlet.name}</span>
-              </div>
-            ))}
+            {data.outlets.map((outlet) => {
+              const state = states.get(outlet.handleId)?.state;
+              return (
+                <div
+                  key={outlet.handleId}
+                  data-graph-port={outlet.handleId}
+                  {...connectAttributes(state)}
+                  className={cn(
+                    "relative flex h-5 min-w-0 items-center justify-end pr-3 text-[11px] text-muted-foreground italic",
+                    rowTone(state),
+                  )}
+                  title={
+                    states.get(outlet.handleId)?.reason ??
+                    `Outlet ${outlet.name}: forwards this node's inputs when taken`
+                  }
+                >
+                  <Handle
+                    type="source"
+                    position={Position.Right}
+                    id={outlet.handleId}
+                    isConnectable={editable}
+                    isConnectableStart={editable}
+                    isConnectableEnd={false}
+                    style={{
+                      width: 10,
+                      height: 10,
+                      background: "var(--color-flow-node)",
+                      border: "2px solid #a1a1aa",
+                      ...handleRing(state),
+                    }}
+                  />
+                  <span className="truncate">→ {outlet.name}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}
+    </div>
+  );
+  if (!data.replication) return face;
+  // D9: a replicated node is one card drawn as a stack, its badge saying how many.
+  return (
+    <div data-graph-stack="" className="relative">
+      <div
+        aria-hidden
+        className="absolute inset-0 translate-x-2 translate-y-2 rounded-xl border border-indigo-400/30 bg-flow-node/60"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 translate-x-1 translate-y-1 rounded-xl border border-indigo-400/40 bg-flow-node/80"
+      />
+      <div className="relative">{face}</div>
     </div>
   );
 }
 
 export const GraphNodeFace = memo(GraphNodeFaceImpl);
 
-function GraphIoFaceImpl({ data }: NodeProps<GraphCanvasIoNode>) {
+function GraphIoFaceImpl({ id, data }: NodeProps<GraphCanvasIoNode>) {
   const side = data.direction === "inputs" ? "out" : "in";
+  const handles = useMemo(
+    () => [
+      ...data.ports.map((port) => ({
+        id: port.handleId,
+        type: side === "in" ? ("target" as const) : ("source" as const),
+      })),
+      ...(data.newPort ? [{ id: "in:+", type: "target" as const }] : []),
+    ],
+    [data, side],
+  );
+  const { editable, states } = useHandleStates(id, handles);
   return (
     <div
       data-graph-io={data.direction}
@@ -224,8 +436,27 @@ function GraphIoFaceImpl({ data }: NodeProps<GraphCanvasIoNode>) {
         {data.direction === "inputs" ? "Run inputs" : "Run outputs"}
       </div>
       {data.ports.map((port) => (
-        <PortRow key={port.handleId} port={port} side={side} />
+        <PortRow
+          key={port.handleId}
+          port={port}
+          side={side}
+          editable={editable}
+          state={states.get(port.handleId)?.state}
+          reason={states.get(port.handleId)?.reason}
+        />
       ))}
+      {data.newPort ? (
+        <NewPortRow
+          label="+ output"
+          state={states.get("in:+")?.state}
+          reason={states.get("in:+")?.reason}
+        />
+      ) : null}
+      {editable && data.ports.length === 0 && data.direction === "inputs" ? (
+        <p className="px-3 text-[11px] text-muted-foreground/80">
+          Add run inputs in the template panel.
+        </p>
+      ) : null}
     </div>
   );
 }

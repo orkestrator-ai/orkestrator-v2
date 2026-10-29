@@ -1220,6 +1220,105 @@ describe("session detail route outcomes", () => {
     ]);
   });
 
+  test("forwards a graph activation's result slots and rejects malformed ones", async () => {
+    const calls: unknown[] = [];
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-secret" };
+    const slots = [
+      { tool: "submit_brief", resultKey: "key-a" },
+      { tool: "submit_risks", resultKey: "key-b" },
+    ];
+    await withRuntimeMethod(
+      "prompt",
+      async (sessionId: string, input: unknown) => {
+        calls.push({ sessionId, input });
+        return {
+          ok: true,
+          result: { status: "processing", requestId: "request-graph", threadId: "thread-1" },
+        };
+      },
+      async () => {
+        const accepted = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-graph",
+          readOnly: true,
+          agentMcp,
+          workflowResultTool: "submit_brief",
+          workflowResultKey: "key-a",
+          workflowResultSlots: slots,
+          workflowResultExtraTools: ["read_artifact"],
+        });
+        expect(accepted.status).toBe(202);
+
+        // An older backend names only the tool, now possibly a port's own.
+        const toolOnly = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-port",
+          agentMcp,
+          workflowResultTool: "submit_brief",
+        });
+        expect(toolOnly.status).toBe(202);
+
+        for (const malformed of [
+          { workflowResultSlots: [slots[1], slots[0]] },
+          { workflowResultSlots: [slots[0], { tool: "submit_risks", resultKey: "key-a" }] },
+          { workflowResultSlots: [] },
+          { workflowResultExtraTools: ["send_message"] },
+          { workflowResultKey: "a key" },
+          { workflowResultTool: "submit_workflow_result" },
+        ]) {
+          const rejected = await jsonRequest("/session/session-1/prompt", "POST", {
+            prompt: "submit",
+            requestId: "request-malformed",
+            agentMcp,
+            workflowResultTool: "submit_brief",
+            workflowResultKey: "key-a",
+            workflowResultSlots: slots,
+            ...malformed,
+          });
+          expect(rejected.status).toBe(400);
+          expect(((await rejected.json()) as { error: string }).error).toMatch(/^workflowResult/);
+        }
+        const keyWithoutTool = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "submit",
+          requestId: "request-keyonly",
+          agentMcp,
+          workflowResultKey: "key-a",
+        });
+        expect(keyWithoutTool.status).toBe(400);
+      },
+    );
+
+    expect(calls).toEqual([
+      {
+        sessionId: "session-1",
+        input: {
+          prompt: "submit",
+          requestId: "request-graph",
+          attachments: [],
+          readOnly: true,
+          agentMcp,
+          workflowResultTool: "submit_brief",
+          workflowResultTurn: {
+            tool: "submit_brief",
+            resultKey: "key-a",
+            slots,
+            extraTools: ["read_artifact"],
+          },
+        },
+      },
+      {
+        sessionId: "session-1",
+        input: {
+          prompt: "submit",
+          requestId: "request-port",
+          attachments: [],
+          agentMcp,
+          workflowResultTool: "submit_brief",
+        },
+      },
+    ]);
+  });
+
   test("accepts images, rejects unsupported files, and maps runtime failures", async () => {
     const calls: unknown[] = [];
     let outcome: unknown = {

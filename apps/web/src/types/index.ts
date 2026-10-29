@@ -13,6 +13,11 @@ export interface Project {
    * `@orkestrator/protocol/project-folders`.
    */
   folder?: string | null;
+  /**
+   * Sidebar icon: a small raster image as a base64 data URL, or absent for
+   * the default. See `@orkestrator/protocol/project-icon`.
+   */
+  icon?: string | null;
 }
 
 // Environment types
@@ -25,7 +30,10 @@ import type {
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
-import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
+import type {
+  EnvironmentDiffBaseline,
+  EnvironmentDiffBaseOverride,
+} from "@orkestrator/protocol/diff-stats";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
@@ -140,6 +148,8 @@ export interface Environment {
   createdFromCommit?: string;
   /** Where the branch now leaves its target branch; see `environmentBaselineCommit`. */
   diffBaseline?: EnvironmentDiffBaseline | null;
+  /** A commit the user chose to measure changes from; wins over `diffBaseline`. */
+  diffBaseOverride?: EnvironmentDiffBaseOverride | null;
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */
@@ -518,6 +528,8 @@ export interface CursorSdkLoginProgress {
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
+  /** Which runtime runs new Multi Reviews (item 301); absent means bespoke. */
+  multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
   /** Weakest read-only guarantee a coordinator conversation may run under. */
   coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
   /** Internal marker for the one-time coordinator safety-default migration. */
@@ -611,6 +623,8 @@ export interface GlobalConfig {
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */
   reviewInstruction?: string;
+  /** Reviewer focus presets; absent means the shipped five (`review-lens.ts`). */
+  reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
   agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
 }
 

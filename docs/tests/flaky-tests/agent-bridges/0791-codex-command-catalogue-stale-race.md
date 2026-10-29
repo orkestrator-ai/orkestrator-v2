@@ -187,6 +187,22 @@ Preparation evidence is `validation-05.stdout.txt` in
 No catalogue code, assertions, timeouts or skips changed.
 
 
+## Markdown diagram review validation — 2026-10-29
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer failure at
+`codex-command-catalogue.test.ts:273`: expected `stale`, received `ready`.
+The complete unchanged owner passed alone (exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name prior-codex-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence: `.orkestrator/review-artifacts/review-validation-2524a0c5-d52e-4452-857a-af901c877175/validation-04.stdout.txt`.
+No catalogue implementation, assertion, deadline or skip changed.
+
+The exact `mise run test` rerun passed all four groups (exit 0, 148.3 s),
+logged as `review-default-rerun`.
+
 ## Scheduling switch review — 2026-10-29
 
 Preparation's `mise run test` repeated the two-pre-plugin-answer mismatch
@@ -200,3 +216,19 @@ mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bri
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+
+## Project icon review validation — 2026-10-29
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer mismatch
+at line 273: expected `stale`, received `ready`. The complete unchanged
+owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence: `validation-04.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-801e01fe-bc32-4c2d-bbaa-76969f1dcae2/`.
+The subsequent exact aggregate rerun's bridges group passed (40.8 s).
+No catalogue implementation, assertion, deadline or skip changed.

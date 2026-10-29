@@ -108,7 +108,8 @@ describe("WorkflowResultService", () => {
 
   test("announces a first acceptance after its commit, once, to isolated listeners", async () => {
     const resultKey = await prepare();
-    const seen: { resultKey: string; environmentId: string; committed: boolean }[] = [];
+    const seen: { resultKey: string; environmentId: string; kind: string; committed: boolean }[] =
+      [];
     service.onAccepted(() => {
       throw new Error("a faulty listener must not fail the submission");
     });
@@ -125,7 +126,10 @@ describe("WorkflowResultService", () => {
     // A duplicate submission of the same result is not a new acceptance.
     expect(await service.submit(scope, resultKey, value)).toMatchObject({ duplicate: true });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(seen).toEqual([{ resultKey, environmentId: "env-1", committed: true }]);
+    // The event names the slot's kind, so a listener can skip other kinds unread.
+    expect(seen).toEqual([
+      { resultKey, environmentId: "env-1", kind: "feature-plan-state", committed: true },
+    ]);
     unsubscribe();
     const second = await prepare();
     await service.submit(scope, second, value);
@@ -821,7 +825,7 @@ describe("WorkflowResultService", () => {
       const resultKey = await prepare();
       const asked: unknown[] = [];
       let blocked = true;
-      service.setAcceptanceCheck("feature-plan-state", async (attempt) => {
+      service.addAcceptanceCheck("feature-plan-state", async (attempt) => {
         asked.push(attempt);
         return blocked ? refusal : null;
       });
@@ -858,7 +862,7 @@ describe("WorkflowResultService", () => {
     test("refuses a commit by digest when the environment changed after validation", async () => {
       const resultKey = await prepare();
       let blocked = false;
-      service.setAcceptanceCheck("feature-plan-state", async () => (blocked ? refusal : null));
+      service.addAcceptanceCheck("feature-plan-state", async () => (blocked ? refusal : null));
       const validation = await service.validate(scope, resultKey, valid);
       if (!validation.ok) throw new Error("expected a valid result");
 
@@ -877,7 +881,7 @@ describe("WorkflowResultService", () => {
           if (!validation.ok) throw new Error("expected a valid result");
           const probe = Promise.withResolvers<typeof refusal | null>();
           let checks = 0;
-          service.setAcceptanceCheck("feature-plan-state", () =>
+          service.addAcceptanceCheck("feature-plan-state", () =>
             ++checks === 1 ? probe.promise : Promise.resolve(null),
           );
           const pending =
@@ -897,7 +901,7 @@ describe("WorkflowResultService", () => {
       const resultKey = await prepare();
       const probe = Promise.withResolvers<typeof refusal | null>();
       let checks = 0;
-      service.setAcceptanceCheck("feature-plan-state", () =>
+      service.addAcceptanceCheck("feature-plan-state", () =>
         ++checks === 1 ? probe.promise : Promise.resolve(null),
       );
       const pending = service.submit(scope, resultKey, valid);
@@ -912,7 +916,7 @@ describe("WorkflowResultService", () => {
       test(`closing an attempt as ${lifecycle} during the probe wins over refusal`, async () => {
         const resultKey = await prepare();
         const probe = Promise.withResolvers<typeof refusal | null>();
-        service.setAcceptanceCheck("feature-plan-state", () => probe.promise);
+        service.addAcceptanceCheck("feature-plan-state", () => probe.promise);
         const pending = service.submit(scope, resultKey, valid);
         await service.close(resultKey, lifecycle);
         probe.resolve(refusal);
@@ -926,7 +930,7 @@ describe("WorkflowResultService", () => {
           const resultKey = await prepare();
           const probe = Promise.withResolvers<typeof refusal | null>();
           let checks = 0;
-          service.setAcceptanceCheck("feature-plan-state", () =>
+          service.addAcceptanceCheck("feature-plan-state", () =>
             ++checks === 1 ? probe.promise : Promise.resolve(null),
           );
           const pending = service.validate(scope, resultKey, valid);
@@ -948,12 +952,61 @@ describe("WorkflowResultService", () => {
 
     test("lets the result through when the check throws, and ignores other kinds", async () => {
       const resultKey = await prepare();
-      service.setAcceptanceCheck("verification-result", async () => refusal);
+      service.addAcceptanceCheck("verification-result", async () => refusal);
       expect(await service.validate(scope, resultKey, valid)).toMatchObject({ ok: true });
-      service.setAcceptanceCheck("feature-plan-state", async () => {
+      service.addAcceptanceCheck("feature-plan-state", async () => {
         throw new Error("probe failed");
       });
       expect(await service.submit(scope, resultKey, valid)).toMatchObject({ ok: true });
+    });
+
+    test("runs every check registered for a kind, each skipping attempts it does not own", async () => {
+      const ownedByFirst = await prepare();
+      const ownedBySecond = await prepare();
+      const unowned = await prepare();
+      const asked = { first: [] as string[], second: [] as string[] };
+      const blocked = new Set<string>([ownedByFirst, ownedBySecond]);
+      const ownerCheck =
+        (name: keyof typeof asked, owned: string) => async (attempt: { resultKey: string }) => {
+          asked[name].push(attempt.resultKey);
+          if (attempt.resultKey !== owned) return null;
+          return blocked.has(owned) ? { ...refusal, message: `${name} refuses` } : null;
+        };
+      service.addAcceptanceCheck("feature-plan-state", ownerCheck("first", ownedByFirst));
+      const removeSecond = service.addAcceptanceCheck(
+        "feature-plan-state",
+        ownerCheck("second", ownedBySecond),
+      );
+
+      // Registering a second check did not replace the first: both refuse
+      // their own attempt, and neither refuses an attempt it does not own.
+      expect(await service.submit(scope, ownedByFirst, valid)).toMatchObject({
+        ok: false,
+        error: { message: "first refuses" },
+      });
+      expect(await service.submit(scope, ownedBySecond, valid)).toMatchObject({
+        ok: false,
+        error: { message: "second refuses" },
+      });
+      expect(await service.submit(scope, unowned, valid)).toMatchObject({ ok: true });
+      expect(asked.first).toEqual([ownedByFirst, ownedBySecond, unowned]);
+      expect(asked.second).toEqual([ownedBySecond, unowned]);
+
+      // Removing one registration leaves the other in place.
+      removeSecond();
+      expect(await service.submit(scope, ownedBySecond, valid)).toMatchObject({ ok: true });
+      expect(asked.second).toEqual([ownedBySecond, unowned]);
+      blocked.delete(ownedByFirst);
+      expect(await service.submit(scope, ownedByFirst, valid)).toMatchObject({ ok: true });
+    });
+
+    test("a throwing check does not hide another owner's refusal", async () => {
+      const resultKey = await prepare();
+      service.addAcceptanceCheck("feature-plan-state", async () => {
+        throw new Error("probe failed");
+      });
+      service.addAcceptanceCheck("feature-plan-state", async () => refusal);
+      expect(await service.submit(scope, resultKey, valid)).toEqual({ ok: false, error: refusal });
     });
   });
 

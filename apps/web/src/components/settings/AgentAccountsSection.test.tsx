@@ -250,12 +250,14 @@ describe("AgentAccountsSection", () => {
     expect(screen.queryAllByRole("listitem")).toHaveLength(2);
   });
 
-  test("names the shared entries an account now keeps as its own copy", async () => {
+  test("warns about entries an account keeps as its own copy", async () => {
     snapshot.accounts[2] = { ...snapshot.accounts[2]!, privateEntries: ["config.toml", "rules"] };
     await mount();
     const added = await screen.findByRole("listitem", { name: "second@example.com" });
     expect(
-      within(added).getByText(/No longer shared with the host login: config\.toml, rules\./),
+      within(added).getByText(
+        "No longer shared with the host login: config.toml, rules. Codex saved its own copy, so changes here and on other accounts no longer reach each other.",
+      ),
     ).toBeTruthy();
     const host = screen.getByRole("listitem", { name: "Host login" });
     expect(within(host).queryByText(/No longer shared/) === null).toBe(true);

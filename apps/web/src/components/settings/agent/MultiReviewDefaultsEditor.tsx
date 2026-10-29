@@ -33,6 +33,8 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { INHERIT } from "./InheritedValue";
+import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
+import { ReviewLensField, useReviewLensPresets } from "@/components/review/ReviewLensField";
 
 interface MultiReviewDefaultsEditorProps {
   tier: AgentSettingsTier;
@@ -41,7 +43,31 @@ interface MultiReviewDefaultsEditorProps {
   canInherit: boolean;
   enabledPlatforms: AgentPlatform[];
   catalog: AgentModelCatalog;
+  /** The presets each reviewer's Focus offers, as currently edited; defaults to the saved ones. */
+  lensPresets?: readonly ReviewLensPreset[];
   disabled?: boolean;
+}
+
+/**
+ * One position's saved focus. Saved text is a copy, so a later preset edit
+ * changes nothing here.
+ */
+function withReviewerLens(
+  tier: AgentSettingsTier,
+  index: number,
+  lens: ReviewLens | undefined,
+): AgentSettingsTier {
+  const reviewerLenses = [...(tier.multiReview?.reviewerLenses ?? [])];
+  while (reviewerLenses.length <= index) reviewerLenses.push(null);
+  reviewerLenses[index] = lens ?? null;
+  while (reviewerLenses.length > 0 && reviewerLenses.at(-1) === null) reviewerLenses.pop();
+  return {
+    ...tier,
+    multiReview: {
+      ...tier.multiReview,
+      ...(reviewerLenses.length > 0 ? { reviewerLenses } : { reviewerLenses: undefined }),
+    },
+  };
 }
 
 function reviewerEntry(tier: AgentSettingsTier, index: number): AgentActionDefault | undefined {
@@ -88,11 +114,14 @@ function withReviewerCount(tier: AgentSettingsTier, reviewerCount: number): Agen
     0,
     additionalCount,
   );
+  const reviewerLenses = (tier.multiReview?.reviewerLenses ?? []).slice(0, reviewerCount);
+  while (reviewerLenses.length > 0 && reviewerLenses.at(-1) === null) reviewerLenses.pop();
   const multiReview = {
     ...(tier.multiReview?.autoFix !== undefined ? { autoFix: tier.multiReview.autoFix } : {}),
     ...(tier.multiReview?.autoPr !== undefined ? { autoPr: tier.multiReview.autoPr } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
+    ...(reviewerLenses.length > 0 ? { reviewerLenses } : {}),
   };
   return {
     ...tier,
@@ -114,7 +143,13 @@ function ReviewerDefaultPicker({
   favorites,
   disabled,
   onChange,
+  lens,
 }: {
+  lens: {
+    value: ReviewLens | undefined;
+    presets: readonly ReviewLensPreset[];
+    onChange: (value: ReviewLens | undefined) => void;
+  };
   index: number;
   entry: AgentActionDefault | undefined;
   fallbackEntry: AgentActionDefault & { platform: AgentPlatform };
@@ -267,6 +302,13 @@ function ReviewerDefaultPicker({
           {entry.model} is not in the current catalog. Pick another model to replace it.
         </p>
       )}
+      <ReviewLensField
+        id={`multi-review-default-${index}-focus`}
+        reviewerLabel={label}
+        value={lens.value}
+        presets={lens.presets}
+        onChange={lens.onChange}
+      />
     </div>
   );
 }
@@ -278,9 +320,12 @@ export function MultiReviewDefaultsEditor({
   canInherit,
   enabledPlatforms,
   catalog,
+  lensPresets,
   disabled,
 }: MultiReviewDefaultsEditorProps) {
   const favorites = useAgentModelFavorites();
+  const savedLensPresets = useReviewLensPresets();
+  const presets = lensPresets ?? savedLensPresets;
   const reviewerCount = tier.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
   const fallbackAgent = firstEnabledAgentPlatform(enabledPlatforms, resolveDefaultAgent(tiers));
   const reviewFallback = resolvedActionDefault(tiers, "review", enabledPlatforms);
@@ -309,8 +354,8 @@ export function MultiReviewDefaultsEditor({
           </h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
             Choose how many independent reviewers a Multi Review click, feature build, or ticket
-            build starts and the model each one uses. Reviewer 1 and Reviewer 2 are shared with the
-            Defaults page.
+            build starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are
+            shared with the Defaults page.
           </p>
         </div>
         <div
@@ -408,6 +453,11 @@ export function MultiReviewDefaultsEditor({
             favorites={favorites}
             disabled={disabled}
             onChange={(entry) => onChange(withReviewerEntry(tier, index, entry))}
+            lens={{
+              value: tier.multiReview?.reviewerLenses?.[index] ?? undefined,
+              presets,
+              onChange: (lens) => onChange(withReviewerLens(tier, index, lens)),
+            }}
           />
         ))}
       </div>

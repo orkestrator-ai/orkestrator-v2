@@ -2,6 +2,7 @@ import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
+import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import {
   isGitFileStatus,
@@ -130,6 +131,33 @@ function sanitizeSizes(value: unknown): [number, number] {
   return [first, 100 - first];
 }
 
+/**
+ * The template a Graphs designer tab showed. A shape check only (the protocol
+ * parser would pull the template library into the main bundle); the backend
+ * refuses a reference that is not valid, and the tab then shows the error.
+ */
+function restoreGraphTemplateRef(value: unknown): GraphTemplateRef | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.scope === "builtin" || value.scope === "user") {
+    const id = value.id;
+    return typeof id === "string" && id.length <= 64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id)
+      ? { scope: value.scope, id }
+      : undefined;
+  }
+  if (value.scope === "project") {
+    const { projectId, path } = value;
+    return typeof projectId === "string" &&
+      projectId.length > 0 &&
+      projectId.length <= 200 &&
+      typeof path === "string" &&
+      path.length <= 160 &&
+      /^\.orkestrator\/graphs\/[A-Za-z0-9][A-Za-z0-9._-]*\.graph\.json$/.test(path)
+      ? { scope: "project", projectId, path }
+      : undefined;
+  }
+  return undefined;
+}
+
 function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo | null {
   if (!isRecord(value)) return null;
   const id = nonEmptyString(value.id);
@@ -195,6 +223,27 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     const canvasId = nonEmptyString(value.designCanvasData.canvasId);
     if (!canvasId || !/^[0-9a-f-]{36}$/i.test(canvasId)) return null;
     return { id, type: "design-canvas", designCanvasData: { canvasId } };
+  }
+
+  if (type === "graph-designer") {
+    const data = isRecord(value.graphDesignerData) ? value.graphDesignerData : {};
+    const selected = restoreGraphTemplateRef(data.selected);
+    return { id, type, graphDesignerData: selected ? { selected } : {} };
+  }
+
+  if (type === "graph-run") {
+    if (!isRecord(value.graphRunData)) return null;
+    const { runId, title } = value.graphRunData;
+    // The run id grammar (`GRAPH_RUN_ID_PATTERN`); the backend refuses anything else.
+    if (typeof runId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(runId)) return null;
+    return {
+      id,
+      type,
+      graphRunData: {
+        runId,
+        ...(typeof title === "string" && title.trim() ? { title: title.slice(0, 200) } : {}),
+      },
+    };
   }
 
   if (type === "pull-request") {

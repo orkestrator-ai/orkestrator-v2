@@ -19,6 +19,7 @@ import {
   summarizePanelValue,
 } from "./multi-review-evaluation.js";
 import { buildConsolidationEvidence } from "./review-consolidation-evidence.js";
+import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
 import {
   consolidationOverlap,
   consolidationReports,
@@ -110,6 +111,51 @@ describe("reference consolidations", () => {
       });
       expect(score.severityMatches).toBe(score.recalledIssues);
       expect(score.locationMatches).toBe(score.recalled);
+    },
+  );
+});
+
+describe("reviewer lenses over the corpus", () => {
+  const presets = SHIPPED_REVIEW_LENS_PRESETS;
+  /** Every reviewer gets a different shipped lens, in configured order. */
+  function withLenses(entry: EvaluationCase): EvaluationCase {
+    return {
+      ...entry,
+      reviewers: entry.reviewers.map((reviewer, index) => {
+        const preset = presets[index % presets.length]!;
+        return { ...reviewer, lens: { label: preset.label, instruction: preset.instruction } };
+      }),
+    };
+  }
+
+  test.each(corpus.map((entry) => [entry.id, entry] as const))(
+    "%s: labels reach consolidation and the reference still scores perfectly",
+    (_id, entry) => {
+      const lensed = withLenses(entry);
+      const prompt = evaluationConsolidationPrompt(lensed, "compact");
+      const evidence = JSON.parse(framedBody(prompt)) as {
+        reviewers: Array<{ reviewerId: string; focus?: string }>;
+      };
+      for (const reviewer of evidence.reviewers) {
+        const index = lensed.reviewers.findIndex(
+          (candidate) => candidate.id === reviewer.reviewerId,
+        );
+        expect(reviewer.focus).toBe(presets[index % presets.length]!.label);
+      }
+      if (evidence.reviewers.length > 0) expect(prompt).toContain("coverage differs by design");
+      // The reviewers' instructions stay with the reviewers.
+      for (const preset of presets) expect(prompt).not.toContain(preset.instruction);
+      // Lens-free, the prompt is exactly what it was before lenses.
+      expect(evaluationConsolidationPrompt(entry, "compact")).not.toContain('"focus"');
+      // Provenance, overlap and scoring read source IDs, which a lens does not touch.
+      const reference = referenceConsolidation(lensed);
+      expect(accepted(reference, lensed.reviewers).success).toBe(true);
+      expect(scoreConsolidation(lensed, reference)).toEqual(
+        scoreConsolidation(entry, referenceConsolidation(entry)),
+      );
+      expect(consolidationOverlap(reference, lensed.reviewers)).toEqual(
+        consolidationOverlap(referenceConsolidation(entry), entry.reviewers),
+      );
     },
   );
 });

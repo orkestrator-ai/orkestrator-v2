@@ -139,7 +139,7 @@ export async function reorderProjects(projectIds: string[]): Promise<Project[]> 
 
 export async function updateProject(
   projectId: string,
-  updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
+  updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
 ): Promise<Project> {
   return invoke<Project>("update_project", { projectId, updates });
 }

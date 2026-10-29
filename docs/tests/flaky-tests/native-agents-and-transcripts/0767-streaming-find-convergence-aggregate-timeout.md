@@ -43,3 +43,25 @@ mise run test:logged -- --name streaming-transcript-owner -- bunx playwright tes
 Failure evidence is in `orkestrator-test-run.0GmfuV/review-browser-rerun.log.gz`.
 Concurrent repository validation was active; contention remains a hypothesis.
 No transcript behavior, assertion, deadline or skip was changed. Status remains open.
+
+
+## Project icon review validation — 2026-10-29
+
+The mobile find-convergence case failed in preparation (`unresolved` instead of `converged`), then passed in the exact complete browser rerun.
+Preparation evidence is `validation-05.stderr.txt` in
+`.orkestrator/review-artifacts/review-validation-801e01fe-bc32-4c2d-bbaa-76969f1dcae2/`.
+
+The exact `mise run test:logged -- --name browser -- mise run test:browser`
+rerun reported 950 passed, 106 skipped and two failed (418.5 s). Both remaining
+failures were the previously established native branch-picker cases, recorded
+in [0958](../aggregate-validation-runs/0958-transcript-scroll-review-validation.md).
+No assertion, timeout, skip or implementation in this owner changed.
+Rerun evidence: `orkestrator-test-run.6s1hQF/browser.log.gz` under the host
+temporary directory.
+
+The separate unchanged `AgentLaunchDialog.spec.ts` owner (`native-picker-owner`,
+one worker) reported two passed and the same two failed in 22.9 s: `rel`
+instead of `release/2.0`. Its log is
+`orkestrator-test-run.cjxAtt/native-picker-owner.log.gz`. The separately run
+public-site browser suite passed (10.9 s); it was blocked by the chained
+component-suite failure in the exact browser command.

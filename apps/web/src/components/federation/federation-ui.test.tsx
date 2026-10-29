@@ -931,6 +931,62 @@ describe("UI-01: machines with identical IDs and project names", () => {
   });
 });
 
+describe("project rows lead with their machine", () => {
+  const ICON = "data:image/png;base64,iVBORw0KGgo=";
+
+  test("by machine, each project leads with a home in its machine's colour", async () => {
+    installTwoMachines();
+    renderWithFederation(<RemoteSections />);
+    await waitForRows(2);
+
+    const projects = screen.getAllByTestId("federated-project");
+    expect(
+      projects.map((project) =>
+        within(project).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
+      ),
+    ).toEqual(["teal", "rose"]);
+    for (const project of projects) {
+      const name = within(project).getByText("app");
+      expect(name.previousElementSibling?.getAttribute("data-testid")).toBe("machine-home-icon");
+    }
+  });
+
+  test("a project's own icon replaces the home and keeps the machine's colour", async () => {
+    installDesktopFake({
+      list: connectionList([MACHINE_A, MACHINE_B]),
+      datasets: {
+        a: {
+          ...sharedIdDataset("working"),
+          projects: [{ id: "project-1", name: "app", order: 0, icon: ICON }],
+        },
+        b: {
+          ...sharedIdDataset("waiting"),
+          projects: [
+            { id: "project-1", name: "app", order: 0, icon: "data:image/svg+xml;base64,PHN2Zz4=" },
+          ],
+        },
+      },
+    });
+    for (const mode of ["machine", "project"] as const) {
+      const view = renderWithFederation(
+        mode === "machine" ? <RemoteSections /> : <AggregateList mode="project" />,
+      );
+      await waitForRows(2);
+      const [withIcon, withoutIcon] = screen.getAllByTestId("federated-project");
+      const mark = within(withIcon!).getByTestId("machine-project-icon");
+      expect(mark.getAttribute("data-machine-color")).toBe("teal");
+      expect(within(mark).getByTestId("project-icon").getAttribute("src")).toBe(ICON);
+      expect(within(withIcon!).queryByTestId("machine-home-icon") === null).toBe(true);
+      // An icon that is not a raster data URL never reaches the row.
+      expect(within(withoutIcon!).queryByTestId("project-icon") === null).toBe(true);
+      expect(
+        within(withoutIcon!).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
+      ).toBe("rose");
+      view.unmount();
+    }
+  });
+});
+
 describe("remote machine sections follow the owner's sidebar", () => {
   function installOrderedMachine(extra: Parameters<typeof remoteConnection>[3] = {}) {
     return installDesktopFake({

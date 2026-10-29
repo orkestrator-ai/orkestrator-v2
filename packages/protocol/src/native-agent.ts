@@ -13,6 +13,13 @@ import {
   describeNativeAgentPolicyEffects,
   nativeAgentPolicyEffects,
 } from "./native-agent-policy-effects.js";
+import {
+  isNativeAgentCapability,
+  NATIVE_AGENT_EXTENDED_DENY_MAX,
+  NATIVE_AGENT_EXTENDED_DENY_MAX_CHARS,
+  isNativeAgentUserMcpServerList,
+  type NativeAgentCapability,
+} from "./native-agent-capabilities.js";
 import type {
   NativeAgentRuntimeSteerJournal,
   NativeAgentSteerRejectedOutcome,
@@ -20,6 +27,7 @@ import type {
 
 export * from "./native-agent-steer-rejection.js";
 export * from "./native-agent-policy-effects.js";
+export * from "./native-agent-capabilities.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
@@ -1440,31 +1448,6 @@ export interface NativeAgentAccountUsageWindow {
 export type NativeAgentExecutionPolicyId =
   "interactive-host" | "interactive-container" | "coordinator-read-only" | "pipeline";
 
-/**
- * A thing an agent can do, named independently of any provider's tool names.
- *
- * `toolPolicy` cannot serve this purpose: it is the user-editable override
- * surface and its strings are passed to a provider verbatim, so the same list
- * means "Write, Edit" on one bridge and nothing at all on another. A capability
- * is translated by each bridge into whatever its own SDK calls that operation,
- * which is what lets one coordinator policy hold across every platform.
- */
-export const NATIVE_AGENT_CAPABILITIES = [
-  "file.write",
-  "file.patch",
-  "shell",
-  "shell.mutate",
-  "network",
-  "web.search",
-] as const;
-export type NativeAgentCapability = (typeof NATIVE_AGENT_CAPABILITIES)[number];
-
-export function isNativeAgentCapability(value: unknown): value is NativeAgentCapability {
-  return (
-    typeof value === "string" && (NATIVE_AGENT_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
-
 export interface NativeAgentExecutionPolicy {
   id: NativeAgentExecutionPolicyId;
   sandbox: "provider" | "container" | "none";
@@ -1479,8 +1462,26 @@ export interface NativeAgentExecutionPolicy {
    * denial: hosted search stays available while commands, hosted page fetches
    * and every other route to the internet stay off. A bridge that predates
    * `allow` ignores it and keeps search off, which is the safe direction.
+   *
+   * `extendedDeny` is the wire form of denials older bridges do not know
+   * (`nativeAgentPolicyForBridge`): their validators ignore the field, while
+   * `nativeAgentDeniedCapabilities` reads both. Entries this build does not
+   * know are tolerated there and skipped, never treated as an error.
+   *
+   * `userMcpServers` selects the configured MCP servers the session may load
+   * (item 404): exactly these names, `[]` for none. Absent keeps every server
+   * the session's configuration provides. It only filters what the bridge
+   * already reads from the user's own files; it never carries a definition.
+   * Reserved Orkestrator servers are not user servers and are unaffected. An
+   * `mcp:<server>` denial wins over a listed name
+   * (`nativeAgentUserMcpGrant`). Older bridges ignore the field.
    */
-  capabilityPolicy?: { deny: NativeAgentCapability[]; allow?: NativeAgentCapability[] };
+  capabilityPolicy?: {
+    deny: NativeAgentCapability[];
+    allow?: NativeAgentCapability[];
+    extendedDeny?: string[];
+    userMcpServers?: string[];
+  };
   networkAccess: "restricted" | "full";
   /** Outer firewall retained when an optional provider sandbox runs in a container. */
   containerNetworkAccess?: "restricted" | "full";
@@ -1538,7 +1539,18 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
         capabilityPolicy.deny.every(isNativeAgentCapability) &&
         (capabilityPolicy.allow === undefined ||
           (Array.isArray(capabilityPolicy.allow) &&
-            capabilityPolicy.allow.every(isNativeAgentCapability)))))
+            capabilityPolicy.allow.every(isNativeAgentCapability))) &&
+        (capabilityPolicy.extendedDeny === undefined ||
+          (Array.isArray(capabilityPolicy.extendedDeny) &&
+            capabilityPolicy.extendedDeny.length <= NATIVE_AGENT_EXTENDED_DENY_MAX &&
+            capabilityPolicy.extendedDeny.every(
+              (item) =>
+                typeof item === "string" &&
+                item.length > 0 &&
+                item.length <= NATIVE_AGENT_EXTENDED_DENY_MAX_CHARS,
+            ))) &&
+        (capabilityPolicy.userMcpServers === undefined ||
+          isNativeAgentUserMcpServerList(capabilityPolicy.userMcpServers))))
   );
 }
 

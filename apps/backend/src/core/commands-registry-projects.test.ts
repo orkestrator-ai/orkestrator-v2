@@ -159,3 +159,33 @@ describe("projectless bug report catalogue", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
+
+test("summary reads bound icons before serialization without changing ordinary reads or storage", async () => {
+  const { MAX_SUMMARY_ICON_BYTES } = await import("./nodes/project-summary-icons.js");
+  const icon = `data:image/png;base64,${"A".repeat(40 * 1024)}`;
+  const stored = Array.from({ length: 20 }, (_, i) => ({
+    ...projects[0]!,
+    id: `p${i}`,
+    order: i,
+    icon,
+  }));
+  const handler = createCommandRegistry().get("get_projects")!;
+  const context = {
+    storage: { loadProjects: async () => stored, loadConfig: async () => ({ repositories: {} }) },
+  } as unknown as CommandContext;
+  for (const includeDefaultBranch of [false, true]) {
+    const response = (await handler(
+      { summaryIcons: true, includeDefaultBranch },
+      context,
+    )) as Project[];
+    expect(response).toHaveLength(20);
+    expect(
+      response.reduce((bytes, project) => bytes + (project.icon?.length ?? 0), 0),
+    ).toBeLessThanOrEqual(MAX_SUMMARY_ICON_BYTES);
+    expect(response[0]!.icon).toBe(icon);
+    expect(response.at(-1)!.icon).toBeUndefined();
+  }
+  expect(await handler({}, context)).toEqual(stored);
+  expect(stored.every((project) => project.icon === icon)).toBe(true);
+  await expect(handler({ summaryIcons: "yes" }, context)).rejects.toThrow("summaryIcons");
+});

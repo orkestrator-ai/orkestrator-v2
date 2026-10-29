@@ -201,12 +201,6 @@ export interface EngineRateLimitWindowUpdate {
   windowMinutes?: number;
 }
 
-export interface EngineCreditSnapshot {
-  hasCredits?: boolean;
-  unlimited?: boolean;
-  balance?: string;
-}
-
 export interface EngineTurnUsage {
   turnId: string;
   /** When this turn was last accounted, ISO-8601; what dates recorded usage. */
@@ -244,7 +238,6 @@ export interface EngineUsageSnapshot {
   reasoningTokens?: number;
   lastTurnTokens?: number;
   sessionTokens?: number;
-  credits?: EngineCreditSnapshot;
   rateLimits?: EngineRateLimitWindow[];
   turns?: EngineTurnUsage[];
   account?: EngineAccountUsageWindow[];
@@ -530,7 +523,6 @@ export type EngineEvent = EngineEventMeta &
     | {
         kind: "account.rateLimits.updated";
         rateLimits: EngineRateLimitWindowUpdate[];
-        credits?: EngineCreditSnapshot;
       }
     | { kind: "engine.state"; state: EngineState; detail?: string }
     /**
@@ -558,7 +550,15 @@ export type EngineEvent = EngineEventMeta &
      * that notice locks the tab's composer, so it must not wait for a turn.
      */
     | { kind: "account.signedIn" }
+    /**
+     * `account/read` reported a different kind of login. A refused-login
+     * notice raised before the answer names the login it was about.
+     */
+    | { kind: "account.loginKind"; login: CodexLoginKind }
   );
+
+/** The login `account/read` reports: an API key or a ChatGPT sign-in. */
+export type CodexLoginKind = "apiKey" | "chatgpt";
 
 export type EngineEventListener = (event: EngineEvent) => void;
 

@@ -117,6 +117,23 @@ describe("ACP provider configuration", () => {
     expect(providerArgv(generic, { trustProject: true })).toEqual(["--acp"]);
   });
 
+  test("a session that denies github.write is spawned without the GitHub credential (item 209)", () => {
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+    const base = { HOME: "/home/u", GH_TOKEN: "gho_x", GITHUB_TOKEN: "ghs_y" };
+    const withheld = providerEnv(
+      config,
+      { trustProject: false, withholdGitHub: { ghConfigDir: "/tmp/empty-gh" } },
+      base,
+    );
+    expect(withheld.GH_TOKEN).toBeUndefined();
+    expect(withheld.GITHUB_TOKEN).toBeUndefined();
+    expect(withheld.GH_CONFIG_DIR).toBe("/tmp/empty-gh");
+    expect(withheld.GIT_CONFIG_KEY_0).toBe("credential.helper");
+    expect(withheld.HOME).toBe("/home/u");
+    // Every other child keeps the bridge's environment.
+    expect(providerEnv(config, { trustProject: false }, base).GH_TOKEN).toBe("gho_x");
+  });
+
   test("loads a generic ACP agent entirely from a config record", () => {
     const config = loadAcpProviderConfig({
       ACP_PROVIDER_CONFIG: JSON.stringify({

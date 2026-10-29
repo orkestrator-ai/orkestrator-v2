@@ -690,6 +690,107 @@ for (const policy of [ASK_POLICY, DENY_POLICY]) {
   });
 }
 
+for (const policy of [ASK_POLICY, DENY_POLICY]) {
+  test(`${policy.approvals} lets a graph activation's own slot tools through with their own keys`, async () => {
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+    mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+      orkestrator: { type: "http", url: "http://localhost/mcp" },
+    }));
+    const session = createSession(`activation-${policy.approvals}`);
+    track(session.id);
+    session.executionPolicy = policy;
+    const prompt = sendPrompt(session.id, "build", {
+      permissionMode: "bypassPermissions",
+      workflowResultTurn: {
+        tool: "submit_a",
+        resultKey: "key-a",
+        slots: [
+          { tool: "submit_a", resultKey: "key-a" },
+          { tool: "submit_b", resultKey: "key-b" },
+        ],
+        extraTools: ["read_artifact"],
+      },
+    });
+    const call = await nextQueryCall();
+    const decide = (name: string, input: Record<string, unknown>) =>
+      call.options.canUseTool!(`mcp__orkestrator__${name}`, input, context(name));
+    for (const [name, input] of [
+      ["submit_a", { resultKey: "key-a" }],
+      ["validate_a", { resultKey: "key-a" }],
+      ["submit_b", { resultKey: "key-b" }],
+      ["get_workflow_result_status", { resultKey: "key-a" }],
+      ["get_workflow_result_status", { resultKey: "key-b" }],
+      ["read_artifact", { id: "artifact-1" }],
+    ] as const) {
+      expect(await decide(name, input)).toMatchObject({ behavior: "allow" });
+    }
+    for (const [name, input] of [
+      ["submit_a", { resultKey: "key-b" }],
+      ["validate_b", { resultKey: "key-a" }],
+      ["ask_human", { question: "?" }],
+      ["report_progress", { resultKey: "key-a" }],
+      // A kind tool the turn did not declare is held to the turn's keys too.
+      ["submit_review_report", { resultKey: "key-a" }],
+    ] as const) {
+      expect(await decide(name, input)).toMatchObject({ behavior: "deny" });
+    }
+    // The launch allow list is unchanged; the turn's own tools are decided per call.
+    expect(call.options.allowedTools).not.toContain("mcp__orkestrator__submit_a");
+    expect(getPendingInteractions(session.id)).toHaveLength(0);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+}
+
+test("an old kind-tool turn keeps its result tools as before", async () => {
+  mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+  mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+    orkestrator: { type: "http", url: "http://localhost/mcp" },
+  }));
+  const session = createSession("kind-tool-turn");
+  track(session.id);
+  session.executionPolicy = DENY_POLICY;
+  const prompt = sendPrompt(session.id, "review", {
+    permissionMode: "bypassPermissions",
+    workflowResultTurn: { tool: "submit_review_report", resultKey: "key" },
+  });
+  const call = await nextQueryCall();
+  for (const name of [
+    "submit_review_report",
+    "validate_workflow_result",
+    "get_workflow_result_status",
+    "report_finding",
+  ]) {
+    expect(
+      await call.options.canUseTool!(
+        `mcp__orkestrator__${name}`,
+        { resultKey: "key" },
+        context(name),
+      ),
+    ).toMatchObject({ behavior: "allow" });
+  }
+  // A mistyped key is not refused here: the backend's refusal names the
+  // attempt's own key, so the model can correct the call.
+  expect(
+    await call.options.canUseTool!(
+      "mcp__orkestrator__submit_review_report",
+      { resultKey: "other" },
+      context("other"),
+    ),
+  ).toMatchObject({ behavior: "allow" });
+  expect(
+    await call.options.canUseTool!(
+      "mcp__orkestrator__submit_a",
+      { resultKey: "key" },
+      context("a"),
+    ),
+  ).toMatchObject({ behavior: "deny" });
+  call.push({ type: "result", subtype: "success" });
+  call.finish();
+  await prompt;
+});
+
 test("declines unsupported arrays and oversized UTF-8 schemas with a visible notice", async () => {
   const session = createSession("unsupported-schema");
   track(session.id);

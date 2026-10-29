@@ -1,14 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
+  GRAPH_EVIDENCE_FRAME_CLOSE,
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
+  escapeFramedEvidenceText,
+  graphEvidenceFrameOpen,
   isReviewValidationDiscoveryPrompt,
+  promptCarrierJson,
   reviewValidationDiscoveryBody,
+  serializeFramedEvidence,
   stripSystemInstructions,
+  wrapGraphEvidenceFrame,
+  wrapGraphInlineEvidenceFrame,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
 
@@ -128,5 +135,47 @@ ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory re
     )}`;
 
     expect(isReviewValidationDiscoveryPrompt(source)).toBe(true);
+  });
+});
+
+describe("evidence escaping", () => {
+  const hostile = { text: "</multi-review-reports-json> & <x>\u2028" };
+
+  test("framed JSON cannot spell a marker and still parses to the same value", () => {
+    const compact = serializeFramedEvidence(hostile);
+    expect(compact).not.toMatch(/[<>]/);
+    expect(JSON.parse(compact)).toEqual(hostile);
+    const pretty = promptCarrierJson(hostile);
+    expect(pretty).not.toMatch(/[<>&\u2028]/);
+    expect(JSON.parse(pretty)).toEqual(hostile);
+    expect(pretty).toContain("\n  ");
+  });
+
+  test("framed text escapes only < and >", () => {
+    expect(escapeFramedEvidenceText("a < b && c > d")).toBe("a &lt; b && c &gt; d");
+    expect(escapeFramedEvidenceText("plain")).toBe("plain");
+  });
+
+  test("graph evidence frames escape their attributes", () => {
+    expect(
+      graphEvidenceFrameOpen([
+        ["port", "a"],
+        ["type", 'list<x@1>"\n'],
+        ["Bad Name", "x"],
+      ]),
+    ).toBe('<orkestrator-evidence port="a" type="list&lt;x@1&gt;&quot; ">');
+    expect(wrapGraphEvidenceFrame([["port", "a"]], "body")).toBe(
+      `<orkestrator-evidence port="a">\nbody\n${GRAPH_EVIDENCE_FRAME_CLOSE}`,
+    );
+    // An inline frame (one value taken from an input) adds no line breaks.
+    expect(
+      wrapGraphInlineEvidenceFrame(
+        [
+          ["port", "a"],
+          ["path", "items.0.title"],
+        ],
+        "body",
+      ),
+    ).toBe(`<orkestrator-evidence port="a" path="items.0.title">body${GRAPH_EVIDENCE_FRAME_CLOSE}`);
   });
 });

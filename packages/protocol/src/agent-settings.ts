@@ -26,6 +26,7 @@ import {
   type ActionDefaults,
 } from "./action-defaults.js";
 import { REVIEW_FANOUT_MAX_REVIEWERS, REVIEW_FANOUT_MIN_REVIEWERS } from "./review-fanout.js";
+import { isReviewLens, type ReviewLens } from "./review-lens.js";
 import type { NativeAgentExecutionPolicyOverride } from "./native-agent.js";
 
 export type AgentLaunchMode = "terminal" | "native";
@@ -67,6 +68,12 @@ export interface MultiReviewAgentSettings {
   reviewerCount?: number;
   /** Reviewer 3 onward. Null means use the first reviewer's resolved default. */
   additionalReviewers?: Array<AgentActionDefault | null>;
+  /**
+   * Each reviewer position's saved focus, from Reviewer 1. Null means none.
+   * The text is copied when saved, so editing a preset later changes nothing
+   * here.
+   */
+  reviewerLenses?: Array<ReviewLens | null>;
 }
 
 export interface ResolvedMultiReviewAgentSettings {
@@ -74,6 +81,8 @@ export interface ResolvedMultiReviewAgentSettings {
   autoPr: boolean;
   reviewerCount: number;
   additionalReviewers: Array<AgentActionDefault | null>;
+  /** One entry per reviewer position up to the count; null means no focus. */
+  reviewerLenses: Array<ReviewLens | null>;
 }
 
 /**
@@ -263,6 +272,11 @@ export function resolveMultiReviewSettings(
     tiers.repository?.multiReview?.additionalReviewers ??
     tiers.global?.multiReview?.additionalReviewers ??
     [];
+  const reviewerLenses =
+    tiers.environment?.multiReview?.reviewerLenses ??
+    tiers.repository?.multiReview?.reviewerLenses ??
+    tiers.global?.multiReview?.reviewerLenses ??
+    [];
   return {
     autoFix:
       tiers.environment?.multiReview?.autoFix ??
@@ -279,7 +293,35 @@ export function resolveMultiReviewSettings(
       0,
       Math.max(0, reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT),
     ),
+    reviewerLenses: reviewerLensesForCount(reviewerLenses, reviewerCount),
   };
+}
+
+/** Saved lenses padded or cut to one entry per reviewer position. */
+export function reviewerLensesForCount(
+  lenses: ReadonlyArray<ReviewLens | null> | undefined,
+  reviewerCount: number,
+): Array<ReviewLens | null> {
+  return Array.from({ length: reviewerCount }, (_, index) => lenses?.[index] ?? null);
+}
+
+/**
+ * Stored lenses kept only where valid, cut to the reviewer count, without
+ * trailing empty positions; undefined when no position has one.
+ */
+export function normalizeReviewerLenses(
+  value: unknown,
+  reviewerCount: number,
+): Array<ReviewLens | null> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const lenses = value
+    .slice(0, reviewerCount)
+    // Kept as typed (a launch trims), so saving never rewrites a field mid-edit.
+    .map((entry) =>
+      isReviewLens(entry) ? { label: entry.label, instruction: entry.instruction } : null,
+    );
+  while (lenses.length > 0 && lenses.at(-1) === null) lenses.pop();
+  return lenses.length > 0 ? lenses : undefined;
 }
 
 function normalizePlatformSettings(
@@ -350,12 +392,14 @@ function normalizeMultiReviewSettings(value: unknown): MultiReviewAgentSettings 
     return normalizeActionDefaults({ review: entry }).review ?? null;
   });
   while (additionalReviewers.at(-1) === null) additionalReviewers.pop();
+  const reviewerLenses = normalizeReviewerLenses(record.reviewerLenses, reviewerCount);
 
   const normalized: MultiReviewAgentSettings = {
     ...(typeof record.autoFix === "boolean" ? { autoFix: record.autoFix } : {}),
     ...(typeof record.autoPr === "boolean" ? { autoPr: record.autoPr } : {}),
     ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
     ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
+    ...(reviewerLenses ? { reviewerLenses } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

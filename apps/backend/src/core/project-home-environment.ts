@@ -105,6 +105,7 @@ async function ensureOnce(
     const updates: Record<string, unknown> = {};
     if (existing.worktreePath !== root) {
       updates.worktreePath = root;
+      updates.diffBaseOverride = null;
       Object.assign(updates, { prUrl: null, prState: null, hasMergeConflicts: null });
     }
     Object.assign(updates, projectHomeBranchUpdates(existing, branch));
@@ -215,6 +216,7 @@ export async function reconcileProjectHomeEnvironment(
     ...(environment.worktreePath !== root
       ? {
           worktreePath: root,
+          diffBaseOverride: null,
           prUrl: null,
           prState: null,
           hasMergeConflicts: null,

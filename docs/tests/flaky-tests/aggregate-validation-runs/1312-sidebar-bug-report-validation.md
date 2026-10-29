@@ -1,6 +1,6 @@
 # Sidebar bottom bar and Report a bug branch validation
 
-- **ID:** 1311
+- **ID:** 1312
 - **Status:** resolved
 - **Date observed:** 2026-10-29
 - **Command:** `mise run test` on branch `env-list-bottom-6d738241d2a2-r1`
@@ -57,3 +57,7 @@ assertion, timeout or skip was changed. The aggregate result remains failed.
 - **Merge register repair (2026-10-29):** renumbered from 1305 to 1311
   because `main` independently assigned 1305 to the Claude cold-dispatch
   restart-admission case; all original evidence and status are retained.
+
+- **Subsequent merge register repair (2026-10-29):** renumbered from 1311
+  to 1312 because `main` independently assigned 1311 to the graph-designer
+  keyboard case; all original evidence and status are retained.

@@ -34,6 +34,7 @@ import type {
 } from "./agent-provider-contract.js";
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
 import {
+  TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -93,6 +94,11 @@ export function reportFor(summary: string, issueTitle?: string): StructuredRevie
   };
 }
 
+const COVERAGE_GAP = {
+  file: "src/app.ts",
+  untestedBehavior: "The inverted branch has no test.",
+};
+
 /**
  * A provider whose answer depends on which session asked.
  *
@@ -113,6 +119,8 @@ export class FanoutProvider implements BuildPipelineProvider {
     requestId: string;
     model?: string;
     fastMode?: boolean;
+    mode?: ProviderSendOptions["mode"];
+    readOnly?: boolean;
     agentMcp?: ProviderSendOptions["agentMcp"];
     artifactGrant?: string;
     workflowResultTool?: string;
@@ -154,6 +162,12 @@ export class FanoutProvider implements BuildPipelineProvider {
   missingConsolidationResult = false;
   backgroundWorkLive = false;
   failingConsolidation = false;
+  /**
+   * What the consolidated report finds: one cited issue (the default), nothing
+   * at all, or only a test coverage gap. With `coverage-gap` every reviewer also
+   * reports the gap, so the consolidation has a source to cite.
+   */
+  consolidationFindings: "issue" | "clean" | "coverage-gap" = "issue";
   changingMessages = false;
   /** Every session's transcript content while `changingMessages` is off. */
   contentVersion = 1;
@@ -210,6 +224,8 @@ export class FanoutProvider implements BuildPipelineProvider {
       requestId: options.requestId,
       model: options.model,
       fastMode: options.fastMode,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.readOnly !== undefined ? { readOnly: options.readOnly } : {}),
       ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
       ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
       ...(options.workflowResultTool ? { workflowResultTool: options.workflowResultTool } : {}),
@@ -293,7 +309,10 @@ export class FanoutProvider implements BuildPipelineProvider {
       if (this.consolidationResultCalls <= this.invalidConsolidationResults) {
         return { ...base, value: {} as T };
       }
-      const merged = reportFor("Merged review.", "Consolidated finding");
+      const merged = reportFor(
+        "Merged review.",
+        this.consolidationFindings === "issue" ? "Consolidated finding" : undefined,
+      );
       const sourceId =
         this.consolidationResultCalls <=
         this.invalidConsolidationResults + this.unknownSourceConsolidationResults
@@ -308,21 +327,35 @@ export class FanoutProvider implements BuildPipelineProvider {
             reviewModels: null,
             reviewSourceIds: [sourceId],
           })),
+          testCoverageGaps:
+            this.consolidationFindings === "coverage-gap"
+              ? [
+                  {
+                    ...COVERAGE_GAP,
+                    reviewModels: null,
+                    reviewSourceIds: ["reviewer-1/coverage-gap-1"],
+                  },
+                ]
+              : [],
         } as T,
       };
     }
     if (sessionId.includes("review")) {
+      const report = reportFor(`Report from ${sessionId}`, "Reviewer finding");
       return {
         ...base,
-        value: reportFor(`Report from ${sessionId}`, "Reviewer finding") as T,
+        value: (this.consolidationFindings === "coverage-gap"
+          ? { ...report, testCoverageGaps: [COVERAGE_GAP] }
+          : report) as T,
       };
     }
     const phase = this.sessionPhases.get(sessionId);
     if (phase === "build" || phase === "fix") {
       return { ...base, value: TEST_REVIEW_PREPARATION as T };
     }
-    // Address, verify, PR and resolve all answer their own contracts; none of
-    // them matter to the fan-out, which ends at the consolidated report.
+    if (phase === "address") return { ...base, value: TEST_FIX_RESULT as T };
+    // Verify, PR and resolve answer the verdict shape; none of them matter to
+    // the fan-out, which ends at the consolidated report.
     return { ...base, value: { complete: true, rationale: "Done." } as T };
   }
 
@@ -347,7 +380,17 @@ export async function withPipeline(
     provider: FanoutProvider;
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
-    worktree: { head: string; fingerprint: string; fail: boolean };
+    /**
+     * The probed worktree. `failAfterPackage` fails every probe once a review
+     * package exists, which is the moment the panel takes its baseline.
+     */
+    worktree: {
+      head: string;
+      fingerprint: string;
+      fail: boolean;
+      failAfterPackage: boolean;
+      paths: string[];
+    };
     packageGeneration: {
       count: number;
       verificationCount: number;
@@ -399,7 +442,13 @@ export async function withPipeline(
     ["cursor", new FanoutProvider("cursor")],
     ["pi", new FanoutProvider("pi")],
   ]);
-  const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
+  const worktree = {
+    head: HEAD,
+    fingerprint: FINGERPRINT,
+    fail: false,
+    failAfterPackage: false,
+    paths: [] as string[],
+  };
   const packageGeneration = {
     count: 0,
     verificationCount: 0,
@@ -410,10 +459,12 @@ export async function withPipeline(
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
     if (command === "get_environment_uncommitted_paths") {
-      if (worktree.fail) throw new Error("probe failed");
+      if (worktree.fail || (worktree.failAfterPackage && packageGeneration.count > 0)) {
+        throw new Error("probe failed");
+      }
       return {
         head: worktree.head,
-        paths: [],
+        paths: [...worktree.paths],
         fingerprint: worktree.fingerprint,
       } as T;
     }

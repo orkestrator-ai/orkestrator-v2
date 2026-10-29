@@ -5,7 +5,8 @@
  * stops being one agent answering the structured-review contract and becomes
  * the same fan-out Multi Review runs: N reviewers against one immutable review
  * package, then a consolidation turn that merges their reports into the single
- * {@link BuildPipeline.structuredReview} the address stage already consumes.
+ * {@link BuildPipeline.structuredReview} a single reviewer would have written,
+ * routed to Address or Verify by the same rule.
  * Nothing downstream of the review stage learns there was more than one
  * reviewer — that is the whole point of consolidating here rather than
  * teaching every later stage about a list.
@@ -86,7 +87,12 @@ import {
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./review-prompts.js";
-import { reviewerPanelSection } from "./multi-review-prompts.js";
+import {
+  pipelineReviewPreparationInstructions,
+  pipelineReviewerInstructions,
+  withBuildStepInstructions,
+} from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import { reviewerPanelTail } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
   MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
@@ -102,9 +108,11 @@ import {
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
   reviewFanoutNowIso,
+  reviewFanoutReviewerMode,
   type ReviewFanoutHost,
   type ReviewerPollGate,
 } from "./review-fanout.js";
+import { buildPipelineStage, buildPipelineStageTurn } from "./build-pipeline-stages.js";
 import { clearReviewerAdmission } from "./review-fanout-admission.js";
 import { dropProvisionalFindings } from "./review-provisional-findings.js";
 import {
@@ -118,6 +126,7 @@ import { readTranscriptProgressSample } from "./transcript-progress.js";
 import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import {
   beginWorkflowArtifactTurn,
   settleArtifactDispatchTurn,
@@ -125,9 +134,14 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
+/** The panel's result kinds and the consolidation turn, from the stage table. */
+const REVIEWER_RESULT_KIND = buildPipelineStage("review").result!;
+const CONSOLIDATION_RESULT_KIND = buildPipelineStage("consolidation").result!;
+const CONSOLIDATION_TURN = buildPipelineStageTurn(buildPipelineStage("consolidation"));
 
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
@@ -190,13 +204,28 @@ export interface BuildPipelineReviewFanoutDeps {
   pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
   /** Reviewer and consolidation turns' artifact grants (`workflow-artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
+  /**
+   * The read-only guard's baseline for a new pass, taken before any reviewer
+   * is dispatched (`build-pipeline-read-only-guard.ts`). Throws when the Git
+   * state cannot be observed, which fails the stage before any turn is spent.
+   */
+  captureWorkspaceBaseline(pipeline: BuildPipeline): Promise<WorkspaceGitBaseline>;
+  /**
+   * The stage error when the worktree no longer matches the pass's baseline,
+   * or null. Asked when reviewer reports arrive and before the consolidated
+   * report is accepted.
+   */
+  workspaceViolation(
+    pipeline: BuildPipeline,
+    subject: "review" | "consolidation",
+  ): Promise<string | null>;
 }
 
 /** What the supervisor should do after one fan-out pass. */
 export type ReviewFanoutStep =
   /** Still working. The supervisor returns without touching the pipeline. */
   | { kind: "working" }
-  /** The consolidated report is on the pipeline; start the address stage. */
+  /** The consolidated report is on the pipeline; route it to Address or Verify. */
   | { kind: "consolidated" }
   /** The stage failed. The supervisor applies its usual failure handling. */
   | { kind: "failed"; error: string };
@@ -234,17 +263,29 @@ export class BuildPipelineReviewFanout {
     if (!pipeline.reviewPackage) {
       throw new Error(`${FANOUT_LABEL} cannot start because no immutable review package exists`);
     }
+    // Reviewers and the consolidator share the worktree, so they share one
+    // baseline, taken before the first of them can touch it.
+    const workspaceBaseline = await this.deps.captureWorkspaceBaseline(pipeline);
     // One batch, so the shared environment, config, and model catalogue are
     // read once for the whole fan-out rather than once per reviewer.
+    const configs = pipelineReviewerConfigs(pipeline);
     const selections = await this.deps.settingsForSelections(
       pipeline,
-      pipelineReviewerConfigs(pipeline).map((config) => ({
+      configs.map((config) => ({
         agent: config.agent,
         model: config.model,
         effort: config.reasoningEffort,
       })),
     );
-    pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig) };
+    // Each record keeps its reviewer's lens, copied from the stored row, so a
+    // fresh pass after a restart or rewind runs the same focus.
+    pipeline.reviewFanout = {
+      reviewers: selections.map((selection, index) => ({
+        ...reviewerFromConfig(selection),
+        ...reviewLensField(configs[index]?.lens),
+      })),
+      workspaceBaseline,
+    };
     recordEfficiency(this.deps.efficiency, {
       owner: "build-pipeline",
       operation: "launch.duplicate_reviewers",
@@ -272,12 +313,21 @@ export class BuildPipelineReviewFanout {
 
     if (!state.consolidation) {
       const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, targetBranch));
+      const completedBefore = completedReviewerCount(state.reviewers);
       const outcome = await runner.advanceReviewers(state.reviewers);
       // Settled *after* the pass, not inside it: a reviewer's last transcript
       // mirror happens while its provider status is still being read, so the
       // status it ends on — completed, failed, stopped — is only known here.
       // Without this the build tab shows finished reviewers as still running.
       await this.settleReviewerSessions(pipeline, state);
+      // A report is only usable from a worktree the panel left as it found it.
+      // Checked as reports arrive, so a reviewer that committed fails the pass
+      // without waiting for the rest of the panel, and again before
+      // consolidation reads them.
+      if (outcome.kind === "ready" || completedReviewerCount(state.reviewers) > completedBefore) {
+        const violation = await this.deps.workspaceViolation(pipeline, "review");
+        if (violation) return { kind: "failed", error: violation };
+      }
       if (outcome.kind === "working") return { kind: "working" };
       if (outcome.kind === "no-reports") return { kind: "failed", error: outcome.error };
     }
@@ -413,6 +463,10 @@ export class BuildPipelineReviewFanout {
       workflowId: pipeline.id,
       targetBranch,
       label: FANOUT_LABEL,
+      // Reviewers read the immutable package, so they run as Multi Review's do:
+      // provider plan mode with the read-only mutation boundary, on every turn
+      // including repairs. The read-only guard backs this on every provider.
+      reviewerMode: reviewFanoutReviewerMode(pipeline.reviewPackage),
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
@@ -438,7 +492,7 @@ export class BuildPipelineReviewFanout {
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
             supportsToolResult: (selection: ReviewerRecord) =>
-              this.deps.workflowToolEnabled?.(selection.agent, "review-report") ?? false,
+              this.deps.workflowToolEnabled?.(selection.agent, REVIEWER_RESULT_KIND) ?? false,
             prepareResult: async (
               selection: ReviewerRecord,
               requestId: string,
@@ -446,7 +500,7 @@ export class BuildPipelineReviewFanout {
             ) =>
               this.deps.workflowResults!.prepare({
                 resultKey: requestId,
-                kind: "review-report",
+                kind: REVIEWER_RESULT_KIND,
                 environmentId: pipeline.environmentId,
                 projectId: pipeline.projectId,
                 provider: selection.agent,
@@ -501,21 +555,25 @@ export class BuildPipelineReviewFanout {
           elapsedMs: Date.now() - started,
         });
       },
-      reviewerPrompt: async (index, count) => {
+      reviewerPrompt: async (index, count, reviewer) => {
         const reviewPackage = pipeline.reviewPackage;
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
         // Shared package prompt first so every reviewer's prefix is identical;
-        // the panel position is the only per-reviewer text.
-        return [
-          createDiscoveryPrompt({
-            reviewPackage,
-            reviewInstruction: await this.deps.reviewInstruction(),
-            context: await this.deps.reviewContext(pipeline),
-          }),
-          reviewerPanelSection(index + 1, count),
-        ].join("\n\n");
+        // the panel position, the reviewer's lens and its own instructions are
+        // the only per-reviewer text, and they come last, in that order.
+        return withBuildStepInstructions(
+          [
+            createDiscoveryPrompt({
+              reviewPackage,
+              reviewInstruction: await this.deps.reviewInstruction(),
+              context: await this.deps.reviewContext(pipeline),
+            }),
+            reviewerPanelTail(index + 1, count, reviewer.lens),
+          ].join("\n\n"),
+          pipelineReviewerInstructions(pipeline, index),
+        );
       },
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         resolveUnattendedReviewerInteractions(provider, providerSessionId, async () => {}),
@@ -790,7 +848,7 @@ export class BuildPipelineReviewFanout {
       const sessionKey = `${pipeline.id}:review-consolidation:${pipeline.iteration}:${randomUUID()}`;
       const providerSessionId = await provider.createSession("review", "Review · Consolidation", {
         clientSessionKey: sessionKey,
-        mode: "plan",
+        ...CONSOLIDATION_TURN,
         model: step.model,
         effort: step.effort,
         ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
@@ -814,12 +872,12 @@ export class BuildPipelineReviewFanout {
         resultTransport:
           this.deps.workflowResults &&
           this.deps.agentMcp &&
-          this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+          this.deps.workflowToolEnabled?.(step.agent, CONSOLIDATION_RESULT_KIND)
             ? "tool-v1"
             : "structured-output-v1",
         ...(this.deps.workflowResults &&
         this.deps.agentMcp &&
-        this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+        this.deps.workflowToolEnabled?.(step.agent, CONSOLIDATION_RESULT_KIND)
           ? { resultSubmission: "preparing" as const }
           : {}),
         ...(step.model ? { model: step.model } : {}),
@@ -881,19 +939,22 @@ export class BuildPipelineReviewFanout {
       // re-sends an already-answered prompt with the same reviewer evidence.
       let prompt = consolidation.continuationPrompt ?? consolidation.schemaRepairPrompt;
       if (!prompt) {
-        prompt = createReviewConsolidationPrompt({
-          targetBranch,
-          reports: consolidationReports(state.reviewers),
-          onEvidenceStats: (stats) =>
-            recordEfficiency(this.deps.efficiency, {
-              owner: "build-pipeline",
-              operation: "consolidation.input",
-              phase: "consolidating",
-              reviewers: stats.reviewers,
-              count: stats.sourceFindings,
-              bytes: stats.compactBytes,
-            }),
-        });
+        prompt = withBuildStepInstructions(
+          createReviewConsolidationPrompt({
+            targetBranch,
+            reports: consolidationReports(state.reviewers),
+            onEvidenceStats: (stats) =>
+              recordEfficiency(this.deps.efficiency, {
+                owner: "build-pipeline",
+                operation: "consolidation.input",
+                phase: "consolidating",
+                reviewers: stats.reviewers,
+                count: stats.sourceFindings,
+                bytes: stats.compactBytes,
+              }),
+          }),
+          pipelineReviewPreparationInstructions(pipeline),
+        );
       }
       const agentMcp =
         consolidation.resultTransport === "tool-v1"
@@ -907,7 +968,7 @@ export class BuildPipelineReviewFanout {
       if (consolidation.resultTransport === "tool-v1" && this.deps.workflowResults) {
         await this.deps.workflowResults.prepare({
           resultKey: consolidation.requestId,
-          kind: "consolidated-review",
+          kind: CONSOLIDATION_RESULT_KIND,
           environmentId: pipeline.environmentId,
           projectId: pipeline.projectId,
           provider: consolidation.agent,
@@ -931,7 +992,7 @@ export class BuildPipelineReviewFanout {
         turnAgentMcp
           ? {
               agentMcp: turnAgentMcp,
-              workflowResultTool: workflowResultToolName("consolidated-review"),
+              workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
             }
           : undefined,
       );
@@ -944,7 +1005,7 @@ export class BuildPipelineReviewFanout {
           consolidation.providerSessionId,
           consolidation.resultTransport === "tool-v1"
             ? `${prompt}\n\n${workflowResultInstruction(
-                "consolidated-review",
+                CONSOLIDATION_RESULT_KIND,
                 consolidation.requestId,
                 { capability: agentMcp?.workflowResultCapability },
               )}`
@@ -955,7 +1016,7 @@ export class BuildPipelineReviewFanout {
               consolidation.resultTransport === "tool-v1"
                 ? undefined
                 : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
-            mode: "plan",
+            ...CONSOLIDATION_TURN,
             model: consolidation.model,
             effort: consolidation.reasoningEffort,
             ...(typeof consolidation.fastMode === "boolean"
@@ -965,7 +1026,7 @@ export class BuildPipelineReviewFanout {
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
               ? {
-                  workflowResultTool: workflowResultToolName("consolidated-review"),
+                  workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
                   workflowResultKey: consolidation.requestId,
                 }
               : {}),
@@ -1121,7 +1182,7 @@ export class BuildPipelineReviewFanout {
           workLabel: "consolidation",
           resultLabel: "consolidated report",
           ...(consolidation.resultTransport === "tool-v1"
-            ? { toolName: workflowResultToolName("consolidated-review") }
+            ? { toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND) }
             : {}),
         }),
       );
@@ -1142,7 +1203,7 @@ export class BuildPipelineReviewFanout {
           ? missingWorkflowResultMessage({
               subject: "The consolidation session",
               resultLabel: "consolidated report",
-              toolName: workflowResultToolName("consolidated-review"),
+              toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
               submission: consolidation.resultSubmission,
               finalText: lastAssistantText(session.messages),
             })
@@ -1172,6 +1233,10 @@ export class BuildPipelineReviewFanout {
       if (previousUsagePolls !== session.usageFinalizationPolls) await this.save(pipeline);
       return { kind: "working" };
     }
+    // The consolidated report is consumed here. The submit-time check let the
+    // consolidator repair a change within its turn; this one decides.
+    const violation = await this.deps.workspaceViolation(pipeline, "consolidation");
+    if (violation) return { kind: "failed", error: violation };
     state.report = provenance.report;
     session.status = "idle";
     session.reviewReport = provenance.report;
@@ -1309,7 +1374,7 @@ export class BuildPipelineReviewFanout {
       "resultReminderSent",
       workflowResultReminderPrompt({
         resultLabel: "consolidated report",
-        toolName: workflowResultToolName("consolidated-review"),
+        toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
         submission: consolidation.resultSubmission,
         finalText: lastAssistantText(session.messages),
         workLabel: "consolidation work",
@@ -1454,4 +1519,8 @@ function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
     ...(typeof config.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
     status: "pending",
   };
+}
+
+function completedReviewerCount(reviewers: readonly ReviewerRecord[]): number {
+  return reviewers.filter((reviewer) => reviewer.status === "completed").length;
 }

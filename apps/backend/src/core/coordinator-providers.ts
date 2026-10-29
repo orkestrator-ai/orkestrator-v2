@@ -8,6 +8,11 @@ import {
   type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
 import {
+  agentPolicyEnforcement,
+  coordinatorEnforcementPolicy,
+  type AgentEnforcementHost,
+} from "@orkestrator/protocol/graphs/capability-profiles";
+import {
   claudeLinuxSandboxStatus,
   type ClaudeLinuxSandboxStatus,
 } from "@orkestrator/protocol/node/claude-linux-sandbox";
@@ -58,12 +63,9 @@ export function coordinatorProviderTierSetting(value: unknown): CoordinatorProvi
  * would promise an OS guarantee that is not there, so the probe result is an
  * input to the table rather than an assumption inside it.
  */
-export interface CoordinatorHostCapabilities {
-  /** Whether the Claude Agent SDK's command sandbox can run commands on this host. */
-  claudeSandbox: boolean;
-  /** Why it cannot, when the probe knows; shown in place of the generic reason. */
-  claudeSandboxReason?: string;
-}
+export type CoordinatorHostCapabilities = AgentEnforcementHost;
+
+const COORDINATOR_ENFORCEMENT_POLICY = coordinatorEnforcementPolicy();
 
 export function defaultCoordinatorHostCapabilities(
   platform: NodeJS.Platform = process.platform,
@@ -86,14 +88,6 @@ export function defaultCoordinatorHostCapabilities(
   }
   return { claudeSandbox: false };
 }
-
-/** Where the probe has no specific cause (Windows, or a host given without one). */
-const CLAUDE_SANDBOX_UNAVAILABLE =
-  "Claude's command sandbox is unavailable on this host (it needs macOS, or Linux whose bubblewrap can nest a user namespace).";
-
-/** The hook sentence every unsandboxed Claude coordinator reason ends with. */
-const CLAUDE_UNSANDBOXED_BOUNDARY =
-  "File tools are removed and the bridge admits only reading commands, but nothing outside the agent enforces it.";
 
 interface Qualification {
   tier: CoordinatorProviderTier;
@@ -125,51 +119,15 @@ function delegationDeliverable(platform: AgentPlatform): boolean {
 const NO_DELIVERY_CAVEAT =
   "Worker delegation is unavailable because this platform's mailbox cannot receive replies. Inspection and planning work normally.";
 
+/**
+ * The tier comes from the shared enforcement matrix, asked about the
+ * coordinator's own policy, so a graph node with a read-only profile and the
+ * coordinator are always judged by the same rules. Every platform ships an MCP
+ * client that can reach the delegation tools.
+ */
 function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): TierJudgement {
-  switch (platform) {
-    case "codex":
-      // A Codex permission profile denies the filesystem and the network in the
-      // child process itself, and the bridge refuses to run a turn unless
-      // app-server echoes the profile back. Hosted web search is outside that
-      // profile (OpenAI's servers fetch the page), so it is switched off in
-      // configuration and the bridge refuses a thread unless `config/read`
-      // confirms it. A Codex that cannot do that would not be `enforced`.
-      return { tier: "enforced", mcpClient: true };
-    case "claude":
-      return host.claudeSandbox
-        ? { tier: "enforced", mcpClient: true }
-        : {
-            tier: "provider-configured",
-            reason: `${host.claudeSandboxReason ?? CLAUDE_SANDBOX_UNAVAILABLE} ${CLAUDE_UNSANDBOXED_BOUNDARY}`,
-            mcpClient: true,
-          };
-    case "pi":
-      // Pi's gate runs inside the bridge on every tool call and cannot be
-      // switched off by the workspace. The bridge-owned MCP client registers
-      // Agent MCP tools on that same gate, so coordinator mail is reachable.
-      return { tier: "enforced", mcpClient: true };
-    case "opencode":
-      return {
-        tier: "provider-configured",
-        reason:
-          "OpenCode denies mutating tools through its own permission rules, but always loads the checkout's project configuration.",
-        mcpClient: true,
-      };
-    case "cursor":
-      return {
-        tier: "provider-configured",
-        reason:
-          "Cursor applies the sandbox and tool restrictions, but its SDK exposes no approval callback to verify them.",
-        mcpClient: true,
-      };
-    case "grok":
-      return {
-        tier: "advisory",
-        reason:
-          "Grok's write, edit, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask, including xAI's hosted X search tools, remain advisory.",
-        mcpClient: true,
-      };
-  }
+  const { tier, reason } = agentPolicyEnforcement(COORDINATOR_ENFORCEMENT_POLICY, platform, host);
+  return { tier, ...(reason ? { reason } : {}), mcpClient: true };
 }
 
 function qualify(platform: AgentPlatform, host: CoordinatorHostCapabilities): Qualification {

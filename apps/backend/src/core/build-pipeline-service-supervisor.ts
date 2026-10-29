@@ -3,7 +3,6 @@
  * lock, and the state machine each pass advances (provisioning, stage start and
  * dispatch, review packages, validation and the multi-model review).
  */
-import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -13,7 +12,6 @@ import {
   type ResumableBuildPhase,
   isBuildPipeline,
   isActiveBuildPhase,
-  isSupersededPipelineSession,
   reviewValidationStage,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
@@ -34,6 +32,7 @@ import {
   readProviderStatus,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   errorMessage,
   sessionForCurrentPhase,
@@ -45,8 +44,6 @@ import {
   withUnattendedPolicy,
   type BuildStepSelection,
   WORKTREE_PROBE_ATTEMPTS,
-  VALIDATION_STAGE_LABELS,
-  VERIFICATION_SCHEMA,
   SESSION_LABELS,
   PreSessionStageStartError,
   executionModeOverrideForPhase,
@@ -54,6 +51,7 @@ import {
   attachBeforeDispatch,
   elapsedSince,
   elapsedSinceLatest,
+  stageAfterReview,
 } from "./build-pipeline-service-helpers.js";
 import {
   reviewValidationDiscoveryPrompt,
@@ -68,39 +66,24 @@ import {
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
-import { forcePushUpstream } from "./build-pipeline-code-rewind.js";
 import {
-  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import {
-  type WorkflowResultError,
   type WorkflowResultKind,
   workflowResultInstruction,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
-  addressPrompt,
-  addressValidationInstruction,
   buildPipelineReviewPackageContext,
   buildPipelineReviewPackageId,
-  buildPrompt,
-  fixPrompt,
-  prPrompt,
-  resolveConflictsPrompt,
   reviewPackagePreparationPrompt,
-  verificationPrompt,
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
-import {
-  BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
-  buildReviewHandoffPrompt,
-  prependReviewHandoff,
-} from "./build-pipeline-handoff.js";
 import {
   BuildPipelineReviewFanout,
   type ReviewFanoutStep,
@@ -123,7 +106,6 @@ import {
 } from "./review-worktree-probe.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  createDiscoveryPrompt,
   parseReviewPreparationResult,
 } from "./review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
@@ -132,13 +114,27 @@ import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
+import { sessionWorkspaceBaselineFields } from "./build-pipeline-validation-worktree.js";
+import { BuildPipelineReadOnlyGuard } from "./build-pipeline-read-only-guard.js";
+import { PIPELINE_ADDRESS_REPORT_KIND } from "@orkestrator/protocol/build-pipeline-address-report";
+import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
+import { BuildPipelineStagePrompts, type StagePrompt } from "./build-pipeline-stage-prompts.js";
 import {
-  compareValidationWorktree,
-  hasValidationBaseline,
-  validationWorktreeError,
-  validationWorktreeRefusal,
-} from "./build-pipeline-validation-worktree.js";
-import type { WorkflowResultAttempt } from "./workflow-result-service.js";
+  buildPhaseForSessionPhase,
+  buildPipelineSessionStage,
+  buildPipelineStage,
+  usesPackagePreparationSession,
+} from "./build-pipeline-stages.js";
+import {
+  pipelineReviewPreparationInstructions,
+  withBuildStepInstructions,
+} from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import {
+  BuildPipelinePromptDispatch,
+  readOnlyReviewSendOptions,
+  readsReviewPackage,
+} from "./build-pipeline-prompt-dispatch.js";
+import { WorkspaceBusyError } from "./workspace-writers.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -147,7 +143,22 @@ import type { WorkflowResultAttempt } from "./workflow-result-service.js";
 export const UNCHANGED_FIX_PAUSE_MESSAGE =
   "Paused: the fix stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
+/** A hand-written prompt for one session: a retry, a user message or package preparation. */
+type StageOverride = {
+  prompt: string;
+  images: BuildPipeline["taskSnapshot"]["images"];
+  mode?: ProviderExecutionMode;
+  schema?: JsonSchema;
+  label?: string;
+  settings?: BuildStepSelection;
+};
+
+/** Pipelines whose current wait for a graph run was logged; cleared past this. */
+const MAX_WORKSPACE_WAITS_NOTED = 256;
+
 export class BuildPipelineSupervisor {
+  /** The wait last logged per pipeline (one line per wait, not per pass). */
+  private readonly workspaceWaits = new Map<string, WorkspaceBusyError["reason"]>();
   /**
    * Progress clocks for the reviewer fan-out.
    *
@@ -159,12 +170,34 @@ export class BuildPipelineSupervisor {
 
   private reviewFanoutRunner: BuildPipelineReviewFanout | null = null;
 
+  /**
+   * The read-only guard on Review, consolidation and Verify. The facade
+   * registers its submit-time checks; this supervisor captures baselines
+   * before dispatch and certifies results when it consumes them.
+   */
+  readonly readOnly: BuildPipelineReadOnlyGuard;
+
+  /** What each stage's session is told when it opens. */
+  private readonly stagePrompts: BuildPipelineStagePrompts;
+
+  /** Sends the journaled `pendingPromptAttempt`, at most once. */
+  private readonly promptDispatch: BuildPipelinePromptDispatch;
+
   constructor(
     private readonly ctx: BuildPipelineContext,
     private readonly agents: BuildPipelineAgents,
     private readonly recovery: BuildPipelineRecovery,
     private readonly interactions: BuildPipelineInteractions,
-  ) {}
+  ) {
+    this.readOnly = new BuildPipelineReadOnlyGuard(
+      ctx.storage,
+      commandWorkspaceProbe((command, args) => ctx.invoke(command, args), WORKTREE_PROBE_ATTEMPTS),
+    );
+    this.stagePrompts = new BuildPipelineStagePrompts(ctx, (environmentId, reviewPackage) =>
+      this.assertReviewPackageIntegrity(environmentId, reviewPackage),
+    );
+    this.promptDispatch = new BuildPipelinePromptDispatch(ctx, agents);
+  }
 
   reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
@@ -203,6 +236,8 @@ export class BuildPipelineSupervisor {
         agentMcp: (pipeline, resultKey, provider, stage) =>
           this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
         artifactDispatch: this.ctx.options.artifactDispatch,
+        captureWorkspaceBaseline: (pipeline) => this.readOnly.capturePanel(pipeline),
+        workspaceViolation: (pipeline, subject) => this.readOnly.panelViolation(pipeline, subject),
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
@@ -263,7 +298,10 @@ export class BuildPipelineSupervisor {
     if (existing) return existing;
     const next = this.advance(pipelineId, namingPrompt)
       .catch(async (error) => {
-        if (error instanceof ProviderUnavailableError) {
+        if (error instanceof WorkspaceBusyError) {
+          // A graph run holds the checkout: the next pass tries the stage again.
+          this.noteWorkspaceWait(pipelineId, error);
+        } else if (error instanceof ProviderUnavailableError) {
           await this.interactions.recordReconnect(pipelineId, error).catch(() => undefined);
         } else {
           await this.interactions.fail(pipelineId, error).catch(() => undefined);
@@ -274,6 +312,14 @@ export class BuildPipelineSupervisor {
       });
     this.ctx.locks.set(pipelineId, next);
     return next;
+  }
+
+  /** Logs a pipeline's wait for a graph run once per wait (ids and reason only). */
+  private noteWorkspaceWait(pipelineId: string, error: WorkspaceBusyError): void {
+    if (this.workspaceWaits.get(pipelineId) === error.reason) return;
+    if (this.workspaceWaits.size >= MAX_WORKSPACE_WAITS_NOTED) this.workspaceWaits.clear();
+    this.workspaceWaits.set(pipelineId, error.reason);
+    console.info(`[build-pipeline] ${pipelineId}: ${error.message}`);
   }
 
   async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
@@ -374,6 +420,11 @@ export class BuildPipelineSupervisor {
     }
 
     if (pipeline.phase === "waiting-for-setup") {
+      // Setup writes the checkout and the Build stage follows it: wait for a
+      // graph run holding the environment before running either.
+      this.ctx.options.workspaceWriters
+        ?.claim({ kind: "build-pipeline", id: pipeline.id }, pipeline.environmentId, "write")
+        .release();
       await this.ctx.invoke("run_environment_setup", {
         environmentId: pipeline.environmentId,
       });
@@ -429,21 +480,7 @@ export class BuildPipelineSupervisor {
         await this.advanceValidation(pipeline);
         return;
       }
-      const phase =
-        request.phase === "build"
-          ? "building"
-          : request.phase === "review"
-            ? "reviewing"
-            : request.phase === "address"
-              ? "addressing"
-              : request.phase === "verify"
-                ? "verifying"
-                : request.phase === "fix"
-                  ? "fixing"
-                  : request.phase === "pr"
-                    ? "creating-pr"
-                    : "resolving-conflicts";
-      await this.startStage(pipeline, request.phase, phase);
+      await this.startStage(pipeline, request.phase, buildPhaseForSessionPhase(request.phase));
       return;
     }
 
@@ -810,7 +847,7 @@ export class BuildPipelineSupervisor {
       case "fixing":
         if (await this.pauseUnchangedFix(pipeline, session)) return;
         if (
-          (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
+          usesPackagePreparationSession(pipeline) &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL
         ) {
           await this.startReviewPackagePreparation(pipeline);
@@ -822,7 +859,7 @@ export class BuildPipelineSupervisor {
         await this.finishReview(pipeline, provider, session);
         return;
       case "addressing":
-        await this.startStage(pipeline, "verify", "verifying");
+        await this.recovery.finishAddress(pipeline, provider, session);
         return;
       case "verifying":
         await this.recovery.finishVerification(pipeline, provider, session);
@@ -836,33 +873,6 @@ export class BuildPipelineSupervisor {
       default:
         return;
     }
-  }
-
-  /**
-   * Observes the worktree a validation stage is about to run in.
-   *
-   * Addressing can leave uncommitted paths behind. Capturing them before the
-   * verification turn makes the state the pipeline's own evidence and tells
-   * the verifier exactly which paths it must preserve.
-   *
-   * The probe is one command round trip into a container or worktree and can
-   * fail transiently, so it is retried a bounded number of times before the
-   * caller is told the state is unknown. Retries are immediate: the supervisor
-   * tick is not a place to sleep, and the failures this covers — a momentarily
-   * busy daemon, a lost exec — do not need a backoff to clear. A state that is
-   * still unknown afterwards is not survivable, because nothing downstream can
-   * certify a turn whose starting point was never established.
-   */
-  async reviewWorktreeSnapshot(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
-    let last = await this.probeWorktreeOnce(pipeline);
-    for (
-      let attempt = 1;
-      attempt < WORKTREE_PROBE_ATTEMPTS && last.status === "unknown";
-      attempt += 1
-    ) {
-      last = await this.probeWorktreeOnce(pipeline);
-    }
-    return last;
   }
 
   async probeWorktreeOnce(
@@ -937,80 +947,35 @@ export class BuildPipelineSupervisor {
   }
 
   /**
-   * Establishes the baseline a validation stage will later be certified against.
+   * Establishes the baseline a guarded stage (Verify, or Review over a package)
+   * will later be certified against.
    *
    * A dirty start is not a failure. The build stage is only *asked* to commit,
-   * the reviewer is told which paths were left behind, and the guard below cares
-   * about what validation itself changed rather than where it began. Only a
+   * the verifier is told which paths were left behind, and the guard cares
+   * about what the stage itself changed rather than where it began. Only a
    * state the backend could not observe at all is fatal, and it is fatal *here*
    * — before the turn is dispatched — because a stage that can never be
    * certified is not worth an agent turn, and failing after the fact would
-   * discard a completed review and report it as a Git error.
+   * discard a completed turn and report it as a Git error.
    */
   async validationBaseline(
     pipeline: BuildPipeline,
     sessionPhase: "review" | "verify",
   ): Promise<ObservedWorktreeSnapshot> {
-    const snapshot = await this.reviewWorktreeSnapshot(pipeline);
-    if (snapshot.status === "unknown") {
-      throw new Error(
-        `${VALIDATION_STAGE_LABELS[sessionPhase]} cannot start because the backend could not establish the environment Git state: ${snapshot.reason}`,
-      );
-    }
-    return snapshot;
+    return this.readOnly.captureSession(pipeline, sessionPhase);
   }
 
   /**
-   * Rejects a validation turn that changed the workspace rather than only
-   * reading it and writing ignored output. See {@link compareValidationWorktree}
-   * for exactly what counts as a change.
+   * Rejects a guarded turn that changed the workspace rather than only reading
+   * it and writing ignored output. See `compareWorkspace` in
+   * `workspace-read-only-guard.ts` for exactly what counts as a change.
    */
   async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
     options: { repairableOnly?: boolean } = {},
   ): Promise<void> {
-    const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
-    // Without a baseline there is nothing to compare, so do not spend a probe.
-    const change = compareValidationWorktree(
-      session,
-      hasValidationBaseline(session)
-        ? await this.reviewWorktreeSnapshot(pipeline)
-        : { status: "unknown", reason: "no baseline" },
-    );
-    if (options.repairableOnly && !validationWorktreeRefusal(change)) return;
-    const error = validationWorktreeError(stage, change);
-    if (error) throw new Error(error);
-  }
-
-  /**
-   * The same comparison, asked by the workflow result service before it
-   * validates or accepts a verification result, so the verifier can undo a
-   * change while its turn is still running instead of the pipeline failing
-   * after it. Only the attempt the pipeline is currently waiting on is judged.
-   */
-  async verificationResultRefusal(
-    attempt: WorkflowResultAttempt,
-  ): Promise<WorkflowResultError | null> {
-    for (const record of await this.ctx.storage.listBuildPipelines(attempt.projectId)) {
-      const pipeline = record.snapshot;
-      if (
-        record.environmentId !== attempt.environmentId ||
-        !isBuildPipeline(pipeline) ||
-        pipeline.phase !== "verifying"
-      ) {
-        continue;
-      }
-      const session = sessionForCurrentPhase(pipeline);
-      if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) {
-        continue;
-      }
-      if (!hasValidationBaseline(session)) return null;
-      return validationWorktreeRefusal(
-        compareValidationWorktree(session, await this.reviewWorktreeSnapshot(pipeline)),
-      );
-    }
-    return null;
+    await this.readOnly.certifySession(pipeline, session, options);
   }
 
   /**
@@ -1383,10 +1348,14 @@ export class BuildPipelineSupervisor {
     }
     delete pipeline.reviewPackage;
     await this.startStage(pipeline, "fix", "fixing", {
-      prompt: reviewValidationDiscoveryPrompt(targetBranch),
+      // The dedicated preparation runs under the preparation step, not Build.
+      prompt: withBuildStepInstructions(
+        reviewValidationDiscoveryPrompt(targetBranch),
+        pipelineReviewPreparationInstructions(pipeline),
+      ),
       images: [],
       schema: REVIEW_VALIDATION_PLAN_SCHEMA,
-      label: REVIEW_PACKAGE_SESSION_LABEL,
+      label: buildPipelineStage("preparation").session!.label,
       settings: pipeline.reviewPreparation
         ? {
             agent: pipeline.reviewPreparation.agent,
@@ -1401,18 +1370,23 @@ export class BuildPipelineSupervisor {
    * Applies one pass of the multi-model review stage.
    *
    * The fan-out reports what happened rather than mutating the phase itself,
-   * so that the transition into `addressing` stays where every other stage
-   * transition is, and a failure is raised the same way any other stage's is.
+   * so that the transition into `addressing` or `verifying` stays where every
+   * other stage transition is, and a failure is raised the same way any other stage's is.
    */
   async advanceReviewFanout(pipeline: BuildPipeline): Promise<void> {
     const step: ReviewFanoutStep = await this.reviewFanout().advance(pipeline);
     if (step.kind === "working") return;
     if (step.kind === "failed") throw new Error(step.error);
-    // The address stage opens first, and only then is the record dropped.
+    const report = pipeline.structuredReview ?? pipeline.reviewFanout?.report;
+    if (!report) throw new Error("The consolidated review report is missing");
+    // The consolidated report routes exactly as a single reviewer's does:
+    // Address when it has findings, otherwise straight to Verify.
+    const next = stageAfterReview(report);
+    // The next stage opens first, and only then is the record dropped.
     // Doing it the other way round leaves a window in which the phase is still
     // `reviewing` with nothing to drive it, which the branch above would have
     // to recover from by re-running every reviewer.
-    await this.startStage(pipeline, "address", "addressing");
+    await this.startStage(pipeline, next.sessionPhase, next.phase);
     // Everything downstream reads `structuredReview`, which the fan-out has
     // already written. Dropping the record keeps the snapshot from carrying a
     // completed fan-out through the rest of the run — and makes a later review
@@ -1421,18 +1395,41 @@ export class BuildPipelineSupervisor {
     await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
+  /**
+   * Opens a stage, first claiming the checkout against graph runs (D3 across
+   * engines, `workspace-writers.ts`): a writing stage waits while a graph run
+   * reads or writes the environment, a review while one writes. Waiting is a
+   * {@link WorkspaceBusyError} thrown before anything is saved or sent;
+   * `runLocked` swallows it and the next pass re-derives the same start from
+   * the stored record, exactly as after a provider that was unreachable.
+   */
   async startStage(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
     phase: ResumableBuildPhase,
-    override?: {
-      prompt: string;
-      images: BuildPipeline["taskSnapshot"]["images"];
-      mode?: ProviderExecutionMode;
-      schema?: JsonSchema;
-      label?: string;
-      settings?: BuildStepSelection;
-    },
+    override?: StageOverride,
+  ): Promise<void> {
+    const writers = this.ctx.options.workspaceWriters;
+    const use = buildPipelineSessionStage(sessionPhase).turn === "read-only" ? "read" : "write";
+    const claim =
+      writers && pipeline.environmentId
+        ? writers.claim({ kind: "build-pipeline", id: pipeline.id }, pipeline.environmentId, use)
+        : null;
+    this.workspaceWaits.delete(pipeline.id);
+    try {
+      await this.startClaimedStage(pipeline, sessionPhase, phase, override);
+    } finally {
+      // The stage's own save already noted the record, so the projection
+      // shows the stage before the claim goes.
+      claim?.release();
+    }
+  }
+
+  private async startClaimedStage(
+    pipeline: BuildPipeline,
+    sessionPhase: PipelineSessionPhase,
+    phase: ResumableBuildPhase,
+    override?: StageOverride,
   ): Promise<void> {
     await this.ctx.refreshWorkflowRollout();
     // A pipeline retains reports only for its newest review attempt. This is
@@ -1456,17 +1453,20 @@ export class BuildPipelineSupervisor {
     }
     const dispatch = await (async () => {
       if (sessionPhase === "build") {
-        await this.recovery.updateKanbanLifecycle(pipeline, {
-          status: "in-progress",
-          comment: "🔨 Build started",
-        });
+        await this.recovery.updateKanbanLifecycle(
+          pipeline,
+          buildPipelineKanbanUpdate("build-started"),
+        );
       }
+      // A review over an immutable package runs as a Multi Review reviewer
+      // does: plan mode with the read-only mutation boundary.
+      const readOnlyReview = readsReviewPackage(pipeline, sessionPhase);
       // Probed before the provider session exists so an unestablishable Git state
       // fails the stage without leaving a session behind or spending a turn on a
-      // review that could never be certified.
+      // stage that could never be certified.
       const validationWorktree =
-        !override && sessionPhase === "verify"
-          ? await this.validationBaseline(pipeline, sessionPhase)
+        (!override && buildPipelineSessionStage(sessionPhase).turn === "guarded") || readOnlyReview
+          ? await this.validationBaseline(pipeline, readOnlyReview ? "review" : "verify")
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also
       // runs as "fix" but always arrives with an override and never edits code.
@@ -1501,8 +1501,9 @@ export class BuildPipelineSupervisor {
       const mode =
         override?.mode ??
         executionModeOverrideForPhase(phase) ??
-        executionModeForSessionPhase(sessionPhase, agent);
+        (readOnlyReview ? "plan" : executionModeForSessionPhase(sessionPhase, agent));
       const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
+      const policy = await this.ctx.executionPolicy(pipeline);
       // Codex binds model and effort at session creation, Claude and OpenCode at
       // prompt dispatch, so a per-step selection has to be supplied at both.
       const sessionId = await provider.createSession(sessionPhase, label, {
@@ -1510,10 +1511,12 @@ export class BuildPipelineSupervisor {
         effort,
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         mode,
-        policy: await this.ctx.executionPolicy(pipeline),
+        ...(readOnlyReview ? { readOnly: true, reviewerSession: true } : {}),
+        policy,
         interaction: {
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          ...(readOnlyReview ? { reviewerSession: true } : {}),
           phase: sessionPhase,
           workflowId: pipeline.id,
           provider: agent,
@@ -1523,6 +1526,7 @@ export class BuildPipelineSupervisor {
       provider.registerSession?.(sessionId, {
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        ...(readOnlyReview ? { reviewerSession: true } : {}),
         phase: sessionPhase,
         workflowId: pipeline.id,
         provider: agent,
@@ -1571,13 +1575,11 @@ export class BuildPipelineSupervisor {
         schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA
           ? { producedReviewPackagePlan: true as const }
           : {}),
-        validationHeadAtStart: validationWorktree?.head,
-        validationWorktreeStatusAtStart: validationWorktree?.status,
-        validationUncommittedPathsAtStart: validationWorktree
-          ? validationWorktree.status === "dirty"
-            ? [...validationWorktree.paths]
-            : []
-          : undefined,
+        // The marker Verify reads to choose the typed report over the text.
+        ...(sessionPhase === "address" && dispatchResultKind === PIPELINE_ADDRESS_REPORT_KIND
+          ? { addressReportKind: PIPELINE_ADDRESS_REPORT_KIND }
+          : {}),
+        ...sessionWorkspaceBaselineFields(validationWorktree),
         ...(fixWorktreeFingerprint
           ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
           : {}),
@@ -1632,6 +1634,8 @@ export class BuildPipelineSupervisor {
         mode,
         resultTransport,
         agent,
+        readOnlyReview,
+        policy,
       };
     })().catch((error: unknown) => {
       if (error instanceof ProviderUnavailableError) throw error;
@@ -1651,6 +1655,8 @@ export class BuildPipelineSupervisor {
       mode,
       resultTransport,
       agent,
+      readOnlyReview,
+      policy,
     } = dispatch;
     const resultKind = this.ctx.workflowResultKind(phase, schema === REVIEW_VALIDATION_PLAN_SCHEMA);
     if (resultTransport === "tool-v1" && resultKind && this.ctx.options.workflowResults) {
@@ -1692,7 +1698,7 @@ export class BuildPipelineSupervisor {
         : undefined,
     );
     try {
-      await this.openDispatchWindow(pipeline, requestId);
+      await this.promptDispatch.openDispatchWindow(pipeline, requestId);
     } catch (error) {
       this.ctx.settleArtifactTurn(pipeline, stageSession, requestId);
       throw error;
@@ -1713,6 +1719,7 @@ export class BuildPipelineSupervisor {
           effort,
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
+          ...(readOnlyReview ? readOnlyReviewSendOptions(agent, policy) : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
@@ -1733,7 +1740,7 @@ export class BuildPipelineSupervisor {
         // when the provider proves it never arrived.
         return;
       }
-      await this.closeDispatchWindow(pipeline, requestId);
+      await this.promptDispatch.closeDispatchWindow(pipeline, requestId);
       throw error;
     }
   }
@@ -1881,389 +1888,18 @@ export class BuildPipelineSupervisor {
     await this.dispatchPending(pipeline, provider);
   }
 
-  async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
-    const attempt = pipeline.pendingPromptAttempt;
-    if (!attempt) return;
-    if (
-      (attempt.dispatchVersion !== 1 || attempt.dispatchingAt !== undefined) &&
-      !(await this.resendProvenSafe(pipeline, provider))
-    ) {
-      return;
-    }
-    const schema = attempt.structuredReview
-      ? attempt.phase === "building" || attempt.phase === "fixing"
-        ? attempt.validationPlan === true
-          ? REVIEW_VALIDATION_PLAN_SCHEMA
-          : REVIEW_PREPARATION_RESULT_JSON_SCHEMA
-        : attempt.phase === "reviewing"
-          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
-          : attempt.phase === "verifying"
-            ? VERIFICATION_SCHEMA
-            : undefined
-      : undefined;
-    // A real stage has to carry the selection its session was opened with:
-    // Claude and OpenCode take the model per prompt, so omitting it would retry
-    // on the connection default. Pre-upgrade sessions have no persisted
-    // selection and fall back field-by-field. Stage-less recovery attempts stay
-    // unpinned because no pipeline step owns their prompt.
-    const sessionPhase = sessionPhaseFor(attempt.phase);
-    const session = pipeline.sessions.find(
-      (candidate) => candidate.sdkSessionId === attempt.sessionId,
-    );
-    const resultKind = this.ctx.workflowResultKind(attempt.phase, attempt.validationPlan === true);
-    if (attempt.resultTransport === "tool-v1") {
-      if (!resultKind || !this.ctx.options.workflowResults || !session) {
-        throw new Error("Tool-mode prompt attempt lost its result-slot binding");
-      }
-      await this.ctx.options.workflowResults.prepare({
-        resultKey: attempt.requestId,
-        kind: resultKind,
-        environmentId: pipeline.environmentId,
-        projectId: pipeline.projectId,
-        provider: sessionAgent(pipeline, session),
-        schema,
-      });
-    }
-    const fallbackStep =
-      sessionPhase &&
-      (!session ||
-        (session.model === undefined && !session.modelSelectionResolved) ||
-        session.reasoningEffort === undefined ||
-        session.fastMode === undefined)
-        ? await this.agents.stepSettings(pipeline, sessionPhase)
-        : undefined;
-    const step = !sessionPhase
-      ? undefined
-      : session
-        ? {
-            agent: sessionAgent(pipeline, session),
-            model: session.modelSelectionResolved
-              ? session.model
-              : (session.model ?? fallbackStep?.model),
-            effort: session.reasoningEffort ?? fallbackStep?.effort,
-            fastMode: session.fastMode ?? fallbackStep?.fastMode,
-          }
-        : fallbackStep;
-    // Re-state the mode the session was opened with so a redispatch cannot land
-    // in a different sandbox. Addressing is a writable, independent session.
-    const mode =
-      executionModeOverrideForPhase(attempt.phase) ??
-      (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
-    const agentMcp =
-      attempt.resultTransport === "tool-v1"
-        ? await this.ctx.workflowAgentMcp(
-            pipeline,
-            attempt.requestId,
-            step?.agent,
-            `build pipeline ${attempt.phase} step`,
-          )
-        : undefined;
-    const artifactTurn = this.ctx.beginArtifactTurn(
-      pipeline,
-      session,
-      attempt.requestId,
-      step?.agent ?? (session ? sessionAgent(pipeline, session) : undefined),
-      agentMcp,
-    );
-    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
-    await attachBeforeDispatch(
-      provider,
-      attempt.sessionId,
-      turnAgentMcp
-        ? {
-            agentMcp: turnAgentMcp,
-            ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
-          }
-        : undefined,
-    );
-    try {
-      await this.openDispatchWindow(pipeline, attempt.requestId);
-    } catch (error) {
-      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
-      throw error;
-    }
-    try {
-      await provider.send(
-        attempt.sessionId,
-        attempt.resultTransport === "tool-v1" && resultKind
-          ? `${attempt.prompt}\n\n${workflowResultInstruction(resultKind, attempt.requestId, {
-              capability: agentMcp?.workflowResultCapability,
-            })}`
-          : attempt.prompt,
-        {
-          requestId: attempt.requestId,
-          images: attempt.useTaskImages ? pipeline.taskSnapshot.images : [],
-          schema: attempt.resultTransport === "tool-v1" ? undefined : schema,
-          mode,
-          model: step?.model,
-          effort: step?.effort,
-          ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
-          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
-          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
-          ...(agentMcp && resultKind
-            ? { workflowResultTool: workflowResultToolName(resultKind) }
-            : {}),
-        },
-      );
-      const dispatchedSession = pipeline.sessions.find(
-        (candidate) => candidate.sdkSessionId === attempt.sessionId,
-      );
-      if (dispatchedSession) dispatchedSession.status = "running";
-      delete pipeline.pendingPromptAttempt;
-      delete pipeline.reconnectAttempt;
-      delete pipeline.error;
-      await this.ctx.save(pipeline, pipeline.backendRevision);
-    } catch (error) {
-      if (error instanceof AmbiguousPromptDispatchError) return;
-      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
-      await this.closeDispatchWindow(pipeline, attempt.requestId);
-      throw error;
-    }
+  dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
+    return this.promptDispatch.dispatchPending(pipeline, provider);
   }
 
-  /**
-   * The at-most-once window opens here, durably and just before the send:
-   * from now on a later pass re-sends this id only on the provider's proof
-   * that it never arrived. Every preparation step before it stays retryable.
-   */
-  private async openDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
-    const attempt = pipeline.pendingPromptAttempt;
-    if (attempt?.requestId !== requestId) return;
-    attempt.dispatchingAt = new Date().toISOString();
-    await this.ctx.save(pipeline, pipeline.backendRevision);
-  }
-
-  /**
-   * A send refused before the prompt was written: a retry is a first send.
-   * A failed save leaves the mark, which only costs a proof read.
-   */
-  private async closeDispatchWindow(pipeline: BuildPipeline, requestId: string): Promise<void> {
-    const attempt = pipeline.pendingPromptAttempt;
-    if (attempt?.requestId !== requestId || attempt.dispatchingAt === undefined) return;
-    attempt.dispatchVersion = 1;
-    delete attempt.dispatchingAt;
-    await this.ctx.save(pipeline, pipeline.backendRevision).catch(() => undefined);
-  }
-
-  /**
-   * Whether a prompt attempt that may already have reached the provider can be
-   * sent again under its id. Only the provider's proof that it never arrived
-   * (`absent`) allows it; acceptance settles the attempt as sent, `lost` fails
-   * the stage, and anything else waits within the reconnect deadline and then
-   * fails closed, as the fan-out does (0223). Bridges deduplicate a resend only
-   * while they still hold the id, which a restart or eviction can end.
-   */
-  private async resendProvenSafe(
-    pipeline: BuildPipeline,
-    provider: BuildPipelineProvider,
-  ): Promise<boolean> {
-    const attempt = pipeline.pendingPromptAttempt!;
-    const session = pipeline.sessions.find(
-      (candidate) => candidate.sdkSessionId === attempt.sessionId,
-    );
-    const label = session?.label.toLowerCase() ?? `${attempt.phase} step`;
-    const acceptance = await recoveredDispatchAcceptance(
-      provider,
-      attempt.sessionId,
-      attempt.requestId,
-      attempt.resultTransport === "tool-v1"
-        ? () => this.ctx.options.workflowResults?.structured<unknown>(attempt.requestId)
-        : undefined,
-    );
-    if (acceptance === "absent") return true;
-    if (acceptance === "dispatched" || acceptance === "pending") {
-      if (session) session.status = "running";
-      delete pipeline.pendingPromptAttempt;
-      delete pipeline.reconnectAttempt;
-      delete pipeline.error;
-      await this.ctx.save(pipeline, pipeline.backendRevision);
-      return false;
-    }
-    if (acceptance === "lost") {
-      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
-      throw new Error(
-        `The ${label} dispatch was lost in a provider restart and cannot be resent safely`,
-      );
-    }
-    const elapsed = Date.now() - Date.parse(attempt.dispatchingAt ?? attempt.startedAt);
-    if (elapsed >= this.ctx.reconnectDeadlineMs) {
-      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
-      throw new Error(`The ${label} dispatch acceptance could not be confirmed`);
-    }
-    return false;
-  }
-
-  /**
-   * The baseline is passed in rather than probed here: the same observation has
-   * to reach both the prompt the verifier reads and the session field the guard
-   * later compares against, and two probes could disagree.
-   */
-  async promptFor(
+  /** See {@link BuildPipelineStagePrompts.promptFor}. */
+  promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
     agent: BuildPipelineAgent,
     worktree?: ReviewWorktreeSnapshot,
-  ): Promise<{
-    prompt: string;
-    schema?: JsonSchema;
-    images: BuildPipeline["taskSnapshot"]["images"];
-  }> {
-    const notes = (await this.ctx.storage.kanban.getProjectNotes(pipeline.projectId)).content;
-    const config = await this.ctx.storage.loadConfig();
-    const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
-    const target = repository.prBaseBranch || "main";
-    if (phase === "build") {
-      return {
-        prompt: buildPrompt(pipeline, notes, target),
-        schema:
-          usesReviewFanout(pipeline) || pipeline.reviewPreparation
-            ? undefined
-            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-        images: pipeline.taskSnapshot.images,
-      };
-    }
-    // Address can mutate workspace evidence after review. Check the package
-    // and its artifacts again at every consuming stage, especially verification.
-    if (
-      (phase === "review" || phase === "address" || phase === "verify") &&
-      pipeline.reviewPackage &&
-      "kind" in pipeline.reviewPackage
-    ) {
-      await this.assertReviewPackageIntegrity(pipeline.environmentId, pipeline.reviewPackage);
-    }
-    if (phase === "review") {
-      if (!pipeline.reviewPackage) {
-        throw new Error("Cannot review without an immutable review package");
-      }
-      return {
-        prompt: createDiscoveryPrompt({
-          reviewPackage: pipeline.reviewPackage,
-          reviewInstruction: config.global.reviewInstruction,
-          context: buildPipelineReviewPackageContext(pipeline, notes).context,
-        }),
-        schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-        images: pipeline.taskSnapshot.images,
-      };
-    }
-    if (phase === "address") {
-      if (!pipeline.structuredReview) {
-        throw new Error("Cannot address issues without the structured review");
-      }
-      const sourceSession = [...pipeline.sessions]
-        .reverse()
-        .find((session) => session.phase === "review" && !isSupersededPipelineSession(session));
-      if (!sourceSession) {
-        throw new Error("Cannot address issues without the review session");
-      }
-      const handoff = buildReviewHandoffPrompt({
-        environmentId: pipeline.environmentId,
-        sourceAgent: sessionAgent(pipeline, sourceSession),
-        destinationAgent: agent,
-        sourceSession,
-        sourceTranscript: await this.ctx.transcriptCheckpoints.window(
-          pipeline.id,
-          sourceSession,
-          BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
-        ),
-      });
-      return {
-        prompt: prependReviewHandoff(
-          handoff,
-          addressPrompt(
-            pipeline.structuredReview,
-            addressValidationInstruction(pipeline.reviewPackage, target),
-          ),
-        ),
-        images: [],
-      };
-    }
-    if (phase === "verify") {
-      return {
-        prompt: verificationPrompt(
-          pipeline,
-          notes,
-          target,
-          worktree,
-          await this.latestAddressReport(pipeline),
-        ),
-        schema: VERIFICATION_SCHEMA,
-        images: pipeline.taskSnapshot.images,
-      };
-    }
-    if (phase === "fix") {
-      return {
-        prompt: fixPrompt(
-          pipeline,
-          notes,
-          pipeline.verificationFeedback ?? "The verification did not pass.",
-          target,
-        ),
-        schema:
-          usesReviewFanout(pipeline) || pipeline.reviewPreparation
-            ? undefined
-            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-        images: pipeline.taskSnapshot.images,
-      };
-    }
-    if (phase === "pr") {
-      // A restart that ships again must update the pull request the earlier
-      // Ship opened, never open a second one. An environment PR without an
-      // earlier Ship belongs to a reused environment, not to this pipeline.
-      const shippedBefore = pipeline.sessions.some((session) => session.phase === "pr");
-      const existingPullRequestUrl = shippedBefore
-        ? ((await this.ctx.storage.getEnvironment(pipeline.environmentId))?.prUrl ?? undefined)
-        : undefined;
-      const forcePush = forcePushUpstream(pipeline);
-      return {
-        prompt: prPrompt(target, {
-          ...(existingPullRequestUrl ? { existingPullRequestUrl } : {}),
-          ...(forcePush ? { forcePushUpstream: forcePush } : {}),
-        }),
-        images: [],
-      };
-    }
-    return { prompt: resolveConflictsPrompt(target), images: [] };
-  }
-
-  /**
-   * The latest assistant text of this round's address stage: what it fixed after the
-   * recorded validation, what it re-checked, and which failures it excused.
-   * Only an address session after the latest review counts, so an earlier
-   * round's report is never mistaken for evidence about this one. Follow-up
-   * replies remain unverified claims, just like the original report.
-   */
-  private async latestAddressReport(pipeline: BuildPipeline): Promise<string | undefined> {
-    let address: PipelineSession | undefined;
-    let foundReview = false;
-    for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
-      const session = pipeline.sessions[index]!;
-      if (session.iteration !== pipeline.iteration) break;
-      if (session.phase === "review") {
-        foundReview = true;
-        break;
-      }
-      if (!address && session.phase === "address") address = session;
-    }
-    if (!address || !foundReview) return undefined;
-    // Display transcripts are best-effort. Never substitute an older report
-    // when the latest attempt could not be checkpointed or its tail is missing.
-    if (address.transcriptCheckpointError) return undefined;
-    try {
-      const transcript = await this.ctx.transcriptCheckpoints.window(
-        pipeline.id,
-        address,
-        LAST_ASSISTANT_TEXT_READ_LIMIT,
-      );
-      if (transcript.entries.at(-1)?.index !== transcript.total - 1) return undefined;
-      // window() also includes the first row for handoffs. A disjoint first
-      // row must not become a fallback report when the bounded tail has none.
-      const tailStart = Math.max(0, transcript.total - LAST_ASSISTANT_TEXT_READ_LIMIT);
-      return lastAssistantText(
-        transcript.entries.filter(({ index }) => index >= tailStart).map(({ message }) => message),
-      );
-    } catch {
-      return undefined;
-    }
+  ): Promise<StagePrompt> {
+    return this.stagePrompts.promptFor(pipeline, phase, agent, worktree);
   }
 
   async finishReview(
@@ -2275,9 +1911,19 @@ export class BuildPipelineSupervisor {
     if (!requestId) throw new Error("Review result key is missing");
     const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
+      try {
+        await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
+      } catch (error) {
+        // A report the read-only guard kept refusing never arrives. Name the
+        // repairable change that blocked it; an unavailable comparison keeps
+        // the original missing-result error.
+        await this.readOnly.certifySession(pipeline, session, { repairableOnly: true });
+        throw error;
+      }
       return;
     }
+    // The report is only usable from the worktree the reviewer was given.
+    await this.readOnly.certifySession(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const parsed = safeParseStructuredReviewReport(result.value, {
@@ -2294,12 +1940,8 @@ export class BuildPipelineSupervisor {
     pipeline.structuredReview = report;
     retainRoundReviewReport(pipeline, session, report);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
-    if (report.issues.length || report.testCoverageGaps.length) {
-      await this.startStage(pipeline, "address", "addressing");
-      await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
-      return;
-    }
-    await this.startStage(pipeline, "verify", "verifying");
+    const next = stageAfterReview(report);
+    await this.startStage(pipeline, next.sessionPhase, next.phase);
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
 }

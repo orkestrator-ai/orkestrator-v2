@@ -47,6 +47,7 @@ import {
   readSessionCommandCatalogue,
 } from "./commands.js";
 import { assertAuthenticated, NOT_AUTHENTICATED_MESSAGE, PI_SIGN_IN } from "./credentials.js";
+import { piWithheldGitHubCredential, withheldShellToolDefinitions } from "./github-credential.js";
 import { requestToolApproval } from "./interactions.js";
 import {
   closePiMcp,
@@ -502,6 +503,9 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
   await closePiMcp(state);
   const runtime = await modelRuntime();
   const agentDir = agentDirectory() ?? getAgentDir();
+  // A session whose policy denies GitHub writes (every graph agent node,
+  // item 209) runs its shell commands and MCP servers without the credential.
+  const withheld = await piWithheldGitHubCredential(state.policy);
   await preparePiMcp(state, { agentDir });
   const createRuntime = async ({
     cwd,
@@ -532,6 +536,14 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       services,
       sessionManager,
       sessionStartEvent,
+      ...(withheld
+        ? {
+            customTools: withheldShellToolDefinitions(cwd, withheld, {
+              commandPrefix: settingsManager.getShellCommandPrefix(),
+              shellPath: settingsManager.getShellPath(),
+            }),
+          }
+        : {}),
       ...(model ? { model } : {}),
       thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
     });

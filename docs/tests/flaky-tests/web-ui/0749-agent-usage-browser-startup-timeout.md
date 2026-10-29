@@ -25,3 +25,33 @@ The nine-worker `mise run test:browser` run repeated failures in this owner; the
 ## Shared Codex state review fixes — 2026-10-26
 
 Both mobile cases reached 30 seconds again in the nine-worker component browser suite on `74841142b`. The complete unchanged owner passed all four cases with one worker in 69.3 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-agentusage -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/playwright/codex-auth-owner-agentusage`. The repository suite and other browser checks were running concurrently. Original command, suite evidence and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md); no cause or fix is established.
+
+## Comparison-base review validation — 2026-10-29
+
+The exact preparation-command rerun,
+`mise run test:logged -- --name browser -- mise run test:browser`, again timed
+out both mobile cases during reload (30 seconds each). The separate complete
+owner command,
+`mise run test:logged -- --name unrelated-browser-usage-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/playwright/diff-base-usage-owner`,
+also timed out all four cases (exit 1, 148.1 seconds logged) while the broad
+browser suite was still running on the shared fixture server. This observation
+therefore does not establish an isolated pass or a cause; the owner remains
+unresolved. No usage-card implementation, assertion, timeout or skip changed.
+The comparison-base flow passed separately on both viewports before this run.
+
+Evidence: `/tmp/orkestrator-test-run.uKKt7U/unrelated-browser-usage-owner.log.gz`
+and its `summary.json`; the broad rerun logs are under
+`/tmp/orkestrator-test-run.OKCGVn/` (compressed on completion). Traces for the
+owner are under `output/playwright/diff-base-usage-owner/`.
+
+The broad rerun exited 1 at its 1,800,000 ms group deadline (1,800.1 seconds
+logged), after starting 960 of 1,040 component cases and reporting 22 failures
+outside the comparison-base change. There was no completed suite summary;
+counts of started cases are not counts of passes. The new comparison-base
+scenario ran on both mobile and desktop without a reported failure, and its
+separate targeted two-viewport run passed. The browser command's initial e2e
+typecheck passed (2,047 files). Its chained public-site suite was not reached.
+Final evidence is `/tmp/orkestrator-test-run.OKCGVn/browser.log.gz` and
+`/tmp/orkestrator-test-run.OKCGVn/summary.json`. This broad command remains
+incomplete/non-green; unrelated browser failures have not been reclassified as
+flakes or repaired by this change.

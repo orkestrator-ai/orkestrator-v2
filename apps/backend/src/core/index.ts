@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
@@ -160,7 +161,10 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import { coordinatorProviderQualification } from "./coordinator-providers.js";
+import {
+  coordinatorProviderQualification,
+  defaultCoordinatorHostCapabilities,
+} from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -179,7 +183,38 @@ import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
-import { createPipelineEnvironmentGit } from "./commands-review.js";
+import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
+import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
+import { GraphTemplateService } from "./graph-template-service.js";
+import { GraphArtifactStore } from "./graph-artifacts.js";
+import { GraphBranchWorktreeJanitor, GraphBranchWorktrees } from "./graph-branch-worktrees.js";
+import { createGraphGateExecutor } from "./graph-node-gate.js";
+import { createGraphMergeExecutor } from "./graph-node-merge.js";
+import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
+import { GraphRunAttention } from "./graph-run-attention.js";
+import { GraphRunService } from "./graph-run-service.js";
+import { GraphRunLaunchService } from "./graph-run-launch.js";
+import {
+  configuredMultiReviewEngine,
+  MultiReviewGraphEngine,
+} from "./multi-review-graph-engine.js";
+import { launchSettingsTiers } from "./control-shared-actions.js";
+import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
+import {
+  assertNoOtherWorkflowWriting,
+  withWorkspaceCodeRewindReservation,
+} from "./workspace-code-rewind.js";
+import { WorkspaceWriters } from "./workspace-writers.js";
+import { GraphNodeSystemExecutor } from "./graph-node-system.js";
+import { createGraphEnvironmentShell } from "./graph-system-environment.js";
+import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
+import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
+import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
+import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
+import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
+import { GraphDescribeService } from "./graph-describe-service.js";
+import { GraphMockRuns } from "./graph-mock-launch.js";
+import { installGraphMockExecutors } from "./graph-mock-provider.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -199,6 +234,21 @@ export class OrkestratorBackend {
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
   private readonly userCommands: UserCommandService;
+  private readonly graphTemplates: GraphTemplateService;
+  /** Graph runs on the keyed `graph-run` domain (items 202, 203). */
+  private readonly graphRuns: GraphRunService;
+  private readonly graphSystemExecutor: GraphNodeSystemExecutor;
+  private readonly graphAgents: GraphAgentWiring;
+  /** Launches saved templates from every surface (item 214). */
+  private readonly graphLaunches: GraphRunLaunchService;
+  /** Multi Review on the graph runtime (item 301); set once the graph services exist. */
+  private multiReviewGraph: MultiReviewGraphEngine | null = null;
+  private readonly graphDescribe: GraphDescribeService;
+  private readonly graphDescribeProviders: GraphAgentProviders;
+  /** Mock run launches and their retention (item 213). */
+  private readonly graphMock: GraphMockRuns;
+  /** Waiting graph runs in the sidebar: activity and attention (item 208). */
+  private readonly graphRunAttention: GraphRunAttention;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -564,6 +614,8 @@ export class OrkestratorBackend {
       announce: (environmentId, tabId) => storage.announceUserCommands(environmentId, tabId),
     });
     context.userCommands = this.userCommands;
+    this.graphTemplates = new GraphTemplateService({ storage });
+    context.graphTemplates = this.graphTemplates;
     this.agentHumanPrompts = new AgentHumanPromptMonitor({
       prompts: humanPrompts,
       workingSessions: async () => {
@@ -1030,6 +1082,9 @@ export class OrkestratorBackend {
       return false;
     });
     context.projectGit = this.projectGit;
+    // D3 across engines: graph runs and Build Pipelines consult one projection
+    // of who uses each checkout (bespoke Multi Reviews are tracked too).
+    const workspaceWriters = new WorkspaceWriters(storage);
     this.buildPipelines = new BuildPipelineService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1054,6 +1109,7 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        workspaceWriters,
       },
     );
     context.buildPipelines = this.buildPipelines;
@@ -1088,9 +1144,200 @@ export class OrkestratorBackend {
             session.providerSessionId,
           );
         },
+        // Multi Review on the graph runtime (item 301): the setting, its
+        // override, and the graph services wired below.
+        graph: {
+          engine: async () =>
+            configuredMultiReviewEngine((await storage.loadConfig()).global.multiReviewEngine),
+          runtime: () => this.multiReviewGraph,
+        },
       },
     );
     context.multiReviews = this.multiReviews;
+    // Node executors (items 204–208) register on `graphRuns.executors`.
+    const invokeCommand = async <T>(command: string, args: Record<string, unknown> = {}) => {
+      const handler = this.commands.get(command);
+      if (!handler) throw new Error(`Unknown backend command: ${command}`);
+      return (await handler(args, context)) as T;
+    };
+    const graphArtifacts = new GraphArtifactStore({
+      storage,
+      fence: context.runtime.environments.fence,
+    });
+    // Isolated branch worktrees (item 403): created by the agent executor,
+    // removed by `select-workspace` and the run service's janitor.
+    const graphBranchWorktrees = new GraphBranchWorktrees({
+      storage,
+      fence: context.runtime.environments.fence,
+    });
+    this.graphRuns = new GraphRunService(storage, {
+      artifacts: graphArtifacts,
+      branchWorktrees: new GraphBranchWorktreeJanitor({ worktrees: graphBranchWorktrees, storage }),
+      workflowAdmission: this.workflowAdmission,
+      provisioner: new GraphRunEnvironmentProvisioner({
+        storage,
+        invoke: invokeCommand,
+        // Run inputs a launch on a new environment deferred to it (item 214).
+        workspaceHead: async (environment) => ({
+          branch: environment.branch,
+          headRef: (
+            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ])
+          ).trim(),
+        }),
+      }),
+      externalWorkspace: {
+        ready: () => workspaceWriters.ready(),
+        hold: (environmentId) => workspaceWriters.externalHold(environmentId),
+      },
+      // Code rewinds (item 210) share the pipeline's Git port and reservation.
+      environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      codeRewindReservation: (run, operation) =>
+        withWorkspaceCodeRewindReservation({
+          fence: context.runtime.environments.fence,
+          storage,
+          environmentId: run.environmentId!,
+          assertQuiet: async () => {
+            await assertNoOtherWorkflowWriting(storage, run.environmentId!, { graphRunId: run.id });
+            if (await this.nativeAgents.hasActiveCheckoutWork(run.environmentId!)) {
+              throw new Error(
+                "An agent may still write to this environment. Stop it before rewinding code.",
+              );
+            }
+          },
+          run: operation,
+        }),
+    });
+    workspaceWriters.setGraphHoldProbe((environmentId) =>
+      this.graphRuns.workspaceHold(environmentId),
+    );
+    // Gates and merges are deterministic (item 206); mock runs use them too.
+    this.graphRuns.executors.register(createGraphGateExecutor());
+    this.graphRuns.executors.register(createGraphMergeExecutor());
+    // Human nodes (item 208): a person approves, edits or chooses; mock runs use it too.
+    this.graphRuns.executors.register(createGraphHumanExecutor());
+    context.graphHumanAnswers = new GraphHumanAnswers({
+      runs: this.graphRuns,
+      artifacts: graphArtifacts,
+    });
+    this.graphRunAttention = new GraphRunAttention(storage);
+    context.graphRuns = this.graphRuns;
+    // System nodes (item 207): backend side effects, journaled per run.
+    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
+    this.graphSystemExecutor = new GraphNodeSystemExecutor({
+      storage,
+      invoke: invokeCommand,
+      shell: graphShell,
+      prMonitor: {
+        state: (environmentId) =>
+          context.runtime.prMonitor.service
+            .snapshot()
+            .find((entry) => entry.environmentId === environmentId) ?? null,
+        subscribe: (listener) =>
+          context.runtime.prMonitor.onEvent((event) => listener(event.environmentId)),
+        watch: (environmentId) =>
+          invokeCommand<void>("pr_monitor_watch", { environmentId, mode: "normal" }),
+      },
+      requestObservation: (runId, activationKey) =>
+        this.graphRuns.requestObservation(runId, activationKey),
+      owner: `backend-${randomUUID()}`,
+      branchWorktrees: graphBranchWorktrees,
+    });
+    this.graphRuns.executors.register(this.graphSystemExecutor);
+    // Mock runs (item 213): mock agent, system and human executors; no
+    // sessions, no side effects. Gates and merges above serve them too.
+    const graphMockOwner = `backend-${randomUUID()}`;
+    installGraphMockExecutors(this.graphRuns.executors, { storage, owner: graphMockOwner });
+    this.graphMock = new GraphMockRuns({
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      storage,
+    });
+    context.graphMock = this.graphMock;
+    // Agent nodes run on the shared agent branch runner (item 204).
+    this.graphAgents = installGraphAgentExecutor({
+      graphRuns: this.graphRuns,
+      artifacts: graphArtifacts,
+      storage,
+      invoke: invokeCommand,
+      workflowResults: this.workflowResults,
+      agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      toolResultsEnabled: (agent) => this.workflowResultRollout.allows(agent, "graph-output"),
+      refreshToolResults: () => this.workflowResultRollout.refresh(),
+      ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
+      environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      branchWorktrees: graphBranchWorktrees,
+      // The guards (item 209): the worktree probe defaults to `invoke`.
+      lsRemote: (environment, args) =>
+        graphShell.remoteGit(environment, "ls-remote", args, { timeoutMs: 60_000 }),
+      systemPushes: async (runId) =>
+        new Set(
+          (await storage.graphEffects.listGraphEffects(runId)).flatMap((effect) => {
+            const commit = graphPushedCommitOfEffectKey(effect.key);
+            return commit ? [commit] : [];
+          }),
+        ),
+      projectNotes: async (projectId) =>
+        (await storage.kanban.getProjectNotes(projectId)).content || undefined,
+      artifactDispatch,
+      // The run view's activation transcripts (item 211).
+      captureTranscript: createGraphRunTranscriptCapture({ storage }),
+    });
+    context.graphQuestions = this.graphAgents.questions;
+    // Every launch surface (item 214) goes through one service.
+    this.graphLaunches = new GraphRunLaunchService({
+      storage,
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      settingsTiers: (projectId, environment) =>
+        launchSettingsTiers(
+          invokeCommand,
+          projectId,
+          environment ? (environment as unknown as Record<string, unknown>) : undefined,
+        ),
+      // Result tools when the rollout admits them, structured output otherwise.
+      structuredResults: (platform) =>
+        this.workflowResultRollout.allows(platform, "graph-output") ||
+        STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(platform),
+      workspaceHead: async (environment) => {
+        const headRef = (
+          await graphShell.git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
+        ).trim();
+        return { branch: environment.branch, headRef };
+      },
+      linkTicket: async (taskId, environmentId) => {
+        await invokeCommand("update_kanban_task", { taskId, environmentId });
+      },
+      host: () => defaultCoordinatorHostCapabilities(),
+    });
+    context.graphLaunches = this.graphLaunches;
+    this.multiReviewGraph = new MultiReviewGraphEngine({
+      launches: this.graphLaunches,
+      runs: this.graphRuns,
+      storage,
+    });
+    // "Describe a graph" (item 215): backend-owned designer agent jobs.
+    this.graphDescribeProviders = new GraphAgentProviders({
+      connection: (environment, agent) =>
+        graphAgentBridgeConnection(invokeCommand, agent, environment),
+      dependencies: { workflowResults: this.workflowResults },
+    });
+    this.graphDescribe = new GraphDescribeService({
+      storage,
+      providers: this.graphDescribeProviders,
+      workflowResults: this.workflowResults,
+      ...(resolveAgentToolConnection
+        ? { agentTools: { workflowResultConnection: resolveAgentToolConnection } }
+        : {}),
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      rollout: this.workflowResultRollout,
+      ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
+    });
+    context.graphDescribe = this.graphDescribe;
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -1140,8 +1387,21 @@ export class OrkestratorBackend {
     // discovery so nothing that commits during startup is missed. Each wake
     // reaches only the indexed keys of one environment; a durable record the
     // index does not hold yet is found by that owner's discovery instead.
-    this.workflowResults.onAccepted(({ environmentId }) => {
-      this.wakeWorkflows(environmentId, "result-accepted");
+    // Graph outputs whose type needs the repository (a workspace commit, a
+    // file list) are checked through the same environment Git port.
+    this.workflowResults.setEnvironmentValidator(
+      gitEnvironmentValidator(
+        createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        {
+          verifyReviewPackage: (environmentId, reference) =>
+            verifyEnvironmentReviewPackage(environmentId, reference, context),
+        },
+      ),
+    );
+    this.workflowResults.onAccepted((event) => {
+      this.wakeWorkflows(event.environmentId, "result-accepted");
+      // Graph runs map the slot to its one owning run instead.
+      this.graphRuns.resultAccepted(event);
     });
     storage.addResourceChangeListener((change) => {
       // Readiness and execution identity (status, setup, bridge port/token)
@@ -1168,6 +1428,7 @@ export class OrkestratorBackend {
       this.featurePlanning,
       this.buildPipelines,
       this.multiReviews,
+      this.graphRuns,
     ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
   }
@@ -1579,6 +1840,30 @@ export class OrkestratorBackend {
     });
     await this.multiReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore multi reviews:", error);
+    });
+    // Non-blocking: the first discovery recovers every run with an obligation.
+    await this.graphRuns.init().catch((error) => {
+      console.warn("[backend] Failed to restore graph runs:", error);
+    });
+    // Runs that ended before they had an environment are bounded (item 214).
+    void this.graphLaunches.sweep().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to sweep graph runs without an environment:",
+        error instanceof Error ? error.name : "error",
+      );
+    });
+    await this.graphDescribe.init().catch((error) => {
+      console.warn("[backend] Failed to restore graph describe jobs:", error);
+    });
+    // Environment-less mock runs of deleted projects (item 213); off the startup path.
+    void this.graphMock.sweepOrphans().catch(() => undefined);
+
+    // Waiting runs light the sidebar again after a restart; runs in the background.
+    void this.graphRunAttention.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore graph run attention:",
+        error instanceof Error ? error.message : error,
+      );
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
@@ -2005,6 +2290,12 @@ export class OrkestratorBackend {
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
+  private requireGraphLaunches() {
+    const launches = this.context.graphLaunches;
+    if (!launches) throw new Error("Graph launches are unavailable");
+    return launches;
+  }
+
   /** The scheduler and the executor that runs each fire as its owner. */
   private createScheduledJobs(storage: StorageService): ScheduledJobService {
     const handlers = publicActionHandlers();
@@ -2017,6 +2308,11 @@ export class OrkestratorBackend {
         coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
+      // Scheduled graph launches (item 214) go through the one launch service.
+      graphs: {
+        launch: (request, origin) => this.requireGraphLaunches().launch(request, origin),
+        options: (input) => this.requireGraphLaunches().options(input),
+      },
       ...(controlMcp.callCoordinatorTool &&
       controlMcp.listCoordinatorTools &&
       controlMcp.credentialPolicy
@@ -2205,7 +2501,10 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.graphRunAttention.stop();
     this.agentHumanPrompts.stop();
+    // Non-recursive project-template watches: closing them never blocks.
+    this.graphTemplates.shutdown();
     // A user's `!` commands end with the backend; their processes must not outlive it.
     const userCommandsStopped = this.userCommands.shutdown().then(
       () => ({ stopped: true as const }),
@@ -2246,6 +2545,20 @@ export class OrkestratorBackend {
           await this.multiReviews.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain multi reviews:", error);
+        }
+        this.graphSystemExecutor.shutdown();
+        try {
+          await this.graphRuns.shutdown();
+          this.graphAgents.dispose();
+          this.graphMock.dispose();
+        } catch (error) {
+          console.warn("[backend] Failed to drain graph runs:", error);
+        }
+        try {
+          await this.graphDescribe.shutdown();
+          this.graphDescribeProviders.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain graph describe jobs:", error);
         }
         try {
           await this.featurePlanning.shutdown();

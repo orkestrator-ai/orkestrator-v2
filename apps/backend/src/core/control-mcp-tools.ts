@@ -132,6 +132,11 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["cancel_multi_review", "multi-review"],
   ["address_multi_review", "multi-review"],
   ["custom_fix_multi_review", "multi-review"],
+  // Saved graph templates (item 214, D6): run, never author.
+  ["list_graph_templates", "graphs"],
+  ["launch_graph", "graphs"],
+  ["get_graph_run", "graphs"],
+  ["cancel_graph_run", "graphs"],
   ["list_mailboxes", "mail"],
   ["send_message", "mail"],
   ["read_messages", "mail"],
@@ -162,6 +167,7 @@ export function coordinatorRoleCapabilities(role: "main" | "side"): string[] {
         "jobs",
         "build-pipelines",
         "multi-review",
+        "graphs",
         "mail",
         "schedules",
       ];

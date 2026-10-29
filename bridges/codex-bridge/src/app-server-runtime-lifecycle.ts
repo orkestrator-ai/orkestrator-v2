@@ -40,6 +40,7 @@ import {
   isRefusedLoginError,
   nextThreadAuthNotice,
   refusedLoginNotice,
+  withRefusedLoginKind,
 } from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
@@ -785,6 +786,14 @@ export class CodexRuntimeLifecycle {
       }
       return;
     }
+    if (event.kind === "account.loginKind") {
+      // The refusal's own account read answers after the failed turn has
+      // already raised the notice; name the login it was about.
+      for (const context of this.ctx.registry.listThreads()) {
+        this.setThreadAuthNotice(context, withRefusedLoginKind(context.authNotice, event.login));
+      }
+      return;
+    }
     if (event.kind === "account.reload.requested") {
       void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
         console.warn(
@@ -800,16 +809,12 @@ export class CodexRuntimeLifecycle {
        * replacement: the generated protocol says clients must merge available
        * values into the last full snapshot, and that absent nullable metadata
        * "does not clear a previously observed value". Assigning wholesale meant
-       * an update carrying only `secondary` erased the primary window, and one
-       * omitting `credits` erased the balance.
+       * an update carrying only `secondary` erased the primary window.
        */
       this.ctx.accountRateLimits = mergeRateLimitWindows(
         this.ctx.accountRateLimits,
         event.rateLimits,
       );
-      if (event.credits) {
-        this.ctx.accountCredits = { ...this.ctx.accountCredits, ...event.credits };
-      }
       for (const [threadId, usage] of this.ctx.usageByThread) {
         const sessionIds = this.ctx.sessionIdsForThread(threadId);
         // A thread nobody can address any more still has an entry here only until
@@ -819,10 +824,9 @@ export class CodexRuntimeLifecycle {
         const merged = {
           ...usage,
           rateLimits: this.ctx.accountRateLimits,
-          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             usage.account,
-            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits),
           ),
           updatedAt: new Date(this.ctx.now()).toISOString(),
         };
@@ -979,10 +983,9 @@ export class CodexRuntimeLifecycle {
           ...(this.ctx.accountRateLimits.length > 0
             ? { rateLimits: this.ctx.accountRateLimits }
             : {}),
-          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             previous?.account,
-            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits),
           ),
         };
         this.ctx.usageByThread.set(threadId, usage);
@@ -1158,7 +1161,11 @@ export class CodexRuntimeLifecycle {
         else if (event.status === "failed" && isRefusedLoginError(event.error)) {
           this.setThreadAuthNotice(
             context,
-            refusedLoginNotice(context.authNotice, () => crypto.randomUUID()),
+            refusedLoginNotice(
+              context.authNotice,
+              this.ctx.options.engine.getAccountLoginKind(),
+              () => crypto.randomUUID(),
+            ),
           );
         }
         this.discardOutlivingCommandWindows(turn);

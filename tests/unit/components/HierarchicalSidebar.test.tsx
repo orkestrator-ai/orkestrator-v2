@@ -264,7 +264,12 @@ describe("HierarchicalSidebar", () => {
       });
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       act(() => useMachineViewStore.getState().setGrouping("machine"));
-      fireEvent.contextMenu(await screen.findByRole("button", { name: /^Project One/i }));
+      const machineHeading = await screen.findByRole("button", { name: /^Project One/i });
+      // By machine, this window's projects lead with its home too.
+      const machineHome = within(machineHeading).getByTestId("machine-home-icon");
+      expect(machineHome.getAttribute("data-machine-color")).toBe("violet");
+      expect(machineHeading.firstElementChild === machineHome).toBe(true);
+      fireEvent.contextMenu(machineHeading);
       expect(screen.getByText("Add to Folder")).toBeTruthy();
     } finally {
       view?.unmount();
@@ -560,6 +565,15 @@ describe("HierarchicalSidebar", () => {
       cleanup();
       window.orkestrator = originalApi;
     }
+  });
+
+  test("renders a local project icon outside federation", () => {
+    const icon = "data:image/png;base64,YQ==";
+    projectsValue = [{ ...project, icon }];
+    render(<HierarchicalSidebar />);
+    const row = screen.getByRole("button", { name: /^Project One/ });
+    expect(within(row).getByTestId("project-icon").getAttribute("src")).toBe(icon);
+    expect(within(row).queryByTestId("machine-home-icon")).toBeNull();
   });
 
   test("shows a project and environment search bar under the host switcher", () => {

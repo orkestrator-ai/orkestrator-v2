@@ -10,7 +10,7 @@ import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
-import { TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
+import { TEST_FIX_RESULT, TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 import {
   cleanReview,
   mutateStored,
@@ -75,7 +75,9 @@ const reviewAndFailEveryRound = (provider: FakeProvider) => {
         ? reviewNaming(sessionId)
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
-          : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
+          : phase === "address"
+            ? TEST_FIX_RESULT
+            : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
     };
   };
 };

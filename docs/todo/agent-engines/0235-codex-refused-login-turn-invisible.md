@@ -3,7 +3,12 @@
 Checked against `main` at `93018933` (2026-10-26), on branch
 `todo-0003-agent-accounts-sign-in-7ea5f29c4c61`. Both code items done on
 2026-10-27 (branch `todo-0235-codex-refused-login-turn-daa0f536ee31`, base
-`863b5782`), and the live check passed up to the sign-in itself.
+`863b5782`). Reworked on 2026-10-29 (branch
+`todo-0235-codex-refused-login-2b095027e71e`, base `79f3bc97`): the notice now
+names the refused login, a six-platform reload test was added, the refresh
+failure shape was read from the 0.164.0 binary, and a live run proved that
+replacing the key clears the banner. Only a person approving a real ChatGPT
+sign-in is left.
 
 ## Task analysis
 
@@ -11,11 +16,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Render a failed turn's terminal error row**: code item 1, find why the projection's `native-terminal:error:` row is not shown, fix it, test it after a reload, and check the other providers. Status: open.
-2. **Raise the `auth` notice for a refused Codex login**: code item 2, keep `httpStatusCode` and set `needs-auth` on a 401. Status: open.
-3. **Which sign-in a 401 on an API key offers**: the open question. Status: open.
-4. **ChatGPT refresh failure shape**: the "Needs verification" item, whether a failed ChatGPT refresh also ends as `httpConnectionFailed`/401 with no `authRecovery*` on 0.164. Status: open.
-5. **Live qualification**: a made-up key in a `dev:test` profile, then reload, sign in and confirm the banner clears. Status: open (depends on 1 and 2).
+1. **Render a failed turn's terminal error row**: code item 1, find why the projection's `native-terminal:error:` row is not shown, fix it, test it after a reload, and check the other providers. Status: done (2026-10-27; six-platform reload test 2026-10-29).
+2. **Raise the `auth` notice for a refused Codex login**: code item 2, keep `httpStatusCode` and set `needs-auth` on a 401. Status: done (2026-10-27).
+3. **Which sign-in a 401 on an API key offers**: the open question. Status: done (2026-10-29: the notice names the login; an API key is pointed at `codex login --with-api-key` and still offered the ChatGPT sign-in).
+4. **ChatGPT refresh failure shape**: the "Needs verification" item, whether a failed ChatGPT refresh also ends as `httpConnectionFailed`/401 with no `authRecovery*` on 0.164. Status: done from the 0.164.0 binary and the protocol (medium confidence); the exact `codexErrorInfo` of the final failure is left under Needs verification until it is seen live.
+5. **Live qualification**: a made-up key in a `dev:test` profile, then reload, sign in and confirm the banner clears. Status: open. The error row, the banner after a reload, and the banner clearing after the key is replaced all passed live (2026-10-29). Clearing after a ChatGPT sign-in needs a person to approve it.
 
 ### 1. Render a failed turn's terminal error row
 
@@ -180,59 +185,198 @@ no answer, no error row and no sign-in prompt, after a reload too.
   passed. The turn failed in under a second here rather than after ten
   retries.
 
+- **The notice names the refused login (item 3, 2026-10-29).** The engine
+  keeps the login kind from every signed-in `account/read`
+  (`getAccountLoginKind`) and emits `account.loginKind` when it changes. A
+  refused turn raises "Codex's API key was refused. Replace it with codex
+  login --with-api-key, or sign in to Codex with ChatGPT instead." for an API
+  key, "Codex's ChatGPT login was refused. Sign in to Codex again to keep
+  working." for a ChatGPT login, and the generic wording before any answer.
+  The refusal's own `account/read` usually answers after the turn has failed,
+  so `account.loginKind` rewords a notice already shown, keeping its
+  occurrence (`withRefusedLoginKind`). The banner still offers **Sign in to
+  Codex**, which is the ChatGPT sign-in.
+- **Cross-provider render test (item 1, 2026-10-29).**
+  `AgentNativeTab.progressive.test.tsx` renders a failed turn for Claude,
+  Codex, Cursor, Grok, OpenCode and Pi, on first load and after a reload, and
+  checks the reason shows exactly once (OpenCode's from its own inline row).
+- **What a failed ChatGPT refresh looks like (item 4).** Read from the 0.164.0
+  binary and the generated protocol; not seen live. Medium confidence.
+  - A ChatGPT login has recovery steps; an API key has none. The binary
+  carries `No more recovery steps available.`, the refresh reason
+  `unauthorized_recovery` (beside `scheduled` and `forced`), and
+  `AuthRecoveryStarted`/`AuthRecoveryCompleted` with outcomes
+  `recovery_succeeded`, `recovery_failed_permanent` and
+  `recovery_failed_transient`. So a 401 on a ChatGPT login starts Codex's
+  recovery (reload `auth.json`, then refresh) and sends
+  `modelProvider/authRecoveryStarted` and `…Completed`. An API key cannot
+  recover and fails the turn straight away, which is what the 2026-10-26 and
+  2026-10-29 live runs showed.
+  - When the refresh is refused, the turn ends with `CodexErr::RefreshTokenFailed`
+  (in the binary's error list) and one of its messages, for example "Your
+  access token could not be refreshed because your refresh token was already
+  used. Please log out and sign in again." `authRecoveryCompleted` carries a
+  message too, and `RENEWAL_FAILED` matches both ("could not", "log out … again").
+  - Covered either way. A failed completion keeps a `needs-auth` notice
+  (`nextThreadAuthNotice`). A turn failed with `unauthorized`, or with a 401
+  on any status-carrying variant, raises the refused-login notice, now worded
+  for ChatGPT. A transient refresh failure with no 401 locks nothing.
+  - Not established: which `codexErrorInfo` the final turn failure carries. It
+  is probably `unauthorized` (the generated enum has it, and nothing else
+  fits `RefreshTokenFailed`), but the binary's strings cannot show the mapping.
+- **Live, 2026-10-29.** Profile `qa-0235b` (`dev:test`, Codex 0.164.0, seeded
+  from a throwaway `CODEX_HOME` holding a made-up `sk-proj-…` key). The turn
+  failed in under a second with `invalid_api_key`. After a reload the tab
+  showed the error row and the banner, worded for the API key. The spec then
+  wrote a second made-up key into the profile's own
+  `agent-credentials/codex/auth.json`, as `codex login --with-api-key` stores
+  it, and reloaded. The `auth` notice left the projection and the banner was
+  gone, with no sign-in (`ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` in
+  `codex-refused-login-live.spec.ts`).
+- **Seen in passing.** The failed turn raised the "Agent finished: The agent
+  completed its work." toast. Unread reasons have no failure case; see
+  [0940](../cross-cutting/0940-failed-turn-reads-as-completed.md).
+
 ## Outstanding work
 
 ### Qualification
 
-- In the same kind of profile, sign in from the banner (or store a valid key
-  through Settings) and confirm the banner clears. The clearing paths are
-  proved only by bridge tests (`account/login/completed` with `success: true`,
-  and a completed turn): approving a ChatGPT sign-in needs a person, and no
-  valid key was used.
+- In the same kind of profile, sign in from the banner and confirm the banner
+  clears. That needs a person to approve a ChatGPT sign-in. Replacing the key
+  in `CODEX_HOME` was proved live on 2026-10-29. The sign-in path
+  (`account/login/completed` with `success: true`) and a completed turn are
+  proved by bridge tests only.
 
 ## Assumptions and decisions
 
-- **Where the progressive path gets the rows (item 1).** Options: (a) append
-  them to the progressive transcript read; (b) carry them on the progressive
-  state view and place them after the transcript in the web; (c) have the web
-  build rows from `turn.error`. Chose (b). The transcript read never reads
-  session state (adding that read costs a second bridge call per poll), and
-  its tokens, deltas and persisted restart preview would then hold a
-  transient state row. (c) would duplicate the backend's ids and miss notices.
-  Pros: one builder, the state token already moves when the error changes, the
-  transcript view stays the provider's rows. Cons: a new optional field on the
-  state view and the projection, and the web must carry it across transcript
-  reads (done in `applyProgressiveTranscript`).
-- **Duplicate failures.** Options: show both the Codex/Pi status line and the
-  terminal row; drop the terminal row for Codex and Pi wholesale; drop it only
-  when the last row's error status line states the same failure. Chose the
-  last, in a shared helper both paths use. Dropping it per platform would hide
-  the bridge's own failures that have no status line (a restart mid-turn, a
-  rejected structured result). The match is "the error contains the status
-  text", minus a trailing ellipsis, so a bounded or JSON-reduced line still
-  matches; a stop row is never dropped this way.
-- **Kept stop results stay off the state view.** `recordStopNotice` is consumed
-  by the full projection the stop mutation answers with; putting it on the
-  state view without consuming it would leave a stale "stopped" row on a tab
-  that never makes a full read. Provider `stopped` notices (OpenCode) do travel.
-- **Which errors raise the notice (item 2).** `unauthorized`, or
-  `httpStatusCode === 401` on any variant that forwards one, which adds
-  `responseTooManyFailedAttempts` to the three the item named: a 401 there is
-  the same refusal. Not 403, 5xx or a missing status, because the notice locks
-  the composer. The message text is never read: a "401" in prose does not
-  count.
-- **Occurrence.** A second refusal keeps the occurrence of a refused-login
-  notice already shown, so a dismissed toast stays dismissed; a renewal notice
-  is replaced by a new occurrence, because the state (and the composer lock)
-  changes.
-- **Open question decided: what a 401 on an API-key login offers.** Options:
-  the in-tab ChatGPT sign-in; a pointer to where the key is set; both. Chose
-  the in-tab sign-in with the message the item prescribed, for both login
-  kinds. It is the one route that works in every environment and clears the
-  notice (`account/login/completed`), and app-server reports no reliable
-  "this was an API key" signal on the failed turn. Con: a user who wants to
-  keep using a key must replace it in Settings; whether that clears a live
-  thread's notice without a sign-in is under Needs verification.
+Choices made on 2026-10-27 (first pass) are kept below. Their task numbers
+are this file's Tasks list.
+
+### Task 1: where the progressive path gets the rows (2026-10-27)
+
+Options: (a) append them to the progressive transcript read; (b) carry them on
+the progressive state view and place them after the transcript in the web; (c)
+have the web build rows from `turn.error`. Chose (b), which is the recommended
+option's aim (the rows are part of what the tab renders, live and after a
+reload) on the read the tab actually uses. The transcript read never reads
+session state (adding that read costs a second bridge call per poll), and its
+tokens, deltas and persisted restart preview would then hold a transient state
+row. (c) would duplicate the backend's ids and miss notices. Pros: one
+builder, the state token already moves when the error changes, the
+transcript view stays the provider's rows. Cons: a new optional field on the
+state view and the projection, and the web must carry it across transcript
+reads (done in `applyProgressiveTranscript`).
+
+### Task 1: duplicate failures (2026-10-27)
+
+Options: show both the Codex/Pi status line and the terminal row; drop the
+terminal row for Codex and Pi wholesale; drop it only when the last row's
+error status line states the same failure. Chose the last, in a shared helper
+both paths use. Dropping it per platform would hide the bridge's own failures
+that have no status line (a restart mid-turn, a rejected structured result).
+The match is "the error contains the status text", minus a trailing ellipsis,
+so a bounded or JSON-reduced line still matches; a stop row is never dropped
+this way.
+
+### Task 1: kept stop results stay off the state view (2026-10-27)
+
+`recordStopNotice` is consumed by the full projection the stop mutation
+answers with; putting it on the state view without consuming it would leave a
+stale "stopped" row on a tab that never makes a full read. Provider `stopped`
+notices (OpenCode) do travel.
+
+### Task 1: cross-provider check is a parametrised component test (2026-10-29)
+
+Took the recommended option. The backend test already ran five bridge
+platforms plus OpenCode through the state view. It did not render them. The
+new web test renders all six, with a reload, and checks the reason appears
+once. Live runs per provider were not needed for a renderer path shared by
+all six.
+
+### Task 2: which errors raise the notice (2026-10-27)
+
+`unauthorized`, or `httpStatusCode === 401` on any variant that forwards one,
+which adds `responseTooManyFailedAttempts` to the three the item named: a 401
+there is the same refusal. Not 403, 5xx or a missing status, because the
+notice locks the composer. The message text is never read: a "401" in prose
+does not count. Kept as `httpStatusCode` on `EngineError` (the recommended
+"keep it on the shared error" option, under the protocol's own name).
+
+### Task 2: occurrence (2026-10-27)
+
+A second refusal keeps the occurrence of a refused-login notice already shown,
+so a dismissed toast stays dismissed; a renewal notice is replaced by a new
+occurrence, because the state (and the composer lock) changes.
+
+### Task 3: the notice names the login and offers both routes (2026-10-29)
+
+Took the recommended option. The first pass chose the in-tab sign-in for
+both kinds because "app-server reports no reliable 'this was an API key'
+signal on the failed turn". That is true of the turn but not of the bridge.
+`account/read` reports `account.type` (`apiKey` or `chatgpt`), and the bridge
+already calls it on every refusal (`checkAccountSignIn(false, true)`). So the
+code did not show the recommended option was wrong.
+
+- **Where the key is set.** Orkestrator's Settings have no Codex API-key
+  field: Codex sign-in there is device code. The key lives in
+  `$CODEX_HOME/auth.json`, written by `codex login --with-api-key`, so the
+  notice names that command. It is plain text: the banner renders the message
+  as a paragraph.
+- **The kind can arrive late.** The refusal's own `account/read` usually
+  answers after the turn has failed. The engine emits `account.loginKind` when
+  the kind changes, and the runtime rewords any refused-login notice in place,
+  keeping its occurrence. A refusal while the kind is still unknown never
+  overwrites a notice that already names it.
+- **Does replacing the key clear the notice?** Yes. After a refusal the engine
+  fingerprints the stored login. The next `account/read`, for example the
+  banner's sign-in-options read on a reload, sees a different key, replaces
+  the app-server child and emits `account.signedIn`, which clears every
+  thread's notice. Bridge tests proved this
+  (`app-server-runtime-account-reload.test.ts`), and so did the 2026-10-29
+  live run.
+- **Review follow-up, 2026-10-29.** Forgetting sign-in state and replacing an
+  app-server generation now clear the cached login kind. Runtime tests cover
+  a refusal after logout or generation replacement using generic wording
+  until a new account read answers, and API-key-to-ChatGPT changes through
+  both account switching and stored-login reload, including the consecutive
+  `account.loginKind` and `account.signedIn` events leaving the notice cleared.
+  The strengthened live assertion rejects a missing projection and requires
+  the original session, failed turn and conversation rows after key replacement,
+  as well as the visible 401 row and enabled Send. It passed with
+  `ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` set in disposable profile
+  `codex-refused-review-0235` (36.8 seconds, Codex 0.164.0, two made-up keys).
+  Targeted engine/runtime tests, bridge and agent-testing typechecks, and
+  scoped lint/format checks passed. Preparation's broader test, browser,
+  isolated-browser and Docker failures remain outside this fix; no passing
+  full checks were repeated.
+- **Pros:** an API-key user is no longer pushed into switching account type
+  without being told; a ChatGPT user still gets the one-click path.
+- **Cons:** three messages instead of one, and a key from an environment
+  variable (not `auth.json`) gets advice that does not apply. Orkestrator
+  strips `OPENAI_API_KEY` and `CODEX_API_KEY` for added accounts, so that is
+  only possible for the host login.
+
+### Task 4: settled from the binary and the protocol, not staged (2026-10-29)
+
+Took the recommended option: no staged refresh failure. I read the evidence
+from the pinned 0.164.0 binary's strings (outcome names, refresh reasons,
+`RefreshTokenFailed` and its messages, `No more recovery steps available.`)
+and from the generated protocol. A ChatGPT refresh failure goes through
+`authRecovery*` and is covered by the existing rule; task 2's 401 rule
+catches any final 401. Confidence: medium. The strings show what exists, not
+the order it runs in or which `codexErrorInfo` the final failure carries. The
+offline probe (`scripts/codex-access-only-auth-probe.ts`) could stage it
+without any real login if a definite answer is ever needed.
+
+### Task 5: a live clearing path without a person (2026-10-29)
+
+The recommended pass needs a successful sign-in, which needs a person (ChatGPT)
+or a valid key, and the task allowed only made-up keys. I proved the clearing
+path that needs neither: a second made-up key written to the profile's own
+`CODEX_HOME`, as `codex login --with-api-key` stores it. I wrote the file
+rather than running `codex login`, because a CLI on a credential-store
+setting other than `file` could write to the macOS Keychain instead. The
+in-tab ChatGPT sign-in stays open.
 
 ## Constraints and rationale
 
@@ -243,14 +387,16 @@ no answer, no error row and no sign-in prompt, after a reload too.
 
 ## Needs verification
 
-- Whether a ChatGPT login whose refresh fails also ends with
-  `httpConnectionFailed`/401 without `authRecovery*` on 0.164.
-- Whether storing a valid key through Settings (rather than signing in from
-  the tab) emits `account/login/completed` to a running bridge and so clears a
-  thread's notice; if not, the locked tab's only way out is the in-tab sign-in.
+- Which `codexErrorInfo` a turn carries when a ChatGPT refresh is refused
+  (probably `unauthorized`; see Current state). Record it when one is seen
+  live; no code depends on the answer.
+- Settled 2026-10-29: storing a new key in `CODEX_HOME` clears the notice
+  without `account/login/completed`, through the stored-login reload (live
+  and bridge tests). Orkestrator's Settings have no Codex key field.
 
 ## Related
 
 - [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)
 - [agent-accounts.md](../../architecture/agent-accounts.md#turn-time-auth-notice)
 - [native-transcripts.md](../../architecture/native-transcripts.md#terminal-rows)
+- [0940-failed-turn-reads-as-completed.md](../cross-cutting/0940-failed-turn-reads-as-completed.md)

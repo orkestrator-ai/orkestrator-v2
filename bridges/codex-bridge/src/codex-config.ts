@@ -6,8 +6,11 @@ import {
   coordinatorWebResearchFromEnv,
 } from "@orkestrator/protocol/coordinator-web-research";
 import {
+  nativeAgentAllowsUserMcpServer,
   nativeAgentPolicyDeniesNetwork,
   nativeAgentPolicyDeniesWebSearch,
+  nativeAgentRestrictsUserMcp,
+  nativeAgentUserMcpGrant,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 import { COORDINATOR_CODEX_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
@@ -316,8 +319,81 @@ export function codexReadOnlyTurnPolicy(
 ): NativeAgentExecutionPolicy {
   if (policy && nativeAgentPolicyDeniesNetwork(policy)) return policy;
   const base = policy ?? READ_ONLY_TURN_FALLBACK_POLICY;
-  const denied = base.capabilityPolicy?.deny ?? [];
-  return { ...base, capabilityPolicy: { deny: [...denied, "network"] } };
+  // The session's other denials (`extendedDeny`) and its user MCP selection
+  // (item 404) stay; only the search exception goes.
+  const { allow: _searchException, ...capabilities } = base.capabilityPolicy ?? { deny: [] };
+  return {
+    ...base,
+    capabilityPolicy: { ...capabilities, deny: [...capabilities.deny, "network"] },
+  };
+}
+
+/**
+ * The configured MCP server names in an effective configuration
+ * (`config/read`): the keys of its `mcp_servers` table. `[]` when there is
+ * none; `undefined` when the table is there but not a table, which a caller
+ * that must disable servers treats as unreadable.
+ */
+export function codexConfiguredMcpServerNames(config: unknown): string[] | undefined {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
+  const servers = (config as Record<string, unknown>).mcp_servers;
+  if (servers === undefined || servers === null) return [];
+  if (typeof servers !== "object" || Array.isArray(servers)) return undefined;
+  return Object.keys(servers);
+}
+
+/** A server name usable as one segment of a dotted override key. */
+const CODEX_MCP_OVERRIDE_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/** Most configured servers a thread's selection is computed over. */
+export const MAX_CODEX_CONFIGURED_MCP_SERVERS = 256;
+
+/**
+ * Thread configuration that loads exactly the configured MCP servers a
+ * policy selects (graphs item 404).
+ *
+ * Every configured server the policy does not allow gets
+ * `mcp_servers.<name>.enabled = false`; a leaf override merges into the
+ * user's own table, so nothing else about the server changes and no
+ * definition travels. A granted server's tools are approved up front unless
+ * the policy asks, since the template's grant is the approval; under
+ * `approvalPolicy: never` Codex would otherwise refuse them on a read-only
+ * turn. Reserved Orkestrator servers are not user servers and are skipped.
+ *
+ * A server that must be disabled but whose name cannot be written as a
+ * dotted key cannot be held, so this throws and the thread is refused rather
+ * than run with it.
+ */
+export function codexUserMcpThreadConfig(
+  policy: NativeAgentExecutionPolicy | undefined,
+  configured: readonly string[],
+  reserved: ReadonlySet<string>,
+): Record<string, unknown> {
+  if (!nativeAgentRestrictsUserMcp(policy)) return {};
+  if (configured.length > MAX_CODEX_CONFIGURED_MCP_SERVERS) {
+    throw new Error(
+      `Codex listed more than ${MAX_CODEX_CONFIGURED_MCP_SERVERS} MCP servers, so this session's MCP selection cannot be applied`,
+    );
+  }
+  const granted = new Set(nativeAgentUserMcpGrant(policy) ?? []);
+  const approve = policy?.approvals !== "ask";
+  const config: Record<string, unknown> = {};
+  for (const name of configured) {
+    if (reserved.has(name)) continue;
+    const allowed = nativeAgentAllowsUserMcpServer(policy, name);
+    if (allowed && !(approve && granted.has(name))) continue;
+    if (!CODEX_MCP_OVERRIDE_SEGMENT.test(name)) {
+      if (!allowed) {
+        throw new Error(
+          "A configured Codex MCP server has a name that cannot be disabled for one thread, so this session's MCP selection was refused",
+        );
+      }
+      continue;
+    }
+    if (allowed) config[`mcp_servers.${name}.default_tools_approval_mode`] = "approve";
+    else config[`mcp_servers.${name}.enabled`] = false;
+  }
+  return config;
 }
 
 /**

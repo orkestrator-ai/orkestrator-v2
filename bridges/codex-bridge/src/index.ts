@@ -15,7 +15,10 @@ import { normalizePendingSignIn } from "@orkestrator/protocol/native-agent";
 import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   WORKFLOW_RESULT_KINDS,
+  parseWorkflowResultTurn,
+  type WorkflowResultTurn,
   workflowResultToolName,
+  workflowResultTurnToolPort,
 } from "@orkestrator/protocol/workflow-results";
 import {
   boundTranscriptResponse,
@@ -78,6 +81,40 @@ import {
 import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
 
 const WORKFLOW_RESULT_TOOL_NAMES = new Set(WORKFLOW_RESULT_KINDS.map(workflowResultToolName));
+
+/** A kind's result tool, or a graph output port's own `submit_<port>`. */
+function isWorkflowResultTool(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    (WORKFLOW_RESULT_TOOL_NAMES.has(value) || workflowResultTurnToolPort(value) !== null)
+  );
+}
+
+/**
+ * The prompt's workflow-result attempt. An older backend names only the tool;
+ * a newer one adds its key and, for a graph activation, every result slot and
+ * the extra tools its credential lists, all read by the shared parser.
+ */
+function readWorkflowResultTurn(
+  body: Record<string, unknown>,
+): { ok: true; turn?: WorkflowResultTurn } | { ok: false; error: string } {
+  const tool = body.workflowResultTool;
+  if (
+    body.workflowResultKey === undefined &&
+    body.workflowResultSlots === undefined &&
+    body.workflowResultExtraTools === undefined
+  ) {
+    return tool === undefined || isWorkflowResultTool(tool)
+      ? { ok: true }
+      : { ok: false, error: "workflowResultTool must name a workflow result tool" };
+  }
+  return parseWorkflowResultTurn(
+    tool,
+    body.workflowResultKey,
+    body.workflowResultSlots,
+    body.workflowResultExtraTools,
+  );
+}
 
 function isScopedAgentMcp(value: unknown): value is { url: string; token: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -1480,12 +1517,10 @@ app.post("/session/:id/prompt", async (c) => {
   if (readOnly !== undefined && typeof readOnly !== "boolean") {
     return c.json({ error: "readOnly must be a boolean" }, 400);
   }
-  if (
-    workflowResultTool !== undefined &&
-    (typeof workflowResultTool !== "string" || !WORKFLOW_RESULT_TOOL_NAMES.has(workflowResultTool))
-  ) {
-    return c.json({ error: "workflowResultTool must name a workflow result tool" }, 400);
-  }
+  const workflowResult = readWorkflowResultTurn(
+    body && typeof body === "object" && !Array.isArray(body) ? body : {},
+  );
+  if (!workflowResult.ok) return c.json({ error: workflowResult.error }, 400);
   if (workflowResultTool !== undefined && !isScopedAgentMcp(agentMcp)) {
     return c.json({ error: "workflowResultTool requires agentMcp" }, 400);
   }
@@ -1505,6 +1540,7 @@ app.post("/session/:id/prompt", async (c) => {
     ...(typeof readOnly === "boolean" ? { readOnly } : {}),
     ...(isScopedAgentMcp(agentMcp) ? { agentMcp } : {}),
     ...(typeof workflowResultTool === "string" ? { workflowResultTool } : {}),
+    ...(workflowResult.turn ? { workflowResultTurn: workflowResult.turn } : {}),
     ...(isCodexApprovalMode(approvalMode) ? { approvalMode } : {}),
     ...(commandFields.allowProviderCommands ? {} : { allowProviderCommands: false }),
     ...(commandFields.command ? { command: commandFields.command } : {}),

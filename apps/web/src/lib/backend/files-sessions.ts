@@ -2,6 +2,8 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
 import type {
+  DiffBaseBranch,
+  DiffBaseCommit,
   EnvironmentDiffStatsSnapshot,
   EnvironmentDiffStatsSnapshotOutcome,
 } from "@orkestrator/protocol/diff-stats";
@@ -372,6 +374,33 @@ export async function getWorktreeSnapshotRevisions(
 /** Forces an immediate rescan, e.g. after an operation that changed the tree. */
 export async function refreshEnvironmentDiffStats(environmentId: string): Promise<void> {
   return invoke<void>("refresh_environment_diff_stats", { environmentId });
+}
+
+/** Branches an environment's checkout can compare its changes against. */
+export async function listEnvironmentDiffBaseBranches(
+  environmentId: string,
+): Promise<DiffBaseBranch[]> {
+  return invoke<DiffBaseBranch[]>("list_environment_diff_base_branches", { environmentId });
+}
+
+/** The newest commits on `ref` (a full branch ref), first parents only. */
+export async function listEnvironmentDiffBaseCommits(
+  environmentId: string,
+  ref: string,
+): Promise<DiffBaseCommit[]> {
+  return invoke<DiffBaseCommit[]>("list_environment_diff_base_commits", { environmentId, ref });
+}
+
+/** Measures the environment's changes from `commit`; `null` restores the automatic base. */
+export async function setEnvironmentDiffBase(
+  environmentId: string,
+  base: { ref: string; commit: string } | null,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_diff_base", {
+    environmentId,
+    ref: base?.ref ?? null,
+    commit: base?.commit ?? null,
+  });
 }
 
 /**

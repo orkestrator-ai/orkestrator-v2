@@ -1,3 +1,4 @@
+import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
 import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
@@ -115,6 +116,9 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const MarkdownEditorDiagramFixture = lazy(async () => ({
+  default: (await import("./MarkdownEditorDiagramFixture")).MarkdownEditorDiagramFixture,
+}));
 const ExpandedViewersFixture = lazy(async () => ({
   default: (await import("./ExpandedViewersFixture")).ExpandedViewersFixture,
 }));
@@ -1915,6 +1919,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
+  if (window.location.pathname === "/diff-base") installDiffBaseFixture();
   if (window.location.pathname === "/change-tracking") return <ChangeTrackingFixture />;
   if (window.location.pathname === "/diff-viewer") {
     installDiffViewerFixture();
@@ -1993,6 +1998,12 @@ function fixtureForPath() {
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
+  if (window.location.pathname === "/markdown-editor-diagram")
+    return (
+      <Suspense fallback={null}>
+        <MarkdownEditorDiagramFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/system-usage") {
     installSystemUsageFixture();
     return <SystemUsageFixture />;
@@ -2039,9 +2050,11 @@ function fixtureForPath() {
         <DataSavingGatewayFixture />
       </Suspense>
     );
+  if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }
 
+if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

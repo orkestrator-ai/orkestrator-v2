@@ -1,3 +1,4 @@
+import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
@@ -420,19 +421,26 @@ export function registerProjectCommands(
   });
 
   register("get_projects", async (args, { storage }) => {
+    // Periodic node-summary reads have a shared icon budget; ordinary project reads stay full.
+    const summaryIcons =
+      args.summaryIcons === undefined
+        ? false
+        : asRequiredBoolean(args.summaryIcons, "summaryIcons");
     const includeDefaultBranch =
       args.includeDefaultBranch === undefined
         ? false
         : asRequiredBoolean(args.includeDefaultBranch, "includeDefaultBranch");
-    if (!includeDefaultBranch) {
+    if (!includeDefaultBranch && !summaryIcons) {
       return conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects());
     }
     // Each project's default branch lives in the app config, whose changes
     // do not move the project manifest revision, so this form is never conditional.
     if (args.knownManifestGeneration !== undefined || args.knownResourceRevision !== undefined) {
-      throw new Error("includeDefaultBranch cannot be combined with a conditional read");
+      throw new Error("Summary enrichment cannot be combined with a conditional read");
     }
-    const projects = await storage.loadProjects();
+    const stored = await storage.loadProjects();
+    const projects = summaryIcons ? boundSummaryIcons(stored) : stored;
+    if (!includeDefaultBranch) return projects;
     try {
       return withDefaultBranches(projects, await storage.loadConfig());
     } catch {

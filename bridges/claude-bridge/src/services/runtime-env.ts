@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
+import {
+  nativeAgentWithholdsGitHubCredential,
+  withheldGitHubCredentialEnvironment,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 
 export const GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 /** Read by the official GitHub plugin's MCP `Authorization` header. */
@@ -110,4 +117,46 @@ export async function runtimeEnvironmentForAgentQuery(
     delete snapshot[GITHUB_MCP_TOKEN_ENV];
   }
   return snapshot;
+}
+
+let withheldGhConfigDir: Promise<string> | undefined;
+
+/** An empty `gh` configuration directory for sessions that must not see the stored login. */
+function emptyGhConfigDir(): Promise<string> {
+  withheldGhConfigDir ??= mkdtemp(path.join(tmpdir(), "orkestrator-gh-withheld-")).catch(
+    (error: unknown) => {
+      withheldGhConfigDir = undefined;
+      throw error;
+    },
+  );
+  return withheldGhConfigDir;
+}
+
+/**
+ * The environment for one query of a session with `policy`. A session whose
+ * policy denies `github.write` (every graph agent node, item 209) gets no
+ * GitHub credential at all: no token variables, no managed credential file
+ * (it is not read), an empty `gh` configuration directory and reset Git
+ * credential helpers (`withheldGitHubCredentialEnvironment`). The MCP token
+ * is not resolved for it either, so the GitHub plugin cannot authenticate.
+ * Every other session gets {@link runtimeEnvironmentForAgentQuery}.
+ */
+export async function runtimeEnvironmentForSessionQuery(
+  policy: Pick<NativeAgentExecutionPolicy, "capabilityPolicy"> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  options: {
+    readTextFile?: ReadTextFile;
+    readGhToken?: ReadGitHubCliToken;
+    ghConfigDir?: () => Promise<string>;
+  } = {},
+): Promise<NodeJS.ProcessEnv> {
+  if (!nativeAgentWithholdsGitHubCredential(policy)) {
+    return runtimeEnvironmentForAgentQuery(
+      env,
+      options.readTextFile ?? readFile,
+      options.readGhToken ?? readGitHubCliToken,
+    );
+  }
+  const ghConfigDir = await (options.ghConfigDir ?? emptyGhConfigDir)();
+  return withheldGitHubCredentialEnvironment(env, { ghConfigDir }) as NodeJS.ProcessEnv;
 }

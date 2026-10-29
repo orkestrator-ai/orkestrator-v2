@@ -323,8 +323,8 @@ export function reduceNotification(
      * A **sparse** rolling update, per the generated protocol: only the fields
      * present carry information, and an absent one must not clear the last
      * observed value. The event therefore lists only the windows this update
-     * actually carried, and omits `credits` entirely when it carried none —
-     * merging into the retained snapshot is the consumer's job.
+     * actually carried — merging into the retained snapshot is the consumer's
+     * job. The credit balance is not carried: it is not shown anywhere.
      */
     case "account/rateLimits/updated": {
       if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
@@ -358,27 +358,11 @@ export function reduceNotification(
           ...(windowMinutes !== undefined ? { windowMinutes } : {}),
         });
       }
-      const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;
-      const credits = rawCredits
-        ? {
-            ...(typeof rawCredits.balance === "string" ? { balance: rawCredits.balance } : {}),
-            ...(typeof rawCredits.hasCredits === "boolean"
-              ? { hasCredits: rawCredits.hasCredits }
-              : {}),
-            ...(typeof rawCredits.unlimited === "boolean"
-              ? { unlimited: rawCredits.unlimited }
-              : {}),
-          }
-        : undefined;
       return {
         events: [
           {
             kind: "account.rateLimits.updated",
             rateLimits: windows,
-            // An empty credits object carries no information, and emitting one
-            // would look like an update in a stream whose whole contract is
-            // "present means changed".
-            ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
             ...base,
           },
         ],

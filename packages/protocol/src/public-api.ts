@@ -462,6 +462,93 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Cancel a running Multi Review; its record and tabs are kept.",
   },
+  "build.launch": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "filesystem", "provider-session", "external-repository"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Start a Kanban ticket's Build Pipeline, as the Build button does: build, review, address, verify and PR in a new or existing environment, with per-step models, instructions and reviewer focus, and saved defaults for what is omitted; the ticket's active build is reused.",
+  },
+  "build.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "List a project's Build Pipelines, newest first.",
+  },
+  "build.get": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read one Build Pipeline: phase, iteration, and each step's agent and model with the size of its instructions and focus.",
+  },
+  "build.cancel": {
+    version: 1,
+    mutation: true,
+    effects: ["process", "provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Cancel a running Build Pipeline; its record, environment and tabs are kept.",
+  },
+  "graph.list": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "List the saved graph templates (built-in, user and, with a project, its project templates) with trust and whether each can be launched.",
+  },
+  "graph.show": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read one graph template: roles, parameters, inputs and nodes, and with a project the providers each role may run on and its launch defaults.",
+  },
+  "graph.validate": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Compile a saved graph template, or a template file's JSON without saving it, and report its diagnostics and cost.",
+  },
+  "graph.launch": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "filesystem", "provider-session", "external-repository"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Run a saved graph template in a new worktree, a new container or an existing environment, with role models, parameters, inputs and a Kanban ticket as input; what is omitted uses the saved launch defaults.",
+  },
+  "graph.status": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read one graph run: status, node counts by state, usage and its environment, never inputs, outputs or prompts.",
+  },
+  "graph.cancel": {
+    version: 1,
+    mutation: true,
+    effects: ["process", "provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Cancel a graph run; its record, artifacts and environment are kept.",
+  },
   "pr.create": {
     version: 1,
     mutation: true,

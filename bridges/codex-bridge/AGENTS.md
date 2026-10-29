@@ -93,7 +93,9 @@ own verdicts (a rejected structured result, a lost rebind) add none. A turn
 failed for its login (`unauthorized`, or a 401 `toTurnError` keeps as
 `httpStatusCode`) also raises the thread's `needs-auth` notice
 (`refusedLoginNotice`); never raise it on a failure without a 401, because it
-locks the tab's composer.
+locks the tab's composer. The notice names the login `account/read` last
+reported (`getAccountLoginKind`); a kind that arrives after the refusal
+rewords it in place through `account.loginKind`, keeping its occurrence.
 
 ## File changes and change evidence
 
@@ -229,6 +231,15 @@ locks the tab's composer.
   records before its first replay.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
+- A thread whose policy denies `github.write` (every graph agent node) gets a
+  `shell_environment_policy` that keeps the GitHub credential out of its
+  commands (`github-credential-config.ts`); app-server itself keeps it. Set it
+  with dotted keys only, and repeat the process's own `exclude` list
+  (`codexProcessShellExclude`): a thread value replaces the process value, so
+  dropping it would hand a coordinator's commands the secrets its process
+  excludes. Number the helper resets from 0 and exclude the inherited
+  `GIT_CONFIG_*` entries rather than copying them into the request. Re-prove
+  after a Codex bump with `live-github-credential.test.ts` (no credits).
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.

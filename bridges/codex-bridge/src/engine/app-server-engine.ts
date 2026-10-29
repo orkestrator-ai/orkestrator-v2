@@ -29,6 +29,8 @@ import {
 } from "@orkestrator/protocol/transcript-artifacts";
 import {
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
+  nativeAgentRestrictsUserMcp,
+  nativeAgentWithholdsGitHubCredential,
   normalizePendingSignIn,
   type NativeAgentPendingSignIn,
 } from "@orkestrator/protocol/native-agent";
@@ -84,7 +86,14 @@ import {
   codexProjectTrustConfig,
   codexRequestUserInputConfig,
   codexToolHistoryGaps,
+  codexConfiguredMcpServerNames,
+  codexUserMcpThreadConfig,
 } from "../codex-config.js";
+import {
+  codexGitHubCredentialThreadConfig,
+  codexProcessShellExclude,
+  emptyGhConfigDir,
+} from "../github-credential-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
 import {
   threadToolHistoryVerdict,
@@ -98,6 +107,7 @@ import {
 import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
+  type CodexLoginKind,
   type EngineCapabilities,
   type EngineAccountUsageWindow,
   type EngineError,
@@ -456,6 +466,12 @@ export interface AppServerEngineOptions {
    */
   toolHistoryVerdict?: (threadId: string) => Promise<ToolHistoryVerdict>;
   /**
+   * The empty `gh` configuration directory a thread that withholds the GitHub
+   * credential points `GH_CONFIG_DIR` at (`github-credential-config.ts`).
+   * Defaults to one temporary directory per process.
+   */
+  ghConfigDir?: () => Promise<string>;
+  /**
    * Supervisor overrides forwarded verbatim.
    *
    * Deliberately *not* an injectable supervisor instance: the engine must always
@@ -672,6 +688,17 @@ function skillLoadNotices(response: unknown, receivedAt: string): RuntimeHealthN
 const CODEX_ACCOUNT_MCP_SERVER = "codex_apps";
 
 /**
+ * MCP servers that are not the user's: Orkestrator's injected ones and
+ * Codex's own account connector. A user MCP selection never disables them.
+ */
+const RESERVED_CODEX_MCP_SERVER_NAMES: ReadonlySet<string> = new Set([
+  "orkestrator",
+  "orkestrator-design",
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+  CODEX_ACCOUNT_MCP_SERVER,
+]);
+
+/**
  * Whether a startup failure is the Codex account's sign-in lapsing.
  *
  * A 401 from `codex_apps` warrants an account check. The account may still be
@@ -684,6 +711,15 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
     notice.severity === "error" &&
     /\bHTTP 401\b|\b401 Unauthorized\b|"token_expired"/.test(notice.detail ?? "")
   );
+}
+
+/**
+ * The login an `account/read` answer reports, when it is an API key or a
+ * ChatGPT login: the two a refused-login notice has its own words for.
+ */
+function accountLoginKind(response: unknown): CodexLoginKind | undefined {
+  const type = objectRecord(objectRecord(response).account).type;
+  return type === "apiKey" || type === "chatgpt" ? type : undefined;
 }
 
 /**
@@ -828,6 +864,8 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  /** The login the last signed-in `account/read` answer reported. */
+  private accountLoginKind: CodexLoginKind | undefined;
   private refusedLoginFingerprint: Promise<string | undefined> | undefined;
   // One live login per app-server account, independent of any renderer or tab.
   private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
@@ -1277,6 +1315,15 @@ export class AppServerEngine implements CodexEngine {
     return this.accountSignInRequired;
   }
 
+  /**
+   * The kind of login app-server last reported signed in, or undefined before
+   * any answer. A refused turn reads it to say whether an API key or a ChatGPT
+   * login was refused; the turn's own error never says.
+   */
+  getAccountLoginKind(): CodexLoginKind | undefined {
+    return this.accountLoginKind;
+  }
+
   private invalidateAccountServing(sequence: number): void {
     this.accountServingGeneration = undefined;
     // Connection and thread queues can drain out of order. A delayed start
@@ -1338,6 +1385,11 @@ export class AppServerEngine implements CodexEngine {
     this.accountAppliedSequence = sequence;
     const wasSignInRequired = this.accountSignInRequired;
     const signedIn = this.recordAccount(response);
+    const login = accountLoginKind(response);
+    if (login && login !== this.accountLoginKind) {
+      this.accountLoginKind = login;
+      this.emit({ kind: "account.loginKind", login, engineGeneration: generation });
+    }
     if (
       signedIn &&
       (wasSignInRequired || accountChanged) &&
@@ -1445,6 +1497,7 @@ export class AppServerEngine implements CodexEngine {
    * `engine.state` so they can mark sessions recovering rather than idle.
    */
   private handleGenerationChange(generation: EngineGeneration, previous: EngineGeneration): void {
+    this.accountLoginKind = undefined;
     this.accountProofTurns.clear();
     // Waiters belong to the dead process; nothing will ever answer them.
     this.rejectAllWaiters();
@@ -1635,6 +1688,69 @@ export class AppServerEngine implements CodexEngine {
       throw error;
     }
     return codexProjectSkillsConfig(listed);
+  }
+
+  /**
+   * Thread configuration that loads exactly the configured MCP servers the
+   * policy selects (graphs item 404): the effective `mcp_servers` table is
+   * read back for the thread's directory, and every server outside the
+   * selection is disabled for this thread (`codexUserMcpThreadConfig`). An
+   * unreadable configuration refuses the thread: running it would load every
+   * server. A policy that narrows nothing costs no request.
+   *
+   * Applied on `thread/start`, `thread/resume` and `thread/fork`. A resume of
+   * a thread app-server still has loaded ignores overrides, so a selection
+   * that changes on a live thread needs `reloadThread`; a graph activation's
+   * session is new and keeps one policy for life.
+   */
+  private async userMcpThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!nativeAgentRestrictsUserMcp(config.policy)) return {};
+    const result = await this.supervisor.requestOnGeneration<{ config?: unknown }>(
+      generation,
+      "config/read",
+      { cwd: config.cwd ?? this.options.cwd },
+    );
+    const configured = codexConfiguredMcpServerNames(result?.config);
+    if (!configured) {
+      throw new Error(
+        "Codex did not report its MCP server configuration, so this session's MCP selection could not be applied",
+      );
+    }
+    return codexUserMcpThreadConfig(config.policy, configured, RESERVED_CODEX_MCP_SERVER_NAMES);
+  }
+
+  /**
+   * The command environment of a thread whose policy denies `github.write`
+   * (every graph agent node, item 209): no GitHub credential variables, an
+   * empty `gh` configuration and reset Git credential helpers
+   * (`codexGitHubCredentialThreadConfig`). Applied on start, resume and fork
+   * like the MCP selection; a graph session is new per activation, and its
+   * result turns reload the thread anyway.
+   */
+  private async githubCredentialThreadConfig(
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!nativeAgentWithholdsGitHubCredential(config.policy)) return {};
+    return codexGitHubCredentialThreadConfig(config.policy, {
+      ghConfigDir: await (this.options.ghConfigDir ?? emptyGhConfigDir)(),
+      processExclude: codexProcessShellExclude(this.options.configOverrides),
+    });
+  }
+
+  /** Thread configuration from the policy that app-server has to be asked for. */
+  private async policyThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    const [skills, mcp, credential] = await Promise.all([
+      this.projectResourceThreadConfig(generation, config),
+      this.userMcpThreadConfig(generation, config),
+      this.githubCredentialThreadConfig(config),
+    ]);
+    return { ...skills, ...mcp, ...credential };
   }
 
   private toThreadParams(
@@ -1852,7 +1968,7 @@ export class AppServerEngine implements CodexEngine {
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
-    const extra = await this.projectResourceThreadConfig(generation, options.config);
+    const extra = await this.policyThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1865,7 +1981,7 @@ export class AppServerEngine implements CodexEngine {
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
-    const extra = await this.projectResourceThreadConfig(generation, options.config);
+    const extra = await this.policyThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1928,7 +2044,7 @@ export class AppServerEngine implements CodexEngine {
     // The whole source, not just the forked prefix: stricter, and it needs no
     // rollout the fork may not have written yet.
     await this.assertNoToolHistory(threadId, config, false);
-    const extra = await this.projectResourceThreadConfig(generation, config);
+    const extra = await this.policyThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -2240,6 +2356,7 @@ export class AppServerEngine implements CodexEngine {
   private forgetSignIn(): void {
     this.clearPendingSignIn();
     this.activeLoginId = null;
+    this.accountLoginKind = undefined;
   }
 
   async readAccount(): Promise<unknown> {

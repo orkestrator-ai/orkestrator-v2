@@ -24,6 +24,7 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
+import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import {
   DEFAULT_DEBUG_LOG_RETENTION_DAYS,
   normalizeDebugLogRetentionDays,
@@ -190,6 +191,12 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     days: global.terminalHistoryRetentionDays,
   });
   const notificationSounds = normalizeNotificationSoundSettings(global.notificationSounds);
+  // A hand-edited or older list keeps every preset that is still valid; the
+  // launchers only ever offer what passes the guard.
+  const reviewLensPresets =
+    global.reviewLensPresets === undefined
+      ? undefined
+      : sanitizeReviewLensPresets(global.reviewLensPresets);
   const sshAgentSocketPath =
     typeof global.sshAgentSocketPath === "string" &&
     global.sshAgentSocketPath.trim().length <= MAX_SSH_AGENT_SOCKET_PATH_CHARS &&
@@ -333,6 +340,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
     JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
     JSON.stringify(global.notificationSounds) === JSON.stringify(notificationSounds) &&
+    JSON.stringify(global.reviewLensPresets) === JSON.stringify(reviewLensPresets) &&
     global.coordinatorProviderTiers === coordinatorProviderTiers &&
     global.coordinatorProviderTierDefaultVersion === coordinatorProviderTierDefaultVersion &&
     config.schemaVersion === 2
@@ -361,6 +369,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       openCodeModelProviders,
       agentMessaging,
       notificationSounds,
+      ...(reviewLensPresets === undefined ? {} : { reviewLensPresets }),
     } as unknown as AppConfig["global"],
   };
 }

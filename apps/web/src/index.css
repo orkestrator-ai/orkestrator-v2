@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* React Flow (the Graphs designer canvas) in the base layer, so utilities override it. */
+@import "@xyflow/react/dist/style.css" layer(base);
 @plugin "@tailwindcss/typography";
 
 /*
@@ -770,4 +772,34 @@ body[data-orkestrator-dev-profile]::before {
   .xterm {
     padding: 2px;
   }
+}
+
+/*
+ * The Graphs designer canvas (React Flow): its own variables mapped to the
+ * flow-graph tokens Multi Review and the build pipeline use.
+ */
+.graph-designer-canvas .react-flow {
+  --xy-background-color: var(--color-flow-canvas);
+  --xy-node-background-color: var(--color-flow-node);
+  --xy-edge-stroke: var(--color-flow-edge);
+  --xy-minimap-background-color: var(--color-flow-node);
+  --xy-controls-button-background-color: var(--color-flow-node);
+  --xy-controls-button-border-color: var(--color-border);
+  --xy-controls-button-color: var(--color-muted-foreground);
+}
+
+/* Faces draw their own frame and selection ring; React Flow's group frame and focus outline would double them. */
+.graph-designer-canvas .react-flow__node-graph-loop,
+.graph-designer-canvas .react-flow__node-graph-node,
+.graph-designer-canvas .react-flow__node-graph-io {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.graph-designer-canvas .react-flow__node-graph-node:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: 0.75rem;
 }

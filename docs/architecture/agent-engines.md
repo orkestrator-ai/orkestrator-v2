@@ -832,6 +832,110 @@ decoder together.
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
 | OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note | A deny rule for `webfetch` after every allow; `websearch` and `codesearch` denied, or allowed by name when search is allowed |
 
+`NATIVE_AGENT_CAPABILITIES` (`packages/protocol/src/native-agent-capabilities.ts`)
+also names `git.commit`, `git.push`, `github.write`, `subagents`,
+`mcp:<server>` and `orkestrator:<group>` (held by the backend's
+credential scope, never sent to a bridge), for graph capability profiles.
+Every released bridge validates a policy against the original six names and
+drops a policy it cannot validate, so the HTTP bridge provider sends
+`nativeAgentPolicyForBridge`'s wire form: `deny` keeps the six, the newer
+names travel in `capabilityPolicy.extendedDeny`, which older validators
+ignore, and bridges read both through `nativeAgentDeniedCapabilities`. Claude
+translates the newer names into `disallowedTools` (`Task`/`Agent`,
+`mcp__<server>__*`, `Bash(git push *)`-style command rules, and all of `gh`
+for `github.write`), OpenCode into permission rules (`task`, `<server>_*`,
+bash patterns, `gh` whole), and Cursor removes `task` for `subagents`
+(`NATIVE_AGENT_BRIDGE_EXTENDED_TRANSLATIONS`). Command rules match the
+command as written, so the enforcement matrix still rates them advisory.
+Codex, Cursor and Pi hold an `mcp:<server>` denial through the user MCP
+selection below; for Grok `nativeAgentPolicyForBridge` turns project
+resources off instead. Git and GitHub denials are held by a shell denial
+where the policy has one, otherwise by the Claude and OpenCode rules above,
+otherwise only by the post-hoc guards (`nativeAgentCapabilityHold`). A Claude
+read-only turn keeps the session's extra denials and its MCP grant
+(`readOnlyTurnPolicy`). A session whose policy
+denies `github.write` (every graph agent node) runs without the GitHub
+credential where the bridge can scope an environment to it: the token
+variables (`WITHHELD_GITHUB_ENV_VARS`, including the managed credential file's
+path) are dropped, `GH_CONFIG_DIR` points at an empty directory and Git's
+credential helpers are reset (`withheldGitHubCredentialEnvironment`).
+`NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING` records each platform:
+
+- **Claude** per query (`runtimeEnvironmentForSessionQuery`) and **Grok** per
+  ACP child (`providerEnv`): the agent process itself is spawned without it.
+- **Codex** per thread: the shared app-server keeps it, but the thread's
+  `shell_environment_policy` (`github-credential-config.ts`, on
+  `thread/start`, `thread/resume` and `thread/fork`) excludes the variables
+  and any inherited `GIT_CONFIG_*` entries and sets the replacements, so no
+  command the thread runs sees it. A thread value replaces the process value,
+  so a coordinator process's own exclude list is repeated. Stdio MCP servers
+  get only Codex's default variable set plus what their entry names, and a
+  graph node loads only granted servers. Verified against 0.164.0, before and
+  after a resume, by `live-github-credential.test.ts` (no credits).
+- **Pi** per session: the session's `bash` and `powershell` are the SDK's own
+  definitions with a `spawnHook` that withholds it (passed as `customTools`,
+  which win over the built-ins and any extension tool of the same name, with
+  `defaultActive: false` so the loadout is unchanged), and the bridge's MCP
+  client starts stdio servers with the withheld environment and resolves
+  `mcp.json` references against it, so an entry naming a credential variable
+  is skipped. Pi extensions run inside the bridge process and keep it.
+- **OpenCode** and **Cursor** cannot: every session shares one `opencode
+  serve` process, and Cursor's SDK runs in the bridge process with no
+  per-session environment.
+
+Withholding is defence in depth, never a boundary: SSH keys, a container's
+runtime credential file and Git's `insteadOf` rewrite stay readable, and a
+command can read an ancestor process's environment (`/proc/<pid>/environ` on
+Linux). The graph remote-ref guard (item 209) is the backstop, and the remote
+axis stays advisory on every platform. How strongly each platform holds a policy is
+`agentPolicyEnforcement`
+(`packages/protocol/src/graphs/capability-enforcement.ts`).
+
+### User MCP servers per session (graphs item 404)
+
+`capabilityPolicy.userMcpServers` selects the configured (user, or with
+project resources project) MCP servers a session may load: exactly those
+names, `[]` for none, minus any `mcp:<server>` denial; absent keeps every
+configured server. Graph agent nodes always carry it (default `[]`; see
+[graphs.md](graphs.md#per-node-user-mcp-servers)). It is a
+filter over what each bridge already reads from the user's own files and never
+carries a definition; reserved Orkestrator servers are never filtered. Older
+bridges ignore the field. `NATIVE_AGENT_USER_MCP_SELECTION` records what each
+platform does:
+
+- **Claude** (`userMcpServerFilter`, `claudeUserMcpQueryOptions` in
+  `services/mcp-config.ts`): the inline set is filtered and the query sets
+  `strictMcpConfig`, because the CLI otherwise loads the servers of every
+  settings source itself (see [MCP server management](mcp-management.md)).
+  Plugin MCP servers therefore never load for a selecting session. A read-only
+  turn keeps the selection (`readOnlyTurnPolicy`) and its hook admits only the
+  granted servers' tools.
+- **Codex** (`codexUserMcpThreadConfig`): the engine reads the effective
+  `mcp_servers` through `config/read` and sets
+  `mcp_servers.<name>.enabled = false` for every other configured server on
+  `thread/start`, `thread/resume` and `thread/fork`; a granted server gets
+  `default_tools_approval_mode = "approve"` unless the policy asks. An
+  unreadable table, or a server to disable whose name is not a bare key,
+  refuses the thread. A loaded thread ignores resume overrides, so a changed
+  selection needs `reloadThread`.
+- **Pi** (`piUserMcpServerFilter`): the bridge's own MCP client starts only
+  the selected servers; the read-only gate admits a granted server's tools by
+  exact registered name (`isGrantedUserMcpTool`).
+- **Cursor** (`cursorUserMcpServerFilter`, `cursorSettingSources`): a
+  selecting session gets no settings source and the selected servers inline
+  from `~/.cursor/mcp.json` (plus `.cursor/mcp.json` with project resources).
+  Gap: it also runs without the user's and the project's Cursor rules and
+  plugins; read-only attaches keep loading only Orkestrator's server, so a
+  grant is not delivered there.
+- **OpenCode** (`opencode-user-mcp.ts`): servers cannot be attached per
+  session in the shared `opencode serve`, so the session's permission rules
+  deny `<server>_*` for every server `mcp.status` lists outside the selection,
+  re-applied at each turn when the list changes; an unreadable list refuses
+  the session. The servers' processes still run.
+- **Grok**: not supported. Grok loads every server of its own configuration
+  and ACP `session/new` `mcpServers` can only add servers, so a selecting
+  session on Grok still loads all of them (rated `advisory`).
+
 A sandbox's network switch (`networkAccess`) only governs commands the agent
 runs on this machine. Hosted web search and fetch run on the vendor's servers,
 so only removing the tools stops them; that is what the last column does, and
@@ -1204,17 +1308,50 @@ completion: the controller still owns turn settlement, worktree and package
 checks, validation execution, pool application, stage changes, and PR
 verification, and consumes an accepted result exactly once.
 
-A controller can also register an acceptance check for one result kind
-(`WorkflowResultService.setAcceptanceCheck`). The service runs it on
-`validate_workflow_result` and on submission, and a refusal is a
-`worktree_changed` error with `nextAction: "correct"` that spends no correction
+A controller can also register acceptance checks for a result kind
+(`WorkflowResultService.addAcceptanceCheck(kind, check)`, which returns an
+unregister function). Checks accumulate per kind and run in registration
+order; the first refusal wins, and each check returns null for attempts it does
+not own. The service runs them on validation and on submission, and a refusal
+(for example `worktree_changed`, `nextAction: "correct"`) spends no correction
 budget, so the model can repair the environment and retry inside its turn. The
-build pipeline uses this for `verification-result`: the verifier is told which
-Git-visible paths it added or removed, or that HEAD moved, against the baseline
-recorded when the stage started (`build-pipeline-validation-worktree.ts`). The
-check is advisory: one that throws lets the result through, and the supervisor
-still compares the worktree when it reads the result and fails the stage,
-naming the paths, if it changed afterwards.
+build pipeline uses this for its read-only guard on review, consolidation and
+verification (`workspace-read-only-guard.ts`). A check is advisory: one that
+throws lets the result through, and the owner still compares the worktree when
+it reads the result.
+
+**Result kind registry.** Every kind maps to one definition in
+`workflow-result-registry.ts`: its schema, the schema a provider sees, its
+submission and validation tools, and the validators that run at submit time
+(structure, domain checks, final-content placeholder checks, the trusted-context
+check, and an optional environment check). Built-in kinds register themselves
+in `workflow-result-contracts.ts`; `workflowResultJsonSchema` and
+`validateWorkflowResult` delegate to the registry. Acceptance checks and the
+environment hook live on a `WorkflowResultRegistry` instance that each service
+owns. Multi Review consolidation's citation check runs through the generic
+provenance validator (`packages/protocol/src/graphs/provenance.ts`) with its own
+rules and wording, so its diagnostics are unchanged.
+
+**Graph output slots.** The `graph-output` kind takes its contract from the
+slot: `schema` is the port type's schema and `toolName` is `submit_<port>`,
+with `validate_<port>` for dry runs (`graphOutputSlotInput` builds the slot from
+a compiled port). The tool description names the port, its type and the port
+description; `x-orkestrator-sources` annotations are stripped before a provider
+sees the schema. Values go through the type library's full validation (budgets,
+schema, domain validator), the placeholder check of the result kind a built-in
+type maps to, and, for consolidating ports, provenance against the node's input
+items (`cite`, `accountForAll`). Values whose type needs the environment are
+also checked there through the environment hook the backend installs
+(`workflow-result-environment-validator.ts`): a `workspace@1` commit must exist
+and be reachable from its branch, `file-list@1` paths must resolve inside the
+worktree, a `validation-plan@1` must name the workspace HEAD it validates, and a
+`review-package@2` reference must still match its sealed package
+(`verifyEnvironmentReviewPackage`, hashed inside the container for container
+environments). Without a hook, or when the environment cannot be read, the
+result is refused without spending a correction. One activation with several output ports gets one capability
+(`AgentToolsServer.workflowResultActivationConnection`) listing each port's pair
+of tools and one status tool. A slot without a port declaration uses the generic
+`submit_graph_output`, which is also what the OpenCode broker offers.
 
 **Delivery failures that never reach the backend.** A model reaches these tools
 through its client's own wrapper (Cursor's `CallDynamicTool`, for one), and that
@@ -1410,6 +1547,64 @@ tool passes either way. Its declared key is what lets the result tools through
 when the environment policy is `deny` (refused) or `ask` (parked, then denied
 by the unattended interaction policy), and would keep them working if the turn
 were made read-only.
+
+### Graph activation turns (item 204)
+
+A graph agent activation has one result slot per output port, each with its
+own key, and may offer three extra tools on the same credential:
+`report_progress` (an output type with `items`), `read_artifact` (an input
+rendered `on-demand`) and `ask_human` (a node that opts in). The prompt body
+therefore declares the whole attempt: `workflowResultTool` and
+`workflowResultKey` name the first slot, as before, and
+`workflowResultSlots` (`[{ tool, resultKey }]`, up to 16) and
+`workflowResultExtraTools` (a subset of the three names) name the rest
+(`ProviderSendOptions`, `bridgePromptBody`; `parseWorkflowResultTurn` takes all
+four). A slot's tool is the per-port `submit_<port>` (its validation tool
+`validate_<port>`; `graphSubmitToolName` in
+`packages/protocol/src/graphs/system-contract.ts`), or on OpenCode the
+generic `submit_graph_output` and `validate_workflow_result`, each call naming
+the slot's key. One predicate,
+`workflowResultTurnAllows(turn, tool, args)`, decides what the turn's own tools
+are: a submission or validation tool with its own slot's key, the status tool
+and `report_progress` with any of the turn's keys, and `read_artifact` and
+`ask_human` when listed.
+
+- **Grok, Pi:** gate with the predicate as they gate kind tools.
+- **Claude:** lets the turn's own per-port tools through `canUseTool` under
+  deny/ask policies; for a graph turn only, a PreToolUse hook refuses a result
+  tool named with another slot's key. A kind tool's turn keeps today's
+  behaviour: a mistyped key reaches the backend, whose refusal names the right
+  key.
+- **Cursor:** the in-process Orkestrator tools refuse, for a graph turn only, a
+  result-family call that is not the turn's own.
+- **Codex:** approves the attempt server as a whole through thread
+  configuration and never shows the bridge a call's arguments, so it cannot
+  gate by key; it checks that every slot's submission tool is offered (424
+  otherwise). The per-activation credential holds the keys on the backend.
+- **OpenCode:** its broker's tool list is fixed per environment, so it always
+  lists `submit_graph_output` and the three extra tools, hidden and denied by
+  default and enabled per turn. Graph outputs go through `submit_graph_output`
+  with each slot's key and one capability: the activation capability covers
+  every slot (`brokerAttempt` accepts it for a key it covers). Per-port names
+  are refused there.
+
+**Turn mode.** A node whose compiled policy is read-only (file writes denied
+and the shell denied or non-mutating, `nativeAgentDenialsAreReadOnly`: the
+Observer, Reviewer and Researcher profiles) runs every turn as a read-only
+turn (`graphAgentPolicy` in `graph-agent-policy.ts`): the branch runner
+(`agent-branch-runner.ts`) creates the session and sends each turn with
+`mode: "plan"` and `readOnly: true`, and its interactions resolve as an
+automated review, so each bridge applies the read-only handling above,
+network denial included. One exception: a Researcher on Claude keeps hosted
+search, which a Claude read-only turn turns off, so it runs an ordinary turn
+whose policy still denies writes, the shell and fetching, rated at most
+`provider-configured` (`graphAgentReadOnlyTurn`). A node whose shell may
+mutate (Verifier, Builder, a custom profile that keeps it) runs build turns,
+even with `workspaceAccess` `read` or `none`. The workspace guard checks
+every node whose `workspaceAccess` is not `write` afterwards, whatever its
+turn mode ([graphs.md](graphs.md#guards-and-enforcement)). On OpenCode a
+read-only node that keeps its shell (Reviewer) is marked a reviewer session,
+which admits a constrained read-only shell.
 
 ### Provider qualification
 

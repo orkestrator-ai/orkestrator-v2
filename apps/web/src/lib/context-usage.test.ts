@@ -209,7 +209,12 @@ describe("context-usage formatTokenCount", () => {
     ["renders millions with one decimal", 1_000_000, "1.0M"],
     ["renders millions with one decimal", 9_500_000, "9.5M"],
     ["drops the decimal from ten millions", 10_000_000, "10M"],
-    ["drops the decimal from ten millions", 1_234_000_000, "1234M"],
+    ["drops the decimal from ten millions", 999_000_000, "999M"],
+    ["trims trailing zeros from billions", 1_000_000_000, "1B"],
+    ["trims trailing zeros from billions", 1_901_000_000, "1.9B"],
+    ["renders billions with two decimals", 1_910_000_000, "1.91B"],
+    ["renders billions with two decimals", 1_880_400_000, "1.88B"],
+    ["renders billions with two decimals", 12_345_000_000, "12.35B"],
   ])("%s (%p)", (_label, tokens, expected) => {
     expect(formatTokenCount(tokens as number)).toBe(expected);
   });

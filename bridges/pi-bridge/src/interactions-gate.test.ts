@@ -698,6 +698,97 @@ test("a read-only reviewer may use its own attempt's result tools under every ap
   }
 });
 
+test("a read-only graph activation may use each slot's own tools with that slot's key", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-activation-"));
+  await mkdir(join(root, "agent"), { recursive: true });
+  setPiMcpTransportForTests({
+    async connect() {
+      return {
+        tools: [
+          "validate_a",
+          "submit_a",
+          "validate_b",
+          "submit_b",
+          "get_workflow_result_status",
+          "read_artifact",
+          "ask_human",
+          "report_progress",
+        ].map((name) => ({ name })),
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  const keyA = { resultKey: "activation-a" };
+  const keyB = { resultKey: "activation-b" };
+  try {
+    const state = newSessionState();
+    state.readOnly = true;
+    state.policy = {
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "full",
+    };
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "activation-capability" };
+    const slots = [
+      { tool: "submit_a", resultKey: keyA.resultKey },
+      { tool: "submit_b", resultKey: keyB.resultKey },
+    ];
+    state.workflowResultTurn = {
+      tool: "submit_a",
+      resultKey: keyA.resultKey,
+      slots,
+      extraTools: ["read_artifact"],
+    };
+    await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+    const allowed = { block: false };
+    expect(await requestToolApproval(state, "1", "submit_a", keyA)).toEqual(allowed);
+    expect(await requestToolApproval(state, "2", "validate_a", keyA)).toEqual(allowed);
+    expect(await requestToolApproval(state, "3", "submit_b", keyB)).toEqual(allowed);
+    expect(await requestToolApproval(state, "4", "submit_a", keyB)).toMatchObject({ block: true });
+    expect(await requestToolApproval(state, "5", "validate_b", keyA)).toMatchObject({
+      block: true,
+    });
+    for (const key of [keyA, keyB]) {
+      expect(await requestToolApproval(state, "6", "get_workflow_result_status", key)).toEqual(
+        allowed,
+      );
+    }
+    expect(await requestToolApproval(state, "7", "read_artifact", { id: "x" })).toEqual(allowed);
+    expect(await requestToolApproval(state, "8", "ask_human", { question: "?" })).toMatchObject({
+      block: true,
+    });
+    expect(await requestToolApproval(state, "9", "report_progress", keyA)).toMatchObject({
+      block: true,
+    });
+    state.workflowResultTurn = { ...state.workflowResultTurn, extraTools: ["ask_human"] };
+    expect(await requestToolApproval(state, "10", "ask_human", {})).toEqual(allowed);
+    expect(await requestToolApproval(state, "11", "read_artifact", {})).toMatchObject({
+      block: true,
+    });
+    // An old kind-tool turn keeps its own tools only.
+    state.workflowResultTurn = { tool: "submit_review_report", resultKey: keyA.resultKey };
+    expect(await requestToolApproval(state, "12", "submit_a", keyA)).toMatchObject({
+      block: true,
+    });
+    expect(await requestToolApproval(state, "13", "get_workflow_result_status", keyA)).toEqual(
+      allowed,
+    );
+    expect(state.approvals.size).toBe(0);
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a read-only workflow turn may use its own artifact-only server's tools", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
   const { mkdir, mkdtemp, rm } = await import("node:fs/promises");

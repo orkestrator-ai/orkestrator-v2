@@ -32,6 +32,8 @@ import type { GraphRun, GraphRunBindings } from "@orkestrator/protocol/graphs/ru
 import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
+import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
+import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import type {
   GraphActivationReport,
@@ -88,6 +90,26 @@ export interface FakeScriptCall {
   iteration: number;
   branchKey?: string;
   attempt: number;
+}
+
+/**
+ * A reference artifact's file and descriptor. A review package's descriptor
+ * names its own file's SHA-256, size and path, as `run-validation-and-seal`
+ * seals it, so the built-in prompts that read it accept it (item 301).
+ */
+function sealedContents(value: unknown): { contents: Buffer; value: unknown } {
+  const contents = Buffer.from(JSON.stringify(value));
+  if (!isReviewPackageReference(value)) return { contents, value };
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  return {
+    contents,
+    value: {
+      ...value,
+      sha256,
+      bytes: contents.byteLength,
+      filePath: reviewPackageArtifactPath(value.id, sha256),
+    },
+  };
 }
 
 /** Pass-through executors for every node kind, with knobs for the tests. */
@@ -215,9 +237,8 @@ export class FakeGraphExecutors {
         graphTypeStorage(context.run.plan, port.type) === "reference"
           ? await context.artifacts.putFile({
               ...common,
-              contents: Buffer.from(JSON.stringify(value)),
+              ...sealedContents(value),
               extension: "json",
-              value,
             })
           : await context.artifacts.putValue({ ...common, value });
       outputs[port.name] = artifact.id;

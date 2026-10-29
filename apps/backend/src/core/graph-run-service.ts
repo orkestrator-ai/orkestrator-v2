@@ -701,6 +701,8 @@ export class GraphRunService implements KeyedWorkflowOwner {
     options: GraphRewindOptions = {},
   ): Promise<GraphRunRestartResult> {
     this.requireEnabled();
+    // A rerun re-verifies the sealed files it reads, as a bespoke restart does.
+    this.options.artifacts.revokeFilePermits(runId);
     return this.afterRewind(await this.rewinds.restart(runId, activationKey, options));
   }
 

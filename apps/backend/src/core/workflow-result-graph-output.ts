@@ -259,6 +259,7 @@ export const graphOutputKindDefinition: WorkflowResultKindDefinition = {
     return validateGraphArtifactValue(definition, value, {
       ...(context.choices ? { choices: context.choices } : {}),
       ...(context.criterionIds ? { criterionIds: context.criterionIds } : {}),
+      ...(context.reviewLimits ? { reviewLimits: context.reviewLimits } : {}),
     }).slice(0, WORKFLOW_RESULT_MAX_ISSUES);
   },
   finalContent: (value, slot) => {
@@ -308,6 +309,8 @@ export function graphOutputSlotInput(
      * Review's contract). Each must name one of the type's sources fields.
      */
     provenanceFields?: GraphProvenanceField[];
+    /** A consolidation's raised review-report caps (item 301). */
+    reviewLimits?: { maxIssues: number; maxCoverageGaps: number };
   } = {},
 ): WorkflowResultSlotInput {
   const problem = graphOutputPortProblem(port.name);
@@ -342,6 +345,9 @@ export function graphOutputSlotInput(
       ? { criterionIds: [...options.criterionIds] }
       : {}),
     ...(provenance ? { provenance } : {}),
+    ...(options.reviewLimits && type.name === "review-report"
+      ? { reviewLimits: { ...options.reviewLimits } }
+      : {}),
   };
   return {
     ...base,

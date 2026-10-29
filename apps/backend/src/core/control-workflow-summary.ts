@@ -83,12 +83,18 @@ function automationNext(workflow: Record<string, unknown>): string {
   if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
   if (phase === "interactive" && customFix)
     return `The custom Fix ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
+  // On the graph engine (item 301) a system step opens the pull request.
+  const graph = workflow.engine === "graph";
   if (launch?.state === "pending")
-    return cleanReviewPr
-      ? "Consolidation found nothing to fix; the PR session is starting."
-      : "The Fix completed; the PR session is starting.";
+    return graph
+      ? `${cleanReviewPr ? "Consolidation found nothing to fix" : "The Fix completed"}; the graph run is writing the description and opening the pull request.`
+      : cleanReviewPr
+        ? "Consolidation found nothing to fix; the PR session is starting."
+        : "The Fix completed; the PR session is starting.";
   if (phase === "interactive" && earlierPr)
     return "The Fix turn ended; the earlier PR does not confirm inclusion of this Fix's changes. Review the result and update the PR manually.";
+  if (launch?.state === "launched" && graph)
+    return "The graph run's pull request step pushed the branch and opened the pull request. Nothing else runs automatically.";
   if (launch?.state === "launched")
     return `The PR session started${typeof launch.tabId === "string" ? ` in tab ${launch.tabId}` : ""}; it pushes the branch and opens the pull request. Nothing else runs automatically.`;
   if (launch?.state === "skipped" || launch?.state === "failed") {
@@ -96,7 +102,9 @@ function automationNext(workflow: Record<string, unknown>): string {
       typeof launch.message === "string"
         ? `: ${launch.message.slice(0, MAX_AUTOMATION_MESSAGE_CHARS)}`
         : ".";
-    return `No PR session ${launch.state === "failed" ? "could start" : "was started"}${reason}`;
+    return graph
+      ? `The graph run did not open the pull request${reason}`
+      : `No PR session ${launch.state === "failed" ? "could start" : "was started"}${reason}`;
   }
   if (phase === "completed") return "Nothing else runs automatically.";
   if (phase === "ready")

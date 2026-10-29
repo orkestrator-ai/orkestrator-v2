@@ -1,16 +1,27 @@
 /**
  * A graph-engine Multi Review in its review tab (item 301): the tab renders
  * the projected record like any other, links to its graph run, and offers no
- * bespoke step control while the run is live.
+ * bespoke step control, live or settled; the reviewer tab, the step statuses
+ * and the pull request step read it as the graph engine runs it.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type {
+  MultiReviewReviewerTranscript,
+  MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import { onGraphRunViewRequested, type GraphRunViewRequest } from "@/lib/graph-run-navigation";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { MultiReviewTab } from "./MultiReviewTab";
+import {
+  autoPrLaunchNotice,
+  consolidationStep,
+  fixStep,
+  pullRequestStep,
+} from "./multi-review-steps";
 
 const timestamp = "2026-10-29T00:00:00.000Z";
 
@@ -115,4 +126,104 @@ test("a settled graph-engine review keeps the link and reads as an ordinary revi
   mount(settled);
   expect(await screen.findByText("This review ran on the graph runtime.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open graph run" })).toBeTruthy();
+});
+
+test("a settled graph-engine review still offers no bespoke step control", async () => {
+  const settled: MultiReviewWorkflow = {
+    ...graphReviewing(true),
+    phase: "failed",
+    error: "Node consolidate failed",
+    reviewSession: {
+      agent: "claude",
+      model: "opus",
+      sessionKey: "graph:run:consolidate",
+      providerSessionId: "ps-consolidate",
+      openedFor: "consolidate",
+      requestIds: ["request-c"],
+      status: "failed",
+      startedAt: timestamp,
+    },
+  };
+  settled.reviewers = settled.reviewers.map((reviewer) => ({ ...reviewer, status: "completed" }));
+  mount(settled);
+  expect(await screen.findByText("This review ran on the graph runtime.")).toBeTruthy();
+  expectDomAbsent(screen.queryByRole("button", { name: "Retry failed stage" }));
+  fireEvent.click(screen.getByRole("tab", { name: /^Reviewer 1 ·/ }));
+  const inspector = within(screen.getByTestId("multi-review-inspector"));
+  expectDomAbsent(inspector.queryByRole("button", { name: /Restart Reviewer 1/ }));
+  // The failed step is attributed from its session, not a journaled request.
+  expect(consolidationStep(settled)).toMatchObject({ state: "failed" });
+});
+
+test("graph-engine steps: a failed Fix, and a pull request opened by a system step", () => {
+  const report = { issues: [], testCoverageGaps: [] } as unknown as NonNullable<
+    MultiReviewWorkflow["consolidatedReport"]
+  >;
+  const failedFix: MultiReviewWorkflow = {
+    ...graphReviewing(true),
+    phase: "failed",
+    consolidatedReport: report,
+    stepRuntimes: { fix: { startedAt: timestamp } },
+  };
+  expect(fixStep(failedFix)).toMatchObject({ state: "failed" });
+  expect(
+    pullRequestStep({
+      autoPr: true,
+      launch: { state: "launched", requestId: "run:pr" },
+      prUrl: null,
+      prState: null,
+      agentPhase: undefined,
+      upstreamComplete: true,
+      graphEngine: true,
+    }),
+  ).toMatchObject({ state: "complete", label: "Pull request opened by the graph run" });
+  expect(
+    pullRequestStep({
+      autoPr: true,
+      launch: { state: "pending", requestId: "run:pr" },
+      prUrl: null,
+      prState: null,
+      agentPhase: undefined,
+      upstreamComplete: true,
+      graphEngine: true,
+    }),
+  ).toMatchObject({ state: "running", statusWord: { text: "opening" } });
+  expect(autoPrLaunchNotice({ state: "launched", requestId: "run:pr" }, true).text).toMatch(
+    /graph run's pull request step pushed the branch/,
+  );
+  expect(autoPrLaunchNotice({ state: "launched", requestId: "run:pr" }).text).toMatch(/PR tab/);
+});
+
+test("a graph-engine reviewer's tab offers no Stop, Restart or Unstick", async () => {
+  useMultiReviewStore.getState().replaceWorkflow(graphReviewing());
+  render(
+    <MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1",
+        workflowId: "multi-graph",
+        reviewerId: "reviewer-1",
+        isLocal: true,
+      }}
+      isActive
+      loadTranscript={mock(
+        async () =>
+          ({
+            workflowId: "multi-graph",
+            reviewerId: "reviewer-1",
+            workflowPhase: "reviewing",
+            agent: "claude",
+            model: "opus",
+            status: "running",
+            dispatchState: "sent",
+            startedAt: timestamp,
+            messages: [],
+          }) as unknown as MultiReviewReviewerTranscript,
+      )}
+      stopReviewer={mock(async () => ({}) as never)}
+    />,
+  );
+  expect(await screen.findByText(/Read only/)).toBeTruthy();
+  expectDomAbsent(screen.queryByRole("button", { name: "Stop this reviewer" }));
+  expectDomAbsent(screen.queryByRole("button", { name: "Restart reviewer" }));
+  expectDomAbsent(screen.queryByRole("button", { name: "Unstick reviewer" }));
 });

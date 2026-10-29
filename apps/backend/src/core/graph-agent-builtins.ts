@@ -67,6 +67,7 @@ import {
   type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
 import {
+  safeParseStructuredReviewReport,
   structuredReviewFindings,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
@@ -112,6 +113,15 @@ export interface GraphBuiltInPromptInputValue {
    * from the producing activation, as Multi Review labels its reviewers.
    */
   reviewer?: { agent: string; model: string; focus?: string };
+  /**
+   * Review reports read by the consolidation built-in: read the report as
+   * Multi Review accepts a reviewer's report, through the domain parse that
+   * drops the provider schema's `null` placeholders (`alternativeFixes`,
+   * `reviewModels`, `reviewSourceIds`) a submitted `review-report@1` keeps.
+   * The graph runtime sets it for reports its agent nodes submitted, so the
+   * evidence matches a bespoke Multi Review's.
+   */
+  acceptedReport?: boolean;
 }
 
 export interface GraphBuiltInPromptContext {
@@ -311,7 +321,13 @@ function consolidationText(inputs: BuiltInInputs, target: string): string {
     agent: entry.reviewer?.agent ?? UNKNOWN_REVIEWER_LABEL,
     model: entry.reviewer?.model ?? UNKNOWN_REVIEWER_LABEL,
     ...(entry.reviewer?.focus ? { focus: entry.reviewer.focus } : {}),
-    report: withSourceIds(inputs.reviewReport(entry), entry.itemIds, entry.coverageGapIds),
+    report: withSourceIds(
+      entry.acceptedReport
+        ? acceptedReport(inputs.reviewReport(entry))
+        : inputs.reviewReport(entry),
+      entry.itemIds,
+      entry.coverageGapIds,
+    ),
   }));
   const reviewPackage = inputs.reviewPackage("package");
   try {
@@ -331,6 +347,17 @@ function consolidationText(inputs: BuiltInInputs, target: string): string {
     }
     throw error;
   }
+}
+
+/** A submitted report as Multi Review accepts it: the domain parse, without null placeholders. */
+function acceptedReport(report: StructuredReviewReport): StructuredReviewReport {
+  const parsed = safeParseStructuredReviewReport(report);
+  if (!parsed.success) {
+    throw new GraphBuiltInPromptError(
+      "Built-in prompt consolidation got a report Multi Review would not accept",
+    );
+  }
+  return parsed.data;
 }
 
 /**
@@ -572,9 +599,15 @@ class BuiltInInputs {
 
   /**
    * The persisted package reference a builder reads: the type's descriptor,
-   * which must name the sealed file the caller verified. The builders tell
-   * the agent the package's SHA-256 was verified before dispatch, so a
-   * descriptor without that file is refused rather than passed on unverified.
+   * which must describe the sealed file the caller verified (same SHA-256 and
+   * byte count). The builders tell the agent the package's SHA-256 was
+   * verified before dispatch, so a descriptor without that file is refused
+   * rather than passed on unverified.
+   *
+   * `run-validation-and-seal` seals a copy of the generated package in the
+   * run's artifact directory, while its descriptor keeps the path the package
+   * was generated at. The builders are then given the verified copy's path,
+   * so the file the prompt names is the file that was verified (item 301).
    */
   reviewPackage(name: string, required = false): ReviewPackageReference | undefined {
     const entry = required ? this.required(name) : this.optional(name);
@@ -584,14 +617,15 @@ class BuiltInInputs {
     const file = entry.file;
     if (
       !file ||
-      file.path !== descriptor.filePath ||
+      typeof file.path !== "string" ||
+      !file.path ||
       file.sha256 !== descriptor.sha256 ||
       file.bytes !== descriptor.bytes ||
       !isReviewPackageReference(descriptor)
     ) {
       this.fail(`needs the verified sealed file of its ${name} input`);
     }
-    return descriptor;
+    return file.path === descriptor.filePath ? descriptor : { ...descriptor, filePath: file.path };
   }
 
   private expectType(entry: GraphBuiltInPromptInputValue, name: string): void {

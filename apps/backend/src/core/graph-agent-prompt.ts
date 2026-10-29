@@ -291,7 +291,9 @@ export async function loadGraphAgentInputs(
   artifacts: Pick<GraphArtifactStore, "verify">,
 ): Promise<GraphAgentInputs> {
   const verified = async (id: string, port: string): Promise<GraphArtifact> => {
-    const verification = await artifacts.verify(run.id, id);
+    // A node's branches share one sealed-file permit (item 301): a reviewer
+    // panel hashes the shared package once, not once per reviewer.
+    const verification = await artifacts.verify(run.id, id, { permit: node.id });
     if (!verification.ok) {
       throw new GraphAgentPromptError(
         `Input ${port} could not be verified (${verification.code}): ${verification.message}`,
@@ -434,6 +436,9 @@ function builtInInputs(
         ...(itemIds.length > 0 ? { itemIds } : {}),
         ...(gapIds.length > 0 ? { coverageGapIds: gapIds } : {}),
         ...(author ? { reviewer: author } : {}),
+        // A submitted report keeps the provider schema's null placeholders;
+        // consolidation reads it as Multi Review accepts a reviewer's report.
+        ...(review ? { acceptedReport: true } : {}),
       };
     });
     result[input.name] = input.list ? values : values[0]!;

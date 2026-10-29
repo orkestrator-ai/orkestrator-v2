@@ -137,10 +137,31 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+/** How long a sealed-file verification permit lasts (the bespoke evidence permit's age). */
+export const GRAPH_FILE_PERMIT_MAX_AGE_MS = 30 * 60_000;
+/** Permits kept at once; the oldest goes first. */
+const MAX_GRAPH_FILE_PERMITS = 512;
+
 export class GraphArtifactStore {
   private readonly createRunner: NonNullable<GraphArtifactStoreDependencies["createRunner"]>;
   private readonly spawn: typeof spawnCommand;
   private readonly now: () => Date;
+  /**
+   * Sealed-file verification permits (item 301), the graph form of Multi
+   * Review's evidence permits (`review-evidence-permits.ts`): key
+   * `run\0artifact\0consumer` → when its file was last hashed. A consumer
+   * node's branches share one permit, so a reviewer panel hashes the shared
+   * package once and consolidation, another consumer, hashes it again: two
+   * verifications per generation at any panel width. Never persisted, expired
+   * after {@link GRAPH_FILE_PERMIT_MAX_AGE_MS}, revoked by any failed
+   * verification of the artifact and by a restart in its run.
+   */
+  private readonly filePermits = new Map<string, number>();
+  /** Hashes in flight per permit key: concurrent branch starts share one. */
+  private readonly filePermitFlights = new Map<
+    string,
+    Promise<{ ok: true } | Extract<GraphArtifactVerification, { ok: false }>>
+  >();
 
   constructor(private readonly dependencies: GraphArtifactStoreDependencies) {
     this.createRunner = dependencies.createRunner ?? createEnvironmentCommandRunner;
@@ -396,7 +417,14 @@ export class GraphArtifactStore {
   async verify(
     runId: string,
     artifactId: string,
-    options: { allowSuperseded?: boolean } = {},
+    options: {
+      allowSuperseded?: boolean;
+      /**
+       * The consuming node: its branches share one permit for a reference
+       * artifact's sealed file (see `filePermits`). Absent: always hash.
+       */
+      permit?: string;
+    } = {},
   ): Promise<GraphArtifactVerification> {
     const artifact = await this.runs.getGraphArtifact(runId, artifactId);
     if (!artifact) return { ok: false, code: "not-found", message: "The run has no such artifact" };
@@ -420,6 +448,59 @@ export class GraphArtifactStore {
     const run = await this.runs.getGraphRun(runId);
     // A mock run's files are never written (`putMockReference`).
     if (run?.mock) return { ok: true, artifact };
+    const permitKey =
+      options.permit !== undefined ? `${runId}\0${artifactId}\0${options.permit}` : undefined;
+    const granted = permitKey === undefined ? undefined : this.filePermits.get(permitKey);
+    if (granted !== undefined && this.now().getTime() - granted < GRAPH_FILE_PERMIT_MAX_AGE_MS) {
+      return { ok: true, artifact };
+    }
+    if (permitKey === undefined) {
+      const verified = await this.verifySealedFile(run ?? null, file);
+      if (!verified.ok) this.revokeFilePermits(runId, artifactId);
+      return verified.ok ? { ok: true, artifact } : verified;
+    }
+    let flight = this.filePermitFlights.get(permitKey);
+    if (!flight) {
+      flight = this.verifySealedFile(run ?? null, file).then((verified) => {
+        if (verified.ok) this.grantFilePermit(permitKey);
+        else this.revokeFilePermits(runId, artifactId);
+        return verified;
+      });
+      const settled = flight.finally(() => {
+        if (this.filePermitFlights.get(permitKey) === settled) {
+          this.filePermitFlights.delete(permitKey);
+        }
+      });
+      this.filePermitFlights.set(permitKey, settled);
+      flight = settled;
+    }
+    const verified = await flight;
+    return verified.ok ? { ok: true, artifact } : verified;
+  }
+
+  /** Drops a run's sealed-file permits (a restart re-verifies what it reruns). */
+  revokeFilePermits(runId: string, artifactId?: string): void {
+    const prefix = artifactId === undefined ? `${runId}\0` : `${runId}\0${artifactId}\0`;
+    for (const key of Array.from(this.filePermits.keys())) {
+      if (key.startsWith(prefix)) this.filePermits.delete(key);
+    }
+  }
+
+  private grantFilePermit(key: string): void {
+    this.filePermits.delete(key);
+    this.filePermits.set(key, this.now().getTime());
+    while (this.filePermits.size > MAX_GRAPH_FILE_PERMITS) {
+      const oldest = this.filePermits.keys().next().value;
+      if (oldest === undefined) break;
+      this.filePermits.delete(oldest);
+    }
+  }
+
+  /** Hashes a reference artifact's sealed file in the run's environment and compares it. */
+  private async verifySealedFile(
+    run: GraphRun | null,
+    file: { path: string; sha256: string; bytes: number },
+  ): Promise<{ ok: true } | Extract<GraphArtifactVerification, { ok: false }>> {
     const environment =
       run?.environmentId !== undefined
         ? await this.dependencies.storage.getEnvironment(run.environmentId)
@@ -451,7 +532,7 @@ export class GraphArtifactStore {
     if (!SHA256.test(actual.sha256) || actual.sha256 !== file.sha256) {
       return { ok: false, code: "hash-mismatch", message: "Graph artifact SHA-256 changed" };
     }
-    return { ok: true, artifact };
+    return { ok: true };
   }
 
   /** {@link verify}, throwing a typed error instead of returning a refusal. */

@@ -49,6 +49,12 @@ export interface GraphTypeValidationContext {
   choices?: readonly string[];
   /** `verification-verdict@1`: the criterion IDs of the ticket being verified. */
   criterionIds?: readonly string[];
+  /**
+   * `review-report@1` written by a consolidation (item 301): it may keep every
+   * source finding, so its issue and coverage-gap caps rise to the sources'
+   * totals, as Multi Review's consolidation allows (`preserveFindings`).
+   */
+  reviewLimits?: { maxIssues: number; maxCoverageGaps: number };
 }
 
 export type GraphTypeDomainCheck = (
@@ -166,10 +172,18 @@ function checkWorkspace(value: unknown): WorkflowResultValidationIssue[] {
   return issues;
 }
 
-function checkReviewReport(value: unknown): WorkflowResultValidationIssue[] {
+function checkReviewReport(
+  value: unknown,
+  context: GraphTypeValidationContext = {},
+): WorkflowResultValidationIssue[] {
   const parsed = safeParseStructuredReviewReport(value);
   if (!parsed.success) return fromReview(parsed.error.issues);
-  return fromReview(structuredReviewReportBudgetIssues(value));
+  return fromReview(
+    structuredReviewReportBudgetIssues(
+      value,
+      context.reviewLimits ? { ...context.reviewLimits, preserveFindings: true } : {},
+    ),
+  );
 }
 
 function checkFinding(value: unknown): WorkflowResultValidationIssue[] {

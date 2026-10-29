@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -182,6 +182,53 @@ describe("reference artifacts in a local worktree", () => {
 
     await fs.rm(file);
     expect(await store.verify("run-1", artifact.id)).toMatchObject({ code: "missing" });
+  });
+
+  test("a consumer's branches share one sealed-file permit; another consumer hashes again (item 301)", async () => {
+    const { worktree, storage } = await localWorld();
+    let now = Date.parse("2026-10-29T00:00:00.000Z");
+    const store = new GraphArtifactStore({ storage, fence, now: () => new Date(now) });
+    const artifact = await store.putFile({
+      runId: "run-1",
+      type: "review-package@2",
+      producer,
+      contents: Buffer.from("0123456789"),
+    });
+    const hashes = spyOn(
+      store as unknown as { verifySealedFile: (...args: unknown[]) => Promise<unknown> },
+      "verifySealedFile",
+    );
+    // A panel starting at once hashes the file once.
+    const panel = await Promise.all(
+      [1, 2, 3, 4].map(() => store.verify("run-1", artifact.id, { permit: "review" })),
+    );
+    expect(panel.every((result) => result.ok)).toBe(true);
+    expect(hashes).toHaveBeenCalledTimes(1);
+    expect((await store.verify("run-1", artifact.id, { permit: "review" })).ok).toBe(true);
+    expect(hashes).toHaveBeenCalledTimes(1);
+    // Consolidation is another consumer, and a check without a permit always hashes.
+    expect((await store.verify("run-1", artifact.id, { permit: "consolidate" })).ok).toBe(true);
+    expect((await store.verify("run-1", artifact.id)).ok).toBe(true);
+    expect(hashes).toHaveBeenCalledTimes(3);
+    // A permit expires.
+    now += 31 * 60_000;
+    expect((await store.verify("run-1", artifact.id, { permit: "review" })).ok).toBe(true);
+    expect(hashes).toHaveBeenCalledTimes(4);
+    // A failed verification revokes every permit on the artifact; so does a restart.
+    const file = path.join(worktree, (artifact.body as { file: { path: string } }).file.path);
+    await fs.chmod(file, 0o644);
+    await fs.writeFile(file, "9876543210");
+    expect(await store.verify("run-1", artifact.id)).toMatchObject({ code: "hash-mismatch" });
+    expect(await store.verify("run-1", artifact.id, { permit: "review" })).toMatchObject({
+      code: "hash-mismatch",
+    });
+    await fs.writeFile(file, "0123456789");
+    expect((await store.verify("run-1", artifact.id, { permit: "review" })).ok).toBe(true);
+    const before = hashes.mock.calls.length;
+    store.revokeFilePermits("run-1");
+    expect((await store.verify("run-1", artifact.id, { permit: "review" })).ok).toBe(true);
+    expect(hashes.mock.calls.length).toBe(before + 1);
+    hashes.mockRestore();
   });
 
   test("superseded artifacts are refused to consumers, still readable by the inspector", async () => {

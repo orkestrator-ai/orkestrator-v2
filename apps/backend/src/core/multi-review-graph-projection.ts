@@ -60,9 +60,11 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import {
   isStructuredReviewReport,
+  safeParseStructuredReviewReport,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import { graphReviewCoverageGapIds } from "./graph-agent-builtins.js";
+import { graphAgentSessionKey } from "./graph-agent-state.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { parseFixResult } from "./review-prompts.js";
 import {
@@ -106,7 +108,7 @@ export async function projectMultiReviewGraphRun(
     next.reviewers.map(async (reviewer, index) => {
       const key = branches[index]?.key;
       const activation = key === undefined ? undefined : latest.get(slot(N.review, key));
-      return projectReviewer(reviewer, activation, read, terminal);
+      return projectReviewer(run.id, reviewer, activation, read, terminal);
     }),
   );
   next.reviewers = reviewers;
@@ -118,9 +120,9 @@ export async function projectMultiReviewGraphRun(
   const packageStep = latest.get(slot(N.package));
   const preparer = workflow.reviewModel ?? workflow.fixModel;
   const consolidator = workflow.consolidationModel ?? preparer;
-  setSession(next, "preparationSession", plan, preparer, "prepare");
-  setSession(next, "reviewSession", consolidate, consolidator, "consolidate");
-  setSession(next, "fixSession", fix, workflow.fixModel, "fix");
+  setSession(next, run.id, "preparationSession", plan, preparer, "prepare");
+  setSession(next, run.id, "reviewSession", consolidate, consolidator, "consolidate");
+  setSession(next, run.id, "fixSession", fix, workflow.fixModel, "fix");
   setRuntime(next, "prepare", plan);
   setRuntime(next, "consolidate", consolidate);
   setRuntime(next, "fix", fix);
@@ -148,12 +150,48 @@ export async function projectMultiReviewGraphRun(
 
   projectAutoPr(next, run, latest, terminal);
   projectPhase(next, run, latest);
+  projectActiveRequest(next, latest, terminal);
   next.graphRun = {
     runId: run.id,
     projectedRevision: run.revision,
     ...(terminal ? { settled: true } : {}),
   };
   return next;
+}
+
+/**
+ * The step a live run is working on, as the bespoke engine's `activeRequest`
+ * shows it: its request id, journal state and result delivery state (the
+ * tab's result-submission header). Only while the run is live: a settled
+ * record keeps none, so no bespoke step logic ever acts on a graph request.
+ */
+function projectActiveRequest(
+  workflow: MultiReviewWorkflow,
+  latest: ReadonlyMap<string, NodeActivation>,
+  terminal: boolean,
+): void {
+  delete workflow.activeRequest;
+  if (terminal) return;
+  const steps: [MultiReviewStepKind, string][] = [
+    ["fix", N.fix],
+    ["consolidate", N.consolidate],
+    ["prepare", N.plan],
+  ];
+  for (const [kind, nodeId] of steps) {
+    const activation = latest.get(slot(nodeId));
+    const session = activation?.session;
+    if (!activation || !session || !isActive(activation)) continue;
+    const transport = resultTransport(session);
+    workflow.activeRequest = {
+      kind,
+      requestId: session.requestId,
+      state: session.dispatchState,
+      ...(transport ? { resultTransport: transport } : {}),
+      ...(session.resultSubmission ? { resultSubmission: session.resultSubmission } : {}),
+      createdAt: activation.startedAt ?? activation.createdAt,
+    };
+    return;
+  }
 }
 
 // ---------------------------------------------------------------- activations
@@ -220,6 +258,7 @@ function selectionOf(reviewer: ReviewerRecord): Partial<ReviewerRecord> {
 }
 
 async function projectReviewer(
+  runId: string,
   reviewer: ReviewerRecord,
   activation: NodeActivation | undefined,
   read: MultiReviewGraphArtifactReader,
@@ -233,7 +272,11 @@ async function projectReviewer(
   const projected: ReviewerRecord = {
     ...base,
     status: "pending",
-    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
+    // The key the graph host runs the session under (`sessionKeyFor`): the
+    // reviewer tab's transcript artifacts resolve in that conversation.
+    ...(session
+      ? { sessionKey: session.sessionKey ?? graphAgentSessionKey(runId, activation.key) }
+      : {}),
     ...(session?.providerSessionId ? { providerSessionId: session.providerSessionId } : {}),
     ...(session?.requestId ? { requestId: session.requestId } : {}),
     ...(session?.dispatchState ? { dispatchState: session.dispatchState } : {}),
@@ -324,10 +367,20 @@ async function readReviewReport(
   reviewer: ReviewerRecord,
 ): Promise<StructuredReviewReport | undefined> {
   if (!artifactId) return undefined;
-  const value = artifactValue(await read(artifactId));
-  if (!isStructuredReviewReport(value)) return undefined;
+  const value = acceptedReport(artifactValue(await read(artifactId)));
+  if (!value) return undefined;
   // Provider output cannot name its own model: the backend attributes it.
   return attributeReportFindings(value, reviewer);
+}
+
+/**
+ * A stored report as Multi Review accepts one: the domain parse, which drops
+ * the provider schema's `null` placeholders a submitted `review-report@1`
+ * keeps, so the record holds what a bespoke review stores.
+ */
+function acceptedReport(value: unknown): StructuredReviewReport | undefined {
+  const parsed = safeParseStructuredReviewReport(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 async function readPackage(
@@ -368,10 +421,10 @@ async function readConsolidation(
   | { report: StructuredReviewReport; overlap: MultiReviewWorkflow["consolidationOverlap"] }
   | undefined
 > {
-  const value = artifactValue(await read(consolidate.outputs.report!));
+  const value = acceptedReport(artifactValue(await read(consolidate.outputs.report!)));
   // Unreadable: the record keeps no report, and a run that completes without
   // one fails the review ("completed without a consolidated report").
-  if (!isStructuredReviewReport(value)) return undefined;
+  if (!value) return undefined;
   const translation = await sourceIdTranslation(run, consolidate, branches, read);
   const translated = translateSourceIds(value, translation);
   const derived = deriveConsolidatedProvenance(translated, reviewers);
@@ -449,6 +502,7 @@ function sessionStatus(activation: NodeActivation): MultiReviewSession["status"]
 
 function setSession(
   workflow: MultiReviewWorkflow,
+  runId: string,
   field: "preparationSession" | "reviewSession" | "fixSession",
   activation: NodeActivation | undefined,
   selection: MultiReviewModelSelection,
@@ -463,7 +517,7 @@ function setSession(
       ? { reasoningEffort: selection.reasoningEffort }
       : {}),
     ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
-    sessionKey: session.sessionKey ?? activation.key,
+    sessionKey: session.sessionKey ?? graphAgentSessionKey(runId, activation.key),
     providerSessionId: session.providerSessionId,
     openedFor: step,
     requestIds: [session.requestId],
@@ -518,12 +572,16 @@ function projectAutoPr(
   // A Fix-authorized launch names the Fix it follows, as `queueAutoPr` does,
   // so status notices never present it as the outcome of a later Fix.
   const fixIdentity = multiReviewFixIdentity(workflow.fixSession);
-  const basis =
-    gate?.outlet === "clean"
-      ? { basis: "clean-review" as const }
-      : fixIdentity
-        ? { fixIdentity }
-        : {};
+  const cleanReport =
+    gate?.outlet === "clean" ||
+    (!workflow.fixResult &&
+      workflow.consolidatedReport !== undefined &&
+      !hasFindings(workflow.consolidatedReport));
+  const basis = cleanReport
+    ? { basis: "clean-review" as const }
+    : fixIdentity
+      ? { fixIdentity }
+      : {};
   const requestId = `${run.id}:pr`;
   const attempts = Math.max(0, (pr?.attempt ?? 1) - 1);
   const reached = (activation: NodeActivation | undefined) =>
@@ -544,7 +602,16 @@ function projectAutoPr(
     };
     return;
   }
-  if (reached(pr) || reached(describe)) {
+  // The gates between the step that authorizes the pull request (a clean
+  // consolidation, a Fix that completed) and `describe-pr` run in later saves
+  // of the run. The bespoke engine queues the pull request in the same save as
+  // that step, so a revision in between must already read pending: otherwise
+  // it shows a review that ended without one, and a status wake reports that.
+  const authorized =
+    (cleanReport || workflow.fixResult?.complete === true) &&
+    pr?.state !== "skipped" &&
+    describe?.state !== "skipped";
+  if (reached(pr) || reached(describe) || authorized) {
     workflow.autoPrLaunch = terminal
       ? {
           ...basis,
@@ -555,6 +622,21 @@ function projectAutoPr(
       : { ...basis, state: "pending", requestId, ...(attempts > 0 ? { attempts } : {}) };
     return;
   }
+  // An anticipated launch whose nodes were then skipped. Never leave it
+  // pending: on a settled record the bespoke supervisor would launch it.
+  if (workflow.autoPrLaunch?.state === "pending") {
+    workflow.autoPrLaunch = {
+      ...basis,
+      state: "skipped",
+      requestId,
+      message: "The pull request step did not run",
+    };
+  }
+}
+
+/** Issues or coverage gaps: what the template's `has-findings` gate routes to the Fix. */
+function hasFindings(report: StructuredReviewReport): boolean {
+  return report.issues.length > 0 || report.testCoverageGaps.length > 0;
 }
 
 function projectPhase(
@@ -588,6 +670,18 @@ function phaseOf(
   if (workflow.fixResult) return workflow.fixResult.complete ? "completed" : "failed";
   if (run.status === "failed") return "failed";
   if (isActive(fix)) return workflow.consolidatedReport ? "fixing" : "consolidating";
+  // Auto-fix hands a report with findings to the Fix through a gate that
+  // runs in a later save; the bespoke engine moves on in the same save, so
+  // the review is never shown ready (with a Fix button and a wake) in between.
+  if (
+    workflow.consolidatedReport &&
+    workflow.autoFix === true &&
+    hasFindings(workflow.consolidatedReport) &&
+    !isGraphRunTerminal(run.status) &&
+    (!fix || fix.state === "waiting")
+  ) {
+    return "fixing";
+  }
   if (workflow.consolidatedReport) return "ready";
   if (run.status === "complete") return "failed";
   const consolidate = latest.get(slot(N.consolidate));

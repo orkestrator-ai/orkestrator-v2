@@ -33,7 +33,11 @@ import type {
   StructuredOutputProvider,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
-import type { ReviewContractValidationIssue } from "@orkestrator/protocol/structured-review";
+import {
+  STRUCTURED_REVIEW_MAX_COVERAGE_GAPS,
+  STRUCTURED_REVIEW_MAX_ISSUES,
+  type ReviewContractValidationIssue,
+} from "@orkestrator/protocol/structured-review";
 import type {
   WorkflowResultSlotInput,
   WorkflowResultSubmissionState,
@@ -224,12 +228,10 @@ export class GraphAgentResults {
         ...(slot.port.provenance ? { sources: this.input.sources } : {}),
         // A consolidation built-in's review report follows Multi Review's
         // contract (item 301): its sources are typed issue and coverage-gap.
-        ...(slot.port.provenance &&
-        isGraphReviewConsolidationNode(this.input.node) &&
-        slot.definition.builtIn &&
-        slot.definition.name === "review-report"
+        ...(slot.port.provenance && this.reviewConsolidation(slot)
           ? { provenanceFields: reviewConsolidationProvenanceFields() }
           : {}),
+        ...(this.reviewLimits(slot) ? { reviewLimits: this.reviewLimits(slot) } : {}),
       },
     );
   }
@@ -414,11 +416,41 @@ export class GraphAgentResults {
     return { success: true, data: value };
   }
 
-  /** The type validation context of a port (choices, criteria). */
+  /** A consolidation built-in's review report (item 301). */
+  private reviewConsolidation(slot: GraphAgentSlotPort): boolean {
+    return (
+      isGraphReviewConsolidationNode(this.input.node) &&
+      slot.definition.builtIn &&
+      slot.definition.name === "review-report"
+    );
+  }
+
+  /**
+   * A consolidation may keep every source finding (item 301): its report's
+   * caps rise to the sources' totals, as `parseStructuredReportResult` lets a
+   * bespoke consolidation. Undefined below the type's own caps.
+   */
+  private reviewLimits(
+    slot: GraphAgentSlotPort,
+  ): GraphTypeValidationContext["reviewLimits"] | undefined {
+    if (!this.reviewConsolidation(slot)) return undefined;
+    const classes = Object.values(this.input.sources);
+    const count = (kind: string) => classes.filter((value) => value === kind).length;
+    const maxIssues = Math.max(STRUCTURED_REVIEW_MAX_ISSUES, count("issue"));
+    const maxCoverageGaps = Math.max(STRUCTURED_REVIEW_MAX_COVERAGE_GAPS, count("coverage-gap"));
+    return maxIssues === STRUCTURED_REVIEW_MAX_ISSUES &&
+      maxCoverageGaps === STRUCTURED_REVIEW_MAX_COVERAGE_GAPS
+      ? undefined
+      : { maxIssues, maxCoverageGaps };
+  }
+
+  /** The type validation context of a port (choices, criteria, review caps). */
   validation(slot: GraphAgentSlotPort): GraphTypeValidationContext | undefined {
+    const limits = this.reviewLimits(slot);
     const context: GraphTypeValidationContext = {
       ...(slot.port.choices ? { choices: slot.port.choices } : {}),
       ...(this.input.criterionIds ? { criterionIds: this.input.criterionIds } : {}),
+      ...(limits ? { reviewLimits: limits } : {}),
     };
     return Object.keys(context).length > 0 ? context : undefined;
   }

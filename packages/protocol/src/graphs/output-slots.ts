@@ -111,6 +111,11 @@ export interface WorkflowGraphOutputContext {
   /** `verification-verdict@N` ports: the criterion IDs of the ticket being verified. */
   criterionIds?: string[];
   provenance?: GraphOutputProvenanceContext;
+  /**
+   * `review-report@N` ports of a consolidation (item 301): the raised issue
+   * and coverage-gap caps (`GraphTypeValidationContext.reviewLimits`).
+   */
+  reviewLimits?: { maxIssues: number; maxCoverageGaps: number };
 }
 
 export const GRAPH_OUTPUT_CONTEXT_BOUNDS = Object.freeze({
@@ -168,6 +173,7 @@ export function graphOutputContextProblem(value: unknown): string | null {
     "choices",
     "criterionIds",
     "provenance",
+    "reviewLimits",
   ]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) return `unknown field ${key}`;
   const port = graphOutputPortProblem(value.port);
@@ -201,6 +207,19 @@ export function graphOutputContextProblem(value: unknown): string | null {
     !stringList(value.criterionIds, B.maxCriterionIds, B.maxCriterionIdChars)
   )
     return "criterionIds is invalid";
+  if (value.reviewLimits !== undefined) {
+    const limits = value.reviewLimits as Record<string, unknown> | null;
+    const bounded = (count: unknown) =>
+      Number.isSafeInteger(count) && (count as number) >= 1 && (count as number) <= 4_096;
+    if (
+      typeof limits !== "object" ||
+      limits === null ||
+      Object.keys(limits).some((key) => key !== "maxIssues" && key !== "maxCoverageGaps") ||
+      !bounded(limits.maxIssues) ||
+      !bounded(limits.maxCoverageGaps)
+    )
+      return "reviewLimits is invalid";
+  }
   if (value.provenance !== undefined) {
     const provenance = value.provenance;
     const plan = graphProvenancePlanProblem(provenance);

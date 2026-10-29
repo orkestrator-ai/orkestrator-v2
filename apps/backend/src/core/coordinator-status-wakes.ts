@@ -195,6 +195,8 @@ export function multiReviewStatus(
   const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
   const fixSession = record(snapshot.fixSession) ? snapshot.fixSession : undefined;
   const autoPr = snapshot.autoPr === true;
+  // On the graph engine (item 301) a system step opens the pull request.
+  const graphEngine = snapshot.engine === "graph";
   const recordedPrLaunch =
     autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
   // A clean report's PR speaks for the review only while it rests on that
@@ -259,9 +261,13 @@ export function multiReviewStatus(
         state: "pr-started",
         tone: "info",
         terminal: false,
-        headline: `${finished}; PR session started`,
+        headline: graphEngine
+          ? `${finished}; the graph run opened the pull request`
+          : `${finished}; PR session started`,
         details: [
-          `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
+          graphEngine
+            ? "The graph run's pull request step pushed the branch and opened the pull request. Another update follows once the environment reports it."
+            : `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
         ],
         tools,
         mode: "settled",
@@ -273,7 +279,9 @@ export function multiReviewStatus(
         state: "pr-failed",
         tone: "failure",
         terminal: false,
-        headline: `${finished} but its PR session could not start`,
+        headline: graphEngine
+          ? `${finished} but the graph run did not open the pull request`
+          : `${finished} but its PR session could not start`,
         details: prLaunchMessage ? [`Error: ${prLaunchMessage}`] : [],
         tools: cleanReviewPr
           ? [read]
@@ -303,7 +311,9 @@ export function multiReviewStatus(
         ...(fix ? [`Files changed: ${count(fix.filesChanged)}`] : []),
         ...(prLaunch?.state === "launched"
           ? [
-              `PR session started${text(prLaunch.tabId) ? ` in tab ${prLaunch.tabId as string}` : ""}.`,
+              graphEngine
+                ? "The graph run opened the pull request."
+                : `PR session started${text(prLaunch.tabId) ? ` in tab ${prLaunch.tabId as string}` : ""}.`,
             ]
           : prLaunch
             ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]

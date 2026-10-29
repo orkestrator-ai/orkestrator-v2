@@ -1,18 +1,7 @@
 import { useMemo, type ReactNode } from "react";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { GraphCapabilityCeiling } from "@orkestrator/protocol/graphs/capability-profiles";
 import {
-  AGENT_PLATFORMS,
-  AGENT_PLATFORM_LABELS,
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
-import {
-  agentPolicyEnforcementMatrix,
-  compileGraphCapabilities,
-  type CompiledGraphCapabilities,
-  type GraphCapabilityCeiling,
-} from "@orkestrator/protocol/graphs/capability-profiles";
-import {
-  GRAPH_COMPILE_DEFAULT_ENVIRONMENT,
-  GRAPH_COMPILE_DEFAULT_HOST,
   graphPlanValueTypeLabel,
   type CompiledGraphPlan,
   type GraphCompileDiagnostic,
@@ -27,9 +16,12 @@ import {
 } from "@orkestrator/protocol/graphs/template";
 import { graphTypeFamily } from "@orkestrator/protocol/graphs/types";
 import type { GraphDesignerSelection } from "@/stores/graphDesignerStore";
-import { cn } from "@/lib/utils";
 import { GRAPH_NODE_KIND_ICONS, TypeFamilyDot } from "./GraphCanvasNodes";
 import { GraphDiagnosticRow } from "./GraphCompilePanel";
+import { GraphEnforcementMatrix, useGraphNodeCapabilities } from "./GraphEnforcementMatrix";
+import { GraphNodeEditor } from "./GraphNodeEditor";
+import { GraphEdgeEditor, GraphLoopEditor } from "./GraphStructureEditors";
+import { GraphTemplateEditor } from "./GraphTemplateEditor";
 import {
   GRAPH_ENFORCEMENT_LABELS,
   GRAPH_NODE_KIND_LABELS,
@@ -39,10 +31,12 @@ import {
 } from "./graph-designer-model";
 
 /**
- * The read-only inspector (report §7.2): what the selected node, edge or loop
- * is, with the compiled facts when the template compiled. An agent node shows
- * its compiled capabilities and the per-provider enforcement matrix (106),
- * computed in the browser under the same ceiling the compile used.
+ * The inspector (report §7.2): what the selected node, edge or loop is, with
+ * the compiled facts when the template compiled. An agent node shows its
+ * compiled capabilities and the per-provider enforcement matrix (106),
+ * computed in the browser under the same ceiling the compile used. While a
+ * user template is edited (item 212) it shows the editable forms instead,
+ * and the template-level form when nothing is selected.
  */
 
 interface GraphInspectorProps {
@@ -54,12 +48,45 @@ interface GraphInspectorProps {
   /** Enabled providers; the matrix marks the others. */
   providers: readonly AgentPlatform[];
   onSelect: (selection: GraphDesignerSelection) => void;
+  /**
+   * The editable inspector (item 212): forms instead of facts. The caller
+   * provides `GraphEditorContext`.
+   */
+  editing?: { idEditable: boolean };
 }
 
 export function GraphInspector(props: GraphInspectorProps) {
-  const { selection, template } = props;
+  const { selection, template, editing } = props;
   let body: ReactNode;
-  if (!selection) {
+  if (editing) {
+    if (!selection) body = <GraphTemplateEditor idEditable={editing.idEditable} />;
+    else if (selection.kind === "node") {
+      const node = template.nodes.find((candidate) => candidate.id === selection.id);
+      body = node ? (
+        <GraphNodeEditor
+          key={node.id}
+          node={node}
+          diagnostics={props.diagnostics.nodes.get(node.id)}
+        />
+      ) : (
+        <Missing what="node" />
+      );
+    } else if (selection.kind === "edge") {
+      body = (
+        <GraphEdgeEditor
+          edgeId={selection.id}
+          diagnostics={props.diagnostics.edges.get(selection.id)}
+        />
+      );
+    } else {
+      body = (
+        <GraphLoopEditor
+          loopId={selection.id}
+          diagnostics={props.diagnostics.loops.get(selection.id)}
+        />
+      );
+    }
+  } else if (!selection) {
     body = <TemplateSummary template={template} />;
   } else if (selection.kind === "node") {
     const node = template.nodes.find((candidate) => candidate.id === selection.id);
@@ -487,23 +514,7 @@ function AgentDetails({
   providers: readonly AgentPlatform[];
 }) {
   const role = template.roles.find((candidate) => candidate.key === node.role);
-  const compiled: CompiledGraphCapabilities | null = useMemo(() => {
-    if (planNode?.kind === "agent") return planNode.capabilities;
-    try {
-      return compileGraphCapabilities({
-        spec: node.capabilities,
-        environment: GRAPH_COMPILE_DEFAULT_ENVIRONMENT,
-        ...(ceiling ? { ceiling } : {}),
-      });
-    } catch {
-      return null;
-    }
-  }, [planNode, node.capabilities, ceiling]);
-  const matrix = useMemo(
-    () =>
-      compiled ? agentPolicyEnforcementMatrix(compiled.policy, GRAPH_COMPILE_DEFAULT_HOST) : {},
-    [compiled],
-  );
+  const compiled = useGraphNodeCapabilities(node, planNode, ceiling);
   const floor =
     planNode?.kind === "agent"
       ? planNode.minEnforcement
@@ -581,51 +592,7 @@ function AgentDetails({
       </Section>
       {compiled ? (
         <Section title="Enforcement by provider">
-          <table data-graph-enforcement-matrix="" className="w-full border-collapse text-left">
-            <thead>
-              <tr className="text-muted-foreground">
-                <th className="py-0.5 pr-2 font-normal">Provider</th>
-                <th className="py-0.5 font-normal">Tier</th>
-              </tr>
-            </thead>
-            <tbody>
-              {AGENT_PLATFORMS.map((platform) => {
-                const judgement = matrix[platform];
-                if (!judgement) return null;
-                const enabled = providers.length === 0 || providers.includes(platform);
-                return (
-                  <tr
-                    key={platform}
-                    data-graph-enforcement-provider={platform}
-                    className={cn("align-top", !enabled && "opacity-50")}
-                  >
-                    <td className="py-0.5 pr-2 whitespace-nowrap">
-                      {AGENT_PLATFORM_LABELS[platform]}
-                      {enabled ? "" : " (off)"}
-                    </td>
-                    <td className="py-0.5">
-                      <span
-                        className={cn(
-                          judgement.tier === "enforced" && "text-emerald-300",
-                          judgement.tier === "provider-configured" && "text-sky-300",
-                          judgement.tier === "advisory" && "text-amber-300",
-                        )}
-                      >
-                        {GRAPH_ENFORCEMENT_LABELS[judgement.tier]}
-                      </span>
-                      {judgement.reason ? (
-                        <p className="text-muted-foreground">{judgement.reason}</p>
-                      ) : null}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <p className="text-muted-foreground">
-            Rated without a Claude command sandbox, the conservative answer when the host is not
-            probed; the backend compile uses the probed host.
-          </p>
+          <GraphEnforcementMatrix compiled={compiled} providers={providers} />
         </Section>
       ) : null}
     </>

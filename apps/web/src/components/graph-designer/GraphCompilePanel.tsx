@@ -1,5 +1,9 @@
-import { AlertCircle, AlertTriangle, Info, Loader2 } from "lucide-react";
-import type { GraphCompileDiagnostic } from "@orkestrator/protocol/graphs/compile";
+import { AlertCircle, AlertTriangle, Info, Loader2, ShieldCheck } from "lucide-react";
+import type {
+  GraphCompileDiagnostic,
+  GraphPlanAcknowledgementRef,
+} from "@orkestrator/protocol/graphs/compile";
+import { Button } from "@/components/ui/button";
 import type {
   GraphDesignerCompile,
   GraphDesignerLoadStatus,
@@ -12,6 +16,10 @@ import { graphDiagnosticCounts } from "./graph-designer-model";
  * The compile panel (report §7.4): every diagnostic, pinned to the node, edge
  * or loop it names (clicking selects it and brings it into view), and the
  * cost estimate: best- and worst-case agent sessions and peak parallelism.
+ * While a template is edited (item 212) it is live (the draft compiles in the
+ * browser as it changes) and lists the warnings waiting for the user's
+ * acknowledgement (§5.13 taint, D4 lowered floor), each with an Acknowledge
+ * action that records it in the template against the warning's digest.
  */
 
 const SEVERITY_ICON = {
@@ -91,17 +99,81 @@ export function GraphDiagnosticRow({
   );
 }
 
+function PendingAcknowledgements({
+  compile,
+  onAcknowledge,
+  onSelect,
+}: {
+  compile: GraphDesignerCompile;
+  onAcknowledge: (ref: GraphPlanAcknowledgementRef) => void;
+  onSelect: (selection: GraphDesignerSelection, focus?: boolean) => void;
+}) {
+  if (compile.pendingAcknowledgements.length === 0) return null;
+  return (
+    <section
+      aria-label="Needs your acknowledgement"
+      data-graph-pending-acknowledgements={compile.pendingAcknowledgements.length}
+      className="border-b border-border/60 bg-amber-500/5 px-2 py-1.5"
+    >
+      <h4 className="px-1 pb-1 text-[11px] font-semibold text-amber-200">
+        Needs your acknowledgement ({compile.pendingAcknowledgements.length})
+      </h4>
+      <ul className="flex flex-col gap-1">
+        {compile.pendingAcknowledgements.map((ref) => {
+          const diagnostic = compile.diagnostics.find(
+            (entry) => entry.acknowledgement?.digest === ref.digest,
+          );
+          return (
+            <li
+              key={`${ref.kind}:${ref.digest}`}
+              data-graph-pending-acknowledgement={ref.code}
+              className="flex items-start gap-2 text-xs"
+            >
+              <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-left hover:underline"
+                onClick={() => onSelect({ kind: "node", id: ref.nodeId }, true)}
+              >
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {ref.code} · {ref.nodeId}
+                </span>
+                <span className="block break-words text-foreground">
+                  {diagnostic?.message ?? `A ${ref.kind} warning on ${ref.nodeId}`}
+                </span>
+              </button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 shrink-0 px-2 text-[11px]"
+                aria-label={`Acknowledge ${ref.code} on ${ref.nodeId}`}
+                onClick={() => onAcknowledge(ref)}
+              >
+                <ShieldCheck className="size-3" />
+                Acknowledge
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function GraphCompilePanel({
   compile,
   status,
   error,
   onSelect,
+  onAcknowledge,
   className,
 }: {
   compile: GraphDesignerCompile | null;
   status: GraphDesignerLoadStatus;
   error: string | null;
   onSelect: (selection: GraphDesignerSelection, focus?: boolean) => void;
+  /** The editor's: records an acknowledgement in the draft. */
+  onAcknowledge?: (ref: GraphPlanAcknowledgementRef) => void;
   className?: string;
 }) {
   const counts = compile ? graphDiagnosticCounts(compile.diagnostics) : null;
@@ -168,6 +240,13 @@ export function GraphCompilePanel({
         ) : null}
       </header>
       {error ? <p className="px-3 py-2 text-xs text-failure">Could not compile: {error}</p> : null}
+      {compile && onAcknowledge ? (
+        <PendingAcknowledgements
+          compile={compile}
+          onAcknowledge={onAcknowledge}
+          onSelect={onSelect}
+        />
+      ) : null}
       {compile ? (
         compile.diagnostics.length === 0 ? (
           <p data-graph-compile-clean="" className="px-3 py-2 text-xs text-muted-foreground">

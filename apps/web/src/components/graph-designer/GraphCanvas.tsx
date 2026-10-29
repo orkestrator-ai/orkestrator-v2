@@ -5,18 +5,29 @@ import {
   Controls,
   MarkerType,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
+  useConnection,
   useNodesInitialized,
   useReactFlow,
   useUpdateNodeInternals,
+  type Connection,
   type EdgeMouseHandler,
   type NodeChange,
   type NodeMouseHandler,
+  type OnNodeDrag,
+  type XYPosition,
 } from "@xyflow/react";
+import type { GraphLayoutPoint } from "@orkestrator/protocol/graphs/template";
 import type { GraphDesignerSelection } from "@/stores/graphDesignerStore";
 import { cn } from "@/lib/utils";
-import { GRAPH_CANVAS_NODE_TYPES } from "./GraphCanvasNodes";
+import { GRAPH_CANVAS_NODE_TYPES, GraphCanvasConnectContext } from "./GraphCanvasNodes";
+import { GraphPalette } from "./GraphPalette";
+import type { GraphConnectEnd, GraphConnectionVerdict } from "./graph-designer-connect";
+import type { GraphPaletteItem } from "./graph-designer-edits";
+import { GRAPH_NODE_WIDTH } from "./graph-designer-layout";
+import type { GraphEditorCommand } from "./graph-editor-context";
 import {
   GRAPH_TYPE_FAMILY_COLORS,
   type GraphCanvasEdge,
@@ -25,11 +36,19 @@ import {
 } from "./graph-designer-model";
 
 /**
- * The read-only Graphs canvas (React Flow, item 110). Nodes cannot be dragged
- * or connected. Keyboard follows the flow graph's pattern: one tab stop (the
- * selected node, else the first), arrows and Home/End move through the nodes
- * in topological order, Enter or Space selects. Edges are not tab stops; the
- * inspector and the compile panel list them.
+ * The Graphs canvas (React Flow). Read-only (item 110) unless an `editor` is
+ * given (item 212): then nodes drag (positions go to the template's layout),
+ * ports connect (only compatible targets light up; see
+ * `graph-designer-connect.ts`), the palette adds nodes, and dragging a node
+ * onto a loop frame moves it into that loop (out of it, when dragged off a
+ * frame that has other members).
+ *
+ * Keyboard follows the flow graph's pattern: one tab stop (the selected node,
+ * else the first), arrows and Home/End move through the nodes in topological
+ * order, Enter or Space selects. Editing adds Delete (remove the node, or the
+ * selected edge), Shift+arrows (move the node), C ("Connect to…") and L
+ * ("Move into loop"). Edges are not tab stops; the inspector and the compile
+ * panel list them.
  */
 
 const ERROR_STROKE = "#f87171";
@@ -37,8 +56,30 @@ const ERROR_STROKE = "#f87171";
 export const GRAPH_READABLE_ZOOM = 0.6;
 const VIEWPORT_MARGIN = 24;
 
+/** What the editable canvas asks of the designer; every change is one undo step. */
+export interface GraphCanvasEditor {
+  verdict: (from: GraphConnectEnd, to: GraphConnectEnd) => GraphConnectionVerdict;
+  connect: (verdict: Extract<GraphConnectionVerdict, { ok: true }>) => void;
+  refuse: (reason: string) => void;
+  /** Absolute positions, and loop membership changes (`null`: out of its loop). */
+  move: (
+    positions: Record<string, GraphLayoutPoint>,
+    loops: Record<string, string | null>,
+    options?: { coalesce?: string },
+  ) => void;
+  remove: (selection: NonNullable<GraphDesignerSelection>) => void;
+  add: (item: GraphPaletteItem, position: GraphLayoutPoint) => void;
+  wrapInLoop: (nodeId: string) => void;
+  command: (command: GraphEditorCommand, nodeId: string) => void;
+}
+
+/** Shift+arrow moves the focused node this far. */
+const NUDGE = 20;
+
 interface GraphCanvasProps {
   model: GraphCanvasModel;
+  /** Present on the editable canvas (item 212). */
+  editor?: GraphCanvasEditor;
   selection: GraphDesignerSelection;
   /** Bumped to bring the selection into view (and focus a selected node). */
   focusRequest: number;
@@ -74,6 +115,7 @@ function nodeSelected(node: GraphCanvasNode, selection: GraphDesignerSelection):
 
 function GraphCanvasInner({
   model,
+  editor,
   selection,
   focusRequest,
   isActive,
@@ -90,6 +132,8 @@ function GraphCanvasInner({
   const [measured, setMeasured] = useState<Map<string, { width: number; height: number }>>(
     () => new Map(),
   );
+  // Positions of nodes being dragged, until the drop writes them to the template.
+  const [dragged, setDragged] = useState<Map<string, XYPosition>>(() => new Map());
 
   const activeId =
     selection?.kind === "node" && model.order.includes(selection.id)
@@ -101,8 +145,10 @@ function GraphCanvasInner({
       model.nodes.map((node) => {
         const selected = nodeSelected(node, selection);
         const size = measured.get(node.id);
+        const position = dragged.get(node.id);
         return {
           ...node,
+          ...(position ? { position } : {}),
           ...(size ? { measured: size } : {}),
           selected,
           ...(node.type === "graph-node"
@@ -115,7 +161,7 @@ function GraphCanvasInner({
             : {}),
         } as GraphCanvasNode;
       }),
-    [model.nodes, selection, measured, activeId],
+    [model.nodes, selection, measured, dragged, activeId],
   );
 
   const edges = useMemo<GraphCanvasEdge[]>(
@@ -153,13 +199,140 @@ function GraphCanvasInner({
       (change): change is Extract<NodeChange<GraphCanvasNode>, { type: "dimensions" }> =>
         change.type === "dimensions" && Boolean(change.dimensions),
     );
-    if (sizes.length === 0) return;
-    setMeasured((previous) => {
-      const next = new Map(previous);
-      for (const change of sizes) next.set(change.id, change.dimensions!);
-      return next;
-    });
+    if (sizes.length > 0) {
+      setMeasured((previous) => {
+        const next = new Map(previous);
+        for (const change of sizes) next.set(change.id, change.dimensions!);
+        return next;
+      });
+    }
+    const moves = changes.filter(
+      (change): change is Extract<NodeChange<GraphCanvasNode>, { type: "position" }> =>
+        change.type === "position" && Boolean(change.position),
+    );
+    if (moves.length > 0) {
+      setDragged((previous) => {
+        const next = new Map(previous);
+        for (const change of moves) next.set(change.id, change.position!);
+        return next;
+      });
+    }
   }, []);
+
+  // A new model carries the dropped positions; the overlay is no longer needed.
+  const [overlayModel, setOverlayModel] = useState(model);
+  if (overlayModel !== model) {
+    setOverlayModel(model);
+    if (dragged.size > 0) setDragged(new Map());
+  }
+
+  const absolute = useCallback(
+    (relative: XYPosition, parentId: string | undefined): XYPosition => {
+      if (!parentId) return relative;
+      const parent = flow.getInternalNode(parentId);
+      const origin = dragged.get(parentId) ?? parent?.internals.positionAbsolute ?? { x: 0, y: 0 };
+      return { x: origin.x + relative.x, y: origin.y + relative.y };
+    },
+    [flow, dragged],
+  );
+
+  /** Where a node dropped at `point` belongs: a loop it was dropped on, or out of its own. */
+  const containment = useCallback(
+    (id: string, point: XYPosition): string | null | undefined => {
+      const size = flow.getInternalNode(id)?.measured;
+      const center = {
+        x: point.x + (size?.width ?? GRAPH_NODE_WIDTH) / 2,
+        y: point.y + (size?.height ?? 100) / 2,
+      };
+      const inside = (box: { x: number; y: number; width: number; height: number }) =>
+        center.x >= box.x &&
+        center.x <= box.x + box.width &&
+        center.y >= box.y &&
+        center.y <= box.y + box.height;
+      const node = model.nodes.find((candidate) => candidate.id === id);
+      const current = node?.parentId?.startsWith("loop:") ? node.parentId.slice(5) : null;
+      for (const [loopId, box] of model.layout.loops) {
+        if (loopId !== current && inside(box)) return loopId;
+      }
+      if (current === null) return undefined;
+      const own = model.layout.loops.get(current);
+      const members = model.nodes.filter((candidate) => candidate.parentId === `loop:${current}`);
+      // A loop's only member drags its frame along: a region needs a node.
+      if (own && !inside(own) && members.length > 1) return null;
+      return undefined;
+    },
+    [flow, model],
+  );
+
+  const onNodeDragStop: OnNodeDrag<GraphCanvasNode> = useCallback(
+    (_event, _node, draggedNodes) => {
+      if (!editor) return;
+      const positions: Record<string, GraphLayoutPoint> = {};
+      const loops: Record<string, string | null> = {};
+      for (const node of draggedNodes) {
+        if (node.type === "graph-node") {
+          const point = absolute(node.position, node.parentId);
+          positions[node.id] = point;
+          const target = containment(node.id, point);
+          if (target !== undefined) loops[node.id] = target;
+        } else if (node.type === "graph-loop") {
+          // Members keep their place in the frame; they move with it.
+          for (const member of model.nodes) {
+            if (member.parentId !== node.id) continue;
+            positions[member.id] = {
+              x: node.position.x + member.position.x,
+              y: node.position.y + member.position.y,
+            };
+          }
+        }
+      }
+      if (Object.keys(positions).length > 0) editor.move(positions, loops);
+    },
+    [editor, absolute, containment, model.nodes],
+  );
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!editor) return;
+      const verdict = editor.verdict(
+        { node: connection.source, handle: connection.sourceHandle ?? "" },
+        { node: connection.target, handle: connection.targetHandle ?? "" },
+      );
+      if (verdict.ok) editor.connect(verdict);
+      else editor.refuse(verdict.reason);
+    },
+    [editor],
+  );
+
+  const isValidConnection = useCallback(
+    (connection: Connection | GraphCanvasEdge) =>
+      editor
+        ? editor.verdict(
+            { node: connection.source, handle: connection.sourceHandle ?? "" },
+            { node: connection.target, handle: connection.targetHandle ?? "" },
+          ).ok
+        : false,
+    [editor],
+  );
+
+  const connectContext = useMemo(() => (editor ? { verdict: editor.verdict } : null), [editor]);
+
+  /** The centre of the visible canvas, for nodes added from the palette. */
+  const viewportCenter = useCallback((): GraphLayoutPoint => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    const center = rect
+      ? flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+      : { x: 0, y: 0 };
+    // Cascade, so repeated adds do not stack exactly.
+    const taken = model.nodes.filter(
+      (node) =>
+        Math.abs(node.position.x - center.x) < 30 && Math.abs(node.position.y - center.y) < 30,
+    ).length;
+    return {
+      x: center.x - GRAPH_NODE_WIDTH / 2 + taken * 30,
+      y: center.y - 60 + taken * 30,
+    };
+  }, [flow, model.nodes]);
 
   // Ports may move inside a face without changing its size.
   useEffect(() => {
@@ -255,13 +428,50 @@ function GraphCanvasInner({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const element = (event.target as HTMLElement).closest<HTMLElement>(".react-flow__node");
     const id = element?.dataset.id;
-    if (!id) return;
+    if (!id) {
+      if (
+        editor &&
+        selection?.kind === "edge" &&
+        (event.key === "Delete" || event.key === "Backspace")
+      ) {
+        event.preventDefault();
+        editor.remove(selection);
+      }
+      return;
+    }
     const index = model.order.indexOf(id);
     if (index < 0) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect({ kind: "node", id });
       return;
+    }
+    if (editor && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        editor.remove({ kind: "node", id });
+        return;
+      }
+      if (event.key === "c" || event.key === "C") {
+        event.preventDefault();
+        editor.command("connect", id);
+        return;
+      }
+      if (event.key === "l" || event.key === "L") {
+        event.preventDefault();
+        editor.command("loop", id);
+        return;
+      }
+      if (event.shiftKey && event.key.startsWith("Arrow")) {
+        event.preventDefault();
+        const node = flow.getInternalNode(id);
+        if (!node) return;
+        const { x, y } = node.internals.positionAbsolute;
+        const dx = event.key === "ArrowLeft" ? -NUDGE : event.key === "ArrowRight" ? NUDGE : 0;
+        const dy = event.key === "ArrowUp" ? -NUDGE : event.key === "ArrowDown" ? NUDGE : 0;
+        editor.move({ [id]: { x: x + dx, y: y + dy } }, {}, { coalesce: `nudge:${id}` });
+        return;
+      }
     }
     let target: number | null = null;
     if (event.key === "ArrowRight" || event.key === "ArrowDown") target = index + 1;
@@ -276,37 +486,89 @@ function GraphCanvasInner({
     focusNode(next);
   };
 
+  const selectedNode = selection?.kind === "node" ? selection.id : null;
   return (
     <div
       ref={wrapperRef}
       data-graph-canvas=""
+      data-graph-canvas-editable={editor ? "" : undefined}
       className={cn("graph-designer-canvas relative h-full min-h-0 w-full", className)}
       onKeyDown={onKeyDown}
     >
-      <ReactFlow<GraphCanvasNode, GraphCanvasEdge>
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={GRAPH_CANVAS_NODE_TYPES}
-        onNodesChange={onNodesChange}
-        onNodeClick={onNodeClick}
-        onEdgeClick={onEdgeClick}
-        onPaneClick={() => onSelect(null)}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable
-        edgesFocusable={false}
-        elementsSelectable={false}
-        disableKeyboardA11y
-        colorMode="dark"
-        minZoom={0.15}
-        maxZoom={1.75}
-        proOptions={{ hideAttribution: true }}
-        aria-label="Graph canvas"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-        <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable position="bottom-right" className="@max-4xl:hidden" />
-      </ReactFlow>
+      <GraphCanvasConnectContext.Provider value={connectContext}>
+        <ReactFlow<GraphCanvasNode, GraphCanvasEdge>
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={GRAPH_CANVAS_NODE_TYPES}
+          onNodesChange={onNodesChange}
+          onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
+          onPaneClick={() => onSelect(null)}
+          {...(editor ? { onConnect, isValidConnection, onNodeDragStop, deleteKeyCode: null } : {})}
+          nodesDraggable={Boolean(editor)}
+          nodesConnectable={Boolean(editor)}
+          nodesFocusable
+          edgesFocusable={false}
+          elementsSelectable={false}
+          disableKeyboardA11y
+          colorMode="dark"
+          minZoom={0.15}
+          maxZoom={1.75}
+          proOptions={{ hideAttribution: true }}
+          aria-label={editor ? "Graph canvas (editable)" : "Graph canvas"}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+          <Controls showInteractive={false} position="bottom-left" />
+          <MiniMap pannable zoomable position="bottom-right" className="@max-4xl:hidden" />
+          {editor ? (
+            <>
+              <Panel position="top-left">
+                <GraphPalette
+                  onAdd={(item) => editor.add(item, viewportCenter())}
+                  wrapTarget={selectedNode}
+                  onWrapInLoop={(nodeId) => editor.wrapInLoop(nodeId)}
+                />
+              </Panel>
+              <Panel position="bottom-center">
+                <ConnectionHint editor={editor} />
+              </Panel>
+            </>
+          ) : null}
+        </ReactFlow>
+      </GraphCanvasConnectContext.Provider>
     </div>
+  );
+}
+
+/** While a connection is dragged over a handle: what it would become, or why not. */
+function ConnectionHint({ editor }: { editor: GraphCanvasEditor }) {
+  const ends = useConnection((connection) =>
+    connection.inProgress && connection.fromHandle && connection.toHandle && connection.toNode
+      ? {
+          fromNode: connection.fromNode.id,
+          fromHandle: connection.fromHandle.id ?? "",
+          toNode: connection.toNode.id,
+          toHandle: connection.toHandle.id ?? "",
+        }
+      : null,
+  );
+  if (!ends || !("fromNode" in ends)) return null;
+  const verdict = editor.verdict(
+    { node: ends.fromNode, handle: ends.fromHandle },
+    { node: ends.toNode, handle: ends.toHandle },
+  );
+  return (
+    <p
+      role="status"
+      data-graph-connection-hint={verdict.ok ? "ok" : "refused"}
+      className={cn(
+        "rounded-md border px-2 py-1 text-[11px] shadow-sm",
+        verdict.ok
+          ? "border-indigo-400/50 bg-flow-node text-foreground"
+          : "border-failure/50 bg-flow-node text-failure",
+      )}
+    >
+      {verdict.ok ? verdict.summary : verdict.reason}
+    </p>
   );
 }

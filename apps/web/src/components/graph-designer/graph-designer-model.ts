@@ -196,11 +196,15 @@ export type GraphCanvasNodeData = {
   outlets: GraphDesignerOutletView[];
   diagnostics: GraphDiagnosticCounts;
   ariaLabel: string;
+  /** Editable canvas: a `+` handle that adds an input of the connected type. */
+  newInput?: boolean;
 };
 
 export type GraphIoNodeData = {
   direction: "inputs" | "outputs";
   ports: GraphDesignerPortView[];
+  /** Editable canvas: `$outputs` takes a `+` handle that adds a run output. */
+  newPort?: boolean;
 };
 
 export type GraphLoopNodeData = {
@@ -352,6 +356,12 @@ function sourceEndpoint(source: GraphEdgeSource): Endpoint {
 
 export interface GraphCanvasModelInput {
   template: GraphTemplateV1;
+  /**
+   * The editable canvas (item 212): both I/O ends always shown, a `+` input
+   * handle on every node that can take one, and loop members free to leave
+   * their frame.
+   */
+  editable?: boolean;
   /** The compiled plan, when the template compiled without errors. */
   plan?: CompiledGraphPlan | null;
   diagnostics?: readonly GraphCompileDiagnostic[];
@@ -363,7 +373,8 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
   const plan = input.plan ?? null;
   const diagnostics = indexGraphDiagnostics(input.diagnostics ?? []);
   const library = graphTemplateTypeLibrary(template);
-  const layout = layoutGraphTemplate(template);
+  const editable = input.editable === true;
+  const layout = layoutGraphTemplate(template, { alwaysIo: editable });
   const planNodes = new Map((plan?.nodes ?? []).map((node) => [node.id, node]));
   const planEdges = new Map((plan?.edges ?? []).map((edge) => [edge.id, edge]));
   const counts = (map: Map<string, GraphCompileDiagnostic[]>, key: string) => {
@@ -440,7 +451,9 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
       id: node.id,
       type: "graph-node",
       position: loopBox ? { x: box.x - loopBox.x, y: box.y - loopBox.y } : { x: box.x, y: box.y },
-      ...(loopId && loopBox ? { parentId: `loop:${loopId}`, extent: "parent" as const } : {}),
+      ...(loopId && loopBox
+        ? { parentId: `loop:${loopId}`, ...(editable ? {} : { extent: "parent" as const }) }
+        : {}),
       width: box.width,
       ariaRole: "button",
       ariaLabel,
@@ -456,8 +469,10 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
         outlets,
         diagnostics: nodeDiagnostics,
         ariaLabel,
+        ...(editable && node.kind !== "subgraph" ? { newInput: true } : {}),
       },
     });
+    if (editable && node.kind !== "subgraph") handles.get(node.id)!.add("in:+");
   }
 
   const inputsBox = layout.boxes.get(GRAPH_INPUTS_NODE_ID);
@@ -474,16 +489,17 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
       width: inputsBox.width,
       focusable: false,
       selectable: false,
+      draggable: false,
       data: { direction: "inputs", ports },
     });
   }
   const outputsBox = layout.boxes.get(GRAPH_OUTPUTS_NODE_ID);
   if (outputsBox) {
     const ports = (template.outputs ?? []).map((port) => portView("in", port, library));
-    addHandles(
-      GRAPH_OUTPUTS_NODE_ID,
-      ports.map((port) => port.handleId),
-    );
+    addHandles(GRAPH_OUTPUTS_NODE_ID, [
+      ...ports.map((port) => port.handleId),
+      ...(editable ? ["in:+"] : []),
+    ]);
     nodes.push({
       id: GRAPH_OUTPUTS_NODE_ID,
       type: "graph-io",
@@ -491,7 +507,8 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
       width: outputsBox.width,
       focusable: false,
       selectable: false,
-      data: { direction: "outputs", ports },
+      draggable: false,
+      data: { direction: "outputs", ports, ...(editable ? { newPort: true } : {}) },
     });
   }
 

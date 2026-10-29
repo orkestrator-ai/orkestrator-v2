@@ -9,6 +9,7 @@ import {
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
+import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
 import {
@@ -62,6 +63,7 @@ export function registerCoordinatorWorkflowTools(
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
+  registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,
     coordinatorId: coordinatorScope.coordinatorId,
@@ -97,7 +99,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, and multi-review associations for this project with bounded authoritative summaries.",
+        "List durable worker, build-pipeline, multi-review and graph-run associations for this project with bounded authoritative summaries.",
       inputSchema: z.object({}),
       annotations: readAnnotations(),
     },
@@ -149,6 +151,12 @@ export function registerCoordinatorWorkflowTools(
               });
               const record = normalizedWorkflow(workflow);
               resource = record ? workflowSummary(record) : null;
+            } else if (kind === "graph-run") {
+              const run = await inv<unknown>("get_coordinator_graph_run", {
+                scope: coordinatorScope,
+                runId: resourceId,
+              });
+              resource = isRecord(run) && isRecord(run.run) ? run.run : null;
             }
           } catch {
             resource = { id: resourceId, status: "unavailable" };

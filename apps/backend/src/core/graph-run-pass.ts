@@ -35,6 +35,7 @@
  */
 import {
   boundGraphError,
+  GRAPH_RUN_INPUT_PRODUCER,
   GRAPH_RUN_LIMIT_CODES,
   graphBranchBinding,
   graphNodeBranches,
@@ -107,9 +108,26 @@ export interface GraphRunProvisioner {
     signal: AbortSignal,
   ): Promise<
     | { state: "pending" }
-    | { state: "ready"; environmentId: string }
+    | {
+        state: "ready";
+        environmentId: string;
+        /**
+         * The new environment's branch and HEAD, when the run has `workspace@1`
+         * inputs the launch deferred to it (item 214).
+         */
+        workspace?: { branch: string; headRef: string };
+      }
     | { state: "failed"; error: string }
   >;
+}
+
+/** The `workspace@1` run inputs without a stored artifact (deferred to a new environment). */
+export function graphDeferredWorkspaceInputs(
+  run: Pick<GraphRun, "plan" | "bindings">,
+): GraphRun["plan"]["inputs"] {
+  return run.plan.inputs.filter(
+    (input) => input.type === "workspace@1" && run.bindings.inputs[input.name] === undefined,
+  );
 }
 
 /**
@@ -351,13 +369,61 @@ class GraphRunPass {
         cause: "system-error",
       });
     } else {
-      this.run = transitionGraphRun(
-        { ...this.run, environmentId: outcome.environmentId },
-        "running",
-        this.at(),
-      );
+      const inputs = await this.deferredWorkspaceInputs(outcome.workspace);
+      if (typeof inputs === "string") {
+        this.run = transitionGraphRun(this.run, "failed", this.at(), {
+          error: inputs,
+          cause: "system-error",
+        });
+      } else {
+        this.run = transitionGraphRun(
+          {
+            ...this.run,
+            environmentId: outcome.environmentId,
+            bindings: { ...this.run.bindings, inputs: { ...this.run.bindings.inputs, ...inputs } },
+          },
+          "running",
+          this.at(),
+        );
+      }
     }
     await this.save();
+  }
+
+  /**
+   * `workspace@1` run inputs a launch on a new environment left empty (item
+   * 214): stored now from the environment's branch and HEAD. Returns the
+   * artifact ids by input name, or why the run cannot start.
+   */
+  private async deferredWorkspaceInputs(
+    workspace: { branch: string; headRef: string } | undefined,
+  ): Promise<Record<string, string> | string> {
+    const empty = graphDeferredWorkspaceInputs(this.run);
+    if (empty.length === 0) return {};
+    if (!workspace) {
+      return empty.some((input) => input.required)
+        ? "The run's new environment has no commit to start from"
+        : {};
+    }
+    const ids: Record<string, string> = {};
+    try {
+      for (const input of empty) {
+        const artifact = await this.deps.artifacts.putValue({
+          runId: this.run.id,
+          type: input.type,
+          producer: {
+            nodeId: GRAPH_RUN_INPUT_PRODUCER,
+            activation: GRAPH_RUN_INPUT_PRODUCER,
+            port: input.name,
+          },
+          value: { branch: workspace.branch, headRef: workspace.headRef, baseRef: null },
+        });
+        ids[input.name] = artifact.id;
+      }
+    } catch (error) {
+      return `The run's workspace input was refused (${error instanceof GraphStorageError ? error.code : "invalid-artifact"})`;
+    }
+    return ids;
   }
 
   // ------------------------------------------------------------ executor calls

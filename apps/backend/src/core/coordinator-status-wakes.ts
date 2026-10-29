@@ -85,6 +85,9 @@ export interface CoordinatorStatus {
   mode: CoordinatorStatusWakeMode;
 }
 
+/** The workflow kinds whose saves are observed for status wakes. */
+export type CoordinatorStatusWorkflowKind = "multi-review" | "build-pipeline" | "graph-run";
+
 export interface CoordinatorStatusResource {
   kind: AgentMailNoticeResource;
   id: string;
@@ -580,6 +583,91 @@ export function buildPipelineStatus(
   return null;
 }
 
+/** Node ids listed in a graph run notice. */
+const MAX_GRAPH_RUN_NODES = 6;
+
+/**
+ * The settled status of a graph run (item 214, D6), reduced over two run
+ * events only, so every way a run can end or stop for a person is covered by
+ * the run record alone:
+ *
+ * - **ended**: a terminal status (`complete`, `failed`, `cancelled`), keyed
+ *   `ended:<status>`, sent whatever the wake setting (as every terminal
+ *   workflow notice is);
+ * - **waiting for a person**: the run is `waiting`, or any live activation is
+ *   `awaiting-human` (a human node of item 208, or an agent's `ask_human`
+ *   question), keyed by the waiting positions (activation key, attempt and
+ *   open question id), so the same wait is reported once and a new wait after
+ *   the run resumed is reported again.
+ *
+ * Anything else is progress and wakes nobody. Details are content-free:
+ * counts, node ids, the run's bounded error and its cause.
+ */
+export function graphRunStatus(run: unknown, runId: string): CoordinatorStatus | null {
+  if (!record(run)) return null;
+  const status = text(run.status);
+  const read = `get_graph_run { "runId": "${runId}" }`;
+  const plan = record(run.plan) ? run.plan : undefined;
+  const template = record(plan?.template) ? text(plan.template.name) : undefined;
+  const templateLine = template ? [`Graph: ${boundedLine(template, MAX_LABEL_CHARS)}`] : [];
+  const usage = record(run.usage) ? run.usage : undefined;
+  const sessions = typeof usage?.agentSessions === "number" ? usage.agentSessions : 0;
+  const usageLine = [`${sessions} agent session${sessions === 1 ? "" : "s"} used.`];
+  const mockLine = run.mock === true ? ["A mock run: no sessions, no side effects."] : [];
+  if (status === "complete" || status === "failed" || status === "cancelled") {
+    const errorLines = text(run.error)
+      ? [
+          `Error: ${boundedLine(run.error as string)}${text(run.errorCause) ? ` (${text(run.errorCause)})` : ""}`,
+        ]
+      : [];
+    return {
+      key: `ended:${status}`,
+      state: status === "complete" ? "completed" : status,
+      tone: status === "complete" ? "success" : status === "failed" ? "failure" : "info",
+      terminal: true,
+      headline:
+        status === "complete" ? "completed" : status === "failed" ? "failed" : "was cancelled",
+      details: [...templateLine, ...mockLine, ...usageLine, ...errorLines],
+      tools: [read],
+      mode: "off",
+    };
+  }
+  const activations = Array.isArray(run.activations) ? run.activations : [];
+  const waiting = activations
+    .filter((activation) => record(activation) && activation.state === "awaiting-human")
+    .map((activation) => activation as Record<string, unknown>);
+  if (status !== "waiting" && waiting.length === 0) return null;
+  const positions = waiting
+    .map((activation) => {
+      const session = record(activation.session) ? activation.session : undefined;
+      const question = record(session?.question) ? text(session.question.id) : undefined;
+      return `${text(activation.key) ?? ""}#${typeof activation.attempt === "number" ? activation.attempt : 0}#${question ?? ""}`;
+    })
+    .sort();
+  const nodes = [
+    ...new Set(waiting.map((activation) => text(activation.nodeId)).filter(Boolean)),
+  ] as string[];
+  const shown = nodes.slice(0, MAX_GRAPH_RUN_NODES).join(", ");
+  const more =
+    nodes.length > MAX_GRAPH_RUN_NODES ? ` and ${nodes.length - MAX_GRAPH_RUN_NODES} more` : "";
+  return {
+    key: `waiting:${hash(positions.join("\n"))}`,
+    state: "waiting",
+    tone: "attention",
+    terminal: false,
+    headline: "is waiting for a person",
+    details: [
+      ...templateLine,
+      waiting.length > 0
+        ? `${waiting.length} step${waiting.length === 1 ? "" : "s"} waiting: ${shown}${more}.`
+        : "The run is waiting for a person.",
+      "The user answers in the run view; the run resumes on its own once they do.",
+    ],
+    tools: [read],
+    mode: "settled",
+  };
+}
+
 /** Subject, Markdown body and structured notice for one status, all bounded. */
 export function renderCoordinatorStatusNotice(
   resource: CoordinatorStatusResource,
@@ -590,7 +678,9 @@ export function renderCoordinatorStatusNotice(
       ? "Multi Review"
       : resource.kind === "build-pipeline"
         ? "Build pipeline"
-        : "Worker";
+        : resource.kind === "graph-run"
+          ? "Graph run"
+          : "Worker";
   const label = resource.label ? ` ${boundedLine(resource.label, MAX_LABEL_CHARS)}` : "";
   const subject = boundedLine(`${name}${label} ${status.headline}`, 160);
   const where =
@@ -839,7 +929,15 @@ export class CoordinatorStatusWakes {
   }
 
   private onResourceChange(change: ResourceChange): void {
-    if (change.resource !== "multi-review" && change.resource !== "build-pipeline") return;
+    if (
+      change.resource !== "multi-review" &&
+      change.resource !== "build-pipeline" &&
+      change.resource !== "graph-run"
+    ) {
+      return;
+    }
+    // A removed run has nothing left to report.
+    if (change.resource === "graph-run" && change.deleted) return;
     const kind = change.resource;
     const key = `${kind}\0${change.id}`;
     if (this.changeTimers.has(key)) return;
@@ -877,7 +975,7 @@ export class CoordinatorStatusWakes {
 
   /** Observe one workflow now (on `nodeId`, or this node). Cheap when no coordinator owns it. */
   observeWorkflow(
-    kind: "multi-review" | "build-pipeline",
+    kind: CoordinatorStatusWorkflowKind,
     resourceId: string,
     nodeId?: string,
   ): Promise<void> {
@@ -910,7 +1008,9 @@ export class CoordinatorStatusWakes {
       const mode = await this.mode();
       for (const association of state.workflows) {
         if (
-          (association.kind === "multi-review" || association.kind === "build-pipeline") &&
+          (association.kind === "multi-review" ||
+            association.kind === "build-pipeline" ||
+            association.kind === "graph-run") &&
           !association.pending &&
           !association.terminalNotifiedAt
         ) {
@@ -970,6 +1070,10 @@ export class CoordinatorStatusWakes {
     association: CoordinatorWorkflowAssociation,
     mode: CoordinatorStatusWakeMode,
   ): Promise<void> {
+    if (association.kind === "graph-run") {
+      await this.observeGraphRun(workspaces, association, mode);
+      return;
+    }
     const kind = association.kind === "build-pipeline" ? "build-pipeline" : "multi-review";
     const remote = association.nodeId ? this.remote : null;
     if (association.nodeId && !remote) return;
@@ -1048,6 +1152,59 @@ export class CoordinatorStatusWakes {
     await this.recordNotice(association.id, status.key);
     if (status.terminal)
       await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
+  }
+
+  /**
+   * A graph run the coordinator launched (item 214): one notice when it ends,
+   * one each time it starts waiting for a person. Graph runs are launched on
+   * this node only, so there is no remote read.
+   */
+  private async observeGraphRun(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    if (association.nodeId) return;
+    const run = await this.storage.graphRuns.getGraphRun(association.resourceId);
+    if (!run) return;
+    const status = graphRunStatus(run, association.resourceId);
+    if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
+    if (association.statusNotice?.key === status.key) {
+      if (status.terminal)
+        await this.storage.coordinators.markCoordinatorWorkflowNotified(
+          association.id,
+          run.revision,
+        );
+      return;
+    }
+    const updatedAt = Date.parse(run.updatedAt);
+    if (
+      !status.terminal &&
+      !association.statusNotice &&
+      Number.isFinite(updatedAt) &&
+      this.timers.now() - updatedAt > STATUS_BACKFILL_LIMIT_MS
+    ) {
+      await this.recordNotice(association.id, status.key);
+      return;
+    }
+    const label = run.environmentId
+      ? (await this.storage.getEnvironment(run.environmentId))?.name
+      : undefined;
+    const delivered = await this.deliver(
+      workspaces,
+      association,
+      {
+        kind: "graph-run",
+        id: association.resourceId,
+        ...(run.environmentId ? { environmentId: run.environmentId } : {}),
+        label: label ? `${run.plan.template.name} in ${label}` : run.plan.template.name,
+      },
+      status,
+    );
+    if (!delivered) return;
+    await this.recordNotice(association.id, status.key);
+    if (status.terminal)
+      await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, run.revision);
   }
 
   /**

@@ -8,6 +8,7 @@ import {
 } from "./argv.js";
 import { attentionCommands } from "./commands/attention.js";
 import { buildCommands } from "./commands/build.js";
+import { graphCommands } from "./commands/graphs.js";
 import { changesCommands } from "./commands/changes.js";
 import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
@@ -44,6 +45,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...changesCommands,
   ...workflowCommands,
   ...buildCommands,
+  ...graphCommands,
   ...attentionCommands,
   ...ticketCommands,
   ...mailCommands,

@@ -264,6 +264,21 @@ describe("KanbanCard", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  test("Run graph… hands the ticket to the launcher without opening the task", () => {
+    const task = makeTask();
+    const onClick = mock(() => {});
+    const onRunGraph = mock(() => {});
+    renderCard(task, { onClick, onRunGraph });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Task actions/ }));
+    const menu = document.querySelector<HTMLElement>('[data-slot="dropdown-menu-content"]');
+    expect(menu).toBeTruthy();
+    fireEvent.click(within(menu!).getByRole("menuitem", { name: "Run graph…" }));
+
+    expect(onRunGraph).toHaveBeenCalledWith(task);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   test("the dropdown omits Clear status when clearing is not allowed", async () => {
     renderCard(makeTask(), { canClearStatus: false });
 

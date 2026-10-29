@@ -3,11 +3,11 @@ id: 214
 title: "Launch surfaces"
 phase: 2
 plan: "P2.14"
-status: not-started
+status: in-progress
 depends_on: [109, 204, 211]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: "Claude Opus 5.5 (implement-graph-tasks)"
+branch: "graphs-214-launch"
 pr: ""
 updated: 2026-10-29
 ---

@@ -201,6 +201,11 @@ export interface GraphLaunchInputOption {
   ticket: boolean;
   /** A value input the launch can take; reference inputs cannot be launched yet. */
   launchable: boolean;
+  /**
+   * Left empty, a `workspace@1` input is filled at launch from the existing
+   * environment's current branch and HEAD (a new environment has none yet).
+   */
+  autoFill?: "environment-head";
 }
 
 /** `graph_launch_options`: everything the launch dialog shows for one template. */

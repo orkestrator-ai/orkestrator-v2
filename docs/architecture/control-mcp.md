@@ -165,7 +165,8 @@ beside its schema in `PUBLIC_ACTION_INPUTS`:
   grant that `projects` must not imply, so only the operator's own CLI
   cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`,
-  `build.launch`, `pr.create` and `pr.resolve` (each pushes to the remote), and
+  `build.launch`, `graph.launch` (a graph's system nodes may push), `pr.create`
+  and `pr.resolve` (each pushes to the remote), and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).
   Denials, cancels and question answers run directly.
@@ -202,7 +203,8 @@ projects, environments, settings, agent sessions, interactions, transcripts,
 changes, runs, exec, Kanban tickets (`ticket.*`), agent mail (`mail.*`),
 scheduled jobs (`schedule.*`), the attention feed (`attention.list`), Multi
 Review (`review.*`), Build Pipelines (`build.*`, as direct tools such as
-`build_launch`), the Create PR and Resolve Conflicts tabs (`pr.create`,
+`build_launch`), saved graph templates and their runs (`graph.*`: list,
+show, validate, launch, status and cancel; no authoring), the Create PR and Resolve Conflicts tabs (`pr.create`,
 `pr.resolve`), and all of it on the leaf nodes of a command node
 ([Leaf nodes](#leaf-nodes)). A schedule a credential creates runs as that
 credential: the action is re-checked against its current capabilities at
@@ -393,7 +395,33 @@ actions for later (`create_schedule`, `list_schedules`, `cancel_schedule`,
 capability `schedules`, granted to the main and side roles; see
 [scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
-cancel/address a multi-review, and use durable mailbox read/send/ack operations.
+cancel/address a multi-review, run saved graphs, and use durable mailbox
+read/send/ack operations.
+
+**Saved graphs** (item 214, capability `graphs`, main role only;
+`control-mcp-graph-tools.ts`, commands in `coordinator-graph-actions.ts`):
+
+- `list_graph_templates {ref?, environmentId?}`: the project's templates with
+  trust and launchability, or with `ref` one template's launch options (roles
+  with each enabled provider's enforcement tier, availability and the reason a
+  provider is not offered, parameters, inputs, environment default, cost).
+- `launch_graph {requestId, template, environment, roles?, params?, inputs?,
+  ticket?}`: `environment` is `{kind: "new", create: "worktree"|"container"}`
+  or `{kind: "existing", environmentId}` (a worker of this project; never the
+  project home). It reserves a durable `graph-run` workflow association under
+  `requestId` before the launch service runs (`requestedBy: "coordinator"`,
+  run id derived from the key), so a retry returns the same run and the
+  conversation gets one status wake when the run ends and one each time it
+  waits for a person ([coordinator.md](coordinator.md#status-wakes)). A launch
+  the service refuses created nothing: the reservation is released and the
+  error text starts with its code (`invalid-binding: …`,
+  `GRAPH_LAUNCH_ERROR_CODES`).
+- `get_graph_run {runId}` and `cancel_graph_run {runId}`: this project's runs
+  only, as a content-free summary plus the waiting and failed steps.
+
+There is no tool that creates, saves, edits, duplicates, imports or describes
+a template (D6); a test asserts none exists. A coordinator schedules a graph
+with `create_schedule` and `type: "tool", tool: "launch_graph"`.
 It can also drive a worker's own surfaces: open a terminal or tmux tab
 (`launch_terminal`), open or navigate a browser preview
 (`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open

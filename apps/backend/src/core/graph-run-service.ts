@@ -503,7 +503,12 @@ export class GraphRunService implements KeyedWorkflowOwner {
     const inputs: { name: string; type: string; value: unknown }[] = [];
     for (const input of plan.inputs) {
       if (!(input.name in given)) {
-        if (input.required) throw launchError(`The run input ${input.name} is required`);
+        // A run that creates its environment stores its empty `workspace@1`
+        // inputs from that environment's HEAD once it exists (item 214).
+        const deferred = launch.environmentId === undefined && input.type === "workspace@1";
+        if (input.required && !deferred) {
+          throw launchError(`The run input ${input.name} is required`);
+        }
         continue;
       }
       const resolution = library.resolve(input.type);

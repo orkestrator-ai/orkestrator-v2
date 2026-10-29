@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   MessageSquare,
   MoreHorizontal,
+  Network,
   RotateCcw,
   SquareArrowOutUpRight,
 } from "lucide-react";
@@ -99,6 +100,8 @@ interface KanbanCardProps {
   environmentName?: string;
   canClearStatus?: boolean;
   onClearStatus?: (task: KanbanTask) => void;
+  /** "Run graph…" with this ticket as the graph's input (item 214). */
+  onRunGraph?: (task: KanbanTask) => void;
 }
 
 export function KanbanCard({
@@ -109,6 +112,7 @@ export function KanbanCard({
   environmentName,
   canClearStatus,
   onClearStatus,
+  onRunGraph,
 }: KanbanCardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -236,6 +240,12 @@ export function KanbanCard({
                     <SquareArrowOutUpRight className="h-4 w-4" />
                     Open task
                   </DropdownMenuItem>
+                  {onRunGraph && (
+                    <DropdownMenuItem onSelect={() => onRunGraph(task)}>
+                      <Network className="h-4 w-4" />
+                      Run graph…
+                    </DropdownMenuItem>
+                  )}
                   {canClearStatus && (
                     <DropdownMenuItem onSelect={() => onClearStatus?.(task)}>
                       <RotateCcw className="h-4 w-4" />

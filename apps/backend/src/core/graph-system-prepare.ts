@@ -15,7 +15,7 @@
  *   starts from as `workspace@1`. Once per run, node and iteration: a retry or
  *   restart replays the recorded commit.
  */
-import type { GraphRunProvisioner } from "./graph-run-pass.js";
+import { graphDeferredWorkspaceInputs, type GraphRunProvisioner } from "./graph-run-pass.js";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import {
   GraphSystemActionError,
@@ -87,6 +87,11 @@ export interface GraphRunProvisionerDependencies {
     };
   };
   invoke: GraphSystemInvoke;
+  /**
+   * The new environment's branch and HEAD, for `workspace@1` run inputs the
+   * launch deferred to it (item 214). Absent: a run with one fails to start.
+   */
+  workspaceHead?(environment: Environment): Promise<{ branch: string; headRef: string }>;
   /** Monotonic milliseconds (tests). */
   monotonic?: () => number;
 }
@@ -141,11 +146,7 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
   async provision(
     run: Readonly<GraphRun>,
     _signal: AbortSignal,
-  ): Promise<
-    | { state: "pending" }
-    | { state: "ready"; environmentId: string }
-    | { state: "failed"; error: string }
-  > {
+  ): ReturnType<GraphRunProvisioner["provision"]> {
     // The launch's choice (item 214) first, then the template's default.
     const kind =
       run.launch?.create ??
@@ -180,6 +181,13 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     if (environment.status === "running") {
       this.started.delete(run.id);
       await this.linkTicket(run, environment.id);
+      if (graphDeferredWorkspaceInputs(run).length > 0 && this.deps.workspaceHead) {
+        const head = await this.deps.workspaceHead(environment);
+        if (!COMMIT.test(head.headRef)) {
+          return { state: "failed", error: "The run's environment has no commit to start from" };
+        }
+        return { state: "ready", environmentId: environment.id, workspace: head };
+      }
       return { state: "ready", environmentId: environment.id };
     }
     if (environment.status === "error") {

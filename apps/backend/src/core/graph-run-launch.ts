@@ -126,6 +126,11 @@ export interface GraphRunLaunchDependencies {
   settingsTiers(projectId: string, environment: Environment | null): Promise<AgentSettingsTiers>;
   /** Whether a provider can return typed results (result tools or structured output). */
   structuredResults?(platform: AgentPlatform): boolean;
+  /**
+   * The environment's current branch and HEAD commit, for a `workspace@1`
+   * run input the launch leaves empty. Absent: such inputs must be given.
+   */
+  workspaceHead?(environment: Environment): Promise<{ branch: string; headRef: string }>;
   /** Links a ticket to an environment (`update_kanban_task`). */
   linkTicket(taskId: string, environmentId: string): Promise<void>;
   /** The host the launch compile judged providers on, for re-checking floors. */
@@ -338,6 +343,9 @@ export class GraphRunLaunchService {
         required: entry.required,
         ticket: entry.type === "ticket@1",
         launchable,
+        ...(entry.type === "workspace@1" && this.deps.workspaceHead
+          ? { autoFill: "environment-head" as const }
+          : {}),
       };
     });
   }
@@ -415,6 +423,7 @@ export class GraphRunLaunchService {
       inputs[name] = await this.ticketValue(request.ticket.taskId, request.projectId);
       ticketId = request.ticket.taskId;
     }
+    await this.fillWorkspaceInputs(plan, inputs, environment);
     const scope = runScope(request.ref);
     const run = await this.deps.runs.create({
       ...(runId ? { id: runId } : {}),
@@ -609,6 +618,43 @@ export class GraphRunLaunchService {
       result[role.key] = structuredClone(fits ? kept! : fromSettings[role.key]!);
     }
     return result;
+  }
+
+  /**
+   * Fills each empty `workspace@1` run input from the existing environment's
+   * branch and HEAD. A new environment has no commit yet: the provisioner
+   * stores them once it exists.
+   */
+  private async fillWorkspaceInputs(
+    plan: CompiledGraphPlan,
+    inputs: Record<string, unknown>,
+    environment: Environment | null,
+  ): Promise<void> {
+    const empty = plan.inputs.filter(
+      (entry) => entry.type === "workspace@1" && !(entry.name in inputs),
+    );
+    if (empty.length === 0) return;
+    // A new environment's HEAD is stored once it exists (the provisioner).
+    if (!environment) return;
+    if (!this.deps.workspaceHead) {
+      const required = empty.find((entry) => entry.required);
+      if (required) {
+        throw new GraphLaunchError("invalid-launch", `The run input ${required.name} is required`);
+      }
+      return;
+    }
+    let head: { branch: string; headRef: string };
+    try {
+      head = await this.deps.workspaceHead(environment);
+    } catch {
+      throw new GraphLaunchError(
+        "invalid-launch",
+        "The environment's current commit could not be read; start the environment and try again",
+      );
+    }
+    for (const entry of empty) {
+      inputs[entry.name] = { branch: head.branch, headRef: head.headRef, baseRef: null };
+    }
   }
 
   private structuredResults(platform: AgentPlatform): boolean {

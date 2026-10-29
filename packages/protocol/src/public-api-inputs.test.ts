@@ -228,6 +228,8 @@ describe("public action input contract", () => {
       "session.interaction.resolve": "voice:approval",
       // Each pushes to the remote (a build's last step opens its PR).
       "build.launch": "voice",
+      // A graph's system nodes may push and open a PR.
+      "graph.launch": "voice",
       "pr.create": "voice",
       "pr.resolve": "voice",
       "run.discard": "always",

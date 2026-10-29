@@ -10,6 +10,7 @@ import {
   Loader2,
   Network,
   PencilRuler,
+  Play,
 } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -51,6 +52,9 @@ import { GraphInspector } from "./GraphInspector";
 import { GraphJsonEditor } from "./GraphJsonEditor";
 import { GraphLibraryList } from "./GraphLibraryList";
 import { GraphRunsList } from "@/components/graph-run/GraphRunsList";
+import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
+import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { arrangeGraphLayout, blankGraphTemplate } from "./graph-designer-edits";
 import { buildGraphCanvasModel, graphTemplateTypeLibrary } from "./graph-designer-model";
 import { GraphEditorContext } from "./graph-editor-context";
@@ -151,6 +155,9 @@ export function GraphDesignerTab({
   );
 
   const [importOpen, setImportOpen] = useState(false);
+  // "Run" (item 214): the stored template the launch dialog is open for.
+  const [launchRef, setLaunchRef] = useState<GraphTemplateRef | null>(null);
+  const createTab = useOptionalTerminalContext()?.createTab ?? null;
   const [busy, setBusy] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState<string | null>(null);
   // The canvas mounts the first time the tab is shown, so its first fit
@@ -336,6 +343,22 @@ export function GraphDesignerTab({
     return () => window.removeEventListener("keydown", listener);
   }, [isActive, editingNow]);
 
+  // A stored, launchable template launches; a draft is saved first (the
+  // launch reads the stored revision, never the canvas).
+  const launchable =
+    compile?.launchable === true && (editor !== null || summary?.launchable === true);
+  const runTemplate = () =>
+    run("prepare the launch", async () => {
+      let ref = view.selected;
+      if (editor && (editor.isNew || dirty)) {
+        const saved = await saveDraft(tabId);
+        if (!saved) return;
+        persistSelected(saved.summary.ref);
+        ref = saved.summary.ref;
+      }
+      if (ref) setLaunchRef(ref);
+    });
+
   const duplicate = () =>
     run("duplicate the template", async () => {
       if (!summary) return;
@@ -448,6 +471,24 @@ export function GraphDesignerTab({
               <CopyPlus className="size-3.5" />
             )}
             Duplicate
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!projectId || !launchable || busy !== null}
+            title={
+              launchable
+                ? "Launch this template (unsaved edits are saved first)"
+                : "Only a trusted template that compiles without errors or pending acknowledgements can run"
+            }
+            onClick={() => void runTemplate()}
+          >
+            {busy === "prepare the launch" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            Run
           </Button>
           {summary?.scope === "user" && !view.editor ? (
             <>
@@ -681,6 +722,18 @@ export function GraphDesignerTab({
           return result;
         }}
       />
+      {projectId && launchRef && (
+        <GraphLaunchDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setLaunchRef(null);
+          }}
+          projectId={projectId}
+          template={launchRef}
+          environmentId={environmentId}
+          onLaunched={(result) => openLaunchedGraphRun({ result, createTab })}
+        />
+      )}
     </div>
   );
 }

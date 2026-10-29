@@ -152,6 +152,7 @@ after now.
 | `action` | Any public **mutation** by name with its input (`mail.send`, `ticket.comment`, …) | One of its own agent tools by name (`send_message`, `create_ticket`, …) | One of its own tools by name (`send_message`, `start_environment`, …) |
 | `prompt` | `session.prompt` to an idle session | Refused | `send_prompt_to_tab` (with `nodeId`) |
 | `launch` | `environment.launch` | Refused | `launch_environment` (with `nodeId`) |
+| `graph` | Operator only: the graph launch service | Refused | Refused: schedule its own `launch_graph` (`kind: "action"`) |
 
 `mail.send` is accepted on every surface and means "send agent mail as the
 owner": external, inbox-only mail for the operator; the agent's or
@@ -177,6 +178,21 @@ node resolves that node's default base through `get_launch_options`; a
 different branch on another node needs a pinned `baseCommit`. An operator
 launch with neither field resolves and persists the default branch and its tip
 through the same path.
+
+A **graph** action (item 214) launches a saved graph template:
+`{kind: "graph", request: {ref, projectId, environment, roles?, params?,
+inputs?, ticket?}}`, the launch request without `requestId` or
+`saveDefaults`. Creation parses it (`parseGraphLaunchRequest`) and refuses a
+template that is not launchable now (untrusted, an engine template, compile
+errors or pending acknowledgements). A fire calls the graph launch service
+with `requestedBy: "schedule"`, the schedule's id and the request key
+`sched:<fireId>`, from which the run id is derived, so a re-claimed fire finds
+the run the first attempt created. The fire's outcome records the run id. A
+template removed since creation (`not-found`) fails the fire and pauses the
+schedule (`target-deleted`). Only the operator (the app, the CLI) schedules a
+`graph` action; a coordinator schedules its own `launch_graph` tool so the
+run, and its status wakes, are its own; agents and Control MCP credentials
+cannot. Never authoring.
 
 A schedule can never create, change or cancel schedules, never runs a read,
 and never runs an action that always needs a confirmation (`project.create`,
@@ -388,6 +404,10 @@ executing at once per backend.
   commit is resolved at fire time), `schedule.*` and credential scoping, a
   revoked credential pausing its schedule, and an agent's schedules running
   through its own tools (peer mail and a reminder to itself).
+- `apps/backend/src/core/scheduled-jobs/graph-schedules.test.ts`: an
+  operator's graph schedule fires once through the launch service as the
+  schedule; an unlaunchable template, a malformed request and other owners are
+  refused at creation; a removed template pauses the schedule.
 - `apps/backend/src/core/scheduled-jobs/coordinator-schedules.test.ts`: the
   real Control MCP endpoint: a coordinator's "wake me at 03:12", a scheduled
   launch through its own `launch_environment`, side-agent refusal, listing

@@ -18,6 +18,7 @@
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import { BUILD_ACTION_INPUTS, REVIEW_LENS_INPUT } from "./public-api-inputs-build.js";
+import { GRAPH_ACTION_INPUTS } from "./public-api-inputs-graph.js";
 import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
@@ -429,9 +430,15 @@ const scheduleTiming: Record<string, PublicJsonSchema> = {
 const scheduleAction: PublicJsonSchema = {
   type: "object",
   description:
-    "What fires. kind action: run one public action (action plus input; a mutation other than schedule.* and actions that always need confirmation). kind prompt: send prompt to an idle agent session (sessionId). kind launch: launch an environment like environment.launch; without baseCommit the base branch's newest commit is resolved when it fires.",
+    "What fires. kind action: run one public action (action plus input; a mutation other than schedule.* and actions that always need confirmation). kind prompt: send prompt to an idle agent session (sessionId). kind launch: launch an environment like environment.launch; without baseCommit the base branch's newest commit is resolved when it fires. kind graph: launch a saved graph template (request); the template must be launchable when the schedule is created.",
   properties: {
-    kind: { type: "string", enum: ["action", "prompt", "launch"] },
+    kind: { type: "string", enum: ["action", "prompt", "launch", "graph"] },
+    request: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "kind graph: the launch request ({ref, projectId, environment, roles?, params?, inputs?, ticket?}), as graph.launch takes it, without requestId (each fire supplies one).",
+    },
     action: {
       type: "string",
       enum: PUBLIC_ACTION_NAMES,
@@ -1383,6 +1390,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       examples: [{ workflowId: "review-1" }],
     },
     ...BUILD_ACTION_INPUTS,
+    ...GRAPH_ACTION_INPUTS,
     "pr.create": {
       capability: "sessions.control",
       confirmation: "voice",

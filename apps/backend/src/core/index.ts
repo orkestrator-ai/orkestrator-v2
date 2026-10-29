@@ -1130,7 +1130,21 @@ export class OrkestratorBackend {
     this.graphRuns = new GraphRunService(storage, {
       artifacts: graphArtifacts,
       workflowAdmission: this.workflowAdmission,
-      provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
+      provisioner: new GraphRunEnvironmentProvisioner({
+        storage,
+        invoke: invokeCommand,
+        // Run inputs a launch on a new environment deferred to it (item 214).
+        workspaceHead: async (environment) => ({
+          branch: environment.branch,
+          headRef: (
+            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ])
+          ).trim(),
+        }),
+      }),
       // Code rewinds (item 210) share the pipeline's Git port and reservation.
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
       codeRewindReservation: (run, operation) =>
@@ -1219,6 +1233,12 @@ export class OrkestratorBackend {
       structuredResults: (platform) =>
         this.workflowResultRollout.allows(platform, "graph-output") ||
         STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(platform),
+      workspaceHead: async (environment) => {
+        const headRef = (
+          await graphShell.git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
+        ).trim();
+        return { branch: environment.branch, headRef };
+      },
       linkTicket: async (taskId, environmentId) => {
         await invokeCommand("update_kanban_task", { taskId, environmentId });
       },
@@ -2158,6 +2178,12 @@ export class OrkestratorBackend {
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
+  private requireGraphLaunches() {
+    const launches = this.context.graphLaunches;
+    if (!launches) throw new Error("Graph launches are unavailable");
+    return launches;
+  }
+
   /** The scheduler and the executor that runs each fire as its owner. */
   private createScheduledJobs(storage: StorageService): ScheduledJobService {
     const handlers = publicActionHandlers();
@@ -2170,6 +2196,11 @@ export class OrkestratorBackend {
         coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
+      // Scheduled graph launches (item 214) go through the one launch service.
+      graphs: {
+        launch: (request, origin) => this.requireGraphLaunches().launch(request, origin),
+        options: (input) => this.requireGraphLaunches().options(input),
+      },
       ...(controlMcp.callCoordinatorTool &&
       controlMcp.listCoordinatorTools &&
       controlMcp.credentialPolicy

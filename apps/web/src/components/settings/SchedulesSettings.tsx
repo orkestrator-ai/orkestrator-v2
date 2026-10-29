@@ -92,6 +92,10 @@ function actionLabel(action: ScheduleAction): string {
       return `Prompt ${action.environmentId} / ${action.tabId}`;
     case "launch":
       return `Launch ${action.agent} in ${action.projectId}`;
+    case "graph": {
+      const ref = action.request.ref;
+      return `Run graph ${ref.scope === "project" ? ref.path : ref.id} in ${action.request.projectId}`;
+    }
   }
 }
 
@@ -404,7 +408,8 @@ function HistoryDialog({ job, onClose }: { job: ScheduledJob; onClose: () => voi
 }
 
 type TimingMode = "once" | "cron" | "interval";
-type ActionMode = "mail" | "prompt" | "launch" | "action";
+/** `graph`: a scheduled graph launch (item 214), kept as created; edit it from the CLI. */
+type ActionMode = "mail" | "prompt" | "launch" | "action" | "graph";
 
 interface FormState {
   name: string;
@@ -471,6 +476,8 @@ function initialForm(job: ScheduledJob | undefined): FormState {
       prompt: action.prompt,
       baseBranch: action.baseBranch ?? "",
     });
+  } else if (action.kind === "graph") {
+    Object.assign(base, { actionMode: "graph" });
   } else if (action.action === "mail.send" && typeof action.input.toTabId === "string") {
     Object.assign(base, {
       actionMode: "mail",
@@ -523,6 +530,9 @@ function buildAction(form: FormState, original?: ScheduleAction): ScheduleAction
         type: original?.kind === "launch" ? original.type : "local",
         baseBranch: form.baseBranch.trim() || undefined,
       };
+    case "graph":
+      if (original?.kind !== "graph") throw new Error("Schedule graph launches from the CLI");
+      return original;
     case "action": {
       let input: unknown;
       try {
@@ -791,6 +801,9 @@ function ScheduleDialog({
                 <SelectItem value="prompt">Prompt an agent tab</SelectItem>
                 <SelectItem value="launch">Launch an environment</SelectItem>
                 <SelectItem value="action">Other public action</SelectItem>
+                {form.actionMode === "graph" ? (
+                  <SelectItem value="graph">Run a graph</SelectItem>
+                ) : null}
               </SelectContent>
             </Select>
             {actionLocked ? (

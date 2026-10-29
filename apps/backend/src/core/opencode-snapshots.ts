@@ -365,6 +365,7 @@ export async function openCodeTranscriptSnapshot(
       messages: groups.slice(start).flat(),
       sourceToken,
       complete: !olderHistory,
+      historyPageable: true,
       revision: input.revision(),
       freshness: "current",
       historyEpoch: snapshotEpoch,

@@ -17,7 +17,13 @@ import {
   takeHourlySnapshotIfDue,
 } from "./storage-backups.js";
 import { StorageChanges } from "./storage-changes.js";
-import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
+import {
+  StoreCorruptError,
+  StoreTooLargeError,
+  type RowUpdate,
+  type SerializedStore,
+  type StorageDatabase,
+} from "./storage-database.js";
 import {
   commitWithLegacyJsonCleanup,
   type LegacyJsonCleanup,
@@ -604,6 +610,19 @@ export class StorageContext {
   }
 
   /**
+   * A database store's committed serialized rows without parsing them; see
+   * {@link StorageDatabase.readStoreSerialized}. `undefined` inside an atomic
+   * scope that buffers a write to the store, whose rows do not exist yet: the
+   * caller reads the buffered value with {@link loadJson} instead.
+   */
+  loadStoreSerialized(filePath: string): SerializedStore | null | undefined {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("loadStoreSerialized requires a database store");
+    if (this.openAtomicScope()?.writes.has(store)) return undefined;
+    return this.database.readStoreSerialized(store);
+  }
+
+  /**
    * Strict read of a database store: an unreadable value throws rather than
    * reading as absent. For stores whose corruption must refuse work instead of
    * looking empty (the public operation ledger).
@@ -677,10 +696,16 @@ export class StorageContext {
     );
   }
 
+  /**
+   * {@link saveJson} for stores holding sensitive content: files are written
+   * owner-only, and a database store's retired JSON archive is pruned of what
+   * the save removes. `maxBytes` (database stores only) refuses the save with
+   * `StoreTooLargeError` when the serialized value would exceed it.
+   */
   async saveSensitiveJson(
     filePath: string,
     value: unknown,
-    options: { backup?: boolean } = {},
+    options: { backup?: boolean; maxBytes?: number } = {},
   ): Promise<void> {
     const store = this.storeForFile(filePath);
     if (store !== null) {
@@ -707,7 +732,7 @@ export class StorageContext {
           ? [{ store, kind: "prune", next: structuredClone(value) }]
           : [];
       // The intent and write share a commit, including inside atomically().
-      this.saveStore(filePath, value, cleanups);
+      this.saveStore(filePath, value, cleanups, options.maxBytes);
       return;
     }
     await this.writeAtomic(
@@ -720,11 +745,20 @@ export class StorageContext {
   }
 
   /** Writes a database store; `false` when `filePath` remains a file. */
-  private saveStore(filePath: string, value: unknown, cleanups: LegacyJsonCleanup[] = []): boolean {
+  private saveStore(
+    filePath: string,
+    value: unknown,
+    cleanups: LegacyJsonCleanup[] = [],
+    maxBytes?: number,
+  ): boolean {
     const store = this.storeForFile(filePath);
     if (store === null) return false;
     const scope = this.openAtomicScope();
     if (scope) {
+      if (maxBytes !== undefined) {
+        const bytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+        if (bytes > maxBytes) throw new StoreTooLargeError(store, bytes);
+      }
       scope.writes.set(store, structuredClone(value));
       scope.archiveCleanups.push(...cleanups);
       return true;
@@ -734,7 +768,7 @@ export class StorageContext {
       this.database,
       this.dataDir,
       () => {
-        this.database.writeStoreInTransaction(store, value);
+        this.database.writeStoreInTransaction(store, value, { maxBytes });
       },
       cleanups,
     );

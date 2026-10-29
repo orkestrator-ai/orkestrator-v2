@@ -385,9 +385,9 @@ async function createAgentToolServer(
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
   const messagingScope = messagingEnabled ? scope : null;
   let messagingInstructions = "";
-  // Only `initialize` and `server/discover` answer with the instructions. The
-  // mailbox lookup below parses the whole mail store, so every other request
-  // (each `tools/list` and `tools/call`) skips it; see agentMcpAnnounces.
+  // Only `initialize` and `server/discover` answer with the instructions, so
+  // every other request (each `tools/list` and `tools/call`) skips the
+  // mailbox lookup below; see agentMcpAnnounces.
   if (messagingEnabled && instructions) {
     const { mailboxes } = await storage.listAgentMailboxes({
       environmentId: scope.environmentId,

@@ -4,6 +4,7 @@ import {
   STORAGE_DATABASE_FILE,
   assembleStoredValue,
   type StoredLayoutKind,
+  type StoredRow,
 } from "@orkestrator/protocol/node/storage-database";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -110,6 +111,23 @@ export type RowUpdate<T> =
   | { result: T; value: unknown; delete?: undefined }
   | { result: T; delete: true };
 
+/** Options of {@link StorageDatabase.writeStore}. */
+export interface StoreWriteOptions {
+  expectedRevision?: number | null;
+  /** Refuse the write when the serialized value exceeds this many UTF-8 bytes. */
+  maxBytes?: number;
+}
+
+/** What {@link StorageDatabase.readStoreSerialized} returns. */
+export interface SerializedStore {
+  revision: number;
+  layout: StoredLayoutKind;
+  mode: "rows" | "document";
+  /** Serialized document part (whole value, envelope remainder, or null). */
+  document: string | null;
+  rows: Iterable<Readonly<StoredRow>>;
+}
+
 export interface StoreSnapshot {
   value: unknown;
   revision: number;
@@ -129,6 +147,17 @@ export class StoreCorruptError extends Error {
   constructor(store: string) {
     super(`Storage ${store} is unreadable`);
     this.name = "StoreCorruptError";
+  }
+}
+
+/** A write refused by its `maxBytes` bound; nothing was written. */
+export class StoreTooLargeError extends Error {
+  constructor(
+    store: string,
+    readonly bytes: number,
+  ) {
+    super(`Storage ${store} would exceed its size limit`);
+    this.name = "StoreTooLargeError";
   }
 }
 
@@ -429,6 +458,25 @@ export class StorageDatabase {
   }
 
   /**
+   * A store's serialized rows at the committed revision, unparsed, from this
+   * connection's revision-validated cache (a miss fetches them). For read
+   * models that keep parsed rows and re-parse only the rows whose serialized
+   * value changed. The result is shared with the cache: callers must not
+   * mutate it. `null` when the store does not exist.
+   */
+  readStoreSerialized(store: string): SerializedStore | null {
+    const cached = this.loadCached(store, "read");
+    if (!cached) return null;
+    return {
+      revision: cached.revision,
+      layout: cached.layout,
+      mode: cached.mode,
+      document: cached.document,
+      rows: cached.rows.values(),
+    };
+  }
+
+  /**
    * Stores an exact, possibly invalid, serialized document. Used only by the
    * legacy import to carry an unreadable file forward: readers then see the
    * same "present but unreadable" state the file had instead of an absent,
@@ -543,25 +591,27 @@ export class StorageDatabase {
   /**
    * Persists `value` as the store's complete new state, writing only the rows
    * that changed. Returns the new revision. With `expectedRevision` the write
-   * is refused when the store moved since that revision.
+   * is refused when the store moved since that revision, and with `maxBytes`
+   * when the serialized value (document and rows, UTF-8) would exceed it.
    */
-  writeStore(store: string, value: unknown, options: { expectedRevision?: number | null } = {}) {
+  writeStore(store: string, value: unknown, options: StoreWriteOptions = {}) {
     if (value === undefined) throw new Error(`Cannot persist undefined to ${store}`);
     return this.transaction(() => this.writeStoreInTransaction(store, value, options));
   }
 
   /** {@link writeStore} for use inside an existing {@link transaction}. */
-  writeStoreInTransaction(
-    store: string,
-    value: unknown,
-    options: { expectedRevision?: number | null } = {},
-  ): number {
+  writeStoreInTransaction(store: string, value: unknown, options: StoreWriteOptions = {}): number {
     const layout = this.layoutFor(store);
     const committed = this.storeRevision(store);
     if (options.expectedRevision !== undefined && options.expectedRevision !== committed) {
       throw new StoreConflictError(store);
     }
     const next = decompose(layout, value);
+    if (options.maxBytes !== undefined) {
+      let bytes = next.document === null ? 0 : Buffer.byteLength(next.document, "utf8");
+      for (const row of next.rows.values()) bytes += Buffer.byteLength(row.value, "utf8");
+      if (bytes > options.maxBytes) throw new StoreTooLargeError(store, bytes);
+    }
     const previous =
       committed === null ? null : this.loadCachedInTransaction(store, committed, "stat");
     if (previous?.mode === "rows" && next.mode === "rows")

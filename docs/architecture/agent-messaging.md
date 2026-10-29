@@ -106,7 +106,7 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 
 - Body 32 KiB UTF-8, subject 200 characters, `requestId` 256
 - 200 messages per mailbox, 2 000 mailboxes, 2 000 pending injects
-- Store file 32 MiB
+- Store 32 MiB, measured as the stored (compact) JSON of the envelope and its rows
 - Thread hop limit 8 for unrouted mail; routed mail uses the budgets below
   (default 16 per budget, 40 per pair per hour)
 - Default retention 14 days (1–365)

@@ -22,12 +22,18 @@ import {
   UserRound,
 } from "lucide-react";
 import type { Components } from "react-markdown";
-import type { AgentMailKind, AgentMailNoticeTone } from "@orkestrator/protocol/agent-mail";
+import {
+  agentMailAddressLabel,
+  type AgentMailKind,
+  type AgentMailNoticeTone,
+} from "@orkestrator/protocol/agent-mail";
 import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
   openAgentMailConversation,
+  useAgentMailEnvironmentName,
 } from "@/components/agent-mail/agent-mail-ui";
+import { agentMailAddressText } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { cn } from "@/lib/utils";
@@ -128,6 +134,44 @@ const peerMailMarkdownComponents: Components = {
 const COLLAPSED_BODY_CLASS =
   "text-xs text-foreground/80 prose-p:my-0 prose-ul:my-0 prose-ol:my-0 prose-pre:my-0 prose-pre:p-1 prose-headings:my-0 prose-headings:text-xs prose-headings:font-semibold";
 
+/**
+ * Who sent the mail, or for sent mail who it went to. An agent tab reads as
+ * its environment and tab, `To fix-login-bug · Claude 2`: a long environment
+ * name gives way first, so the tab stays readable and the header's status and
+ * buttons stay on the card.
+ */
+function MailTileSender({
+  mail,
+  className,
+}: {
+  mail: Pick<PeerMailPresentation, "sender" | "address" | "direction">;
+  className?: string;
+}) {
+  const address = mail.address;
+  // Another node's environment is not in this window's stores.
+  const liveName = useAgentMailEnvironmentName(address?.node ? undefined : address?.environmentId);
+  if (!address) return <span className={cn("truncate", className)}>{mail.sender}</span>;
+  const environmentName = liveName ?? address.environmentName;
+  const label = agentMailAddressLabel({ ...address, environmentName });
+  const prefix = mail.direction === "out" ? "To " : "";
+  const rest = `${label.tab ? ` · ${label.tab}` : ""}${address.node ? ` on ${address.node}` : ""}`;
+  return (
+    <span
+      data-mail-sender="true"
+      title={`${prefix}${agentMailAddressText({ ...address, environmentName })}`}
+      className={cn("flex min-w-0 items-baseline", className)}
+    >
+      {prefix ? <span className="shrink-0 whitespace-pre">{prefix}</span> : null}
+      <span className="min-w-0 truncate">{label.environment}</span>
+      {rest ? (
+        <span className="max-w-[60%] shrink-0 overflow-hidden text-ellipsis whitespace-pre">
+          {rest}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export interface MailTileProps {
   mail: PeerMailPresentation;
   /**
@@ -199,9 +243,7 @@ export const MailTile = memo(function MailTile({
             <Icon className={cn("mt-0.5 size-4 shrink-0", style.accent)} aria-hidden="true" />
             <span className="sr-only">{style.label}: </span>
             <span className="flex min-w-0 flex-1 flex-col gap-0.5 @sm:flex-row @sm:items-baseline @sm:gap-1.5">
-              <span className={cn("truncate text-xs font-medium", style.accent)}>
-                {mail.sender}
-              </span>
+              <MailTileSender mail={mail} className={cn("text-xs font-medium", style.accent)} />
               {mail.subject ? (
                 <span className="min-w-0 truncate text-xs text-foreground/85">{mail.subject}</span>
               ) : null}

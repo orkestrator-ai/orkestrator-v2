@@ -24,9 +24,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   nativeAgentUserMcpGrant,
+  nativeAgentWithholdsGitHubCredential,
   type NativeAgentMcpServer,
 } from "@orkestrator/protocol/native-agent";
 import { agentDirectory, workingDirectory } from "./config.js";
+import {
+  piWithheldGitHubCredential,
+  withheldEnvironment,
+  type WithheldGitHubCredential,
+} from "./github-credential.js";
 import {
   BRIDGE_SECRET_ENV,
   piUserMcpServerFilter,
@@ -106,8 +112,14 @@ export interface PiMcpConnection {
   close(): Promise<void>;
 }
 
+/** How the bridge starts one server for one session. */
+export interface PiMcpConnectContext {
+  /** Set when the session withholds the GitHub credential (item 209). */
+  withheldGitHubCredential?: WithheldGitHubCredential;
+}
+
 export interface PiMcpTransport {
-  connect(server: ResolvedMcpServer): Promise<PiMcpConnection>;
+  connect(server: ResolvedMcpServer, context?: PiMcpConnectContext): Promise<PiMcpConnection>;
 }
 
 interface RegisteredMcpTool {
@@ -143,6 +155,8 @@ interface PiMcpRuntime {
   configPaths: { agentDir?: string; cwd?: string };
   /** Set once `closePiMcp` runs, so an in-flight connect closes on arrival. */
   closed: boolean;
+  /** What this generation's servers are started without (item 209). */
+  connectContext: PiMcpConnectContext;
 }
 
 const runtimes = new WeakMap<SessionState, PiMcpRuntime>();
@@ -338,13 +352,17 @@ export async function mcpConfigNeedsRefresh(state: SessionState): Promise<boolea
 
 /** Any change, the artifact grant included, rebuilds the connections. */
 function mcpConnectionKey(state: SessionState): string {
-  return state.agentMcp
+  const key = state.agentMcp
     ? JSON.stringify([
         state.agentMcp.url,
         state.agentMcp.token,
         state.agentMcp.artifacts?.token ?? null,
       ])
     : "";
+  // A policy that starts or stops withholding the GitHub credential (item
+  // 209) needs a new generation: the shell tools and the servers' environment
+  // are fixed when a session is built.
+  return nativeAgentWithholdsGitHubCredential(state.policy) ? `${key}|withhold-github` : key;
 }
 
 export async function preparePiMcp(
@@ -365,6 +383,7 @@ export async function preparePiMcp(
     configKey: "",
     configPaths: { agentDir: options.agentDir, cwd: options.cwd },
     closed: false,
+    connectContext: {},
   };
   // Registered synchronously, before the first await. A detach that races this
   // call then finds the new runtime and can mark it closed, so a connection
@@ -380,12 +399,19 @@ export async function preparePiMcp(
   const revision = await piMcpConfigRevision(state, options);
   runtime.configKey = revision.fingerprint;
   runtime.configRevision = { ...revision, builtAt };
+  // A session that withholds the GitHub credential (item 209) resolves its
+  // servers' `$NAME` references against the withheld environment, so an entry
+  // that names a credential variable is skipped, and starts stdio servers
+  // with it.
+  const withheld = await piWithheldGitHubCredential(state.policy);
+  if (withheld) runtime.connectContext = { withheldGitHubCredential: withheld };
+  const env = options.env ?? process.env;
   const servers = await resolvePiMcpServers({
     agentDir: options.agentDir ?? agentDirectory() ?? getAgentDir(),
     cwd: options.cwd ?? workingDirectory,
     projectResources: state.policy?.projectResources === true,
     agentMcp: state.agentMcp,
-    env: options.env,
+    env: withheld ? withheldEnvironment(env, withheld) : options.env,
     allowServer: piUserMcpServerFilter(state.policy),
   });
   // Every failure settles into that server's inventory row, so one malformed
@@ -502,7 +528,11 @@ async function connectAndRegister(
   if (runtime.closed) return detachedServer(server);
   let connection: PiMcpConnection | undefined;
   try {
-    connection = await connectWithTimeout(testTransport ?? defaultTransport, server);
+    connection = await connectWithTimeout(
+      testTransport ?? defaultTransport,
+      server,
+      runtime.connectContext,
+    );
   } catch (error) {
     return recordConnectFailure(state, server, error);
   }
@@ -593,8 +623,9 @@ function recordConnectFailure(
 async function connectWithTimeout(
   transport: PiMcpTransport,
   server: ResolvedMcpServer,
+  context: PiMcpConnectContext,
 ): Promise<PiMcpConnection> {
-  const attempt = transport.connect(server);
+  const attempt = transport.connect(server, context);
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -670,7 +701,7 @@ function toolParameters(schema: unknown): JsonObject {
 }
 
 const defaultTransport: PiMcpTransport = {
-  async connect(server) {
+  async connect(server, context) {
     const client = new McpClient(
       { name: "orkestrator-pi-bridge", version: "1.0.0" },
       { versionNegotiation: { mode: "auto" } },
@@ -683,7 +714,7 @@ const defaultTransport: PiMcpTransport = {
         : new StdioClientTransport({
             command: server.command ?? "",
             ...(server.args ? { args: server.args } : {}),
-            env: stdioEnvironment(server.env),
+            env: stdioEnvironment(server.env, context),
             stderr: "ignore",
             cwd: server.cwd ? resolvePath(workingDirectory, server.cwd) : workingDirectory,
           });
@@ -726,13 +757,24 @@ const defaultTransport: PiMcpTransport = {
   },
 };
 
-export function stdioEnvironment(overlay?: Record<string, string>): Record<string, string> {
+/**
+ * A stdio server's environment: the bridge's own without its secrets, then
+ * without the GitHub credential when the session withholds it (item 209),
+ * then the entry's own `env`, which the user wrote and which wins.
+ */
+export function stdioEnvironment(
+  overlay?: Record<string, string>,
+  context: PiMcpConnectContext = {},
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined || BRIDGE_SECRET_ENV.has(key)) continue;
     env[key] = value;
   }
-  return { ...env, ...overlay };
+  const base = context.withheldGitHubCredential
+    ? withheldEnvironment(env, context.withheldGitHubCredential)
+    : env;
+  return { ...base, ...overlay };
 }
 
 function formatMcpContent(result: { content?: unknown }): string {

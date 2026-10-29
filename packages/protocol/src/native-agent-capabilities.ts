@@ -452,6 +452,16 @@ export const GITHUB_CREDENTIAL_ENV_VARS = Object.freeze([
 ] as const);
 
 /**
+ * Every variable a withheld session must not inherit: the credential
+ * variables plus `ORKESTRATOR_GITHUB_CREDENTIAL_FILE`, the path of a
+ * container's managed token file (the file itself stays readable).
+ */
+export const WITHHELD_GITHUB_ENV_VARS = Object.freeze([
+  ...GITHUB_CREDENTIAL_ENV_VARS,
+  "ORKESTRATOR_GITHUB_CREDENTIAL_FILE",
+] as const);
+
+/**
  * Whether a session's environment must not carry the GitHub credential: its
  * policy denies `github.write` (every graph agent node, D12). Reading through
  * `gh` goes with it, because no environment variable separates a read token
@@ -462,6 +472,41 @@ export function nativeAgentWithholdsGitHubCredential(
 ): boolean {
   return nativeAgentPolicyDenies(policy, "github.write");
 }
+
+/**
+ * Per platform: whether the current bridge starts a session whose policy
+ * denies `github.write` without the GitHub credential in what it runs, and
+ * what still reaches it. Withholding is never a boundary on its own (SSH
+ * keys, a container's credential file and an ancestor process's environment
+ * stay reachable), so the remote axis stays advisory everywhere and the
+ * remote-ref guard is the backstop; this table only words that axis honestly.
+ */
+export const NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING: Readonly<
+  Record<AgentPlatform, { withheld: boolean; gap?: string }>
+> = Object.freeze({
+  // Per query: the CLI process is spawned with the withheld environment.
+  claude: Object.freeze({ withheld: true }),
+  // One ACP child per session, spawned with the withheld environment.
+  grok: Object.freeze({ withheld: true }),
+  // Per thread: `shell_environment_policy` on the shared app-server.
+  codex: Object.freeze({
+    withheld: true,
+    gap: "Codex withholds it from the session's commands; the shared app-server process keeps it.",
+  }),
+  // The bridge's shell tools (spawn hook) and the MCP servers it starts.
+  pi: Object.freeze({
+    withheld: true,
+    gap: "Pi withholds it from the session's shell commands and MCP servers; Pi extensions run inside the bridge and keep it.",
+  }),
+  opencode: Object.freeze({
+    withheld: false,
+    gap: "OpenCode runs every session of an environment in one server process, so the session keeps the GitHub credential.",
+  }),
+  cursor: Object.freeze({
+    withheld: false,
+    gap: "Cursor runs its SDK inside the bridge process, so the session keeps the GitHub credential.",
+  }),
+});
 
 /** Git credential helper lists an empty value resets (`gh auth setup-git` writes the scoped ones). */
 const RESET_CREDENTIAL_HELPERS = Object.freeze([
@@ -474,8 +519,8 @@ const RESET_CREDENTIAL_HELPERS = Object.freeze([
  * A session environment without the GitHub credential, for a bridge that
  * builds one environment per session (item 209):
  *
- * - every {@link GITHUB_CREDENTIAL_ENV_VARS} entry is dropped, and so is
- *   `ORKESTRATOR_GITHUB_CREDENTIAL_FILE` (a container's managed token file);
+ * - every {@link WITHHELD_GITHUB_ENV_VARS} entry is dropped: the token
+ *   variables and `ORKESTRATOR_GITHUB_CREDENTIAL_FILE`;
  * - `GH_CONFIG_DIR` points at `ghConfigDir`, an empty directory the caller
  *   owns, so `gh` finds no stored login (its `hosts.yml` names the keychain
  *   entry it would read);
@@ -493,8 +538,7 @@ export function withheldGitHubCredentialEnvironment(
   options: { ghConfigDir: string },
 ): Record<string, string | undefined> {
   const next: Record<string, string | undefined> = { ...env };
-  for (const name of GITHUB_CREDENTIAL_ENV_VARS) delete next[name];
-  delete next.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
+  for (const name of WITHHELD_GITHUB_ENV_VARS) delete next[name];
   next.GH_CONFIG_DIR = options.ghConfigDir;
   const inherited = Number.parseInt(next.GIT_CONFIG_COUNT ?? "", 10);
   let count = Number.isSafeInteger(inherited) && inherited > 0 ? inherited : 0;

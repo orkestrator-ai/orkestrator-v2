@@ -7,7 +7,7 @@ status: in-progress
 depends_on: [001, 106, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
-branch: "graphs-209-guards"
+branch: "graphs-209-credentials"
 pr: ""
 updated: 2026-10-29
 ---
@@ -29,7 +29,9 @@ What a profile promises is either enforced by the provider or detected by a guar
 - [x] A remote-ref guard compares upstream refs before and after every agent node (none may push).
 - Withhold the GitHub credential from agent session environments where the provider allows it:
   - [x] Claude and Grok (ACP) sessions whose policy denies `github.write` start without it.
-  - [ ] Codex and Pi sessions withhold it too (Codex: per-thread `shell_environment_policy` needs a live check; Pi: a bash tool with a `spawnHook`). OpenCode and Cursor share one process per environment and cannot (see Notes).
+  - [x] Codex sessions withhold it from every command the thread runs (per-thread `shell_environment_policy`, checked live against the pinned app-server).
+  - [x] Pi sessions withhold it from their shell tools (`spawnHook`) and the MCP servers the bridge starts.
+  - [x] ~~OpenCode and Cursor sessions withhold it too~~ (impossible: one shared `opencode serve` per directory and Cursor's in-process SDK have no per-session environment; see Notes).
 - [x] `minEnforcement` filters pickers at launch and is re-checked at dispatch; a tier that dropped since launch fails the activation before dispatch.
 - Record the applied tier on the activation and show it in the inspector:
   - [x] Recorded on the activation (`enforcement`, `enforcementReason`, `guards`), with `graphActivationEnforcementView` for the inspector.
@@ -98,16 +100,60 @@ resetting `credential.helper` and the github.com/gist scoped helpers).
   managed credential file is not read and `gh auth token` is not run for such a session.
 - **Grok (ACP):** done. One child per session; `providerEnv(config, {withholdGitHub})` in
   `acp-context.ts`.
-- **Codex:** not done. One shared `codex app-server` per environment; the coordinator's
-  `shell_environment_policy.exclude` is process-level. A per-thread config in `thread/start` may
-  work but needs a live check before relying on it.
-- **Pi:** not done. The SDK runs in the bridge process; its bash tool accepts a `spawnHook` that
-  could strip the env, but MCP children and extensions would still inherit it.
+- **Codex:** done 2026-10-29 (see the entry below).
+- **Pi:** done 2026-10-29 for shell tools and bridge-started MCP servers (see the entry below).
 - **OpenCode, Cursor:** not feasible per session (shared `opencode serve` / in-process SDK with no
   env option).
 - **Containers (every provider):** the runtime credential file (`/tmp/orkestrator-ai/github-token`)
   and the global Git `url.<token>.insteadOf` rewrite stay readable; only the remote-ref guard
   detects a push there. SSH keys are untouched everywhere.
+
+**2026-10-29 · Codex and Pi credential withholding** (branch `graphs-209-credentials`).
+- **Protocol:** `WITHHELD_GITHUB_ENV_VARS` (the five token variables plus
+  `ORKESTRATOR_GITHUB_CREDENTIAL_FILE`) and `NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING`
+  (`Record<AgentPlatform, {withheld, gap?}>`: Claude, Grok, Codex, Pi withheld; OpenCode, Cursor
+  not). The remote axis stays **advisory on every provider**: withholding is never a boundary (SSH
+  keys, the container's credential file, Git `insteadOf`, and an ancestor's environment through
+  `/proc/<pid>/environ` stay reachable). Only its reason changed: it names the withheld credential
+  where the platform withholds it, adds the platform's `gap` (Codex: app-server keeps it; Pi:
+  extensions keep it) and, on OpenCode and Cursor, says the session keeps the credential.
+- **Codex:** `shell_environment_policy` is accepted as thread configuration and applied per thread
+  on the shared app-server. Checked against the pinned 0.164.0 with no credits
+  (`bridges/codex-bridge/src/app-server/live-github-credential.test.ts`, `RUN_LIVE_CODEX_APP_SERVER=1`):
+  one app-server with fake tokens in its environment, a graph-policy thread whose `env` command sees
+  no token, no credential-file path, `GH_CONFIG_DIR` at the empty directory and the three helper
+  resets (also after `reloadThread` rebuilds it from its rollout), and a sibling thread without the
+  policy that still sees the tokens. Fails when the override is removed. Mechanism
+  (`github-credential-config.ts`, `codexGitHubCredentialThreadConfig`): dotted keys
+  `shell_environment_policy.exclude` = the process's own exclude list (`codexProcessShellExclude`;
+  a thread value replaces it, which matters for a coordinator) + `WITHHELD_GITHUB_ENV_VARS` +
+  `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`, and `shell_environment_policy.set` =
+  `GH_CONFIG_DIR` + resets numbered from 0 (appending after an inherited count breaks under
+  `inherit = "core"`; copying inherited entries would put an `http.extraheader` token into the
+  request). Engine: `githubCredentialThreadConfig` in `policyThreadConfig` (start, resume, fork),
+  option `ghConfigDir` (default one `mkdtemp` per process); a directory failure refuses the thread.
+  `promptThreadConfig` includes the flag so a change reloads a loaded thread (graph result turns
+  reload anyway). Not covered by the policy: app-server's own environment, hooks, and stdio MCP
+  servers (they get Codex's default variable set plus what their entry names; graph nodes load only
+  granted servers, item 404).
+- **Pi:** `bridges/pi-bridge/src/github-credential.ts`. `createPiAgentSession` passes
+  `withheldShellToolDefinitions` as `customTools` for a withholding policy: the SDK's own
+  `createBashToolDefinition` (with the settings' command prefix and shell path) and
+  `createPowerShellToolDefinition`, each with a `spawnHook` applying
+  `withheldGitHubCredentialEnvironment`, `defaultActive: false` so activation follows the tool names
+  as for built-ins. SDK custom tools win over built-ins and extension tools of the same name;
+  `codemode` reaches the same registrations. MCP (`mcp.ts`): `preparePiMcp` resolves `mcp.json`
+  `$NAME` references against the withheld environment (an entry naming a credential variable is
+  skipped as unresolvable) and passes `PiMcpConnectContext.withheldGitHubCredential` to the
+  transport, whose `stdioEnvironment` withholds before the entry's own `env` overlay. The MCP
+  connection key carries the flag, so a policy flip rebuilds the session at the next turn boundary.
+  Tested inside a real SDK session (`sdk-session.test.ts`: graph session's `env` lacks the token,
+  ordinary session's has it; fails without the override) and in `github-credential.test.ts`.
+  **Still inherits it:** Pi extensions (loaded only with project resources on) run in the bridge
+  process and can read `process.env` or spawn with it; a credential written literally into an
+  `mcp.json` entry reaches that server if the node was granted it.
+- **OpenCode, Cursor:** impossible per session, unchanged (one `opencode serve` per directory; the
+  Cursor SDK in the bridge process with no per-session environment option).
 
 **2026-10-29 · Helper for 214.** Protocol `@orkestrator/protocol/graphs/agent-enforcement`:
 `graphAgentNodeEnforcement(compiled, platform, host)` (moved from backend
@@ -135,3 +181,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Guards (read-only, remote-ref, enforcement at dispatch), Claude/Grok credential withholding, launch picker helper, tests, docs, todo 0031 task 10. · Codex/Pi withholding, inspector rendering (211), live conformance (after 214).
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Codex (per-thread `shell_environment_policy`, live-checked on 0.164.0) and Pi (spawn-hooked shell tools, withheld MCP environment) credential withholding; OpenCode/Cursor struck as impossible; per-platform remote-axis reason; docs. · Inspector rendering (211), live conformance (after 214).

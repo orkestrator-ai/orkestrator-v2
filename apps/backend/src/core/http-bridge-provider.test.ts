@@ -64,9 +64,9 @@ describe("HTTP bridge provider", () => {
     };
     for (const [connection, projectResources] of [
       [claudeConnection, true],
-      [codexConnection, false],
-      [cursorConnection, false],
-      [piConnection, false],
+      [codexConnection, true],
+      [cursorConnection, true],
+      [piConnection, true],
       [grokConnection, false],
     ] as const) {
       const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
@@ -75,7 +75,8 @@ describe("HTTP bridge provider", () => {
       });
       const sent = JSON.parse(String(created.requests[0]!.init.body)).policy;
       expect(sent.capabilityPolicy).toEqual(wire);
-      // Claude names an MCP server itself; elsewhere repository config goes instead.
+      // Claude, Codex, Cursor and Pi name an MCP server themselves (item 404);
+      // on Grok repository config goes instead.
       expect(sent.projectResources).toBe(projectResources);
 
       const resumed = httpProvider(

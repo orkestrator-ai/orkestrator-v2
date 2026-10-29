@@ -567,10 +567,17 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     expect: { nodeId: "build", path: "nodes[0].capabilities", detail: "git.push" },
   },
   "capability-mcp-grant": {
+    // Grok cannot select user MCP servers, so a grant warns once for it.
     mutate: (t) => {
       agentOf(t, "build").capabilities.allow = ["mcp:docs"];
     },
-    expect: { nodeId: "build", detail: "mcp:docs" },
+    expect: { nodeId: "build", detail: "mcp:docs", severity: "warning" },
+  },
+  "capability-mcp-grant-read-only": {
+    mutate: (t) => {
+      agentOf(t, "review").capabilities.allow = ["mcp:docs"];
+    },
+    expect: { nodeId: "review", detail: "mcp:docs", severity: "warning" },
   },
   "capability-allow-unused": {
     mutate: (t) => {

@@ -14,6 +14,13 @@ import {
   nativeAgentPolicyForBridge,
   nativeAgentWithholdsGitHubCredential,
   withheldGitHubCredentialEnvironment,
+  isNativeAgentUserMcpServerList,
+  NATIVE_AGENT_USER_MCP_SELECTION,
+  NATIVE_AGENT_USER_MCP_SERVERS_MAX,
+  nativeAgentAllowsUserMcpServer,
+  nativeAgentRestrictsUserMcp,
+  nativeAgentUserMcpGrant,
+  nativeAgentUserMcpSelectionDelivered,
   type NativeAgentExecutionPolicy,
 } from "./native-agent.js";
 
@@ -151,13 +158,14 @@ describe("the wire form for bridges", () => {
         nativeAgentPolicyForBridge(graphPolicy, platform).projectResources,
       ]),
     );
+    // Codex, Cursor and Pi name a denied server themselves since item 404.
     expect(resources).toEqual({
       claude: true,
-      codex: false,
-      cursor: false,
+      codex: true,
+      cursor: true,
       grok: false,
       opencode: true,
-      pi: false,
+      pi: true,
     });
   });
 
@@ -180,7 +188,9 @@ describe("the wire form for bridges", () => {
     expect(nativeAgentCapabilityHold("codex", "git.push", readOnly)).toBe("shell-denial");
     expect(nativeAgentCapabilityHold("codex", "git.push", writer)).toBe("guard");
     expect(nativeAgentCapabilityHold("claude", "git.push", writer)).toBe("bridge");
-    expect(nativeAgentCapabilityHold("codex", "mcp:docs", writer)).toBe("project-resources");
+    expect(nativeAgentCapabilityHold("codex", "mcp:docs", writer)).toBe("bridge");
+    expect(nativeAgentCapabilityHold("cursor", "mcp:docs", writer)).toBe("bridge");
+    expect(nativeAgentCapabilityHold("grok", "mcp:docs", writer)).toBe("project-resources");
     expect(nativeAgentCapabilityHold("opencode", "mcp:docs", writer)).toBe("bridge");
     expect(nativeAgentCapabilityHold("pi", "subagents", writer)).toBe("advisory");
     expect(nativeAgentCapabilityHold("cursor", "subagents", writer)).toBe("bridge");
@@ -233,5 +243,104 @@ describe("withholding the GitHub credential (item 209)", () => {
     expect([1, 2, 3].map((index) => withheld[`GIT_CONFIG_VALUE_${index}`])).toEqual(["", "", ""]);
     // Pure.
     expect(env.GH_TOKEN).toBe("gho_secret");
+  });
+});
+
+describe("user MCP server selection (item 404)", () => {
+  const selecting = (
+    userMcpServers: string[],
+    deny: string[] = [],
+  ): NativeAgentExecutionPolicy => ({
+    ...base,
+    capabilityPolicy: { deny: deny as never, userMcpServers },
+  });
+
+  test("the list is bounded, valid and unique, and the validator holds it to that", () => {
+    expect(isNativeAgentUserMcpServerList([])).toBe(true);
+    expect(isNativeAgentUserMcpServerList(["docs", "linear.v2"])).toBe(true);
+    for (const bad of [
+      ["docs", "docs"],
+      ["-x"],
+      ["a b"],
+      [7],
+      "docs",
+      Array.from({ length: NATIVE_AGENT_USER_MCP_SERVERS_MAX + 1 }, (_, index) => `s${index}`),
+    ]) {
+      expect(isNativeAgentUserMcpServerList(bad)).toBe(false);
+      expect(
+        isNativeAgentExecutionPolicy({
+          ...base,
+          capabilityPolicy: { deny: [], userMcpServers: bad },
+        }),
+      ).toBe(false);
+    }
+    expect(isNativeAgentExecutionPolicy(selecting(["docs"]))).toBe(true);
+    // A bridge released before the field ignores it and keeps the policy.
+    expect(legacyBridgeAccepts(selecting(["docs"]))).toBe(true);
+  });
+
+  test("a denial wins over a listed name, and absent means every server", () => {
+    expect(nativeAgentUserMcpGrant(base)).toBeUndefined();
+    expect(nativeAgentUserMcpGrant(selecting([]))).toEqual([]);
+    expect(nativeAgentUserMcpGrant(selecting(["docs", "linear"], ["mcp:linear"]))).toEqual([
+      "docs",
+    ]);
+    // The wire form's extendedDeny counts too.
+    expect(
+      nativeAgentUserMcpGrant({
+        capabilityPolicy: { deny: [], extendedDeny: ["mcp:docs"], userMcpServers: ["docs"] },
+      }),
+    ).toEqual([]);
+    expect(nativeAgentAllowsUserMcpServer(base, "anything")).toBe(true);
+    expect(nativeAgentAllowsUserMcpServer(selecting([]), "docs")).toBe(false);
+    expect(nativeAgentAllowsUserMcpServer(selecting(["docs"]), "docs")).toBe(true);
+    expect(nativeAgentAllowsUserMcpServer(selecting(["docs"]), "linear")).toBe(false);
+    expect(
+      nativeAgentAllowsUserMcpServer({ ...base, capabilityPolicy: { deny: ["mcp:docs"] } }, "docs"),
+    ).toBe(false);
+    expect(nativeAgentRestrictsUserMcp(base)).toBe(false);
+    expect(nativeAgentRestrictsUserMcp(selecting([]))).toBe(true);
+    expect(nativeAgentRestrictsUserMcp({ ...base, capabilityPolicy: { deny: ["mcp:x"] } })).toBe(
+      true,
+    );
+  });
+
+  test("the wire form carries the effective grant to every bridge", () => {
+    const policy = selecting(["docs", "linear"], ["file.write", "mcp:linear", "subagents"]);
+    for (const platform of AGENT_PLATFORMS) {
+      const wire = nativeAgentPolicyForBridge(policy, platform);
+      expect(wire.capabilityPolicy?.userMcpServers).toEqual(["docs"]);
+      expect(isNativeAgentExecutionPolicy(wire)).toBe(true);
+      expect(nativeAgentPolicyForBridge(wire, platform)).toEqual(wire);
+    }
+    // A legacy-only policy is passed through untouched, its selection included.
+    const plain = selecting(["docs"], ["network"]);
+    expect(nativeAgentPolicyForBridge(plain, "claude")).toBe(plain);
+  });
+
+  test("which platforms deliver a grant on which turns", () => {
+    expect(
+      Object.fromEntries(
+        AGENT_PLATFORMS.map((platform) => [
+          platform,
+          [
+            nativeAgentUserMcpSelectionDelivered(platform, false),
+            nativeAgentUserMcpSelectionDelivered(platform, true),
+          ],
+        ]),
+      ),
+    ).toEqual({
+      claude: [true, true],
+      codex: [true, true],
+      cursor: [true, false],
+      grok: [false, false],
+      opencode: [true, true],
+      pi: [true, true],
+    });
+    for (const platform of AGENT_PLATFORMS) {
+      const selection = NATIVE_AGENT_USER_MCP_SELECTION[platform];
+      // Every gap is explained.
+      expect(selection.ordinary && selection.readOnly ? true : !!selection.gap).toBe(true);
+    }
   });
 });

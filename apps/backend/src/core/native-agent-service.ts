@@ -115,6 +115,16 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
+  BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
+  bugReportRuntimeEnvironment,
+  bugReportRuntimeUnavailableMessage,
+  resolveBugReportRuntime,
+} from "./bug-report-runtime.js";
+import {
+  bugReportFirstPromptNote,
+  bugReportIdFromRuntimeId,
+} from "@orkestrator/protocol/bug-report";
+import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
   coordinatorRuntimeEnvironment,
@@ -204,6 +214,7 @@ export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
  * object spreads inside the dispatch path carry it forward.
  */
 const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
+const BUG_REPORT_CONTEXT_APPLIED = Symbol("orkestrator.bugReportContextApplied");
 
 function hasPendingTabTeardown(
   environment: Environment | null,
@@ -841,8 +852,61 @@ export class NativeAgentService {
     };
   }
 
+  /**
+   * A bug report's session: its platform and policy come from the report,
+   * never the caller. The first prompt carries a pointer to the briefing the
+   * report wrote into its scratch directory.
+   */
+  private async trustedBugReportInput<T extends EnsureNativeAgentSessionInput>(
+    input: T,
+    record: { id: string; agent: string; briefedAt?: string; scratchDir: string },
+  ): Promise<T> {
+    if (record.agent !== input.agent) {
+      throw new Error("This bug report belongs to a different agent platform");
+    }
+    const existing = await this.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    const trusted = {
+      ...input,
+      executionPolicy: existing?.executionPolicy,
+      policy:
+        existing?.policy ??
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "full" },
+          input.origin ?? "interactive-native",
+          BUG_REPORT_EXECUTION_POLICY_OVERRIDE,
+        ),
+    };
+    if (
+      "prompt" in input &&
+      typeof input.prompt === "string" &&
+      !record.briefedAt &&
+      !(BUG_REPORT_CONTEXT_APPLIED in input)
+    ) {
+      // Marked before the send rather than after it: a briefing pointer that
+      // reaches the agent twice is harmless, and the briefing file itself is
+      // loaded from the working directory on every turn anyway.
+      await this.storage.bugReports.mutateBugReport(record.id, (current) => ({
+        ...current,
+        briefedAt: current.briefedAt ?? new Date().toISOString(),
+      }));
+      return {
+        ...trusted,
+        [BUG_REPORT_CONTEXT_APPLIED]: true,
+        prompt: `${bugReportFirstPromptNote(`${record.scratchDir}/AGENTS.md`)}${input.prompt}`,
+      } as T;
+    }
+    return trusted;
+  }
+
   /** Resolve coordinator authority from persisted ownership, never caller metadata. */
   private async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(input: T): Promise<T> {
+    const bugReport = await resolveBugReportRuntime(this.storage, input.environmentId);
+    if (bugReport.status === "unavailable") {
+      throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
+    }
+    if (bugReport.status === "ready") return this.trustedBugReportInput(input, bugReport.record);
     const coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
     if (coordinator.status === "not-coordinator") {
       const environment = await this.storage.getEnvironment(input.environmentId);
@@ -3944,7 +4008,9 @@ export class NativeAgentService {
       platform: input.agent,
       agentLabel: AGENT_PLATFORM_LABELS[input.agent] ?? input.agent,
       prompt:
-        input.owner?.kind === "coordinator" ? stripCoordinatorContext(input.prompt) : input.prompt,
+        input.owner?.kind === "coordinator" || bugReportIdFromRuntimeId(input.environmentId)
+          ? stripCoordinatorContext(input.prompt)
+          : input.prompt,
       intent,
       structuredOutput: input.schema !== undefined,
       attachments: [
@@ -4299,6 +4365,13 @@ export class NativeAgentService {
 
   private async assertEnvironmentLive(environmentId: string): Promise<Environment> {
     this.assertAcceptingWork();
+    const bugReport = await resolveBugReportRuntime(this.storage, environmentId);
+    if (bugReport.status === "unavailable") {
+      throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
+    }
+    if (bugReport.status === "ready") {
+      return bugReportRuntimeEnvironment(environmentId, bugReport.record);
+    }
     const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
     if (coordinator.status === "unavailable") {
       throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));

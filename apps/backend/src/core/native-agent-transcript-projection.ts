@@ -81,6 +81,7 @@ import {
   nativeComposerControls,
   resolveReasoningId,
 } from "./native-agent-service-shared.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
   coordinatorIdFromRuntimeId,
   stripCoordinatorContext,
@@ -569,6 +570,17 @@ function isNormalizedProgressiveMessage(value: unknown): value is {
 function normalizedProgressiveMessages(value: unknown): unknown[] | null {
   if (!Array.isArray(value) || !value.every(isNormalizedProgressiveMessage)) return null;
   return value;
+}
+
+/**
+ * Whether user rows of this runtime may open with a server-authored context
+ * block: a coordinator conversation's, or a bug report's pointer to its
+ * briefing. Both use the coordinator context tags.
+ */
+function hasServerPromptPreamble(environmentId: string): boolean {
+  return Boolean(
+    coordinatorIdFromRuntimeId(environmentId) || bugReportIdFromRuntimeId(environmentId),
+  );
 }
 
 /**
@@ -2496,7 +2508,7 @@ export class NativeAgentTranscriptProjection {
       input.liveWindow.messages,
       NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
       initialPromptPresentation,
-      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      hasServerPromptPreamble(input.environmentId),
       summary ? { providerSessionId } : undefined,
       overlay,
     );
@@ -2653,7 +2665,7 @@ export class NativeAgentTranscriptProjection {
       snapshot.revisedMessages,
       normalized.messages,
       initialPromptPresentation,
-      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      hasServerPromptPreamble(input.environmentId),
       summary ? { providerSessionId } : undefined,
       overlay,
     );
@@ -2692,7 +2704,7 @@ export class NativeAgentTranscriptProjection {
       context: {
         sessionKey,
         ...(summary ? { remoteSessionId: providerSessionId } : {}),
-        coordinator: Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+        coordinator: hasServerPromptPreamble(input.environmentId),
       },
       previous,
       sameHistory:
@@ -4300,7 +4312,7 @@ export class NativeAgentTranscriptProjection {
             Math.max(limit, providerPage.messages.length),
             NATIVE_PROJECTION_MAX_BYTES,
             resolved.session.initialPromptPresentation,
-            Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+            hasServerPromptPreamble(input.environmentId),
             { providerSessionId },
           );
         } finally {

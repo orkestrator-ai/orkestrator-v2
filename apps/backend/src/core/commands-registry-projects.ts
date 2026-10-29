@@ -55,6 +55,7 @@ import {
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
 import { coordinatorProviderAllowed } from "./coordinator-providers.js";
+import { bugReportIdFromRuntimeId, isBugReportAgent } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -597,8 +598,14 @@ export function registerProjectCommands(
     const environment = await storage.getEnvironment(id);
     let cache = await storage.getAgentModelCatalogCache();
     if (!environment) {
-      const coordinator = await resolveCoordinatorRuntime(storage, id);
-      if (coordinator.status === "not-coordinator") {
+      // A bug report, like a coordinator, has no environment row; it belongs
+      // to no project and offers only the bug-report agents.
+      const bugReportId = bugReportIdFromRuntimeId(id);
+      if (bugReportId && !(await storage.bugReports.getBugReport(bugReportId))) {
+        throw new Error("This bug report was discarded");
+      }
+      const coordinator = bugReportId ? null : await resolveCoordinatorRuntime(storage, id);
+      if (coordinator?.status === "not-coordinator") {
         throw new Error(`Environment not found: ${id}`);
       }
       // An unassigned conversation is exactly when this catalogue matters
@@ -610,28 +617,35 @@ export function registerProjectCommands(
         ? await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId)
         : null;
       if (
-        coordinator.status === "unavailable" &&
+        coordinator?.status === "unavailable" &&
         (!workspace || coordinator.reason !== "unassigned")
       ) {
         throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
       }
-      const projectId =
-        coordinator.status === "ready" ? coordinator.workspace.projectId : workspace!.projectId;
+      const projectId = !coordinator
+        ? undefined
+        : coordinator.status === "ready"
+          ? coordinator.workspace.projectId
+          : workspace!.projectId;
       const config = await storage.loadConfig();
+      const enabledPlatforms = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
       const qualified = new Set(
-        normalizeAgentPlatforms(config.global.enabledAgentPlatforms).filter((platform) =>
-          coordinatorProviderAllowed(platform, {
-            tierSetting: config.global.coordinatorProviderTiers,
-            enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
-          }),
+        enabledPlatforms.filter((platform) =>
+          bugReportId
+            ? isBugReportAgent(platform)
+            : coordinatorProviderAllowed(platform, {
+                tierSetting: config.global.coordinatorProviderTiers,
+                enabledPlatforms,
+              }),
         ),
       );
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
-      let openCodeSnapshot = qualified.has("opencode")
-        ? await storage.getOpenCodeModelCatalog(projectId)
-        : null;
+      let openCodeSnapshot =
+        projectId && qualified.has("opencode")
+          ? await storage.getOpenCodeModelCatalog(projectId)
+          : null;
       let coordinatorSeedFailed = false;
       const hostSeeded =
         ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
@@ -644,14 +658,17 @@ export function registerProjectCommands(
       if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
         const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
         const seeded = await waitForFirstUseSeed(
-          seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
-            projectId,
-          }),
+          seedHostModelCatalogIfMissing(
+            context,
+            ensureAgent,
+            refreshHostModelCatalog,
+            projectId ? { projectId } : {},
+          ),
           deadline,
         );
         coordinatorSeedFailed = seeded !== true;
         cache = await storage.getAgentModelCatalogCache();
-        if (ensureAgent === "opencode") {
+        if (ensureAgent === "opencode" && projectId) {
           openCodeSnapshot = await storage.getOpenCodeModelCatalog(projectId);
         }
       }

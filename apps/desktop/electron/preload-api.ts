@@ -383,6 +383,13 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
+    bugReport: {
+      /** This page as a base64 PNG, for a bug report. */
+      captureWindow(): Promise<string> {
+        return ipcRenderer.invoke("orkestrator:bug-report:capture-window");
+      },
+    },
+
     permissions: {
       getMacOsStatus(): Promise<MacOsPermissionsStatus> {
         return ipcRenderer.invoke("orkestrator:permissions:macos-status");

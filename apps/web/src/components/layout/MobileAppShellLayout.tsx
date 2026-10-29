@@ -17,6 +17,8 @@ import { MergeReadyMarker, MergeReadyName } from "@/components/environments/Merg
 import { PR_READY_TO_MERGE_LABEL } from "@orkestrator/protocol/pr-merge-readiness";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useBugReportStore } from "@/stores/bugReportStore";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -138,28 +140,45 @@ export function MobileAppShellLayout({
     sidebarOpenRef.current = sidebarOpen;
   }, [sidebarOpen]);
 
-  // App dialogs render outside both mobile surfaces. Collapse the originating
-  // surface without stealing focus, then restore its trigger after the commit
-  // that unmounts the dialog and its focus trap (including cached lazy dialogs).
-  useEffect(
-    () =>
-      useAppDialogStore.subscribe((state, previous) => {
-        if (state.request && !previous.request) {
-          if (sidebarOpenRef.current) {
-            appDialogOpenerRef.current = sidebarTriggerRef.current;
-            restoreSidebarFocusRef.current = false;
-            setSidebarOpen(false);
-          } else if (toolsOpenRef.current) {
-            appDialogOpenerRef.current = toolsTriggerRef.current;
-            restoreToolsFocusRef.current = false;
-            setToolsOpen(false);
-          }
-        } else if (!state.request && previous.request && appDialogOpenerRef.current) {
-          setAppDialogFocusReturn((count) => count + 1);
-        }
-      }),
-    [],
-  );
+  // App dialogs, global Settings and the bug report sheet render outside both
+  // mobile surfaces. Collapse the originating surface without stealing focus,
+  // then restore its trigger after the commit that unmounts the dialog and its
+  // focus trap (including cached lazy dialogs).
+  useEffect(() => {
+    const opened = () => {
+      if (sidebarOpenRef.current) {
+        appDialogOpenerRef.current = sidebarTriggerRef.current;
+        restoreSidebarFocusRef.current = false;
+        setSidebarOpen(false);
+      } else if (toolsOpenRef.current) {
+        appDialogOpenerRef.current = toolsTriggerRef.current;
+        restoreToolsFocusRef.current = false;
+        setToolsOpen(false);
+      }
+    };
+    // Focus returns once the last of them closes, not under one still open.
+    const closed = () => {
+      const anyOpen =
+        useAppDialogStore.getState().request !== null ||
+        useGlobalSettingsStore.getState().open ||
+        useBugReportStore.getState().sheetOpen;
+      if (!anyOpen && appDialogOpenerRef.current) setAppDialogFocusReturn((count) => count + 1);
+    };
+    const follow = (open: boolean, wasOpen: boolean) => {
+      if (open && !wasOpen) opened();
+      else if (!open && wasOpen) closed();
+    };
+    const unsubscribers = [
+      useAppDialogStore.subscribe((state, previous) =>
+        follow(state.request !== null, previous.request !== null),
+      ),
+      useGlobalSettingsStore.subscribe((state, previous) => follow(state.open, previous.open)),
+      useBugReportStore.subscribe((state, previous) => follow(state.sheetOpen, previous.sheetOpen)),
+    ];
+    return () => {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (appDialogFocusReturn > 0) {

@@ -1,14 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { useState } from "react";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -21,8 +13,8 @@ import {
 } from "./account-machine";
 import { MachineSettings } from "./SettingsPage";
 import { SettingsMachineStrip } from "./SettingsMachineStrip";
-import { TerminalProvider } from "@/contexts/TerminalContext";
-import { useActionBarController } from "@/components/layout/useActionBarController";
+import { GlobalSettingsHost } from "@/components/layout/GlobalSettingsHost";
+import { requestCloseGlobalSettings } from "@/lib/settings-navigation";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const initialPortal = portalStore.getState();
@@ -178,16 +170,11 @@ test("single-machine settings hide the picker", async () => {
   expect(screen.queryByRole("group", { name: "Machine" }) === null).toBe(true);
 });
 
-test("closing Settings resets its selection so the next visit follows the on-screen machine", async () => {
-  const { result } = renderHook(() => useActionBarController({ presentation: "bar" }), {
-    wrapper: TerminalProvider,
-  });
-  act(() => {
-    result.current.setGlobalSettingsOpen(true);
-    useAccountMachineStore.getState().choose(null);
-  });
+test("closing Settings resets its selection so the next visit follows the on-screen machine", () => {
+  render(<GlobalSettingsHost />);
+  act(() => useAccountMachineStore.getState().choose(null));
   expect(useAccountMachineStore.getState().chosen).toBeNull();
-  act(() => result.current.setGlobalSettingsOpen(false));
+  act(() => requestCloseGlobalSettings());
   expect(useAccountMachineStore.getState().chosen).toBeUndefined();
 });
 

@@ -11,6 +11,8 @@ import type {
   NativeAgentServiceOptions,
   PromptDispatchPreparation,
 } from "./native-agent-service-shared.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { bugReportRuntimeEnvironment } from "./bug-report-runtime.js";
 import {
   nativeAgentSessionStorageKey,
   isEnvironmentReadyForAgents,
@@ -597,6 +599,22 @@ export class NativeAgentLaunchActivityReconciler {
           coordinatorEnvironmentIds.add(runtimeId);
         }
       }
+    }
+    // Bug reports have no environment row either, and are observed the same
+    // way. They join the coordinator set because that set means "not an
+    // environment": no activity aggregate, completion bookkeeping or PR probe.
+    const bugReportRuntimeIds = new Set(
+      sessions
+        .map((session) => session.environmentId)
+        .filter((id) => !environmentsById.has(id) && bugReportIdFromRuntimeId(id)),
+    );
+    for (const runtimeId of bugReportRuntimeIds) {
+      const record = await this.storage.bugReports.getBugReport(
+        bugReportIdFromRuntimeId(runtimeId)!,
+      );
+      if (!record?.agent) continue;
+      environmentsById.set(runtimeId, bugReportRuntimeEnvironment(runtimeId, record));
+      coordinatorEnvironmentIds.add(runtimeId);
     }
     if (this.host.isStopped()) return;
     const staleStoppedEnvironments = await this.settleStoppedRuntimes(

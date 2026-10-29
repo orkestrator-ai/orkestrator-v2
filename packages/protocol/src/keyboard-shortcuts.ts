@@ -1,12 +1,19 @@
 /**
- * The app-level keyboard shortcuts (⌘K search, ⌘⇧K shortcuts dialog) and the
- * shortcuts dialog's desktop menu event, shared by the renderer (which owns
+ * The app-level keyboard shortcuts (⌘K search, ⌘⇧K shortcuts dialog, ⌘,
+ * settings) and the shortcuts dialog's desktop menu event, shared by the renderer (which owns
  * the UI they open), Electron main (which owns the View menu item and the
  * native views that keys can land in instead) and the design frame runtime.
  */
 
 /** The View menu's accelerator label. */
 export const KEYBOARD_SHORTCUTS_ACCELERATOR = "CmdOrCtrl+Shift+K";
+
+/**
+ * The app menu's Settings… accelerator label. The menu item reaches the
+ * window's shell renderer as the `open-settings` app shortcut
+ * (`APP_SHORTCUT_EVENT`).
+ */
+export const SETTINGS_ACCELERATOR = "CmdOrCtrl+,";
 
 /** Electron main → renderer: show the keyboard shortcuts dialog. */
 export const KEYBOARD_SHORTCUTS_EVENT = "menu-keyboard-shortcuts";
@@ -41,7 +48,7 @@ export interface ShortcutChord {
 }
 
 /** The app shortcuts: see `APP_SHORTCUTS`. */
-export type AppShortcutId = "show-shortcuts" | "search-projects";
+export type AppShortcutId = "show-shortcuts" | "search-projects" | "open-settings";
 
 /** The platform a chord was typed on: macOS, or anything else. */
 export type ShortcutPlatform = "mac" | "other";
@@ -67,7 +74,7 @@ export type ShortcutFocus = "terminal" | "text" | "page";
  */
 export interface AppShortcut {
   id: AppShortcutId;
-  /** The Latin letter, lower case, typed with ⌘ or Ctrl. */
+  /** The Latin letter, lower case, or the punctuation (`,`) typed with ⌘ or Ctrl. */
   key: string;
   shift: boolean;
   /**
@@ -109,6 +116,15 @@ export const APP_SHORTCUTS: readonly AppShortcut[] = [
     fromPreviews: false,
     ctrlEditsText: true,
   },
+  {
+    // The settings key of every macOS app; Ctrl+, edits no text anywhere.
+    id: "open-settings",
+    key: ",",
+    shift: false,
+    owner: "window",
+    fromPreviews: true,
+    ctrlEditsText: false,
+  },
 ];
 
 export function isAppShortcutId(value: unknown): value is AppShortcutId {
@@ -128,23 +144,30 @@ export function appShortcut(id: AppShortcutId): AppShortcut {
  * `key` wins when it is a Latin letter, so Dvorak and other remapped Latin
  * layouts use the letter they type. A layout that types no Latin letter
  * there (Cyrillic, Greek, Hebrew…) reports its own character, so the
- * physical key position (`code`) decides instead.
+ * physical key position (`code`) decides instead. Punctuation (`,`) follows
+ * the same rule: an ASCII character typed wins (AZERTY's `,` sits on the M
+ * key), and the `Comma` key position stands in for a layout that types none.
  */
 export function matchAppShortcut(
   chord: ShortcutChord,
   shortcuts: readonly Pick<AppShortcut, "id" | "key" | "shift">[] = APP_SHORTCUTS,
 ): AppShortcutId | null {
   if (chord.metaKey === chord.ctrlKey || chord.altKey) return null;
+  // Any printable ASCII character typed is what the user meant; only a
+  // layout that types none there falls back to the physical key.
   const key = chord.key;
-  const letter =
-    typeof key === "string" && /^[a-z]$/i.test(key)
+  const code = chord.code;
+  const pressed =
+    typeof key === "string" && /^[\x21-\x7e]$/.test(key)
       ? key.toLowerCase()
-      : typeof chord.code === "string" && /^Key[A-Z]$/.test(chord.code)
-        ? chord.code.slice(3).toLowerCase()
-        : null;
-  if (!letter) return null;
+      : typeof code === "string" && /^Key[A-Z]$/.test(code)
+        ? code.slice(3).toLowerCase()
+        : code === "Comma"
+          ? ","
+          : null;
+  if (!pressed) return null;
   for (const shortcut of shortcuts) {
-    if (shortcut.key === letter && shortcut.shift === chord.shiftKey) return shortcut.id;
+    if (shortcut.key === pressed && shortcut.shift === chord.shiftKey) return shortcut.id;
   }
   return null;
 }

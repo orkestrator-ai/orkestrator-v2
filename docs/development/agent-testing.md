@@ -112,6 +112,21 @@ mise run dev:stop --profile codex-refused-qa
 mise run dev:reset --profile codex-refused-qa
 ```
 
+## Report a bug qualification
+
+`e2e/agent-testing/bug-report-live.spec.ts` opens the sidebar's Report a bug
+sheet, sends one real turn that asks the agent to write a draft immediately,
+checks the sheet shows it with File issue enabled, then discards the report.
+Nothing is filed ([bug-report.md](../architecture/bug-report.md)).
+
+```bash
+mise run dev:test --profile bug-report-qa --fixture --credential-source claude --agent-platforms claude
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=bug-report-qa ORKESTRATOR_AGENT_TEST_LIVE_BUG_REPORT=1 mise run test:logged -- --name bug-report-live -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts bug-report-live.spec.ts --workers=1
+mise run dev:stop --profile bug-report-qa
+mise run dev:reset --profile bug-report-qa
+```
+
 ## Claude warm-runtime qualification
 
 `e2e/agent-testing/claude-warm-runtime.spec.ts` exercises real Claude follow-up

@@ -10,6 +10,7 @@ import {
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
+import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import {
   frameEnvelope,
@@ -261,6 +262,8 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
       } else if (message.type === "settings") {
         if (isGlobalSettingsSection(message.section)) requestGlobalSettings(message.section);
+      } else if (message.type === "bugReport") {
+        openBugReport(message.nodeId);
       } else if (message.type === "shortcut") {
         // ⌘K typed in the realm: the search it opens is this window's.
         requestAppShortcut(message.shortcut);

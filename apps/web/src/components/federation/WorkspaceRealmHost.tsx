@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBugReportStore } from "@/stores/bugReportStore";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { useSidebarHydration } from "@/components/sidebar/useSidebarHydration";
@@ -90,6 +91,14 @@ export function WorkspaceRealmHost() {
     [],
   );
   useEffect(() => postToShell({ type: "ready" }), []);
+  // The window asked for this node's Report a bug sheet, which runs here so
+  // its agent session talks to this node.
+  const bugReportSeq = useRef(0);
+  useEffect(() => {
+    if (!request?.bugReport || bugReportSeq.current >= request.seq) return;
+    bugReportSeq.current = request.seq;
+    useBugReportStore.getState().openSheet();
+  }, [request]);
   useEffect(
     () =>
       useUIStore.subscribe((state, previous) => {

@@ -61,7 +61,10 @@ type BackendInvoker = {
 
 type IpcEventLike = {
   senderFrame?: { url: string } | null;
-  sender?: { id: number };
+  sender?: {
+    id: number;
+    capturePage?(): Promise<{ isEmpty(): boolean; toPNG(): Uint8Array }>;
+  };
 };
 
 type IpcMainLike = {
@@ -313,6 +316,15 @@ export function registerMainIpc({
   handle("orkestrator:shell:open-external", (_event, url: unknown) =>
     shellApi.openExternal(externalBrowserUrl(url)),
   );
+  // Report a bug: the requesting page as the user sees it. A realm captures
+  // its own workspace, the window its sidebar and own workspace.
+  handle("orkestrator:bug-report:capture-window", async (event) => {
+    const sender = event.sender;
+    if (!sender?.capturePage) throw new Error("Window capture is unavailable");
+    const image = await sender.capturePage();
+    if (image.isEmpty()) throw new Error("The window capture was empty");
+    return Buffer.from(image.toPNG()).toString("base64");
+  });
   handle("orkestrator:permissions:macos-status", () => getMacOsPermissions());
   handle("orkestrator:permissions:open-macos-settings", (_event, pane: unknown) => {
     if (!isMacOsPrivacySettingsPane(pane)) {

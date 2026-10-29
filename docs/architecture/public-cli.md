@@ -45,9 +45,11 @@ interactively in a new temporary directory with a prompt that has it interview
 the user, collect diagnostics read-only, draft a redacted issue in `issue.md`
 and, once the user approves, file it on `orkestrator-ai/orkestrator-v2` with
 `gh issue create`. The launcher ignores SIGINT while the agent runs (Ctrl+C
-belongs to the agent's TUI) and exits with the agent's status. Edit the prompt
-in `buildFixPrompt` when the data-directory layout, log names or settings labels
-it cites change.
+belongs to the agent's TUI) and exits with the agent's status. Its interview, diagnostics and redaction sections are shared with the
+desktop's Report a bug sheet ([bug-report.md](bug-report.md)) through
+`packages/protocol/src/bug-report.ts`, and the machine facts through
+`packages/protocol/src/node/bug-report-facts.ts`. Edit them there when the
+data-directory layout, log names or settings labels they cite change.
 
 ## Selecting a backend
 

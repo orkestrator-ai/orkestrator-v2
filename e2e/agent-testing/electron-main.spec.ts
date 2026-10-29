@@ -472,8 +472,9 @@ print("public.tiff")
       return;
     }
 
-    const actionBarControl = window.getByRole("button", { name: "Global settings" });
-    await expect(actionBarControl).toBeVisible();
+    // The sidebar's bottom bar, shown once the shell has loaded.
+    const settingsControl = window.getByRole("button", { name: "Global settings" });
+    await expect(settingsControl).toBeVisible();
     await window.bringToFront();
     await expect
       .poll(() =>

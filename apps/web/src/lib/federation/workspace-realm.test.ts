@@ -226,3 +226,24 @@ test("a realm forwards only catalogued app shortcuts to its window", () => {
   expect(parseRealmMessage({ type: "shortcut", shortcut: "close-tab" })).toBeNull();
   expect(parseRealmMessage({ type: "shortcut" })).toBeNull();
 });
+
+test("a realm can be asked for its Report a bug sheet, and can hand one to its window", () => {
+  const search = realmSearchParams({ bugReport: true });
+  happyDOM.setURL(`http://localhost/?${search.toString()}`);
+  expect(realmInitialRequest()).toEqual({ type: "select", bugReport: true });
+  expect(parseShellMessage({ type: "select", projectId: "p", bugReport: true })).toEqual({
+    type: "select",
+    projectId: "p",
+    bugReport: true,
+  });
+  expect(parseShellMessage({ type: "select", bugReport: "yes" })).toEqual({ type: "select" });
+  expect(parseRealmMessage({ type: "bugReport", nodeId: null })).toEqual({
+    type: "bugReport",
+    nodeId: null,
+  });
+  expect(parseRealmMessage({ type: "bugReport", nodeId: "node-b" })).toEqual({
+    type: "bugReport",
+    nodeId: "node-b",
+  });
+  expect(parseRealmMessage({ type: "bugReport", nodeId: 7 })).toBeNull();
+});

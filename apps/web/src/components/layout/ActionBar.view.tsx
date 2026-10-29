@@ -53,7 +53,6 @@ import {
   Play,
   Plus,
   Shield,
-  SlidersHorizontal,
   StickyNote,
   Terminal as TerminalIcon,
   Trash2,
@@ -99,9 +98,6 @@ import { formatObservedAt, hydrationFreshnessNotice } from "@/lib/view-freshness
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
-}));
-const LazySettingsPage = lazy(async () => ({
-  default: (await import("@/components/settings/SettingsPage")).SettingsPage,
 }));
 
 const ToolbarTooltipsEnabledContext = createContext(true);
@@ -246,10 +242,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     sidebarOpen,
     toggleSidebar,
     setRepoSettingsProjectId,
-    globalSettingsOpen,
-    globalSettingsDefaultSection,
-    globalSettingsSectionRequest,
-    setGlobalSettingsOpen,
     openEnvironmentSettings,
     dockerStatsOpen,
     setDockerStatsOpen,
@@ -704,19 +696,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </Button>
                 </ToolbarTooltipTrigger>
               )}
-
-              <ToolbarTooltipTrigger tooltip="Global settings">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setGlobalSettingsOpen(true)}
-                  aria-label="Global settings"
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  {isGrid && <span className="truncate text-xs">Global settings</span>}
-                </Button>
-              </ToolbarTooltipTrigger>
 
               <ToolbarTooltipTrigger
                 tooltip={dockerAvailable ? "Docker configuration" : "Docker is not running"}
@@ -1634,19 +1613,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onConfirm={(selection) => void handleConfiguredResolve(selection)}
       />
 
-      {/* Settings Dialogs */}
-      {globalSettingsOpen && (
-        <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading global settings…" />}
-        >
-          <LazySettingsPage
-            open={globalSettingsOpen}
-            onOpenChange={setGlobalSettingsOpen}
-            defaultSection={globalSettingsDefaultSection}
-            sectionRequest={globalSettingsSectionRequest}
-          />
-        </LazyLoadBoundary>
-      )}
+      {/*
+        Settings Dialogs. Global settings open from the sidebar and ⌘, and
+        render in `GlobalSettingsHost`, which `AppShell` mounts.
+      */}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
       {repoSettingsProject && (

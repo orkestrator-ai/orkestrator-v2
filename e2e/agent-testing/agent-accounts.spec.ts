@@ -159,27 +159,19 @@ for (const width of [1280, 390]) {
     expect(status.status).toBe("ready");
     expect(status.flavor).toBe("agent-test");
     const original = accountRegistry(status.dataDir, "read");
-    let fixtureName = "";
     const openOverview = async () => {
       const settings = page.getByRole("button", { name: "Global settings", exact: true });
       if (width < 768 && !(await settings.isVisible())) {
-        const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
-        const closeDrawer = page
-          .getByRole("button", { name: "Close projects and environments" })
-          .first();
-        await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+        // On a phone the sidebar's bottom bar, with Settings, is in the
+        // projects drawer, which may already be open on first load.
         const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
-        if (await drawer.isVisible()) {
-          await drawer.getByRole("button", { name: fixtureName, exact: true }).click();
-          if (await drawer.isVisible()) await closeDrawer.click();
-          await expect(drawer).toBeHidden();
-        }
-        // Project hydration can close the tools menu; reopen it once that settles.
         await expect(async () => {
-          if (!(await settings.isVisible())) {
-            await page.getByRole("button", { name: "Open tools", exact: true }).click();
+          if (!(await drawer.isVisible())) {
+            await page.getByRole("button", { name: "Open projects and environments" }).click();
           }
-          await settings.click({ timeout: 1_000 });
+          await drawer
+            .getByRole("button", { name: "Global settings", exact: true })
+            .click({ timeout: 1_000 });
           await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
         }).toPass({ timeout: 15_000 });
       } else {
@@ -217,7 +209,6 @@ for (const width of [1280, 390]) {
       };
       const fixture = projects.result.find((project) => project.localPath === status.testProject);
       if (!fixture) throw new Error("The profile's fixture project was not found");
-      fixtureName = fixture.name;
       await openOverview();
       const summary = page.getByTestId("machine-agent-preferred");
       await expect(summary).toContainText("gone@example.com");

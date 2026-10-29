@@ -76,6 +76,7 @@ import { registerPublicApiCommands } from "./public-api/registry.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerUserCommandCommands } from "./commands-registry-user-commands.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
+import { registerBugReportCommands } from "./commands-registry-bug-reports.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 import { readPlanUsage } from "./plan-usage.js";
 
@@ -338,6 +339,7 @@ export function createCommandRegistry(
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);
   registerToolingCommands(register, dependencies);
+  registerBugReportCommands(register);
   registerSessionCommands(register, dependencies);
   registerNativeAgentCommands(register, dependencies);
   registerReviewWorkflowCommands(register, dependencies);

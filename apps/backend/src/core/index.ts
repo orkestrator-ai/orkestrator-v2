@@ -1,4 +1,9 @@
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
+import { bugReportIdFromRuntimeId, bugReportRuntimeId } from "@orkestrator/protocol/bug-report";
+import {
+  bugReportBridgeIdentityFromFields,
+  bugReportRuntimeEnvironment,
+} from "./bug-report-runtime.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -1439,9 +1444,10 @@ export class OrkestratorBackend {
     // pidfile they still hold blocks this instance's app-server ownership.
     const reaperStorage = {
       loadEnvironments: async (): Promise<Environment[]> => {
-        const [environments, workspaces] = await Promise.all([
+        const [environments, workspaces, bugReports] = await Promise.all([
           this.context.storage.loadEnvironments(),
           this.context.storage.coordinators.listCoordinatorWorkspaces(),
+          this.context.storage.bugReports.listBugReports(),
         ]);
         const coordinatorRuntimes = workspaces.flatMap((workspace) =>
           workspace.conversations.flatMap((conversation): Environment[] =>
@@ -1469,9 +1475,27 @@ export class OrkestratorBackend {
                 ],
           ),
         );
-        return [...environments, ...coordinatorRuntimes];
+        const bugReportRuntimes = bugReports.flatMap((report): Environment[] =>
+          report.bridgePid === undefined || !report.agent
+            ? []
+            : [bugReportRuntimeEnvironment(bugReportRuntimeId(report.id), report, "stopped")],
+        );
+        return [...environments, ...coordinatorRuntimes, ...bugReportRuntimes];
       },
       updateEnvironment: async (environmentId: string, fields: Partial<Environment>) => {
+        const bugReportId = bugReportIdFromRuntimeId(environmentId);
+        if (bugReportId) {
+          return this.context.storage.bugReports.mutateBugReport(bugReportId, (current) => {
+            const identity = bugReportBridgeIdentityFromFields(current.agent, fields);
+            if (!identity.changed) return current;
+            const { bridgePort: _port, bridgePid: _pid, ...rest } = current;
+            return {
+              ...rest,
+              ...(identity.bridgePort !== undefined ? { bridgePort: identity.bridgePort } : {}),
+              ...(identity.bridgePid !== undefined ? { bridgePid: identity.bridgePid } : {}),
+            };
+          });
+        }
         const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
         const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
         if (!coordinatorId || !conversationId) {

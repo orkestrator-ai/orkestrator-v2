@@ -7,6 +7,8 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useBugReportStore } from "@/stores/bugReportStore";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { FullscreenSettingsLayout } from "@/components/settings/FullscreenSettingsLayout";
 import {
   MOBILE_TOOLS_TRIGGER_LABEL,
@@ -20,6 +22,8 @@ const originalGateway = window.orkestratorGateway;
 afterEach(() => {
   cleanup();
   useAppDialogStore.setState({ request: null });
+  useGlobalSettingsStore.setState({ open: false, section: undefined, sectionRequest: 0 });
+  useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -527,6 +531,63 @@ describe("MobileAppShellLayout", () => {
       expect(document.activeElement).toBe(menuButton);
     } finally {
       dialogControl.remove();
+    }
+  });
+
+  test.each([
+    [
+      "global settings",
+      () => useGlobalSettingsStore.getState().openSection("general"),
+      () => useGlobalSettingsStore.getState().close(),
+    ],
+    [
+      "the bug report sheet",
+      () => useBugReportStore.getState().openSheet(),
+      () => useBugReportStore.getState().closeSheet(),
+    ],
+  ])(
+    "gives way to %s opened from the drawer and returns focus to its trigger",
+    async (_name, open, close) => {
+      const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+      const menuButton = getTitleBarSidebarTrigger(container);
+      // Stands in for the surface `AppShell` hosts, which takes focus.
+      const surfaceControl = document.createElement("button");
+      document.body.append(surfaceControl);
+      try {
+        act(open);
+        surfaceControl.focus();
+        expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(
+          true,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(document.activeElement).toBe(surfaceControl);
+
+        act(close);
+        expect(document.activeElement).toBe(menuButton);
+      } finally {
+        surfaceControl.remove();
+      }
+    },
+  );
+
+  test("returns focus only once the last surface opened from the drawer closes", () => {
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
+    const surfaceControl = document.createElement("button");
+    document.body.append(surfaceControl);
+    try {
+      act(() => useGlobalSettingsStore.getState().openSection("machines"));
+      act(() =>
+        useAppDialogStore.getState().open({ kind: "repository-settings", projectId: "project-1" }),
+      );
+      surfaceControl.focus();
+      act(() => useAppDialogStore.getState().close());
+      // Settings are still open over the workspace.
+      expect(document.activeElement).toBe(surfaceControl);
+      act(() => useGlobalSettingsStore.getState().close());
+      expect(document.activeElement).toBe(menuButton);
+    } finally {
+      surfaceControl.remove();
     }
   });
 

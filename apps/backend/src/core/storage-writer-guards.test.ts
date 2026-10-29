@@ -1792,6 +1792,7 @@ describe("StorageService store writers", () => {
     const { areas } = analyzeStorageService();
     expect([...areas.keys()].sort()).toEqual([
       "agentAccounts",
+      "bugReports",
       "coordinators",
       "kanban",
       "nodes",

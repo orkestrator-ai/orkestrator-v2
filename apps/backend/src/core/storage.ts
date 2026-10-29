@@ -1,6 +1,7 @@
 export * from "./storage-shared.js";
 export type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 export type { CoordinatorsStorage } from "./storage-coordinators.js";
+export type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -17,6 +18,7 @@ import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
 import type { CoordinatorsStorage } from "./storage-coordinators.js";
+import type { BugReportsStorage } from "./storage-bug-reports.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -126,6 +128,7 @@ export class StorageService {
   readonly nodes: NodesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
+  readonly bugReports: BugReportsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -136,6 +139,7 @@ export class StorageService {
     this.nodes = this.repos.nodes;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
+    this.bugReports = this.repos.bugReports;
   }
 
   async init(): Promise<void> {

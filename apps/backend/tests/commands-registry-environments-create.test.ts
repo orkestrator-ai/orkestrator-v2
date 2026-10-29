@@ -647,6 +647,7 @@ exit 1
 `,
         async (logPath) => {
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
           now.mockReturnValue(110_000);
           await commands.get("prepare_environment_first_prompt")?.(
             { environmentId: environment.id, prompt: "Retry this prompt" },

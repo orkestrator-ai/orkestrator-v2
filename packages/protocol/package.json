@@ -85,6 +85,8 @@
     "./graphs/builtins": "./src/graphs/builtins/index.ts",
     "./graphs/capability-profiles": "./src/graphs/capability-profiles.ts",
     "./graphs/compile": "./src/graphs/compile.ts",
+    "./graphs/describe": "./src/graphs/describe.ts",
+    "./graphs/describe-prompt": "./src/graphs/describe-prompt.ts",
     "./graphs/examples": "./src/graphs/examples.ts",
     "./graphs/grammar": "./src/graphs/grammar.ts",
     "./graphs/library": "./src/graphs/library.ts",

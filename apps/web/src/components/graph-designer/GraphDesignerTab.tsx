@@ -44,6 +44,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { GraphDesignerTabData } from "@/types/paneLayout";
 import { GraphCanvas } from "./GraphCanvas";
 import { GraphConnectDialog, GraphLoopDialog } from "./GraphCommandDialogs";
+import { GraphDescribeControl } from "./GraphDescribeControl";
 import { GraphCompilePanel } from "./GraphCompilePanel";
 import { GraphEditorToolbar } from "./GraphEditorToolbar";
 import { GraphImportDialog } from "./GraphImportDialog";
@@ -63,6 +64,8 @@ import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
  * edited on the canvas (item 212): palette, connections, forms, undo, a live
  * browser compile, and Save with compare-and-swap. The environment's graph
  * runs are listed under the library; a row opens the run's tab (item 211).
+ * "Describe a graph" (item 215) drafts one with an agent; the draft opens
+ * here unsaved.
  *
  * The tab keeps only the template it shows in the pane layout; everything
  * else is re-read from the backend when it mounts, when a `graph-template`
@@ -405,6 +408,21 @@ export function GraphDesignerTab({
           </span>
         ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
+          <GraphDescribeControl
+            environmentId={environmentId}
+            projectId={projectId}
+            isActive={isActive}
+            providers={providers}
+            currentTemplate={shownTemplate}
+            onOpenDraft={(template, opened) =>
+              guardDiscard("open the described graph", () => {
+                usePaneLayoutStore.getState().updateTabGraphDesigner(tabId, {}, environmentId);
+                openDraft(tabId, template, projectId);
+                setJsonOpen(false);
+                opened();
+              })
+            }
+          />
           <Button variant="ghost" size="sm" onClick={newGraph}>
             <FilePlus2 className="size-3.5" />
             New graph

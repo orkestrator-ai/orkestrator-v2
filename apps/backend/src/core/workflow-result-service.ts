@@ -6,6 +6,7 @@ import {
   graphOutputContextProblem,
   graphOutputToolPort,
 } from "@orkestrator/protocol/graphs/output-slots";
+import { graphTemplateResultContextProblem } from "@orkestrator/protocol/graphs/describe";
 import {
   isReviewFindingPool,
   safeParseStructuredReviewReport,
@@ -262,6 +263,7 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (value.type === "graph-output") return graphOutputContextProblem(value) === null;
+  if (value.type === "graph-template") return graphTemplateResultContextProblem(value) === null;
   if (value.type === "review-reconciliation") {
     return isReviewFindingPool(value.pool) && safeParseStructuredReviewReport(value.report).success;
   }

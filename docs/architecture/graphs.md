@@ -80,6 +80,8 @@ detected by a guard, and the activation records which (plan P2.9, D4, D12).
 - **The inspector** reads `activation.enforcement`, `enforcementReason` and
   `guards` (`graphActivationEnforcementView` labels them).
 
+| Describe a graph (215) | `describe.ts`, `describe-prompt.ts`; backend `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `graph-describe` store; web `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` | A designer agent drafts a template from the user's description; the `graph-template` result kind checks it with the guard and the compiler; the draft opens unsaved (below). |
+
 ## The Graphs designer (items 110 and 212)
 
 **Opening it.** The environment action bar's **Graphs** button (network icon)
@@ -390,6 +392,66 @@ Open session (the agent's provider session in a native tab that refuses to
 start a fresh one), and the run-wide Pause, Resume and Cancel (with a
 confirmation). Mock runs are labelled "Mock run" in the header and "mock" in
 the list.
+
+## Describe a graph (item 215)
+
+The user writes what the graph should do, picks a model and, optionally,
+"Modify the current draft". A designer agent drafts the template; the draft
+opens in the designer **unsaved** and runs only after the user saves it.
+
+**The job is the backend's.** `graph_describe_start {environmentId,
+description, agent, model?, reasoningEffort?, fastMode?, baseDraft?}` stores
+one job per environment (the `graph-describe` store, a row per environment,
+owned by it and deleted with it) and returns at once. `GraphDescribeService`
+advances it on its own timer, one pass at a time per environment, and resumes
+running jobs after a restart. The web reads it with `graph_describe_status`
+on mount, on `graph-describe` change hints (id = environment) and on view
+safety checks, so switching tabs or reloading shows the job where it is;
+`graph_describe_cancel` aborts the turn and closes its slot, and
+`graph_describe_dismiss` forgets a finished job. The job needs a running
+environment (the session runs there) and an agent the result-tool rollout
+admits for `graph-template`.
+
+**The session.** One unattended, read-only (`plan`) branch of the shared agent
+branch runner (`graph-describe-host.ts`), with the environment's
+`automated-review` policy: dispatch journal, proof-based recovery, the result
+reminder and bounded repair turns are the runner's. The prompt
+(`renderGraphDescribePrompt`) explains the template model from the live
+registries (node kinds, built-in types, built-in prompts, system actions with
+their parameters from `GRAPH_SYSTEM_ACTION_SPECS`, predicates, loops,
+replicate, profiles and bounds), quotes the report §9 examples that compile
+today (§9.1 and §9.2; at most 16 KiB), and puts the draft to modify and the
+description in evidence frames.
+
+**The result kind.** `graph-template` (`submit_graph_template`, validated by
+the shared `validate_workflow_result`). Its schema, `graphTemplateJsonSchema()`,
+is a **tool-transport** schema: the template does not fit the strict
+structured-output subset (optional fields everywhere, recursive predicates,
+open type schemas and system parameters), so the schema guides the model and
+stays portable (no `$ref`, bounded depth and size), and the authority is
+`graphTemplateResultIssues`: the template guard's errors, two authoring rules
+(no `acknowledgements`, which only the user gives, and no `engine`), then the
+compiler's errors under the slot's context (`{type: "graph-template",
+providers, ceiling}`: the user's enabled platforms and the project ceiling).
+Warnings are left for the user in the designer.
+
+**Repairs.** A refused submission returns each problem as `{code, path,
+message}` (compiler codes such as `unknown-port`, `input-unbound`), and the
+agent corrects it in the same turn within the slot's rejection budget (4). A
+slot that spends it becomes a contract failure, and the runner sends a repair
+turn with a fresh slot (at most 3), as review reports do.
+
+**Opening the draft.** A completed job carries the template. The first time an
+active designer tab sees it, `GraphDescribeControl` opens it with
+`openDraft(tabId, template, projectId)` (asking first when the editor has
+unsaved edits) and dismisses the job; a tab that was inactive opens it when it
+is shown, and the header keeps an "Open described draft" button until then.
+Nothing is saved on the way, and a run launches only from a saved template
+(`compileForLaunch` refuses an unsaved draft).
+
+**Not for the coordinator (D6).** The `graph_describe_*` commands are app
+commands, not public actions, so neither the CLI, `run_action` nor any Control
+MCP tool reaches them (`graph-describe-coordinator.test.ts`).
 
 ## Canvas library decision (spike, 2026-10-29)
 

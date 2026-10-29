@@ -95,6 +95,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   // their artifacts, one row per artifact plus a usage row per run, owned by run.
   "graph-runs": { kind: "record", owner: ownerField("environmentId") },
   "graph-artifacts": { kind: "record", owner: ownerField("runId") },
+  // "Describe a graph" (item 215): one row per environment, its latest job.
+  "graph-describe": { kind: "record", owner: ownerField("environmentId") },
 };
 
 /**

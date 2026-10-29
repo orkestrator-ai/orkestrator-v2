@@ -74,6 +74,8 @@ function installBackend() {
           text: graphTemplateExportText(pipeline.template),
           digest: "d",
         };
+      case "graph_describe_status":
+        return null;
       default:
         throw new Error(`unexpected command ${command}`);
     }

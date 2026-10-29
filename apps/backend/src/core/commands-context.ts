@@ -117,6 +117,8 @@ export type CommandContext = {
   graphRuns?: import("./graph-run-service.js").GraphRunService;
   /** Agent `ask_human` questions and their answers (item 204; `graph_run_answer`). */
   graphQuestions?: import("./graph-agent-questions.js").GraphAgentQuestions;
+  /** "Describe a graph" jobs, one per environment (item 215). */
+  graphDescribe?: import("./graph-describe-service.js").GraphDescribeService;
 };
 
 export type CommandHandler = (

@@ -70,6 +70,12 @@ export const RESOURCE_KINDS = [
    * clients re-read the run. A hint only: the stored run is authoritative.
    */
   "graph-run",
+  /**
+   * An environment's "Describe a graph" job changed (item 215): started,
+   * progressed, finished, cancelled or dismissed. The id is the environment
+   * id; clients re-read `graph_describe_status`. A hint only.
+   */
+  "graph-describe",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

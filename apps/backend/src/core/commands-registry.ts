@@ -266,13 +266,16 @@ export function createCommandRegistry(
     const environments = await context.storage.loadEnvironments();
     const tasks: Promise<void>[] = [];
     let pending = 0;
-    pendingEnvironmentRenameFailures.retainOnly(
-      new Set(
-        environments
-          .filter((environment) => environment.pendingRenamePrompt?.trim())
-          .map((environment) => environment.id),
-      ),
+    const withIntent = new Set(
+      environments
+        .filter((environment) => environment.pendingRenamePrompt?.trim())
+        .map((environment) => environment.id),
     );
+    // A cleared intent restarts its backoff, so its retry time goes with its count.
+    pendingEnvironmentRenameFailures.retainOnly(withIntent);
+    for (const environmentId of Array.from(pendingEnvironmentRenameRetryAt.keys())) {
+      if (!withIntent.has(environmentId)) pendingEnvironmentRenameRetryAt.delete(environmentId);
+    }
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.pendingRenamePrompt?.trim()) continue;
       pending += 1;

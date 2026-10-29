@@ -123,8 +123,11 @@ Fixed on 2026-10-28.
   from that count instead of a flat 30 s. The intent and the generated name
   are kept, so naming still succeeds after a later sign-in; a session's first
   prompt still retries at once and, on failure, continues the backoff rather
-  than restarting it. The backoff is in memory, so a backend restart starts it
-  again at 30 s.
+  than restarting it. `reconcilePendingEnvironmentRenames` prunes the retry
+  time together with the count for an environment whose intent was cleared,
+  so a re-set intent starts again at 30 s instead of waiting out the old
+  backoff. The backoff is in memory, so a backend restart starts it again at
+  30 s.
 - Tests:
   - `pending-rename-failure-log.test.ts`: the delay schedule and cap, and the
     count `failed()` returns across intents, environments and a success.
@@ -137,6 +140,10 @@ Fixed on 2026-10-28.
     the 2nd, 4th and 8th failure, with no prompt text.
   - Failing first: with the retry time set back to a flat 30 s, the new
     registry test fails (`Expected: 2, Received: 3` at the 60 s step).
+  - `tests/commands-registry-pending-renames.test.ts` "reconciliation
+    retains failure history for stopped intents and prunes cleared intents"
+    caught a retry time left behind after its count was pruned; it passes
+    unchanged with the pruning above.
   - The existing 30-second, explicit-first-prompt and recovery tests still
     pass unchanged.
 - [recurring-work.md](../../architecture/recurring-work.md) B09 documents the
@@ -195,6 +202,10 @@ Fixed on 2026-10-28.
    (existing behaviour), but a failure then continues the backoff from the
    intent's count instead of restarting at 30 s, so opening tabs cannot reset
    it.
+6. **Task 2, a cleared intent drops its retry time too (2026-10-28).** The
+   failure count was already pruned for environments without an intent; the
+   retry time now goes with it, so the next intent's first failure and its
+   wait both start from one.
 
 ## Open questions
 

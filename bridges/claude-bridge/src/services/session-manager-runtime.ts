@@ -13,7 +13,7 @@
 // routed to it, and the newest one owns the root conversation.
 
 import { createHash } from "node:crypto";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
+import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import type {
   CanUseTool,
   HookCallback,
@@ -291,7 +291,7 @@ export async function assertClaudeRuntimeAccepts(
     const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
     const [{ plugins }, environment] = await Promise.all([
       resolveClaudeTurnPlugins(request.cwd, policy, claudeTurnSettingSources(session, options)),
-      runtimeEnvironmentForAgentQuery(),
+      runtimeEnvironmentForSessionQuery(policy),
     ]);
     resources = claudeLaunchResourceProfile(plugins, environment);
   }

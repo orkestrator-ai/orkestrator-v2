@@ -72,6 +72,7 @@
  */
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type {
+  GraphActivationBaseline,
   GraphActivationSession,
   GraphGuardResult,
   GraphModelBinding,
@@ -110,7 +111,7 @@ export interface GraphActivationFacts {
   policy?: NativeAgentExecutionPolicy;
   enforcement?: GraphEnforcementTier;
   enforcementReason?: string;
-  baseline?: { headRef: string; pathsDigest: string };
+  baseline?: GraphActivationBaseline;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
   /** Usage since the previous report; added to the run's usage. */

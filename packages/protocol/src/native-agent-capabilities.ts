@@ -313,3 +313,72 @@ export function nativeAgentPolicyForBridge(
     },
   };
 }
+
+/**
+ * Environment variables that hand a GitHub credential to `gh`, Git helpers
+ * and GitHub MCP servers (`GITHUB_PERSONAL_ACCESS_TOKEN` is the official
+ * GitHub plugin's header variable).
+ */
+export const GITHUB_CREDENTIAL_ENV_VARS = Object.freeze([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+] as const);
+
+/**
+ * Whether a session's environment must not carry the GitHub credential: its
+ * policy denies `github.write` (every graph agent node, D12). Reading through
+ * `gh` goes with it, because no environment variable separates a read token
+ * from a write token.
+ */
+export function nativeAgentWithholdsGitHubCredential(
+  policy: Pick<NativeAgentExecutionPolicy, "capabilityPolicy"> | undefined,
+): boolean {
+  return nativeAgentPolicyDenies(policy, "github.write");
+}
+
+/** Git credential helper lists an empty value resets (`gh auth setup-git` writes the scoped ones). */
+const RESET_CREDENTIAL_HELPERS = Object.freeze([
+  "credential.helper",
+  "credential.https://github.com.helper",
+  "credential.https://gist.github.com.helper",
+]);
+
+/**
+ * A session environment without the GitHub credential, for a bridge that
+ * builds one environment per session (item 209):
+ *
+ * - every {@link GITHUB_CREDENTIAL_ENV_VARS} entry is dropped, and so is
+ *   `ORKESTRATOR_GITHUB_CREDENTIAL_FILE` (a container's managed token file);
+ * - `GH_CONFIG_DIR` points at `ghConfigDir`, an empty directory the caller
+ *   owns, so `gh` finds no stored login (its `hosts.yml` names the keychain
+ *   entry it would read);
+ * - Git's credential helpers are reset through `GIT_CONFIG_COUNT` entries
+ *   (an empty `credential.helper` clears the inherited list), so an HTTPS
+ *   push cannot borrow the keychain or `gh auth git-credential`.
+ *
+ * What it cannot withhold: SSH keys and agents, a token written into a
+ * global Git `url.<…>.insteadOf` rewrite or a file the agent can read (a
+ * container's runtime credential). The remote-ref guard is the backstop for
+ * those. Pure: the input is not modified.
+ */
+export function withheldGitHubCredentialEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+  options: { ghConfigDir: string },
+): Record<string, string | undefined> {
+  const next: Record<string, string | undefined> = { ...env };
+  for (const name of GITHUB_CREDENTIAL_ENV_VARS) delete next[name];
+  delete next.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
+  next.GH_CONFIG_DIR = options.ghConfigDir;
+  const inherited = Number.parseInt(next.GIT_CONFIG_COUNT ?? "", 10);
+  let count = Number.isSafeInteger(inherited) && inherited > 0 ? inherited : 0;
+  for (const key of RESET_CREDENTIAL_HELPERS) {
+    next[`GIT_CONFIG_KEY_${count}`] = key;
+    next[`GIT_CONFIG_VALUE_${count}`] = "";
+    count += 1;
+  }
+  next.GIT_CONFIG_COUNT = String(count);
+  return next;
+}

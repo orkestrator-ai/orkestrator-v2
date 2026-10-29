@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  GITHUB_CREDENTIAL_ENV_VARS,
   isNativeAgentCapability,
   isNativeAgentExecutionPolicy,
   LEGACY_NATIVE_AGENT_CAPABILITIES,
@@ -11,6 +12,8 @@ import {
   nativeAgentPolicyDeniesNetwork,
   nativeAgentPolicyDeniesWebSearch,
   nativeAgentPolicyForBridge,
+  nativeAgentWithholdsGitHubCredential,
+  withheldGitHubCredentialEnvironment,
   type NativeAgentExecutionPolicy,
 } from "./native-agent.js";
 
@@ -183,5 +186,52 @@ describe("the wire form for bridges", () => {
     expect(nativeAgentCapabilityHold("cursor", "subagents", writer)).toBe("bridge");
     expect(nativeAgentCapabilityHold("grok", "orkestrator:mail", writer)).toBe("backend");
     expect(nativeAgentCapabilityHold("grok", "network", writer)).toBe("bridge");
+  });
+});
+
+describe("withholding the GitHub credential (item 209)", () => {
+  test("applies to a session whose policy denies github.write", () => {
+    expect(
+      nativeAgentWithholdsGitHubCredential({
+        capabilityPolicy: { deny: ["file.write"], extendedDeny: ["github.write"] },
+      }),
+    ).toBe(true);
+    expect(nativeAgentWithholdsGitHubCredential({ capabilityPolicy: { deny: ["network"] } })).toBe(
+      false,
+    );
+    expect(nativeAgentWithholdsGitHubCredential(undefined)).toBe(false);
+  });
+
+  test("drops every token, isolates gh's configuration and resets Git's credential helpers", () => {
+    const env = {
+      PATH: "/usr/bin",
+      GH_TOKEN: "gho_secret",
+      GITHUB_TOKEN: "ghs_secret",
+      GH_ENTERPRISE_TOKEN: "x",
+      GITHUB_ENTERPRISE_TOKEN: "y",
+      GITHUB_PERSONAL_ACCESS_TOKEN: "z",
+      ORKESTRATOR_GITHUB_CREDENTIAL_FILE: "/tmp/orkestrator-ai/github-token",
+      GH_CONFIG_DIR: "/home/me/.config/gh",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.hooksPath",
+      GIT_CONFIG_VALUE_0: "/dev/null",
+    };
+    const withheld = withheldGitHubCredentialEnvironment(env, { ghConfigDir: "/tmp/empty-gh" });
+    for (const name of GITHUB_CREDENTIAL_ENV_VARS) expect(withheld[name]).toBeUndefined();
+    expect(withheld.ORKESTRATOR_GITHUB_CREDENTIAL_FILE).toBeUndefined();
+    expect(Object.values(withheld).join("\n")).not.toContain("secret");
+    expect(withheld.GH_CONFIG_DIR).toBe("/tmp/empty-gh");
+    expect(withheld.PATH).toBe("/usr/bin");
+    // The inherited entry is kept; the resets follow it.
+    expect(withheld.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
+    expect(withheld.GIT_CONFIG_COUNT).toBe("4");
+    expect([1, 2, 3].map((index) => withheld[`GIT_CONFIG_KEY_${index}`])).toEqual([
+      "credential.helper",
+      "credential.https://github.com.helper",
+      "credential.https://gist.github.com.helper",
+    ]);
+    expect([1, 2, 3].map((index) => withheld[`GIT_CONFIG_VALUE_${index}`])).toEqual(["", "", ""]);
+    // Pure.
+    expect(env.GH_TOKEN).toBe("gho_secret");
   });
 });

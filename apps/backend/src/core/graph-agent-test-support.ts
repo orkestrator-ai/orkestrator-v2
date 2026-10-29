@@ -11,12 +11,14 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentEnforcementHost } from "@orkestrator/protocol/graphs/capability-profiles";
 import type { CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
 import type { GraphRun, GraphRunBindings } from "@orkestrator/protocol/graphs/run";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { ProviderSessionFailedError, type ProviderSendOptions } from "./agent-provider-contract.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
@@ -307,11 +309,108 @@ export class FakeAgentProvider {
 
 /** Fake Git for the environment: a fixed HEAD on `main`, a clean tree. */
 export function fakeEnvironmentGit(head = AGENT_TEST_COMMIT) {
-  return async (_environmentId: string, args: string[]): Promise<string> => {
-    if (args[0] === "rev-parse") return `${head}\n`;
-    if (args[0] === "symbolic-ref") return "main\n";
-    if (args[0] === "status") return "";
+  return new FakeGraphRepo(head).git;
+}
+
+interface FakeCommit {
+  parent: string;
+  /** Commit time, Unix seconds. */
+  time: number;
+}
+
+/**
+ * The environment's repository and its remotes, as the guards (item 209)
+ * observe them: HEAD, the uncommitted paths (the worktree probe), commits
+ * with their times, the HEAD reflog and each remote's refs (`ls-remote`). An
+ * agent script changes it to commit, dirty the tree or push.
+ */
+export class FakeGraphRepo {
+  head: string;
+  branch = "main";
+  dirty: string[] = [];
+  readonly commits = new Map<string, FakeCommit>();
+  readonly reflog: Array<{ sha: string; at: number }> = [];
+  /** Remote → ref → sha. `origin` starts with the run branch at HEAD. */
+  readonly remotes = new Map<string, Map<string, string>>();
+  /** False: the worktree probe answers `unknown` (the baseline cannot be established). */
+  probeAvailable = true;
+  /** False: `ls-remote` fails. */
+  remoteReachable = true;
+  lsRemoteCalls = 0;
+  private counter = 0;
+
+  constructor(head = AGENT_TEST_COMMIT) {
+    this.head = head;
+    this.remotes.set("origin", new Map([[`refs/heads/${this.branch}`, head]]));
+  }
+
+  /** A new commit on HEAD, made now. */
+  commit(): string {
+    const sha = (++this.counter).toString(16).padStart(40, "e");
+    const now = Math.floor(Date.now() / 1000);
+    this.commits.set(sha, { parent: this.head, time: now });
+    this.head = sha;
+    this.reflog.unshift({ sha, at: now });
+    return sha;
+  }
+
+  /** Moves HEAD back (a reset), as the reflog records it. */
+  reset(to: string): void {
+    this.head = to;
+    this.reflog.unshift({ sha: to, at: Math.floor(Date.now() / 1000) });
+  }
+
+  push(remote: string, ref: string, sha = this.head): void {
+    const refs = this.remotes.get(remote) ?? new Map<string, string>();
+    refs.set(ref, sha);
+    this.remotes.set(remote, refs);
+  }
+
+  readonly git = async (_environmentId: string, args: string[]): Promise<string> => {
+    const [command, ...rest] = args;
+    if (command === "rev-parse") return `${this.head}\n`;
+    if (command === "symbolic-ref") return `${this.branch}\n`;
+    if (command === "status") return "";
+    if (command === "remote") return [...this.remotes.keys()].join("\n");
+    if (command === "config") throw new Error("not set");
+    if (command === "log" && rest.includes("-g")) {
+      return this.reflog
+        .map((entry) => `${entry.sha} ${this.commits.get(entry.sha)?.time ?? 0} HEAD@{${entry.at}}`)
+        .join("\n");
+    }
+    if (command === "log") {
+      const range = rest.find((arg) => arg.includes(".."))!;
+      const base = range.split("..")[0]!;
+      const lines: string[] = [];
+      for (let sha = this.head; sha !== base;) {
+        const commit = this.commits.get(sha);
+        if (!commit) break;
+        lines.push(`${sha} ${commit.time}`);
+        sha = commit.parent;
+      }
+      return lines.join("\n");
+    }
     throw new Error(`unexpected git ${args.join(" ")}`);
+  };
+
+  readonly probe = async (): Promise<ReviewWorktreeSnapshot> => {
+    if (!this.probeAvailable) return { status: "unknown", reason: "probe failed (timeout)" };
+    return this.dirty.length > 0
+      ? { status: "dirty", head: this.head, paths: [...this.dirty] }
+      : { status: "clean", head: this.head };
+  };
+
+  readonly lsRemote = async (_environment: unknown, args: string[]): Promise<string> => {
+    this.lsRemoteCalls += 1;
+    if (!this.remoteReachable) throw new Error("fatal: unable to access the remote");
+    const names = args.filter((arg) => !arg.startsWith("--"));
+    const refs = this.remotes.get(names[0]!);
+    if (!refs) throw new Error(`fatal: '${names[0]}' does not appear to be a git repository`);
+    const patterns = names.slice(1);
+    return [...refs]
+      .filter(([ref]) => patterns.length === 0 || patterns.includes(ref))
+      .map(([ref, sha]) => `${sha}\t${ref}`)
+      .join("\n");
   };
 }
 
@@ -324,6 +423,10 @@ export interface AgentTestProcess {
 
 export interface GraphAgentWorld {
   dataDir: string;
+  /** The environment's repository as the guards see it (item 209). */
+  repo: FakeGraphRepo;
+  /** What the enforcement matrix assumes about the host; a test may flip it. */
+  host: AgentEnforcementHost;
   storage: StorageService;
   artifacts: GraphArtifactStore;
   workflowResults: WorkflowResultService;
@@ -365,8 +468,11 @@ export async function graphAgentWorld(
     options.script ?? (async () => "idle"),
   );
   const processes: AgentTestProcess[] = [];
+  const repo = new FakeGraphRepo();
   const world: GraphAgentWorld = {
     dataDir,
+    repo,
+    host: { claudeSandbox: true },
     storage,
     artifacts,
     workflowResults,
@@ -415,7 +521,10 @@ export async function graphAgentWorld(
         workflowResults,
         agentTools,
         toolResultsEnabled: () => world.toolResults,
-        environmentGit: fakeEnvironmentGit(),
+        environmentGit: repo.git,
+        workspaceProbe: repo.probe,
+        lsRemote: repo.lsRemote,
+        enforcementHost: () => world.host,
         createProvider: async () => provider.asProvider(() => process.alive),
         askHumanHoldMs: startOptions.holdMs ?? 50,
       });

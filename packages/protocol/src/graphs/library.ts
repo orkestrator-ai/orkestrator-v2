@@ -12,6 +12,7 @@
  */
 import { canonicalJson } from "../canonical-json.js";
 import type { FieldError } from "../field-validation.js";
+import type { GraphRoleProviders } from "./agent-enforcement.js";
 import type { GraphCapabilityCeiling } from "./capability-profiles.js";
 import type { GraphCompileDiagnostic } from "./compile-diagnostics.js";
 import type { CompiledGraphPlan, GraphCompileCost, GraphPlanAcknowledgementRef } from "./plan.js";
@@ -277,6 +278,13 @@ export interface GraphTemplateCompileResponse {
   /** Only with `includePlan: true`. */
   plan?: CompiledGraphPlan | null;
   ceiling: GraphCapabilityCeiling;
+  /**
+   * `forLaunch` with a plan only: per role, every enabled provider's tier on
+   * this host (probed afresh) and whether it meets each node's
+   * `minEnforcement`. The launch pickers offer exactly the `allowed` ones
+   * (item 209); dispatch re-checks the same judgement.
+   */
+  providerChoices?: GraphRoleProviders[];
 }
 
 /** `graph_template_export {ref}`. */

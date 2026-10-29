@@ -7,6 +7,7 @@ import {
   GITHUB_MCP_TOKEN_ENV,
   readGitHubCliToken,
   runtimeEnvironmentForAgentQuery,
+  runtimeEnvironmentForSessionQuery,
 } from "./runtime-env.js";
 
 const noGhToken = async () => undefined;
@@ -213,5 +214,66 @@ describe("Claude Agent SDK runtime environment", () => {
     const cleared = await runtimeEnvironmentForAgentQuery(base, async () => "", readGhToken);
     expect(cleared[GITHUB_MCP_TOKEN_ENV]).toBeUndefined();
     expect(ghCalls).toBe(0);
+  });
+});
+
+describe("graph agent sessions (item 209)", () => {
+  const graphPolicy = {
+    capabilityPolicy: { deny: ["file.write" as const], extendedDeny: ["git.push", "github.write"] },
+  };
+
+  test("a session whose policy denies github.write gets no GitHub credential", async () => {
+    let fileReads = 0;
+    let ghReads = 0;
+    const environment = await runtimeEnvironmentForSessionQuery(
+      graphPolicy,
+      {
+        PATH: "/usr/bin:/bin",
+        GH_TOKEN: "host-token",
+        GITHUB_TOKEN: "host-token",
+        [GITHUB_MCP_TOKEN_ENV]: "mcp-token",
+        [GITHUB_CREDENTIAL_FILE_ENV]: "/tmp/orkestrator-ai/github-token",
+      },
+      {
+        readTextFile: async () => {
+          fileReads += 1;
+          return "file-token";
+        },
+        readGhToken: async () => {
+          ghReads += 1;
+          return "gh-token";
+        },
+        ghConfigDir: async () => "/tmp/empty-gh",
+      },
+    );
+    expect(environment.GH_TOKEN).toBeUndefined();
+    expect(environment.GITHUB_TOKEN).toBeUndefined();
+    expect(environment[GITHUB_MCP_TOKEN_ENV]).toBeUndefined();
+    expect(environment[GITHUB_CREDENTIAL_FILE_ENV]).toBeUndefined();
+    expect(environment.GH_CONFIG_DIR).toBe("/tmp/empty-gh");
+    expect(environment.GIT_CONFIG_KEY_0).toBe("credential.helper");
+    expect(environment.GIT_CONFIG_VALUE_0).toBe("");
+    expect(environment.PATH).toBe("/usr/bin:/bin");
+    expect(Object.values(environment).join("\n")).not.toContain("token");
+    // Neither the managed file nor `gh auth token` was read.
+    expect(fileReads).toBe(0);
+    expect(ghReads).toBe(0);
+  });
+
+  test("an empty gh configuration directory is created when none is given", async () => {
+    const environment = await runtimeEnvironmentForSessionQuery(graphPolicy, { PATH: "/bin" });
+    expect(environment.GH_CONFIG_DIR).toContain("orkestrator-gh-withheld-");
+  });
+
+  test("any other session keeps the ordinary runtime environment", async () => {
+    const environment = await runtimeEnvironmentForSessionQuery(
+      { capabilityPolicy: { deny: ["network"] } },
+      { PATH: "/usr/bin:/bin", GH_TOKEN: "host-token" },
+      { readGhToken: noGhToken },
+    );
+    expect(environment).toMatchObject({
+      GH_TOKEN: "host-token",
+      [GITHUB_MCP_TOKEN_ENV]: "host-token",
+    });
   });
 });

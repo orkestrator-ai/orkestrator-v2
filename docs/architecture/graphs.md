@@ -29,7 +29,55 @@ unless noted:
 | Built-ins (108) | `builtins/` | The three built-in templates, pinned to their engines by tests. Looped Review's engine is retired (`engineStatus: "retired"`). |
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
+| Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
+
+## Guards and enforcement (item 209)
+
+What a capability profile promises is either enforced by the provider or
+detected by a guard, and the activation records which (plan P2.9, D4, D12).
+
+- **The tier.** `graphAgentNodeEnforcement(compiled, platform, host)` judges a
+  node on a provider and host with the shared matrix (106), including the one
+  exception: a Claude `researcher` runs as an ordinary turn so hosted search
+  stays available, at most `provider-configured`. The launch compile
+  (`graph_template_compile` with `forLaunch`, or `compileForLaunch`) re-probes
+  the host and returns `providerChoices`: per role, every enabled provider's
+  weakest tier over the role's nodes and whether it meets each node's
+  `minEnforcement` (`graphRoleProviderChoices`). The launch pickers offer the
+  `allowed` ones; `graphBindingFloorProblems` lists bound models that miss a
+  floor.
+- **At dispatch** the executor judges the node again on the live host
+  (`defaultCoordinatorHostCapabilities`, whose Linux sandbox probe is
+  re-run after its TTL). A tier that dropped since launch fails the
+  activation before any session with `guard-violation` and a message naming
+  the provider, tier, floor and reason. The applied tier, its reason and an
+  `enforcement` guard result are recorded on the activation.
+- **Read-only guard** (`read` and `none` nodes): the generic guard from item
+  001. The baseline (HEAD, the uncommitted path set: its digest and count, the
+  paths themselves when at most 64) is captured before dispatch and fails
+  closed. An acceptance check on `graph-output` slots, scoped to the
+  activation's own result keys, refuses a submission with a correctable
+  `worktree_changed` error so the agent can put the tree back in its turn.
+  When the result is consumed, before any artifact is stored, the worktree is
+  certified again; a change fails the activation and the evidence (message,
+  paths) stays in its `guards`.
+- **Remote-ref guard** (every agent node; none may push): before dispatch the
+  run branch is read with `git ls-remote` on `origin` and the branch's
+  upstream remote (every remote when neither exists); unreachable remotes fail
+  closed. After the turn their heads and tags are listed again. The guard
+  fails the activation when the run branch moved or any ref points at a
+  commit the activation created (in `baseline..HEAD` or the worktree's HEAD
+  reflog since the capture, committed after it). Commits the run's own
+  `push-branch` or `open-pull-request` pushed are not counted. It cannot see a
+  push to an unwatched remote or URL, a push of older commits, or GitHub
+  writes that are not pushes.
+- **GitHub credential.** Graph agent policies deny `github.write`; the Claude
+  and Grok bridges then start the session without the GitHub credential
+  (see [agent engines](agent-engines.md)). Codex, OpenCode, Cursor and Pi do
+  not withhold it yet, and a container's runtime credential stays readable.
+- **The inspector** reads `activation.enforcement`, `enforcementReason` and
+  `guards` (`graphActivationEnforcementView` labels them).
 
 ## The Graphs designer (items 110 and 212)
 

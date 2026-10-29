@@ -50,6 +50,15 @@ export const GRAPH_RUN_BOUNDS = Object.freeze({
   maxGuardResults: 8,
   maxGuardDetailChars: 512,
   maxGuardPaths: 32,
+  /**
+   * Uncommitted paths a baseline keeps by name (item 209). A larger set is
+   * kept as its digest and count only, so the guard still detects a change
+   * but cannot name the paths it touched.
+   */
+  maxBaselinePaths: 64,
+  maxBaselinePathChars: 1_024,
+  /** Remotes the remote-ref guard watches per activation. */
+  maxBaselineUpstreamRefs: 8,
   /** Serialized UTF-8 size of a whole record, frozen plan included. */
   maxRecordBytes: 16 * MIB,
   /** Run, rewind and request ids. */
@@ -279,6 +288,41 @@ export interface GraphGuardResult {
   paths?: string[];
 }
 
+/** One watched upstream ref before dispatch (the remote-ref guard, item 209). */
+export interface GraphUpstreamRef {
+  /** A configured remote's name. */
+  remote: string;
+  /** `refs/heads/<run branch>`. */
+  ref: string;
+  /** Null when the remote has no such ref. */
+  sha: string | null;
+}
+
+/**
+ * The workspace and upstream state an agent activation started from (items
+ * 204, 209), captured before dispatch. The guards compare against it.
+ */
+export interface GraphActivationBaseline {
+  headRef: string;
+  /** SHA-256 over the uncommitted path set: sorted, each path followed by NUL. */
+  pathsDigest: string;
+  /** Size of the uncommitted path set (item 209). */
+  pathCount?: number;
+  /**
+   * The uncommitted paths themselves, sorted, when there are at most
+   * {@link GRAPH_RUN_BOUNDS.maxBaselinePaths}; otherwise only the digest and
+   * count. Kept for `read` and `none` nodes only.
+   */
+  paths?: string[];
+  /**
+   * When it was captured (item 209). The HEAD reflog after it is the
+   * activation's own; a baseline without it predates the guards.
+   */
+  capturedAt?: string;
+  /** The run branch on each watched remote (item 209). */
+  upstream?: GraphUpstreamRef[];
+}
+
 export interface NodeActivation {
   /** `graphActivationKey({nodeId, iteration, branchKey, attempt})`. */
   key: string;
@@ -311,7 +355,7 @@ export interface NodeActivation {
   /** Why the tier is not `enforced`, as the matrix states it. */
   enforcementReason?: string;
   /** Workspace state before dispatch, for the guards. */
-  baseline?: { headRef: string; pathsDigest: string };
+  baseline?: GraphActivationBaseline;
   guards?: GraphGuardResult[];
   /** At most {@link GRAPH_RUN_BOUNDS.maxErrorChars}; content-free. */
   error?: string;

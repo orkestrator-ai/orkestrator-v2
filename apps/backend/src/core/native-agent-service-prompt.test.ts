@@ -1017,7 +1017,7 @@ describe("NativeAgentService", () => {
       [
         "an interactive policy for a workflow origin",
         {
-          origin: "looped-review" as const,
+          origin: "automated-review" as const,
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
         },
       ],

@@ -329,11 +329,11 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
 
   let verifyCalls = 0;
   const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-    if (command === "verify_looped_review_package") {
+    if (command === "verify_review_package") {
       verifyCalls += 1;
       return { valid: true } as T;
     }
-    if (command === "generate_looped_review_package") {
+    if (command === "generate_review_package") {
       return testGeneratedReviewPackage(args!) as T;
     }
     if (command === "get_environment_uncommitted_paths") {

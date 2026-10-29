@@ -1523,7 +1523,7 @@ export class ReviewFanoutRunner {
 
   private interactionContext(reviewer: ReviewerRecord, fence: string | undefined) {
     return {
-      origin: "looped-review" as const,
+      origin: "automated-review" as const,
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       reviewerSession: true,
       phase: "review" as const,

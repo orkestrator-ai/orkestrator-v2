@@ -8,7 +8,6 @@ import {
   Paintbrush,
   Terminal as TerminalIcon,
   Hammer,
-  Repeat2,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
@@ -26,7 +25,6 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
@@ -146,10 +144,6 @@ export function DraggableTab({
     const pipeline = state.pipelines.get(tab.buildTabData.pipelineId);
     return pipeline?.taskTitle;
   });
-  const loopedReviewPhase = useLoopedReviewStore((state) => {
-    if (tab.type !== "looped-review" || !tab.loopedReviewTabData) return undefined;
-    return state.workflows.get(tab.loopedReviewTabData.workflowId)?.phase;
-  });
   const multiReviewPhase = useMultiReviewStore((state) => {
     if (tab.type !== "multi-review" || !tab.multiReviewTabData) return undefined;
     return state.workflows.get(tab.multiReviewTabData.workflowId)?.phase;
@@ -252,9 +246,6 @@ export function DraggableTab({
     if (isCursorTab(tab.type)) return `Cursor ${tabNumber}`;
     if (isGrokTab(tab.type)) return `Grok ${tabNumber}`;
     if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
-    if (tab.type === "looped-review") {
-      return loopedReviewPhase === "completed" ? `Looped Review ✓` : `Looped Review ${tabNumber}`;
-    }
     if (tab.type === "multi-review") {
       return multiReviewPhase === "completed" || multiReviewPhase === "interactive"
         ? "Multi Review ✓"
@@ -301,9 +292,6 @@ export function DraggableTab({
     }
     if (isBuildTab(tab.type)) {
       return <Hammer className="h-3 w-3 shrink-0 text-yellow-400" />;
-    }
-    if (tab.type === "looped-review") {
-      return <Repeat2 className="h-3 w-3 shrink-0 text-cyan-400" />;
     }
     if (tab.type === "multi-review") {
       return <StackedEyes className="size-3.5 shrink-0 text-cyan-400" />;

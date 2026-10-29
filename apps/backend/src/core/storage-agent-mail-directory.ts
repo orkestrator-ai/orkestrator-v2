@@ -38,7 +38,7 @@ import {
 
 const TERMINAL_TYPES = new Set(["claude", "codex", "opencode"]);
 
-const WORKFLOW_TYPES = new Set(["claude-build", "looped-review", "multi-review"]);
+const WORKFLOW_TYPES = new Set(["claude-build", "multi-review"]);
 
 /**
  * Which coordinator each environment belongs to, as the mail address of that
@@ -189,7 +189,7 @@ export class AgentMailboxDirectory {
    */
   async resolveUniqueAgentMailPullTabId(environmentId: string): Promise<string | null> {
     if (!environmentId.trim()) return null;
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     let tabId: string | null = null;
     for (const mailbox of Object.values(store.mailboxes)) {
       if (
@@ -207,7 +207,7 @@ export class AgentMailboxDirectory {
 
   async listAgentMailPullTabIds(environmentId: string): Promise<string[]> {
     if (!environmentId.trim()) return [];
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     return Object.values(store.mailboxes)
       .filter(
         (mailbox) =>
@@ -518,7 +518,10 @@ export class AgentMailboxDirectory {
       environmentId?: string;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const query = options.q?.trim().toLocaleLowerCase();
     const offset = Math.max(0, options.offset ?? 0);
@@ -568,7 +571,7 @@ export class AgentMailboxDirectory {
   }
 
   async getAgentMailSummary(): Promise<AgentMailSummarySnapshot> {
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     return {
       revision: store.revision,
       mailboxes: Object.values(store.mailboxes).map((mailbox) => ({
@@ -622,7 +625,10 @@ export class AgentMailboxDirectory {
       incarnationId?: string;
     } = {},
   ): Promise<AgentMailMailboxSnapshot> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
     if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
     const offset = Math.max(0, options.offset ?? 0);
@@ -656,7 +662,10 @@ export class AgentMailboxDirectory {
     if (addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`At most ${AGENT_MAIL_MAX_MAILBOXES} mailboxes may be read at once`);
     }
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;
@@ -682,7 +691,10 @@ export class AgentMailboxDirectory {
   }
 
   async getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
     ).defaultInjectPolicy;

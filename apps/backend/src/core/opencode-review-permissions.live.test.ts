@@ -191,7 +191,7 @@ liveTest(
       const policy = effectiveOpenCodePolicy(
         resolveNativeAgentExecutionPolicy(
           { environmentType: "local", networkAccessMode: "full" },
-          "looped-review",
+          "automated-review",
         ),
       );
       const sessionId = await owner.createSession("validation", "Isolated workflow lifecycle", {
@@ -463,7 +463,7 @@ liveTest(
       const policy = effectiveOpenCodePolicy(
         resolveNativeAgentExecutionPolicy(
           { environmentType: "local", networkAccessMode: "full" },
-          "looped-review",
+          "automated-review",
         ),
       );
       const created = await client.session.create({
@@ -557,7 +557,7 @@ liveTest(
       const policy = effectiveOpenCodePolicy(
         resolveNativeAgentExecutionPolicy(
           { environmentType: "local", networkAccessMode: "full" },
-          "looped-review",
+          "automated-review",
         ),
       );
       const created = await client.session.create({

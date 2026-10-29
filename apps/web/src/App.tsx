@@ -27,7 +27,6 @@ import { ConnectionStatusBanner } from "@/components/layout/ConnectionStatusBann
 import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
-import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
@@ -363,9 +362,6 @@ function ConnectedApp() {
   // renderer exit/remount, when the store starts empty.
   useEffect(() => {
     for (const environment of environments) {
-      void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
-        console.warn(`[App] Failed to restore looped reviews for ${environment.id}:`, error);
-      });
       void hydrateMultiReviewWorkflowsForEnvironment(environment.id).catch((error) => {
         console.warn(`[App] Failed to restore multi reviews for ${environment.id}:`, error);
       });

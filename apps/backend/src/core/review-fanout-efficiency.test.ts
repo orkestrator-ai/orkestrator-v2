@@ -19,7 +19,7 @@ import {
 
 const policy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "full" },
-  "looped-review",
+  "automated-review",
 );
 
 const report: StructuredReviewReport = {

@@ -83,8 +83,9 @@ test("a restarted Claude bridge answers a cold dispatch from disk without regist
       );
       // Killed only once the turn's own preference writes (the claim, then
       // the in-flight mark) have landed and released their lock: a lock left
-      // by a kill mid-write blocks the next process's writes until it is
-      // stale (todo 0059), which would fail the resend below for the wrong reason.
+      // by a kill mid-write can block the next process's writes until it is
+      // stale (docs/architecture/agent-engines.md, "Claude Code"), which would
+      // fail the resend below for the wrong reason.
       const locked = files.some((file) => file.endsWith(".lock"));
       if (
         !locked &&

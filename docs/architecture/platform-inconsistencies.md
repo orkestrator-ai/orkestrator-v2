@@ -83,7 +83,7 @@ a third gate and often checks `provider === "claude"` rather than
 Features the capability table does **not** cover (gated by provider string,
 projection payload, or product-level agent lists): questions, approvals, context
 usage, chat-find, interrupt, @mentions, auto-title, plan-mode card, build
-pipeline, looped review, multi-review.
+pipeline, multi-review.
 
 ---
 
@@ -125,7 +125,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Chat-find / @mentions / interrupt | full | full | full | full | full | full |
 | Auto-title | partial | env rename only | **full** (hermetic `codex exec`) | partial | partial | partial |
 | Close vs destroy | **DELETE rollout** | stop pane; transcript **kept** | unsubscribe, never delete | kill child | kill child | **DELETE session** |
-| Build pipeline / looped review | full | **n/a** (forced native) | full | full | full | full |
+| Build pipeline | full | **n/a** (forced native) | full | full | full | full |
 
 \*Cursor still runs background Tasks and the ACP bridge continues the parent
 turn (up to four continuation prompts). There is no Claude-style hold/stop card.
@@ -245,7 +245,7 @@ SDK discovery. Custom user/project commands still work if typed manually.
 Compact, fast, and model changes are TUI commands (`/compact`, `switchFastMode`,
 `switchModel`), not `performSessionAction`.
 
-Tmux cannot drive a build pipeline, looped review, or multi-review. Launchers
+Tmux cannot drive a build pipeline or multi-review. Launchers
 force `mode: "native"`.
 
 ### 3.2 Cursor vs Grok
@@ -344,7 +344,7 @@ Each native platform grew unique Agent Info verbs and never back-ported them:
 
 Users switching agents therefore lose verbs, not just models.
 
-Codex native review is **not** looped-review. Agent Info always sends
+Codex native review is **not** Multi Review. Agent Info always sends
 `{ type: "uncommittedChanges" }` even though the bridge accepts `baseBranch` /
 `commit` / `custom`. Compact `modelId` is accepted on the action type but Codex
 `POST /compact` has no body.
@@ -449,9 +449,8 @@ except Cursor's, so an OS crash is out of scope.
 
 ### 3.7 Product workflows
 
-Build pipeline, looped review, and multi-review accept all **five** native
-platforms once enabled (`BUILD_PIPELINE_AGENTS` / `LoopedReviewAgent` /
-`AgentPlatform`). **Tmux cannot drive any of them** — launchers force
+Build pipeline and multi-review accept all **five** native platforms once
+enabled (`BUILD_PIPELINE_AGENTS` / `AgentPlatform`). **Tmux cannot drive any of them** — launchers force
 `mode: "native"`.
 
 Legacy `enabledAgentPlatforms` still defaults to Claude/Codex/OpenCode
@@ -627,7 +626,7 @@ Do not fake these on platforms that lack the vendor method.
 | Claude background tasks + hold card | Claude Agent Tasks; ACP/Codex/OpenCode don’t have this lifecycle. |
 | Claude local settings + prompt suggestions | Claude-bridge session options. |
 | Codex steer (`turn/steer`) + `/steer` | App-server method; injecting it for others would shadow provider commands. |
-| Codex native review (uncommitted changes) | Thread review API; not looped-review. |
+| Codex native review (uncommitted changes) | Thread review API; not Multi Review. |
 | Codex plan-mode card | Codex `planReview` transcript flag after plan turns. |
 | Codex hermetic titles | Isolated `codex exec`; must not inherit user tools/config. |
 | OpenCode undo / redo / share | OpenCode SDK `session.revert` / `unrevert` / `share`. |

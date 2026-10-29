@@ -21,7 +21,6 @@ import {
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import type { ErrorContext } from "@/stores";
@@ -908,12 +907,6 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // reach for a bridge that no longer exists once a minute forever.
         cleanupDeletedEnvironmentSubscriptions(environmentId);
         useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
-        const loopedReviewState = useLoopedReviewStore.getState();
-        for (const [workflowId, workflow] of loopedReviewState.workflows) {
-          if (workflow.environmentId === environmentId) {
-            loopedReviewState.removeWorkflow(workflowId);
-          }
-        }
         removeEnvironmentFromStore(environmentId);
         // The backend drops this environment's pane layout with the
         // environment, so the remembered selection has nothing left to point

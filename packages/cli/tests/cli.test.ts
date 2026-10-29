@@ -115,7 +115,9 @@ async function startPackagedBackend(
       cwd: dataDir,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...environmentOverrides },
+      // Off: each run is a new Docker owner stopped right after ready, so a boot
+      // host-reachability probe would leave a network nothing reaps.
+      env: { ...process.env, ORKESTRATOR_HOST_REACHABILITY_CHECK: "off", ...environmentOverrides },
     },
   );
   processes.push(child);

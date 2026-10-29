@@ -18,7 +18,7 @@ import {
   PhysicalKeyResolver,
   SharedScanQueue,
   SharedWatcherRegistry,
-} from "./change-tracking/shared-physical-work.js";
+} from "./change-tracking/index.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";

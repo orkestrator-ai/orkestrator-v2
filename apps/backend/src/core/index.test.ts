@@ -272,10 +272,10 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       effectiveAdoption: false,
     });
     const internals = observeOnly as unknown as {
-      context: { loopedReviews: unknown };
-      loopedReviews: unknown;
+      context: { multiReviews: unknown };
+      multiReviews: unknown;
     };
-    expect(internals.context.loopedReviews).toBe(internals.loopedReviews);
+    expect(internals.context.multiReviews).toBe(internals.multiReviews);
   } finally {
     if (previousObserve === undefined) delete process.env[observeKey];
     else process.env[observeKey] = previousObserve;
@@ -580,7 +580,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
-    loopedReviews: {
+    multiReviews: {
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
@@ -593,7 +593,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.init = mock(async () => {
     calls.push("pipelines:init");
   });
-  internals.loopedReviews.init = mock(async () => {
+  internals.multiReviews.init = mock(async () => {
     calls.push("reviews:init");
     throw new Error("review restore failed");
   });
@@ -612,7 +612,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.shutdown = mock(async () => {
     calls.push("pipelines:shutdown");
   });
-  internals.loopedReviews.shutdown = mock(async () => {
+  internals.multiReviews.shutdown = mock(async () => {
     calls.push("reviews:shutdown");
     throw new Error("review drain failed");
   });
@@ -1266,6 +1266,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       activityJobClock: { now: time.now, timers: time.timerFactory },
     });
     const internals = backend as unknown as {
+      context: { storage: StorageService };
       commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
       buildPipelines: { init: () => Promise<void> };
       nativeAgents: {
@@ -1297,6 +1298,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.commands.set("reconcile_pending_environment_renames", renames);
     const teardowns = mock(async () => ({ completed: 0 }));
     internals.commands.set("reconcile_tab_teardowns", teardowns);
+    const retiredReviews = spyOn(internals.context.storage, "reconcileRetiredLoopedReviews");
     const { intervals, restore } = controlledIntervals();
 
     try {
@@ -1310,6 +1312,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
         expect(job!.priority).toBe("recovery");
         expect(RECURRING_JOB_CATALOGUE[job!.kind].priority).toBe(job!.priority);
       }
+      const retirementJob = jobs.find((entry) => entry.name === "retired-looped-reviews");
+      expect(retirementJob?.priority).toBe("maintenance");
+      expect(retirementJob?.intervalMs).toBe(60_000);
+      expect(retiredReviews.mock.calls.length).toBeGreaterThan(0);
       // No 2 s bundle and no 60 s tab timer: the jobs own those cadences.
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(intervals.filter((interval) => interval.delay === 60_000)).toHaveLength(0);
@@ -1321,6 +1327,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
         repair: (internals.coordinators.reconcileWorkflowNotifications as ReturnType<typeof mock>)
           .mock.calls.length,
         teardowns: teardowns.mock.calls.length,
+        retiredReviews: retiredReviews.mock.calls.length,
       };
 
       // A hung activity sweep no longer holds back presence refreshes, which
@@ -1348,13 +1355,17 @@ describe("native-agent activity reconciliation lifecycle", () => {
           .calls.length - startup.repair,
       ).toBe(1);
       expect(teardowns.mock.calls.length - startup.teardowns).toBe(1);
+      expect(retiredReviews.mock.calls.length - startup.retiredReviews).toBe(1);
       await time.advance(60_000);
       expect(teardowns.mock.calls.length - startup.teardowns).toBe(2);
+      expect(retiredReviews.mock.calls.length - startup.retiredReviews).toBe(2);
 
       await backend.shutdown();
       const afterShutdown = teardowns.mock.calls.length;
+      const retirementsAfterShutdown = retiredReviews.mock.calls.length;
       await time.advance(120_000);
       expect(teardowns.mock.calls.length).toBe(afterShutdown);
+      expect(retiredReviews.mock.calls.length).toBe(retirementsAfterShutdown);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();

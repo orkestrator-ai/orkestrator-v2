@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-  type ReviewFindingPool,
-  type StructuredReviewReport,
-} from "@orkestrator/protocol/structured-review";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { reviewValidationArtifactPaths } from "@orkestrator/protocol/review-artifacts";
 import {
   buildReviewBody,
@@ -12,10 +8,8 @@ import {
 } from "@orkestrator/protocol/review-workflow";
 import {
   createDiscoveryPrompt,
-  createFixPoolPrompt,
-  createReconciliationPrompt,
   createReviewPreparationPrompt,
-  LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+  REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
   parseFixResult,
   parsePrResult,
   parseReviewPreparationResult,
@@ -25,36 +19,7 @@ import {
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
-} from "./looped-review-prompts.js";
-
-const report: StructuredReviewReport = {
-  reviewScope: {
-    targetBranch: "main",
-    baseRef: "origin/main...HEAD",
-    commit: null,
-    filesReviewed: [],
-    filesSkipped: [],
-    filesLeftUncommitted: [],
-    commandsRun: [],
-    commandsNotRun: [],
-    limitations: [],
-  },
-  whatChanged: {
-    overview: "No change.",
-    before: "Before.",
-    after: "After.",
-    keyCodeChanges: [],
-    userImpact: "None.",
-  },
-  riskProfile: { changeTypes: [], riskAreas: [], overallRisk: "low", reasoning: "Low." },
-  testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
-  strengths: [],
-  issues: [],
-  testCoverageGaps: [],
-  verdict: { ready: "yes", reasoning: "No issues." },
-  summaryOfChange: "No change.",
-  reviewSummary: "No high-confidence issues were found in the reviewed scope.",
-};
+} from "./review-prompts.js";
 
 /** The inline shape older snapshots persisted; reviewers still receive it verbatim. */
 const reviewPackage: LegacyReviewPackage = {
@@ -72,8 +37,6 @@ const reviewPackage: LegacyReviewPackage = {
   uncommittedFiles: [],
   limitations: [],
 };
-
-const pool: ReviewFindingPool = { issues: [], coverageGaps: [] };
 
 function assertOpenAiStrictCompatible(schema: unknown): void {
   if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return;
@@ -94,12 +57,12 @@ function assertOpenAiStrictCompatible(schema: unknown): void {
   }
 }
 
-describe("backend looped-review prompt contracts", () => {
+describe("backend review prompt contracts", () => {
   test("keeps every provider schema in the OpenAI strict subset", () => {
     for (const schema of [
       REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-      LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+      REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
       REVIEW_FIX_RESULT_JSON_SCHEMA,
       REVIEW_PR_RESULT_JSON_SCHEMA,
     ])
@@ -208,63 +171,6 @@ describe("backend looped-review prompt contracts", () => {
     expect(discovery.indexOf("## Structured report structural preflight")).toBeGreaterThan(
       discovery.indexOf("## Test coverage review"),
     );
-  });
-
-  test("serializes the complete report and finding pool into later phases", () => {
-    const reconciliation = createReconciliationPrompt({ report, pool });
-    expect(reconciliation).toContain(JSON.stringify(report, null, 2));
-    expect(reconciliation).toContain(JSON.stringify(pool, null, 2));
-    expect(reconciliation).toContain("exactly once, using its zero-based reportIndex");
-
-    const fixPool: ReviewFindingPool = {
-      issues: [
-        {
-          poolId: "issue-1",
-          severity: "P1",
-          confidence: 95,
-          category: "correctness",
-          title: "Lost transition",
-          file: "src/a.ts",
-          line: 7,
-          symbol: "advance",
-          description: "State is lost.",
-          evidence: "The save happens later.",
-          suggestion: "Save first.",
-          verification: "Restart at the boundary.",
-        },
-      ],
-      coverageGaps: [{ poolId: "gap-1", file: "src/a.ts", untestedBehavior: "restart" }],
-    };
-    const fix = createFixPoolPrompt({ pool: fixPool, targetBranch: "main" });
-    expect(fix).toContain(JSON.stringify(fixPool, null, 2));
-    expect(fix).toContain("Target branch: main");
-    expect(fix).toContain("Set complete=false");
-  });
-
-  test("states every rule the reconciliation parser actually enforces", () => {
-    // applyReconciliation throws — failing the whole workflow — when any of
-    // these is broken, so a rule missing from the prompt becomes an
-    // unactionable "Reconciliation ... mismatch" for the user.
-    const prompt = createReconciliationPrompt({ report, pool });
-    expect(prompt).toContain("outcome=new requires poolId=null");
-    expect(prompt).toContain("in report order");
-    expect(prompt).toContain("outcome=updated requires the referenced existing poolId");
-    expect(prompt).toContain("outcome=existing requires the stable poolId");
-    expect(prompt).toContain("Do not invent IDs");
-    expect(prompt).toContain("Do not remove findings");
-  });
-
-  test("states the notes-versus-limitations rule the fix parser enforces", () => {
-    // parseFixResult rejects `complete` alongside any limitation, so a model
-    // that files an informational note as a limitation fails the round.
-    const prompt = createFixPoolPrompt({
-      pool: { issues: [], coverageGaps: [] },
-      targetBranch: "main",
-    });
-    expect(prompt).toContain("Limitations are blockers only");
-    expect(prompt).toContain("informational observations in notes");
-    expect(prompt).toContain("commandsRun records the final state of each validation command");
-    expect(prompt).toContain("Set complete=true only when");
   });
 });
 
@@ -439,8 +345,6 @@ describe("parsePrResult", () => {
 });
 
 describe("prompt contract edge cases", () => {
-  const emptyPool: ReviewFindingPool = { issues: [], coverageGaps: [] };
-
   test("keeps adversarial ticket context subordinate to the fixed contract", () => {
     // Context comes from a kanban ticket, i.e. from whoever can edit the board.
     // JSON serialization is what stops a heading in that text reading as prompt
@@ -622,7 +526,7 @@ describe("prompt contract edge cases", () => {
   });
 
   test("keeps the reconciliation schema's required list free of duplicates", () => {
-    const required = LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA.required as string[];
+    const required = REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA.required as string[];
     expect(new Set(required).size).toBe(required.length);
     expect(required).toContain("issueOutcomes");
     expect(required).toContain("coverageGapOutcomes");
@@ -648,11 +552,5 @@ describe("prompt contract edge cases", () => {
       limitations: [],
     });
     expect(parsed.validation[0]?.stdoutPath).toBe("../../.env");
-  });
-
-  test("rejects a pool prompt built from a pool that is not an object", () => {
-    expect(createFixPoolPrompt({ pool: emptyPool, targetBranch: "main" })).toContain(
-      JSON.stringify(emptyPool, null, 2),
-    );
   });
 });

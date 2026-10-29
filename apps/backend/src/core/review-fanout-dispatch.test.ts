@@ -9,7 +9,7 @@ import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
 
 const policy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "full" },
-  "looped-review",
+  "automated-review",
 );
 
 function preparedReviewer(): ReviewerRecord {

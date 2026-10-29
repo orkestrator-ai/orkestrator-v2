@@ -15,6 +15,7 @@ import {
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
+import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdir";
 
 /**
  * Read-only inventory of the disk state Orkestrator work leaves behind, with
@@ -427,7 +428,85 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
     owner: "test runs (swept at the next run)",
     cleanup: "removed automatically once their process has exited",
   });
+  rows.push(...temporaryBrowserRows(context.tmpDir));
+  // On macOS test processes keep their private TMPDIR under /private/tmp.
+  const privateRoot = privateTmpdirRoot(context.tmpDir);
+  if (privateRoot !== context.tmpDir)
+    rows.push(
+      ...temporaryBrowserRows(privateRoot).filter((row) =>
+        row.location.endsWith(`${PRIVATE_TMPDIR_PREFIX}*`),
+      ),
+    );
   return rows;
+}
+
+const TEMPORARY_BROWSER_PREFIXES = [
+  {
+    prefix: "playwright_chromiumdev_profile-",
+    owner:
+      "Playwright browsers: design renderer, tests, playwright-cli or agent sessions (owner unknown)",
+    cleanup:
+      "backend removes the profiles it recorded at startup; remove others by hand once unused",
+  },
+  {
+    prefix: "ork-artifact-preview-",
+    owner: "artifact preview workers (scratch with a full browser profile)",
+    cleanup: "removed at backend startup once their backend has exited (after an hour)",
+  },
+  {
+    prefix: PRIVATE_TMPDIR_PREFIX,
+    owner: "test processes (private TMPDIR holding their browser profiles)",
+    cleanup: "removed by the next test run once their process has exited (after an hour)",
+  },
+] as const;
+
+function formatAge(milliseconds: number): string {
+  const hours = Math.max(0, Math.floor(milliseconds / 3_600_000));
+  return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * Browser profiles and the temporary directories that hold them. Profile
+ * names hold no owner, so a profile counts as in use when a live process
+ * names it on its command line; the rest are what a sweep could consider.
+ */
+export function temporaryBrowserRows(
+  tmpDir: string,
+  now = Date.now(),
+  commandLines: string | null = liveCommandLines(),
+): ReportRow[] {
+  return TEMPORARY_BROWSER_PREFIXES.map(({ prefix, owner, cleanup }) => {
+    const directories = childDirectories(tmpDir).filter((directory) =>
+      path.basename(directory).startsWith(prefix),
+    );
+    const modified = directories.flatMap((directory) => {
+      try {
+        return [lstatSync(directory).mtimeMs];
+      } catch {
+        return [];
+      }
+    });
+    const inUse =
+      commandLines === null
+        ? "in use unknown"
+        : `${directories.filter((directory) => commandLines.includes(directory)).length} in use`;
+    const oldest = modified.length > 0 ? `, oldest ${formatAge(now - Math.min(...modified))}` : "";
+    return {
+      location: `${tmpDir}/${prefix}*`,
+      bytes: diskUsage(directories),
+      orphaned: `${directories.length} directories (${inUse}${oldest})`,
+      owner,
+      cleanup,
+    };
+  });
+}
+
+function liveCommandLines(): string | null {
+  const result = spawnSync("ps", ["-axww", "-o", "args="], {
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return result.status === 0 ? result.stdout : null;
 }
 
 function parseDecimalSize(value: string): number | null {

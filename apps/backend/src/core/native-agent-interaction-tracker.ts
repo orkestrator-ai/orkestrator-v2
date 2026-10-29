@@ -272,7 +272,7 @@ export class NativeAgentInteractionTracker {
   }
 
   private interactionPhase(session: PersistedNativeAgentSession): string {
-    if (session.origin === "looped-review") {
+    if (session.origin === "automated-review") {
       const segments = session.logicalSessionKey.split(":");
       const phase = segments[2];
       if (phase && phase.length <= 256) return phase;

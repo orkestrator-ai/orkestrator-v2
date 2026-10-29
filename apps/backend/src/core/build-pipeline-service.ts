@@ -249,7 +249,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   protected executionPolicy(
     pipeline: BuildPipeline,
-    origin: "build-pipeline" | "looped-review" = "build-pipeline",
+    origin: "build-pipeline" | "automated-review" = "build-pipeline",
   ): Promise<NativeAgentExecutionPolicy> {
     return this.context.executionPolicy(pipeline, origin);
   }

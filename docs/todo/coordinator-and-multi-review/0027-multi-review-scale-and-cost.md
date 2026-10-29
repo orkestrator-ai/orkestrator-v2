@@ -322,8 +322,7 @@ platforms than Claude and Codex.
   re-checks the controller fence and revision inside its own transaction.
   `validateMultiReviewController`, the fence check, reads one row and takes no
   lease. The benchmark asserts no whole-store read and two lease acquisitions
-  per running pass at any panel size or retained history. The looped-review
-  store follows the same rules.
+  per running pass at any panel size or retained history.
 
 ## Outstanding work
 

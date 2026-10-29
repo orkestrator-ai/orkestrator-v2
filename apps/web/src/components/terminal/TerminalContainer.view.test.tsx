@@ -28,10 +28,6 @@ import {
 
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 
-import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
-
-import { loopedReviewFixture } from "@/test/looped-review-fixture";
-
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
 import {
@@ -276,18 +272,6 @@ const getMultiReviewWorkflowMock = mock<typeof realBackend.getMultiReviewWorkflo
   async () => null,
 );
 
-const listLoopedReviewWorkflowsMock = mock(
-  async (_environmentId: string) =>
-    [] as Array<{
-      version: number;
-      id: string;
-      environmentId: string;
-      snapshot: LoopedReviewWorkflow;
-      updatedAt: string;
-      revision: number;
-    }>,
-);
-
 const writeContainerFileMock = mock(
   async (_containerId: string, filePath: string, _base64Data: string) => `/workspace/${filePath}`,
 );
@@ -398,7 +382,6 @@ mock.module("@/lib/backend", () => ({
   getBuildPipelineControl: mock(async () => null),
   deletePaneLayout: deletePaneLayoutMock,
   teardownTab: teardownTabMock,
-  listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
   getMultiReviewWorkflow: getMultiReviewWorkflowMock,
   writeContainerFile: writeContainerFileMock,
@@ -531,7 +514,6 @@ describe("TerminalContainer", () => {
       composeDraftImages: new Map(),
     });
     useNativeComposeStore.setState({ drafts: new Map() });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -609,8 +591,6 @@ describe("TerminalContainer", () => {
     teardownTabMock.mockReset();
     teardownTabMock.mockResolvedValue({ completed: true });
     localStorage.clear();
-    listLoopedReviewWorkflowsMock.mockReset();
-    listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeInitialPromptAttachmentsMock.mockClear();
@@ -2600,28 +2580,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
-    const workflow = loopedReviewFixture({
-      environmentId: "env-hidden",
-      projectId: "project-1",
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-      startingAllowance: 6,
-      currentAllowance: 6,
-    });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    useLoopedReviewStore.setState({ workflows: new Map() });
-    listLoopedReviewWorkflowsMock.mockResolvedValue([
-      {
-        version: workflow.version,
-        id: workflow.id,
-        environmentId: workflow.environmentId,
-        snapshot: workflow,
-        updatedAt: workflow.updatedAt,
-        revision: 3,
-      },
-    ]);
+  test("drops a tab of the removed Looped Review feature from a restored layout", async () => {
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -2632,14 +2591,24 @@ describe("TerminalContainer", () => {
         id: "restored-pane",
         tabs: [
           {
+            id: "restored-file",
+            type: "file",
+            displayTitle: "README",
+            fileData: {
+              filePath: "README.md",
+              containerId: "container-hidden",
+            },
+          },
+          // Saved by a build that still had Looped Review.
+          {
             id: "restored-looped-review",
             type: "looped-review",
             loopedReviewTabData: {
               environmentId: "env-hidden",
-              workflowId: workflow.id,
+              workflowId: "workflow-retired",
               isLocal: false,
             },
-          },
+          } as never,
         ],
         activeTabId: "restored-looped-review",
       },
@@ -2659,25 +2628,75 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
-        backendRevision: 3,
-        phase: "preparing",
-      });
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
-        {
-          id: "restored-looped-review",
-          type: "looped-review",
-          loopedReviewTabData: {
-            environmentId: "env-hidden",
-            workflowId: workflow.id,
-          },
-        },
+        { id: "restored-file", type: "file", displayTitle: "README" },
       ]);
     });
   });
 
+  test.each([false, true])(
+    "seeds a usable layout when every saved tab is retired (active=%s)",
+    async (isActive) => {
+      getPaneLayoutMock.mockResolvedValue({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-hidden",
+        containerId: "container-hidden",
+        activePaneId: "retired-pane",
+        root: {
+          kind: "leaf",
+          id: "retired-pane",
+          tabs: [
+            {
+              id: "retired-one",
+              type: "looped-review",
+              loopedReviewTabData: {
+                workflowId: "one",
+                environmentId: "env-hidden",
+                isLocal: false,
+              },
+            } as never,
+            {
+              id: "retired-two",
+              type: "looped-review",
+              loopedReviewTabData: {
+                workflowId: "two",
+                environmentId: "env-hidden",
+                isLocal: false,
+              },
+            } as never,
+          ],
+          activeTabId: "retired-two",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 1,
+      });
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={isActive}
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => {
+        const state = usePaneLayoutStore.getState();
+        expect(state.hydration.get("env-hidden")).toBe("done");
+        const tabs = state.getAllTabs("env-hidden");
+        expect(tabs.some((tab) => tab.id.startsWith("retired-"))).toBe(false);
+        expect(tabs.some((tab) => tab.type === "plain")).toBe(true);
+        const layout = state.environments.get("env-hidden");
+        const pane = layout && state.getPane(layout.activePaneId, "env-hidden");
+        expect(pane?.tabs.some((tab) => tab.id === pane.activeTabId)).toBe(true);
+        expect(layout?.containerId).toBe("container-hidden");
+      });
+    },
+  );
+
   test("preserves persisted review tabs when workflow hydration is unavailable", async () => {
-    listLoopedReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
+    listMultiReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
@@ -2698,8 +2717,8 @@ describe("TerminalContainer", () => {
           },
           {
             id: "restored-review",
-            type: "looped-review",
-            loopedReviewTabData: {
+            type: "multi-review",
+            multiReviewTabData: {
               environmentId: "env-hidden",
               workflowId: "workflow-unknown",
               isLocal: false,
@@ -2729,8 +2748,8 @@ describe("TerminalContainer", () => {
         { id: "restored-file", type: "file", displayTitle: "README" },
         {
           id: "restored-review",
-          type: "looped-review",
-          loopedReviewTabData: { workflowId: "workflow-unknown" },
+          type: "multi-review",
+          multiReviewTabData: { workflowId: "workflow-unknown" },
         },
       ]);
     });

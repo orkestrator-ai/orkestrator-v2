@@ -116,6 +116,92 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Benchmarks on Linux Engine CI, and the call and start-time misses (2026-10-28)
+
+Todo [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md).
+The CI reports below come from GitHub runners (4 CPUs, Docker Engine
+28.0.4, built-in default budget), copied here before the artefacts expire.
+Bold marks a miss against the targets in [Benchmarks](#benchmarks); the
+calls column is judged against the re-baselined ≤ 27.
+
+| Measure (target) | arm64, run 40409285999 | x64, run 40409285999 | arm64, run 40746551838 | x64, run 40746551838 |
+| --- | --- | --- | --- | --- |
+| Fresh to ready (≤ 3 s) | 2.96 s | **3.40 s** | **3.14 s** | **3.33 s** |
+| Docker calls per fresh environment, median (max) | **28** (34) | **28** (34) | **28** (35) | **28** (34) |
+| Three concurrent, slowdown (≤ 1.5×) | 1.11× | 1.44× | 1.24× | 1.29× |
+| Warm stop (≤ 1 s) | 0.10 s | 0.13 s | 0.13 s | 0.13 s |
+| Warm start (≤ 2 s) | 1.90 s | **2.14 s** | **2.28 s** | **2.08 s** |
+| 5,000-file copy (≤ 20 s) | 13.0 s | 14.6 s | 17.6 s | 13.5 s |
+| Calls per minute, view open (≤ 36) | 24 | 24 | 24 | 24 |
+| Followers after grace (0) | 0 | 0 | 0 | 0 |
+
+- Run 40409285999 is the 0109 PR, head `e53ea683`, with images
+  `sha256:e12b0404d1888eefd5403c389617c8b809271499a56850ec312561d61bb4f993`
+  (arm64) and `sha256:5cadbe5b01855614b93c7f2eb0062836067116dfdd426d918c38ab5f00f344e5`
+  (x64).
+- Run 40746551838 is the 0728 PR, head `8296d90e`, with images
+  `sha256:8e2a89bb96b2ce6f7b8c2e5dbf4714181b944c40901559b19297c56a93c78527`
+  and `sha256:c78355c7926ff803b1d8cf462619d37b33b51ccf50338559585ed316f5012258`.
+- Nothing on either runtime's boot path changed between the two runs, so
+  the arm64 warm-start move from 1.90 s to 2.28 s is runner variance. Earlier
+  runs are in 0729.
+
+**Where the calls go.** The attributed harness ran on Docker Desktop 29.9.2
+(arm64, 18 CPUs, a host loaded by other work), with workspace images
+`orkestrator-v2:qual-0729-79f3bc97` (`sha256:e972d1e6…`, `main` `79f3bc97`)
+and `orkestrator-v2:qual-0729-pre0109` (`sha256:492ba204…`, `9791a425`,
+0109's parent). Before this change a steady fresh start cost
+17 + 2k + R calls:
+
+- 5 for storage;
+- 6 for the create: the network inspect and create, the `ps`, the
+  gateway's create and GitHub seed copy, and the runtime's create;
+- 5 + 2k to bring the gateway up: the runtime's network-mode and state
+  inspects, the gateway's inspect and start, and an exec plus an inspect for
+  each of the k unfinished firewall polls, plus the final exec;
+- 1 for the runtime's `docker start`;
+- R readiness execs, one per 250 ms poll.
+
+The first run of a process adds six one-off capacity probes, which is the
+34 in CI's maximum.
+
+- 0022's 15 had neither the gateway nor the seed copy.
+- The gateway (#1279) added 6 + 2k.
+- 0109 added the seed copy, and on CI one more readiness poll.
+
+**Cuts.** This change removes 1 + k calls from every fresh start:
+
+- The runtime's network owner is cached at create.
+- The firewall wait inspects the gateway only when its exec fails.
+
+A warm start whose gateway already reported `applied` also skips the second
+firewall read. The median for fresh restricted starts went from 31 in the
+one run before the change (steady runs 28 to 31) to 24 or 25 in each of the
+six runs after it. Warm starts went from 12 calls to 10 or 11. On CI the same
+arithmetic gives 24 to 26 calls; the first CI run of this change confirms it.
+
+**Start time.** The runtime's warm start path in the backend did not change
+with 0109. The benchmark's warm stop leaves the gateway running, and on the
+success path `startDockerContainer` issues one `docker start`. The rise is in
+the boot's readiness step, and it is quantised:
+
+- In five alternating runs of the same harness, fresh `startToReady.ready`
+  clustered at about 1.50 s (6 polls) and about 1.82 s (7 polls). The
+  parent's image mostly took 6 (medians 1.49, 1.51 and 1.52 s); HEAD's
+  mostly took 7 (1.83 and 1.82 s).
+- Warm-start medians swung from 1.64 s to 2.06 s within each image, so
+  warm start showed no stable difference.
+- The relay copy that runs when the host user is not uid 1000 costs 13 to
+  19 ms per boot (2 to 4 ms with nothing to copy), timed in a throwaway
+  container of the HEAD image.
+- So 0109's small per-boot cost crosses a poll boundary and costs a whole
+  poll period of about 300 ms. CI's 300 to 600 ms rise is one or two
+  periods.
+- The start-time misses keep their targets, and their reason is recorded
+  here. Removing the quantisation is todo
+  [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md).
+  The reference-host run (0729 task 5) is still to do.
+
 ## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
 
 Todo [0728](../todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md),
@@ -565,17 +651,40 @@ Runtimes get the built-in default budget, as on a new install; set
 `ORKESTRATOR_BENCHMARK_UNRESTRICTED=1` to run them without limits. The report
 records which (`budget`) and the limits Docker applied (`appliedLimits`).
 
+Each report explains its own Docker calls and start time, as counts and
+durations only:
+
+- `freshRestricted.dockerCallsByPhase`, `dockerCallsByTarget` and
+  `dockerCallBreakdown` give, per completed fresh run, the calls by phase,
+  by container (the runtime, its egress gateway, or neither), and by
+  `<step> <container> <verb>`.
+- `freshRestricted.startToReady.gateway`, `.runtimeStart` and `.ready` split
+  the boot into three steps: the gateway brought up to an applied firewall,
+  the runtime's `docker start`, and the entrypoint to current-boot readiness.
+- `warmStopStart.startSteps`, `startDockerCalls` and
+  `startDockerCallBreakdown` do the same for warm starts.
+
+The benchmark's warm stop is a bare `docker stop` of the runtime, so its
+gateway keeps running and a warm start never restarts it.
+
 The harness asserts only that rebuilds succeed and no log follower survives.
 Compare the report with these targets by hand. They were set on Linux
 x86_64, 12 CPUs, Docker Engine 29.7.2, no resource budget, restricted mode
 allowing `registry.npmjs.org` and GitHub's ranges. A change that misses one
-is fixed, or the reason is recorded, before it merges.
+is fixed, or the reason is recorded, before it merges. The calls target was
+re-baselined on 2026-10-28
+([0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)):
+the runtime's own path keeps its budget of 21. The egress gateway, a second
+container since 2026-10-25, adds 6 fixed calls: its create, the GitHub seed
+copy, the runtime's state inspect, the gateway's inspect, its start, and the
+first firewall read. Its firewall polls, one call each, must fit in the old
+headroom.
 
 | Measure (median unless stated) | Report field | Target |
 | --- | --- | --- |
 | Fresh restricted environment to ready | `freshRestricted.total` | ≤ 3 s |
 | Incomplete fresh boots | `freshRestricted.incomplete` | none |
-| Docker CLI calls per fresh environment | `freshRestricted.dockerCalls` | ≤ 21 |
+| Docker CLI calls per fresh environment | `freshRestricted.dockerCalls` | ≤ 27 (21 for the runtime, 6 for its gateway) |
 | Three concurrent fresh environments, each against the sequential median | `freshConcurrent3.slowdownVsSequentialMedian` | ≤ 1.5× |
 | Warm stop (drain and `docker stop`) | `warmStopStart.stop` | ≤ 1 s |
 | Warm start to current-boot ready | `warmStopStart.start` | ≤ 2 s |

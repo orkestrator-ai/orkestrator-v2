@@ -12,7 +12,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import { listAgentAccounts } from "./agent-accounts.js";
 import { readHostAgentSignIns } from "./agent-sign-ins.js";
-import { NodeUnavailableError } from "./nodes/node-link.js";
+import { NodeUnavailableError } from "./nodes/index.js";
 
 /** How long one machine may take to list its accounts before it is shown as unavailable. */
 const MACHINE_ACCOUNTS_TIMEOUT_MS = 8_000;

@@ -1002,7 +1002,7 @@ workspace tests; two complete owner reruns passed and three still failed.
 The browser rerun repaired fixture-server ownership but was interrupted after
 18 failures in unchanged UI owners (173 passed, 57 skipped, 5 interrupted,
 785 not run). Full evidence and the credible flakes are recorded in
-[1304](../../tests/flaky-tests/aggregate-validation-runs/1304-temp-directory-cleanup-0247-review-validation.md).
+[1307](../../tests/flaky-tests/aggregate-validation-runs/1307-temp-directory-cleanup-0247-review-validation.md).
 
 ### Task 2: preview scratch leaks in production, and is swept at startup only
 

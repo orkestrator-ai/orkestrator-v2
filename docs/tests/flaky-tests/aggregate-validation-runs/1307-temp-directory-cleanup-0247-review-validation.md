@@ -1,6 +1,6 @@
 # Temporary-directory cleanup (0247) review validation
 
-- **ID:** 1304
+- **ID:** 1307
 - **Status:** open
 - **Date observed:** 2026-10-29
 

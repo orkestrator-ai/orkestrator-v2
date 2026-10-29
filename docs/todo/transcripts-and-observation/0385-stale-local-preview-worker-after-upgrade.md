@@ -17,6 +17,72 @@ user prepared it again, and nothing prompted them to. Both sides speak
 `PREVIEW_WORKER_PROTOCOL` 1, so nothing failed; the new worker's fixes and
 bundles just never arrived.
 
+## Task analysis
+
+Analysed 2026-10-28 against `main` at `79f3bc97`.
+
+Every item in this file is done. The code, the qualification and both
+decisions landed in `c36697a6` (#1403) on 2026-10-28. The tasks below are
+listed for the record, with their evidence.
+
+### Tasks
+
+1. **Label local images and record the digest**: preparation and `build.sh` label the worker image with its build-context digest and record it in the pin. Status: done.
+2. **Treat an outdated local worker as not prepared**: a packaged backend under `auto` falls back to process isolation and offers preparation again. Status: done.
+3. **Source checkout behaviour**: decide whether a source checkout checks its pin. Status: done (decided: keep trusting it).
+4. **Qualification: a live upgrade of a packaged install**: one real upgrade prompts, re-prepares and keeps the new image across a restart. Status: done.
+5. **Remove the stale image after re-preparation (open question)**: whether preparation deletes the old image. Status: done (decided: leave it to `docker image prune`).
+
+### 1. Label local images and record the digest
+
+**Problem.** A locally built worker image carried nothing that tied it to the build context it came from, so a later version could not tell it was stale.
+
+**Context.** The published route already compared the pulled image's `orkestrator.artifact-preview-worker.context` label with the shipped context's digest (`publishedMatchesContext`, `apps/backend/src/core/transcript-artifacts/preview-worker-prepare.ts:210`).
+
+**Investigation.** Done. Preparation hashes the context once (`preview-worker-prepare.ts:275-276`) and adds `--label orkestrator.artifact-preview-worker.context=<digest>` to the local build (`:316`); an unhashable context is built unlabelled (`:314-316`). `writePin` records `contextDigest` when there is one (`:125-133`). `docker/artifact-preview-worker/build.sh:27-35` labels the image the same way and writes `contextDigest` into its `image-pin.json`. The label name is `WORKER_CONTEXT_LABEL` (`preview-worker-context-digest.ts:21`). `preview-worker-build-script.test.ts:21` runs `build.sh` against fake staging and Docker boundaries.
+
+**Decisions.** None; done.
+
+### 2. Treat an outdated local worker as not prepared
+
+**Problem.** After an upgrade, `auto` kept running the old worker and nothing told the user to prepare it again.
+
+**Context.** The check applies only to a packaged backend (one that ships `artifact-runtime/worker-context/`), with no `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` and the default tag selected. Which source of truth decides "current", and what happens on a mismatch, are recorded under Assumptions and decisions.
+
+**Investigation.** Done. `localWorkerContext` reads the image's context label (`apps/backend/src/core/transcript-artifacts/runtime.ts:237-254`). The startup check is at `runtime.ts:476-491` (`checksLocalWorker` at `:480`): a missing or different label sets `outdatedWorker`. Under `auto` that switches isolation to `process` and logs a warning (`:506-511`); an explicit `container` setting keeps the image with its own warning (`:578-582`). Owner-scoped orphan containers are reaped before the runner is built, whichever isolation was chosen (`:543-548`). `workerPreparationStatus` reports `outdated: true` (`:765`), the protocol field is optional (`packages/protocol/src/transcript-artifact-commands.ts:91`), and the card words it at `apps/web/src/components/chat/rich/ArtifactWorkerPrepareAction.tsx:53-55`. A successful preparation clears the flag and swaps to the container runner without a restart (`runtime.ts:735-756`). Tests: `runtime-prepare.test.ts:583` ("a locally prepared worker after an upgrade") and `ArtifactPdf.test.tsx:268`.
+
+**Decisions.** None; done.
+
+### 3. Source checkout behaviour
+
+**Problem.** A source checkout ships no context, so the check in task 2 has nothing to compare with.
+
+**Context.** Decided on 2026-10-28; see "A source checkout" under Assumptions and decisions.
+
+**Investigation.** Done. `shippedContext` is unset for a source checkout, so `runtime.ts:484` skips the check and the `build.sh` or data-directory pin is trusted as before. Covered by `runtime-prepare.test.ts:792`.
+
+**Decisions.** None; done.
+
+### 4. Qualification: a live upgrade of a packaged install
+
+**Problem.** The deterministic tests use a fake Docker CLI, so nothing had shown the real flow end to end.
+
+**Context.** `scripts/qualify-preview-worker-upgrade.ts` bundles the current backend into a temporary package that ships the worker context, seeds a worker built the previous version's way, and drives the real gateway. The commands are under Qualification below.
+
+**Investigation.** Done. The 2026-10-28 run against a disposable `docker:29.9-dind-rootless` daemon passed in 180.4 s: process isolation and `outdated: true` at start, a rebuilt and labelled image after preparation, container isolation and no flag after restart, and real Mermaid renders before and after the restart. The first attempt on the host daemon failed in `runc` (`SIGSEGV` in libpathrs); its cause is not established and is outside this file. The desktop installer was not exercised; the run used the packaged backend bundle and release assets outside the checkout.
+
+**Decisions.** None; done. The run used the packaged backend, not the desktop installer. This file counts that as a pass, because the check reads only the shipped `worker-context` and the Docker image, and the installer changes neither.
+
+### 5. Remove the stale image after re-preparation (open question)
+
+**Problem.** Re-preparation leaves the old image on disk.
+
+**Context.** Decided on 2026-10-28; see "Removing the stale image after re-preparation" under Assumptions and decisions.
+
+**Investigation.** Done. Preparation moves the tag, so the old image is dangling and `docker image prune` removes it. Preparation contains no `docker image rm`.
+
+**Decisions.** None; done.
+
 ## Current state
 
 - Found on 2026-10-27 while binding the published image pin to its build

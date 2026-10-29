@@ -147,14 +147,13 @@ describe("driven native observation baseline (step 07)", () => {
 
 // Storage reads plus stats each workflow attempt may cost, from the current
 // supervisors (whole-store ticks list the store and read each active record;
-// looped review reads a record's row four times and claims it once per pass;
 // a multi-review pass reads its record ten times, under either driver).
 // Raise one only for a reviewed reason.
 const STORAGE_PER_ATTEMPT = {
-  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12, "multi-review": 10 },
-  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5, "multi-review": 10 },
+  rollback: { "feature-planning": 3, "build-pipeline": 4, "multi-review": 10 },
+  keyed: { "feature-planning": 1, "build-pipeline": 2, "multi-review": 10 },
 } as const;
-const DOMAINS = ["feature-planning", "build-pipeline", "looped-review", "multi-review"] as const;
+const DOMAINS = ["feature-planning", "build-pipeline", "multi-review"] as const;
 
 describe("driven workflow supervision baseline (step 08)", () => {
   test.each([0, 30])(
@@ -238,7 +237,7 @@ describe("driven workflow supervision baseline (step 08)", () => {
     expect(serialized).not.toContain("synthetic");
     const { rollback, keyed } = first.modes;
     const records = fixture.completedPerStore + fixture.activePerStore;
-    for (const domain of ["build-pipeline", "looped-review"] as const) {
+    for (const domain of ["build-pipeline"] as const) {
       // The whole-store tick enumerates every record every tick…
       expect(rollback[domain].recordsScanned).toBeGreaterThanOrEqual(
         (fixture.windowMs / 1_500) * records,
@@ -246,11 +245,11 @@ describe("driven workflow supervision baseline (step 08)", () => {
     }
     // …multi review's due scheduler at start and every 15 s…
     expect(rollback["multi-review"].recordsScanned).toBe((1 + fixture.windowMs / 15_000) * records);
-    for (const domain of ["build-pipeline", "looped-review", "multi-review"] as const) {
+    for (const domain of ["build-pipeline", "multi-review"] as const) {
       // …and the keyed driver only at start and every 30 s.
       expect(keyed[domain].recordsScanned).toBe(4 * records);
     }
-    for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
+    for (const domain of ["feature-planning", "build-pipeline"] as const) {
       // Active work is supervised at the same cadence in both modes.
       expect(
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),

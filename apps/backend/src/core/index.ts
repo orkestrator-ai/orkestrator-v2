@@ -181,6 +181,10 @@ import { GraphArtifactStore } from "./graph-artifacts.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { GraphRunService } from "./graph-run-service.js";
+import {
+  assertNoOtherWorkflowWriting,
+  withWorkspaceCodeRewindReservation,
+} from "./workspace-code-rewind.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
@@ -1117,6 +1121,23 @@ export class OrkestratorBackend {
       artifacts: graphArtifacts,
       workflowAdmission: this.workflowAdmission,
       provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
+      // Code rewinds (item 210) share the pipeline's Git port and reservation.
+      environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+      codeRewindReservation: (run, operation) =>
+        withWorkspaceCodeRewindReservation({
+          fence: context.runtime.environments.fence,
+          storage,
+          environmentId: run.environmentId!,
+          assertQuiet: async () => {
+            await assertNoOtherWorkflowWriting(storage, run.environmentId!, { graphRunId: run.id });
+            if (await this.nativeAgents.hasActiveCheckoutWork(run.environmentId!)) {
+              throw new Error(
+                "An agent may still write to this environment. Stop it before rewinding code.",
+              );
+            }
+          },
+          run: operation,
+        }),
     });
     // Gates and merges are deterministic (item 206); mock runs use them too.
     this.graphRuns.executors.register(createGraphGateExecutor());

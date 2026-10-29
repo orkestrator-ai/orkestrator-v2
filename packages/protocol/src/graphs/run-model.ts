@@ -365,6 +365,13 @@ export interface GraphRewindCode {
   upstream?: string;
   /** Commits on the upstream that the reset dropped; above 0 means a forced push is due. */
   upstreamCommitsDropped?: number;
+  /**
+   * The rewind is recorded but the reset has not been confirmed yet. Item
+   * 210 journals the intent first and finishes the reset before the run
+   * plans anything again (after a crash, at the next pass), as the pipeline
+   * does with its pending code rewinds.
+   */
+  pending?: true;
 }
 
 // ---------------------------------------------------------------- artifacts

@@ -8,7 +8,12 @@
  * this module beside the guard.
  */
 import type { ActionDefaultKey } from "../action-defaults.js";
-import { NATIVE_AGENT_CAPABILITIES } from "../native-agent.js";
+import {
+  NATIVE_AGENT_CAPABILITIES,
+  NATIVE_AGENT_ORKESTRATOR_CAPABILITY_GROUPS,
+  type NativeAgentOrkestratorCapabilityGroup,
+  type NativeAgentPlainCapability,
+} from "../native-agent.js";
 import type { ArtifactTypeDef } from "./artifact-type-def.js";
 import type { GraphPredicate } from "./predicate-shape.js";
 
@@ -240,35 +245,17 @@ export const GRAPH_CAPABILITY_PROFILES = [
 export type GraphCapabilityProfileId = (typeof GRAPH_CAPABILITY_PROFILES)[number];
 
 /**
- * Plain capability names: today's native set plus the additions of report
- * §6.3. The schema accepts `git.push` and `github.write` so the compiler can
- * reject them on agent nodes with a pinned diagnostic (D12).
+ * Plain capability names: the native vocabulary, which now includes the
+ * additions of report §6.3 (`native-agent-capabilities.ts`). The schema accepts
+ * `git.push` and `github.write` so the compiler can reject them on agent nodes
+ * with a pinned diagnostic (D12).
  */
-export const GRAPH_CAPABILITIES = [
-  ...new Set([
-    ...NATIVE_AGENT_CAPABILITIES,
-    "git.commit",
-    "git.push",
-    "github.write",
-    "subagents",
-  ] as const),
-];
-export type GraphPlainCapability =
-  | (typeof NATIVE_AGENT_CAPABILITIES)[number]
-  | "git.commit"
-  | "git.push"
-  | "github.write"
-  | "subagents";
+export const GRAPH_CAPABILITIES: readonly NativeAgentPlainCapability[] = NATIVE_AGENT_CAPABILITIES;
+export type GraphPlainCapability = NativeAgentPlainCapability;
 
 /** Backend-enforced Orkestrator tool groups: `orkestrator:<group>`. */
-export const GRAPH_ORKESTRATOR_CAPABILITY_GROUPS = [
-  "tickets.read",
-  "tickets.write",
-  "mail",
-  "artifacts",
-  "schedules",
-] as const;
-export type GraphOrkestratorCapabilityGroup = (typeof GRAPH_ORKESTRATOR_CAPABILITY_GROUPS)[number];
+export const GRAPH_ORKESTRATOR_CAPABILITY_GROUPS = NATIVE_AGENT_ORKESTRATOR_CAPABILITY_GROUPS;
+export type GraphOrkestratorCapabilityGroup = NativeAgentOrkestratorCapabilityGroup;
 
 /** `mcp:<server>` (deny only until item 404) and `orkestrator:<group>`. */
 export type GraphCapabilityName =

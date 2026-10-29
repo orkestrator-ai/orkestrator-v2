@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { wrapSystemInstructions } from "./review-evidence-frames.js";
 import {
   AGENT_INTERACTION_AUTHORIZATION_KINDS,
   AGENT_INTERACTION_CLAIM_RETENTION_MS,
@@ -42,6 +43,9 @@ import {
   type AgentInteractionResolutionProcessingLease,
   type AgentInteractionState,
   type AgentInteractionWorkflowSummary,
+  UNATTENDED_POLICY_INSTRUCTION,
+  unattendedPolicyFrame,
+  withUnattendedPolicy,
 } from "./agent-interactions.js";
 
 const CREATED_AT = 1_800_000_000_000;
@@ -1609,5 +1613,15 @@ describe("per-kind interaction policy", () => {
         "question",
       ),
     ).toBe("deny-and-fail");
+  });
+});
+
+describe("unattended policy text", () => {
+  test("is appended as one system-instructions frame", () => {
+    expect(unattendedPolicyFrame()).toBe(wrapSystemInstructions(UNATTENDED_POLICY_INSTRUCTION));
+    expect(withUnattendedPolicy("Build it.")).toBe(`Build it.\n\n${unattendedPolicyFrame()}`);
+    expect(UNATTENDED_POLICY_INSTRUCTION).toContain(
+      "Never treat the absence of a person as authorization.",
+    );
   });
 });

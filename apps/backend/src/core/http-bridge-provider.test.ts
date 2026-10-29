@@ -47,6 +47,53 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("sends policies in a wire form every released bridge still validates", async () => {
+    const policy = {
+      id: "pipeline" as const,
+      sandbox: "none" as const,
+      approvals: "auto-approve" as const,
+      projectResources: true,
+      networkAccess: "full" as const,
+      capabilityPolicy: {
+        deny: ["shell.mutate", "git.push", "subagents", "mcp:docs", "orkestrator:mail"] as const,
+      },
+    };
+    const wire = {
+      deny: ["shell.mutate"],
+      extendedDeny: ["git.push", "subagents", "mcp:docs"],
+    };
+    for (const [connection, projectResources] of [
+      [claudeConnection, true],
+      [codexConnection, false],
+      [cursorConnection, false],
+      [piConnection, false],
+      [grokConnection, false],
+    ] as const) {
+      const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
+      await created.provider.createSession("build", "Graph node", {
+        policy: { ...policy, capabilityPolicy: { deny: [...policy.capabilityPolicy.deny] } },
+      });
+      const sent = JSON.parse(String(created.requests[0]!.init.body)).policy;
+      expect(sent.capabilityPolicy).toEqual(wire);
+      // Claude names an MCP server itself; elsewhere repository config goes instead.
+      expect(sent.projectResources).toBe(projectResources);
+
+      const resumed = httpProvider(
+        () => Response.json({ sessionId: "session-1", status: "idle" }),
+        connection,
+      );
+      await resumed.provider.resumeSession!("session-1", undefined, {
+        ...policy,
+        capabilityPolicy: { deny: [...policy.capabilityPolicy.deny] },
+      });
+      const resumeBodies = resumed.requests
+        .map((request) => (request.init.body ? JSON.parse(String(request.init.body)) : {}))
+        .filter((body) => body.policy);
+      expect(resumeBodies.length).toBe(1);
+      expect(resumeBodies[0].policy.capabilityPolicy).toEqual(wire);
+    }
+  });
+
   test("leaves the default model alone on bridges whose prompts carry the model", () => {
     for (const connection of [claudeConnection, piConnection, cursorConnection, grokConnection]) {
       expect(httpProvider(() => Response.json({}), connection).provider.resolveDefaultModel).toBe(

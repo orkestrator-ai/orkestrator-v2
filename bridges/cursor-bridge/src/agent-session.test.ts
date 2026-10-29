@@ -354,6 +354,26 @@ describe("ensureAgent", () => {
     ).toEqual(["edit", "delete", "applyAgentDiff", "task", "shell", "webFetch", "webSearch"]);
   });
 
+  test("removes the sub-agent tool for a subagents denial in either wire form", () => {
+    const policy = {
+      id: "pipeline" as const,
+      sandbox: "provider" as const,
+      approvals: "auto-approve" as const,
+      projectResources: false,
+      networkAccess: "full" as const,
+    };
+    expect(
+      cursorDeniedTools({ ...policy, capabilityPolicy: { deny: ["subagents", "git.push"] } }),
+    ).toEqual(["task"]);
+    // The backend's wire form for a bridge that may predate the name.
+    expect(
+      cursorDeniedTools({
+        ...policy,
+        capabilityPolicy: { deny: [], extendedDeny: ["subagents", "mcp:docs", "future.thing"] },
+      }),
+    ).toEqual(["task"]);
+  });
+
   test("refuses to attach without a credential, with a message naming the fix", async () => {
     delete process.env.CURSOR_API_KEY;
     const state = newSessionState();

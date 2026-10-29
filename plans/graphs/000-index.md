@@ -77,7 +77,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | in-progress | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
 | 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | in-progress | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |
 | 215 | [215-describe-a-graph.md](215-describe-a-graph.md) | 2 | in-progress | 103, 107, 212 | An agent turns a description into a `graph-template` artifact, repaired against compiler diagnostics, opened as an unsaved draft. |
-| 216 | [216-documentation.md](216-documentation.md) | 2 | not-started | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
+| 216 | [216-documentation.md](216-documentation.md) | 2 | in-progress | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 

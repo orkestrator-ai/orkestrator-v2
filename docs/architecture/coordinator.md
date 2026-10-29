@@ -112,10 +112,11 @@ coordinator**.
 
 Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
 free number). A side agent reads the project and Orkestrator state (its
-credential carries only the `discovery` and `mail` capabilities, so it launches
-nothing), and exchanges mail with the main coordinator only: the mail store
-refuses side ↔ worker and side ↔ peer mail in both directions. The user may
-still write to it.
+credential carries only the `discovery`, `mail` and `schedules` capabilities
+(`coordinatorRoleCapabilities` in `control-mcp-tools.ts`), so it launches
+nothing, graphs included), and exchanges mail with the main coordinator only:
+the mail store refuses side ↔ worker and side ↔ peer mail in both
+directions. The user may still write to it.
 
 Records from before roles migrate when read (`normalizeCoordinatorRoles`): the
 selected conversation, else the oldest with an agent, becomes main and the
@@ -967,18 +968,21 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification), `failed` (error) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
-| Graph run | waiting for a person (`waiting`): the run is `waiting` or a step is `awaiting-human` (a human node, or an agent's `ask_human` question), keyed by the waiting positions, with the steps' node ids | `settled` |
-| Graph run | ended: `completed`, `failed` (bounded error and cause), `cancelled`, keyed `ended:<status>` | always |
+| Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
+| Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
-A graph run (item 214) is reduced over two run events only, `graphRunStatus`:
-it ended, or it waits for a person. Anything else, nodes finishing included, is
-progress. A wait's key is the sorted set of waiting positions (activation key,
-attempt and open question id), so the same wait observed again sends nothing,
-and a new wait after the run resumed is sent again. A human node (item 208)
-needs nothing beyond putting its activation in `awaiting-human`. Graph runs are
-launched on this node only, so a `graph-run` association never has a `nodeId`.
+A graph run is reduced to two statuses only (`graphRunCoordinatorStatus` in
+`graph-run-coordinator-status.ts`): it ended, or it waits for a person.
+Anything else, nodes finishing included, is progress. A wait's key is
+`waiting:<openedAt>:<id>` of the newest open wait, and a wait is sent only when
+it opened after the one last reported (`graphRunWaitNoticeIsNew`). So one wait
+staying open while another is answered, a backend restart or a second observer
+sends nothing again, and every new wait (a later node, a restarted one) sends
+one. Graph waits have no 20-second debounce: the 2-second save debounce is the
+only delay. `launch_graph` takes no `nodeId`, and the observer skips a
+`graph-run` association that has one.
 
 Individual reviewers finishing never wakes anyone: that is progress, and a
 seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
@@ -1053,8 +1057,8 @@ store's. Workflow saves wake an observation within seconds; the
 `coordinator-repair` maintenance job (every 60 s, and at startup) re-reads
 every owned workflow and open delegation, which recovers a missed save, a
 timer lost to a restart, or bookkeeping that never landed.
-`launch_multi_review`, `address_multi_review`, `start_multi_review` and
-`start_build_pipeline` return `delivery: "async"` with
+`launch_multi_review`, `address_multi_review`, `start_multi_review`,
+`start_build_pipeline` and `launch_graph` return `delivery: "async"` with
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
 rather than left to poll `get_multi_review`.
 
@@ -1303,6 +1307,57 @@ all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
 The coordinator never sees the patch.
 
+## Saved graphs
+
+The main coordinator runs saved graph templates
+([graphs.md](graphs.md#launching)); it never authors them (D6). Four tools
+(`control-mcp-graph-tools.ts`, over the commands in
+`coordinator-graph-actions.ts`) need the `graphs` capability, which only the
+main role holds (`COORDINATOR_TOOL_CAPABILITY` in `control-mcp-tools.ts`).
+They are in `COORDINATOR_CONTROL_TOOL_NAMES`, the allowlist Pi's read-only
+gate and OpenCode's coordinator permission rules (`orkestrator_<tool>`, by
+name) admit, like every other Control MCP tool. They change nothing in
+[provider qualification](#provider-qualification): they are backend actions
+under the scoped credential, never a write to the checkout.
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `list_graph_templates` | optional `ref` (`{scope: "builtin" \| "user", id}` or `{scope: "project", path}`), optional `environmentId` | Without `ref`: `{templates, total}`, at most 200, each with its `ref`, name, scope, revision, `trust`, `engine`, `launchable` and compile counts and cost. With `ref`: `{template}`, its launch options: roles (panel, `maxPanel`, `floor`, steps, each provider's `tier`, `available` and `unavailableReason`, the default binding), parameters, inputs, environment default, cost, `launchable` and `blockedReason`. `environmentId` judges the launch on that existing environment |
+| `launch_graph` | `requestId`, `template` (a `ref`), `environment` (`{kind: "new", create: "worktree" \| "container"}` or `{kind: "existing", environmentId}`), optional `roles` (role key → one `{platform, model?, reasoningEffort?, fastMode?, lens?}` or a panel list of up to 32), `params`, `inputs` (value inputs only), `ticket: {taskId, input?}` | `{runId, launch, delivery: "async", wake, nextStep}` |
+| `get_graph_run` | `runId` | `{run, waitingFor, failed, terminal}`: the run summary, plus up to 16 steps waiting for a person and 16 failed steps (`activationKey`, `nodeId`, a failed step's error cut to 400 characters) |
+| `cancel_graph_run` | `runId` | The same view with `cancelled`; a run that already ended or is cancelling answers `cancelled: false`. Steps stop; the record and artifacts are kept |
+
+Every result is content-free: ids, states, counts and template metadata,
+never prompts, input values or artifact payloads. Runs and environments of
+another project, and the project home, are refused. A refusal's error text
+starts with its stable code (`GRAPH_LAUNCH_ERROR_CODES` in
+`packages/protocol/src/graphs/launch.ts`, such as `untrusted:` or
+`engine-template:`), else `graph-error:`.
+
+**No authoring.** No tool creates, saves, edits, duplicates, imports,
+deletes, trusts or describes a template. "Describe a graph"
+(`graph_describe_*`) are app commands only: neither a coordinator
+credential, the operator profile nor a public action reaches them
+(`graph-describe-coordinator.test.ts`, `control-mcp-graph-tools.test.ts`).
+
+**Launching.** `launch_graph` goes through the same `GraphRunLaunchService`
+as the app and the CLI, recorded as `requestedBy: "coordinator"`. Omitted
+roles and parameters use the defaults saved for the template in the project,
+then the Settings defaults. It admits before it acts: the launch's own
+idempotency key is `coordinator:<coordinatorId>:<requestId>`, the run id is
+derived from that key (`graphLaunchRunId`), and a `graph-run` workflow
+association holding that run id, the `requestId` and the payload hash is
+reserved before the launch service is called. A retry with the same
+`requestId` returns the same run (`repeated: true`), answers `conflict` while
+the first attempt is still in flight, and is refused when the payload
+differs. A launch the service refused outright (a launch code and no run)
+releases the reservation, so the same `requestId` can carry a corrected
+request. The association is what gives the conversation its
+[status wakes](#status-wakes): one per wait for a person and one when the
+run ends. To launch later, schedule the tool itself (`create_schedule` with
+`action: {type: "tool", tool: "launch_graph", arguments}`); the operator-only
+`graph` schedule action is refused for a coordinator.
+
 ## Saving decisions to AGENTS.md
 
 Users settle durable decisions in coordinator conversations: how workers
@@ -1413,7 +1468,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
 - status wakes (ownership, one wake per settled transition per resource kind,
-  coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`
+  coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
+  graph runs: `graph-run-coordinator-status.test.ts`,
+  `coordinator-status-wakes-graph.test.ts`
+- saved graphs: the four tools and no authoring tool, admission before
+  launch, refusal codes, project scoping and scheduling
+  (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a
+  coordinator, the operator profile or a public action
+  (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
 - no-waiting-tools boundary, tier table, hosted network tools removed on

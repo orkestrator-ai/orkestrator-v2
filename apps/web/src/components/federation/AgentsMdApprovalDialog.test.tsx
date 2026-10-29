@@ -240,6 +240,23 @@ describe("AGENTS.md approval dialog", () => {
     }
   });
 
+  test("paste falls back to a normalized selection replacement without an editing command", async () => {
+    backend();
+    render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);
+    await screen.findByTestId("agents-md-diff");
+    const entry = screen.getByRole("textbox", { name: "Entry 1 text" }) as HTMLTextAreaElement;
+    const original = entry.value;
+    entry.focus();
+    entry.setSelectionRange(0, 6);
+    await act(async () => {
+      fireEvent.paste(entry, {
+        clipboardData: { getData: () => "Save\nthese\u2028decisions" },
+      });
+    });
+    expect(entry.value).toBe(`Save these decisions${original.slice(6)}`);
+    expect(diffLines("add")).toContain(`+ - ${entry.value}`);
+  });
+
   test("an unchecked row's entry is disabled", async () => {
     backend();
     render(<AgentsMdApprovalDialog request={request} onSettled={() => {}} />);

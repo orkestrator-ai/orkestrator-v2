@@ -47,6 +47,19 @@ type Merged =
 // Entries are single lines (the backend refuses line breaks) but wrap on screen.
 const LINE_BREAKS = /[\r\n\u000b\u000c\u0085\u2028\u2029]/g;
 
+function insertNormalizedText(field: HTMLTextAreaElement, incoming: string) {
+  const available =
+    field.maxLength - field.value.length + field.selectionEnd - field.selectionStart;
+  const text = incoming.replace(LINE_BREAKS, " ").slice(0, Math.max(0, available));
+  field.focus();
+  // insertText preserves native undo history; assigning value or setRangeText
+  // does not. Keep a fallback for engines without this editing command.
+  if (!field.ownerDocument.execCommand?.("insertText", false, text)) {
+    field.setRangeText(text, field.selectionStart, field.selectionEnd, "end");
+  }
+  return field.value;
+}
+
 interface Row {
   change: AgentsMdChange;
   text: string;
@@ -257,13 +270,46 @@ export function AgentsMdApprovalDialog({
                         maxLength={500}
                         rows={1}
                         className="max-h-[calc(8lh+0.75rem+2px)] min-h-9 resize-none py-1.5"
+                        onPaste={(event) => {
+                          const incoming = event.clipboardData.getData("text/plain");
+                          if (incoming === incoming.replace(LINE_BREAKS, " ")) return;
+                          event.preventDefault();
+                          const text = insertNormalizedText(event.currentTarget, incoming);
+                          setRows((current) =>
+                            current.map((item, at) => (at === index ? { ...item, text } : item)),
+                          );
+                        }}
+                        ref={(field) => {
+                          if (!field) return;
+                          // Native beforeinput exposes drop data after the browser has
+                          // positioned the caret at the drop location. React's synthetic
+                          // beforeinput does not expose every native input path.
+                          const beforeInput = (event: InputEvent) => {
+                            const incoming =
+                              event.dataTransfer?.getData("text/plain") || event.data;
+                            if (
+                              !event.cancelable ||
+                              event.isComposing ||
+                              !incoming ||
+                              incoming === incoming.replace(LINE_BREAKS, " ")
+                            )
+                              return;
+                            event.preventDefault();
+                            const text = insertNormalizedText(field, incoming);
+                            setRows((current) =>
+                              current.map((item, at) => (at === index ? { ...item, text } : item)),
+                            );
+                          };
+                          field.addEventListener("beforeinput", beforeInput);
+                          return () => field.removeEventListener("beforeinput", beforeInput);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" && !event.nativeEvent.isComposing)
                             event.preventDefault();
                         }}
                         onChange={(event) => {
-                          // Pasted or dropped line breaks become spaces. Same length, so
-                          // the caret stays where it was.
+                          // Fallback for other input paths (e.g. IME or dictation).
+                          // Replacements have the same length, preserving the caret.
                           const field = event.target;
                           const text = field.value.replace(LINE_BREAKS, " ");
                           if (text !== field.value) {

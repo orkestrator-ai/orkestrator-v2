@@ -1078,3 +1078,147 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 });
+
+describe("BuildLaunchDialog step instructions", () => {
+  const fanoutDefaults = {
+    steps: {
+      review: { agent: "claude" as const, model: "claude-b" },
+      address: { agent: "codex" as const, model: "codex-a" },
+      verify: { agent: "codex" as const, model: "codex-a" },
+      pr: { agent: "claude" as const, model: "claude-a" },
+      "resolve-conflicts": { agent: "claude" as const, model: "claude-b" },
+    },
+    reviewers: [
+      { agent: "claude" as const, model: "claude-b" },
+      { agent: "codex" as const, model: "codex-a" },
+    ],
+    reviewPreparation: { agent: "codex" as const, model: "codex-a" },
+  };
+
+  function toggle(title: string) {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${title} instructions`) }));
+  }
+
+  function type(title: string, value: string) {
+    fireEvent.change(screen.getByRole("textbox", { name: `${title} instructions` }), {
+      target: { value },
+    });
+  }
+
+  test("every step card has a collapsed instructions field", () => {
+    renderDialog({ pipelineDefaults: fanoutDefaults });
+    const titles = [
+      "Build",
+      "Review preparation & consolidation",
+      "Reviewer 1",
+      "Reviewer 2",
+      "Address issues",
+      "Verify",
+      "Pull request",
+      "Resolve conflicts",
+    ];
+    for (const title of titles) {
+      const trigger = screen.getByRole("button", { name: `${title} instructions` });
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    }
+    expect(screen.queryByRole("textbox", { name: "Build instructions" })).toBeNull();
+
+    toggle("Build");
+    expect(
+      screen.getByRole("button", { name: "Build instructions" }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.getByRole("textbox", { name: "Build instructions" })).toBeTruthy();
+    expect(screen.getByText(/0 \/ 16,384 bytes/).textContent).toContain(
+      "The fix stage uses them too.",
+    );
+  });
+
+  test("submits each card's trimmed instructions on its own step", () => {
+    const { onConfirm } = renderDialog({ pipelineDefaults: fanoutDefaults });
+    const entries: Array<[string, string]> = [
+      ["Build", "  Write the failing test first.  "],
+      ["Review preparation & consolidation", "Merge duplicates."],
+      ["Reviewer 1", "Security."],
+      ["Reviewer 2", "Performance."],
+      ["Address issues", "Fix every nit."],
+      ["Verify", "Check the help text."],
+      ["Pull request", "Title it in English."],
+      ["Resolve conflicts", "Keep main's lockfile."],
+    ];
+    for (const [title, value] of entries) {
+      toggle(title);
+      type(title, value);
+    }
+    // Collapsing keeps the text and says the step has some.
+    toggle("Verify");
+    expect(screen.getByRole("button", { name: "Verify instructions · added" })).toBeTruthy();
+
+    submit();
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.build.instructions).toBe("Write the failing test first.");
+    expect(selection.steps.review.instructions).toBe("Security.");
+    expect(selection.steps.address.instructions).toBe("Fix every nit.");
+    expect(selection.steps.verify.instructions).toBe("Check the help text.");
+    expect(selection.steps.pr.instructions).toBe("Title it in English.");
+    expect(selection.steps["resolve-conflicts"].instructions).toBe("Keep main's lockfile.");
+    expect(selection.reviewers?.map((reviewer) => reviewer.instructions)).toEqual([
+      "Security.",
+      "Performance.",
+    ]);
+    expect(selection.reviewPreparation?.instructions).toBe("Merge duplicates.");
+  });
+
+  test("leaves instructions out of steps whose field is blank", () => {
+    const { onConfirm } = renderDialog();
+    toggle("Build");
+    type("Build", "   \n ");
+    submit();
+    const selection = onConfirm.mock.calls[0]![0];
+    for (const step of Object.values(selection.steps)) {
+      expect(step).not.toHaveProperty("instructions");
+    }
+  });
+
+  test("counts bytes and blocks the launch over 16 KiB", () => {
+    const { onConfirm } = renderDialog();
+    toggle("Verify");
+    type("Verify", "é".repeat(10));
+    expect(screen.getByText(/^20 \/ 16,384 bytes/)).toBeTruthy();
+
+    type("Verify", "x".repeat(16 * 1024 + 1));
+    const textbox = screen.getByRole("textbox", { name: "Verify instructions" });
+    expect(textbox.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(/16,385 \/ 16,384 bytes\. Shorten them/)).toBeTruthy();
+    const start = screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    submit();
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    type("Verify", "x".repeat(16 * 1024));
+    expect(start.disabled).toBe(false);
+    submit();
+    expect(onConfirm.mock.calls[0]![0].steps.verify.instructions).toHaveLength(16 * 1024);
+  });
+
+  test("starts every launch with empty instructions", () => {
+    const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
+    const dialog = (open: boolean) => (
+      <BuildLaunchDialog
+        open={open}
+        onOpenChange={() => undefined}
+        catalog={catalog}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        onConfirm={onConfirm}
+      />
+    );
+    const view = render(dialog(true));
+    toggle("Build");
+    type("Build", "Only for this launch.");
+    view.rerender(dialog(false));
+    view.rerender(dialog(true));
+    submit();
+    expect(onConfirm.mock.calls[0]![0].steps.build).not.toHaveProperty("instructions");
+  });
+});

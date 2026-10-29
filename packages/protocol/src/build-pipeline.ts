@@ -38,6 +38,7 @@ import {
   type PipelineAddressReportKind,
   type PipelineFixResult,
 } from "./build-pipeline-address-report.js";
+import { isBuildStepInstructions } from "./build-pipeline-stage-instructions.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -342,6 +343,13 @@ export interface BuildStepConfig {
   reasoningEffort?: string;
   /** Fast/Normal choice retained for exact prompt recovery. */
   fastMode?: boolean;
+  /**
+   * The user's own instructions for this step, at most 16 KiB of UTF-8
+   * (`MAX_BUILD_STEP_INSTRUCTIONS_BYTES`). Rendered as a framed
+   * section after the stage's contract (`build-pipeline-stage-instructions.ts`);
+   * Fix reads Build's.
+   */
+  instructions?: string;
 }
 
 export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
@@ -1451,7 +1459,8 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
     AGENTS.has(value.agent as BuildPipelineAgent) &&
     isOptionalNonBlankString(value.model) &&
     isOptionalNonBlankString(value.reasoningEffort) &&
-    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
+    (value.instructions === undefined || isBuildStepInstructions(value.instructions))
   );
 }
 

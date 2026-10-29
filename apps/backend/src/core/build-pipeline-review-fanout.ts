@@ -87,6 +87,11 @@ import {
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./review-prompts.js";
+import {
+  pipelineReviewPreparationInstructions,
+  pipelineReviewerInstructions,
+  withBuildStepInstructions,
+} from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import { reviewerPanelSection } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
@@ -540,15 +545,19 @@ export class BuildPipelineReviewFanout {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
         // Shared package prompt first so every reviewer's prefix is identical;
-        // the panel position is the only per-reviewer text.
-        return [
-          createDiscoveryPrompt({
-            reviewPackage,
-            reviewInstruction: await this.deps.reviewInstruction(),
-            context: await this.deps.reviewContext(pipeline),
-          }),
-          reviewerPanelSection(index + 1, count),
-        ].join("\n\n");
+        // the panel position and the reviewer's own instructions are the only
+        // per-reviewer text, and they come last.
+        return withBuildStepInstructions(
+          [
+            createDiscoveryPrompt({
+              reviewPackage,
+              reviewInstruction: await this.deps.reviewInstruction(),
+              context: await this.deps.reviewContext(pipeline),
+            }),
+            reviewerPanelSection(index + 1, count),
+          ].join("\n\n"),
+          pipelineReviewerInstructions(pipeline, index),
+        );
       },
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         resolveUnattendedReviewerInteractions(provider, providerSessionId, async () => {}),
@@ -915,19 +924,22 @@ export class BuildPipelineReviewFanout {
       // re-sends an already-answered prompt with the same reviewer evidence.
       let prompt = consolidation.continuationPrompt ?? consolidation.schemaRepairPrompt;
       if (!prompt) {
-        prompt = createReviewConsolidationPrompt({
-          targetBranch,
-          reports: consolidationReports(state.reviewers),
-          onEvidenceStats: (stats) =>
-            recordEfficiency(this.deps.efficiency, {
-              owner: "build-pipeline",
-              operation: "consolidation.input",
-              phase: "consolidating",
-              reviewers: stats.reviewers,
-              count: stats.sourceFindings,
-              bytes: stats.compactBytes,
-            }),
-        });
+        prompt = withBuildStepInstructions(
+          createReviewConsolidationPrompt({
+            targetBranch,
+            reports: consolidationReports(state.reviewers),
+            onEvidenceStats: (stats) =>
+              recordEfficiency(this.deps.efficiency, {
+                owner: "build-pipeline",
+                operation: "consolidation.input",
+                phase: "consolidating",
+                reviewers: stats.reviewers,
+                count: stats.sourceFindings,
+                bytes: stats.compactBytes,
+              }),
+          }),
+          pipelineReviewPreparationInstructions(pipeline),
+        );
       }
       const agentMcp =
         consolidation.resultTransport === "tool-v1"

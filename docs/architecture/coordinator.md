@@ -1073,6 +1073,13 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 - A named step replaces only that step, and a step that names only an agent runs
   that agent's saved model.
+- A step, or `reviewPreparation`, may carry `instructions` (at most 16 KiB of
+  UTF-8; [per-stage instructions](build-pipeline-view.md#per-stage-instructions)).
+  One that names only `instructions`, without an agent, keeps its saved
+  selection: the pipeline agent for `build`, the saved row for the others, and
+  the saved preparation model (Address's when the saved review has one
+  reviewer) for `reviewPreparation`. Reviewer rows always name their agent and
+  may carry their own `instructions`.
 - `steps.build.agent` decides the pipeline agent.
 - Explicit `reviewers` replace the saved rows; otherwise an explicit
   `steps.review` becomes Reviewer 1.
@@ -1099,7 +1106,8 @@ reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `default`, `requested` or `implied` (auto-fix turned on by a requested auto-PR).
 `start_multi_review` reports the same `selection`. `start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
-per-field `source`. The environment and tab UI do not show a marker
+per-field `source`; a step's stored instructions are reported as
+`instructionsBytes`, not echoed. The environment and tab UI do not show a marker
 for overrides yet; that is a tracked follow-up.
 
 ## Complete application actions

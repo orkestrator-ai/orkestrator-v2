@@ -37,6 +37,7 @@ import {
   type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { normalizeBuildStepInstructions } from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import type { AppConfig } from "./models.js";
 import {
   type BuildPipelineProvider,
@@ -393,6 +394,12 @@ export function stepModel(
   return trimmed;
 }
 
+/** A step's instructions, trimmed, kept only when there are some. */
+function instructionsField(value: string | undefined): { instructions?: string } {
+  const instructions = normalizeBuildStepInstructions(value);
+  return instructions ? { instructions } : {};
+}
+
 /**
  * Drops empty selections so a step that only pinned a harness does not also pin
  * a placeholder as a model id or the string "default" as a reasoning effort.
@@ -410,6 +417,7 @@ export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepCo
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
+      ...instructionsField(step.instructions),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -435,6 +443,7 @@ export function normalizeReviewers(
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
+      ...instructionsField(reviewer.instructions),
     };
   });
 }

@@ -17,6 +17,7 @@ import {
   assertCoordinatorLaunchBaseOnBranch,
   buildPipelineSelection,
   buildStepSchema,
+  buildStepOverrideSchema,
   isRecord,
   nodeIdField,
   readAnnotations,
@@ -243,7 +244,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Start a structured build pipeline",
       description:
-        "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set; any field you leave out keeps its saved default.",
+        "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         taskId: z.string().trim().min(1).max(200),
@@ -258,17 +259,17 @@ export function registerCoordinatorWorkflowTools(
           ),
         steps: z
           .object({
-            build: buildStepSchema.optional(),
-            review: buildStepSchema.optional(),
-            address: buildStepSchema.optional(),
-            verify: buildStepSchema.optional(),
-            pr: buildStepSchema.optional(),
-            "resolve-conflicts": buildStepSchema.optional(),
+            build: buildStepOverrideSchema.optional(),
+            review: buildStepOverrideSchema.optional(),
+            address: buildStepOverrideSchema.optional(),
+            verify: buildStepOverrideSchema.optional(),
+            pr: buildStepOverrideSchema.optional(),
+            "resolve-conflicts": buildStepOverrideSchema.optional(),
           })
           .strict()
           .optional()
           .describe(
-            "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step.",
+            "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step, or gives instructions for it. A step that names only instructions keeps its saved agent and model.",
           ),
         reviewers: z
           .array(buildStepSchema)
@@ -276,12 +277,12 @@ export function registerCoordinatorWorkflowTools(
           .max(32)
           .optional()
           .describe(
-            "Optional. Replaces the saved Multi Review reviewer rows for the review step. Omit to use them. Set only when the user asks for specific reviewers.",
+            "Optional. Replaces the saved Multi Review reviewer rows for the review step. Omit to use them. Set only when the user asks for specific reviewers or for instructions per reviewer.",
           ),
-        reviewPreparation: buildStepSchema
+        reviewPreparation: buildStepOverrideSchema
           .optional()
           .describe(
-            "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one.",
+            "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one, or for instructions for it; naming only instructions keeps the saved model.",
           ),
         taskTitle: z.string().trim().min(1).max(500),
         taskSnapshot: z.object({

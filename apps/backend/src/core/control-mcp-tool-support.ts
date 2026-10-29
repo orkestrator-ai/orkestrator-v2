@@ -6,6 +6,11 @@
  */
 
 import { z } from "zod";
+import {
+  MAX_BUILD_STEP_INSTRUCTIONS_BYTES,
+  buildStepInstructionsBytes,
+  isBuildStepInstructions,
+} from "@orkestrator/protocol/build-pipeline-stage-instructions";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
 /** The field every environment and workflow tool takes to act on another node. */
@@ -79,18 +84,46 @@ export function toolResult(value: JsonRecord, summary: JsonRecord = value) {
   };
 }
 
+const buildStepFields = {
+  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: z.string().trim().min(1).max(500).optional(),
+  reasoningEffort: z.string().trim().min(1).max(100).optional(),
+  fastMode: z.boolean().optional(),
+  instructions: z
+    .string()
+    .refine(isBuildStepInstructions, {
+      error: `instructions must be at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes of UTF-8 (16 KiB).`,
+    })
+    .optional()
+    .describe(
+      "Optional. The user's own instructions for this step, at most 16 KiB. The step's prompt carries them after its own contract; Fix uses the build step's. Set only when the user asks for them.",
+    ),
+};
+
 /**
  * One build step's harness and model. Unlike a Multi Review row the model is
  * optional: naming only an agent runs that agent's own saved model.
  */
-export const buildStepSchema = z
-  .object({
-    agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-    model: z.string().trim().min(1).max(500).optional(),
-    reasoningEffort: z.string().trim().min(1).max(100).optional(),
-    fastMode: z.boolean().optional(),
-  })
+export const buildStepSchema = z.object(buildStepFields).strict();
+
+/**
+ * A named pipeline step. The agent is optional so that a step naming only
+ * `instructions` keeps its saved agent and model
+ * (`buildPipelineInputWithDefaults`).
+ */
+export const buildStepOverrideSchema = z
+  .object({ ...buildStepFields, agent: buildStepFields.agent.optional() })
   .strict();
+
+/**
+ * A step as the start result reports it: the caller already has the text of
+ * its instructions, so the result says how many bytes the pipeline stored.
+ */
+function selectedStep(step: unknown): unknown {
+  if (!isRecord(step) || typeof step.instructions !== "string") return step;
+  const { instructions, ...rest } = step;
+  return { ...rest, instructionsBytes: buildStepInstructionsBytes(instructions) };
+}
 
 /** What a started build runs, and which choices the caller made. */
 export function buildPipelineSelection(
@@ -106,9 +139,11 @@ export function buildPipelineSelection(
   const steps = isRecord(record.steps) ? record.steps : {};
   return {
     agentType: record.agentType ?? null,
-    steps,
-    reviewers: Array.isArray(record.reviewers) ? record.reviewers : [],
-    reviewPreparation: record.reviewPreparation ?? null,
+    steps: Object.fromEntries(
+      Object.entries(steps).map(([key, step]) => [key, selectedStep(step)]),
+    ),
+    reviewers: Array.isArray(record.reviewers) ? record.reviewers.map(selectedStep) : [],
+    reviewPreparation: selectedStep(record.reviewPreparation ?? null),
     source: {
       agentType: source(input.agentType !== undefined || input.steps?.build !== undefined),
       steps: Object.fromEntries(

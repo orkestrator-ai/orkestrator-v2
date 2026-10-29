@@ -46,12 +46,18 @@ import {
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
 import type { BuildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
+import {
+  BuildStepInstructionsField,
+  buildStepInstructionsTooLong,
+} from "./BuildStepInstructionsField";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /** The user's own instructions for this step, trimmed; absent when blank. */
+  instructions?: string;
 }
 
 export interface BuildLaunchSelection {
@@ -434,6 +440,15 @@ function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]
   );
 }
 
+/** Instructions are keyed by card: a step key, `reviewer:N` or `reviewPreparation`. */
+type InstructionsKey = Exclude<BuildStepKey, "review"> | `reviewer:${number}` | "reviewPreparation";
+
+/** Trimmed instructions for a submitted selection, or nothing when blank. */
+function instructionsField(value: string | undefined): { instructions?: string } {
+  const instructions = value?.trim();
+  return instructions ? { instructions } : {};
+}
+
 function BuildStepCard({
   number,
   stepKey,
@@ -441,6 +456,9 @@ function BuildStepCard({
   title,
   description,
   icon,
+  instructions,
+  instructionsHint,
+  onInstructionsChange,
   state,
   resolved,
   models,
@@ -460,6 +478,9 @@ function BuildStepCard({
   title: string;
   description: string;
   icon: React.ReactNode;
+  instructions: string;
+  instructionsHint?: string;
+  onInstructionsChange: (value: string) => void;
   state: StepState;
   resolved: ResolvedStep;
   models: AgentModel[];
@@ -578,6 +599,14 @@ function BuildStepCard({
           files that were already uncommitted are not checked.
         </p>
       )}
+
+      <BuildStepInstructionsField
+        id={`${controlId.replace(/-model$/, "")}-instructions`}
+        stepTitle={title}
+        value={instructions}
+        hint={instructionsHint}
+        onChange={onInstructionsChange}
+      />
     </li>
   );
 }
@@ -656,6 +685,8 @@ export function BuildLaunchDialog({
     ),
   );
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
+  // Per launch: instructions are never saved as defaults, so every open starts empty.
+  const [instructions, setInstructions] = useState<Partial<Record<InstructionsKey, string>>>({});
   const wasOpenRef = useRef(false);
   const touchedRef = useRef(new Set<string>());
   const environmentGroupId = useId();
@@ -718,6 +749,7 @@ export function BuildLaunchDialog({
         return defaultEnvironmentType;
       });
       setIncludeComments(commentContext?.defaultIncluded ?? true);
+      setInstructions({});
       resetLaunchState();
       return;
     }
@@ -819,6 +851,14 @@ export function BuildLaunchDialog({
     setReviewers((current) => current.map((row, i) => (i === index ? next : row)));
   };
 
+  const updateInstructions = (key: InstructionsKey, value: string) =>
+    setInstructions((current) => ({ ...current, [key]: value }));
+  const instructionsKeyFor = (key: BuildStepKey): InstructionsKey =>
+    key === "review" ? "reviewer:0" : key;
+  const instructionsTooLong = Object.values(instructions).some(
+    (value) => value !== undefined && buildStepInstructionsTooLong(value),
+  );
+
   const commentContextLabel = commentContext
     ? `Include ${commentContext.count} comment${commentContext.count === 1 ? "" : "s"} in build context`
     : "";
@@ -843,7 +883,8 @@ export function BuildLaunchDialog({
             Configure build
           </DialogTitle>
           <DialogDescription>
-            Choose the workspace, then assign a model to every stage of the pipeline.
+            Choose the workspace, then assign a model to every stage of the pipeline. Any stage can
+            also take your own instructions.
           </DialogDescription>
         </DialogHeader>
 
@@ -852,7 +893,7 @@ export function BuildLaunchDialog({
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy) return;
+            if (busy || instructionsTooLong) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             const selectedSteps = Object.fromEntries(
@@ -867,6 +908,7 @@ export function BuildLaunchDialog({
                     reasoningEffort:
                       resolvedStep.effort === "default" ? undefined : resolvedStep.effort,
                     fastMode: resolvedStep.fastMode,
+                    ...instructionsField(instructions[instructionsKeyFor(key)]),
                   },
                 ];
               }),
@@ -874,12 +916,20 @@ export function BuildLaunchDialog({
             const submittedReviewers =
               reviewers.length > 1
                 ? reviewers.map((reviewer, index) =>
-                    index === 0 ? selectedSteps.review : cleanStep(reviewer, catalog),
+                    index === 0
+                      ? selectedSteps.review
+                      : {
+                          ...cleanStep(reviewer, catalog),
+                          ...instructionsField(instructions[`reviewer:${index}`]),
+                        },
                   )
                 : undefined;
             const submittedPreparation =
               reviewers.length > 1 && reviewPreparation
-                ? cleanStep(reviewPreparation, catalog)
+                ? {
+                    ...cleanStep(reviewPreparation, catalog),
+                    ...instructionsField(instructions.reviewPreparation),
+                  }
                 : undefined;
             onConfirm({
               environmentType,
@@ -1004,6 +1054,10 @@ export function BuildLaunchDialog({
                           title={card.title}
                           description={card.description}
                           icon={card.icon}
+                          instructions={instructions.reviewPreparation ?? ""}
+                          onInstructionsChange={(value) =>
+                            updateInstructions("reviewPreparation", value)
+                          }
                           state={reviewPreparation}
                           resolved={resolvedReviewPreparation}
                           models={models}
@@ -1033,6 +1087,10 @@ export function BuildLaunchDialog({
                           title={card.title}
                           description={card.description}
                           icon={card.icon}
+                          instructions={instructions[`reviewer:${card.index}`] ?? ""}
+                          onInstructionsChange={(value) =>
+                            updateInstructions(`reviewer:${card.index}`, value)
+                          }
                           state={state}
                           resolved={resolvedReviewers[card.index] ?? resolved.review}
                           models={models}
@@ -1056,6 +1114,11 @@ export function BuildLaunchDialog({
                         title={card.title}
                         description={card.description}
                         icon={card.icon}
+                        instructions={instructions[card.key] ?? ""}
+                        instructionsHint={
+                          card.key === "build" ? "The fix stage uses them too." : undefined
+                        }
+                        onInstructionsChange={(value) => updateInstructions(card.key, value)}
                         state={steps[card.key]}
                         resolved={resolved[card.key]}
                         models={models}
@@ -1089,6 +1152,7 @@ export function BuildLaunchDialog({
               type="submit"
               disabled={
                 busy ||
+                instructionsTooLong ||
                 (environmentType === "containerized" && !dockerAvailable) ||
                 (environmentType === "local" && !localEnvironmentAvailable)
               }

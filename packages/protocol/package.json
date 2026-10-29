@@ -44,6 +44,7 @@
     "./build-pipeline": "./src/build-pipeline.ts",
     "./build-pipeline-defaults": "./src/build-pipeline-defaults.ts",
     "./build-pipeline-address-report": "./src/build-pipeline-address-report.ts",
+    "./build-pipeline-stage-instructions": "./src/build-pipeline-stage-instructions.ts",
     "./connections": "./src/connections.ts",
     "./device-catalogue": "./src/device-catalogue.ts",
     "./container-host-reachability": "./src/container-host-reachability.ts",

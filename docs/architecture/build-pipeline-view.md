@@ -4,8 +4,8 @@ Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
-2026-10-28), the shared review routing (2026-10-29), and read-only reviewers
-with the Git guard (2026-10-29).
+2026-10-28), the shared review routing (2026-10-29), read-only reviewers
+with the Git guard (2026-10-29), and per-stage instructions (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -181,6 +181,50 @@ only grows, is saved on the transcript persist cadence while the turn runs and
 with the final transcript when it ends, and a meter that fails never fails the
 stage. The validation run of a Prepare node, the Ticket, Setup and the PR run
 no agent and have no tokens.
+
+## Per-stage instructions
+
+Every step can carry the user's own instructions: `BuildStepConfig.instructions`,
+at most 16 KiB of UTF-8 (`MAX_BUILD_STEP_INSTRUCTIONS_BYTES`). The guard,
+renderer and stage mapping live in
+`packages/protocol/src/build-pipeline-stage-instructions.ts`
+(`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
+rejects a longer text, so every launch input that carries steps (the launcher,
+feature builds, the coordinator) is bounded by the same check.
+
+- **Prompt.** A stage with instructions gets one framed section after its own
+  contract: "**Additional instructions from the user** for this stage…" and the
+  text inside `<user-stage-instructions>` … `</user-stage-instructions>`
+  (`withBuildStepInstructions`). The preamble says they refine the task and do
+  not change the stage's result format, permissions or rules. A marker typed
+  inside the text is escaped so it cannot close the frame. Only the
+  session-wide unattended-input note follows it. A step without instructions
+  gets a prompt identical to before, byte for byte.
+- **Which step a stage reads.** Build, Review (single reviewer), Address,
+  Verify, Ship and conflict resolution read their own step
+  (`pipelineStepInstructions` with `stepKeyForSessionPhase`). Fix reads
+  Build's, as it runs on Build's model. Each fan-out reviewer reads its own row
+  in `reviewers` (`pipelineReviewerInstructions`), after the panel section, so
+  the panel's shared prompt prefix stays byte-identical. The dedicated package
+  preparation and the fan-out consolidation read `reviewPreparation`
+  (`pipelineReviewPreparationInstructions`); without a preparation step they
+  borrow Address's model but not Address's instructions. On the
+  single-reviewer path the build or fix turn prepares the package inline, under
+  Build's instructions.
+- **Record.** The backend stores them trimmed on `steps`, `reviewers` and
+  `reviewPreparation` (`normalizeSteps`, `normalizeReviewers`); blank text is
+  dropped. Every stage prompt is rebuilt from the record, so a restart, a
+  rewind, a retried stage, a fresh review panel and a backend restart all read
+  the same text. Resume, reminders and repairs continue a session that already
+  has the opening prompt and do not repeat it. A feature build that pins
+  Address but not Verify copies Address's model to Verify, not its
+  instructions.
+- **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
+  "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte
+  counter. Over 16 KiB the field is marked invalid and Start build is disabled.
+  The Build card notes that Fix uses them too. Instructions belong to one
+  launch: the dialog starts empty every time it opens, and saved build defaults
+  (action defaults) hold models only.
 
 ## Inspector and actions
 

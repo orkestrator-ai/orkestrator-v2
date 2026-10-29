@@ -1,6 +1,9 @@
 import { launchSelectionReport, platformLaunchDefault } from "./control-shared-actions.js";
 import { normalizeReviewers } from "./build-pipeline-service-helpers.js";
-import type { BuildStepConfig } from "@orkestrator/protocol/build-pipeline";
+import {
+  isStartBuildPipelineInput,
+  type BuildStepConfig,
+} from "@orkestrator/protocol/build-pipeline";
 import type { CommandContext } from "./commands-context.js";
 import { describe, expect, test } from "bun:test";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
@@ -208,6 +211,20 @@ describe("multiReviewDefaultRows", () => {
   });
 });
 
+const startFields = {
+  taskId: "task-1",
+  projectId: "project-1",
+  environmentType: "local",
+  taskTitle: "Title",
+  taskSnapshot: {
+    title: "Title",
+    description: "",
+    acceptanceCriteria: "",
+    comments: [],
+    images: [],
+  },
+};
+
 describe("coordinator launch overrides", () => {
   const global: AgentSettingsTier = {
     actionDefaults: {
@@ -251,6 +268,46 @@ describe("coordinator launch overrides", () => {
     expect(resolved.steps).toMatchObject({ review });
     expect((resolved.reviewers as BuildStepConfig[])[0]).toEqual(review);
     expect((resolved.reviewers as BuildStepConfig[])[1]?.model).toBe("saved-second");
+  });
+  test("a step naming only instructions keeps its saved selection", () => {
+    const resolved = buildPipelineInputWithDefaults(
+      {
+        steps: {
+          build: { instructions: "Write the test first." },
+          review: { instructions: "Security." },
+          verify: { agent: "codex", instructions: "Check the help text." },
+        },
+        reviewPreparation: { instructions: "Merge duplicates." },
+      },
+      settings,
+    );
+    const steps = resolved.steps as Record<string, BuildStepConfig>;
+    // The build step takes the pipeline agent the launcher would have used.
+    expect(steps.build).toEqual({
+      agent: resolved.agentType as BuildStepConfig["agent"],
+      instructions: "Write the test first.",
+    });
+    expect(steps.review).toEqual({ agent: "claude", model: "opus", instructions: "Security." });
+    expect(steps.verify).toEqual({ agent: "codex", instructions: "Check the help text." });
+    const reviewers = resolved.reviewers as BuildStepConfig[];
+    expect(reviewers[0]).toEqual(steps.review);
+    expect(reviewers[1]).toEqual(expect.objectContaining({ model: "saved-second" }));
+    expect(reviewers[1]?.instructions).toBeUndefined();
+    expect(resolved.reviewPreparation).toEqual({
+      agent: "claude",
+      model: "saved-preparation",
+      instructions: "Merge duplicates.",
+    });
+    expect(isStartBuildPipelineInput({ ...startFields, ...resolved })).toBe(true);
+  });
+  test("explicit reviewer rows carry their own instructions", () => {
+    const reviewers = [
+      { agent: "codex", model: "first", instructions: "Security." },
+      { agent: "claude", model: "second", instructions: "Performance." },
+    ] as BuildStepConfig[];
+    const resolved = buildPipelineInputWithDefaults({ reviewers }, settings);
+    expect(resolved.reviewers).toEqual(reviewers);
+    expect((resolved.steps as Record<string, BuildStepConfig>).review).toEqual(reviewers[0]);
   });
   test("partial Multi Review overrides preserve explicit rows and false auto-actions", async () => {
     const fixModel = { agent: "codex", model: "explicit-fix" };

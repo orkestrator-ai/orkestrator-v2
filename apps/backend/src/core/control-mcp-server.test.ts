@@ -603,6 +603,81 @@ describe("Orkestrator control MCP server", () => {
     ).toMatchObject({ maxIterations: MAX_BUILD_PIPELINE_ITERATIONS });
   });
 
+  test("start_build_pipeline carries per-step instructions within their bound", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const call = (requestId: string, extra: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "start_build_pipeline",
+        arguments: {
+          requestId,
+          taskId: "task-1",
+          baseBranch: "main",
+          baseCommit: "a".repeat(40),
+          taskTitle: "Task",
+          taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+          ...extra,
+        },
+      });
+    const refused = await call("build-long-instructions", {
+      steps: { verify: { instructions: "x".repeat(16 * 1024 + 1) } },
+    });
+    expect(refused.body.result?.isError).toBe(true);
+    expect(JSON.stringify(refused.body.result)).toContain("instructions must be at most 16384");
+    expect(
+      invocations.filter((entry) => entry.command === "start_coordinator_build_pipeline"),
+    ).toHaveLength(0);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: {
+        build: { agent: "claude", instructions: "Write the test first." },
+        review: { agent: "codex", instructions: "Security." },
+      },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { agent: "claude", instructions: "Merge duplicates." },
+    }));
+    const accepted = await call("build-instructions", {
+      steps: { build: { instructions: "Write the test first." } },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { instructions: "Merge duplicates." },
+    });
+    expect(accepted.body.result?.isError).not.toBe(true);
+    // The tool forwards the caller's choices; the backend command layers an
+    // instructions-only step over the saved selection.
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({
+      steps: { build: { instructions: "Write the test first." } },
+      reviewers: [
+        { agent: "codex", instructions: "Security." },
+        { agent: "claude", instructions: "Performance." },
+      ],
+      reviewPreparation: { instructions: "Merge duplicates." },
+    });
+    // The result reports what was stored by size, not by echoing the text.
+    const selection = accepted.body.result?.structuredContent?.selection as Record<string, unknown>;
+    expect(selection).toMatchObject({
+      steps: { build: { agent: "claude", instructionsBytes: 21 } },
+      reviewers: [
+        { agent: "codex", instructionsBytes: 9 },
+        { agent: "claude", instructionsBytes: 12 },
+      ],
+      reviewPreparation: { agent: "claude", instructionsBytes: 17 },
+    });
+    expect(JSON.stringify(selection)).not.toContain("Write the test first.");
+  });
+
   test("binds coordinator credentials to one project and revokes them", async () => {
     overrides.set("get_projects", () => [
       { id: "project-1", name: "Allowed", localPath: "/allowed" },

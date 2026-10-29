@@ -479,6 +479,45 @@ cost; saved defaults). `graph_run_launch {…GraphLaunchRequest}` →
 `GraphLaunchResult {runId, projectId, environmentId?, status, template,
 repeated}`, launched as `user`.
 
+**Surfaces.** All of them call the same service, so every entry point
+launches the same run:
+
+- *The launch dialog* (`components/graph-launch/GraphLaunchDialog.tsx`,
+  generated from `GraphLaunchOptions`): a template picker when opened without
+  one, inputs (a `ticket@1` input takes a Kanban ticket; `workspace@1` inputs
+  say they come from the run's environment), one picker per role offering
+  only `available` providers and showing every provider's tier and why one is
+  not offered, panel editors with a lens per member (item 005's
+  `ReviewLensField` and presets), parameters (toggles, numbers, enums, text),
+  the environment choice and the cost estimate (`graphLaunchCostEstimate`,
+  the compile cost scaled by the bound panel sizes). It starts from the saved
+  defaults and launches with `saveDefaults: true`.
+- *Entry points* (D17): "Run graph…" in the environment action bar
+  (`RunGraphButton`), "Run graph…" on a Kanban card (the ticket as input),
+  and "Run" in the designer header (a dirty or new draft is saved first; it
+  launches the stored template). After a launch, `openLaunchedGraphRun`
+  (`components/graph-launch/open-launched-run.ts`) asks for the run's tab
+  through item 213's `requestGraphRunView` (`lib/graph-run-navigation.ts`),
+  the same path Mock run uses; the active environment's terminal container
+  answers requests naming it, and one made while that environment is off
+  screen waits until it is shown again.
+- *The CLI*: `orkestrator graph list | show | validate | launch | status |
+  cancel` over the `graph.*` public actions
+  ([public-cli.md](public-cli.md#graphs)), launched as `cli` with a
+  `requestId` derived from the public request key.
+- *The coordinator* (D6): Control MCP `list_graph_templates`, `launch_graph`,
+  `get_graph_run` and `cancel_graph_run` (`control-mcp-graph-tools.ts`,
+  `coordinator-graph-actions.ts`), launched as `coordinator`. There is no
+  tool that creates, saves, edits, duplicates, imports or describes a
+  template. A launch reserves a `graph-run` workflow association before it
+  acts; the status wake (item 208's `graph-run-coordinator-status.ts`) sends
+  one notice per wait for a person and one when the run ends (terminal
+  notices whatever the wake setting, as for every workflow).
+- *Schedules*: a `graph` schedule action ([scheduled-jobs.md](scheduled-jobs.md))
+  holds a launch request, validated when the schedule is created, and fires
+  as `schedule` with `requestId` `sched:<fireId>`, so a fire replayed after a
+  restart finds its run instead of launching twice.
+
 **Runs that end without an environment.** A failed provisioning leaves a run
 no environment deletion will remove. `GraphRunLaunchService.sweep()` (at
 startup and after every launch) keeps at most 20 such terminal runs per

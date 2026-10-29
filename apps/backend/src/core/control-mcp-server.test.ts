@@ -22,6 +22,7 @@ import {
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 
 type RpcBody = {
   result?: {
@@ -552,6 +553,54 @@ describe("Orkestrator control MCP server", () => {
         COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
       );
     }
+  });
+
+  test("bounds start_build_pipeline maxIterations by the protocol limit", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const tool = listed.body.result?.tools?.find((item) => item.name === "start_build_pipeline") as
+      | { inputSchema?: { properties?: Record<string, { minimum?: number; maximum?: number }> } }
+      | undefined;
+    expect(tool?.inputSchema?.properties?.maxIterations).toMatchObject({
+      minimum: 1,
+      maximum: MAX_BUILD_PIPELINE_ITERATIONS,
+    });
+
+    const call = (requestId: string, maxIterations: number) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "start_build_pipeline",
+        arguments: {
+          requestId,
+          taskId: "task-1",
+          baseBranch: "main",
+          baseCommit: "a".repeat(40),
+          taskTitle: "Task",
+          taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+          maxIterations,
+        },
+      });
+    const refused = await call("build-too-many-iterations", MAX_BUILD_PIPELINE_ITERATIONS + 1);
+    expect(refused.body.result?.isError).toBe(true);
+    expect(JSON.stringify(refused.body.result)).toContain(
+      `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}`,
+    );
+    expect(
+      invocations.filter((entry) => entry.command === "start_coordinator_build_pipeline"),
+    ).toHaveLength(0);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+    }));
+    const accepted = await call("build-max-iterations", MAX_BUILD_PIPELINE_ITERATIONS);
+    expect(accepted.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({ maxIterations: MAX_BUILD_PIPELINE_ITERATIONS });
   });
 
   test("binds coordinator credentials to one project and revokes them", async () => {

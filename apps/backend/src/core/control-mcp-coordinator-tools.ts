@@ -27,6 +27,7 @@ import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "./control-shared-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
+import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
 import type {
   ScheduleOwner,
@@ -297,7 +298,17 @@ export function registerCoordinatorWorkflowTools(
             .default([]),
         }),
         existingEnvironmentId: z.string().trim().min(1).max(200).optional(),
-        maxIterations: z.number().int().min(1).max(20).optional(),
+        maxIterations: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_BUILD_PIPELINE_ITERATIONS, {
+            error: `maxIterations must be at most ${MAX_BUILD_PIPELINE_ITERATIONS}, the Build Pipeline's iteration limit.`,
+          })
+          .optional()
+          .describe(
+            `Optional. Review/fix/verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omit for the default.`,
+          ),
         nodeId: nodeIdField.describe(
           "Optional: run the build on that node's copy of this project (a nodeId from list_nodes); take baseBranch and baseCommit from get_launch_options with the same nodeId. Omit for this node.",
         ),

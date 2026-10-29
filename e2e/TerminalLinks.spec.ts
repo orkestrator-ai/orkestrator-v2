@@ -50,3 +50,53 @@ for (const modifier of ["Control", "Meta"] as const) {
     await expect(page.getByTestId("internal-opens")).toHaveText("[]");
   });
 }
+
+for (const kind of ["service", "unregistered", "ambiguous"]) {
+  test(`a remote terminal OSC link resolves ${kind} through the service router`, async ({
+    page,
+  }) => {
+    await page.goto(`/terminal-links?remote=${kind}`);
+    await expect(page.getByTestId("osc-ready")).toHaveText("true");
+    const screen = page.getByTestId("osc-terminal").locator(".xterm-screen");
+    const bounds = await screen.boundingBox();
+    if (!bounds) throw new Error("Missing terminal screen");
+    await page.mouse.move(bounds.x + 15, bounds.y + 10);
+    await expect(screen).toHaveClass(/xterm-cursor-pointer/);
+    await screen.click({ position: { x: 15, y: 10 }, modifiers: ["Control"] });
+    await expect(page.getByTestId("resolutions")).toHaveText(
+      JSON.stringify([
+        {
+          url: "http://localhost:3000/start?x=1",
+          source: "worktree-terminal",
+          environmentId: "osc-environment",
+        },
+      ]),
+    );
+    await expect(page.getByTestId("external-opens")).toHaveText("[]");
+    if (kind === "service") {
+      await expect(page.getByTestId("service-opens")).toHaveText(
+        JSON.stringify([
+          {
+            backendInstanceId: "backend-instance-1",
+            environmentId: "osc-environment",
+            serviceId: "service-0000001",
+            path: "/start?x=1",
+          },
+        ]),
+      );
+      await expect(page.getByTestId("internal-opens")).toHaveText("[]");
+    } else {
+      await expect(page.getByTestId("internal-opens")).toHaveText(
+        JSON.stringify([
+          {
+            environmentId: "osc-environment",
+            sourceTabId: "osc-source-tab",
+            url: "http://localhost:3000/start?x=1",
+            origin: "terminal",
+          },
+        ]),
+      );
+      await expect(page.getByTestId("service-opens")).toHaveText("[]");
+    }
+  });
+}

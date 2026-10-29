@@ -13,7 +13,7 @@ import {
   startInteractiveTerminal,
   writeInteractiveTerminal,
 } from "@/lib/claude-tmux-client";
-import { openInBrowser } from "@/lib/backend";
+import { openLinkExternally } from "@/lib/preview-link-external";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
@@ -136,7 +136,8 @@ export function ClaudeTmuxInteractiveTerminal({
         activate: createTerminalLinkActivator({
           environmentId: environmentId ?? "",
           sourceTabId: tabId,
-          openExternal: openInBrowser,
+          openExternal: (url) =>
+            openLinkExternally({ environmentId: environmentId ?? "", sourceTabId: tabId, url }),
         }),
       },
       cursorBlink: true,

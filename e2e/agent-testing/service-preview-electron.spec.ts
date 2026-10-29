@@ -2564,6 +2564,155 @@ test("windows on different backends never share previews, and switches release o
   ).toBe(true);
 });
 
+test("a remote terminal link opens the native localhost forward in a separate browser", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const remote = s().remote ?? (await startRemoteBackend());
+  const [second] = await Promise.all([
+    s().app.waitForEvent("window", {
+      predicate: (candidate) => candidate.url().startsWith(s().rendererUrl),
+      timeout: 60_000,
+    }),
+    s().window.evaluate(() => (globalThis as any).orkestrator.connections.openWindow("local")),
+  ]);
+  const windowId = await (await s().app.browserWindow(second)).evaluate((window) => window.id);
+  try {
+    await waitForApi(second);
+    await second.evaluate(
+      (input) =>
+        (globalThis as any).orkestrator.connections.connect({
+          ...input,
+          nickname: "External preview",
+        }),
+      { address: remote.address, token: remote.token },
+    );
+    // Drive the actual terminal link handler, renderer resolver, preload IPC,
+    // main route selection and tunnel, then navigate a separate browser context.
+    // Capture shell.openExternal so qualification never opens the user's browser.
+    await s().app.evaluate(({ shell }) => {
+      const state = globalThis as any;
+      state.__savedPreviewOpenExternal = shell.openExternal;
+      state.__previewExternalUrls = [];
+      shell.openExternal = async (url: string) => {
+        state.__previewExternalUrls.push(url);
+      };
+    });
+    const externalContext = await browser.newContext();
+    try {
+      await second.evaluate(
+        async ({ environmentId, url }) => {
+          const terminalPath = "/src/stores/terminalPortalStore.ts";
+          const environmentPath = "/src/stores/environmentStore.ts";
+          const capabilitiesPath = "/src/stores/previewServiceStore.ts";
+          const { useTerminalPortalStore } = await import(terminalPath);
+          const { useEnvironmentStore } = await import(environmentPath);
+          const { usePreviewServiceStore } = await import(capabilitiesPath);
+          // Hydrate from the remote backend's authoritative environment record.
+          const environment = await (globalThis as any).orkestrator.invoke("get_environment", {
+            environmentId,
+          });
+          if (!useEnvironmentStore.getState().getEnvironmentById(environmentId))
+            useEnvironmentStore.getState().addEnvironment(environment);
+          await usePreviewServiceStore.getState().loadCapabilities({ force: true });
+          const host = document.createElement("div");
+          host.id = "external-preview-terminal";
+          Object.assign(host.style, {
+            position: "fixed",
+            inset: "0",
+            width: "400px",
+            height: "100px",
+            zIndex: "999999",
+          });
+          document.body.append(host);
+          const { terminal } = useTerminalPortalStore
+            .getState()
+            .createTerminal({ environmentId, tabId: "external-preview-link", containerId: null });
+          terminal.open(host);
+          terminal.resize(40, 3);
+          await new Promise<void>((resolve) =>
+            terminal.write(`\x1b]8;;${url}\x07remote service\x1b]8;;\x07`, resolve),
+          );
+        },
+        {
+          environmentId: svc("r").environmentId,
+          url: `http://localhost:${fixtureOf("r").port}/app/page?x=1`,
+        },
+      );
+      const terminalScreen = second.locator("#external-preview-terminal .xterm-screen");
+      const bounds = await terminalScreen.boundingBox();
+      if (!bounds) throw new Error("Missing remote terminal screen");
+      await second.mouse.move(bounds.x + 15, bounds.y + 10);
+      await expect(terminalScreen).toHaveClass(/xterm-cursor-pointer/);
+      await terminalScreen.click({ position: { x: 15, y: 10 }, modifiers: ["Control"] });
+      const openedUrls = () =>
+        s().app.evaluate(() => (globalThis as any).__previewExternalUrls as string[]);
+      await expect.poll(async () => (await openedUrls()).length).toBe(1);
+      const [url] = await openedUrls();
+      expect(new URL(url!).hostname).toBe("localhost");
+      expect(new URL(url!).pathname).toBe("/app/page");
+      expect(new URL(url!).search).toBe("?x=1");
+      const externalPage = await externalContext.newPage();
+      await externalPage.goto(url!);
+      await expect(externalPage.locator("body")).toHaveAttribute("data-loaded", "svc-remote");
+      expect(await externalPage.evaluate(() => isSecureContext)).toBe(true);
+      expect(
+        await externalPage.evaluate(
+          async () => (await fetch("/cookies/echo", { method: "POST" })).status,
+        ),
+      ).toBe(200);
+      const posted = fixtureOf("r").requests.find(
+        (request) => request.method === "POST" && request.path === "/cookies/echo",
+      );
+      expect(posted?.origin).toBe(new URL(`http://localhost:${fixtureOf("r").port}`).origin);
+      expect(posted?.forwardedHost).toBeUndefined();
+      const websocket = await externalPage.evaluate(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            const socket = new WebSocket(`ws://${location.host}/ws`, "fixture.v1");
+            socket.onmessage = (event) => {
+              resolve(event.data);
+              socket.close();
+            };
+            socket.onerror = () => reject(new Error("External preview WebSocket failed"));
+          }),
+      );
+      expect(JSON.parse(websocket)).toEqual({ hello: "svc-remote", protocol: "fixture.v1" });
+    } finally {
+      try {
+        await externalContext.close();
+        await second.evaluate(async (environmentId) => {
+          const terminalPath = "/src/stores/terminalPortalStore.ts";
+          const { useTerminalPortalStore } = await import(terminalPath);
+          useTerminalPortalStore.getState().disposeTerminal(environmentId, "external-preview-link");
+          document.getElementById("external-preview-terminal")?.remove();
+        }, svc("r").environmentId);
+      } finally {
+        await s().app.evaluate(({ shell }) => {
+          const state = globalThis as any;
+          shell.openExternal = state.__savedPreviewOpenExternal;
+          delete state.__savedPreviewOpenExternal;
+          delete state.__previewExternalUrls;
+        });
+      }
+    }
+  } finally {
+    // This window is test-owned; force its teardown after the navigation checks.
+    // The separate multi-window case above verifies user-initiated close.
+    await s().app.evaluate(
+      ({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(),
+      windowId,
+    );
+    await expect
+      .poll(
+        () => s().app.evaluate(({ BrowserWindow }, id) => !BrowserWindow.fromId(id), windowId),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+  }
+  await expect.poll(remoteAttachments, { timeout: 20_000 }).toBe(0);
+});
+
 /** Cookies named `name` (any, when omitted) in a partition's native session. */
 function partitionCookies(partition: string, name?: string): Promise<number> {
   return s().app.evaluate(

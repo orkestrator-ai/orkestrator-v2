@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { openInBrowser } from "@/lib/backend";
+import { openLinkExternally } from "@/lib/preview-link-external";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
 import { createTerminalLinkActivator } from "@/lib/terminal-links";
 
@@ -146,7 +146,12 @@ function createXtermTerminal(
   const activateLink = createTerminalLinkActivator({
     environmentId: linkSource.environmentId,
     sourceTabId: linkSource.tabId,
-    openExternal: openInBrowser,
+    openExternal: (url) =>
+      openLinkExternally({
+        environmentId: linkSource.environmentId,
+        sourceTabId: linkSource.tabId,
+        url,
+      }),
   });
 
   const terminal = new Terminal({

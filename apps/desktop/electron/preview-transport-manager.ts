@@ -28,6 +28,11 @@ import {
   type PreviewError,
 } from "@orkestrator/protocol/preview-services";
 
+import {
+  PreviewExternalForward,
+  type ExternalForwardTimers,
+  type ExternalForwardUpstream,
+} from "./preview-external-forward.js";
 import { openPreviewTunnel } from "./preview-tunnel-client.js";
 
 /** Minimal Electron Session surface used for service partitions (injectable in tests). */
@@ -71,6 +76,9 @@ export interface PreviewTransportManagerOptions {
   renewIntervalMs?: number;
   /** Idle pooled upstream connections are dropped after this long. */
   poolIdleMs?: number;
+  /** An external-browser forward closes after this long with no connection. */
+  externalForwardIdleMs?: number;
+  externalForwardTimers?: ExternalForwardTimers;
   poolMax?: number;
   onStateChange?: (serviceKey: string) => void;
   logger?: Pick<Console, "warn">;
@@ -98,6 +106,9 @@ interface ServiceGroup {
   origin: string;
   ingressSecret: string;
   sockets: Set<Socket>;
+  /** The external-browser forward, while one is open. */
+  forward: PreviewExternalForward | null;
+  forwarding: Promise<PreviewExternalForward> | null;
   pool: Array<{ socket: Duplex; idle: ReturnType<typeof setTimeout> }>;
   retireTimer: ReturnType<typeof setTimeout> | null;
   renewTimer: ReturnType<typeof setInterval> | null;
@@ -105,6 +116,9 @@ interface ServiceGroup {
   ready: Promise<void>;
   disposed: boolean;
 }
+
+/** Holder id for a service's external-browser forward; at most one per group. */
+const EXTERNAL_FORWARD_HOLDER = "external-browser-forward";
 
 /** This machine, its local networks, and carrier-grade NAT (tailnets). */
 const LOCAL_NETWORK = new BlockList();
@@ -248,6 +262,27 @@ export class PreviewTransportManager {
     };
   }
 
+  /**
+   * Open a remote service for the user's own browser at
+   * `http://localhost:<port><path>` (see `PreviewExternalForward`). The
+   * forward holds the service like a tab does, so it shares this group's
+   * attachment and tunnel, and lets go once it has been idle.
+   */
+  async forwardExternally(target: BrowserPreviewServiceTarget): Promise<string> {
+    const path = normalizePreviewPath(target.path);
+    const descriptor = await this.acquire(target, EXTERNAL_FORWARD_HOLDER);
+    const group = this.groups.get(descriptor.serviceKey);
+    if (!group) throw previewFailure("backend-unavailable");
+    try {
+      const forward = await this.externalForward(group);
+      return `http://localhost:${forward.port}${path}`;
+    } catch (error) {
+      if (!group.forward && this.groups.get(group.key) === group)
+        this.release(group.key, EXTERNAL_FORWARD_HOLDER);
+      throw error;
+    }
+  }
+
   /** Release one holder. The listener idles out after a short retirement lease. */
   release(serviceKey: string, holderId: string): void {
     const group = this.groups.get(serviceKey);
@@ -371,6 +406,8 @@ export class PreviewTransportManager {
       origin: "",
       ingressSecret: randomBytes(32).toString("base64url"),
       sockets: new Set(),
+      forward: null,
+      forwarding: null,
       pool: [],
       retireTimer: null,
       renewTimer: null,
@@ -545,7 +582,77 @@ export class PreviewTransportManager {
     this.options.portHints?.set(group.key, group.port);
   }
 
-  private policy(group: ServiceGroup): PreviewHeaderPolicy {
+  private externalForward(group: ServiceGroup): Promise<PreviewExternalForward> {
+    if (group.forward && !group.forward.isClosed) return Promise.resolve(group.forward);
+    group.forwarding ??= (async () => {
+      const forward: PreviewExternalForward = new PreviewExternalForward(
+        this.forwardUpstream(group),
+        {
+          idleMs: this.options.externalForwardIdleMs,
+          timers: this.options.externalForwardTimers,
+          onIdle: () => void this.closeExternalForward(group, forward),
+        },
+      );
+      try {
+        await forward.listen();
+      } catch (error) {
+        await forward.close();
+        throw error;
+      }
+      if (group.disposed) {
+        await forward.close();
+        throw previewFailure("backend-unavailable");
+      }
+      group.forward = forward;
+      return forward;
+    })().finally(() => {
+      group.forwarding = null;
+    });
+    return group.forwarding;
+  }
+
+  private async closeExternalForward(
+    group: ServiceGroup,
+    forward: PreviewExternalForward,
+  ): Promise<void> {
+    if (group.forward !== forward) return;
+    group.forward = null;
+    await forward.close();
+    // A click while this one closed opened a newer forward under the same holder.
+    if (group.forward || group.forwarding || this.groups.get(group.key) !== group) return;
+    this.release(group.key, EXTERNAL_FORWARD_HOLDER);
+  }
+
+  private forwardUpstream(group: ServiceGroup): ExternalForwardUpstream {
+    return {
+      applicationPort: () => group.attachment?.applicationPort ?? 0,
+      available: () => !group.disposed && group.attachment !== null,
+      forwardRequest: async (request, response, publicOrigin) => {
+        await forwardPreviewRequest(
+          request,
+          response,
+          this.policy(group, publicOrigin),
+          DEFAULT_PREVIEW_FORWARD_LIMITS,
+          {
+            connect: (signal) => this.connect(group, signal),
+            reuse: (socket) => this.pool(group, socket),
+          },
+        );
+      },
+      forwardUpgrade: async (request, socket, head, publicOrigin) => {
+        await forwardPreviewUpgrade(
+          request,
+          socket,
+          head,
+          this.policy(group, publicOrigin),
+          DEFAULT_PREVIEW_FORWARD_LIMITS,
+          { connect: (signal) => this.connect(group, signal, false) },
+        );
+      },
+    };
+  }
+
+  private policy(group: ServiceGroup, publicOrigin = group.origin): PreviewHeaderPolicy {
     const port = group.attachment?.applicationPort ?? 0;
     return {
       privateAuthority: `localhost:${port}`,
@@ -554,7 +661,7 @@ export class PreviewTransportManager {
         `http://127.0.0.1:${port}`,
         `http://[::1]:${port}`,
       ],
-      publicOrigin: group.origin,
+      publicOrigin,
       stripRequestHeaders: [PREVIEW_INGRESS_HEADER],
     };
   }
@@ -827,6 +934,9 @@ export class PreviewTransportManager {
     if (group.retireTimer) clearTimeout(group.retireTimer);
     if (group.renewTimer) clearInterval(group.renewTimer);
     this.drainPool(group);
+    const forward = group.forward;
+    group.forward = null;
+    await forward?.close();
     const server = group.server;
     group.server = null;
     for (const socket of Array.from(group.sockets)) socket.destroy();

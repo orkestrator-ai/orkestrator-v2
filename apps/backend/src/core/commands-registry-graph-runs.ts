@@ -1,6 +1,12 @@
 import {
   GRAPH_AGENT_ANSWER_KINDS,
   GRAPH_AGENT_QUESTION_BOUNDS,
+  GRAPH_HUMAN_BOUNDS,
+  GRAPH_HUMAN_DECISIONS,
+  graphRunPendingInteractions,
+  isGraphRunTerminal,
+  type GraphHumanDecision,
+  type GraphRunPendingInteraction,
   GRAPH_COMMIT_PATTERN,
   GRAPH_RUN_BOUNDS,
   GRAPH_RUN_ID_PATTERN,
@@ -19,6 +25,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { GraphAgentQuestionError, type GraphAgentQuestions } from "./graph-agent-questions.js";
+import { GraphHumanAnswerError, type GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphRunRewindError } from "./graph-run-rewind.js";
 import { GraphRunServiceError, type GraphRunService } from "./graph-run-service.js";
 
@@ -33,14 +40,29 @@ import { GraphRunServiceError, type GraphRunService } from "./graph-run-service.
  * (`invalid-request`, `not-found`, `invalid-state`, `disabled`).
  *
  * The commands that act on one waiting activation (item 204; the human
- * nodes of item 208 share the answer surface): `graph_run_answer` answers an
+ * nodes of item 208 share the answer surface). `graph_run_answer` answers an
  * agent's `ask_human` question:
  *
  * `{ runId, activationKey, questionId, kind: "answered" | "declined", text?, choice? }`
  *
- * It returns the activation's stored question. A stale (another or an
- * already answered question), malformed or oversized answer is refused with
- * a `GraphAgentQuestionError` (`invalid-answer`) and never reaches the agent.
+ * and returns `{activationKey, question}`, the activation's stored question.
+ * Its human-node form (item 208; named by `waitId`) answers a waiting human
+ * node:
+ *
+ * `{ runId, activationKey, waitId, decision: "approve" | "reject" | "choose", outlet?, value?, note? }`
+ *
+ * and returns `{activationKey, human}`, the stored wait with its answer.
+ * `outlet` is a `choose` form's option; `value` an `edit` form's edited input
+ * (validated against its type and stored as a new artifact whose lineage is
+ * the original). A stale (another attempt's wait or question, or one already
+ * answered), malformed, oversized or mismatched answer is refused with a
+ * `GraphAgentQuestionError` (`invalid-answer`, or `not-found`) and never
+ * recorded.
+ *
+ * `graph_run_pending {runId? | environmentId?}` →
+ * `GraphRunPendingInteraction[]`: what the run (or every live run of the
+ * environment) waits on a person for, derived from the stored record, so a
+ * view that mounts late, or after a restart, shows the same waits.
  *
  * Restart and rewind (item 210; shapes in `@orkestrator/protocol/graphs/run-rewind`):
  *
@@ -258,7 +280,24 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
     });
   });
 
+  register("graph_run_pending", async (args, context): Promise<GraphRunPendingInteraction[]> => {
+    onlyKeys(args, ["runId", "environmentId"]);
+    if ((args.runId === undefined) === (args.environmentId === undefined)) {
+      badRequest("Pass exactly one of runId and environmentId");
+    }
+    const listed =
+      args.runId !== undefined
+        ? [await readRun(context, runIdArg(args))]
+        : await runs(context).list(requiredString(args.environmentId, "environmentId", 200));
+    return listed
+      .filter((run) => !isGraphRunTerminal(run.status))
+      .sort(compareGraphRunsNewestFirst)
+      .flatMap(graphRunPendingInteractions)
+      .slice(0, GRAPH_HUMAN_BOUNDS.maxPendingInteractions);
+  });
+
   register("graph_run_answer", async (args, context) => {
+    if (args.waitId !== undefined) return answerHumanNode(args, context);
     const allowed = ["runId", "activationKey", "questionId", "kind", "text", "choice"];
     const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
     if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
@@ -301,6 +340,53 @@ export function registerGraphRunCommands(register: CommandRegistrar): void {
       throw error;
     }
   });
+}
+
+function humanAnswers(context: CommandContext): GraphHumanAnswers {
+  if (!context.graphHumanAnswers) {
+    throw new GraphAgentQuestionError("not-found", "Graph runs are unavailable");
+  }
+  return context.graphHumanAnswers;
+}
+
+/** `graph_run_answer`'s human-node form (item 208). */
+async function answerHumanNode(args: Record<string, unknown>, context: CommandContext) {
+  const allowed = ["runId", "activationKey", "waitId", "decision", "outlet", "value", "note"];
+  const unknown = Object.keys(args).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) invalid(`Unknown arguments: ${unknown.slice(0, 5).join(", ")}`);
+  const runId = stringArg(args.runId, "runId", 128, true)!;
+  const activationKey = stringArg(args.activationKey, "activationKey", 256, true)!;
+  const waitId = stringArg(args.waitId, "waitId", 64, true)!;
+  const decision = args.decision;
+  if (
+    typeof decision !== "string" ||
+    !(GRAPH_HUMAN_DECISIONS as readonly string[]).includes(decision)
+  ) {
+    invalid(`decision must be one of ${GRAPH_HUMAN_DECISIONS.join(", ")}`);
+  }
+  const outlet = stringArg(args.outlet, "outlet", 64, false);
+  const note = stringArg(args.note, "note", GRAPH_HUMAN_BOUNDS.maxNoteChars, false);
+  // `null` is a JSON value a type may accept; only an absent `value` means "unchanged".
+  const hasValue = Object.hasOwn(args, "value");
+  try {
+    const activation = await humanAnswers(context).answer(
+      { runId, activationKey },
+      {
+        waitId,
+        decision: decision as GraphHumanDecision,
+        ...(outlet !== undefined ? { outlet } : {}),
+        ...(hasValue ? { value: args.value } : {}),
+        ...(note !== undefined ? { note } : {}),
+      },
+      "user",
+    );
+    return { activationKey: activation.key, human: activation.human ?? null };
+  } catch (error) {
+    if (error instanceof GraphHumanAnswerError) {
+      throw new GraphAgentQuestionError(error.code, error.message);
+    }
+    throw error;
+  }
 }
 
 function rewindInvalid(message: string): never {

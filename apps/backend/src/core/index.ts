@@ -180,6 +180,8 @@ import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
+import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
+import { GraphRunAttention } from "./graph-run-attention.js";
 import { GraphRunService } from "./graph-run-service.js";
 import {
   assertNoOtherWorkflowWriting,
@@ -223,6 +225,8 @@ export class OrkestratorBackend {
   private readonly graphDescribeProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
   private readonly graphMock: GraphMockRuns;
+  /** Waiting graph runs in the sidebar: activity and attention (item 208). */
+  private readonly graphRunAttention: GraphRunAttention;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1152,6 +1156,13 @@ export class OrkestratorBackend {
     // Gates and merges are deterministic (item 206); mock runs use them too.
     this.graphRuns.executors.register(createGraphGateExecutor());
     this.graphRuns.executors.register(createGraphMergeExecutor());
+    // Human nodes (item 208): a person approves, edits or chooses; mock runs use it too.
+    this.graphRuns.executors.register(createGraphHumanExecutor());
+    context.graphHumanAnswers = new GraphHumanAnswers({
+      runs: this.graphRuns,
+      artifacts: graphArtifacts,
+    });
+    this.graphRunAttention = new GraphRunAttention(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
@@ -1738,6 +1749,14 @@ export class OrkestratorBackend {
     });
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
+
+    // Waiting runs light the sidebar again after a restart; runs in the background.
+    void this.graphRunAttention.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore graph run attention:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
     );
@@ -2362,6 +2381,7 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.graphRunAttention.stop();
     this.agentHumanPrompts.stop();
     // Non-recursive project-template watches: closing them never blocks.
     this.graphTemplates.shutdown();

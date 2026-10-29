@@ -81,6 +81,7 @@ import {
 import { checkGraphMockRunOptions } from "./mock-pins.js";
 import { GRAPH_ENFORCEMENT_TIERS } from "./template-model.js";
 import { GRAPH_AGENT_SESSION_FIELDS, checkGraphAgentSessionFields } from "./run-agent-session.js";
+import { checkGraphHumanWait } from "./run-human.js";
 import { GRAPH_ERROR_CAUSES } from "./types.js";
 
 /** Errors reported per guard call. */
@@ -633,6 +634,7 @@ const ACTIVATION_FIELDS = [
   "outputs",
   "outlet",
   "session",
+  "human",
   "policy",
   "enforcement",
   "enforcementReason",
@@ -693,6 +695,7 @@ function checkActivation(
     );
   }
   if (value.session !== undefined) checkSession(value.session, joinPath(path, "session"), errors);
+  if (value.human !== undefined) checkGraphHumanWait(value.human, joinPath(path, "human"), errors);
   if (value.policy !== undefined && !isNativeAgentExecutionPolicy(value.policy)) {
     errors.add(joinPath(path, "policy"), "type", "Expected a native agent execution policy");
   }

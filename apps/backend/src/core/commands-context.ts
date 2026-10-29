@@ -121,6 +121,8 @@ export type CommandContext = {
   graphDescribe?: import("./graph-describe-service.js").GraphDescribeService;
   /** Mock run launches and their retention (item 213; `graph_run_mock`). */
   graphMock?: import("./graph-mock-launch.js").GraphMockRuns;
+  /** Human node answers (item 208; `graph_run_answer`'s human-node form). */
+  graphHumanAnswers?: import("./graph-node-human.js").GraphHumanAnswers;
 };
 
 export type CommandHandler = (

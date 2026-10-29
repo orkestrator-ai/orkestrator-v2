@@ -1,9 +1,12 @@
-import type { BuildPipelineCodeRewindPreview } from "@orkestrator/protocol/build-pipeline";
 import type {
   GraphAgentAnswerKind,
   GraphAgentQuestion,
+  GraphHumanAnswerInput,
+  GraphHumanWait,
   GraphRun,
+  GraphRunPendingInteraction,
 } from "@orkestrator/protocol/graphs/run";
+import type { GraphRunCodeRewindPreview } from "@orkestrator/protocol/graphs/run-rewind";
 import type {
   GraphRunArtifactView,
   GraphRunGetResult,
@@ -11,11 +14,16 @@ import type {
   GraphRunTranscriptView,
 } from "@orkestrator/protocol/graphs/run-view";
 import { invoke } from "@/lib/native/backend";
+import {
+  previewGraphRunCodeRewind,
+  restartGraphRunActivation,
+  rewindGraphRunCode,
+} from "./graph-run-rewind";
 
 /**
  * Graph runs (item 211): list, read and control a run, read its artifacts and
- * its agent transcripts, and answer an agent's `ask_human` question (item
- * 204). Shapes are in `@orkestrator/protocol/graphs/run-view`. Every read is
+ * its agent transcripts, answer an agent's `ask_human` question (item 204)
+ * or a human node (item 208), and list what a run waits on a person for. Shapes are in `@orkestrator/protocol/graphs/run-view`. Every read is
  * a snapshot of the backend's run record, which stays the authority; a
  * refused call rejects with the backend's message.
  */
@@ -95,17 +103,41 @@ export function answerGraphRunQuestion(
   return invoke("graph_run_answer", { ...input });
 }
 
+export interface GraphRunHumanAnswerInput extends GraphHumanAnswerInput {
+  runId: string;
+  activationKey: string;
+}
+
+/**
+ * Answers a waiting human node (item 208): approve or reject (an `edit` form's
+ * approval may carry the edited `value`), or choose an option's `outlet`. A
+ * stale wait (another attempt, already answered), a value that fails its type
+ * or a mismatched decision is refused with the backend's message.
+ */
+export function answerGraphRunHumanNode(
+  input: GraphRunHumanAnswerInput,
+): Promise<{ activationKey: string; human: GraphHumanWait | null }> {
+  const { value, ...rest } = input;
+  return invoke("graph_run_answer", {
+    ...rest,
+    ...(Object.hasOwn(input, "value") ? { value } : {}),
+  });
+}
+
+/** What a run, or every live run of an environment, waits on a person for. */
+export function listGraphRunPendingInteractions(
+  target: { runId: string } | { environmentId: string },
+): Promise<GraphRunPendingInteraction[]> {
+  return invoke<GraphRunPendingInteraction[]>("graph_run_pending", { ...target });
+}
+
 // ---------------------------------------------------------------- restart and rewind
 
 /**
  * Restart and code rewind (item 210). The run view is built against this
- * interface. {@link graphRunRewindBackend} calls 210's commands
- * (`graph_run_restart {runId, activationKey, requestId?}` and
- * `graph_run_rewind_code {…, expectedHead}`, both answering
- * `{run, rewind, repeated}`; `graph_run_rewind_code_preview`) directly, so a
- * backend without them refuses the call and the view reports it. Once 210's
- * wrappers (`lib/backend/graph-run-rewind.ts`) are on this branch, point it
- * at them.
+ * interface so tests can pass their own; {@link graphRunRewindBackend} calls
+ * 210's wrappers in `graph-run-rewind.ts`, one request id per user action so
+ * a retried call is a no-op (`repeated`).
  */
 export interface GraphRunRewindBackend {
   /** Supersedes the activation and its lineage descendants and reruns it with the same inputs. */
@@ -116,18 +148,7 @@ export interface GraphRunRewindBackend {
   rewindCode(runId: string, activationKey: string, expectedHead: string): Promise<GraphRun>;
 }
 
-/**
- * A code rewind preview. Item 210 reuses `build-pipeline-code-rewind.ts`, so
- * the pipeline's preview shape is the expected one.
- */
-export type GraphRunCodeRewindPreview = BuildPipelineCodeRewindPreview;
-
-/** The run out of a `{run, …}` answer (210's `GraphRunRestartResult`, or a `changed` snapshot). */
-async function runFrom(command: string, args: Record<string, unknown>): Promise<GraphRun> {
-  const result = await invoke<{ run?: GraphRun }>(command, args);
-  if (!result?.run) throw new Error("The backend returned no run snapshot");
-  return result.run;
-}
+export type { GraphRunCodeRewindPreview };
 
 /** One id per user action, so a retried call is a no-op (`repeated`) on 210's backend. */
 function requestId(): string {
@@ -135,15 +156,16 @@ function requestId(): string {
 }
 
 export const graphRunRewindBackend: GraphRunRewindBackend = {
-  restart: (runId, activationKey) =>
-    runFrom("graph_run_restart", { runId, activationKey, requestId: requestId() }),
-  previewCodeRewind: (runId, activationKey) =>
-    invoke<GraphRunCodeRewindPreview>("graph_run_rewind_code_preview", { runId, activationKey }),
-  rewindCode: (runId, activationKey, expectedHead) =>
-    runFrom("graph_run_rewind_code", {
-      runId,
-      activationKey,
-      expectedHead,
-      requestId: requestId(),
-    }),
+  restart: async (runId, activationKey) =>
+    (await restartGraphRunActivation({ runId, activationKey, requestId: requestId() })).run,
+  previewCodeRewind: (runId, activationKey) => previewGraphRunCodeRewind({ runId, activationKey }),
+  rewindCode: async (runId, activationKey, expectedHead) =>
+    (
+      await rewindGraphRunCode({
+        runId,
+        activationKey,
+        expectedHead,
+        requestId: requestId(),
+      })
+    ).run,
 };

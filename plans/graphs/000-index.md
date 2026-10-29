@@ -69,7 +69,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 205 | [205-replication-and-collection.md](205-replication-and-collection.md) | 2 | in-progress | 204 | `replicate` over panel, lenses and samples (≤ 32); stable branch keys; collect policies; zip edges. |
 | 206 | [206-gate-merge-loop-failure.md](206-gate-merge-loop-failure.md) | 2 | in-progress | 104, 203 | Gates with skipped subtrees, deterministic merges (dedupe default), bounded loops with carried ports, retry and `onFailure`. |
 | 207 | [207-system-nodes.md](207-system-nodes.md) | 2 | in-progress | 201, 203 | `prepare-environment`, `run-validation-and-seal`, `push-branch`, `open-pull-request`, `wait-for-checks`, `update-ticket`, `notify`. |
-| 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | not-started | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
+| 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | in-progress | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
 | 209 | [209-guards-and-enforcement.md](209-guards-and-enforcement.md) | 2 | in-progress | 001, 106, 204 | Read-only guard on read/none nodes, remote-ref guard on every agent node, GitHub credential withheld, `minEnforcement` checks. |
 | 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | in-progress | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
 | 211 | [211-run-view.md](211-run-view.md) | 2 | in-progress | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |

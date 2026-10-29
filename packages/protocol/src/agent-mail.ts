@@ -371,7 +371,12 @@ export const AGENT_MAIL_NOTICE_TONES = ["success", "failure", "attention", "info
 export type AgentMailNoticeTone = (typeof AGENT_MAIL_NOTICE_TONES)[number];
 
 /** The kinds of work a notice can report on. */
-export const AGENT_MAIL_NOTICE_RESOURCES = ["agent-tab", "multi-review", "build-pipeline"] as const;
+export const AGENT_MAIL_NOTICE_RESOURCES = [
+  "agent-tab",
+  "multi-review",
+  "build-pipeline",
+  "graph-run",
+] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 
 const AGENT_MAIL_NOTICE_MAX_ID_LENGTH = 256;

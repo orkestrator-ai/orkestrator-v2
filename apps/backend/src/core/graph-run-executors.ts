@@ -77,6 +77,7 @@ import type {
   GraphActivationBaseline,
   GraphActivationSession,
   GraphGuardResult,
+  GraphHumanWait,
   GraphModelBinding,
   GraphRun,
   NodeActivation,
@@ -124,6 +125,8 @@ export interface GraphActivationFacts {
   baseline?: GraphActivationBaseline;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
+  /** Human nodes (item 208): the wait the activation keeps until a person answers. */
+  human?: GraphHumanWait;
   /** Usage since the previous report; added to the run's usage. */
   usage?: { tokens: number; cacheReadTokens?: number };
   /**

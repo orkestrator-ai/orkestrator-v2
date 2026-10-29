@@ -448,19 +448,14 @@ export function mergeAccountUsage(
 
 export function accountUsageFromLimits(
   limits: EngineRateLimitWindow[],
-  credits?: import("./engine/types.js").EngineCreditSnapshot,
 ): EngineAccountUsageWindow[] {
-  const windows: EngineAccountUsageWindow[] = limits.map((limit) => ({
+  return limits.map((limit) => ({
     window: limit.slot,
     label: accountRateLimitLabel(limit),
     ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
     ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
     ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
   }));
-  if (credits?.balance !== undefined && credits.balance.trim().length > 0) {
-    windows.push({ window: "credits", label: "Credits", creditBalance: credits.balance });
-  }
-  return windows;
 }
 
 function accountRateLimitLabel(limit: EngineRateLimitWindow): string {

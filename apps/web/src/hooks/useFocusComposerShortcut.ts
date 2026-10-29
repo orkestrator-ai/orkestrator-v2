@@ -1,4 +1,5 @@
 import { type RefObject, useEffect } from "react";
+import { isAgentShortcutInScope } from "./agent-shortcut-scope";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 
 interface UseFocusComposerShortcutOptions {
@@ -9,27 +10,12 @@ interface UseFocusComposerShortcutOptions {
   scopeRef: RefObject<HTMLElement | null>;
 }
 
-function isUnfocusedTarget(target: EventTarget | null): boolean {
-  // Keydown lands on the window, document or body when nothing has focus.
-  return (
-    !(target instanceof Node) ||
-    target === document ||
-    target === document.body ||
-    target === document.documentElement
-  );
-}
-
-function isOutsideModalOpen(pane: Element | null): boolean {
-  for (const modal of document.querySelectorAll('[aria-modal="true"]')) {
-    if (!pane || !modal.contains(pane)) return true;
-  }
-  return false;
-}
-
 /** ⌘I on macOS, Ctrl+I elsewhere; either modifier is accepted. */
 export function isFocusComposerShortcut(event: KeyboardEvent): boolean {
+  // Preserve logical Latin shortcuts (e.g. Dvorak copy at physical KeyI).
+  // Fall back to the physical key only for layouts without a Latin letter.
   return (
-    (event.key.toLowerCase() === "i" || event.code === "KeyI") &&
+    (event.key.toLowerCase() === "i" || (!/^[a-z]$/i.test(event.key) && event.code === "KeyI")) &&
     (event.metaKey || event.ctrlKey) &&
     !event.altKey &&
     !event.shiftKey
@@ -58,13 +44,7 @@ export function useFocusComposerShortcut({
         return;
       }
 
-      const scope = scopeRef.current;
-      // PaneLeafContainer and pane-less hosts mark the full agent surface.
-      const pane = scope?.closest("[data-pane-leaf], [data-agent-scope]") ?? scope;
-      const target = event.target;
-      const insidePane = target instanceof Node && Boolean(pane?.contains(target));
-      const unfocused = isUnfocusedTarget(target) && !isOutsideModalOpen(pane);
-      if (!insidePane && !unfocused) return;
+      if (!isAgentShortcutInScope(event.target, scopeRef.current)) return;
 
       event.preventDefault();
       if (!event.repeat) inputRef.current?.focus();

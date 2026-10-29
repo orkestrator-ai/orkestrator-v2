@@ -44,6 +44,7 @@ import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeedback";
 import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
+import { useFocusComposerShortcut } from "@/hooks/useFocusComposerShortcut";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { getNativeAgentModelCatalog } from "@/lib/backend";
@@ -332,6 +333,8 @@ export function NativeAgentResumePlatformDialog({
 }
 
 export function UnassignedNativeAgentComposer({
+  isActive = true,
+  ownsGlobalShortcuts,
   tabId,
   environmentId,
   containerId,
@@ -353,6 +356,8 @@ export function UnassignedNativeAgentComposer({
   initialExecutionProfileId,
   offerApprovalModes = true,
 }: {
+  isActive?: boolean;
+  ownsGlobalShortcuts?: boolean;
   tabId: string;
   environmentId: string;
   containerId?: string;
@@ -847,7 +852,12 @@ export function UnassignedNativeAgentComposer({
     refresh: fileSearch.refresh,
     mentionMenuOpen: fileMentionMenuOpen,
   });
-  useComposerMountFocus(inputRef);
+  useComposerMountFocus(inputRef, isActive);
+  useFocusComposerShortcut({
+    isActive: ownsGlobalShortcuts ?? isActive,
+    inputRef,
+    scopeRef: inputContainerRef,
+  });
 
   // Annotations (a design context, a quoted excerpt) join the first prompt the
   // same way the locked composer adds them to every later one.

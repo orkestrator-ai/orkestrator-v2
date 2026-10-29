@@ -2,14 +2,20 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
-import { useFocusComposerShortcut } from "./useFocusComposerShortcut";
+import { isFocusComposerShortcut, useFocusComposerShortcut } from "./useFocusComposerShortcut";
 
 function Harness({
   isActive = true,
   modalOpen = false,
+  pane = true,
+  agentScope = false,
+  attachRef = true,
 }: {
   isActive?: boolean;
   modalOpen?: boolean;
+  pane?: boolean;
+  agentScope?: boolean;
+  attachRef?: boolean;
 }) {
   const composerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -19,9 +25,9 @@ function Harness({
   useFocusComposerShortcut({ isActive, inputRef, scopeRef: composerRef });
   return (
     <>
-      <div data-pane-leaf="">
+      <div data-pane-leaf={pane ? "" : undefined} data-agent-scope={agentScope ? "" : undefined}>
         <button type="button">Transcript action</button>
-        <div ref={composerRef}>
+        <div ref={attachRef ? composerRef : undefined}>
           <textarea ref={textareaRef} aria-label="Composer" />
         </div>
       </div>
@@ -107,4 +113,88 @@ describe("useFocusComposerShortcut", () => {
     expect(pressCmdI(document.body, { altKey: true })).toBe(true);
     expect(document.activeElement).not.toBe(screen.getByLabelText("Composer"));
   });
+});
+
+for (const [key, code, matches] of [
+  ["c", "KeyI", false],
+  ["u", "KeyI", false],
+  ["ш", "KeyI", true],
+  ["i", "KeyC", true],
+  ["I", "KeyC", true],
+] as const) {
+  test(`layout key ${key} at ${code} matches: ${matches}`, () => {
+    const event = new KeyboardEvent("keydown", { key, code, ctrlKey: true });
+    expect(isFocusComposerShortcut(event)).toBe(matches);
+    render(<Harness />);
+    const button = screen.getByRole("button", { name: "Transcript action" });
+    button.focus();
+    expect(pressCmdI(button, { key, code })).toBe(!matches);
+    expect(document.activeElement).toBe(matches ? screen.getByLabelText("Composer") : button);
+  });
+}
+
+test("prevents auto-repeat without moving focus again", () => {
+  render(<Harness />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  button.focus();
+  expect(pressCmdI(button, { repeat: true })).toBe(false);
+  expect(document.activeElement).toBe(button);
+});
+
+test("leaves a previously consumed chord alone", () => {
+  render(<Harness />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  button.focus();
+  const event = new KeyboardEvent("keydown", {
+    key: "i",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  event.preventDefault();
+  button.dispatchEvent(event);
+  expect(document.activeElement).toBe(button);
+});
+
+test("ignores IME composition", () => {
+  render(<Harness />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  button.focus();
+  expect(pressCmdI(button, { isComposing: true })).toBe(true);
+  expect(document.activeElement).toBe(button);
+});
+
+test("focuses from a sibling control in a pane-less agent scope", () => {
+  render(<Harness pane={false} agentScope />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  expect(pressCmdI(button)).toBe(false);
+  expect(document.activeElement).toBe(screen.getByLabelText("Composer"));
+});
+
+test("falls back to the composer when no scope marker exists", () => {
+  render(<Harness pane={false} />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  button.focus();
+  expect(pressCmdI(button)).toBe(true);
+  expect(document.activeElement).toBe(button);
+  expect(pressCmdI(screen.getByLabelText("Composer"))).toBe(false);
+  expect(document.activeElement).toBe(screen.getByLabelText("Composer"));
+});
+
+test("does not claim a focused target with a null scope ref", () => {
+  render(<Harness attachRef={false} />);
+  const button = screen.getByRole("button", { name: "Transcript action" });
+  button.focus();
+  expect(pressCmdI(button)).toBe(true);
+  expect(document.activeElement).toBe(button);
+});
+
+test("unregisters when inactive and on unmount", () => {
+  const view = render(<Harness />);
+  view.rerender(<Harness isActive={false} />);
+  expect(pressCmdI(document.body)).toBe(true);
+  view.rerender(<Harness />);
+  expect(pressCmdI(document.body)).toBe(false);
+  view.unmount();
+  expect(pressCmdI(document.body)).toBe(true);
 });

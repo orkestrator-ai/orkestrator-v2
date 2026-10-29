@@ -314,13 +314,25 @@ What differs on the graph engine:
   structured bespoke Fix does. The pull request is the `open-pull-request`
   system node after a `describe-pr` agent; only a complete Fix result or a clean
   report reaches them, the same rule as above.
-- Step controls (restart, stop, pause, resume, nudge, retry) are refused while
-  the run is live; they belong to the graph run view. The manual Fix
-  (`address`, custom Fix) waits until the run settles, then runs as the
-  ordinary interactive handoff, and its completion can still queue the
-  automatic PR.
+- Step controls (restart, stop, pause, resume, nudge, retry) are refused on a
+  graph-engine review, live or settled, and the review tabs do not offer them;
+  they belong to the graph run view, which the tab links to ("Open graph
+  run"). The manual Fix (`address`, custom Fix) waits until the run settles,
+  then runs as the ordinary interactive handoff, and its completion can still
+  queue the automatic PR. The status texts (`get_multi_review`, status wakes,
+  the tab's PR step) say the graph run's pull request step opened the pull
+  request, not a PR session.
 - Validation progress (`validationRun`) is not projected: the graph's
-  `package` system node runs and seals the plan in one activation.
+  `package` system node runs and seals the plan in one activation, and its
+  progress shows in the graph run view.
+- Between two saves of the run, the record shows what the bespoke engine
+  would at that point: a consolidation with findings under auto-fix reads
+  `fixing` (never a transient `ready`), and an authorized pull request reads
+  `pending` from the save that authorizes it, so no status wake reports an end
+  the bespoke engine never shows.
+
+Parity evidence for each Phase 3 checklist item, with the test names, is
+recorded in `plans/graphs/301-multi-review-on-graph-runtime.md`.
 
 ## Performance boundary and verification
 

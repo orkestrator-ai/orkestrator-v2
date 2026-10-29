@@ -891,6 +891,28 @@ what the graph runtime gained for it.
   the bespoke wording (`review-consolidation-provenance.ts`). The port's own
   mode is kept, so `accountForAll` is still stricter. Failed reviewers stay
   out of the evidence, as in the bespoke prompt.
+- **A consolidation keeps every source finding.** Its `review-report@1`
+  slot raises the report's issue and coverage-gap caps to the totals of its
+  sources (`reviewLimits` on the slot context and
+  `GraphTypeValidationContext`), as the bespoke consolidation does; the
+  stored artifact is checked with the same limits.
+- **Reports read as Multi Review accepts them.** Review reports the
+  consolidation built-in reads, and those the projection stores, go through
+  `safeParseStructuredReviewReport`, which drops the provider schema's `null`
+  placeholders.
+- **The sealed package copy.** `run-validation-and-seal` seals a copy of the
+  generated package in the run's artifact directory, while the descriptor
+  keeps the path it was generated at. The built-in prompts that read a
+  `review-package@2` now require the same SHA-256 and size and name the
+  verified copy (before, every graph reviewer refused the package).
+- **Sealed-file verification permits.** `GraphArtifactStore.verify(run,
+  artifact, { permit: <consumer node> })` lets a node's branches share one
+  hash of a reference artifact's sealed file (single-flight for concurrent
+  starts), so a reviewer panel verifies the shared package once and
+  consolidation, another consumer, once more: two verifications per
+  generation, the bespoke budget. Permits live in memory only, expire after
+  30 minutes, and are revoked by any failed verification of the artifact and
+  by a restart in the run.
 - **`targetBranch` and `reviewInstruction` parameters.** A string parameter
   `targetBranch` in an agent node's scope names the branch its prompt reviews
   against, ahead of the environment's base branch (`graph-agent-host.ts`). A

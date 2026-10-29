@@ -7,7 +7,7 @@ status: in-progress
 depends_on: []
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
-branch: "graphs-phase1-protocol"
+branch: "implement-graph-tasks-17b1f79c6e44-r1"
 pr: ""
 updated: 2026-10-29
 ---

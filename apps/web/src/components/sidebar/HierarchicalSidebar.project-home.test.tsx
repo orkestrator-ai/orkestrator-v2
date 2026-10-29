@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
@@ -145,3 +145,40 @@ test("a project row stays highlighted while its home is shown, on the command no
     stopSync();
   }
 });
+
+for (const grouping of ["machine", "repository"] as const) {
+  test(`bound project icons replace machine homes in ${grouping} grouping`, async () => {
+    const icon = "data:image/png;base64,YQ==";
+    installDesktopFake({
+      list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
+      datasets: { leaf: { projects: [], environments: {} } },
+      respondPortal: (command) =>
+        command === "get_projects"
+          ? [{ ...localProject, icon }]
+          : command === "get_environment_snapshots" || command === "get_environments"
+            ? []
+            : undefined,
+    });
+    useProjectStore.getState().setProjects([{ ...localProject, icon }]);
+    useEnvironmentStore.getState().setEnvironments([]);
+    useMachineViewStore.setState({
+      grouping,
+      machineFilter: "all",
+      collapsedMachines: [],
+      collapsedProjectKeys: [],
+      collapsedFolderKeys: [],
+      revealedProject: null,
+      recentKeys: [],
+    });
+    render(
+      <FederationProvider>
+        <HierarchicalSidebar />
+      </FederationProvider>,
+    );
+    const image = await screen.findByTestId("project-icon");
+    expect(image.getAttribute("src")).toBe(icon);
+    const row = image.closest("button")!;
+    expect(row.textContent).toContain("local-app");
+    expect(within(row).queryByTestId("machine-home-icon")).toBeNull();
+  });
+}

@@ -27,6 +27,8 @@ interface ProjectState {
   addProject: (project: Project) => void;
   removeProject: (projectId: string) => void;
   updateProject: (projectId: string, updates: Partial<Project>) => void;
+  /** Apply an authoritative record, including deleted optional keys. */
+  replaceProject: (project: Project) => void;
   /** Reorder projects based on the new order of IDs */
   reorderProjects: (projectIds: string[]) => void;
   /** Apply a new order together with the folder memberships that changed. */
@@ -79,6 +81,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       projects: sortByOrder(
         state.projects.map((p) => (p.id === projectId ? { ...p, ...updates } : p)),
       ),
+    }));
+  },
+
+  replaceProject: (project) => {
+    advanceProjectMutationVersion();
+    set((state) => ({
+      projects: sortByOrder(state.projects.map((p) => (p.id === project.id ? project : p))),
     }));
   },
 

@@ -61,7 +61,7 @@ export function useProjects() {
   const setProjects = useProjectStore((state) => state.setProjects);
   const addProjectToStore = useProjectStore((state) => state.addProject);
   const removeProjectFromStore = useProjectStore((state) => state.removeProject);
-  const updateProjectInStore = useProjectStore((state) => state.updateProject);
+  const updateProjectInStore = useProjectStore((state) => state.replaceProject);
   const reorderProjectsInStore = useProjectStore((state) => state.reorderProjects);
   const arrangeProjectsInStore = useProjectStore((state) => state.arrangeProjects);
   const setLoading = useProjectStore((state) => state.setLoading);
@@ -245,7 +245,8 @@ export function useProjects() {
           localPath: project.localPath,
           ...(project.icon !== undefined ? { icon: project.icon } : {}),
         });
-        updateProjectInStore(project.id, updated);
+        // Use the authoritative record so removed optional fields disappear locally.
+        updateProjectInStore(updated);
         return updated;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to update project";

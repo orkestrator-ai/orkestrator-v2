@@ -567,6 +567,15 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
+  test("renders a local project icon outside federation", () => {
+    const icon = "data:image/png;base64,YQ==";
+    projectsValue = [{ ...project, icon }];
+    render(<HierarchicalSidebar />);
+    const row = screen.getByRole("button", { name: /^Project One/ });
+    expect(within(row).getByTestId("project-icon").getAttribute("src")).toBe(icon);
+    expect(within(row).queryByTestId("machine-home-icon")).toBeNull();
+  });
+
   test("shows a project and environment search bar under the host switcher", () => {
     render(<HierarchicalSidebar />);
     expect(screen.getByRole("button", { name: "Search projects and environments" })).toBeTruthy();

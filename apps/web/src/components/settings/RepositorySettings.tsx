@@ -16,7 +16,7 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { isGitRemoteUrl, withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +83,8 @@ export function RepositorySettings({
   const [gitUrl, setGitUrl] = useState(project.gitUrl);
   const [localPath, setLocalPath] = useState(project.localPath || "");
   const [icon, setIcon] = useState<string | null>(project.icon ?? null);
+  const iconConversionGeneration = useRef(0);
+  const [isConvertingIcon, setIsConvertingIcon] = useState(false);
   const iconInputRef = useRef<HTMLInputElement>(null);
   const [projectNameError, setProjectNameError] = useState<string | null>(null);
   const [isReadingRemote, setIsReadingRemote] = useState(false);
@@ -116,6 +118,7 @@ export function RepositorySettings({
   const [formFor, setFormFor] = useState(formResetKey);
   if (formFor !== formResetKey) {
     setFormFor(formResetKey);
+    setIsConvertingIcon(false);
     if (formResetKey !== null) {
       setIsReadingRemote(false);
       // Reset project fields
@@ -141,6 +144,19 @@ export function RepositorySettings({
       remoteReadGeneration.current += 1;
     };
   }, [open, project.id, project.name, project.gitUrl, project.localPath]);
+
+  // Fence resets and unmounts before another image callback can run.
+  useLayoutEffect(
+    () => () => {
+      iconConversionGeneration.current += 1;
+    },
+    [formResetKey],
+  );
+
+  const abandonIconConversion = () => {
+    iconConversionGeneration.current += 1;
+    setIsConvertingIcon(false);
+  };
 
   // Validate project name
   const validateProjectName = (value: string): boolean => {
@@ -201,12 +217,18 @@ export function RepositorySettings({
     const file = event.target.files?.[0];
     // The same file chosen again after Remove must fire another change.
     event.target.value = "";
+    const generation = ++iconConversionGeneration.current;
+    setIsConvertingIcon(Boolean(file));
     if (!file) return;
     try {
-      setIcon(await projectIconFromFile(file));
+      const converted = await projectIconFromFile(file);
+      if (generation === iconConversionGeneration.current) setIcon(converted);
     } catch (err) {
+      if (generation !== iconConversionGeneration.current) return;
       const message = err instanceof Error ? err.message : "The image could not be used";
       toast.error("Could not use that image", { description: message });
+    } finally {
+      if (generation === iconConversionGeneration.current) setIsConvertingIcon(false);
     }
   };
 
@@ -334,7 +356,7 @@ export function RepositorySettings({
   }, [portMappings]);
 
   const handleSave = async () => {
-    if (isReadingRemote) return;
+    if (isReadingRemote || isConvertingIcon) return;
     // Validate project name
     if (!validateProjectName(projectName)) {
       return;
@@ -416,6 +438,7 @@ export function RepositorySettings({
   };
 
   const handleCancel = () => {
+    abandonIconConversion();
     remoteReadGeneration.current += 1;
     setIsReadingRemote(false);
     // Reset project fields
@@ -509,12 +532,15 @@ export function RepositorySettings({
                   <ImageUp className="mr-2 h-4 w-4" />
                   {icon ? "Change Image…" : "Choose Image…"}
                 </Button>
-                {icon && (
+                {(icon || isConvertingIcon) && (
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => setIcon(null)}
+                    onClick={() => {
+                      abandonIconConversion();
+                      setIcon(null);
+                    }}
                     disabled={isSaving}
                   >
                     Remove
@@ -828,7 +854,10 @@ export function RepositorySettings({
   return (
     <FullscreenSettingsLayout
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) abandonIconConversion();
+        onOpenChange(nextOpen);
+      }}
       title="Repository Settings"
       menuItems={repoMenuItems}
       headerActions={
@@ -836,7 +865,10 @@ export function RepositorySettings({
           <Button variant="outline" onClick={handleCancel}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || isReadingRemote || hasErrors}>
+          <Button
+            onClick={handleSave}
+            disabled={isSaving || isReadingRemote || isConvertingIcon || hasErrors}
+          >
             {isSaving ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

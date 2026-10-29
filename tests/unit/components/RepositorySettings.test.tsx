@@ -1,5 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import * as realProjectIconImage from "@/lib/project-icon-image";
+const realProjectIconImageSnapshot = { ...realProjectIconImage };
 import * as realSelect from "@/components/ui/select";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import type { OpenCodeModelCatalogSnapshot } from "@/lib/backend";
@@ -139,6 +141,7 @@ mock.module("@/components/ui/select", () => ({
 }));
 
 afterAll(() => {
+  mock.module("@/lib/project-icon-image", () => realProjectIconImageSnapshot);
   mock.module("@/components/ui/select", () => realSelectSnapshot);
 });
 
@@ -281,7 +284,8 @@ describe("RepositorySettings", () => {
     mockGetCachedOpenCodeModelCatalog.mockReset();
     mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
     mockOpenDialog.mockClear();
-    mockProjectIconFromFile.mockClear();
+    mockProjectIconFromFile.mockReset();
+    mockProjectIconFromFile.mockImplementation(async () => PICKED_ICON);
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -711,6 +715,99 @@ describe("RepositorySettings", () => {
       await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
       expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
         expect.objectContaining({ id: "project-1", icon: PICKED_ICON }),
+      );
+    });
+
+    test("a newer selection wins when conversions finish out of order", async () => {
+      const first = Promise.withResolvers<string>();
+      const second = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => first.promise);
+      mockProjectIconFromFile.mockImplementationOnce(() => second.promise);
+      renderSettings({ section: "general" });
+      const choose = () =>
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+      choose();
+      choose();
+      const latestIcon = "data:image/webp;base64,YQ==";
+      await act(async () => second.resolve(latestIcon));
+      expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+      await act(async () => first.resolve(PICKED_ICON));
+      expect(screen.getByTestId("project-icon").getAttribute("src")).toBe(latestIcon);
+    });
+
+    test("an obsolete conversion cannot report errors or finish the current selection", async () => {
+      const first = Promise.withResolvers<string>();
+      const second = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => first.promise);
+      mockProjectIconFromFile.mockImplementationOnce(() => second.promise);
+      renderSettings({ section: "general" });
+      for (let i = 0; i < 2; i++)
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+      await act(async () => first.reject(new Error("obsolete")));
+      expect(mockToastError).not.toHaveBeenCalled();
+      expect(getSaveButton().hasAttribute("disabled")).toBe(true);
+      await act(async () => second.resolve(PICKED_ICON));
+      expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+    });
+
+    for (const action of ["remove", "cancel", "empty selection", "reset", "close"] as const) {
+      test(`${action} abandons a pending icon conversion`, async () => {
+        const conversion = Promise.withResolvers<string>();
+        mockProjectIconFromFile.mockImplementationOnce(() => conversion.promise);
+        const view = renderSettings({ section: "general", project: { icon: PICKED_ICON } });
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+        const resetIcon = "data:image/webp;base64,YQ==";
+        if (action === "remove") fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+        if (action === "cancel") fireEvent.click(getCancelButton());
+        if (action === "empty selection")
+          fireEvent.change(screen.getByLabelText("Icon"), { target: { files: [] } });
+        if (action === "reset" || action === "close") {
+          view.rerender(
+            <RepositorySettings
+              project={{ ...view.project, icon: resetIcon }}
+              open={action !== "close"}
+              onOpenChange={view.onOpenChange}
+            />,
+          );
+        }
+        await act(async () => conversion.resolve("data:image/png;base64,Yg=="));
+        if (action === "close") {
+          view.rerender(
+            <RepositorySettings project={view.project} open onOpenChange={view.onOpenChange} />,
+          );
+        }
+        const image = screen.queryByTestId("project-icon");
+        expect(image?.getAttribute("src") ?? null).toBe(
+          action === "remove" ? null : action === "reset" ? resetIcon : PICKED_ICON,
+        );
+        expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+      });
+    }
+
+    test("Save waits until conversion settles and then saves the converted icon", async () => {
+      const conversion = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => conversion.promise);
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+      fireEvent.change(screen.getByLabelText("Icon"), {
+        target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+      });
+      expect(getSaveButton().hasAttribute("disabled")).toBe(true);
+      fireEvent.click(getSaveButton());
+      expect(mockUpdateRepositoryConfig).not.toHaveBeenCalled();
+      expect(onUpdateProject).not.toHaveBeenCalled();
+      await act(async () => conversion.resolve(PICKED_ICON));
+      fireEvent.click(getSaveButton());
+      await waitFor(() =>
+        expect(onUpdateProject).toHaveBeenCalledWith(
+          expect.objectContaining({ icon: PICKED_ICON }),
+        ),
       );
     });
 

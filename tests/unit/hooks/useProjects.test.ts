@@ -411,6 +411,39 @@ describe("useProjects", () => {
     expect(result.current.projects[0]).toEqual(updatedProject);
   });
 
+  test("clearing an icon survives a resource snapshot begun before the update response", async () => {
+    const original = createMockProject({ id: "project-1", icon: "data:image/png;base64,YQ==" });
+    const { icon: _icon, ...cleared } = original;
+    mockGetProjects.mockResolvedValue([original]);
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    const update = Promise.withResolvers<Project>();
+    const snapshot = Promise.withResolvers<Project[]>();
+    mockUpdateProject.mockImplementationOnce(() => update.promise);
+    mockGetProjects.mockImplementationOnce(() => snapshot.promise);
+    let saving!: Promise<Project>;
+    act(() => {
+      saving = result.current.updateProject({ ...original, icon: null });
+    });
+    act(() => dispatchResourceChange({ resource: "project", id: original.id, revision: 1 }));
+    await waitFor(() => expect(mockGetProjects).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      update.resolve(cleared);
+      await saving;
+    });
+    expect(mockUpdateProject).toHaveBeenCalledWith(
+      original.id,
+      expect.objectContaining({ icon: null }),
+    );
+    expect(result.current.projects[0]).toEqual(cleared);
+    expect("icon" in result.current.projects[0]!).toBe(false);
+    await act(async () => {
+      snapshot.resolve([original]);
+      await snapshot.promise;
+    });
+    expect(useProjectStore.getState().projects[0]).toEqual(cleared);
+  });
+
   test("updateProject forwards a changed Git URL", async () => {
     const existingProject = createMockProject({
       id: "project-1",

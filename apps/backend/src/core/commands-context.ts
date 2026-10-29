@@ -27,7 +27,7 @@ export type CommandContext = {
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
   webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
   /** Transcript artifacts: durable revisions, receipts and publications. */
-  transcriptArtifacts?: import("./transcript-artifacts/service.js").TranscriptArtifactService;
+  transcriptArtifacts?: import("./transcript-artifacts/index.js").TranscriptArtifactService;
   /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
   webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
   storage: StorageService;
@@ -87,11 +87,11 @@ export type CommandContext = {
   /** Shell prompts waiting on the user, from every detector (human-prompt-registry.ts). */
   humanPrompts?: import("./human-prompt-registry.js").HumanPromptRegistry;
   /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
-  nodes?: import("./nodes/node-service.js").NodeService;
+  nodes?: import("./nodes/index.js").NodeService;
   /** Portal read model, routing and workspaces (command node); client grants (leaf). */
-  nodePortal?: import("./nodes/node-portal.js").NodePortal;
+  nodePortal?: import("./nodes/index.js").NodePortal;
   /** Leaf mail, the outbox and user-approved action requests. */
-  nodeCoordination?: import("./nodes/node-coordination.js").NodeCoordination;
+  nodeCoordination?: import("./nodes/index.js").NodeCoordination;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;
@@ -108,7 +108,7 @@ export type CommandContext = {
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
   drainAgentMail?: () => Promise<void>;
   /** Durable, backend-timed scheduled jobs (docs/architecture/scheduled-jobs.md). */
-  scheduledJobs?: import("./scheduled-jobs/service.js").ScheduledJobService;
+  scheduledJobs?: import("./scheduled-jobs/index.js").ScheduledJobService;
   /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
 };

@@ -182,6 +182,29 @@ The passing logged runner discarded its detailed output. The known native
 branch-suggestion failures remain unrepaired; no unrelated implementation,
 assertion, deadline or skip was changed.
 
+## Remote project-search review recurrence — 2026-10-28
+
+Preparation at `8ac47666e` repeated the mobile waiting-group overflow failure
+at line 471 (`scrollTop` 704 instead of zero at five seconds). The recorded
+`mise run test:browser` used nine workers alongside the default repository
+suite: 920 passed, 105 skipped, nine failed (490.5 seconds). Six other failures
+were the search assertions repaired in this change, and two were native branch
+suggestions. Evidence is `validation-05.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-567e75fe-4f47-4151-9031-8f6c94a373ce/`.
+
+After the search fixes, the exact browser command was rerun through
+`test:logged`: 930 passed, 105 skipped, three unrelated failures (565.0 seconds).
+All tool-group cases passed in that aggregate. The complete unchanged owner
+also passed alone (exit 0, 79.3 seconds):
+
+```sh
+mise run test:logged -- --name tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/search-review-tool-group
+```
+
+The exact aggregate rerun's evidence is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ciI5We/review-repair-browser.log.gz`.
+No tool-group implementation, assertion, deadline, or skip changed. This case
+remains open; the aggregate cause is unproven.
 
 ## Looped Review retirement repair validation — 2026-10-29
 

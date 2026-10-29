@@ -30,6 +30,7 @@ unless noted:
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
+| Run view (211) | `run-view.ts`; backend `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts`; web `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` | The `graph-run` tab: a run on the shared flow graph with an inspector and controls, rehydrated from revisioned snapshots (below). |
 
 ## The Graphs designer (items 110 and 212)
 
@@ -249,6 +250,98 @@ loop while connecting). The real-stack paths are
 `graph-designer-editing.spec.ts` (212: the design bake-off built from a blank
 canvas, taint acknowledged, compiled clean, saved, rehydrated after a reload,
 and a lost save race saved as a copy), both in the browser suite.
+
+## The run view (item 211)
+
+**Opening it.** A `graph-run` tab shows one run ("Graph run", or the run's
+name, in the tab chrome; D17). The designer lists the environment's runs under
+its library (`GraphRunsList`); a row calls
+`createTab("graph-run", { graphRun: { runId, title } })`, and there is one tab
+per run (`openGraphRunTab`, `components/graph-run/graph-run-open-tab.ts`).
+Item 214 adds the launch entry points. The pane layout keeps only
+`TabInfo.graphRunData = { runId, title? }`; the component is lazy-loaded from
+`PaneLeafContainer`.
+
+**Reads and rehydration.** The view reads only snapshots (invariant 1). The
+commands, with shapes in `@orkestrator/protocol/graphs/run-view`:
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `graph_runs_list` | `{environmentId}` | `GraphRunSummary[]`, newest first, at most 200 |
+| `graph_run_get` | `{runId, knownRevision?}` | `{status: "changed", run}` or `{status: "unchanged", revision}` |
+| `graph_run_cancel`, `graph_run_pause`, `graph_run_resume` | `{runId}` | `{status: "changed", run}` |
+| `graph_run_retry`, `graph_run_skip` | `{runId, activationKey}` | `{status: "changed", run}` |
+| `graph_run_artifact` | `{runId, artifactId}` | the envelope; the value inline up to 512 KiB (else `valueOmitted: "too-large"`); a reference artifact's file metadata and descriptor, never the file |
+| `graph_run_transcript` | `{runId, activationKey, fromIndex?, maxBytes?}` | one window (default 2 MiB, at most 4 MiB) of the activation's stored transcript, or `none` |
+| `graph_run_answer` | item 204 | answers an agent's `ask_human` question |
+
+Refusals throw `GraphRunServiceError` (`invalid-request`, `not-found`,
+`invalid-state`, `disabled`). Snapshots go through `graphRunViewSnapshot`,
+which drops the runtime's own repair and continuation prompts.
+`stores/graphRunStore.ts` re-reads a run on mount, when the tab becomes active,
+on `graph-run` resource changes naming it, on resource resyncs and on view
+safety checks (the gap path), passing the revision it holds; it applies a
+snapshot only when its revision is newer, coalesces a burst of change events
+into one read in flight plus one after it, keeps the last snapshot when a
+refresh fails, and shows a deleted run as gone. Unmounting or closing the tab
+sends nothing. Artifacts (newest 200) and transcripts (newest 32 activations)
+are cached with bounds.
+
+**Projection.** `graphRunFlowModel(plan, run, {expandedAttempts?})`
+(`components/graph-run/graph-run-flow.ts`) feeds the shared `FlowGraph` (D16)
+through `GraphRunFlowGraph`, with the build pipeline's column layout. A flow
+node is a node position (plan node, loop iteration, branch; id
+`node#iter=N[#branch=K]`), the run's inputs, or a previous attempt. Columns are
+the longest path over the positions: the branches of a replicated node share a
+column, and each loop iteration unrolls to the right of the last (a carry feeds
+the next iteration; the next iteration is drawn once entered). Positions not
+reached are faded (`placeholder`), "ahead" while the run is live and "not
+reached" after it ended. A gate or human node shows the outlet it took, edges
+out of the other outlets stay pending (`untaken`), and nodes behind them show
+as skipped. An `awaiting-human` activation is highlighted "waiting for you",
+the run header shows a banner, and the node is selected by default.
+Activations a rewind superseded collapse into one "Previous attempt" node per
+rewind, in the column of the node it restarted; expanded (the flow view
+store's `expandedAttempts`), its activations follow in their own columns,
+greyed. Retries stay on one position; the face shows the newest attempt and
+the inspector can show the earlier ones.
+
+**Inspector** (`GraphRunInspector`): Details and Transcript views. Details
+holds the agent's `ask_human` question with `GraphQuestionAnswerForm` (choices,
+free text, decline; reusable by item 208's human nodes), the human node slot
+(`GraphHumanNodePanel`, which item 208 fills with approve, edit and choose),
+the error and its cause, the profile, the enforcement tier actually applied and
+`enforcementReason`, the sandbox policy and turn mode, guard results with their
+paths, the session's agent, tokens and times, provisional `report_progress`
+items, and the output and input artifacts (`GraphArtifactCard`), rendered by
+type: a built-in formatter (a review report in the review view), else the
+type's markdown template, else its summary fields, else JSON. The Transcript
+view (`GraphActivationTranscript`) renders an agent activation's stored
+transcript with the build pipeline's stage-transcript stack
+(`toPipelineTranscript`, `VirtualizedMessageList`, `NativeMessage`).
+
+**Transcripts.** The agent executor's `captureTranscript` dependency
+(`graph-run-transcripts.ts`, wired in `index.ts`) stores each activation's
+provider messages in the build pipeline's content-addressed transcript store,
+owner `graph-run:<run id>`, one session per activation key, and records the
+`PipelineTranscriptReference` on the activation's session. It captures when a
+turn settles and at most every 15 s while it runs, only when the content
+changed, and never fails an activation. The manifest commits before the run
+record names it; the orphan sweep counts existing graph runs as live owners,
+and deleting a run with its environment deletes its transcripts.
+
+**Actions** (`graph-run-actions.ts`, the same list on the faces' context menus
+and in the inspector): Retry (a failed position of a live run, as a new
+attempt; `graph_run_retry` records a user `restart` rewind over the lineage
+descendants and the never-started markers derived from the failure), Restart
+from here and Rewind code to here… (item 210's backend, through
+`GraphRunRewindBackend` in `lib/backend/graph-runs.ts`; the rewind opens a
+preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
+`ready` position, held back by a pause, a workspace lock or the run's limits),
+Open session (the agent's provider session in a native tab that refuses to
+start a fresh one), and the run-wide Pause, Resume and Cancel (with a
+confirmation). Mock runs are labelled "Mock run" in the header and "mock" in
+the list.
 
 ## Canvas library decision (spike, 2026-10-29)
 

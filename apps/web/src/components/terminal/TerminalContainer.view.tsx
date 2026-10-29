@@ -40,6 +40,7 @@ import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { isDesignFilePath, openDesignFile } from "@/components/design/design-open-file";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
+import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
@@ -1279,6 +1280,19 @@ export function TerminalContainer({
           addTab,
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });
+
+      if (type === "graph-run") {
+        if (!options?.graphRun) return false;
+        return openGraphRunTab({
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          run: options.graphRun,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+      }
 
       if (type === "graph-designer")
         return openGraphDesignerTab({

@@ -151,6 +151,16 @@ export interface GraphDesignerTabData {
   selected?: GraphTemplateRef;
 }
 
+/**
+ * A graph run tab ("Graph run" or the run's name, item 211). Only the run id
+ * is kept, with the name it was opened under for the tab title; the run is
+ * re-read from the backend when the tab mounts.
+ */
+export interface GraphRunTabData {
+  runId: string;
+  title?: string;
+}
+
 // Data for in-app GitHub pull request tabs
 export interface PullRequestTabData {
   ref: GitHubPullRequestRef;
@@ -266,6 +276,8 @@ export interface TabInfo {
   designCanvasData?: { canvasId: string };
   /** Data for the Graphs designer tab. */
   graphDesignerData?: GraphDesignerTabData;
+  /** Data for a graph run tab. */
+  graphRunData?: GraphRunTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

@@ -48,6 +48,8 @@ function installBackend() {
     const find = (ref: { scope: string; id?: string }) =>
       all.find((detail) => detail.summary.ref.scope === ref.scope && detail.summary.id === ref.id);
     switch (command) {
+      case "graph_runs_list":
+        return [];
       case "graph_templates_list":
         return listResult(all.map((detail) => detail.summary));
       case "graph_template_get":
@@ -131,7 +133,10 @@ describe("GraphDesignerTab", () => {
   test("lists the library for the environment's project and opens a built-in", async () => {
     const { container } = renderTab();
     await screen.findByText(pipeline.summary.name);
-    expect(invokeMock.mock.calls[0]).toEqual(["graph_templates_list", { projectId: "project-1" }]);
+    expect(invokeMock.mock.calls.find(([command]) => command === "graph_templates_list")).toEqual([
+      "graph_templates_list",
+      { projectId: "project-1" },
+    ]);
     expect(
       screen.getByText("Choose a template from the library, or import one as JSON."),
     ).toBeDefined();

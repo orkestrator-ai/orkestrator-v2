@@ -185,6 +185,7 @@ import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
+import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -1158,6 +1159,8 @@ export class OrkestratorBackend {
       projectNotes: async (projectId) =>
         (await storage.kanban.getProjectNotes(projectId)).content || undefined,
       artifactDispatch,
+      // The run view's activation transcripts (item 211).
+      captureTranscript: createGraphRunTranscriptCapture({ storage }),
     });
     context.graphQuestions = this.graphAgents.questions;
     // Live reviewers' `report_finding` calls reach the review through the

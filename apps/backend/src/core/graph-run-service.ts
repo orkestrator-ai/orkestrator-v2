@@ -58,6 +58,7 @@ import {
   type GraphRunObligation,
 } from "./graph-run-supervisor.js";
 import { isGraphActivationAdmitted, transitionGraphRun } from "./graph-run-transitions.js";
+import { planGraphRunRetry, planGraphRunSkip } from "./graph-run-user-actions.js";
 import {
   reviewFanoutConcurrency,
   type ReviewFanoutConcurrency,
@@ -86,7 +87,9 @@ export type GraphRunServiceErrorCode =
   | "invalid-launch"
   | "not-found"
   /** The run's status does not allow the action. */
-  | "invalid-state";
+  | "invalid-state"
+  /** A command's arguments are malformed (the run view's commands, item 211). */
+  | "invalid-request";
 
 export class GraphRunServiceError extends Error {
   constructor(
@@ -531,6 +534,44 @@ export class GraphRunService implements KeyedWorkflowOwner {
       return transitionGraphRun(current, "running", at);
     });
     this.wake(runId, "resume");
+    return run;
+  }
+
+  /**
+   * Reruns one failed node position as a new attempt (item 211; see
+   * `graph-run-user-actions.ts`): a `restart` rewind the user requested,
+   * saved with its artifact marks in one transaction, then the run is woken.
+   */
+  async retry(runId: string, activationKey: string): Promise<GraphRun> {
+    const artifacts = await this.options.artifacts.list(runId);
+    const run = await this.withLock(runId, async () => {
+      const current = await this.storage.graphRuns.getGraphRun(runId);
+      if (!current) throw new GraphRunServiceError("not-found", "The graph run does not exist");
+      const planned = planGraphRunRetry(current, artifacts, activationKey, {
+        rewindId: randomUUID(),
+        at: this.passDeps.clock().toISOString(),
+      });
+      if (!planned.ok) throw new GraphRunServiceError(planned.code, planned.message);
+      return this.storage.graphRuns.saveGraphRun(planned.run, current.revision, {
+        supersede: {
+          rewindId: planned.rewind.id,
+          artifactIds: planned.rewind.superseded.artifacts,
+        },
+      });
+    });
+    this.noteRecord(run);
+    this.wake(runId, "explicit");
+    return run;
+  }
+
+  /** Settles a `waiting` or `ready` activation as `skipped` (item 211) and wakes the run. */
+  async skip(runId: string, activationKey: string): Promise<GraphRun> {
+    const run = await this.mutate(runId, (current, at) => {
+      const planned = planGraphRunSkip(current, activationKey, at);
+      if (!planned.ok) throw new GraphRunServiceError(planned.code, planned.message);
+      return planned.run;
+    });
+    this.wake(runId, "explicit");
     return run;
   }
 

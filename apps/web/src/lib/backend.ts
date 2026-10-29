@@ -22,4 +22,5 @@ export * from "./backend/github-pull-requests";
 export * from "./backend/scheduled-jobs";
 export * from "./backend/user-commands";
 export * from "./backend/permission-rules";
+export * from "./backend/graph-runs";
 export * from "./backend/graph-templates";

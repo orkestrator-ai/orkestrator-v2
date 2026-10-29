@@ -510,11 +510,12 @@ export class GraphRunsRepository {
    * Environment deletion: removes the environment's runs and every artifact
    * row of those runs. Attributed by the stored environment field alone, so
    * a record this build cannot otherwise read still leaves with its
-   * environment. Returns the removed run ids.
+   * environment. Their activation transcripts are removed after. Returns the
+   * removed run ids.
    */
   async deleteGraphRunsByEnvironment(environmentId: string): Promise<string[]> {
     if (!isNonBlankString(environmentId)) throw new Error("Environment ID must not be blank");
-    return this.enqueueGraphRunMutation(async () => {
+    const removed = await this.enqueueGraphRunMutation(async () => {
       const runIds = this.context
         .loadStoreRowsByOwner<unknown>(this.graphRunsFile(), environmentId)
         .flatMap((run) => (isRecord(run) && typeof run.id === "string" ? [run.id] : []));
@@ -538,6 +539,12 @@ export class GraphRunsRepository {
       }
       return runIds;
     });
+    // Then their activation transcripts (item 211). Best-effort: a manifest
+    // left behind has no live owner, so the startup sweep removes it.
+    for (const runId of removed) {
+      await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
+    }
+    return removed;
   }
 }
 

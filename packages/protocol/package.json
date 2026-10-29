@@ -92,6 +92,7 @@
     "./graphs/provenance": "./src/graphs/provenance.ts",
     "./graphs/prompts": "./src/graphs/prompts.ts",
     "./graphs/run": "./src/graphs/run.ts",
+    "./graphs/run-view": "./src/graphs/run-view.ts",
     "./graphs/schema-from-example": "./src/graphs/schema-from-example.ts",
     "./graphs/schema-subset": "./src/graphs/schema-subset.ts",
     "./graphs/system-actions": "./src/graphs/system-actions.ts",

@@ -11,6 +11,7 @@ export type CreatableTabType =
   | "browser"
   | "design-canvas"
   | "graph-designer"
+  | "graph-run"
   | "multi-review"
   | "pull-request";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
@@ -21,6 +22,7 @@ export type TabType =
   | "browser"
   | "design-canvas"
   | "graph-designer"
+  | "graph-run"
   | "file"
   | "agent-native"
   | "claude-tmux"
@@ -69,6 +71,8 @@ export interface CreateTabOptions {
   pullRequest?: import("@/types/paneLayout").PullRequestTabData;
   /** The template a Graphs designer tab opens on (one designer tab per environment). */
   graphTemplate?: import("@orkestrator/protocol/graphs/library").GraphTemplateRef;
+  /** The run a `graph-run` tab shows (one tab per run; opening it again focuses that tab). */
+  graphRun?: import("@/types/paneLayout").GraphRunTabData;
   /** Existing authoritative workflow opened by a Multi Review tab. */
   multiReviewId?: string;
   /** Reviewer transcript opened inside an existing Multi Review workflow. */

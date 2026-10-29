@@ -10,7 +10,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -45,6 +45,7 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv, resolveGitHubToken } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
+import { writeConfinedFile } from "./path-safety.js";
 import type { BugReportRecord } from "./storage-bug-reports.js";
 
 export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
@@ -243,11 +244,11 @@ async function writeBriefing(
     draftPath: path.join(record.scratchDir, BUG_REPORT_DRAFT_FILE),
     screenshotDir: path.join(record.scratchDir, BUG_REPORT_SCREENSHOT_DIRECTORY),
   });
-  await mkdir(path.join(record.scratchDir, BUG_REPORT_SCREENSHOT_DIRECTORY), { recursive: true });
-  // Codex and OpenCode load AGENTS.md from their working directory, Claude
-  // loads CLAUDE.md.
-  await writeFile(path.join(record.scratchDir, "AGENTS.md"), `${briefing}\n`, { mode: 0o600 });
-  await writeFile(path.join(record.scratchDir, "CLAUDE.md"), `${briefing}\n`, { mode: 0o600 });
+  // Pin the trusted temporary parent, treating the agent-writable scratch root
+  // itself as an untrusted ancestor too.
+  for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+    await writeReportFile(record, name, Buffer.from(`${briefing}\n`), false);
+  }
 }
 
 export async function saveBugReportScreenshot(
@@ -263,11 +264,30 @@ export async function saveBugReportScreenshot(
   }
   const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (!isPng) throw new Error("Screenshot must be a PNG image");
-  const directory = path.join(record.scratchDir, BUG_REPORT_SCREENSHOT_DIRECTORY);
-  await mkdir(directory, { recursive: true });
-  const file = path.join(directory, `window-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
-  await writeFile(file, bytes, { mode: 0o600, flag: "wx" });
+  const relative = `${BUG_REPORT_SCREENSHOT_DIRECTORY}/window-${randomUUID()}.png`;
+  await writeReportFile(record, relative, bytes);
+  const file = path.join(record.scratchDir, relative);
   return { path: file, snapshot: await getBugReportSnapshot(context) };
+}
+
+async function writeReportFile(
+  record: BugReportRecord,
+  relative: string,
+  bytes: Buffer,
+  exclusive = true,
+): Promise<void> {
+  if (!ownedScratchDir(record.scratchDir)) throw new Error("Invalid report scratch directory");
+  const target = await lstat(path.join(record.scratchDir, relative)).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  if (target?.isSymbolicLink()) throw new Error("Report output cannot be a symlink");
+  await writeConfinedFile(
+    path.dirname(record.scratchDir),
+    `${path.basename(record.scratchDir)}/${relative}`,
+    bytes,
+    { exclusive, maxBytes: MAX_SCREENSHOT_BYTES },
+  );
 }
 
 function validateIssue(title: unknown, body: unknown): { title: string; body: string } {
@@ -275,7 +295,7 @@ function validateIssue(title: unknown, body: unknown): { title: string; body: st
   if (typeof body !== "string" || !body.trim()) throw new Error("The issue needs a body");
   if (title.length > MAX_BUG_REPORT_TITLE_CHARS) throw new Error("The issue title is too long");
   if (body.length > MAX_BUG_REPORT_BODY_CHARS) throw new Error("The issue body is too long");
-  return { title: title.trim(), body: body.trim() };
+  return { title: title.trim(), body };
 }
 
 /** The issue URL `gh issue create` prints on its last line. */
@@ -296,13 +316,33 @@ function browserFallback(title: string, body: string, reason: string): BugReport
  * approved in the sheet, not a re-read of the file the agent may still be
  * rewriting.
  */
-export async function fileBugReport(
+const filingFlights = new Map<string, Promise<BugReportFileResult>>();
+const UNCERTAIN_FILING =
+  "A filing attempt may already have created this issue. Check GitHub and record its URL before trying again.";
+
+export function fileBugReport(
+  context: CommandContext,
+  reportId: string,
+  input: { title: unknown; body: unknown; via?: unknown },
+): Promise<BugReportFileResult> {
+  const key = `${context.storage.getDataDir()}:${reportId}`;
+  const existing = filingFlights.get(key);
+  if (existing) return existing;
+  const flight = fileBugReportOnce(context, reportId, input).finally(() => {
+    if (filingFlights.get(key) === flight) filingFlights.delete(key);
+  });
+  filingFlights.set(key, flight);
+  return flight;
+}
+
+async function fileBugReportOnce(
   context: CommandContext,
   reportId: string,
   input: { title: unknown; body: unknown; via?: unknown },
 ): Promise<BugReportFileResult> {
   const record = await requireReport(context, reportId);
   if (record.filed) return { kind: "filed", url: record.filed.url };
+  if (record.filingAttempt) throw new Error(UNCERTAIN_FILING);
   const { title, body } = validateIssue(input.title, input.body);
   if (input.via === "browser") return browserFallback(title, body, "Opened on GitHub");
 
@@ -310,8 +350,15 @@ export async function fileBugReport(
   if (!(await resolveGitHubToken(config.global))) {
     return browserFallback(title, body, "GitHub CLI is not signed in on this host");
   }
-  const bodyFile = path.join(record.scratchDir, "issue-body.filed.md");
-  await writeFile(bodyFile, `${body}\n`, { mode: 0o600 });
+  const env = await gitHubCliEnv();
+  // Persist before launching gh. Even a backend crash or lost response must
+  // leave a fence against a second public issue. Only recording a known URL
+  // resolves an uncertain attempt.
+  const claimed = await context.storage.bugReports.mutateBugReport(reportId, (current) => {
+    if (current.filed || current.filingAttempt) throw new Error(UNCERTAIN_FILING);
+    return { ...current, filingAttempt: { startedAt: new Date().toISOString() } };
+  });
+  if (!claimed) throw new Error("This bug report was discarded");
   let stdout: string;
   try {
     ({ stdout } = await runCommand(
@@ -324,19 +371,15 @@ export async function fileBugReport(
         "--title",
         title,
         "--body-file",
-        bodyFile,
+        "-",
       ],
-      { env: await gitHubCliEnv(), timeoutMs: 60_000, cwd: record.scratchDir },
+      { env, stdin: body, timeoutMs: 60_000 },
     ));
-  } catch (error) {
-    console.warn(
-      "[bug-report] gh issue create failed; offering the browser instead:",
-      error instanceof Error ? error.message.split("\n")[0] : "unknown error",
-    );
-    return browserFallback(title, body, "GitHub CLI could not file the issue");
+  } catch {
+    throw new Error(UNCERTAIN_FILING);
   }
   const url = issueUrlFromGhOutput(stdout);
-  if (!url) return browserFallback(title, body, "GitHub CLI did not return an issue URL");
+  if (!url) throw new Error(UNCERTAIN_FILING);
   await context.storage.bugReports.mutateBugReport(reportId, (current) => ({
     ...current,
     filed: { url, filedAt: new Date().toISOString() },

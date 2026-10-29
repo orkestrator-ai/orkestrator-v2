@@ -2,6 +2,8 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createPortal } from "react-dom";
+import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
+import { SidebarBottomBar } from "../sidebar/SidebarBottomBar";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -768,3 +770,45 @@ for (const action of [
     }
   });
 }
+
+for (const remoteReport of [false, true]) {
+  test(`drawer bottom bar opens ${remoteReport ? "remote" : "local"} bug report and yields the drawer`, async () => {
+    const remote = useRemoteWorkspaceStore.getState();
+    const portal = portalStore.getState();
+    try {
+      portalStore.store.setState({ selfId: "bk_self" as never });
+      useRemoteWorkspaceStore.setState({
+        ...remote,
+        active: remoteReport ? { nodeId: "bk_remote", projectId: "p", environmentId: "e" } : null,
+      });
+      renderLayout({ sidebar: <SidebarBottomBar /> }, { keepInitialDrawerOpen: true });
+      fireEvent.click(screen.getByRole("button", { name: "Report a bug" }));
+      await waitFor(() =>
+        expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
+      );
+      if (remoteReport) {
+        expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toMatchObject({
+          bugReport: true,
+          projectId: "p",
+          environmentId: "e",
+        });
+      } else expect(useBugReportStore.getState().sheetOpen).toBe(true);
+    } finally {
+      useRemoteWorkspaceStore.setState(remote, true);
+      portalStore.store.setState(portal, true);
+    }
+  });
+}
+
+test("drawer bottom bar opens global Settings and yields the drawer", async () => {
+  const unsubscribe = onGlobalSettingsRequest((section) =>
+    useGlobalSettingsStore.getState().openSection(section),
+  );
+  renderLayout({ sidebar: <SidebarBottomBar /> }, { keepInitialDrawerOpen: true });
+  fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+  await waitFor(() =>
+    expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
+  );
+  expect(useGlobalSettingsStore.getState().open).toBe(true);
+  unsubscribe();
+});

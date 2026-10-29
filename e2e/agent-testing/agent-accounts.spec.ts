@@ -161,18 +161,27 @@ for (const width of [1280, 390]) {
     const original = accountRegistry(status.dataDir, "read");
     const openOverview = async () => {
       const settings = page.getByRole("button", { name: "Global settings", exact: true });
-      if (width < 768 && !(await settings.isVisible())) {
+      if (width < 768) {
+        await expect(
+          page
+            .getByRole("dialog", { name: "Projects and environments", exact: true })
+            .or(page.getByRole("button", { name: "Open projects and environments", exact: true })),
+        ).toBeVisible();
         // On a phone the sidebar's bottom bar, with Settings, is in the
         // projects drawer, which may already be open on first load.
         const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
         await expect(async () => {
           if (!(await drawer.isVisible())) {
-            await page.getByRole("button", { name: "Open projects and environments" }).click();
+            await page
+              .getByRole("button", { name: "Open projects and environments" })
+              .click({ timeout: 1_000 });
           }
           await drawer
             .getByRole("button", { name: "Global settings", exact: true })
             .click({ timeout: 1_000 });
-          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
+          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible({
+            timeout: 1_000,
+          });
         }).toPass({ timeout: 15_000 });
       } else {
         await settings.click();

@@ -81,6 +81,7 @@ import {
 import {
   persistHostCatalog,
   seedEnabledHostModelCatalogs,
+  HOST_OPENCODE_CATALOG_SCOPE,
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
@@ -627,6 +628,7 @@ export function registerProjectCommands(
         : coordinator.status === "ready"
           ? coordinator.workspace.projectId
           : workspace!.projectId;
+      const openCodeScope = projectId ?? HOST_OPENCODE_CATALOG_SCOPE;
       const config = await storage.loadConfig();
       const enabledPlatforms = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
       const qualified = new Set(
@@ -642,10 +644,9 @@ export function registerProjectCommands(
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
-      let openCodeSnapshot =
-        projectId && qualified.has("opencode")
-          ? await storage.getOpenCodeModelCatalog(projectId)
-          : null;
+      let openCodeSnapshot = qualified.has("opencode")
+        ? await storage.getOpenCodeModelCatalog(openCodeScope)
+        : null;
       let coordinatorSeedFailed = false;
       const hostSeeded =
         ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
@@ -668,8 +669,8 @@ export function registerProjectCommands(
         );
         coordinatorSeedFailed = seeded !== true;
         cache = await storage.getAgentModelCatalogCache();
-        if (ensureAgent === "opencode" && projectId) {
-          openCodeSnapshot = await storage.getOpenCodeModelCatalog(projectId);
+        if (ensureAgent === "opencode") {
+          openCodeSnapshot = await storage.getOpenCodeModelCatalog(openCodeScope);
         }
       }
       const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>

@@ -1,8 +1,8 @@
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
-import { bugReportIdFromRuntimeId, bugReportRuntimeId } from "@orkestrator/protocol/bug-report";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
-  bugReportBridgeIdentityFromFields,
-  bugReportRuntimeEnvironment,
+  bugReportReaperEnvironments,
+  updateBugReportBridgeFromEnvironment,
 } from "./bug-report-runtime.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
@@ -1475,26 +1475,13 @@ export class OrkestratorBackend {
                 ],
           ),
         );
-        const bugReportRuntimes = bugReports.flatMap((report): Environment[] =>
-          report.bridgePid === undefined || !report.agent
-            ? []
-            : [bugReportRuntimeEnvironment(bugReportRuntimeId(report.id), report, "stopped")],
-        );
+        const bugReportRuntimes = bugReportReaperEnvironments(bugReports);
         return [...environments, ...coordinatorRuntimes, ...bugReportRuntimes];
       },
       updateEnvironment: async (environmentId: string, fields: Partial<Environment>) => {
         const bugReportId = bugReportIdFromRuntimeId(environmentId);
         if (bugReportId) {
-          return this.context.storage.bugReports.mutateBugReport(bugReportId, (current) => {
-            const identity = bugReportBridgeIdentityFromFields(current.agent, fields);
-            if (!identity.changed) return current;
-            const { bridgePort: _port, bridgePid: _pid, ...rest } = current;
-            return {
-              ...rest,
-              ...(identity.bridgePort !== undefined ? { bridgePort: identity.bridgePort } : {}),
-              ...(identity.bridgePid !== undefined ? { bridgePid: identity.bridgePid } : {}),
-            };
-          });
+          return updateBugReportBridgeFromEnvironment(this.context.storage, bugReportId, fields);
         }
         const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
         const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);

@@ -29,6 +29,7 @@ export interface BugReportRecord {
   bridgePort?: number;
   bridgePid?: number;
   filed?: BugReportFiled;
+  filingAttempt?: { startedAt: string };
 }
 
 interface BugReportStore {
@@ -57,6 +58,9 @@ function parseRecord(value: unknown): BugReportRecord | null {
   if (isBugReportAgent(value.agent)) record.agent = value.agent;
   if (isRecordLike(value.clientContext)) {
     record.clientContext = value.clientContext as unknown as BugReportClientContext;
+  }
+  if (isRecordLike(value.filingAttempt) && typeof value.filingAttempt.startedAt === "string") {
+    record.filingAttempt = { startedAt: value.filingAttempt.startedAt };
   }
   if (typeof value.briefedAt === "string") record.briefedAt = value.briefedAt;
   if (typeof value.bridgePort === "number") record.bridgePort = value.bridgePort;

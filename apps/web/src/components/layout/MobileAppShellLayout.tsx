@@ -199,7 +199,8 @@ export function MobileAppShellLayout({
         if (
           !next.request.dialog &&
           !next.request.createEnvironmentProjectId &&
-          !next.request.addProject
+          !next.request.addProject &&
+          !next.request.bugReport
         )
           return;
         restoreSidebarFocusRef.current = false;

@@ -39,10 +39,15 @@ web counterpart of `orkestrator --fix AGENT`
    **File issue** and **Open on GitHub instead**.
 4. `file_bug_report` takes the title and body the user saw, not a re-read of
    the file. With a GitHub credential (the host `gh` login, or the stored
-   token, as Settings selects) it runs `gh issue create --body-file`. Without
-   one, or if gh fails, it returns a prefilled `issues/new` URL. A body too
-   long for a URL is left out and copied to the clipboard instead; the user
-   then pastes the issue URL back (`mark_bug_report_filed`).
+   token, as Settings selects) it passes the exact approved body to
+   `gh issue create --body-file -` through stdin, outside the agent's write
+   boundary. Concurrent requests share one filing operation. A durable attempt
+   marker blocks another launch after an uncertain CLI result, including after
+   backend restart; the user checks existing issues and records the URL to
+   resolve it. Without credentials it returns a prefilled `issues/new` URL.
+   A body too long for a URL is retained for manual copying and copied to the
+   clipboard when available; the user then pastes the issue URL back
+   (`mark_bug_report_filed`).
 5. **Done** (`discard_bug_report`) stops the report's bridge and deletes
    Orkestrator's session records, the report record and the scratch
    directory. It never deletes the provider's conversation (invariant 13).

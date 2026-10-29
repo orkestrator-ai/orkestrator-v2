@@ -1,4 +1,8 @@
-import { bugReportIdFromRuntimeId, type BugReportAgent } from "@orkestrator/protocol/bug-report";
+import {
+  bugReportRuntimeId,
+  bugReportIdFromRuntimeId,
+  type BugReportAgent,
+} from "@orkestrator/protocol/bug-report";
 import type { NativeAgentExecutionPolicyOverride } from "@orkestrator/protocol/native-agent";
 
 import type { Environment } from "./models.js";
@@ -127,4 +131,30 @@ export function bugReportBridgeIdentityFromFields(
     ...(typeof port === "number" ? { bridgePort: port } : {}),
     ...(typeof pid === "number" ? { bridgePid: pid } : {}),
   };
+}
+
+/** Startup reaping uses the same identity projection as normal bridge liveness. */
+export function bugReportReaperEnvironments(reports: BugReportRecord[]): Environment[] {
+  return reports.flatMap((report) =>
+    report.bridgePid === undefined || !report.agent
+      ? []
+      : [bugReportRuntimeEnvironment(bugReportRuntimeId(report.id), report, "stopped")],
+  );
+}
+
+export async function updateBugReportBridgeFromEnvironment(
+  storage: { bugReports: Pick<BugReportsStorage, "mutateBugReport"> },
+  reportId: string,
+  fields: Partial<Environment>,
+): Promise<BugReportRecord | null> {
+  return storage.bugReports.mutateBugReport(reportId, (current) => {
+    const identity = bugReportBridgeIdentityFromFields(current.agent, fields);
+    if (!identity.changed) return current;
+    const { bridgePort: _port, bridgePid: _pid, ...rest } = current;
+    return {
+      ...rest,
+      ...(identity.bridgePort !== undefined ? { bridgePort: identity.bridgePort } : {}),
+      ...(identity.bridgePid !== undefined ? { bridgePid: identity.bridgePid } : {}),
+    };
+  });
 }

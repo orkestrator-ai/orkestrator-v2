@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   BUG_REPORT_AGENTS,
+  BUG_REPORT_ISSUE_REPOSITORY,
   isBugReportAgent,
   type BugReportSnapshot,
 } from "@orkestrator/protocol/bug-report";
@@ -57,7 +58,7 @@ type LaunchOptions = {
   executionProfileId?: string;
 };
 
-type BrowserHandoff = { reason: string; bodyCopied: boolean };
+type BrowserHandoff = { reason: string; bodyCopied: boolean; body: string | null; opened: boolean };
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -80,6 +81,8 @@ export function BugReportSheet() {
   const closeSheet = useBugReportStore((state) => state.closeSheet);
   const setDraftInProgress = useBugReportStore((state) => state.setDraftInProgress);
   const [snapshot, setSnapshot] = useState<BugReportSnapshot | null>(null);
+  const readFence = useRef({ revision: 0, mutations: 0 });
+  const [loadRevision, setLoadRevision] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<
     (LaunchOptions & { reportId: string; prompt: string }) | null
@@ -95,18 +98,31 @@ export function BugReportSheet() {
 
   const apply = useCallback(
     (next: BugReportSnapshot) => {
+      readFence.current.revision++;
       setSnapshot(next);
       setDraftInProgress(Boolean(next.report && !next.report.filed));
     },
     [setDraftInProgress],
   );
 
+  const mutate = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    readFence.current.revision++;
+    readFence.current.mutations++;
+    try {
+      return await operation();
+    } finally {
+      readFence.current.mutations--;
+      readFence.current.revision++;
+    }
+  }, []);
+
   // Whether a report is open, for the bottom bar's dot, before anyone opens the sheet.
   useEffect(() => {
     let current = true;
+    const revision = readFence.current.revision;
     void (async () => {
       const next = await getBugReport().catch(() => null);
-      if (current && next) apply(next);
+      if (current && next && revision === readFence.current.revision) apply(next);
     })();
     return () => {
       current = false;
@@ -118,45 +134,68 @@ export function BugReportSheet() {
   useEffect(() => {
     if (!open) return;
     let current = true;
+    const revision = ++readFence.current.revision;
+    const isCurrent = () => current && revision === readFence.current.revision;
     void (async () => {
       try {
         let next = await getBugReport();
-        if (current) setLoadError(null);
+        if (!isCurrent()) return;
+        setLoadError(null);
         if (!next.report) {
           next = await createBugReport(
             collectBugReportClientContext({ id: ownBugReportMachineId(), label: machineLabel }),
           );
         }
-        if (current) apply(next);
+        if (isCurrent()) apply(next);
       } catch (error) {
-        if (current) setLoadError(errorText(error));
+        if (isCurrent()) setLoadError(errorText(error));
       }
     })();
     return () => {
       current = false;
     };
-  }, [apply, machineLabel, open]);
+  }, [apply, machineLabel, open, loadRevision]);
 
   // The agent rewrites its draft as the conversation goes; follow it while shown.
   useEffect(() => {
     if (!open || !report) return;
-    const timer = setInterval(() => {
-      getBugReport()
-        .then(apply)
-        .catch(() => undefined);
-    }, DRAFT_POLL_MS);
-    return () => clearInterval(timer);
+    let current = true;
+    let reading = false;
+    const poll = async () => {
+      if (reading || readFence.current.mutations) return;
+      reading = true;
+      const revision = readFence.current.revision;
+      try {
+        const next = await getBugReport();
+        if (
+          current &&
+          revision === readFence.current.revision &&
+          (!next.report || next.report.id === report.id)
+        ) {
+          apply(next);
+        }
+      } catch {
+        // A transient read failure leaves the last authoritative snapshot visible.
+      } finally {
+        reading = false;
+      }
+    };
+    const timer = setInterval(() => void poll(), DRAFT_POLL_MS);
+    return () => {
+      current = false;
+      clearInterval(timer);
+    };
   }, [apply, open, report]);
 
   const assign = useCallback(
     async (platform: AgentPlatform, prompt: string, options: LaunchOptions) => {
       if (!report) throw new Error("The bug report is still starting");
       if (!isBugReportAgent(platform)) throw new Error("This agent cannot be used for bug reports");
-      const next = await assignBugReportAgent(report.id, platform);
+      const next = await mutate(() => assignBugReportAgent(report.id, platform));
       setPendingLaunch({ reportId: report.id, prompt, ...options });
       apply(next);
     },
-    [apply, report],
+    [apply, mutate, report],
   );
 
   const capture = useCallback(async () => {
@@ -170,7 +209,7 @@ export function BugReportSheet() {
       await nextFrame();
       await new Promise((resolve) => setTimeout(resolve, 250));
       const base64 = await api.captureWindow();
-      const saved = await saveBugReportScreenshot(report.id, base64);
+      const saved = await mutate(() => saveBugReportScreenshot(report.id, base64));
       apply(saved.snapshot);
       const sessionKey = createSessionKey(report.runtimeId, report.tabId);
       const compose = useNativeComposeStore.getState();
@@ -196,18 +235,20 @@ export function BugReportSheet() {
       useBugReportStore.getState().openSheet();
       setCapturing(false);
     }
-  }, [apply, closeSheet, report]);
+  }, [apply, closeSheet, mutate, report]);
 
   const file = useCallback(
     async (via?: "browser") => {
       if (!report || !draft) return;
       setFiling(true);
       try {
-        const result = await fileBugReport(report.id, {
-          title: draft.title,
-          body: draft.body,
-          ...(via ? { via } : {}),
-        });
+        const result = await mutate(() =>
+          fileBugReport(report.id, {
+            title: draft.title,
+            body: draft.body,
+            ...(via ? { via } : {}),
+          }),
+        );
         if (result.kind === "filed") {
           toast.success("Issue filed", { description: result.url });
           apply(await getBugReport());
@@ -215,26 +256,39 @@ export function BugReportSheet() {
         }
         let bodyCopied = false;
         if (!result.bodyInUrl) {
-          bodyCopied = await navigator.clipboard
-            .writeText(draft.body)
-            .then(() => true)
-            .catch(() => false);
+          try {
+            await navigator.clipboard?.writeText(draft.body);
+            bodyCopied = Boolean(navigator.clipboard?.writeText);
+          } catch {
+            bodyCopied = false;
+          }
         }
+        setBrowserHandoff({
+          reason: result.reason,
+          bodyCopied,
+          body: result.bodyInUrl ? null : draft.body,
+          opened: true,
+        });
         await openInBrowser(result.url);
-        setBrowserHandoff({ reason: result.reason, bodyCopied });
       } catch (error) {
+        setBrowserHandoff({
+          reason: errorText(error),
+          bodyCopied: false,
+          body: draft.body,
+          opened: false,
+        });
         toast.error("Could not file the issue", { description: errorText(error) });
       } finally {
         setFiling(false);
       }
     },
-    [apply, draft, report],
+    [apply, draft, mutate, report],
   );
 
   const discard = useCallback(async () => {
     if (!report) return;
     try {
-      apply(await discardBugReport(report.id));
+      apply(await mutate(() => discardBugReport(report.id)));
       setBrowserHandoff(null);
       setIssueUrl("");
       setDraftExpanded(false);
@@ -242,17 +296,17 @@ export function BugReportSheet() {
     } catch (error) {
       toast.error("Could not discard the report", { description: errorText(error) });
     }
-  }, [apply, closeSheet, report]);
+  }, [apply, closeSheet, mutate, report]);
 
   const markFiled = useCallback(async () => {
     if (!report) return;
     try {
-      apply(await markBugReportFiled(report.id, issueUrl.trim()));
+      apply(await mutate(() => markBugReportFiled(report.id, issueUrl.trim())));
       setBrowserHandoff(null);
     } catch (error) {
       toast.error("Could not record the issue", { description: errorText(error) });
     }
-  }, [apply, issueUrl, report]);
+  }, [apply, issueUrl, mutate, report]);
 
   /*
    * The opening prompt is held until the session is observed, as the
@@ -336,12 +390,41 @@ export function BugReportSheet() {
           <div className="shrink-0 space-y-2 border-b border-border/70 bg-sky-500/5 px-4 py-3 text-sm">
             <p className="font-medium">Finish on GitHub</p>
             <p className="text-xs text-muted-foreground">
-              {browserHandoff.reason}, so the new-issue page was opened with the draft filled in.
-              {browserHandoff.bodyCopied
-                ? " The body was too long for the link and is on your clipboard: paste it into the description."
-                : ""}{" "}
+              {browserHandoff.reason}{" "}
+              {browserHandoff.opened
+                ? "The new-issue page was opened on GitHub."
+                : "Check existing issues on GitHub before submitting again."}
+              {browserHandoff.body
+                ? browserHandoff.bodyCopied
+                  ? " The body was too long for the link and is on your clipboard: paste it into the description."
+                  : browserHandoff.opened
+                    ? " The body was too long for the link. Clipboard access failed; copy the complete body below into the description."
+                    : " The complete approved body is retained below."
+                : " The draft is filled in."}{" "}
               Paste the new issue's URL here once you have submitted it.
             </p>
+            {!browserHandoff.opened ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  void openInBrowser(`https://github.com/${BUG_REPORT_ISSUE_REPOSITORY}/issues`)
+                }
+              >
+                Check existing issues
+              </Button>
+            ) : null}
+            {browserHandoff.body ? (
+              <textarea
+                aria-label="Issue body for manual copy"
+                readOnly
+                value={browserHandoff.body}
+                onFocus={(event) => event.currentTarget.select()}
+                className="max-h-48 w-full rounded-md border border-border bg-background p-2 text-xs"
+                rows={5}
+              />
+            ) : null}
             <div className="flex gap-2">
               <Input
                 value={issueUrl}
@@ -443,10 +526,7 @@ export function BugReportSheet() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    closeSheet();
-                    useBugReportStore.getState().openSheet();
-                  }}
+                  onClick={() => setLoadRevision((value) => value + 1)}
                 >
                   Retry
                 </Button>

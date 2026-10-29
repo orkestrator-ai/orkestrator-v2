@@ -757,6 +757,18 @@ body[data-orkestrator-dev-profile]::before {
     padding-right: 3.25rem;
   }
 
+  /* Clear the home indicator, with touch-sized buttons. */
+  .mobile-sidebar [data-sidebar-bottom-bar] {
+    height: auto;
+    min-height: 2.75rem;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .mobile-sidebar [data-sidebar-bottom-bar] button {
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
   .xterm {
     padding: 2px;
   }

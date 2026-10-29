@@ -99,6 +99,12 @@ import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import {
+  bugReportRuntimeEnvironment,
+  bugReportRuntimeUnavailableMessage,
+  resolveBugReportRuntime,
+} from "./bug-report-runtime.js";
 import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
@@ -227,12 +233,40 @@ async function coordinatorCodexRuntime(executable: string): Promise<{
   throw retryableBridgeStartupError("Codex executable is unavailable");
 }
 
+/**
+ * Record (or clear) a bug report's bridge. A clear from an exiting process
+ * applies only while the record still names that process, so a replacement's
+ * identity is never erased by its predecessor's exit.
+ */
+async function recordBugReportBridge(
+  context: CommandContext,
+  reportId: string,
+  child: ChildProcessWithoutNullStreams,
+  bridge: { port: number; pid: number } | null,
+): Promise<void> {
+  await context.storage.bugReports
+    .mutateBugReport(reportId, (current) => {
+      if (bridge) return { ...current, bridgePort: bridge.port, bridgePid: bridge.pid };
+      if (current.bridgePid !== undefined && current.bridgePid !== child.pid) return current;
+      const { bridgePort: _port, bridgePid: _pid, ...rest } = current;
+      return rest;
+    })
+    .catch(() => undefined);
+}
+
 async function localRuntimeEnvironment(
   environmentId: string,
   context: CommandContext,
 ): Promise<Environment | null> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (environment) return environment;
+  const bugReport = await resolveBugReportRuntime(context.storage, environmentId);
+  if (bugReport.status === "ready") {
+    const scratchDir = await realpath(bugReport.record.scratchDir).catch(() => null);
+    if (!scratchDir) return null;
+    return bugReportRuntimeEnvironment(environmentId, { ...bugReport.record, scratchDir });
+  }
+  if (bugReport.status === "unavailable") return null;
   const coordinator = await resolveCoordinatorRuntime(context.storage, environmentId);
   if (coordinator.status !== "ready") return null;
   const projectPath = await realpath(coordinator.project.localPath!).catch(() => null);
@@ -623,7 +657,9 @@ function openCodeReconcileConnection(
     `local:${environmentId}`,
   );
   if (launched) return launched;
-  if (coordinatorIdFromRuntimeId(environmentId)) return undefined;
+  if (coordinatorIdFromRuntimeId(environmentId) || bugReportIdFromRuntimeId(environmentId)) {
+    return undefined;
+  }
   return context.agentTools?.connection(env.id, env.projectId, "host");
 }
 
@@ -801,6 +837,18 @@ async function startLocalServerAttempt(
   if (coordinator?.status === "ready" && coordinator.conversation.agent !== kind) {
     throw new Error("This coordinator conversation belongs to a different agent platform");
   }
+  // A bug report holds one bridge identity for its own agent, like a
+  // coordinator conversation.
+  const bugReportId = bugReportIdFromRuntimeId(environmentId);
+  if (bugReportId) {
+    const bugReport = await resolveBugReportRuntime(context.storage, environmentId);
+    if (bugReport.status === "unavailable") {
+      throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
+    }
+    if (bugReport.status === "ready" && bugReport.record.agent !== kind) {
+      throw new Error("This bug report belongs to a different agent platform");
+    }
+  }
   const environment = await localRuntimeEnvironment(environmentId, context);
   if (!environment?.worktreePath) {
     throw retryableBridgeStartupError("Local environment worktree is not available");
@@ -809,7 +857,9 @@ async function startLocalServerAttempt(
   const coordinatorConversationId =
     coordinator?.status === "ready" ? coordinator.conversationId : null;
   let agentToolConnection: AgentToolConnection | undefined;
-  if (!coordinatorId) {
+  // A bug report gets no project tools: it belongs to no project, and its
+  // agent has no business with tickets or mail.
+  if (!coordinatorId && !bugReportId) {
     agentToolConnection = context.agentTools?.connection(
       environment.id,
       environment.projectId,
@@ -853,6 +903,11 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
   delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
   delete env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV];
+  if (bugReportId) {
+    // No project tools, and none inherited from this backend's own environment.
+    delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
+    delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+  }
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -1176,6 +1231,7 @@ async function startLocalServerAttempt(
         )
         .catch(() => undefined);
     }
+    if (bugReportId) void recordBugReportBridge(context, bugReportId, child, null);
   });
 
   const { port: field, pid: pidField } = localServerFields(kind);
@@ -1255,6 +1311,8 @@ async function startLocalServerAttempt(
               }
             : workspace,
       );
+    } else if (bugReportId) {
+      await recordBugReportBridge(context, bugReportId, child, { port, pid: child.pid! });
     } else {
       await context.storage.updateEnvironment(environmentId, {
         [field]: port,
@@ -1293,6 +1351,8 @@ async function startLocalServerAttempt(
             : workspace,
         )
         .catch(() => undefined);
+    } else if (bugReportId) {
+      await recordBugReportBridge(context, bugReportId, child, null).catch(() => undefined);
     } else {
       await context.storage
         .updateEnvironment(environmentId, { [field]: null, [pidField]: null })

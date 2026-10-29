@@ -3904,3 +3904,149 @@ test("ambiguous retry preserves one command block and never acknowledges a newer
     },
   );
 });
+
+describe("bug report session authority", () => {
+  test("forces provider sandbox and ask approvals, prefixes the first prompt once, and rejects mismatches", async () => {
+    const provider = createProviderStub("codex");
+    await withService(
+      { prefix: "ork-report-trust-", provider: async () => provider.provider },
+      async ({ storage, service }) => {
+        await storage.bugReports.createBugReport({
+          id: "r1",
+          createdAt: "t",
+          tabId: "t",
+          scratchDir: "/tmp/report",
+          agent: "codex",
+        });
+        const input = {
+          environmentId: "bug-report:r1",
+          logicalSessionKey: "report-tab",
+          agent: "codex" as const,
+          origin: "interactive-native" as const,
+          policy: {
+            id: "interactive-host" as const,
+            sandbox: "none" as const,
+            approvals: "auto-approve" as const,
+            networkAccess: "full" as const,
+            projectResources: true,
+          },
+        };
+        const session = await service.ensureSession(input);
+        expect((await storage.getNativeAgentSession(session.key))?.policy).toMatchObject({
+          sandbox: "provider",
+          approvals: "ask",
+          projectResources: false,
+        });
+        expect((await storage.bugReports.getBugReport("r1"))?.briefedAt).toBeUndefined();
+        await expect(service.ensureSession({ ...input, agent: "claude" })).rejects.toThrow(
+          "different agent",
+        );
+        expect(
+          await service.dispatchIntent({ ...input, prompt: "First", requestId: "first" }),
+        ).toMatchObject({ outcome: "accepted" });
+        expect(provider.send.mock.calls[0]![1]).toContain("/tmp/report/AGENTS.md");
+        expect(provider.send.mock.calls[0]![1]).toContain("First");
+        expect(
+          provider.send.mock.calls[0]![1].match(/<orkestrator-coordinator-context>/g),
+        ).toHaveLength(1);
+        expect((await storage.bugReports.getBugReport("r1"))?.briefedAt).toBeString();
+        expect(
+          await service.dispatchIntent({ ...input, prompt: "Second", requestId: "second" }),
+        ).toMatchObject({ outcome: "accepted" });
+        expect(provider.send.mock.calls[1]![1]).toBe("Second");
+        await storage.bugReports.deleteBugReport("r1");
+        await expect(service.ensureSession(input)).rejects.toThrow("discarded");
+        await storage.bugReports.createBugReport({
+          id: "r2",
+          createdAt: "t",
+          tabId: "t",
+          scratchDir: "/tmp/report",
+        });
+        await expect(
+          service.ensureSession({ ...input, environmentId: "bug-report:r2" }),
+        ).rejects.toThrow("no agent");
+      },
+    );
+  });
+
+  test("keeps a failed first send retryable without duplicating its briefing", async () => {
+    const provider = createProviderStub("codex");
+    provider.send.mockRejectedValueOnce(new AmbiguousPromptDispatchError("acknowledgement lost"));
+    await withService(
+      { prefix: "ork-report-retry-", provider: async () => provider.provider },
+      async ({ storage, service }) => {
+        await storage.bugReports.createBugReport({
+          id: "r1",
+          createdAt: "t",
+          tabId: "t",
+          scratchDir: "/tmp/report",
+          agent: "codex",
+        });
+        const input = {
+          environmentId: "bug-report:r1",
+          logicalSessionKey: "report-tab",
+          agent: "codex" as const,
+          prompt: "First",
+          requestId: "first",
+        };
+        expect(await service.dispatchIntent(input)).toMatchObject({ outcome: "unknown" });
+        expect((await storage.bugReports.getBugReport("r1"))?.briefedAt).toBeString();
+        expect(await service.retryRecoverableDispatch(input)).toMatchObject({
+          outcome: "accepted",
+        });
+        expect(provider.send).toHaveBeenCalledTimes(2);
+        expect(provider.send.mock.calls[1]![1]).toBe(provider.send.mock.calls[0]![1]);
+        for (const call of provider.send.mock.calls)
+          expect(
+            (call[1].match(/<orkestrator-coordinator-context>/g) ?? []).length,
+          ).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
+  test("discard during session creation prevents dispatch and does not recreate the report", async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider = createProviderStub("codex", {
+      createSession: async () => {
+        enter();
+        await gate;
+        return "thread";
+      },
+    });
+    await withService(
+      { prefix: "ork-report-discard-race-", provider: async () => provider.provider },
+      async ({ storage, service }) => {
+        await storage.bugReports.createBugReport({
+          id: "r1",
+          createdAt: "t",
+          tabId: "t",
+          scratchDir: "/tmp/report",
+          agent: "codex",
+        });
+        const dispatch = service.dispatchIntent({
+          environmentId: "bug-report:r1",
+          logicalSessionKey: "report-tab",
+          agent: "codex",
+          prompt: "First",
+          requestId: "first",
+        });
+        try {
+          await entered;
+          await storage.bugReports.deleteBugReport("r1");
+        } finally {
+          release();
+        }
+        expect(await dispatch).toMatchObject({ outcome: "rejected" });
+        expect(provider.send).not.toHaveBeenCalled();
+        expect(await storage.bugReports.getBugReport("r1")).toBeNull();
+      },
+    );
+  });
+});

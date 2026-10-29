@@ -1,4 +1,5 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -460,8 +461,12 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       initialResumeOpen={resumeRequestedPlatform === props.data.platform}
     />
   );
-  // A coordinator has no environment to resolve its loopback links in.
-  if (props.coordinatorProjectId || props.executionPolicy === "coordinator-read-only")
+  // A coordinator or bug report has no environment to resolve its loopback links in.
+  if (
+    props.coordinatorProjectId ||
+    props.executionPolicy === "coordinator-read-only" ||
+    bugReportIdFromRuntimeId(props.data.environmentId)
+  )
     return controller;
   return (
     <PreviewLinkSourceContext.Provider value={linkSource}>

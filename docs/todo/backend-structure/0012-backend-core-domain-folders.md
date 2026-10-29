@@ -68,7 +68,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)).
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)).
 
 **Decisions.**
 
@@ -279,8 +279,7 @@ before the busy ones move.
    `previews` are also imported from outside `core/`, so these slices touch the
    most files.
 4. **Last: `commands`.** It depends on most other domains. Its former
-   `commands-runtime-state.ts` was deleted by
-   [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md);
+   `commands-runtime-state.ts` was deleted by todo 0011;
    the state now lives in `BackendRuntime` (`backend-runtime.ts`,
    `terminal-runtime.ts`, `local-server-runtime.ts`,
    `environment-operations.ts`).
@@ -452,17 +451,19 @@ Rules that keep slices safe:
 - Where `pi-model-catalog-seeding.ts` belongs: next to the native-agent model
   catalogue code, or the kernel. Decide when it is touched.
 - Whether `storage` and `native-agent` should move before or after their
-  inheritance chains are split
-  ([0009-storage-service-repositories.md](0009-storage-service-repositories.md),
-  [0010-native-agent-service-collaborators.md](0010-native-agent-service-collaborators.md)).
-  Splitting first avoids moving files that are about to be rewritten.
+  inheritance chains are split. Settled: both chains are split (todos 0009
+  and 0010, retired on 2026-10-29), so neither slice moves files that are
+  about to be rewritten.
 
 ## Related
 
-- [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md),
-  which must land before the `commands` slice.
-- [0009-storage-service-repositories.md](0009-storage-service-repositories.md) and
-  [0010-native-agent-service-collaborators.md](0010-native-agent-service-collaborators.md).
+- [`backend-runtime.md`](../../architecture/backend-runtime.md#rules): the
+  runtime state owner from todo 0011 (retired on 2026-10-29), which had to land
+  before the `commands` slice.
+- [`storage.md`](../../architecture/storage.md#code-layout) and
+  [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators):
+  the storage repositories and native agent collaborators (todos 0009 and
+  0010).
 - [`linting.md`](../../development/linting.md) ("Module boundaries").
 
 ## Replaces

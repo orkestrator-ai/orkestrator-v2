@@ -56,13 +56,17 @@ export function linkBrowserTarget(
   if (!environment || !isLoopbackUrl(url)) return url;
   ensurePreviewServiceSync();
   if (usePreviewServiceStore.getState().status === "unsupported") return url;
-  const source: PreviewUrlSource =
-    origin === "agent"
-      ? "agent-link"
-      : environment.environmentType === "local"
-        ? "worktree-terminal"
-        : "container-terminal";
+  const source = linkUrlSource(environment, origin);
   return formatPreviewIntentUri({ environmentId: environment.id, source, url: url.trim() });
+}
+
+/** Who interprets a printed loopback link: the terminal's environment, or the agent's. */
+export function linkUrlSource(
+  environment: Pick<Environment, "environmentType">,
+  origin: "terminal" | "agent",
+): PreviewUrlSource {
+  if (origin === "agent") return "agent-link";
+  return environment.environmentType === "local" ? "worktree-terminal" : "container-terminal";
 }
 
 /** A same-service link opened from inside a service preview. */

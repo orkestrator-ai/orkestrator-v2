@@ -29,6 +29,8 @@ legacy gateway loopback route ("compatibility" mode).
 | Protocol | `packages/protocol/src/preview-*.ts` | Contracts, HTTP/1.1 and WebSocket codecs, header policy |
 | Desktop | `electron/preview-transport-manager.ts` | Per-service loopback ingress over the tunnel |
 | Desktop | `electron/preview-external-handoff.ts` | External-browser handoff without a credential in a URL |
+| Desktop | `electron/preview-external-forward.ts` | `localhost` forward for the user's own browser (remote backends without a private origin) |
+| Web | `lib/preview-link-external.ts` | Routes Cmd/Ctrl-clicked terminal and agent loopback links to a service |
 | Web | `stores/previewServiceStore.ts`, `components/browser/*` | Snapshots, service tabs, picker, diagnostics |
 
 ## Identity
@@ -121,9 +123,10 @@ from port A to B** for nearby services of the same kind and scheme, next to
 
 **Agent links.** In an environment's agent tab, ⌘⇧-click (Ctrl+Shift-click) on
 a loopback link opens a preview tab with the `agent-link` intent, resolved in
-that environment like a terminal link. A plain click still opens the system
-browser. Coordinator and mail transcripts have no environment and keep the
-plain behaviour.
+that environment like a terminal link. A plain click uses the external-link
+router: on remote desktop connections a registered service opens externally,
+and an unresolved port opens a preview tab. Coordinator and mail transcripts
+have no environment and keep the plain behaviour.
 
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
@@ -139,7 +142,10 @@ response:
 - **Desktop app, in-app tab:** desktop tunnel. If the transport is off, it
   falls back to the legacy gateway path. The legacy path rewrites HTML, has no
   WebSocket support, and shares one origin between applications; the tab shows
-  these limitations. **Open in browser** uses the private origin.
+  these limitations. **Open in browser** uses the private origin when the
+  backend publishes one. A remote backend without one gets an
+  [external-browser forward](#external-browser-forward) on `localhost`
+  instead.
 - **Web and iOS clients:** the private HTTPS origin, opened top-level. Without
   publication, the tab explains the required setup. It never falls back to an
   unauthenticated or embedded view.
@@ -241,6 +247,45 @@ The client never names a host, port, or container.
 
 HTTPS upstream services are not carried by the desktop tunnel. They need the
 private origin.
+
+### External-browser forward
+
+A desktop window connected to another machine can open a service in the
+user's own browser without a private origin (no domain, DNS or certificate):
+Electron opens a second loopback listener for the service and the browser
+loads `http://localhost:<port><path>`. It shares the service's attachment,
+tunnel and connection pool with the in-app ingress, and holds the service like
+a tab does (`forwardExternally` in `preview-transport-manager.ts`).
+
+- **Which route.** `openServiceInExternalBrowser` uses the private origin
+  whenever `browserTopLevel` is available, and the forward only for a remote
+  connection without it. A local connection keeps the private-origin path.
+- **Links.** A Cmd/Ctrl-clicked loopback link in a terminal, or a clicked one
+  in agent chat, is resolved in its source environment
+  (`resolve_preview_target`, as for a preview tab). A single registered
+  service opens through **Open in browser**'s route. An unregistered or
+  ambiguous port opens a preview tab, where the user registers or picks it.
+  With preview access off, an older backend, or a failed forward, the link
+  falls back to the gateway path proxy (`/__orkestrator/proxy/loopback/<port>`)
+  and a toast says why (including unavailable capabilities or failed resolution).
+- **Port.** On platforms with exclusive loopback binding, the forward prefers a
+  browser-safe application port, so absolute `localhost:<port>` URLs and OAuth
+  callbacks keep working. It binds 127.0.0.1 and ::1 together on one port, so
+  `localhost` can never reach a
+  different local server on the other address family; if either is taken it
+  uses another browser-safe free port on both. macOS/BSD always use an
+  OS-assigned port to avoid shadowing wildcard listeners through SO_REUSEADDR.
+- **Lifetime.** It closes after ten minutes with no open connection (an open
+  page's HMR WebSocket keeps it alive), when its service retires, and when the
+  window's transport is disposed.
+- **What it gives up.** Services share the `localhost` site, so they are not
+  isolated from each other the way private origins are, and a page sees the
+  user's other `localhost` cookies, as it would running locally.
+
+Never open a remote dev server on the gateway's own host name (for example
+`http://<machine>.<tailnet>.ts.net:3000`). Cookies ignore ports, so the page
+would receive `orkestrator_gateway_auth`; the gateway path proxy and the
+forward both keep it away from the application.
 
 ### Private HTTPS origins
 
@@ -345,6 +390,16 @@ to the preview path must keep these boundaries:
   injects through `webRequest` only for requests from that service's partition
   to that listener's origin (HTTP and WS). The header is stripped before bytes
   enter the tunnel. Other local processes get `403`.
+- **The external-browser forward is the one uncredentialed ingress.** An
+  external browser cannot be made to send a credential, so the forward is
+  bounded instead: loopback binds only, a `Host` of `localhost`, `127.0.0.1`
+  or `[::1]` on its own port (no DNS rebinding), Fetch Metadata that lets
+  non-loopback sites only navigate to it (no foreign-site fetches, frames, writes or
+  WebSockets; `externalForwardSiteViolation`), reserved cookies stripped, and
+  an idle shutdown. That is the exposure of a dev server run on the user's
+  machine. It exists only for remote connections and only while the user has
+  opened a service with it. Requests with a loopback Origin are allowed across
+  loopback hostnames and ports; the application still enforces its own CORS policy.
 - **The tunnel cannot choose destinations.** An attachment is bound to
   `(serviceId, backendEpoch, endpointGeneration)`. An `OPEN` frame carrying
   host or port fields is malformed. The backend re-resolves the upstream and

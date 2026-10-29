@@ -9,12 +9,23 @@
  * directory. The agent runs in a fresh scratch directory that holds the issue
  * draft.
  */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { mkdtemp, readdir, rmdir, stat } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
+import { mkdtemp, readdir, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isHostVersion } from "@orkestrator/protocol/host-maintenance";
-import { readApplicationLogSettings } from "@orkestrator/protocol/node/application-logging";
+import {
+  BUG_REPORT_ABOUT_ORKESTRATOR,
+  BUG_REPORT_DRAFT_FILE,
+  BUG_REPORT_ISSUE_REPOSITORY,
+  BUG_REPORT_REDACTION_RULES,
+  bugReportDiagnosticsSection,
+  bugReportIssueTemplate,
+  bugReportUnderstandSection,
+  describeBugReportBackend,
+  describeBugReportLogs,
+  type BugReportMachineFacts,
+} from "@orkestrator/protocol/bug-report";
+import { collectBugReportMachineFacts } from "@orkestrator/protocol/node/bug-report-facts";
 import {
   CLAUDE_PINNED_RUNTIME_ENV,
   OPENCODE_PINNED_RUNTIME_ENV,
@@ -23,7 +34,7 @@ import { defaultToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { defaultDataDir } from "../../../../apps/backend/src/data-dir.js";
 
-export const FIX_ISSUE_REPOSITORY = "orkestrator-ai/orkestrator-v2";
+export const FIX_ISSUE_REPOSITORY = BUG_REPORT_ISSUE_REPOSITORY;
 
 export type FixAgentName = "claude" | "codex" | "opencode";
 
@@ -181,103 +192,13 @@ export function resolveFixAgent(
   return null;
 }
 
-export interface FixFacts {
+export interface FixFacts extends BugReportMachineFacts {
   agent: { name: FixAgentName; displayName: string; executable: string; source: string };
   cliVersion: string;
   /** How the agent should run Orkestrator client commands. */
   cliCommand: string;
-  platform: string;
-  osRelease: string;
-  arch: string;
-  bunVersion: string;
-  now: string;
   workDir: string;
-  dataDir: string;
-  dataDirExists: boolean;
-  logsDir: string;
-  debugLogging: boolean;
-  recentLogs: { name: string; bytes: number; modified: string }[];
-  backend: { appVersion?: string; startedAt?: string; pid?: number; running: boolean } | null;
-  toolchainBinDir: string | null;
-  managedGh: string | null;
   diagnosticConnection: string | null;
-  desktopApp: string | null;
-}
-
-const MAX_LISTED_LOGS = 8;
-
-async function recentLogFiles(logsDir: string): Promise<FixFacts["recentLogs"]> {
-  const names = await readdir(logsDir).catch(() => [] as string[]);
-  const files = await Promise.all(
-    names
-      .filter((name) => name.endsWith(".log"))
-      .map(async (name) => {
-        const info = await stat(path.join(logsDir, name)).catch(() => null);
-        return info?.isFile() ? { name, bytes: info.size, modifiedMs: info.mtimeMs } : null;
-      }),
-  );
-  return files
-    .filter((file) => file !== null)
-    .sort((left, right) => right.modifiedMs - left.modifiedMs)
-    .slice(0, MAX_LISTED_LOGS)
-    .map((file) => ({
-      name: file.name,
-      bytes: file.bytes,
-      modified: new Date(file.modifiedMs).toISOString(),
-    }));
-}
-
-function processRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** The non-secret fields of the running backend's instance descriptor. */
-function backendInstance(dataDir: string): FixFacts["backend"] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path.join(dataDir, "backend-instance.json"), "utf8"));
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") return null;
-  const record = parsed as Record<string, unknown>;
-  const pid = typeof record.pid === "number" ? record.pid : undefined;
-  return {
-    ...(typeof record.appVersion === "string" ? { appVersion: record.appVersion } : {}),
-    ...(typeof record.startedAt === "string" ? { startedAt: record.startedAt } : {}),
-    ...(pid !== undefined ? { pid } : {}),
-    running: pid !== undefined && processRunning(pid),
-  };
-}
-
-async function managedGhBinary(dataDir: string): Promise<string | null> {
-  const activated = path.join(defaultToolchainBinDir(dataDir), "gh");
-  if (existsSync(activated)) return activated;
-  const latestRoot = path.join(toolchainRootDir(dataDir), "gh-latest");
-  const latestVersions = await readdir(latestRoot).catch(() => [] as string[]);
-  for (const version of latestVersions
-    .filter(isHostVersion)
-    .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))) {
-    const candidate = path.join(latestRoot, version, "gh");
-    if (existsSync(candidate)) return candidate;
-  }
-  const root = path.join(toolchainRootDir(dataDir), "gh");
-  const versions = await readdir(root).catch(() => [] as string[]);
-  for (const version of versions.sort((left, right) =>
-    right.localeCompare(left, undefined, { numeric: true }),
-  )) {
-    const platforms = await readdir(path.join(root, version)).catch(() => [] as string[]);
-    for (const platform of platforms) {
-      const candidate = path.join(root, version, platform, "gh");
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
 }
 
 /** Only a descriptor for this data directory establishes a local connection match. */
@@ -302,17 +223,6 @@ async function diagnosticConnection(
   return null;
 }
 
-function desktopAppPath(home: string): string | null {
-  if (process.platform !== "darwin") return null;
-  for (const candidate of [
-    "/Applications/OrkestratorV2.app",
-    path.join(home, "Applications", "OrkestratorV2.app"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
 export async function collectFixFacts(options: {
   resolved: ResolvedFixAgent;
   version: string;
@@ -322,9 +232,14 @@ export async function collectFixFacts(options: {
   now?: Date;
 }): Promise<FixFacts> {
   const { resolved, dataDir, env } = options;
-  const logsDir = path.join(dataDir, "logs");
-  const binDir = defaultToolchainBinDir(dataDir);
+  const machine = await collectBugReportMachineFacts({
+    dataDir,
+    toolchainBinDir: defaultToolchainBinDir(dataDir),
+    toolchainRoot: toolchainRootDir(dataDir),
+    ...(options.now ? { now: options.now } : {}),
+  });
   return {
+    ...machine,
     agent: {
       name: resolved.agent.name,
       displayName: resolved.agent.displayName,
@@ -335,66 +250,21 @@ export async function collectFixFacts(options: {
     cliCommand: Bun.which("orkestrator", { PATH: env.PATH ?? "" })
       ? "orkestrator"
       : `bunx orkestrator@${options.version}`,
-    platform: process.platform,
-    osRelease: `${os.type()} ${os.release()}`,
-    arch: process.arch,
-    bunVersion: Bun.version,
-    now: (options.now ?? new Date()).toISOString(),
     workDir: options.workDir,
-    dataDir,
-    dataDirExists: existsSync(dataDir),
-    logsDir,
-    debugLogging: readApplicationLogSettings(dataDir).enabled,
-    recentLogs: await recentLogFiles(logsDir),
-    backend: backendInstance(dataDir),
-    toolchainBinDir: existsSync(binDir) ? binDir : null,
-    managedGh: await managedGhBinary(dataDir),
     diagnosticConnection: await diagnosticConnection(dataDir, env),
-    desktopApp: desktopAppPath(os.homedir()),
   };
-}
-
-function describeBackend(facts: FixFacts): string {
-  const backend = facts.backend;
-  if (!backend)
-    return "no `backend-instance.json` (no backend has run with this data directory, or it was removed)";
-  const parts = [
-    backend.appVersion ? `version ${backend.appVersion}` : "version not recorded",
-    backend.startedAt ? `started ${backend.startedAt}` : null,
-    backend.pid !== undefined
-      ? `pid ${backend.pid} ${backend.running ? "(running)" : "(not running)"}`
-      : null,
-  ];
-  return parts.filter(Boolean).join(", ");
-}
-
-function describeLogs(facts: FixFacts): string[] {
-  const state = facts.debugLogging
-    ? "on"
-    : "off (Settings → Debug → Save Logs for Debugging); new events are not being written";
-  const lines = [`- Logs directory: ${facts.logsDir} — debug logging is ${state}`];
-  if (facts.recentLogs.length === 0) {
-    lines.push("- Log files: none");
-  } else {
-    lines.push("- Most recent log files:");
-    for (const log of facts.recentLogs) {
-      lines.push(`  - ${log.name} (${log.bytes} bytes, modified ${log.modified})`);
-    }
-  }
-  return lines;
 }
 
 /** The first message the agent receives. Contains paths and versions, never file contents. */
 export function buildFixPrompt(facts: FixFacts): string {
-  const issue = path.join(facts.workDir, "issue.md");
+  const issue = path.join(facts.workDir, BUG_REPORT_DRAFT_FILE);
   const gh = facts.managedGh
     ? `\`gh\` on PATH, or Orkestrator's copy at ${facts.managedGh}`
     : "`gh`";
   return [
     `I started you with \`orkestrator --fix ${facts.agent.name}\` because something in Orkestrator is not working for me. Help me report it to the Orkestrator maintainers. Your job is to (1) understand the problem by talking with me, (2) collect the evidence a maintainer needs from this machine, and (3) file a GitHub issue on https://github.com/${FIX_ISSUE_REPOSITORY} detailed enough that the maintainer can understand, reproduce and fix the problem without coming back to me with questions.`,
     "",
-    "## About Orkestrator",
-    "Orkestrator runs coding agents (Claude Code, Codex, OpenCode, Cursor, Grok Build, Pi) in isolated environments: local git worktrees or Docker containers. It is an Electron desktop app with a Bun backend. The backend can also run on its own through the `orkestrator` CLI (`orkestrator serve`, or as a launchd/systemd service) and be used from a browser or the iOS app, including from another computer over Tailscale. In that case the logs that matter are on the backend's computer.",
+    ...BUG_REPORT_ABOUT_ORKESTRATOR,
     "",
     "## This machine",
     `- Collected: ${facts.now}`,
@@ -402,58 +272,26 @@ export function buildFixPrompt(facts: FixFacts): string {
     `- Orkestrator CLI: ${facts.cliVersion} (run client commands as \`${facts.cliCommand} …\`)`,
     `- Desktop app: ${facts.desktopApp ?? "not found in /Applications (on Linux, or not installed)"}`,
     `- Data directory: ${facts.dataDir}${facts.dataDirExists ? "" : " (does not exist)"}`,
-    `- Backend: ${describeBackend(facts)}`,
-    ...describeLogs(facts),
+    `- Backend: ${describeBugReportBackend(facts)}`,
+    ...describeBugReportLogs(facts),
     `- Managed agent binaries: ${facts.toolchainBinDir ?? "none installed"}`,
     `- You: ${facts.agent.displayName} from ${facts.agent.source} (${facts.agent.executable})`,
     `- Your working directory (scratch space for notes and the draft): ${facts.workDir}`,
     "",
-    "## 1. Understand the problem",
-    "Start with a one- or two-sentence introduction, then ask me to describe the problem in my own words. Follow up a few questions at a time, not as one long questionnaire, until you know:",
-    "- what I was trying to do, what I expected, and what happened instead, with the exact error text (I can give you a screenshot path);",
-    "- the steps that reproduce it, and whether it happens every time;",
-    "- when it started, and whether it began after an Orkestrator update;",
-    "- where it happens: desktop app, web client, iOS app or CLI; a local-worktree, Docker or remote-host environment; and which agent and model.",
+    ...bugReportUnderstandSection("I can give you a screenshot path"),
     "",
-    "## 2. Collect diagnostics",
-    "Gather evidence yourself instead of asking me to copy it. Before each command, say in one sentence what it checks. Stay read-only: do not edit, delete, move, restart, reinstall or update anything, and do not change Orkestrator's data directory or settings. If something needs changing, explain it and let me do it.",
-    "Useful sources:",
-    "- Log files: `orkestrator-ai-YYYY-MM-DD.log` is the desktop app (it includes its backend's output), `orkestrator-backend-YYYY-MM-DD.log` a standalone backend; a busy day continues in `.1.log`, `.2.log`, and so on. Search around the time of the problem (errors, warnings, stack traces, the environment or session name) rather than reading whole files.",
-    "- If debug logging is off or the logs predate the problem, ask me to turn on Settings → Debug → Save Logs for Debugging, reproduce the problem, and tell you when I have.",
-    facts.diagnosticConnection
-      ? `- Run \`${facts.cliCommand} host status --connection ${facts.diagnosticConnection}\` and \`${facts.cliCommand} connection check --connection ${facts.diagnosticConnection}\` for this installation; add \`--json\` for detail. They never start or change anything.`
-      : "- No saved CLI connection was verified for this data directory. Use the local evidence above; do not run backend status commands against the saved default or change CLI configuration.",
-    "- Docker environments: `docker version`, `docker ps -a`, and `docker logs --tail 200 <container>` for the affected container.",
-    "- Versions: `<agent> --version` for the agents involved, `git --version`, `gh --version`; on macOS, `defaults read /Applications/OrkestratorV2.app/Contents/Info.plist CFBundleShortVersionString` for the desktop app.",
-    "- `config.json` in the data directory holds settings. Read only the keys that bear on the problem.",
-    "Never open credentials: `gateway-auth.json`, anything under `agent-accounts/`, the file an `authFile` field points to, `.env` files, keychains, or any other token or auth file.",
-    "",
-    "Then work out what is going on: tell me what you think the cause is, how confident you are, and what you ruled out. If it is clearly a problem with my setup (for example Docker is not running or an agent is not signed in), tell me how to fix it and ask whether I still want to file an issue. Name the part of Orkestrator that seems to be at fault if the evidence shows it, but do not guess source file names you have not seen.",
+    ...bugReportDiagnosticsSection(
+      facts.diagnosticConnection
+        ? `- Run \`${facts.cliCommand} host status --connection ${facts.diagnosticConnection}\` and \`${facts.cliCommand} connection check --connection ${facts.diagnosticConnection}\` for this installation; add \`--json\` for detail. They never start or change anything.`
+        : "- No saved CLI connection was verified for this data directory. Use the local evidence above; do not run backend status commands against the saved default or change CLI configuration.",
+    ),
     "",
     "## 3. Draft the issue",
-    "GitHub issues on this repository are public. In everything you put in the issue:",
-    "- remove API keys, tokens, passwords, cookies, auth headers, URLs that carry credentials, and anything read from a credential file;",
-    "- replace my home directory with `~`, and my username, e-mail address, hostnames, Tailscale names, IP addresses, and private repository or project names with placeholders, unless I say they can stay;",
-    "- leave out my prompts, agent conversations and project source code unless I explicitly agree to include them;",
-    "- keep log excerpts to the lines that matter, with their timestamps: a few dozen lines in total.",
+    ...BUG_REPORT_REDACTION_RULES,
     "",
     `Write the issue body to ${issue}, using this structure:`,
     "",
-    "```markdown",
-    "## Summary",
-    "## Steps to reproduce",
-    "## Expected behavior",
-    "## Actual behavior",
-    "## Environment",
-    "(Orkestrator desktop, backend and CLI versions; OS and architecture; desktop, web, iOS or CLI; local, Docker or remote host; agents, models and their versions; how often it happens; first seen; whether an update caused it)",
-    "## Diagnostics",
-    "(log excerpts and command output in fenced code blocks, each inside <details><summary>what it is</summary> … </details>)",
-    "## Analysis",
-    "(likely cause, confidence, what was ruled out)",
-    "## Additional context",
-    "",
-    `_Reported with \`orkestrator --fix ${facts.agent.name}\`._`,
-    "```",
+    ...bugReportIssueTemplate(`_Reported with \`orkestrator --fix ${facts.agent.name}\`._`),
     "",
     "Choose a specific title under 80 characters that says what fails and where. Show me the title and the complete body, and ask me to approve it or ask for changes. Do not file anything until I explicitly approve.",
     "",

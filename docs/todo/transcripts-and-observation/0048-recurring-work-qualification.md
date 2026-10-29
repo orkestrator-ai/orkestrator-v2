@@ -937,9 +937,10 @@ Recorded 2026-10-25 by the worker that implemented this file's code items.
   multi-review rollback gates and benchmark.
 - [0050-transcript-history-efficiency.md](0050-transcript-history-efficiency.md):
   activity-sweep latency against real bridges.
-- [0043-web-annotation-known-limitations.md](../previews-and-annotations/0043-web-annotation-known-limitations.md):
+- [web-page-annotations.md](../../architecture/web-page-annotations.md):
   annotation capture polling (`SELECTION_POLL_MS` in `useAnnotationCapture.ts`)
-  belongs there, not here.
+  belongs with web annotations (formerly todo 0043, retired on 2026-10-29), not
+  here.
 - [recurring-work.md](../../architecture/recurring-work.md) for the inventory
   (B, C and L IDs), scheduling primitives and latency budgets, and
   [testing-guide.md](../../development/testing-guide.md#recurring-work-harness)

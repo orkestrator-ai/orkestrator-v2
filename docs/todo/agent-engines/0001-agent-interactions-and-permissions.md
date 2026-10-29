@@ -900,8 +900,9 @@ All answered on 2026-10-25; the reasoning is in the decisions below.
   fail-closed timeout.~~ Checked 2026-10-25. Every provider has park,
   render, resolve and timeout tests for its main kinds; the cells without one
   (kinds that share another kind's timer, `mcp-url` expiry, some backend
-  mapping fixtures and bridge-route listings, OpenCode abort) are in
-  [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md).
+  mapping fixtures and bridge-route listings, OpenCode abort) got their tests in
+  todo 0162 (retired on 2026-10-29; see
+  [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing)).
   The audit also found OpenCode's capability row claiming `command-approval`
   and `file-approval`, which it never emits; the row now says `question` and
   `permission`.
@@ -1029,9 +1030,11 @@ Decisions made on 2026-10-25 while working through the file.
 ## Related
 
 - [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
-  [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md),
-  [0162-interaction-test-matrix-gaps.md](0162-interaction-test-matrix-gaps.md)
+  [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
   (split out on 2026-10-25).
+- [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing):
+  the OpenCode abort and session-grant rules from todo 0162 (the interaction
+  test gaps, split out on 2026-10-25 and retired on 2026-10-29).
 - [0723-orkestrator-permission-rules.md](0723-orkestrator-permission-rules.md)
   (Orkestrator-owned "always allow" rules, applied as allow-once; meets decision 1's
   list-and-revoke constraint without a provider rule).

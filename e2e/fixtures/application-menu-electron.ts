@@ -22,6 +22,7 @@ app.whenReady().then(async () => {
         selectWindow: (id) => record(`window:${id}`),
         zoom: (direction) => record(`zoom:${direction}`),
         showKeyboardShortcuts: (request) => record(`shortcuts:${request}`),
+        openSettings: () => record("settings"),
         checkForUpdates: () => record("updates"),
       }),
     ),

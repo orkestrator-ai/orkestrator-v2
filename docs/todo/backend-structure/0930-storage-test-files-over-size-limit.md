@@ -16,7 +16,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97e`.
 
 **Problem.** The file is more than twice the 2,000-line guideline in `AGENTS.md`. Since 0214, its sources live in `storage-shared-<topic>.ts` modules and per-area repositories, but the tests for all of them still sit in one file. Anyone changing one config field or catalogue cache has to read the whole thing.
 
-**Context.** [0214](0214-storage-files-over-size-limit.md) (decision "Should the over-limit storage test files be handled too?") recommended a new todo for the storage test files it left over the limit. This is that todo. `AGENTS.md` asks for tests to be split to match their sources.
+**Context.** Todo 0214 (decision "Should the over-limit storage test files be handled too?"; retired on 2026-10-29, see [`storage.md`](../../architecture/storage.md#code-layout)) recommended a new todo for the storage test files it left over the limit. This is that todo. `AGENTS.md` asks for tests to be split to match their sources.
 
 **Investigation.** The 22 blocks group by subject. Config normalisation and migrations come first: `defaultConfig` (`:42`), first-run platform selection, the SSH agent socket, Claude mode and favourite-model normalisation, the OpenCode allowlist and the SDK/ACP bridge runtime (`:42`–`:731`). Next comes the large `backend-owned setup and build surfaces` block (`:732`–`:2134`, 1,400 lines). Then pane-layout intents and tab teardown intents (`:2135`–`:2728`), PR metadata and completion intents (`:2729`–`:2916`), and more config migrations (`:2917`–`:3113`). The rest is hot-store read caching (`:3114`), environment completion and unread state (`:3340`), Kanban point reads and session buffer deletion, the OpenCode and host-agent model catalogue caches (`:3560`–`:4260`), and diff baselines (`:4261`). The file has no `mock.module`. The temp-directory helpers at the top are shared by every block.
 
@@ -52,7 +52,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97e`.
 
 **Problem.** The file is 2,292 lines, 292 over the guideline.
 
-**Context.** [0163](0163-storage-facade-size.md) split `AgentMailRepository` into `AgentMailStore`, `AgentMailboxDirectory`, `AgentMailInjects` and `AgentMailBudgets`. The tests did not follow.
+**Context.** Todo 0163 split `AgentMailRepository` into `AgentMailStore`, `AgentMailboxDirectory`, `AgentMailInjects` and `AgentMailBudgets`. The tests did not follow.
 
 **Investigation.** There are two top-level blocks: `StorageService agent mail` (`:98`–`:1611`, about 1,500 lines) and `StorageService agent mail routes` (`:1612` onwards, about 680 lines), 45 tests in all.
 
@@ -121,6 +121,5 @@ The raw-writer block's first test builds `rawDatabaseWrites(backendSources(), �
 
 ## Related
 
-- [0214-storage-files-over-size-limit.md](0214-storage-files-over-size-limit.md): split the sources and recommended this follow-up.
-- [0163-storage-facade-size.md](0163-storage-facade-size.md): the agent mail collaborators.
+- [`storage.md`](../../architecture/storage.md#code-layout): the split sources and the agent mail collaborators, from todos 0214 (which recommended this follow-up) and 0163, both retired on 2026-10-29.
 - Flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md).

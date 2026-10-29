@@ -128,7 +128,7 @@ fixtures above.
 rule forbids.
 
 **Context.** 0004's analysis worried that a Codex bridge inside the
-compatibility window ([0034](../cross-cutting/0034-mixed-version-compatibility.md))
+compatibility window ([`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window))
 might still advertise `summary`.
 
 **Investigation.** That worry does not apply: the descriptor comes from the
@@ -326,7 +326,8 @@ Fixed on 2026-10-28 (code and unit tests; see Assumptions and decisions).
 
 - [0004-composer-model-parameters.md](0004-composer-model-parameters.md)
   (item 1 and "Assumptions and decisions").
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md).
+- [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)
+  (the support window, from todo 0034, retired on 2026-10-29).
 - [agent-engines.md](../../architecture/agent-engines.md)
 
 ## Replaces

@@ -159,6 +159,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],
     });
+    await expect(api.bugReport.captureWindow()).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:bug-report:capture-window",
+      args: [],
+    });
     await expect(api.permissions.getMacOsStatus()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:macos-status",
       args: [],

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -1075,6 +1076,94 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       permissionProfile: null,
       readableRuntimeRoot: null,
     });
+  });
+
+  test("bug report bridges strip project tools, persist identity, restart, and fence stale exits by pid", async () => {
+    const bridge = path.join(root, "bridges", "codex-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `
+await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ url: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, token: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null }));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    await storage.bugReports.createBugReport({
+      id: "report",
+      createdAt: "t",
+      tabId: "t",
+      scratchDir: checkout,
+      agent: "codex",
+    });
+    const runtimeId = "bug-report:report";
+    const connection = mock(() => {
+      throw new Error("No project tools allowed");
+    });
+    const context = {
+      storage,
+      appRoot: root,
+      resourceRoot: root,
+      toolchainBinDir: managedBin,
+      emit: () => undefined,
+      environmentLifecycleTasks: {},
+      runtime: trackedRuntime(),
+      agentTools: { connection },
+    } as unknown as CommandContext;
+    cleanupContext = context;
+    cleanupRuntimeId = runtimeId;
+    const inherited = {
+      ORKESTRATOR_AGENT_MCP_URL: process.env.ORKESTRATOR_AGENT_MCP_URL,
+      ORKESTRATOR_AGENT_MCP_TOKEN: process.env.ORKESTRATOR_AGENT_MCP_TOKEN,
+    };
+    Object.assign(process.env, {
+      ORKESTRATOR_AGENT_MCP_URL: "http://invalid.test",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "test-token",
+    });
+    try {
+      await expect(startLocalServerUnlocked(runtimeId, context, "claude")).rejects.toThrow(
+        "different agent",
+      );
+      await startLocalServerUnlocked(runtimeId, context, "codex");
+      expect(JSON.parse(await fs.readFile(path.join(checkout, "captured.json"), "utf8"))).toEqual({
+        url: null,
+        token: null,
+      });
+      expect(connection).not.toHaveBeenCalled();
+      const first = (await storage.bugReports.getBugReport("report"))!;
+      expect(first.bridgePid).toBeGreaterThan(0);
+      expect(first.bridgePort).toBeGreaterThan(0);
+      const firstChild = context.runtime.localServers.process(`codex:${runtimeId}`)!;
+      const firstExit = once(firstChild, "exit");
+      firstChild.kill("SIGTERM");
+      await firstExit;
+      await storage.bugReports.mutateBugReport("report", (current) => current);
+      expect((await storage.bugReports.getBugReport("report"))?.bridgePid).toBeUndefined();
+      await startLocalServerUnlocked(runtimeId, context, "codex");
+      const replacement = (await storage.bugReports.getBugReport("report"))!;
+      expect(replacement.bridgePid).not.toBe(first.bridgePid);
+      await storage.bugReports.mutateBugReport("report", (current) => ({
+        ...current,
+        bridgePid: 999999,
+        bridgePort: 1234,
+      }));
+      const child = context.runtime.localServers.process(`codex:${runtimeId}`)!;
+      const exited = once(child, "exit");
+      child.kill("SIGTERM");
+      await exited;
+      // Flush the asynchronous exit callback's queued storage mutation.
+      await storage.bugReports.mutateBugReport("report", (current) => current);
+      expect(await storage.bugReports.getBugReport("report")).toMatchObject({
+        bridgePid: 999999,
+        bridgePort: 1234,
+      });
+    } finally {
+      for (const [key, value] of Object.entries(inherited)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   test("a coordinator runtime refuses a bridge that is not its own platform", async () => {

@@ -86,6 +86,10 @@ test("built application menu resolves native roles and dispatches callbacks", as
       accelerator: "CmdOrCtrl+Shift+K",
       registerAccelerator: false,
     });
+    expect(items.find((item) => item.label === "Settings…")).toMatchObject({
+      accelerator: "CmdOrCtrl+,",
+      registerAccelerator: false,
+    });
 
     await app.evaluate(({ Menu, BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0]!;
@@ -93,6 +97,7 @@ test("built application menu resolves native roles and dispatches callbacks", as
       for (const label of [
         "New Window",
         "Close Tab",
+        "Settings…",
         "Zoom In",
         "Zoom Out",
         "Actual Size",
@@ -118,6 +123,7 @@ test("built application menu resolves native roles and dispatches callbacks", as
     expect(await app.evaluate(() => globalThis.applicationMenuEvents)).toEqual([
       "new-window",
       "close-tab",
+      "settings",
       "zoom:in",
       "zoom:out",
       "zoom:reset",

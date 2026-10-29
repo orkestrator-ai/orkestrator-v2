@@ -19,6 +19,7 @@ import type { PluggableList } from "unified";
 import { toast } from "sonner";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
+import { openLinkExternally } from "@/lib/preview-link-external";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import { PREVIEW_LINK_GESTURE } from "@/lib/preview-service-display";
 import {
@@ -171,7 +172,8 @@ export function MarkdownLink({
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const openPullRequest = usePullRequestOpener();
   const linkSource = useContext(PreviewLinkSourceContext);
-  // Only the explicit gesture opens a preview tab; a plain click is unchanged.
+  // The explicit gesture opens a preview tab. On remote desktop connections,
+  // plain clicks use the service transport, or a preview tab for unresolved ports.
   const previewable = Boolean(linkSource && href && isLoopbackUrl(href));
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -219,7 +221,16 @@ export function MarkdownLink({
       const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
       if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) return;
 
-      void openInBrowser(href).catch((error) => {
+      const opened =
+        previewable && linkSource
+          ? openLinkExternally({
+              environmentId: linkSource.environmentId,
+              sourceTabId: linkSource.tabId,
+              url: href,
+              origin: "agent",
+            })
+          : openInBrowser(href);
+      void opened.catch((error) => {
         console.error("[MessageMarkdown] Failed to open link:", error);
       });
     },

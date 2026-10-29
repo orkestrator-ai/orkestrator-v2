@@ -16,7 +16,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** `apps/backend/src/core/native-agent-service.ts` is 4,276 lines, over twice the 2,000-line guideline, and still growing. Anyone changing one session control reads the whole service.
 
-**Context.** Opened from [0010](0010-native-agent-service-collaborators.md) decision 11, which removed the `extends` chain and moved the stateful clusters into collaborators but left the stateless session work. Size and readability only; no behaviour or ordering risk.
+**Context.** Opened from todo 0010 decision 11, which removed the `extends` chain and moved the stateful clusters into collaborators but left the stateless session work. Size and readability only; no behaviour or ordering risk.
 
 **Investigation.** The service has grown by 396 lines since this file was written (3,880), across 25 commits, mostly mail steering (#1312, #1310), interaction holds (#1273) and MCP evidence (#1251). The session-control block is contiguous: `stopProjectionSession` at `native-agent-service.ts:1879` through `holdProjectionInteraction` at `:2640` and its helpers to about `:2722` (Stop, background-task stop, suggested prompts, resumable sessions, resume, fork at `:2161`, actions at `:2199`, MCP actions, sign-in at `:2265` to `:2311`, steer at `:2312` to `:2491`, controls at `:2492`, interactions), about 840 lines. It already reaches its fences through the dispatcher (`this.promptQueues.withSessionMutationIntent` at `:1882`, `fenceTurnInterrupt` at about `:1916`), so it holds no fence state itself. It calls `resolveProjectionSession` (`:2680`), `provider`, `bridgeConnection` and `dispatchIntent`, which a host object would have to expose; the projection host already exposes several of these (`native-agent-transcript-projection.ts:704` to `:731`).
 
@@ -219,9 +219,9 @@ The new class owns no state, so no `forTesting()` reads moved;
 `collaborators(service)` lists it as `sessionOperations`. The
 `native-agent-service-*.test.ts` oracle suites are unchanged.
 
-Opened 2026-10-23 from
-[0010-native-agent-service-collaborators.md](0010-native-agent-service-collaborators.md)
-(decision 11), which removed the six-layer `extends` chain but left two files
+Opened 2026-10-23 from todo 0010 (decision 11; retired on 2026-10-29, see
+[`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)),
+which removed the six-layer `extends` chain but left two files
 well over the repository's 2,000-line guideline.
 
 ## Current state
@@ -288,7 +288,6 @@ service suites unchanged as the oracle.
 
 ## Related
 
-- [0010-native-agent-service-collaborators.md](0010-native-agent-service-collaborators.md)
 - [0012-backend-core-domain-folders.md](0012-backend-core-domain-folders.md)
 - [`native-agent-service.md`](../../architecture/native-agent-service.md)
 

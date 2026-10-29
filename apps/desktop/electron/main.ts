@@ -91,7 +91,9 @@ import {
   previewPartitionsInUse,
 } from "./preview-partition-retention.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
+import { openServiceInExternalBrowser } from "./preview-external-forward.js";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
+import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 import {
   configurePreviewServiceSession,
   createBrowserPreviewAddressFocusHandler,
@@ -622,24 +624,34 @@ function createWindowBrowserPreviews(
     transport,
     captureStore: browserPreviewCaptureStore(),
     nativeImage,
-    // External browsers never inherit Electron's request hooks: they sign in
+    // External browsers never inherit Electron's request hooks. They sign in
     // through the private preview origin with a one-use grant POSTed by a
-    // loopback handoff page. The grant is never part of a URL.
-    openServiceExternally: async (target) => {
-      const attachment = await previewBackend.invoke<PreviewAttachmentDescriptor>(
-        "create_preview_attachment",
-        {
-          serviceId: target.serviceId,
-          surface: "browser-top-level",
-          path: target.path,
-          clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+    // loopback handoff page (the grant is never part of a URL), or, for a
+    // remote backend without one, open a forward on this machine's loopback.
+    openServiceExternally: (target) =>
+      openServiceInExternalBrowser({
+        remote: connectionId !== LOCAL_CONNECTION_ID,
+        publicationAvailable: async () =>
+          (await previewBackend.invoke<PreviewCapabilities>("get_preview_capabilities", {}))
+            .surfaces.browserTopLevel.available,
+        forward: () => previewTransport.forwardExternally(target),
+        openExternal: (url) => shell.openExternal(url),
+        publish: async () => {
+          const attachment = await previewBackend.invoke<PreviewAttachmentDescriptor>(
+            "create_preview_attachment",
+            {
+              serviceId: target.serviceId,
+              surface: "browser-top-level",
+              path: target.path,
+              clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
+            },
+          );
+          if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
+            throw new Error("This backend cannot publish the preview to an external browser.");
+          }
+          await previewExternalHandoff.open(attachment.attachmentId, attachment.bootstrap);
         },
-      );
-      if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
-        throw new Error("This backend cannot publish the preview to an external browser.");
-      }
-      await previewExternalHandoff.open(attachment.attachmentId, attachment.bootstrap);
-    },
+      }),
   });
   manager = runtime.manager;
   return { ...runtime, previewTransport };
@@ -763,6 +775,13 @@ function createMenu(): void {
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
     // The dialog belongs to the focused renderer, which may be a realm.
     showKeyboardShortcuts: (request) => keyboardShortcuts.request(focusedShortcutTarget(), request),
+    // Settings belong to the window's shell (a realm forwards them there), so
+    // the menu item takes the same path as ⌘, typed in a native view.
+    openSettings: () => {
+      const context = focusedContext();
+      if (context && !context.window.isDestroyed())
+        requestAppShortcut(context.window.webContents, "open-settings");
+    },
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

@@ -413,10 +413,10 @@ evidence. This file only points at it.
   removes its own temporary profile.
 - ~~**Live OpenCode spec.**~~ Done 2026-10-25; evidence under "Live OpenCode
   spec evidence" below. The run found that undo leaves the reverted turn in
-  the transcript, now
-  [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md);
-  the spec's full pass is that file's qualification (passed 2026-10-26 on
-  OpenCode 1.19.4, pinned and unpinned; recorded in 0175). OpenCode 1.19's
+  the transcript, todo 0175 (fixed, and retired on 2026-10-29; see
+  [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration));
+  the spec's full pass was that todo's qualification (passed 2026-10-26 on
+  OpenCode 1.19.4, pinned and unpinned). OpenCode 1.19's
   `session.fork` does **not** fill in `Session.model`: both fork sessions
   had empty `model` and `agent` columns in the profile's `opencode.db`, while
   their sources held `{"id":"gpt-5.6-luna","providerID":"opencode-go"}`. The
@@ -478,7 +478,7 @@ Provider runs (credentials needed). Every provider also has items in [0049-nativ
 | --- | --- |
 | Claude | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
 | Codex | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
-| OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md) (the live spec's undo step) |
+| OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md) |
 | Cursor | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0004-composer-model-parameters.md](../agent-engines/0004-composer-model-parameters.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
 | Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the tool-output check above, [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
 | Pi | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
@@ -797,10 +797,11 @@ did; it was rerun on Sonnet).
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md) for CI gates and
   slow or flaky suites.
-- [0034-mixed-version-compatibility.md](0034-mixed-version-compatibility.md) for
+- [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window) for
   old-client and old-bridge runs.
-- [0175-opencode-undo-keeps-reverted-turn.md](../agent-engines/0175-opencode-undo-keeps-reverted-turn.md)
-  for the undo gap the live OpenCode run found.
+- [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration)
+  ("Undo hides a turn OpenCode still holds") for the undo gap the live
+  OpenCode run found, fixed in todo 0175 (retired on 2026-10-29).
 - The OpenCode paragraph in [`agent-testing.md`](../../development/agent-testing.md)
   was brought up to date on 2026-10-25 (optional pin, new assertions).
 

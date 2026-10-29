@@ -77,7 +77,11 @@ spool image. The backend records the relation as `capture.regionCrop`
 also gets `producerSource`: `client-declared` for a producer named by the
 submitting client (any authenticated client can name `desktop-native`, so the
 thread says "reported by the client, not verified"), `backend` for legacy
-imports and result captures.
+imports and result captures. Source hints (`evidence.sourceHints`) are stored
+and briefed with only their known fields (`webAnnotationSourceHintFields`), and
+a hint declaring `verified: true` is refused: only a backend containment check
+may verify a location, and even a verified hint stays a candidate location
+inside the untrusted evidence.
 
 Page identity comes from the real view URL in main, never from the page:
 `{kind: "port"}` for loopback or gateway previews, `{kind: "service"}` for
@@ -317,7 +321,8 @@ Codex, Cursor or Grok session whose recorded mode is already Plan
 (`planModeScope: "session"`). Otherwise it is labelled advisory, and the
 destination picker lists the sessions in the environment that can discuss
 read-only; with none, it says how to get one (a Claude session, or Plan set in
-a session's own chat). A plan-mode brief tells the agent to answer in its reply
+a session's own chat). Orkestrator never switches a session's mode or opens
+a separate Plan session for a discussion. A plan-mode brief tells the agent to answer in its reply
 and not submit a plan for approval. Neither mode is presented as a sandbox.
 **Request changes** asks for a repository change with a readable report.
 
@@ -587,7 +592,9 @@ What has actually been exercised on a real stack (details and dates in
   errs towards advisory and refusing.
 - The crop relation is checked by image size, not by pixels.
 - The capture `producer` is client-declared and labelled as such; nothing
-  attests it. Provenance is still assigned by the server.
+  attests it. Every client uses the same gateway token, so a desktop
+  signature would prove only that the caller holds it. Provenance is still
+  assigned by the server.
 - The gateway token is a single user credential that reaches every
   environment, as for other environment-scoped commands.
 - An Ask approval policy does not make every provider wait before an edit:

@@ -69,7 +69,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** 0082 fixed the resumed `<environment_context>` reader on 2026-10-26.
 
-**Investigation.** `todo/transcripts-and-observation/0082-codex-resume-shows-environment-context.md` item 3 records both design specs rerun on 2026-10-26 with pinned Codex 0.164.0, with the exclusion dropped: two clients with 1 user row live and 1 resumed, and the full cycle with 3 live and 3 resumed, 13 design MCP calls and 0 failed.
+**Investigation.** Todo 0082 (retired on 2026-10-29; see the Codex bridge's [`AGENTS.md`](../../../bridges/codex-bridge/AGENTS.md#when-touching-the-app-server-engine)) item 3 recorded both design specs rerun on 2026-10-26 with pinned Codex 0.164.0, with the exclusion dropped: two clients with 1 user row live and 1 resumed, and the full cycle with 3 live and 3 resumed, 13 design MCP calls and 0 failed.
 
 **Decisions.**
 
@@ -214,9 +214,8 @@ problems the spec found were fixed before those passes:
 - A resumed Codex transcript shows Codex's synthetic `<environment_context>`
   as a user message the live tab never showed (3 user messages live, 4 after
   resume, with one turn per prompt in the rollout: nothing was sent). Filed as
-  [0082](../transcripts-and-observation/0082-codex-resume-shows-environment-context.md);
-  the step excluded that block until 0082 fixed the reader on 2026-10-26,
-  and now counts every user message (a Codex rerun is owed there).
+  todo 0082; the step excluded that block until 0082 fixed the reader on
+  2026-10-26, and now counts every user message (a Codex rerun is owed there).
 
 Every earlier step (launch, stale Ask agent, approval, handoff) also passed
 for both providers, so the handoff's design context now arriving as a chip in
@@ -477,8 +476,8 @@ Assumptions, each checked live on 2026-10-24 unless noted:
   [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md) for
   archive behaviour.
 - [0081-annotation-fence-in-session-titles.md](../agent-engines/0081-annotation-fence-in-session-titles.md)
-  and [0082-codex-resume-shows-environment-context.md](../transcripts-and-observation/0082-codex-resume-shows-environment-context.md),
-  both found while qualifying this file.
+  and todo 0082 (retired on 2026-10-29), both found while qualifying this
+  file.
 - [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md).
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Agent context").
 

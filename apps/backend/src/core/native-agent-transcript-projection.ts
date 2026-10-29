@@ -78,6 +78,7 @@ import {
   nativeComposerControls,
   resolveReasoningId,
 } from "./native-agent-service-shared.js";
+import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { type CommandCatalogueSnapshot } from "./native-agent-command-catalogue.js";
 import {
@@ -229,6 +230,17 @@ const DIRECT_HISTORY_GAPS_MAX = 512;
 
 function joinedPageCounter(gap: DirectHistoryGap | undefined): CompatibilityPathId {
   return gap ? `history.joined-v1-page.${gap}` : "history.joined-v1-page";
+}
+
+/**
+ * Whether user rows of this runtime may open with a server-authored context
+ * block: a coordinator conversation's, or a bug report's pointer to its
+ * briefing. Both use the coordinator context tags.
+ */
+function hasServerPromptPreamble(environmentId: string): boolean {
+  return Boolean(
+    coordinatorIdFromRuntimeId(environmentId) || bugReportIdFromRuntimeId(environmentId),
+  );
 }
 
 type PromptPresentationKind = NonNullable<
@@ -2063,7 +2075,7 @@ export class NativeAgentTranscriptProjection {
       input.liveWindow.messages,
       NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
       initialPromptPresentation,
-      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      hasServerPromptPreamble(input.environmentId),
       summary ? { providerSessionId } : undefined,
       overlay,
     );
@@ -2232,7 +2244,7 @@ export class NativeAgentTranscriptProjection {
       snapshot.revisedMessages,
       normalized.messages,
       initialPromptPresentation,
-      Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      hasServerPromptPreamble(input.environmentId),
       summary ? { providerSessionId } : undefined,
       overlay,
     );
@@ -2271,7 +2283,7 @@ export class NativeAgentTranscriptProjection {
       context: {
         sessionKey,
         ...(summary ? { remoteSessionId: providerSessionId } : {}),
-        coordinator: Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+        coordinator: hasServerPromptPreamble(input.environmentId),
       },
       previous,
       sameHistory:
@@ -3879,7 +3891,7 @@ export class NativeAgentTranscriptProjection {
             Math.max(limit, providerPage.messages.length),
             NATIVE_PROJECTION_MAX_BYTES,
             resolved.session.initialPromptPresentation,
-            Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+            hasServerPromptPreamble(input.environmentId),
             { providerSessionId },
           );
         } finally {

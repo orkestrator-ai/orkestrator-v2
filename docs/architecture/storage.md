@@ -45,7 +45,9 @@ code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
 `{ coordinators: Pick<CoordinatorsStorage, …> }` beside facade methods) rather
 than the whole service. New areas follow the same shape; the remaining
-forwarders move to areas as their callers are narrowed. The facade itself only
+forwarders move to areas as their callers are narrowed. Forwarders are written
+out, never generated at run time: the writer guard reads them and the area
+`Pick`s as its entry points, and the surface stays greppable. The facade itself only
 opens and closes the database, runs the start-up steps (`init`) and exposes
 the change journal.
 
@@ -272,6 +274,12 @@ that holds a `StorageContext` without the facade reaching it, a scanned class
 that uses `this.context` as a value outside a constructor, a scanned class
 that extends another, and any backend code outside the storage files that
 names `StorageContext` or a repository.
+
+The guard is static and test-only on purpose. A run-time lease assertion
+would see only the paths tests exercise and could only tell that *some* lease
+is held; the scan sees every call site and checks that every writer of a store
+holds the same one. Likewise a mixed-writer store is rejected by the scan
+rather than detected in production by revision checks on save.
 
 Engines with stores of their own (workflow results, the cleanup ledger,
 display tails, web annotations, transcript artifacts, usage history, design

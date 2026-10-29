@@ -83,6 +83,10 @@ interface Window {
     shell?: {
       openExternal(url: string): Promise<void>;
     };
+    /** Electron only: captures this page for the Report a bug sheet. */
+    bugReport?: {
+      captureWindow(): Promise<string>;
+    };
     /** Electron only: checks protected macOS folders before agent work begins. */
     permissions?: {
       getMacOsStatus(): Promise<

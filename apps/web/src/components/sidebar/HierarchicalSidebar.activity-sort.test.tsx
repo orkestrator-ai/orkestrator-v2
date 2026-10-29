@@ -148,3 +148,24 @@ for (const order of ["newest", "oldest"] as const) {
     expect(ids()).toEqual(order === "newest" ? ["b", "a"] : ["a", "b"]);
   });
 }
+
+test("the static bottom bar follows the scrolling list, outside it", async () => {
+  installDesktopFake({
+    list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+    datasets: { a: { projects: [{ ...project }], environments: { p: [{ ...environment }] } } },
+    respondPortal: (command) => (command === "get_projects" ? [] : undefined),
+  });
+  useProjectStore.setState({ projects: [], hasLoaded: true });
+  useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
+  const { container } = render(
+    <FederationProvider>
+      <HierarchicalSidebar />
+    </FederationProvider>,
+  );
+  const settings = await screen.findByRole("button", { name: "Global settings" });
+  const scroll = container.querySelector("[data-sidebar-scroll]")!;
+  const bar = container.querySelector("[data-sidebar-bottom-bar]")!;
+  expect(scroll.nextElementSibling).toBe(bar);
+  expect(bar.contains(settings)).toBe(true);
+  expect(within(bar as HTMLElement).getByRole("button", { name: "Report a bug" })).toBeTruthy();
+});

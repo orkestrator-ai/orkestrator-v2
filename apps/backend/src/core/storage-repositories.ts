@@ -4,6 +4,7 @@ import { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
 import { AgentMailInjects } from "./storage-agent-mail-injects.js";
 import { AgentMailStore } from "./storage-agent-mail-store.js";
 import { AgentMailRepository } from "./storage-agent-mail.js";
+import { BugReportsRepository } from "./storage-bug-reports.js";
 import { BuildPipelinesRepository } from "./storage-build-pipelines.js";
 import { ConfigRepository } from "./storage-config.js";
 import type { StorageContext } from "./storage-context.js";
@@ -65,6 +66,7 @@ export class StorageRepositories {
   readonly publicOperations: PublicOperationsRepository;
   readonly coordinators: CoordinatorsRepository;
   readonly agentAccounts: AgentAccountsRepository;
+  readonly bugReports: BugReportsRepository;
   readonly graphTemplates: GraphTemplatesRepository;
   readonly graphRuns: GraphRunsRepository;
   readonly graphEffects: GraphEffectsRepository;
@@ -96,6 +98,7 @@ export class StorageRepositories {
     this.publicOperations = new PublicOperationsRepository(context, files, this);
     this.coordinators = new CoordinatorsRepository(context, files, this);
     this.agentAccounts = new AgentAccountsRepository(context);
+    this.bugReports = new BugReportsRepository(context, files);
     this.graphTemplates = new GraphTemplatesRepository(context);
     this.graphRuns = new GraphRunsRepository(context, this);
     this.graphEffects = new GraphEffectsRepository(context, this);

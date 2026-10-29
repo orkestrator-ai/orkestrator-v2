@@ -277,8 +277,6 @@ Run on omarchy-hp (Linux) on 2026-10-28.
 ## Related
 
 - [0390-backend-module-state-beyond-0133.md](0390-backend-module-state-beyond-0133.md): the remaining per-backend module state, after 0133 (finished and deleted).
-- [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md)
-- [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md)
 - [backend-runtime.md](../../architecture/backend-runtime.md)
 
 ## Replaces

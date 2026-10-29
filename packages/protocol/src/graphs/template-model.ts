@@ -15,6 +15,7 @@ import {
   type NativeAgentPlainCapability,
 } from "../native-agent.js";
 import type { ArtifactTypeDef } from "./artifact-type-def.js";
+import type { GraphMockPins } from "./mock-pins.js";
 import type { GraphPredicate } from "./predicate-shape.js";
 
 export const GRAPH_TEMPLATE_FORMAT = "orkestrator.graph";
@@ -599,6 +600,11 @@ export interface GraphTemplateV1 {
   /** Designer positions by node id; ignored by the compiler and digest. */
   layout?: Record<string, GraphLayoutPoint>;
   acknowledgements?: GraphAcknowledgement[];
+  /**
+   * Pinned mock outputs by node id (item 213, `graphs/mock-pins.ts`); designer
+   * data like `layout`, ignored by the compiler and digest.
+   */
+  mockPins?: GraphMockPins;
 }
 
 /** The outlets a gate or human node exposes; undefined for other kinds. */

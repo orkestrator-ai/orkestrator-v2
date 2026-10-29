@@ -110,7 +110,7 @@ describe("GraphDescribeDialog", () => {
     const { onCancelJob, onOpenChange } = renderDialog({
       job: job({ progress: "correcting", repairs: 1 }),
     });
-    expect(screen.queryByLabelText("What should the graph do?")).toBeNull();
+    expect(screen.queryByLabelText("What should the graph do?") === null).toBe(true);
     expect(screen.getByRole("status").textContent).toContain(
       "Correcting the draft the compiler refused…",
     );

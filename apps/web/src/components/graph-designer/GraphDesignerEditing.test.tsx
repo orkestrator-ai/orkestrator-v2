@@ -261,7 +261,7 @@ describe("GraphDesignerTab editing", () => {
     expect(draft().acknowledgements?.map((entry) => entry.kind)).toEqual(["taint", "taint"]);
     // The next browser compile finds nothing pending: the template may launch.
     await waitFor(() =>
-      expect(container.querySelector("[data-graph-pending-acknowledgements]")).toBeNull(),
+      expect(container.querySelector("[data-graph-pending-acknowledgements]") === null).toBe(true),
     );
     expect(graphDesignerTab(TAB_ID).compile?.launchable).toBe(true);
   });

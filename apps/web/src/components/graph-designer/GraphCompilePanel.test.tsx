@@ -88,7 +88,7 @@ describe("GraphCompilePanel", () => {
       plan: null,
     });
     const row = container.querySelector('[data-graph-diagnostic="template-invalid"]')!;
-    expect(row.querySelector("button")).toBeNull();
+    expect(row.querySelector("button") === null).toBe(true);
     expect(row.textContent).toContain("nodes must be an array");
     expect(screen.getByText("3 more not shown.")).toBeDefined();
     expect(screen.getByText("Draft, compiled in the browser")).toBeDefined();

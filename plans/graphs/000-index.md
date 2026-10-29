@@ -74,7 +74,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | in-progress | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
 | 211 | [211-run-view.md](211-run-view.md) | 2 | in-progress | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |
 | 212 | [212-editable-designer.md](212-editable-designer.md) | 2 | in-progress | 107, 109, 110 | Canvas editing with undo, inspector forms, prompt and type editors, live compile, safe save, taint acknowledgement. |
-| 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | not-started | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
+| 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | in-progress | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
 | 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | not-started | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |
 | 215 | [215-describe-a-graph.md](215-describe-a-graph.md) | 2 | in-progress | 103, 107, 212 | An agent turns a description into a `graph-template` artifact, repaired against compiler diagnostics, opened as an unsaved draft. |
 | 216 | [216-documentation.md](216-documentation.md) | 2 | not-started | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
@@ -87,7 +87,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 - [x] Code rewind works as it does in the pipeline.
 - [ ] A backend restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover activations.
 - [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs.
-- [ ] A mock run of every example template passes with zero provider sessions.
+- [x] A mock run of every example template passes with zero provider sessions. (evidence: [213](213-mock-runs.md) Notes, "Tests"; `apps/backend/src/core/graph-mock-provider.test.ts`, "mock runs of the report §9 examples" and "mock runs of the built-ins' duplicates")
 - [ ] The inactive-environment test passes for the run view and human nodes.
 - [ ] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction.
 

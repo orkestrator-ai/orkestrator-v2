@@ -99,7 +99,7 @@ describe("GraphQuestionAnswerForm", () => {
       />,
     );
     expect(screen.getByRole("heading", { name: "Fix asked" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send answer" }) === null).toBe(true);
     expect(screen.getByText("Yes")).toBeTruthy();
   });
 });

@@ -448,7 +448,7 @@ describe("GraphRunTab rehydration", () => {
       expect(screen.getByTestId("graph-run-status").textContent).toBe("Complete"),
     );
     expect(faceOf("plan").getAttribute("data-flow-state")).toBe("complete");
-    expect(screen.queryByRole("button", { name: "Cancel run…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel run…" }) === null).toBe(true);
   });
 
   test("a deleted run says so", async () => {

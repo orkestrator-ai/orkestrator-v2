@@ -133,6 +133,6 @@ describe("GraphPromptEditor", () => {
       target: { value: "builtin:build" },
     });
     expect(agent(harness.current(), "design").prompt).toEqual({ builtIn: "build" });
-    expect(screen.queryByRole("combobox", { name: /^Template/ })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /^Template/ }) === null).toBe(true);
   });
 });

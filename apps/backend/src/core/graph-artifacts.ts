@@ -306,6 +306,36 @@ export class GraphArtifactStore {
     );
   }
 
+  /**
+   * A mock run's reference artifact (item 213): the envelope of a sealed file
+   * that is never written. `contents` only derive the file's hash and size,
+   * so the artifact has the identity a real one with that content would
+   * have; nothing touches an environment (a mock run may have none).
+   * {@link verify} accepts such a file without reading it. Refused for a run
+   * that is not a mock run.
+   */
+  async putMockReference(
+    input: GraphArtifactInput & { contents: Buffer; extension?: string; value?: unknown },
+  ): Promise<GraphArtifact> {
+    const run = await this.requireRun(input.runId);
+    if (!run.mock) {
+      throw new GraphStorageError("invalid-artifact", "Only a mock run stores unwritten files");
+    }
+    const definition = this.typeOf(run, input.type, "reference");
+    if (input.value !== undefined) this.checkValue(definition, input.value, input.validation);
+    const digest = sha256(input.contents);
+    return this.runs.putGraphArtifact(
+      this.envelope(input, {
+        file: {
+          path: graphArtifactFilePath(run.id, digest, input.extension),
+          sha256: digest,
+          bytes: input.contents.byteLength,
+        },
+        ...(input.value === undefined ? {} : { value: input.value }),
+      }),
+    );
+  }
+
   private async writeFile(environment: Environment, filePath: string, contents: Buffer) {
     if (environment.environmentType === "local") {
       if (!environment.worktreePath) {
@@ -388,6 +418,8 @@ export class GraphArtifactStore {
       return { ok: false, code: "not-confined", message: "The artifact names another location" };
     }
     const run = await this.runs.getGraphRun(runId);
+    // A mock run's files are never written (`putMockReference`).
+    if (run?.mock) return { ok: true, artifact };
     const environment =
       run?.environmentId !== undefined
         ? await this.dependencies.storage.getEnvironment(run.environmentId)

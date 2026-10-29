@@ -87,6 +87,15 @@ import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { AdmissionLease } from "./work-admission.js";
 import { stableSpreadMs } from "./workflow-supervisor.js";
 
+/**
+ * The workspace whose locks a run's activations hold: its environment, but
+ * none for a mock run (item 213), which never touches a workspace and so
+ * never blocks a real run on it.
+ */
+export function graphRunLockedWorkspace(run: Pick<GraphRun, "environmentId" | "mock">) {
+  return run.mock ? undefined : run.environmentId;
+}
+
 /** Default observation cadence of a running activation (report §8.2: as reviewers are). */
 export const GRAPH_RUN_OBSERVATION_MS = 3_000;
 /** Cadence of a run that is provisioning, cancelling or has new work to plan. */
@@ -292,7 +301,7 @@ class GraphRunPass {
 
   /** Keeps the lock table in step with what the run holds; wakes waiters on a release. */
   private syncLocks(run: GraphRun): void {
-    const environmentId = run.environmentId;
+    const environmentId = graphRunLockedWorkspace(run);
     const released = this.deps.locks.set(
       run.id,
       environmentId,
@@ -391,7 +400,8 @@ class GraphRunPass {
       node,
       activation,
       ...(binding ? { binding } : {}),
-      environmentId: this.run.environmentId!,
+      // Empty only for an environment-less mock run, whose executors touch no environment.
+      environmentId: this.run.environmentId ?? "",
       artifacts: this.deps.artifacts,
       signal: this.options.signal,
       ...(this.options.lease ? { lease: this.options.lease } : {}),
@@ -743,9 +753,13 @@ class GraphRunPass {
         return;
       }
       await this.cancelSurplus();
-      const environmentId = this.run.environmentId!;
+      // A mock run shares no workspace: its own holds are the only ones.
+      const environmentId = graphRunLockedWorkspace(this.run);
       const decision = selectGraphAdmissions(this.run, {
-        others: this.deps.locks.others(environmentId, this.run.id),
+        others:
+          environmentId === undefined
+            ? { writers: 0, readers: 0 }
+            : this.deps.locks.others(environmentId, this.run.id),
         workspaceKnown: this.deps.workspaceKnown(),
       });
       const at = this.at();

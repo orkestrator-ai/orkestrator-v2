@@ -165,7 +165,10 @@ export interface GraphExecutorContext {
   readonly activation: Readonly<NodeActivation>;
   /** Agent nodes: the model this activation runs on (its branch's panel member or lens role). */
   readonly binding?: GraphModelBinding;
-  /** The run's environment. Every admitted activation has one. */
+  /**
+   * The run's environment. Every admitted activation of a live run has one;
+   * an environment-less mock run (item 213) passes "" to its mock executors.
+   */
   readonly environmentId: string;
   /** Reads (with `verify`/`requireVerified`) and stores this run's artifacts. */
   readonly artifacts: GraphArtifactStore;

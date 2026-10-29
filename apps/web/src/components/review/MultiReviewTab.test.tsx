@@ -1576,7 +1576,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     // A reviewer whose host had a sandbox says nothing.
     selectFlowNode("Reviewer 2 ·");
     await inspector().findByText(/Read only/);
-    expect(screen.queryByTestId("multi-reviewer-sandbox-off-reviewer-2")).toBeNull();
+    expect(screen.queryByTestId("multi-reviewer-sandbox-off-reviewer-2") === null).toBe(true);
 
     selectFlowNode("Consolidation");
     expect((await screen.findByTestId("multi-review-consolidation-sandbox-off")).textContent).toBe(

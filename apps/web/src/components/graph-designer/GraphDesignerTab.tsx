@@ -10,6 +10,7 @@ import {
   Loader2,
   Network,
   PencilRuler,
+  PlayCircle,
 } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -28,6 +29,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { launchGraphMockRun } from "@/lib/backend/graph-mock";
+import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { writeText } from "@/lib/native/clipboard";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
@@ -75,6 +78,9 @@ import { useGraphDesignerEditing } from "./useGraphDesignerEditing";
 
 /** Wait this long after the last edit before compiling the draft in the browser. */
 export const GRAPH_DRAFT_COMPILE_DELAY_MS = 250;
+
+/** Each mock activation appears to run this long, so the run view shows the graph moving. */
+export const GRAPH_DESIGNER_MOCK_STEP_MS = 1_000;
 
 function isTextTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
@@ -339,6 +345,42 @@ export function GraphDesignerTab({
     return () => window.removeEventListener("keydown", listener);
   }, [isActive, editingNow]);
 
+  // A mock run (item 213) launches a stored template: an unsaved or new draft is saved first.
+  const mockRun = () =>
+    run("start a mock run", async () => {
+      if (!projectId) return;
+      let ref = view.selected;
+      if (editor && (editor.isNew || graphDraftDirty(editor))) {
+        const saved = await saveDraft(tabId);
+        // The editing bar says why a save did not happen.
+        if (!saved) return;
+        persistSelected(saved.summary.ref);
+        ref = saved.summary.ref;
+      }
+      if (!ref) return;
+      const result = await launchGraphMockRun({
+        ref,
+        projectId,
+        stepMs: GRAPH_DESIGNER_MOCK_STEP_MS,
+      });
+      const opened = requestGraphRunView({
+        runId: result.run.id,
+        projectId,
+        environmentId,
+        mock: true,
+      });
+      toast.success("Mock run started", {
+        description: `${opened ? "" : `Run ${result.run.id.slice(0, 8)}. `}No provider sessions, no tokens, no pull requests or ticket changes.`,
+      });
+    });
+  const mockBlocked = !projectId
+    ? "Mock runs need a project"
+    : summary?.engine !== undefined && !editor
+      ? "A built-in runs on its own engine; duplicate it to mock a copy"
+      : !summary && !editor?.isNew
+        ? "Choose a template first"
+        : null;
+
   const duplicate = () =>
     run("duplicate the template", async () => {
       if (!summary) return;
@@ -448,6 +490,24 @@ export function GraphDesignerTab({
           >
             <ClipboardCopy className="size-3.5" />
             Copy JSON
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-graph-mock-run=""
+            disabled={mockBlocked !== null || busy !== null || editor?.saving === true}
+            title={
+              mockBlocked ??
+              "Run the graph with canned answers (examples or your pins): no provider sessions, no tokens, no pull requests or ticket changes"
+            }
+            onClick={() => void mockRun()}
+          >
+            {busy === "start a mock run" ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <PlayCircle className="size-3.5" />
+            )}
+            Mock run
           </Button>
           <Button
             variant="ghost"

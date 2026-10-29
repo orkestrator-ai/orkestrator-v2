@@ -36,8 +36,8 @@ describe("GraphSystemEditor", () => {
     const { harness, container } = renderWithGraphEditor(kindsTemplate(), (template) => (
       <GraphSystemEditor node={nodeOf<GraphSystemNode>(template, "pr")} />
     ));
-    expect(container.querySelector("[data-graph-system-port-issues]")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Use default ports" })).toBeNull();
+    expect(container.querySelector("[data-graph-system-port-issues]") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Use default ports" }) === null).toBe(true);
     fireEvent.change(screen.getByLabelText("Action"), { target: { value: "wait-for-checks" } });
     expect(nodeOf<GraphSystemNode>(harness.current(), "pr").action).toBe("wait-for-checks");
     const issues = container.querySelector("[data-graph-system-port-issues]") as HTMLElement;
@@ -49,7 +49,7 @@ describe("GraphSystemEditor", () => {
     // The spec's required inputs and its outputs, named as the built-ins name them.
     expect(node.inputs).toEqual([{ name: "pr", type: "pr-result@1" }]);
     expect(node.outputs).toEqual([{ name: "checks", type: "check-summary@1" }]);
-    expect(container.querySelector("[data-graph-system-port-issues]")).toBeNull();
+    expect(container.querySelector("[data-graph-system-port-issues]") === null).toBe(true);
     expect(harness.edits.map((entry) => entry.label)).toEqual([
       "Change action",
       "Use the default ports of Wait for checks",
@@ -72,7 +72,7 @@ describe("GraphSystemEditor", () => {
     );
     // wait-for-checks only reads.
     fireEvent.change(action, { target: { value: "wait-for-checks" } });
-    expect(container.querySelector('[data-graph-badge="side-effect"]')).toBeNull();
+    expect(container.querySelector('[data-graph-badge="side-effect"]') === null).toBe(true);
   });
 
   test("lists the types the action reads and produces and adds a missing port", () => {
@@ -263,7 +263,7 @@ describe("GraphHumanEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove option later" }));
     expect(form().options).toHaveLength(2);
     // Two options is the minimum.
-    expect(screen.queryByRole("button", { name: /Remove option/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Remove option/ }) === null).toBe(true);
   });
 
   test("edit form names an input; timeout explains waiting", () => {

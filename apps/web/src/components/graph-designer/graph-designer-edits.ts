@@ -20,6 +20,7 @@ import {
 } from "@orkestrator/protocol/graphs/template";
 import { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { layoutGraphTemplate } from "./graph-designer-layout";
+import { moveGraphMockPins } from "./graph-designer-mock";
 import { graphSystemDefaultPorts } from "./graph-designer-system-actions";
 
 /**
@@ -318,6 +319,9 @@ export function removeGraphNode(template: GraphTemplateV1, nodeId: string): Grap
     layout,
   };
   if (template.loops) next.loops = loops;
+  const mockPins = moveGraphMockPins(template.mockPins, nodeId, null);
+  if (mockPins) next.mockPins = mockPins;
+  else delete next.mockPins;
   return next;
 }
 
@@ -416,6 +420,7 @@ export function renameGraphNode(
       })),
     }));
   }
+  if (template.mockPins) next.mockPins = moveGraphMockPins(template.mockPins, from, to)!;
   return next;
 }
 

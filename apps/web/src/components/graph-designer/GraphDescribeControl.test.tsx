@@ -233,7 +233,7 @@ describe("Describe a graph in the designer", () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss the failed request" }));
     });
     await waitFor(() =>
-      expect(document.querySelector('[data-graph-describe-status="failed"]')).toBeNull(),
+      expect(document.querySelector('[data-graph-describe-status="failed"]') === null).toBe(true),
     );
   });
 
@@ -251,7 +251,7 @@ describe("Describe a graph in the designer", () => {
       { environmentId: ENVIRONMENT_ID },
     ]);
     await waitFor(() =>
-      expect(document.querySelector('[data-graph-describe-status="running"]')).toBeNull(),
+      expect(document.querySelector('[data-graph-describe-status="running"]') === null).toBe(true),
     );
   });
 });

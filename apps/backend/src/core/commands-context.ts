@@ -119,6 +119,8 @@ export type CommandContext = {
   graphQuestions?: import("./graph-agent-questions.js").GraphAgentQuestions;
   /** "Describe a graph" jobs, one per environment (item 215). */
   graphDescribe?: import("./graph-describe-service.js").GraphDescribeService;
+  /** Mock run launches and their retention (item 213; `graph_run_mock`). */
+  graphMock?: import("./graph-mock-launch.js").GraphMockRuns;
 };
 
 export type CommandHandler = (

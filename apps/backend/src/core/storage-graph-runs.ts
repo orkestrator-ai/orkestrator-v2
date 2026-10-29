@@ -5,6 +5,7 @@ import {
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_ARTIFACT_FORMAT_VERSION,
   GRAPH_RUN_FORMAT_VERSION,
+  GRAPH_RUN_TERMINAL_STATUSES,
   graphArtifactFootprint,
   graphArtifactLimitViolation,
   graphRunLimitViolation,
@@ -507,6 +508,56 @@ export class GraphRunsRepository {
   }
 
   /**
+   * Removes one finished run that has no environment, with every artifact and
+   * effect row of it: the retention of environment-less mock runs (item 213),
+   * which environment deletion never reaches. Refuses a run with an
+   * environment (environment deletion owns those) and an unfinished one.
+   * Returns whether a run was removed.
+   */
+  async deleteEnvironmentlessGraphRun(runId: string): Promise<boolean> {
+    if (!isGraphRunId(runId)) return false;
+    return this.enqueueGraphRunMutation(async () => {
+      const stored = this.context.loadStoreRow(this.graphRunsFile(), runId);
+      if (!isRecord(stored)) return false;
+      if (stored.environmentId !== undefined) {
+        throw new GraphStorageError(
+          "invalid-run",
+          "A run with an environment leaves with its environment",
+        );
+      }
+      if (
+        typeof stored.status !== "string" ||
+        !(GRAPH_RUN_TERMINAL_STATUSES as readonly string[]).includes(stored.status)
+      ) {
+        throw new GraphStorageError("invalid-run", "Only a finished run can be removed");
+      }
+      const rows = this.context.loadStoreRowsByOwner<unknown>(this.graphArtifactsFile(), runId);
+      this.context.database.transaction(() => {
+        for (const row of rows) {
+          if (!isRecord(row) || typeof row.id !== "string") continue;
+          this.context.updateStoreRow<void>(
+            this.graphArtifactsFile(),
+            artifactKey(runId, row.id),
+            () => ({ result: undefined, delete: true }),
+          );
+        }
+        this.context.updateStoreRow<void>(this.graphRunsFile(), runId, () => ({
+          result: undefined,
+          delete: true,
+        }));
+      });
+      this.context.changes.announce(
+        "graph-run",
+        runId,
+        typeof stored.projectId === "string" ? stored.projectId : undefined,
+        undefined,
+        true,
+      );
+      return true;
+    });
+  }
+
+  /**
    * Environment deletion: removes the environment's runs and every artifact
    * row of those runs. Attributed by the stored environment field alone, so
    * a record this build cannot otherwise read still leaves with its
@@ -563,4 +614,5 @@ export type GraphRunsStorage = Pick<
   | "graphArtifactUsage"
   | "supersedeGraphArtifacts"
   | "deleteGraphRunsByEnvironment"
+  | "deleteEnvironmentlessGraphRun"
 >;

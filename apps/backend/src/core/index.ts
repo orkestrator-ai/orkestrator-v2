@@ -193,6 +193,8 @@ import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
 import { GraphDescribeService } from "./graph-describe-service.js";
+import { GraphMockRuns } from "./graph-mock-launch.js";
+import { installGraphMockExecutors } from "./graph-mock-provider.js";
 
 /**
  * One observed attempt of an activity-sweep step that has no overlap guard of
@@ -219,6 +221,8 @@ export class OrkestratorBackend {
   private readonly graphAgents: GraphAgentWiring;
   private readonly graphDescribe: GraphDescribeService;
   private readonly graphDescribeProviders: GraphAgentProviders;
+  /** Mock run launches and their retention (item 213). */
+  private readonly graphMock: GraphMockRuns;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1170,6 +1174,16 @@ export class OrkestratorBackend {
       owner: `backend-${randomUUID()}`,
     });
     this.graphRuns.executors.register(this.graphSystemExecutor);
+    // Mock runs (item 213): mock agent, system and human executors; no
+    // sessions, no side effects. Gates and merges above serve them too.
+    const graphMockOwner = `backend-${randomUUID()}`;
+    installGraphMockExecutors(this.graphRuns.executors, { storage, owner: graphMockOwner });
+    this.graphMock = new GraphMockRuns({
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      storage,
+    });
+    context.graphMock = this.graphMock;
     // Agent nodes run on the shared agent branch runner (item 204).
     this.graphAgents = installGraphAgentExecutor({
       graphRuns: this.graphRuns,
@@ -1722,6 +1736,8 @@ export class OrkestratorBackend {
     await this.graphDescribe.init().catch((error) => {
       console.warn("[backend] Failed to restore graph describe jobs:", error);
     });
+    // Environment-less mock runs of deleted projects (item 213); off the startup path.
+    void this.graphMock.sweepOrphans().catch(() => undefined);
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
     );
@@ -2394,6 +2410,7 @@ export class OrkestratorBackend {
         try {
           await this.graphRuns.shutdown();
           this.graphAgents.dispose();
+          this.graphMock.dispose();
         } catch (error) {
           console.warn("[backend] Failed to drain graph runs:", error);
         }

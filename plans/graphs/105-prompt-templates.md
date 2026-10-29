@@ -189,6 +189,13 @@ built-in templates compile cleanly: `consolidation` takes an optional `package` 
 (recorded validation); `build` and `pipeline-fix` declare their `fix-result` output optional
 (today's Build and Fix turns submit none). See [108](108-builtin-templates.md) Notes.
 
+**2026-10-29 · Code coverage (Phase 1 exit).** `prompt-diagnostics.test.ts` has one minimal
+input per `GRAPH_PROMPT_DIAGNOSTIC_CODES` entry (parser, engine renderer, input renderer, node
+renderer, linter) in a table typed `Record<GraphPromptDiagnosticCode, …>`, plus a final test
+that every case produces its code. Three codes had no test before: `prompt-template-unsupported-tag`
+(`{{{a}}}`), `prompt-template-invalid-tag` (`{{a b}}`) and `prompt-value-missing`. All codes are
+reachable; none removed.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -196,3 +203,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Template engine, variables, five render modes in shared evidence frames, size estimator with bound tests, lints, built-in prompt registry, system contract and `renderGraphNodePrompt`; framing, unattended policy and result-instruction pieces moved to the protocol. · Work and tests done; the Done-when box waits for 107/204 and the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 runs the lints and size estimate; Done-when split, 107 half ticked. · 204 half open.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Per-code prompt diagnostic coverage table. · 204 half of Done-when still open.

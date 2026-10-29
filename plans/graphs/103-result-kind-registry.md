@@ -143,3 +143,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Registry, `graph-output` kind with per-port tools and activation capability, generic provenance validator (review consolidation delegates), environment hook with git-backed checks, combined-schema helpers, docs and tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Behaviour-neutral check for the Phase 1 exit: `git diff --stat c253f0b01 HEAD` over `apps/backend/src/core/workflow-result-conformance.test.ts` and `workflow-result-tools.test.ts` is empty, and both suites pass unchanged (48 pass, 0 fail). · complete; awaiting PR

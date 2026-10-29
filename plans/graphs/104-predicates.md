@@ -136,6 +136,14 @@ replicated members) and edge filters with `graphFilterPredicateScope`, all throu
 `checkGraphPredicateTypes`; every finding is `condition-invalid` with the 104 code as `detail`.
 The Done-when box is split: the 107 half is ticked, the 206 half stays open.
 
+**2026-10-29 · Code coverage (Phase 1 exit).** `predicate-typecheck.test.ts` "one case per
+code" covers every `GRAPH_PREDICATE_TYPE_CODES` entry and `predicate-eval.test.ts` "one case per
+error code" every `GRAPH_PREDICATE_EVAL_ERROR_CODES` entry (`internal` from a revoked proxy).
+Both tables are typed `Record<Code, …>`, so a new code without a case fails the typecheck, and
+a final test asserts every case still produces its code. All codes were already reachable; none
+removed. The structural codes come from 101's guard (`predicate-shape.ts`) and are tested in
+`predicates.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -143,3 +151,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Path roots, scopes and type checker with diagnostic codes, total three-valued evaluator and list filter, table, type-check, example and generated-input totality tests. · Work and tests done; the Done-when box waits for 107 and 206 to use the API and for the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the type checker; Done-when split, 107 half ticked. · 206 half open.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Typed per-code coverage tables for the type checker and the evaluator. · 206 half of Done-when still open.

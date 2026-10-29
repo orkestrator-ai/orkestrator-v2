@@ -3,6 +3,8 @@ import { validateWorkflowJsonSchema } from "../workflow-json-schema";
 import {
   GRAPH_SCHEMA_SOURCES_KEYWORD,
   GRAPH_SCHEMA_SUBSET_BOUNDS,
+  GRAPH_SCHEMA_SUBSET_ERROR_CODES,
+  type GraphSchemaSubsetErrorCode,
   graphProviderSchema,
   graphSchemaAtPath,
   validateGraphSchemaSubset,
@@ -290,6 +292,60 @@ describe("schema subset: rejected constructs, with JSON paths", () => {
       schema.required.push(`p${index}`);
     }
     expect(errorsOf(schema)).toEqual([["$", "too_large"]]);
+  });
+});
+
+/**
+ * One minimal schema per error code. `CODE_CASES` is typed by the code union,
+ * so a new code without a case fails the typecheck; the last test fails at
+ * run time when a case stops producing its code.
+ */
+describe("schema subset: one case per error code", () => {
+  const nested = (depth: number): Draft => {
+    let schema: Draft = { type: "string" };
+    for (let index = 0; index < depth; index++) schema = root({ child: schema });
+    return schema;
+  };
+  const CODE_CASES: Record<GraphSchemaSubsetErrorCode, () => Draft> = {
+    type: () => root({ a: { type: ["string", "null"] } }),
+    required: () => root({ a: { type: "array" } }),
+    enum: () => root({ a: { type: "date" } }),
+    unsupported_keyword: () => root({ a: { type: "string", pattern: "^a" } }),
+    not_applicable: () => ({ type: "string" }),
+    not_required: () => ({ ...root({ a: { type: "string" } }), required: [] }),
+    unknown_property: () => ({ ...root({}), required: ["a"] }),
+    pattern: () => root({ "a b": { type: "string" } }),
+    duplicate: () => root({ a: { type: "string", enum: ["x", "x"] } }),
+    conflict: () => root({ a: { type: "string", const: "x", enum: ["x"] } }),
+    empty: () => root({ a: { type: "string", enum: [] } }),
+    too_few: () => root({ a: { anyOf: [{ type: "string" }] } }),
+    too_many: () =>
+      root({
+        a: {
+          type: "integer",
+          enum: Array.from({ length: GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumValues + 1 }, (_, i) => i),
+        },
+      }),
+    too_large: () => root({ a: { type: "string", title: "x".repeat(201) } }),
+    too_deep: () => nested(GRAPH_SCHEMA_SUBSET_BOUNDS.maxObjectDepth + 1),
+    not_integer: () => root({ a: { type: "integer", minimum: 0.5 } }),
+    out_of_range: () => root({ a: { type: "number", minimum: 2, maximum: 1 } }),
+    // A BigInt passes the depth walk but cannot be serialized.
+    not_json: () => ({ ...root({}), description: 1n }),
+  };
+
+  for (const [code, schema] of Object.entries(CODE_CASES)) {
+    test(code, () => {
+      expect(errorsOf(schema()).map(([, found]) => found)).toContain(code);
+    });
+  }
+
+  test("every code in the list has a case, and every case produces its code", () => {
+    expect(Object.keys(CODE_CASES).sort()).toEqual([...GRAPH_SCHEMA_SUBSET_ERROR_CODES].sort());
+    const missing = GRAPH_SCHEMA_SUBSET_ERROR_CODES.filter(
+      (code) => !errorsOf(CODE_CASES[code]()).some(([, found]) => found === code),
+    );
+    expect(missing).toEqual([]);
   });
 });
 

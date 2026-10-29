@@ -179,6 +179,15 @@ records `budgetCheck` per edge in the plan. "Done when" ticked; the PR is still 
 enum-grammar values, `decision@N` only, else `not_applicable`): the report's "choice enum
 supplied by the node". The §9.3 judge declares its lens keys.
 
+**2026-10-29 · Error-code coverage (Phase 1 exit).** `schema-subset.ts` exports
+`GRAPH_SCHEMA_SUBSET_ERROR_CODES` / `GraphSchemaSubsetErrorCode` (18 codes: `type`, `required`,
+`enum`, `unsupported_keyword`, `not_applicable`, `not_required`, `unknown_property`, `pattern`,
+`duplicate`, `conflict`, `empty`, `too_few`, `too_many`, `too_large`, `too_deep`, `not_integer`,
+`out_of_range`, `not_json`). Every error site goes through a typed `report()`, so a code outside
+the list fails the typecheck. `schema-subset.test.ts` "one case per error code" has a table
+typed `Record<GraphSchemaSubsetErrorCode, …>` and asserts each case produces its code;
+`not_json` (a BigInt in the schema) was untested before. No code was unreachable.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -186,3 +195,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Type library, validators, schema subset, schema from example, assignability, transforms, adapters, families, custom-type guard, decision choices; shared validators moved into the protocol; tests. · Work and tests done; the Done-when box waits for 107 to use the library and for the PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · 107 uses the library; Done-when ticked. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Exported the schema-subset error-code list, typed every error site, added the per-code coverage table. · complete; awaiting PR

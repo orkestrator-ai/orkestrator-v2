@@ -4,6 +4,7 @@ import { graphTemplateExamples } from "./examples";
 import {
   GRAPH_PREDICATE_TYPE_CODES,
   type GraphPredicateScope,
+  type GraphPredicateTypeCode,
   graphFilterPredicateScope,
   graphLoopPredicateScope,
   graphNodePredicateScope,
@@ -297,6 +298,46 @@ describe("predicate type checker", () => {
         "value_type",
       ].sort(),
     );
+  });
+});
+
+/**
+ * One minimal predicate per type-checker code. `CODE_CASES` is typed by the
+ * code union, so a new code without a case fails the typecheck; the last test
+ * fails at run time when a case stops producing its code.
+ */
+describe("predicate type checker: one case per code", () => {
+  const shadowing = graphNodePredicateScope(
+    [{ name: "params", type: "text@1" }],
+    parameters,
+    library,
+  );
+  const codesOf = (predicate: unknown, scope?: GraphPredicateScope) =>
+    errorsOf(predicate, scope).map((error) => error.code);
+  const CODE_CASES: Record<GraphPredicateTypeCode, () => string[]> = {
+    unknown_root: () => codesOf({ path: "plan.commands", op: "nonEmpty" }),
+    shadowed_root: () => codesOf({ path: "params.autoFix", op: "exists" }, shadowing),
+    unknown_path: () => codesOf({ path: "report.findings", op: "nonEmpty" }),
+    through_list: () => codesOf({ path: "report.issues.severity", op: "eq", value: "P0" }),
+    operator_type: () => codesOf({ path: "report.summaryOfChange", op: "lt", value: 3 }),
+    value_type: () => codesOf({ path: "verdict.complete", op: "eq", value: "true" }),
+    enum_value: () => codesOf({ path: "report.verdict.ready", op: "eq", value: "maybe" }),
+    requires_list: () => {
+      const scope = graphFilterPredicateScope(listOf("finding@1").element);
+      return scope.ok ? [] : [scope.code];
+    },
+  };
+
+  for (const [code, run] of Object.entries(CODE_CASES)) {
+    test(code, () => {
+      expect(run()).toContain(code);
+    });
+  }
+
+  test("every code in the list has a case, and every case produces its code", () => {
+    expect(Object.keys(CODE_CASES).sort()).toEqual([...GRAPH_PREDICATE_TYPE_CODES].sort());
+    const missing = GRAPH_PREDICATE_TYPE_CODES.filter((code) => !CODE_CASES[code]().includes(code));
+    expect(missing).toEqual([]);
   });
 });
 

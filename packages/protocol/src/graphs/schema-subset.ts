@@ -122,6 +122,39 @@ const UNSUPPORTED_KEYWORD_HINTS: ReadonlyMap<string, string> = new Map([
   ["uniqueItems", "uniqueness is not portable across providers"],
 ]);
 
+/** Every error code the subset checker reports (`FieldError.code`). */
+export const GRAPH_SCHEMA_SUBSET_ERROR_CODES = [
+  "type",
+  "required",
+  "enum",
+  "unsupported_keyword",
+  "not_applicable",
+  "not_required",
+  "unknown_property",
+  "pattern",
+  "duplicate",
+  "conflict",
+  "empty",
+  "too_few",
+  "too_many",
+  "too_large",
+  "too_deep",
+  "not_integer",
+  "out_of_range",
+  "not_json",
+] as const;
+export type GraphSchemaSubsetErrorCode = (typeof GRAPH_SCHEMA_SUBSET_ERROR_CODES)[number];
+
+/** The checker's only way to report an error, so every code is in the list above. */
+function report(
+  errors: FieldErrorCollector,
+  path: string,
+  code: GraphSchemaSubsetErrorCode,
+  message: string,
+): void {
+  errors.add(path, code, message);
+}
+
 const KIB = 1024;
 
 /** Bounds a subset schema stays within, beyond the template's byte and depth bounds. */
@@ -225,9 +258,9 @@ function checkText(
   name: string,
 ): void {
   if (typeof value !== "string") {
-    state.errors.add(path, "type", `${name} must be a string`);
+    report(state.errors, path, "type", `${name} must be a string`);
   } else if (graphUtf8Bytes(value) > maxBytes) {
-    state.errors.add(path, "too_large", `${name} must be at most ${maxBytes} UTF-8 bytes`);
+    report(state.errors, path, "too_large", `${name} must be at most ${maxBytes} UTF-8 bytes`);
   }
 }
 
@@ -241,9 +274,10 @@ function checkBound(
     const bound = schema[key];
     if (bound === undefined) continue;
     if (typeof bound !== "number" || !Number.isFinite(bound)) {
-      state.errors.add(joinPath(path, key), "type", `${key} must be a finite number`);
+      report(state.errors, joinPath(path, key), "type", `${key} must be a finite number`);
     } else if (type === "integer" && !Number.isSafeInteger(bound)) {
-      state.errors.add(
+      report(
+        state.errors,
         joinPath(path, key),
         "not_integer",
         `${key} of an integer must be an integer`,
@@ -255,7 +289,12 @@ function checkBound(
     typeof schema.maximum === "number" &&
     schema.minimum > schema.maximum
   ) {
-    state.errors.add(joinPath(path, "minimum"), "out_of_range", "minimum must not exceed maximum");
+    report(
+      state.errors,
+      joinPath(path, "minimum"),
+      "out_of_range",
+      "minimum must not exceed maximum",
+    );
   }
 }
 
@@ -267,24 +306,30 @@ function checkEnumAndConst(
 ): void {
   if (schema.const !== undefined) {
     if (!isScalar(schema.const) || !scalarMatchesType(schema.const, type)) {
-      state.errors.add(joinPath(path, "const"), "type", `const must be a ${type} value`);
+      report(state.errors, joinPath(path, "const"), "type", `const must be a ${type} value`);
     }
     if (schema.enum !== undefined) {
-      state.errors.add(joinPath(path, "enum"), "conflict", "Use either const or enum, not both");
+      report(
+        state.errors,
+        joinPath(path, "enum"),
+        "conflict",
+        "Use either const or enum, not both",
+      );
     }
   }
   if (schema.enum === undefined) return;
   const enumPath = joinPath(path, "enum");
   if (!Array.isArray(schema.enum)) {
-    state.errors.add(enumPath, "type", "enum must be an array");
+    report(state.errors, enumPath, "type", "enum must be an array");
     return;
   }
   if (schema.enum.length === 0) {
-    state.errors.add(enumPath, "empty", "enum must list at least one value");
+    report(state.errors, enumPath, "empty", "enum must list at least one value");
     return;
   }
   if (schema.enum.length > GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumValues) {
-    state.errors.add(
+    report(
+      state.errors,
       enumPath,
       "too_many",
       `enum must list at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumValues} values`,
@@ -293,7 +338,8 @@ function checkEnumAndConst(
   }
   state.enumValues += schema.enum.length;
   if (state.enumValues > GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumValuesTotal) {
-    state.errors.add(
+    report(
+      state.errors,
       enumPath,
       "too_many",
       `A schema may list at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumValuesTotal} enum values in total`,
@@ -304,18 +350,19 @@ function checkEnumAndConst(
   schema.enum.forEach((entry, index) => {
     const entryPath = joinPath(enumPath, index);
     if (!isScalar(entry) || !scalarMatchesType(entry, type)) {
-      state.errors.add(entryPath, "type", `enum values must be ${type} values`);
+      report(state.errors, entryPath, "type", `enum values must be ${type} values`);
     } else if (
       typeof entry === "string" &&
       graphUtf8Bytes(entry) > GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumStringBytes
     ) {
-      state.errors.add(
+      report(
+        state.errors,
         entryPath,
         "too_large",
         `enum values must be at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxEnumStringBytes} UTF-8 bytes`,
       );
     } else if (seen.has(entry)) {
-      state.errors.add(entryPath, "duplicate", "enum values must be unique");
+      report(state.errors, entryPath, "duplicate", "enum values must be unique");
     }
     seen.add(entry);
   });
@@ -329,7 +376,8 @@ function checkObjectSchema(
   objectDepth: number,
 ): void {
   if (objectDepth > GRAPH_SCHEMA_SUBSET_BOUNDS.maxObjectDepth) {
-    state.errors.add(
+    report(
+      state.errors,
       path,
       "too_deep",
       `Objects may be nested at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxObjectDepth} deep`,
@@ -338,16 +386,17 @@ function checkObjectSchema(
   }
   const propertiesPath = joinPath(path, "properties");
   if (schema.properties === undefined) {
-    state.errors.add(propertiesPath, "required", "An object schema must list its properties");
+    report(state.errors, propertiesPath, "required", "An object schema must list its properties");
     return;
   }
   if (!isPlainRecord(schema.properties)) {
-    state.errors.add(propertiesPath, "type", "properties must be an object");
+    report(state.errors, propertiesPath, "type", "properties must be an object");
     return;
   }
   const keys = Object.keys(schema.properties);
   if (keys.length > GRAPH_SCHEMA_SUBSET_BOUNDS.maxPropertiesPerObject) {
-    state.errors.add(
+    report(
+      state.errors,
       propertiesPath,
       "too_many",
       `An object may have at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxPropertiesPerObject} properties`,
@@ -356,7 +405,8 @@ function checkObjectSchema(
   }
   state.properties += keys.length;
   if (state.properties > GRAPH_SCHEMA_SUBSET_BOUNDS.maxPropertiesTotal) {
-    state.errors.add(
+    report(
+      state.errors,
       propertiesPath,
       "too_many",
       `A schema may have at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxPropertiesTotal} properties in total`,
@@ -367,7 +417,8 @@ function checkObjectSchema(
   const requiredPath = joinPath(path, "required");
   const required = new Set<string>();
   if (!Array.isArray(schema.required)) {
-    state.errors.add(
+    report(
+      state.errors,
       requiredPath,
       schema.required === undefined ? "required" : "type",
       "required must list every property",
@@ -376,11 +427,11 @@ function checkObjectSchema(
     schema.required.forEach((entry, index) => {
       const entryPath = joinPath(requiredPath, index);
       if (typeof entry !== "string") {
-        state.errors.add(entryPath, "type", "required entries must be property names");
+        report(state.errors, entryPath, "type", "required entries must be property names");
       } else if (required.has(entry)) {
-        state.errors.add(entryPath, "duplicate", `"${entry}" is listed twice`);
+        report(state.errors, entryPath, "duplicate", `"${entry}" is listed twice`);
       } else if (!Object.hasOwn(schema.properties as object, entry)) {
-        state.errors.add(entryPath, "unknown_property", `"${entry}" is not a property`);
+        report(state.errors, entryPath, "unknown_property", `"${entry}" is not a property`);
       }
       if (typeof entry === "string") required.add(entry);
     });
@@ -388,7 +439,8 @@ function checkObjectSchema(
 
   const additionalPath = joinPath(path, "additionalProperties");
   if (schema.additionalProperties !== false) {
-    state.errors.add(
+    report(
+      state.errors,
       additionalPath,
       schema.additionalProperties === undefined ? "required" : "type",
       "additionalProperties must be false",
@@ -398,7 +450,8 @@ function checkObjectSchema(
   for (const key of keys) {
     const propertyPath = joinPath(propertiesPath, key);
     if (key.length > GRAPH_TEMPLATE_BOUNDS.maxKeyChars || !GRAPH_PATH_SEGMENT_PATTERN.test(key)) {
-      state.errors.add(
+      report(
+        state.errors,
         propertyPath,
         "pattern",
         `Property names must be letters, digits, '_' or '-', starting with a letter or '_', at most ${GRAPH_TEMPLATE_BOUNDS.maxKeyChars} characters`,
@@ -406,7 +459,8 @@ function checkObjectSchema(
       continue;
     }
     if (Array.isArray(schema.required) && !required.has(key)) {
-      state.errors.add(
+      report(
+        state.errors,
         propertyPath,
         "not_required",
         'Every property must be listed in required; express an optional value as anyOf with { "type": "null" }',
@@ -433,13 +487,14 @@ function visitSchema(
   insideAnyOf = false,
 ): void {
   if (!isPlainRecord(schema)) {
-    state.errors.add(path, "type", "Expected a schema object");
+    report(state.errors, path, "type", "Expected a schema object");
     return;
   }
   const allowedKeywords = new Set<string>([...GRAPH_SCHEMA_KEYWORDS, ...GRAPH_SCHEMA_ANNOTATIONS]);
   for (const key of Object.keys(schema)) {
     if (allowedKeywords.has(key)) continue;
-    state.errors.add(
+    report(
+      state.errors,
       joinPath(path, key),
       "unsupported_keyword",
       UNSUPPORTED_KEYWORD_HINTS.get(key) ?? `"${key}" is not in the portable schema subset`,
@@ -466,21 +521,24 @@ function visitSchema(
   if (schema[GRAPH_SCHEMA_SOURCES_KEYWORD] !== undefined) {
     const sourcesPath = joinPath(path, GRAPH_SCHEMA_SOURCES_KEYWORD);
     if (schema[GRAPH_SCHEMA_SOURCES_KEYWORD] !== true) {
-      state.errors.add(sourcesPath, "type", `${GRAPH_SCHEMA_SOURCES_KEYWORD} must be true`);
+      report(state.errors, sourcesPath, "type", `${GRAPH_SCHEMA_SOURCES_KEYWORD} must be true`);
     } else if (isRoot || insideAnyOf) {
-      state.errors.add(
+      report(
+        state.errors,
         sourcesPath,
         "not_applicable",
         "Mark the property itself as a provenance field, not the root or an anyOf branch",
       );
     } else if (!isStringListSchema(schema)) {
-      state.errors.add(
+      report(
+        state.errors,
         sourcesPath,
         "not_applicable",
         "A provenance field must be an array of strings, optionally nullable",
       );
     } else if (state.sources.length >= GRAPH_SCHEMA_SUBSET_BOUNDS.maxSourcesFields) {
-      state.errors.add(
+      report(
+        state.errors,
         sourcesPath,
         "too_many",
         `A schema may mark at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxSourcesFields} provenance fields`,
@@ -493,11 +551,16 @@ function visitSchema(
   if (schema.anyOf !== undefined) {
     const anyOfPath = joinPath(path, "anyOf");
     if (isRoot) {
-      state.errors.add(anyOfPath, "not_applicable", "The root schema must be an object, not anyOf");
+      report(
+        state.errors,
+        anyOfPath,
+        "not_applicable",
+        "The root schema must be an object, not anyOf",
+      );
       return;
     }
     if (insideAnyOf) {
-      state.errors.add(anyOfPath, "not_applicable", "Nested anyOf is not portable; flatten it");
+      report(state.errors, anyOfPath, "not_applicable", "Nested anyOf is not portable; flatten it");
       return;
     }
     for (const key of Object.keys(schema)) {
@@ -505,7 +568,8 @@ function visitSchema(
         continue;
       }
       if (allowedKeywords.has(key)) {
-        state.errors.add(
+        report(
+          state.errors,
           joinPath(path, key),
           "not_applicable",
           "A schema with anyOf may carry only annotations beside it; move constraints into the branches",
@@ -513,14 +577,15 @@ function visitSchema(
       }
     }
     if (!Array.isArray(schema.anyOf)) {
-      state.errors.add(anyOfPath, "type", "anyOf must be an array");
+      report(state.errors, anyOfPath, "type", "anyOf must be an array");
       return;
     }
     if (
       schema.anyOf.length < 2 ||
       schema.anyOf.length > GRAPH_SCHEMA_SUBSET_BOUNDS.maxAnyOfBranches
     ) {
-      state.errors.add(
+      report(
+        state.errors,
         anyOfPath,
         schema.anyOf.length < 2 ? "too_few" : "too_many",
         `anyOf must have between 2 and ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxAnyOfBranches} branches`,
@@ -535,11 +600,12 @@ function visitSchema(
 
   const typePath = joinPath(path, "type");
   if (schema.type === undefined) {
-    state.errors.add(typePath, "required", "Every schema needs a type (or anyOf)");
+    report(state.errors, typePath, "required", "Every schema needs a type (or anyOf)");
     return;
   }
   if (Array.isArray(schema.type)) {
-    state.errors.add(
+    report(
+      state.errors,
       typePath,
       "type",
       'A type union is not portable; use anyOf (for example with { "type": "null" })',
@@ -547,19 +613,20 @@ function visitSchema(
     return;
   }
   if (!(GRAPH_SCHEMA_TYPES as readonly unknown[]).includes(schema.type)) {
-    state.errors.add(typePath, "enum", `type must be one of ${GRAPH_SCHEMA_TYPES.join(", ")}`);
+    report(state.errors, typePath, "enum", `type must be one of ${GRAPH_SCHEMA_TYPES.join(", ")}`);
     return;
   }
   const type = schema.type as GraphSchemaType;
   if (isRoot && type !== "object") {
-    state.errors.add(typePath, "not_applicable", "The root schema must be an object");
+    report(state.errors, typePath, "not_applicable", "The root schema must be an object");
     return;
   }
   const applicable = new Set(KEYWORDS_BY_TYPE[type]);
   for (const key of GRAPH_SCHEMA_KEYWORDS) {
     if (key === "type" || key === "anyOf" || schema[key] === undefined) continue;
     if (!applicable.has(key)) {
-      state.errors.add(
+      report(
+        state.errors,
         joinPath(path, key),
         "not_applicable",
         `${key} does not apply to type ${type}`,
@@ -573,11 +640,12 @@ function visitSchema(
     case "array": {
       const itemsPath = joinPath(path, "items");
       if (schema.items === undefined) {
-        state.errors.add(itemsPath, "required", "An array schema must describe its items");
+        report(state.errors, itemsPath, "required", "An array schema must describe its items");
         return;
       }
       if (Array.isArray(schema.items)) {
-        state.errors.add(
+        report(
+          state.errors,
           itemsPath,
           "type",
           "Tuple items are not portable; items must be one schema",
@@ -612,11 +680,12 @@ export function checkGraphSchemaSubset(
 ): GraphSchemaSubsetInfo | undefined {
   const failedBefore = errors.errors.length + errors.omitted;
   if (!isPlainRecord(schema)) {
-    errors.add(path, "type", "Expected a schema object");
+    report(errors, path, "type", "Expected a schema object");
     return undefined;
   }
   if (jsonDepthExceeds(schema, GRAPH_SCHEMA_SUBSET_BOUNDS.maxSchemaDepth)) {
-    errors.add(
+    report(
+      errors,
       path,
       "too_deep",
       `A schema may be nested at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxSchemaDepth} levels deep`,
@@ -627,11 +696,12 @@ export function checkGraphSchemaSubset(
   try {
     bytes = graphUtf8Bytes(JSON.stringify(schema));
   } catch {
-    errors.add(path, "not_json", "A schema must be JSON");
+    report(errors, path, "not_json", "A schema must be JSON");
     return undefined;
   }
   if (bytes > GRAPH_SCHEMA_SUBSET_BOUNDS.maxSchemaBytes) {
-    errors.add(
+    report(
+      errors,
       path,
       "too_large",
       `A schema must serialize to at most ${GRAPH_SCHEMA_SUBSET_BOUNDS.maxSchemaBytes} bytes`,

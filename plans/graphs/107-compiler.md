@@ -241,9 +241,16 @@ Passed through unchanged: 106's `capability-remote-write` (D12), `capability-mcp
 **2026-10-29 · Changed by 108.** `output-unused` no longer reports a port that a loop's `until`
 reads (`<node>.<port>`). Test in `compile.test.ts`. See [108](108-builtin-templates.md) Notes.
 
+**2026-10-29 · Phase 1 exit criterion.** The per-code table in `compile-diagnostics.test.ts`
+(typed over `GraphCompileDiagnosticCode | GraphCapabilityIssueCode`, so 106's
+`GRAPH_CAPABILITY_ISSUE_CODES` are covered too) is the compiler's evidence. The other Phase 1
+modules now have the same kind of table: `predicate-typecheck.test.ts`, `predicate-eval.test.ts`,
+`prompt-diagnostics.test.ts`, `schema-subset.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Compiler passes, plan with digests, cost, lints, taint and acknowledgements, 103's port rules, per-code tests, example acknowledgements; 102 box ticked, 104/105 boxes split. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Recorded the per-code coverage evidence for the Phase 1 exit criterion. · complete; awaiting PR

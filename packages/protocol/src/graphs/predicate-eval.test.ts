@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { GRAPH_TEMPLATE_BOUNDS as B } from "./grammar";
 import {
+  GRAPH_PREDICATE_EVAL_ERROR_CODES,
   type GraphPredicateEnvironment,
+  type GraphPredicateEvalErrorCode,
   type GraphPredicateTruth,
   evaluateGraphElementPredicate,
   evaluateGraphPredicate,
@@ -412,6 +414,45 @@ describe("predicate evaluator: hostile input", () => {
       truth: "unknown",
       error: { code: "malformed" },
     });
+  });
+});
+
+/**
+ * One minimal input per evaluation error code. `CODE_CASES` is typed by the
+ * code union, so a new code without a case fails the typecheck; the last test
+ * fails at run time when a case stops producing its code.
+ */
+describe("predicate evaluator: one case per error code", () => {
+  const CODE_CASES: Record<GraphPredicateEvalErrorCode, () => string | undefined> = {
+    malformed: () => evaluateGraphPredicate({ path: "a", op: "near" }, environment).error?.code,
+    too_deep: () => {
+      let deep: unknown = leaf("report.issues", "nonEmpty");
+      for (let index = 0; index < B.maxPredicateDepth; index++) deep = { not: deep };
+      return evaluateGraphPredicate(deep, environment).error?.code;
+    },
+    too_many_nodes: () => {
+      const leaves = Array.from({ length: B.maxPredicateNodes }, () => leaf("a", "exists"));
+      return evaluateGraphPredicate({ any: leaves }, environment).error?.code;
+    },
+    // A value that throws when read: the evaluator contains it.
+    internal: () => {
+      const revocable = Proxy.revocable({}, {});
+      revocable.revoke();
+      return evaluateGraphPredicate(leaf("doc.x", "exists"), { values: { doc: revocable.proxy } })
+        .error?.code;
+    },
+  };
+
+  for (const [code, run] of Object.entries(CODE_CASES)) {
+    test(code, () => {
+      expect(run()).toBe(code);
+    });
+  }
+
+  test("every code in the list has a case, and every case produces its code", () => {
+    expect(Object.keys(CODE_CASES).sort()).toEqual([...GRAPH_PREDICATE_EVAL_ERROR_CODES].sort());
+    const missing = GRAPH_PREDICATE_EVAL_ERROR_CODES.filter((code) => CODE_CASES[code]() !== code);
+    expect(missing).toEqual([]);
   });
 });
 

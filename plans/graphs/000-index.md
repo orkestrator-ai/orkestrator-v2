@@ -53,8 +53,8 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
 - [x] All three built-in templates compile cleanly. The pinning tests fail when either the engine or the template changes alone (evidence: [108](108-builtin-templates.md) Notes, "How the pins work").
-- [ ] The result-kind registry change is behaviour-neutral, as shown by the unchanged conformance suites.
-- [ ] Compiler, predicate, prompt and schema-subset modules have unit tests for every diagnostic code.
+- [x] The result-kind registry change is behaviour-neutral, as shown by the unchanged conformance suites (evidence: `git diff --stat c253f0b01 HEAD` over `apps/backend/src/core/workflow-result-conformance.test.ts` and `workflow-result-tools.test.ts` is empty, and both pass; [103](103-result-kind-registry.md) Progress log).
+- [x] Compiler, predicate, prompt and schema-subset modules have unit tests for every diagnostic code (evidence: tables typed by each code list in `packages/protocol/src/graphs/compile-diagnostics.test.ts`, `predicate-typecheck.test.ts`, `predicate-eval.test.ts`, `prompt-diagnostics.test.ts`, `schema-subset.test.ts`; [107](107-compiler.md) Notes).
 - [x] The designer shows the built-in templates and imported user templates, with diagnostics pinned to nodes and edges (evidence: [110](110-canvas-spike-and-read-only-designer.md) Notes, "Tests and evidence"; `e2e/agent-testing/graph-designer.spec.ts`).
 - [x] The canvas library is chosen and the decision is recorded (evidence: [110](110-canvas-spike-and-read-only-designer.md) Notes, "Spike result"; [`docs/architecture/graphs.md`](../../docs/architecture/graphs.md#canvas-library-decision-spike-2026-10-29)).
 

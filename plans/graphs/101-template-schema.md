@@ -176,9 +176,20 @@ human `edit` node; §9.2 completes the nodes around the loop after Phase 0. The 
 acknowledgement is not encoded because it needs 107's warning digest. 107 may adjust the
 fixtures if a compile rule needs it.
 
+**2026-10-29 · No typed guard-code list.** Unlike 102, 104, 105 and 107, the template guard has
+no exported code list with a typed coverage table. That would not be cheap: its codes come
+through string-typed helpers shared outside the graphs (`field-validation.ts`), `grammar.ts`,
+`predicate-shape.ts`, `artifact-type-def.ts` and the schema subset, so typing every site means
+changing those shared helpers. Every code listed under "Guard API" has a test in
+`template.test.ts` (or `predicates.test.ts` for `predicate`). That list leaves out codes the
+guard passes through from nested checks: `artifact-type-def.ts` reports `unknown_path`,
+`not_a_list` and `built_in_type`, and the schema subset reports
+`GRAPH_SCHEMA_SUBSET_ERROR_CODES` (see 102).
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Template model, guards, bounds, predicate shape, §9 example fixtures, exports, lint boundary and tests; compiler box added to 107. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Noted why the guard has no typed code list, and which nested-check codes the documented list omits. · complete; awaiting PR

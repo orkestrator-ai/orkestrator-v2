@@ -17,6 +17,7 @@ describe("agent activity vocabulary", () => {
       "claude-tmux",
       "native-agent",
       "multi-review",
+      "graph-run",
     ]);
   });
 });

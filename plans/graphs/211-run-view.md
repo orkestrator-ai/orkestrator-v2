@@ -28,10 +28,10 @@ Users watch and control a run in the same visual language as Multi Review and th
 - [x] Tab type `graph-run` in `apps/web/src/contexts/TerminalContext.tsx`.
 - [x] `graphRunFlowModel(plan, run)` over `apps/web/src/components/flow-graph/`: replicated activations share a column, loops unroll to the right, superseded activations collapse into "Previous attempt" nodes, nodes not yet reached are faded.
 - [x] Inspector: transcript (`PipelineSessionTranscript`), input and output artifacts rendered by type, profile and enforced tier, guard results.
-- [ ] Actions: retry, restart from here, rewind code to here, skip, open session, approve/edit/choose, pause, resume, cancel.
+- [x] Actions: retry, restart from here, rewind code to here, skip, open session, approve/edit/choose, pause, resume, cancel.
   - [x] Retry, skip, open session, pause, resume and cancel (backend commands in this item).
-  - [ ] Restart from here and rewind code to here: UI and preview dialog built against `GraphRunRewindBackend`; connect to item 210's wrappers after merge (see Notes).
-  - [ ] Approve, edit and choose: the human node slot `GraphHumanNodePanel` is left for item 208.
+  - [x] Restart from here and rewind code to here: UI and preview dialog built against `GraphRunRewindBackend`; connected to item 210's wrappers by item 208 (see Notes).
+  - [x] Approve, edit and choose: the human node slot `GraphHumanNodePanel`, filled by item 208.
 - [x] Rehydrate from snapshots only.
 - [x] Backend read side: `graph_runs_list`, `graph_run_get` (revisioned, `knownRevision`), `graph_run_cancel|pause|resume|retry|skip`, bounded `graph_run_artifact` and `graph_run_transcript`.
 - [x] Transcript capture: the agent executor's `captureTranscript` is wired to the content-addressed transcript store.
@@ -57,9 +57,12 @@ Users watch and control a run in the same visual language as Multi Review and th
 - 2026-10-29 · To connect after merge: (1) 210: point `graphRunRewindBackend` in `apps/web/src/lib/backend/graph-runs.ts` at `restartGraphRunActivation` / `previewGraphRunCodeRewind` / `rewindGraphRunCode` (`lib/backend/graph-run-rewind.ts`; `GraphRunRestartResult.run` is what the view applies), switch `GraphRunCodeRewindPreview` to 210's protocol type, and replace the restart/rewind availability in `graph-run-actions.ts` with `graphRunRestartBlocker` / `graphRunCodeRewindBlocker` (show the blocker as a disabled reason). The seam already calls 210's command names with a `requestId`, so it works before that rewiring. (2) 208: fill `GraphHumanNodePanel`. (3) 213/214: the agent-testing scenario below.
 - 2026-10-29 · Agent testing: no launch path exists on this branch (no command creates a run until 214; mock runs are 213), so "start, switch away, finish, return" cannot run on a real stack yet. `e2e/agent-testing/graph-run-view.spec.ts` (browser suite) covers the read side on a real stack: empty runs list, `graph_runs_list`/`graph_run_get` through the gateway, switch away and back, reload. The inactive path is covered by component tests (`GraphRunTab.test.tsx` "Rehydration": unmount sends nothing, a run that finished meanwhile shows its final state on remount, change events re-read). Add the real-stack scenario to that spec once 213/214 land.
 
+- 2026-10-29 · Item 208 connected (1) and (2): `graphRunRewindBackend` calls 210's wrappers with 210's `GraphRunCodeRewindPreview`; `graph-run-actions.ts` uses `graphRunRestartBlocker` (restart offered for a started, current attempt; a running activation restarts in place) and `graphRunCodeRewindBlocker` (Rewind code to here listed but disabled with the reason, via the new `GraphRunActionSpec.disabledReason`); `GraphHumanNodePanel` answers human nodes (see 208's Notes).
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Run view: commands, retry/skip, transcript capture, `graph-run` tab, projection, inspector, actions, tests, read-side browser spec. · Connect 210 rewind wrappers and 208 human slot after merge; real-stack inactive-path run after 213/214.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks, item 208) · 210 rewind wiring and 208 human slot connected; Actions ticked. · Real-stack inactive-path run after 213/214.

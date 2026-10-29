@@ -321,7 +321,8 @@ commands, with shapes in `@orkestrator/protocol/graphs/run-view`:
 | `graph_run_retry`, `graph_run_skip` | `{runId, activationKey}` | `{status: "changed", run}` |
 | `graph_run_artifact` | `{runId, artifactId}` | the envelope; the value inline up to 512 KiB (else `valueOmitted: "too-large"`); a reference artifact's file metadata and descriptor, never the file |
 | `graph_run_transcript` | `{runId, activationKey, fromIndex?, maxBytes?}` | one window (default 2 MiB, at most 4 MiB) of the activation's stored transcript, or `none` |
-| `graph_run_answer` | item 204 | answers an agent's `ask_human` question |
+| `graph_run_answer` | item 204: `{runId, activationKey, questionId, kind, text?, choice?}`; item 208: `{runId, activationKey, waitId, decision, outlet?, value?, note?}` | answers an agent's `ask_human` question (`{activationKey, question}`) or a waiting human node (`{activationKey, human}`) |
+| `graph_run_pending` | `{runId}` or `{environmentId}` | `GraphRunPendingInteraction[]`: every open human wait and `ask_human` question of the run (or of the environment's live runs), derived from the stored record |
 
 Refusals throw `GraphRunServiceError` (`invalid-request`, `not-found`,
 `invalid-state`, `disabled`). Snapshots go through `graphRunViewSnapshot`,
@@ -356,8 +357,8 @@ the inspector can show the earlier ones.
 
 **Inspector** (`GraphRunInspector`): Details and Transcript views. Details
 holds the agent's `ask_human` question with `GraphQuestionAnswerForm` (choices,
-free text, decline; reusable by item 208's human nodes), the human node slot
-(`GraphHumanNodePanel`, which item 208 fills with approve, edit and choose),
+free text, decline), the human node's `GraphHumanNodePanel` (item 208; see
+"Human nodes"),
 the error and its cause, the profile, the enforcement tier actually applied and
 `enforcementReason`, the sandbox policy and turn mode, guard results with their
 paths, the session's agent, tokens and times, provisional `report_progress`
@@ -382,14 +383,82 @@ and deleting a run with its environment deletes its transcripts.
 and in the inspector): Retry (a failed position of a live run, as a new
 attempt; `graph_run_retry` records a user `restart` rewind over the lineage
 descendants and the never-started markers derived from the failure), Restart
-from here and Rewind code to here… (item 210's backend, through
-`GraphRunRewindBackend` in `lib/backend/graph-runs.ts`; the rewind opens a
-preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
+from here and Rewind code to here… (item 210's wrappers in
+`lib/backend/graph-run-rewind.ts`, behind `GraphRunRewindBackend` in
+`lib/backend/graph-runs.ts`; offered by 210's `graphRunRestartBlocker`, and
+Rewind code to here stays listed but disabled with `graphRunCodeRewindBlocker`'s
+reason, such as "Pause the run first", when only the code rewind is refused;
+the rewind opens a preview dialog and confirms with the HEAD it showed), Skip (a `waiting` or
 `ready` position, held back by a pause, a workspace lock or the run's limits),
 Open session (the agent's provider session in a native tab that refuses to
 start a fresh one), and the run-wide Pause, Resume and Cancel (with a
 confirmation). Mock runs are labelled "Mock run" in the header and "mock" in
 the list.
+
+## Human nodes (item 208)
+
+A person takes part in a run at an explicit point (P2.8, D15, report §6.8).
+Shapes and validation are in `@orkestrator/protocol/graphs/run`
+(`run-human.ts`); the executor and the answers are in
+`apps/backend/src/core/graph-node-human.ts`.
+
+**Forms.** `approve` takes `approved` or `rejected`; `edit` does the same, and
+an approval may carry an edited value of the form's `edit` input; `choose`
+takes one option's outlet. A decided node forwards its single-value inputs as
+its outputs, as a gate does, with an edited value in place of the original.
+
+**The wait.** The executor's first call records `activation.human`
+(`GraphHumanWait {id, form, openedAt, answer?}`, a fresh UUID) and reports the
+activation `awaiting-human`; the pass then makes the run `waiting` when nothing
+else is admitted. The executor is observed only when woken
+(`observeAfterMs: null`), or at the node's deadline. The wait is in the run
+record, so it survives a backend restart (recovery observes it) and any view
+rehydrates it. A restart of the node (item 210) supersedes the activation; its
+wait dies with it.
+
+**Answers.** `graph_run_answer` with a `waitId` goes to `GraphHumanAnswers`,
+which checks `graphHumanAnswerProblem` (the activation waits, the wait id is
+this attempt's, it is unanswered, the decision fits the form, the note and an
+edited value are within bounds), stores an edited value as a new artifact of
+the original's type (validated against it, with the producing port's `choices`
+for `decision@1`; lineage: the original; producer: the human activation on the
+edited port; an unchanged value stores nothing), then records the answer under
+the run's lock through `GraphRunService.updateActivation`, checking again, which
+wakes the run to observe the activation. A refused answer records nothing
+(invariant 10). `ask_human` answers share the command and the locked update.
+
+**Timeouts.** Without `timeoutMs` the run waits indefinitely, paused rather
+than failed. With one, a human node's default `onFailure` is `route`
+(`graphHumanRoutesFailures`), which gives it an implicit `error` port carrying
+`error@1` (`GRAPH_HUMAN_ERROR_PORT`; edges read it as `{node, port: "error"}`
+without an outlet, and the designer draws it as an output). The timeout
+arrives as `cancel(…, "timeout")`; the pass fails the activation with cause
+`timeout`, the planner routes `error@1`, and the outlets' consumers are
+skipped. An answer recorded before the deadline still wins. `onFailure:
+fail-run` opts out of the route.
+
+**Where a wait shows.**
+
+- The run view: the face reads "waiting for you" and the inspector's
+  `GraphHumanNodePanel` renders the shared `GraphQuestionAnswerForm` (choices
+  Approve/Reject or the options, an optional note, no decline) and, for `edit`,
+  `GraphArtifactValueEditor`: the type's form for a flat object schema
+  (strings, enums, numbers, booleans, lists of strings, optionally nullable),
+  else JSON, checked live with `validateGraphArtifactValue`.
+- The sidebar (`graph-run-attention.ts`): the environment's `graph-run`
+  activity source is `working`, `waiting` or `idle`
+  (`graphRunEnvironmentActivity`), and each new wait (human wait or question
+  id) records one content-free attention key (`graph-run:<sha256>`), which
+  lights the unread badge with reason `agent_question` once. It runs on
+  `graph-run` changes (debounced per run) and reconciles every environment at
+  start. `GraphRunAttention.onWaitOpened` reports each wait the first time it
+  is recorded.
+- The coordinator (`graph-run-coordinator-status.ts`, observed by
+  `coordinator-status-wakes.ts` for `graph-run` associations): one notice per
+  wait (the key names the newest open wait and when it opened; a wait is news
+  only when it opened after the last one reported), and one when the run
+  completes, fails or is cancelled. Item 214 records the association when the
+  coordinator launches a run.
 
 ## Canvas library decision (spike, 2026-10-29)
 

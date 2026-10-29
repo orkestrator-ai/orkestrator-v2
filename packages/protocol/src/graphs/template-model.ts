@@ -618,6 +618,32 @@ export function graphNodeOutlets(node: GraphNodeSpec): string[] | undefined {
   }
 }
 
+/**
+ * Whether a human node routes its failures (a timeout above all) to an
+ * implicit `error` port carrying `error@1` (P2.8). A human node has no
+ * declared outputs, so the port is implied: an explicit `onFailure: route`,
+ * or the default for a node with `timeoutMs` (a timed-out wait routes to
+ * `error` rather than failing the run; its outlets' consumers are skipped).
+ */
+export function graphHumanRoutesFailures(node: GraphNodeSpec): boolean {
+  if (node.kind !== "human") return false;
+  return (node.onFailure ?? (node.timeoutMs !== undefined ? "route" : "fail-run")) === "route";
+}
+
+/** The implicit output of a human node that routes failures (see {@link graphHumanRoutesFailures}). */
+export const GRAPH_HUMAN_ERROR_PORT: Readonly<GraphOutputPortSpec> = Object.freeze({
+  name: "error",
+  type: "error@1",
+  label: "Timed out",
+  required: false,
+});
+
+/** A node's output ports as producers see them: declared ones, or a human node's implicit `error`. */
+export function graphNodeOutputSpecs(node: GraphNodeSpec): readonly GraphOutputPortSpec[] {
+  if ("outputs" in node) return node.outputs ?? [];
+  return graphHumanRoutesFailures(node) ? [GRAPH_HUMAN_ERROR_PORT] : [];
+}
+
 export function isGraphRunInputRef(source: GraphEdgeSource): source is GraphRunInputRef {
   return "input" in source;
 }

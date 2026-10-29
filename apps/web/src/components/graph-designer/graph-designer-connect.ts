@@ -1,5 +1,6 @@
 import { graphSchemaAtPath, graphSchemaNonNull } from "@orkestrator/protocol/graphs/schema-subset";
 import {
+  graphNodeOutputSpecs,
   isGraphRunInputRef,
   type GraphEdgeSource,
   type GraphLayoutPoint,
@@ -119,7 +120,7 @@ function resolve(library: GraphTypeLibrary, ref: string): GraphValueType | null 
 }
 
 function outputsOf(node: GraphNodeSpec) {
-  return "outputs" in node ? (node.outputs ?? []) : [];
+  return graphNodeOutputSpecs(node);
 }
 
 /** Does `to` reach `from` along edges (so `from → to` would close a cycle)? */

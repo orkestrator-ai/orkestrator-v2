@@ -15,6 +15,7 @@ import {
   type GraphNodeSpec,
   type GraphPortTarget,
   type GraphReplicateAxis,
+  graphHumanRoutesFailures,
   graphNodeOutlets,
   isGraphRunInputRef,
 } from "./template-model.js";
@@ -140,6 +141,13 @@ export function resolveGraphPortTypes(state: GraphCompileState): void {
         }),
       );
     });
+    if (graphHumanRoutesFailures(node)) {
+      // A human node's failures (a timeout) route to its implicit `error` port.
+      state.outputTypes.set(
+        portKey(node.id, "error"),
+        resolve("error@1", { nodeId: node.id, port: "error", path: `${path}.onFailure` }),
+      );
+    }
     if (!("outputs" in node)) continue;
     (node.outputs ?? []).forEach((port, index) => {
       state.outputTypes.set(
@@ -188,6 +196,14 @@ export function checkGraphSource(
   }
   const outlets = graphNodeOutlets(entry.node);
   if (outlets) {
+    if (
+      source.outlet === undefined &&
+      source.port === "error" &&
+      graphHumanRoutesFailures(entry.node)
+    ) {
+      // A human node's routed failure (a timeout): `error@1`, outside its outlets.
+      return true;
+    }
     if (source.outlet === undefined) {
       diagnostics.add(
         "outlet-required",
@@ -442,6 +458,7 @@ export function checkGraphNodeRules(state: GraphCompileState): void {
       );
     });
     if (!("outputs" in node)) {
+      if (node.kind === "human") continue; // its `error` port is implicit
       if ("onFailure" in node && node.onFailure === "route") {
         diagnostics.add(
           "route-without-error-port",

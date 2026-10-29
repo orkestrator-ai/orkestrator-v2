@@ -26,6 +26,7 @@ import type { CompiledGraphPlan } from "./plan.js";
 import type { GraphEnforcementTier, GraphScalarValue } from "./template-model.js";
 import type { GraphErrorCause } from "./types.js";
 import type { GraphAgentSessionState } from "./run-agent-session.js";
+import type { GraphHumanWait } from "./run-human.js";
 
 const KIB = 1024;
 const MIB = 1024 * KIB;
@@ -344,6 +345,8 @@ export interface NodeActivation {
   /** Gate and human nodes: the outlet taken (consumers on other outlets are skipped). */
   outlet?: string;
   session?: GraphActivationSession;
+  /** Human nodes: the wait and, once a person decided, the answer (P2.8, `run-human.ts`). */
+  human?: GraphHumanWait;
   /**
    * The policy the activation actually ran under, recorded before dispatch
    * (required once `session` exists, so a dispatched activation always says

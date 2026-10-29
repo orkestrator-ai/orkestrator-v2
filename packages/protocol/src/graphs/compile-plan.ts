@@ -31,6 +31,7 @@ import {
   type GraphCollectPolicy,
   type GraphNodeSpec,
   type GraphReplicate,
+  graphHumanRoutesFailures,
   graphNodeOutlets,
 } from "./template-model.js";
 import { graphListType, type GraphValueType } from "./types.js";
@@ -148,6 +149,15 @@ function planNode(
       };
     },
   );
+  if (graphHumanRoutesFailures(node)) {
+    // The implicit `error` port a human node's timeout routes to (P2.8).
+    outputs.push({
+      name: "error",
+      type: "error@1",
+      required: false,
+      valueType: plan(state.outputTypes.get(portKey(node.id, "error")) ?? null),
+    });
+  }
   const execution = "retry" in node ? node : undefined;
   const base = {
     id: node.id,
@@ -159,8 +169,9 @@ function planNode(
     outputs,
     ...(node.when !== undefined ? { when: node.when } : {}),
     workspaceAccess: graphNodeWorkspaceAccess(node),
-    onFailure:
-      ("onFailure" in node ? node.onFailure : undefined) ?? (replicated ? "skip" : "fail-run"),
+    onFailure: graphHumanRoutesFailures(node)
+      ? "route"
+      : (("onFailure" in node ? node.onFailure : undefined) ?? (replicated ? "skip" : "fail-run")),
     retry: execution?.retry
       ? { attempts: execution.retry.attempts, on: [...execution.retry.on] }
       : { attempts: 1, on: [] },

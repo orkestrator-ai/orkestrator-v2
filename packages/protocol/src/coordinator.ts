@@ -283,7 +283,8 @@ export interface CoordinatorWorkflowAssociation {
   coordinatorId: string;
   projectId: string;
   conversationId?: string;
-  kind: "environment" | "build-pipeline" | "multi-review";
+  /** `graph-run`: a graph run (item 208 wires its status wake; item 214 records it at launch). */
+  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run";
   resourceId: string;
   /**
    * The node that holds the resource, when it is not this one: a worker

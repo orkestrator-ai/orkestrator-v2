@@ -1973,7 +1973,12 @@ export class OrkestratorBackend {
     // Tell the user now, not when a review stage silently fails to submit its
     // result: can agents in containers reach the agent tools server? Runs in
     // the background (a blocked probe takes seconds) and never rejects.
-    void this.containerHostReachability?.check("boot");
+    // Disposable test backends (the CLI tests and scenarios) turn it off: each
+    // runs on a new data directory, so its probe network would belong to an
+    // owner no reaper revisits. A later on-demand check still runs.
+    if (process.env.ORKESTRATOR_HOST_REACHABILITY_CHECK !== "off") {
+      void this.containerHostReachability?.check("boot");
+    }
   }
 
   /**
@@ -2148,6 +2153,9 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Bounded and never rejects: a running host check removes its probe
+    // network (or shutdown removes it) before the process exits.
+    const reachabilitySettled = this.containerHostReachability?.dispose();
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
@@ -2255,6 +2263,7 @@ export class OrkestratorBackend {
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
+        await reachabilitySettled;
         await Promise.race([
           this.webAnnotations.close().catch((error: unknown) => {
             console.warn(

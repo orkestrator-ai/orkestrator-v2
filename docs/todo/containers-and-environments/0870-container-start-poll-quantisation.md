@@ -54,6 +54,42 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
     - Pros: fewer calls.
     - Cons: worse start latency, against the start-time targets.
 
+### 2. Re-qualify the readiness faults
+
+**Problem.** A bounded in-container wait changes when the backend observes readiness and failure. Faster successful starts must still refuse failed, stale or incomplete boot reports.
+
+**Context.** Task 1 changes both the runtime boot probe and the gateway firewall wait. C09 and the gateway-cannot-apply case in `container-live-readiness.test.ts` exercise failure admission against a real daemon.
+
+**Investigation.** The existing live suite covers a missing firewall, DNS and permission failures, torn status writes, a restart during launch and a gateway that cannot apply its firewall. Deterministic tests should first cover bounded probe output and deadline handling; fake Docker alone cannot establish behavior when an exec is interrupted by an actual restart. Record the image digest and scenario results with the qualification evidence.
+
+**Decisions.**
+
+- **How should the new wait be qualified?**
+  - **Run the deterministic readiness tests, then all existing live readiness-fault cases with a workspace-specific image (recommended).**
+    - Pros: preserves the admission contract across actual restarts and failed boots; reuses established fault fixtures.
+    - Cons: requires a disposable Docker test environment and a rebuilt image.
+  - **Qualify only successful starts with the benchmark.**
+    - Pros: produces latency evidence quickly.
+    - Cons: cannot prove fail-closed behavior or current-boot identity after a restart.
+
+### 3. Re-measure the benchmark
+
+**Problem.** The current call budget includes one Docker exec per unfinished poll. Once task 1 changes that relationship, the call target and latency evidence need to reflect the new behavior.
+
+**Context.** `container-benchmarks.test.ts` reports calls by phase, target and verb, plus separate gateway, runtime-start and readiness durations. `container-qualification.md` records a ≤ 27 call target and unchanged fresh and warm start-time targets. Task 2 must qualify failure behavior before the new timings count as release evidence.
+
+**Investigation.** Compare repeated fresh and warm starts on both CI architectures and the Linux reference host using the same resource budget and attributed harness. Record runner shape, engine version, image digest, incomplete starts and readiness call counts. Compare multiple runs because 0729 measured substantial warm-start variance. A bounded wait can still need multiple exec windows for a slow boot, so any tighter budget must account for that rather than assume one call always suffices.
+
+**Decisions.**
+
+- **When should the calls target change?**
+  - **Measure repeated qualified runs on CI and the reference host, then derive a tighter budget from the observed phases and bounded-window behavior (recommended).**
+    - Pros: ties the target to an explained call count and retains visibility of regressions on both architectures.
+    - Cons: needs a quiet reference-host window and CI evidence after tasks 1 and 2.
+  - **Set the target from one local successful run.**
+    - Pros: gives immediate feedback.
+    - Cons: fits one host's boot time and can hide incomplete starts or runner variance.
+
 ## Constraints and rationale
 
 - The probe stays content-free: it reads only the boot status and firewall

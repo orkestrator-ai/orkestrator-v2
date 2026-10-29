@@ -330,7 +330,9 @@ export async function waitForEgressGatewayFirewall(
         "The environment's egress gateway could not apply its network policy, so the container was not started. Check the gateway's logs, then retry.",
       );
     }
-    const inspection = state === null ? await inspectGateway(gatewayId).catch(() => null) : null;
+    // An inspection failure is a daemon/protocol error, not evidence of a
+    // pending policy. Surface it so the caller can retry without a policy timeout.
+    const inspection = state === null ? await inspectGateway(gatewayId) : null;
     if (inspection === "missing" || (inspection && !inspection.running)) {
       throw lifecycleError(
         "not-ready",

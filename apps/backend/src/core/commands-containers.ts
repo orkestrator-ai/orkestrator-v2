@@ -643,7 +643,6 @@ export async function createDockerContainer(
       redactValues,
     });
     containerId = stdout.trim();
-    rememberNetworkOwner(containerId, gatewayId);
   } catch (error) {
     context.runtime.containerStates.invalidate();
     // A gateway whose workload was certainly not created is removed now; one
@@ -680,6 +679,7 @@ export async function createDockerContainer(
       );
     }
   }
+  rememberNetworkOwner(containerId, gatewayId);
   context.runtime.containerStates.invalidate();
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   if (stagedInputs) {

@@ -67,7 +67,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   only `<step> <container> <verb>` counts. It learns the runtime's and
   gateway's identities from the calls themselves, so attribution costs no
   call.
-- Before the cuts, a steady fresh start cost 16 + 2k + R calls, where k is
+- Before the cuts, a steady fresh start cost 17 + 2k + R calls, where k is
   the number of unfinished firewall polls and R the number of readiness
   polls:
   - storage: 5 (two volume creates and inspects, one helper `run`);

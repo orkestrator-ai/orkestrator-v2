@@ -151,7 +151,7 @@ calls column is judged against the re-baselined ≤ 27.
 `orkestrator-v2:qual-0729-79f3bc97` (`sha256:e972d1e6…`, `main` `79f3bc97`)
 and `orkestrator-v2:qual-0729-pre0109` (`sha256:492ba204…`, `9791a425`,
 0109's parent). Before this change a steady fresh start cost
-16 + 2k + R calls:
+17 + 2k + R calls:
 
 - 5 for storage;
 - 6 for the create: the network inspect and create, the `ps`, the

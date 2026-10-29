@@ -22,6 +22,7 @@ import {
 import type { NodeView } from "./command-nodes.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
+import { normalizeProjectIcon } from "./project-icon.js";
 import type { PrState } from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
@@ -55,6 +56,8 @@ export interface NodeProjectSummary {
    * (`get_projects` with `includeDefaultBranch`); older nodes do not.
    */
   defaultBranch?: string;
+  /** The project's sidebar icon, a bounded raster data URL (`project-icon`). */
+  icon?: string;
 }
 
 export interface NodeEnvironmentSummary {
@@ -190,6 +193,7 @@ export function toNodeProjectSummary(
   const checkout = pathName(raw.localPath);
   const defaultBranch =
     typeof raw.defaultBranch === "string" ? boundedText(raw.defaultBranch.trim()) : "";
+  const icon = normalizeProjectIcon(raw.icon);
   return {
     ref,
     key: projectKey(ref),
@@ -201,6 +205,7 @@ export function toNodeProjectSummary(
     ...(hint ? { repositoryHint: hint } : {}),
     ...(checkout ? { pathName: checkout } : {}),
     ...(defaultBranch ? { defaultBranch } : {}),
+    ...(icon ? { icon } : {}),
   };
 }
 

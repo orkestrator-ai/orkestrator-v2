@@ -111,7 +111,7 @@ import {
 } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
-import { MachineDot, MachineHomeIcon, machineStatusText } from "./MachineDot";
+import { MachineDot, MachineHomeIcon, ProjectIconImage, machineStatusText } from "./MachineDot";
 import {
   newFederatedEnvironment,
   useFederatedEnvironmentActions,
@@ -330,6 +330,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
       sortable={sortable}
       grouping="machine"
+      showMachine
       {...(sortable
         ? {
             onAddToFolder: () => setFolderDialogKey(item.id),
@@ -430,7 +431,7 @@ export function RemoteProjectGroup({
   sortable: boolean;
   /** How the window's sidebar groups the list this row is in; decides where it opens. */
   grouping: RealmGrouping;
-  /** Mark the machine with a home before the name, in lists that mix machines. */
+  /** Mark the machine with a home before the name, in lists that name machines. */
   showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
@@ -533,7 +534,13 @@ export function RemoteProjectGroup({
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 {showMachine ? (
-                  <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
+                  <MachineHomeIcon
+                    colorToken={machine.colorToken}
+                    machineName={machine.name}
+                    projectIcon={project.icon}
+                  />
+                ) : project.icon ? (
+                  <ProjectIconImage src={project.icon} />
                 ) : null}
                 <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
                 {environments.length > 0 && (

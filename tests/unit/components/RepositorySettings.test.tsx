@@ -1,5 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import * as realProjectIconImage from "@/lib/project-icon-image";
+const realProjectIconImageSnapshot = { ...realProjectIconImage };
 import * as realSelect from "@/components/ui/select";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import type { OpenCodeModelCatalogSnapshot } from "@/lib/backend";
@@ -43,6 +45,13 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/lib/host-path-picker", () => ({
   pickHostPath: mockOpenDialog,
+}));
+
+const PICKED_ICON = "data:image/png;base64,iVBORw0KGgo=";
+const mockProjectIconFromFile = mock(async (_file: File) => PICKED_ICON);
+mock.module("@/lib/project-icon-image", () => ({
+  PROJECT_ICON_FILE_ACCEPT: "image/*,.ico",
+  projectIconFromFile: mockProjectIconFromFile,
 }));
 
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
@@ -132,6 +141,7 @@ mock.module("@/components/ui/select", () => ({
 }));
 
 afterAll(() => {
+  mock.module("@/lib/project-icon-image", () => realProjectIconImageSnapshot);
   mock.module("@/components/ui/select", () => realSelectSnapshot);
 });
 
@@ -274,6 +284,8 @@ describe("RepositorySettings", () => {
     mockGetCachedOpenCodeModelCatalog.mockReset();
     mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
     mockOpenDialog.mockClear();
+    mockProjectIconFromFile.mockReset();
+    mockProjectIconFromFile.mockImplementation(async () => PICKED_ICON);
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -681,6 +693,149 @@ describe("RepositorySettings", () => {
           name: "Use the local clone's origin remote",
         }) === null,
       ).toBe(true);
+    });
+
+    test("a chosen image is previewed and saved as the project icon", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
+      const file = new File(["png"], "logo.png", { type: "image/png" });
+      fireEvent.change(screen.getByLabelText("Icon"), { target: { files: [file] } });
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId("project-icon-preview"))
+            .getByTestId("project-icon")
+            .getAttribute("src"),
+        ).toBe(PICKED_ICON),
+      );
+      expect(mockProjectIconFromFile).toHaveBeenCalledWith(file);
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ id: "project-1", icon: PICKED_ICON }),
+      );
+    });
+
+    test("a newer selection wins when conversions finish out of order", async () => {
+      const first = Promise.withResolvers<string>();
+      const second = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => first.promise);
+      mockProjectIconFromFile.mockImplementationOnce(() => second.promise);
+      renderSettings({ section: "general" });
+      const choose = () =>
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+      choose();
+      choose();
+      const latestIcon = "data:image/webp;base64,YQ==";
+      await act(async () => second.resolve(latestIcon));
+      expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+      await act(async () => first.resolve(PICKED_ICON));
+      expect(screen.getByTestId("project-icon").getAttribute("src")).toBe(latestIcon);
+    });
+
+    test("an obsolete conversion cannot report errors or finish the current selection", async () => {
+      const first = Promise.withResolvers<string>();
+      const second = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => first.promise);
+      mockProjectIconFromFile.mockImplementationOnce(() => second.promise);
+      renderSettings({ section: "general" });
+      for (let i = 0; i < 2; i++)
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+      await act(async () => first.reject(new Error("obsolete")));
+      expect(mockToastError).not.toHaveBeenCalled();
+      expect(getSaveButton().hasAttribute("disabled")).toBe(true);
+      await act(async () => second.resolve(PICKED_ICON));
+      expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+    });
+
+    for (const action of ["remove", "cancel", "empty selection", "reset", "close"] as const) {
+      test(`${action} abandons a pending icon conversion`, async () => {
+        const conversion = Promise.withResolvers<string>();
+        mockProjectIconFromFile.mockImplementationOnce(() => conversion.promise);
+        const view = renderSettings({ section: "general", project: { icon: PICKED_ICON } });
+        fireEvent.change(screen.getByLabelText("Icon"), {
+          target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+        });
+        const resetIcon = "data:image/webp;base64,YQ==";
+        if (action === "remove") fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+        if (action === "cancel") fireEvent.click(getCancelButton());
+        if (action === "empty selection")
+          fireEvent.change(screen.getByLabelText("Icon"), { target: { files: [] } });
+        if (action === "reset" || action === "close") {
+          view.rerender(
+            <RepositorySettings
+              project={{ ...view.project, icon: resetIcon }}
+              open={action !== "close"}
+              onOpenChange={view.onOpenChange}
+            />,
+          );
+        }
+        await act(async () => conversion.resolve("data:image/png;base64,Yg=="));
+        if (action === "close") {
+          view.rerender(
+            <RepositorySettings project={view.project} open onOpenChange={view.onOpenChange} />,
+          );
+        }
+        const image = screen.queryByTestId("project-icon");
+        expect(image?.getAttribute("src") ?? null).toBe(
+          action === "remove" ? null : action === "reset" ? resetIcon : PICKED_ICON,
+        );
+        expect(getSaveButton().hasAttribute("disabled")).toBe(false);
+      });
+    }
+
+    test("Save waits until conversion settles and then saves the converted icon", async () => {
+      const conversion = Promise.withResolvers<string>();
+      mockProjectIconFromFile.mockImplementationOnce(() => conversion.promise);
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", onUpdateProject });
+      fireEvent.change(screen.getByLabelText("Icon"), {
+        target: { files: [new File(["x"], "logo.png", { type: "image/png" })] },
+      });
+      expect(getSaveButton().hasAttribute("disabled")).toBe(true);
+      fireEvent.click(getSaveButton());
+      expect(mockUpdateRepositoryConfig).not.toHaveBeenCalled();
+      expect(onUpdateProject).not.toHaveBeenCalled();
+      await act(async () => conversion.resolve(PICKED_ICON));
+      fireEvent.click(getSaveButton());
+      await waitFor(() =>
+        expect(onUpdateProject).toHaveBeenCalledWith(
+          expect.objectContaining({ icon: PICKED_ICON }),
+        ),
+      );
+    });
+
+    test("removing the icon saves the project without one", async () => {
+      const onUpdateProject = mock(async (project: Project) => project);
+      renderSettings({ section: "general", project: { icon: PICKED_ICON }, onUpdateProject });
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
+      expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ id: "project-1", icon: null }),
+      );
+    });
+
+    test("an image that cannot be used is reported and leaves the icon alone", async () => {
+      mockProjectIconFromFile.mockImplementationOnce(async () => {
+        throw new Error("The image could not be read");
+      });
+      renderSettings({ section: "general" });
+
+      fireEvent.change(screen.getByLabelText("Icon"), {
+        target: { files: [new File(["x"], "broken.png", { type: "image/png" })] },
+      });
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(within(getSettingsContent()).queryByTestId("project-icon") === null).toBe(true);
     });
 
     test("cancel resets edits and closes the dialog", () => {

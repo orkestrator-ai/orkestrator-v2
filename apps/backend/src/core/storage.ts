@@ -323,7 +323,7 @@ export class StorageService {
 
   updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
+    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
   ): Promise<Project> {
     return this.repos.projects.updateProject(projectId, updates);
   }

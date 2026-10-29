@@ -216,3 +216,19 @@ mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bri
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+
+## Project icon review validation — 2026-10-29
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer mismatch
+at line 273: expected `stale`, received `ready`. The complete unchanged
+owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence: `validation-04.stdout.txt` in
+`.orkestrator/review-artifacts/review-validation-801e01fe-bc32-4c2d-bbaa-76969f1dcae2/`.
+The subsequent exact aggregate rerun's bridges group passed (40.8 s).
+No catalogue implementation, assertion, deadline or skip changed.

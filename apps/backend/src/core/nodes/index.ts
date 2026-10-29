@@ -15,3 +15,4 @@ export { isWorkspaceExcludedCommand } from "./node-routing.js";
 export { readSeedManifest } from "./node-seed.js";
 export { errorCode, NodeService, type NodeServiceOptions } from "./node-service.js";
 export { createNodeSshFactory } from "./node-ssh.js";
+export { boundSummaryIcons } from "./project-summary-icons.js";

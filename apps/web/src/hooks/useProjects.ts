@@ -61,7 +61,7 @@ export function useProjects() {
   const setProjects = useProjectStore((state) => state.setProjects);
   const addProjectToStore = useProjectStore((state) => state.addProject);
   const removeProjectFromStore = useProjectStore((state) => state.removeProject);
-  const updateProjectInStore = useProjectStore((state) => state.updateProject);
+  const updateProjectInStore = useProjectStore((state) => state.replaceProject);
   const reorderProjectsInStore = useProjectStore((state) => state.reorderProjects);
   const arrangeProjectsInStore = useProjectStore((state) => state.arrangeProjects);
   const setLoading = useProjectStore((state) => state.setLoading);
@@ -230,15 +230,23 @@ export function useProjects() {
   );
 
   const updateProject = useCallback(
-    async (project: { id: string; name: string; gitUrl?: string; localPath: string | null }) => {
+    async (project: {
+      id: string;
+      name: string;
+      gitUrl?: string;
+      localPath: string | null;
+      icon?: string | null;
+    }) => {
       invalidateProjectSnapshots();
       try {
         const updated = await backend.updateProject(project.id, {
           name: project.name,
           ...(project.gitUrl !== undefined ? { gitUrl: project.gitUrl } : {}),
           localPath: project.localPath,
+          ...(project.icon !== undefined ? { icon: project.icon } : {}),
         });
-        updateProjectInStore(project.id, updated);
+        // Use the authoritative record so removed optional fields disappear locally.
+        updateProjectInStore(updated);
         return updated;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to update project";

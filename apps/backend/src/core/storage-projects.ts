@@ -14,6 +14,7 @@ import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/proto
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
 import type { EnvironmentUnreadReason } from "./models.js";
@@ -124,6 +125,17 @@ export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
+}
+
+/** Sets or clears a project's sidebar icon; blank or null clears it. */
+export function applyProjectIcon(project: Project, icon: unknown): void {
+  if (icon === null || icon === undefined || icon === "") {
+    delete project.icon;
+    return;
+  }
+  const normalized = normalizeProjectIcon(icon);
+  if (!normalized) throw new Error("Project icon must be a small PNG, JPEG, WebP or GIF image");
+  project.icon = normalized;
 }
 
 /** Validates a durable environment-move record; paths are absolute and bounded. */
@@ -402,7 +414,7 @@ export class ProjectsRepository {
 
   async updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
+    updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
   ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
@@ -423,6 +435,7 @@ export class ProjectsRepository {
       if (typeof updates.name === "string") project.name = updates.name;
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
       if ("folder" in updates) applyProjectFolder(project, updates.folder);
+      if ("icon" in updates) applyProjectIcon(project, updates.icon);
       await this.context.saveJson(this.files.projectsFile(), projects);
       return project;
     });

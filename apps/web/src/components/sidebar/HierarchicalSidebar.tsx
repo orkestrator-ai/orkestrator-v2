@@ -76,7 +76,7 @@ import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
-import { MachineDot, MachineHomeIcon } from "@/components/federation/MachineDot";
+import { MachineDot, MachineHomeIcon, ProjectIconImage } from "@/components/federation/MachineDot";
 import { machineTextClass } from "@/lib/federation/machine-colors";
 import {
   FederatedActivityList,
@@ -1044,6 +1044,19 @@ export function HierarchicalSidebar() {
     ? projects.find((p) => p.id === settingsProjectId)
     : null;
 
+  // This machine's home, in its colour, wherever the sidebar names machines;
+  // shown even before the machine is identified, then coloured once it is.
+  const boundHomeIcon = (project: Project) => (
+    <MachineHomeIcon
+      colorToken={boundMachineView?.colorToken}
+      machineName={boundMachineView?.name ?? "This machine"}
+      status="This window"
+      projectIcon={project.icon}
+    />
+  );
+  const projectIconOnly = (project: Project) =>
+    project.icon ? <ProjectIconImage src={project.icon} /> : undefined;
+
   const renderProjectGroup = (
     project: Project,
     mixed?: {
@@ -1056,7 +1069,13 @@ export function HierarchicalSidebar() {
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
-      machineIcon={mixed?.machineIcon}
+      machineIcon={
+        mixed
+          ? mixed.machineIcon
+          : federation.enabled
+            ? boundHomeIcon(project)
+            : projectIconOnly(project)
+      }
       label={mixed?.label}
       labelClassName={mixed?.labelClassName}
       project={project}
@@ -1334,21 +1353,10 @@ export function HierarchicalSidebar() {
         sortableId,
         label,
         labelClassName: machineTextClass(boundMachineView?.colorToken),
+        machineIcon: projectIconOnly(project),
       });
     }
-    // Show that this is the bound project even before this window's machine
-    // is identified; its colour and name become available once identified.
-    return renderProjectGroup(project, {
-      sortableId,
-      label,
-      machineIcon: (
-        <MachineHomeIcon
-          colorToken={boundMachineView?.colorToken}
-          machineName={boundMachineView?.name ?? "This machine"}
-          status="This window"
-        />
-      ),
-    });
+    return renderProjectGroup(project, { sortableId, label, machineIcon: boundHomeIcon(project) });
   };
 
   const handleBoundEnvironmentDrop = (activeId: string, overId: string) => {

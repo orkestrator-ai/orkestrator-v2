@@ -51,6 +51,11 @@ export interface Project {
    * `@orkestrator/protocol/project-folders`.
    */
   folder?: string | null;
+  /**
+   * Sidebar icon: a small raster image as a base64 data URL, or absent for
+   * the default. See `@orkestrator/protocol/project-icon`.
+   */
+  icon?: string | null;
 }
 
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";

@@ -21,6 +21,8 @@ import {
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 
+import { boundSummaryIcons } from "./project-summary-icons.js";
+
 import { BackendActivityJobs } from "../backend-activity-jobs.js";
 import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js";
 
@@ -646,7 +648,11 @@ export class NodeReadModel {
         })),
     };
     try {
-      if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) return;
+      if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) {
+        // Project icons are the bulkiest optional field; the next read brings them back.
+        for (const node of value.nodes) node.projects = node.projects.map(withoutIcon);
+        if (JSON.stringify(value).length > MAX_PERSISTED_BYTES) return;
+      }
       await this.options.persistence.save(value);
     } catch {
       // Last-known state is a convenience; losing it only shows "initializing".
@@ -680,7 +686,7 @@ export class NodeReadModel {
           )
         : [];
       const state = this.stateFor(nodeId);
-      state.projects = projects.slice(0, MAX_SUMMARY_PROJECTS);
+      state.projects = boundSummaryIcons(projects.slice(0, MAX_SUMMARY_PROJECTS));
       state.environmentsByProject = new Map(environments);
       state.loadedAt = entry.loadedAt;
       state.truncated = entry.truncated === true;
@@ -695,7 +701,11 @@ async function readProjects(
 ): Promise<{ projects: NodeProjectSummary[]; truncated: boolean }> {
   // A node older than `includeDefaultBranch` ignores it and sends none; the
   // search then falls back to "main", as it does for an unconfigured project.
-  const raw = await invoke<unknown>("get_projects", { includeDefaultBranch: true });
+  // Bound icons before transport on current nodes; bound again below for older nodes.
+  const raw = await invoke<unknown>("get_projects", {
+    includeDefaultBranch: true,
+    summaryIcons: true,
+  });
   const list = Array.isArray(raw) ? raw : [];
   const projects = list
     .slice(0, MAX_SUMMARY_PROJECTS)
@@ -707,7 +717,13 @@ async function readProjects(
       return project ? [project] : [];
     })
     .sort((a, b) => a.order - b.order);
-  return { projects, truncated: list.length > MAX_SUMMARY_PROJECTS };
+  return { projects: boundSummaryIcons(projects), truncated: list.length > MAX_SUMMARY_PROJECTS };
+}
+
+function withoutIcon(project: NodeProjectSummary): NodeProjectSummary {
+  if (!project.icon) return project;
+  const { icon: _icon, ...rest } = project;
+  return rest;
 }
 
 function safeMessage(error: unknown): string {

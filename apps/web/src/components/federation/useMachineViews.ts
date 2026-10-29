@@ -73,6 +73,7 @@ function boundProjects(backendId: BackendId, projects: readonly Project[]): Fede
       order: project.order,
       ...(project.folder ? { folder: project.folder } : {}),
       ...(hint ? { repositoryHint: hint } : {}),
+      ...(project.icon ? { icon: project.icon } : {}),
     };
   });
 }

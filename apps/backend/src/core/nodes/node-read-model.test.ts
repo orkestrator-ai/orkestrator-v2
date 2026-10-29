@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { NodeReadModel } from "./node-read-model.js";
@@ -172,7 +173,7 @@ test("summaries carry the search fields: path names, default branch and creation
   ]);
   try {
     const self = (await model.summaries(undefined, { includeSelf: true })).self!;
-    expect(projectArgs).toEqual([{ includeDefaultBranch: true }]);
+    expect(projectArgs).toEqual([{ includeDefaultBranch: true, summaryIcons: true }]);
     expect(self.projects[0]).toMatchObject({
       name: "telegram-scraper",
       repositoryHint: "github.com/acme/telegram-scraper",
@@ -215,7 +216,10 @@ test("config-only changes invalidate the cached self default branch", async () =
     expect(
       (await model.summaries(undefined, { includeSelf: true })).self!.projects[0]!.defaultBranch,
     ).toBe("develop");
-    expect(projectArgs).toEqual([{ includeDefaultBranch: true }, { includeDefaultBranch: true }]);
+    expect(projectArgs).toEqual([
+      { includeDefaultBranch: true, summaryIcons: true },
+      { includeDefaultBranch: true, summaryIcons: true },
+    ]);
   } finally {
     model.stop();
   }
@@ -251,6 +255,146 @@ test("config-only leaf events rehydrate the remote project's default branch", as
     expect(leaf.received.filter((call) => call.command === "get_projects").length).toBeGreaterThan(
       before,
     );
+  } finally {
+    model.stop();
+  }
+});
+
+test("summaries bound aggregate icon bytes even when an older node ignores the flag", async () => {
+  const { MAX_SUMMARY_ICON_BYTES } = await import("./project-summary-icons.js");
+  const icon = `data:image/png;base64,${"A".repeat(40 * 1024)}`;
+  const { model } = searchFieldModel(() =>
+    Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, name: `Project ${i}`, icon })),
+  );
+  try {
+    const self = (await model.summaries(undefined, { includeSelf: true })).self!;
+    expect(self.projects).toHaveLength(20);
+    const bytes = self.projects.reduce((sum, project) => sum + (project.icon?.length ?? 0), 0);
+    expect(bytes).toBeLessThanOrEqual(MAX_SUMMARY_ICON_BYTES);
+    expect(bytes).toBeGreaterThan(MAX_SUMMARY_ICON_BYTES - icon.length);
+    expect(self.projects[0]!.icon).toBe(icon);
+    expect(self.projects.at(-1)!.icon).toBeUndefined();
+  } finally {
+    model.stop();
+  }
+});
+
+for (const tooManyEnvironments of [false, true]) {
+  test(`oversized persistence ${tooManyEnvironments ? "skips snapshots still over the limit" : "strips icons without changing live state"}`, async () => {
+    const { mock } = await import("bun:test");
+    const { toNodeProjectSummary } = await import("@orkestrator/protocol/node-summaries");
+    const ids = Array.from({ length: 10 }, (_, i) => `bk_${i}` as BackendId);
+    const icon = `data:image/png;base64,${"A".repeat(40 * 1024)}`;
+    const projects = Array.from({ length: 6 }, (_, i) => ({
+      id: `p${i}`,
+      name: `Project ${i}`,
+      icon,
+    }));
+    const save = mock(async (_snapshot: unknown) => {});
+    let connected = false;
+    const model = new NodeReadModel({
+      nodes: {
+        selfIdentity: async () => "bk_command" as BackendId,
+        selfProfile: async () => ({ displayName: "Command" }),
+        listNodes: async () =>
+          ({
+            nodes: ids.map((nodeId) => ({ nodeId, connection: { state: "connected" } })),
+          }) as never,
+        link: () => ({
+          connected,
+          view: { epoch: 1 },
+          transport: () => null,
+          invoke: async <T>(command: string, args?: Record<string, unknown>) =>
+            (command === "get_projects"
+              ? projects
+              : tooManyEnvironments
+                ? Array.from({ length: 80 }, (_, i) => ({
+                    id: `e${i}`,
+                    projectId: args?.projectId,
+                    name: "N".repeat(256),
+                    branch: "B".repeat(256),
+                    status: "running",
+                  }))
+                : []) as T,
+        }),
+        subscribe: () => () => {},
+        recordProfile: async () => {},
+      },
+      emit: () => {},
+      persistence: { load: async () => null, save },
+    });
+    try {
+      await model.start();
+      connected = true;
+      await Promise.all(ids.map((id) => model.requestHydrate(id)));
+      const live = (await model.summaries()).nodes;
+      expect(live.every((node) => node.projects.every((project) => project.icon === icon))).toBe(
+        true,
+      );
+      model.stop(); // Flushes the scheduled persistence without waiting five seconds.
+      await Promise.resolve();
+      if (tooManyEnvironments) {
+        expect(save).not.toHaveBeenCalled();
+      } else {
+        expect(save).toHaveBeenCalledTimes(1);
+        const snapshot = save.mock.calls[0]![0] as {
+          nodes: Array<{ projects: NodeProjectSummary[] }>;
+        };
+        expect(snapshot.nodes).toHaveLength(10);
+        expect(
+          snapshot.nodes.every((node) => node.projects.every((project) => !("icon" in project))),
+        ).toBe(true);
+        expect(JSON.stringify(snapshot).length).toBeLessThanOrEqual(2 * 1024 * 1024);
+        expect(snapshot.nodes[0]!.projects[0]).toEqual(
+          (({ icon: _icon, ...rest }) => rest)(toNodeProjectSummary(ids[0]!, projects[0]!, 0)!),
+        );
+      }
+      expect(
+        (await model.summaries()).nodes.every((node) =>
+          node.projects.every((project) => project.icon === icon),
+        ),
+      ).toBe(true);
+    } finally {
+      model.stop();
+    }
+  });
+}
+
+test("restored offline node summaries obey the icon budget", async () => {
+  const { MAX_SUMMARY_ICON_BYTES } = await import("./project-summary-icons.js");
+  const { toNodeProjectSummary } = await import("@orkestrator/protocol/node-summaries");
+  const nodeId = "bk_offline" as BackendId;
+  const icon = `data:image/png;base64,${"A".repeat(40 * 1024)}`;
+  const projects = Array.from({ length: 20 }, (_, i) =>
+    toNodeProjectSummary(nodeId, { id: `p${i}`, name: `Project ${i}`, icon }, i)!,
+  );
+  const model = new NodeReadModel({
+    nodes: {
+      selfIdentity: async () => "bk_command" as BackendId,
+      selfProfile: async () => ({ displayName: "Command" }),
+      listNodes: async () =>
+        ({ nodes: [{ nodeId, connection: { state: "disconnected" } }] }) as never,
+      link: () => null,
+      subscribe: () => () => {},
+      recordProfile: async () => {},
+    },
+    emit: () => {},
+    persistence: {
+      load: async () => ({
+        version: 1,
+        nodes: [{ nodeId, loadedAt: 1, projects, environments: [] }],
+      }),
+      save: async () => {},
+    },
+  });
+  try {
+    await model.start();
+    const restored = (await model.summaries()).nodes[0]!.projects;
+    expect(restored).toHaveLength(20);
+    expect(
+      restored.reduce((bytes, project) => bytes + (project.icon?.length ?? 0), 0),
+    ).toBeLessThanOrEqual(MAX_SUMMARY_ICON_BYTES);
+    expect(projects.every((project) => project.icon === icon)).toBe(true);
   } finally {
     model.stop();
   }

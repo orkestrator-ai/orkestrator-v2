@@ -16,12 +16,13 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { commandInvocationCount, runCommand } from "../src/core/shell";
+import { commandInvocationCount, observeCommandInvocations, runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
+import { egressGatewayOf } from "../src/core/container-network-owner";
+import { egressGatewayName, prepareEgressGatewayForStart } from "../src/core/egress-gateway";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
-import { startRuntime } from "./container-live-start";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_CONTAINER_BENCHMARKS === "1" && IMAGE.length > 0;
@@ -63,6 +64,152 @@ async function timed<T>(
     dockerCalls: commandInvocationCount("docker") - calls,
   };
 }
+
+/**
+ * The Docker calls made while it runs, each tagged with the step that was
+ * current. Arguments are held only until `attributeCalls` reduces them to a
+ * verb and a target; nothing else reads or keeps them.
+ */
+function recordDockerCalls() {
+  const calls: Array<{ step: string; args: readonly string[] }> = [];
+  let step = "";
+  const stop = observeCommandInvocations("docker", (args) => calls.push({ step, args: [...args] }));
+  return {
+    calls,
+    stop,
+    step: (next: string) => {
+      step = next;
+    },
+  };
+}
+
+const COMPOUND_VERBS = new Set(["container", "context", "image", "network", "system", "volume"]);
+
+function dockerVerb(args: readonly string[]): string {
+  const at = args.findIndex((arg) => !arg.startsWith("-"));
+  if (at < 0) return "none";
+  const verb = args[at]!;
+  return COMPOUND_VERBS.has(verb) && args[at + 1] ? `${verb} ${args[at + 1]}` : verb;
+}
+
+function createdName(args: readonly string[]): string | null {
+  if (!["create", "container create", "run"].includes(dockerVerb(args))) return null;
+  const at = args.indexOf("--name");
+  return at >= 0 ? (args[at + 1] ?? null) : null;
+}
+
+interface CallIdentities {
+  runtime: string[];
+  gateway: string[];
+}
+
+/**
+ * A fresh runtime's identities, from its own calls: the creates' names and the
+ * runtime's `container:<gateway>` network. Finding them costs no Docker call.
+ */
+function freshIdentities(
+  calls: ReadonlyArray<{ args: readonly string[] }>,
+  runtimeId: string,
+): CallIdentities {
+  const names = calls.map((call) => createdName(call.args)).filter((name) => name !== null);
+  const runtimeName =
+    names.find((name) => names.includes(egressGatewayName(name))) ?? names.at(-1) ?? "";
+  const gatewayName = names.includes(egressGatewayName(runtimeName))
+    ? egressGatewayName(runtimeName)
+    : "";
+  const gatewayId =
+    calls
+      .find((call) => createdName(call.args) === runtimeName)
+      ?.args.find((arg) => arg.startsWith("container:"))
+      ?.slice("container:".length) ?? "";
+  return {
+    runtime: [runtimeId, runtimeName].filter(Boolean),
+    gateway: [gatewayId, gatewayName].filter(Boolean),
+  };
+}
+
+/**
+ * Counts calls by `<step> <target> <verb>`, where the target is the runtime,
+ * its egress gateway, or neither (volumes, the network, storage helpers).
+ */
+function attributeCalls(
+  calls: ReadonlyArray<{ step: string; args: readonly string[] }>,
+  ids: CallIdentities,
+): Record<string, number> {
+  const mentions = (names: string[], args: readonly string[]) =>
+    args.some((arg) =>
+      names.some(
+        (name) => arg === name || arg.startsWith(`${name}:`) || arg === `container:${name}`,
+      ),
+    );
+  const counts: Record<string, number> = {};
+  for (const call of calls) {
+    const created = createdName(call.args);
+    const target =
+      created !== null
+        ? ids.runtime.includes(created)
+          ? "runtime"
+          : ids.gateway.includes(created)
+            ? "gateway"
+            : "other"
+        : mentions(ids.runtime, call.args)
+          ? "runtime"
+          : mentions(ids.gateway, call.args)
+            ? "gateway"
+            : "other";
+    const key = `${call.step} ${target} ${dockerVerb(call.args)}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** Per key, the count in each sample (0 where a sample had none). */
+function collectBreakdowns(samples: Array<Record<string, number>>): Record<string, number[]> {
+  const keys = [...new Set(samples.flatMap((sample) => Object.keys(sample)))].sort();
+  return Object.fromEntries(keys.map((key) => [key, samples.map((sample) => sample[key] ?? 0)]));
+}
+
+/** Totals by step (field 0) or by target (field 1) of `<step> <target> <verb>` keys. */
+function totalsBy(breakdown: Record<string, number>, field: 0 | 1): Record<string, number> {
+  const totals: Record<string, number> = {};
+  for (const [key, count] of Object.entries(breakdown)) {
+    const name = key.split(" ")[field]!;
+    totals[name] = (totals[name] ?? 0) + count;
+  }
+  return totals;
+}
+
+/**
+ * Starts a runtime the way `startRuntime` (`container-live-start.ts`) does,
+ * timing its three steps: the egress gateway brought up to an applied
+ * firewall, the runtime's `docker start`, and its entrypoint to current-boot
+ * readiness.
+ */
+async function bootRuntime(
+  containerId: string,
+  step: (name: string) => void = () => undefined,
+): Promise<Record<BootStep, number>> {
+  const steps = {} as Record<BootStep, number>;
+  let at = performance.now();
+  const mark = (name: BootStep) => {
+    const now = performance.now();
+    steps[name] = now - at;
+    at = now;
+  };
+  step("boot.gateway");
+  await prepareEgressGatewayForStart(containerId);
+  mark("gateway");
+  step("boot.runtimeStart");
+  await runCommand("docker", ["start", containerId], { timeoutMs: 120_000 });
+  mark("runtimeStart");
+  step("boot.ready");
+  await waitForContainerBoot(containerId);
+  mark("ready");
+  return steps;
+}
+
+type BootStep = "gateway" | "runtimeStart" | "ready";
+const BOOT_STEPS: BootStep[] = ["gateway", "runtimeStart", "ready"];
 
 beforeAll(async () => {
   if (!ENABLED) return;
@@ -164,7 +311,7 @@ async function writeReport(): Promise<void> {
   console.log(JSON.stringify(report, null, 2));
 }
 
-async function freshRuntime(id: string, mode: "restricted" | "full") {
+async function freshRuntime(id: string, mode: "restricted" | "full", attribute = false) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
   const { resolveDockerImage } = await import("../src/core/docker-image");
   const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
@@ -175,25 +322,34 @@ async function freshRuntime(id: string, mode: "restricted" | "full") {
   if (resolved.kind !== "present") throw new Error("image missing");
   const storage = planStorageSet(id, owner, 1);
   const phases: Record<string, number> = {};
-  const storageStep = await timed(async () => {
-    await ensureStorageVolumes(fixture.context, id, storage);
-    await initializeStorageSet(fixture.context, resolved.imageId, id, storage);
-  });
-  phases.storage = storageStep.ms;
-  const create = await timed(() =>
-    createDockerContainer(environment, fixture.context, {
-      imageId: resolved.imageId,
-      runtimeGeneration: 1,
-      storage,
-    }),
-  );
-  phases.create = create.ms;
-  const containerId = create.value;
-  const boot = await timed(async () => {
-    await startRuntime(containerId);
-    await waitForContainerBoot(containerId);
-  });
-  phases.startToReady = boot.ms;
+  // Only sequential runs attribute: concurrent ones would see each other's calls.
+  const recorder = attribute ? recordDockerCalls() : null;
+  let containerId: string;
+  let dockerCalls: number;
+  try {
+    recorder?.step("storage");
+    const storageStep = await timed(async () => {
+      await ensureStorageVolumes(fixture.context, id, storage);
+      await initializeStorageSet(fixture.context, resolved.imageId, id, storage);
+    });
+    phases.storage = storageStep.ms;
+    recorder?.step("create");
+    const create = await timed(() =>
+      createDockerContainer(environment, fixture.context, {
+        imageId: resolved.imageId,
+        runtimeGeneration: 1,
+        storage,
+      }),
+    );
+    phases.create = create.ms;
+    containerId = create.value;
+    const boot = await timed(() => bootRuntime(containerId, (name) => recorder?.step(name)));
+    phases.startToReady = boot.ms;
+    for (const step of BOOT_STEPS) phases[`startToReady.${step}`] = boot.value[step];
+    dockerCalls = storageStep.dockerCalls + create.dockerCalls + boot.dockerCalls;
+  } finally {
+    recorder?.stop();
+  }
   await fixture.context.storage.updateEnvironment(id, {
     containerId,
     status: "running",
@@ -216,7 +372,10 @@ async function freshRuntime(id: string, mode: "restricted" | "full") {
     fixture,
     containerId,
     phases,
-    dockerCalls: storageStep.dockerCalls + create.dockerCalls + boot.dockerCalls,
+    dockerCalls,
+    callBreakdown: recorder
+      ? attributeCalls(recorder.calls, freshIdentities(recorder.calls, containerId))
+      : null,
   };
 }
 
@@ -237,18 +396,21 @@ describe("container baselines", () => {
         storage: [],
         create: [],
         startToReady: [],
+        ...Object.fromEntries(BOOT_STEPS.map((step) => [`startToReady.${step}`, []])),
       };
       const freshCalls: number[] = [];
+      const freshBreakdowns: Array<Record<string, number>> = [];
       let last: Awaited<ReturnType<typeof freshRuntime>> | null = null;
       const incomplete: string[] = [];
       for (let index = 0; index < 5; index += 1) {
         const started = performance.now();
         try {
-          const runtime = await freshRuntime(`env-${RUN}-fresh-${index}`, "restricted");
+          const runtime = await freshRuntime(`env-${RUN}-fresh-${index}`, "restricted", true);
           last = runtime;
           fresh.total!.push(performance.now() - started);
           for (const [phase, ms] of Object.entries(runtime.phases)) fresh[phase]!.push(ms);
           freshCalls.push(runtime.dockerCalls);
+          if (runtime.callBreakdown) freshBreakdowns.push(runtime.callBreakdown);
         } catch (error) {
           // Recorded, not retried: a fail-closed firewall start is a result.
           incomplete.push(
@@ -261,6 +423,12 @@ describe("container baselines", () => {
       results.freshRestricted = {
         ...Object.fromEntries(Object.entries(fresh).map(([key, value]) => [key, summarize(value)])),
         dockerCalls: summarize(freshCalls),
+        // Where the calls go, per completed run: by phase, by container (the
+        // runtime, its egress gateway, or neither), and by step, container
+        // and verb.
+        dockerCallsByPhase: collectBreakdowns(freshBreakdowns.map((entry) => totalsBy(entry, 0))),
+        dockerCallsByTarget: collectBreakdowns(freshBreakdowns.map((entry) => totalsBy(entry, 1))),
+        dockerCallBreakdown: collectBreakdowns(freshBreakdowns),
         incomplete,
       };
 
@@ -291,20 +459,39 @@ describe("container baselines", () => {
 
       // Warm stop (drain) and start to current-boot readiness.
       const warm = { stop: [] as number[], start: [] as number[] };
+      const warmSteps = Object.fromEntries(BOOT_STEPS.map((step) => [step, [] as number[]]));
+      const warmCalls: number[] = [];
+      const warmBreakdowns: Array<Record<string, number>> = [];
       const containerId = last!.containerId;
+      // Cached since the fresh start above, so this lookup runs no Docker call.
+      const warmIds: CallIdentities = {
+        runtime: [containerId],
+        gateway: [(await egressGatewayOf(containerId)) ?? ""].filter(Boolean),
+      };
       for (let index = 0; index < 10; index += 1) {
         const stop = await timed(async () => {
           await drainContainerProcesses(containerId);
           await docker(["stop", containerId]);
         });
         warm.stop.push(stop.ms);
-        const start = await timed(async () => {
-          await startRuntime(containerId);
-          await waitForContainerBoot(containerId);
-        });
+        const recorder = recordDockerCalls();
+        const start = await timed(() => bootRuntime(containerId, recorder.step)).finally(
+          recorder.stop,
+        );
         warm.start.push(start.ms);
+        for (const step of BOOT_STEPS) warmSteps[step]!.push(start.value[step]);
+        warmCalls.push(start.dockerCalls);
+        warmBreakdowns.push(attributeCalls(recorder.calls, warmIds));
       }
-      results.warmStopStart = { stop: summarize(warm.stop), start: summarize(warm.start) };
+      results.warmStopStart = {
+        stop: summarize(warm.stop),
+        start: summarize(warm.start),
+        startSteps: Object.fromEntries(
+          Object.entries(warmSteps).map(([step, samples]) => [step, summarize(samples)]),
+        ),
+        startDockerCalls: summarize(warmCalls),
+        startDockerCallBreakdown: collectBreakdowns(warmBreakdowns),
+      };
 
       // Preserving rebuilds at two workspace sizes. Durations come from the
       // operation's own phase timing.

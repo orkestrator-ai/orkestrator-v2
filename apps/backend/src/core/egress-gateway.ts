@@ -283,23 +283,37 @@ export async function createEgressGateway(spec: EgressGatewaySpec): Promise<stri
 
 const FIREWALL_REPORT = "/run/orkestrator-firewall/firewall.json";
 
-async function gatewayFirewallState(gatewayId: string): Promise<"applied" | "failed" | null> {
+/**
+ * The current boot's firewall report. `pending` when the exec ran, which
+ * proves the gateway is running, but found no final state; `null` when Docker
+ * could not exec into it (stopped, missing or unreachable).
+ */
+async function gatewayFirewallState(
+  gatewayId: string,
+): Promise<"applied" | "failed" | "pending" | null> {
+  let stdout: string;
   try {
-    const { stdout } = await runCommand(
+    ({ stdout } = await runCommand(
       "docker",
       ["exec", gatewayId, "sh", "-c", `head -c 4096 ${FIREWALL_REPORT} 2>/dev/null || true`],
       { timeoutMs: 10_000 },
-    );
-    const state = (JSON.parse(stdout.trim() || "{}") as { state?: unknown }).state;
-    return state === "applied" || state === "failed" ? state : null;
+    ));
   } catch {
     return null;
+  }
+  try {
+    const state = (JSON.parse(stdout.trim() || "{}") as { state?: unknown }).state;
+    return state === "applied" || state === "failed" ? state : "pending";
+  } catch {
+    return "pending";
   }
 }
 
 /**
  * Waits for the gateway's current boot to apply its firewall. A failed or
  * missing report, or a gateway that stopped, refuses the workload's start.
+ * The gateway is inspected only when the exec itself failed, so a poll while
+ * the firewall is still applying costs one Docker call, not two.
  */
 export async function waitForEgressGatewayFirewall(
   gatewayId: string,
@@ -316,7 +330,7 @@ export async function waitForEgressGatewayFirewall(
         "The environment's egress gateway could not apply its network policy, so the container was not started. Check the gateway's logs, then retry.",
       );
     }
-    const inspection = await inspectGateway(gatewayId).catch(() => null);
+    const inspection = state === null ? await inspectGateway(gatewayId).catch(() => null) : null;
     if (inspection === "missing" || (inspection && !inspection.running)) {
       throw lifecycleError(
         "not-ready",
@@ -364,7 +378,8 @@ export async function prepareEgressGatewayForStart(
       "This environment's egress gateway is missing, so its container cannot start with its network policy. Rebuild the environment to create a new one.",
     );
   }
-  const retryFailed = gateway.running && (await gatewayFirewallState(gatewayId)) === "failed";
+  const firewall = gateway.running ? await gatewayFirewallState(gatewayId) : null;
+  const retryFailed = firewall === "failed";
   if (!gateway.running || retryFailed) {
     await startDockerContainer(gatewayId, { verb: retryFailed ? "restart" : "start" }).catch(
       (error: unknown) => {
@@ -372,7 +387,11 @@ export async function prepareEgressGatewayForStart(
       },
     );
   }
-  await waitForEgressGatewayFirewall(gatewayId, options);
+  // A running gateway that already reported `applied` for its current boot
+  // (its /run is fresh per boot) needs no second read.
+  if (firewall !== "applied") {
+    await waitForEgressGatewayFirewall(gatewayId, options);
+  }
   const { stdout } = await runCommand(
     "docker",
     [

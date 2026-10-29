@@ -99,6 +99,7 @@ import {
   ingressPorts,
 } from "./container-network.js";
 import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js";
+import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   EGRESS_OVERRIDE_ENV,
@@ -642,6 +643,7 @@ export async function createDockerContainer(
       redactValues,
     });
     containerId = stdout.trim();
+    rememberNetworkOwner(containerId, gatewayId);
   } catch (error) {
     context.runtime.containerStates.invalidate();
     // A gateway whose workload was certainly not created is removed now; one

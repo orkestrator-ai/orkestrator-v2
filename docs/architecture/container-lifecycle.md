@@ -951,7 +951,8 @@ and the Network section says whether a root terminal can change the rules.
 - **Namespace owner.** Published ports, the firewall report, live edits,
   `--host-ports` and the network endpoint belong to the gateway.
   `container-network-owner.ts` resolves a runtime's owner from its
-  immutable network mode (cached), and `getHostPort`, the network status,
+  immutable network mode (cached, and recorded when the backend creates the
+  runtime, so its first start does not inspect it), and `getHostPort`, the network status,
   `applyEnvironmentAllowedDomains`, `ensureContainerHostServicePorts`, the
   Linux host alias repair and the preview resolver read through it.
 - **Creation.** The gateway is created first, the runtime referencing it by
@@ -962,7 +963,9 @@ and the Network section says whether a root terminal can change the rules.
 - **Start.** `prepareEgressGatewayForStart` (in
   `startContainerWithAgentAccounts` and before a rebuild candidate's start)
   starts a stopped gateway and waits until its firewall reports `applied`;
-  the tmpfs `/run` means an earlier boot's report cannot be read. A `failed`
+  the tmpfs `/run` means an earlier boot's report cannot be read. Each poll
+  is one `docker exec`; the gateway is inspected only when that exec fails,
+  and a running gateway's `applied` report is not read twice. A `failed`
   report, a gateway that stops, or 180 s without a report refuses the start
   (`not-ready`), and a missing gateway is `needs-attention` (rebuild). Docker
   itself refuses to start a runtime whose gateway is not running ("cannot

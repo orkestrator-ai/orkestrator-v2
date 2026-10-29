@@ -224,3 +224,35 @@ remains open; the aggregate cause is unproven.
 - No owning implementation, assertion, timeout or skip changed. Concurrent
   worktree validation was active; timing under load remains a hypothesis,
   not an established cause. The aggregate remains failed.
+
+
+## Account usage sorting review — 2026-10-29
+
+- **Scope:** review repair `3878c7a0f` restores the private-account notice and
+  adds mixed usage-row ordering coverage. The failing browser owners and their
+  implementations were unchanged.
+- **Preparation:** `mise run test:logged -- --name browser -- mise run test:browser`
+  used nine workers: 935 passed, 105 skipped and six failed (538.0 s).
+  This case failed on desktop with inner `scrollTop` 704 instead of zero.
+- **Exact command rerun:** the same command used nine workers: 937 passed,
+  105 skipped and four failed (518.4 s). This case recurred on mobile with
+  the same mismatch. The other failures were both native branch-picker cases
+  and desktop Cursor steering. The public-site stage did not run because the
+  component stage failed.
+- **Complete unchanged owner rerun:**
+  `mise run test:logged -- --name browser-failure-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts e2e/CloseRetention.spec.ts e2e/PaneBreakpoint.spec.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/account-review-owners`
+  ran the five files sequentially with one worker: 93 passed, 21 skipped and
+  four failed (283.8 s). All active ToolGroupFold and PaneBreakpoint cases
+  passed. Both native branch selections still received `rel` instead of
+  `release/2.0`; desktop Cursor steering still reported no running turn;
+  desktop streaming-find still received `unresolved` instead of `converged`.
+  Those failures remain limitations, with no new isolated pass established.
+- **Evidence:** preparation logs in
+  `.orkestrator/review-artifacts/review-validation-2913e577-990b-4a04-8669-dd3ee445e52c/validation-05.stderr.txt`;
+  rerun logs under the host temporary directory in
+  `orkestrator-test-run.DHprkW/browser.log.gz` and
+  `orkestrator-test-run.uneHBw/browser-failure-owners.log.gz`.
+  Owner traces are under `output/playwright/account-review-owners/`.
+- **Assessment:** the unchanged ToolGroupFold owner pass confirms recurrence
+  of this intermittent case. No assertion, deadline, skip or owning code was
+  changed. The root cause remains unestablished.

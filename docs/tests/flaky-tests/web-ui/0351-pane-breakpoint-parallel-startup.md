@@ -110,3 +110,15 @@ tool-group overflow case (704 instead of zero). All new queue regressions
 passed in both viewports; the pane owner passed. The public-site stage was
 not reached because the component suite failed. Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.my4kyi/review-repair-browser.log.gz`.
+
+
+## Account usage sorting review — 2026-10-29
+
+Preparation's nine-worker browser run failed the mobile pane-tree `moveBefore`
+and app-shell `appendChild fallback` variants at `PaneBreakpoint.spec.ts:140`:
+expected first visible `Transcript message 36.`, received message 35. The exact
+aggregate rerun and complete unchanged one-worker PaneBreakpoint owner passed
+these cases. This confirms an intermittent anchor mismatch; it does not establish
+a startup failure or a root cause. No assertion, deadline, skip or owning code
+changed. Commands, suite counts, durations and evidence are recorded in
+[0747's account usage review](0747-tool-group-overflow-follow.md#account-usage-sorting-review--2026-10-29).

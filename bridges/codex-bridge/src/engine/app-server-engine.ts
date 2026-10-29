@@ -30,6 +30,7 @@ import {
 import {
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   nativeAgentRestrictsUserMcp,
+  nativeAgentWithholdsGitHubCredential,
   normalizePendingSignIn,
   type NativeAgentPendingSignIn,
 } from "@orkestrator/protocol/native-agent";
@@ -88,6 +89,11 @@ import {
   codexConfiguredMcpServerNames,
   codexUserMcpThreadConfig,
 } from "../codex-config.js";
+import {
+  codexGitHubCredentialThreadConfig,
+  codexProcessShellExclude,
+  emptyGhConfigDir,
+} from "../github-credential-config.js";
 import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
 import {
   threadToolHistoryVerdict,
@@ -458,6 +464,12 @@ export interface AppServerEngineOptions {
    * fork ancestors; scripted-child tests replace it.
    */
   toolHistoryVerdict?: (threadId: string) => Promise<ToolHistoryVerdict>;
+  /**
+   * The empty `gh` configuration directory a thread that withholds the GitHub
+   * credential points `GH_CONFIG_DIR` at (`github-credential-config.ts`).
+   * Defaults to one temporary directory per process.
+   */
+  ghConfigDir?: () => Promise<string>;
   /**
    * Supervisor overrides forwarded verbatim.
    *
@@ -1683,16 +1695,35 @@ export class AppServerEngine implements CodexEngine {
     return codexUserMcpThreadConfig(config.policy, configured, RESERVED_CODEX_MCP_SERVER_NAMES);
   }
 
+  /**
+   * The command environment of a thread whose policy denies `github.write`
+   * (every graph agent node, item 209): no GitHub credential variables, an
+   * empty `gh` configuration and reset Git credential helpers
+   * (`codexGitHubCredentialThreadConfig`). Applied on start, resume and fork
+   * like the MCP selection; a graph session is new per activation, and its
+   * result turns reload the thread anyway.
+   */
+  private async githubCredentialThreadConfig(
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!nativeAgentWithholdsGitHubCredential(config.policy)) return {};
+    return codexGitHubCredentialThreadConfig(config.policy, {
+      ghConfigDir: await (this.options.ghConfigDir ?? emptyGhConfigDir)(),
+      processExclude: codexProcessShellExclude(this.options.configOverrides),
+    });
+  }
+
   /** Thread configuration from the policy that app-server has to be asked for. */
   private async policyThreadConfig(
     generation: EngineGeneration,
     config: EngineTurnConfig,
   ): Promise<Record<string, unknown>> {
-    const [skills, mcp] = await Promise.all([
+    const [skills, mcp, credential] = await Promise.all([
       this.projectResourceThreadConfig(generation, config),
       this.userMcpThreadConfig(generation, config),
+      this.githubCredentialThreadConfig(config),
     ]);
-    return { ...skills, ...mcp };
+    return { ...skills, ...mcp, ...credential };
   }
 
   private toThreadParams(

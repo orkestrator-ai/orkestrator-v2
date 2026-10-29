@@ -189,7 +189,7 @@ not advertise at its version before sending it.
 | `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
 | `build list --project P` / `build get BUILD` | `build.list/get` | Build Pipeline storage; each step's selection with the byte size of its instructions and focus, never the text | read |
 | `build cancel BUILD` | `build.cancel` | Build Pipeline supervisor `cancel` (refused once the build ended) | process |
-| `graph list [--project P]` / `graph show TEMPLATE [--project P [--environment ENV]]` | `graph.list/show` | the graph template library (`GraphTemplateService`); with a project, the launch options (`GraphRunLaunchService.options`): each role's providers with their tier and why one is unavailable, and the launch defaults. Never prompt text. See [Graphs](#graphs) | read |
+| `graph list [--project P] [--limit N] [--cursor C]` / `graph show TEMPLATE [--project P [--environment ENV]]` | `graph.list/show` | the graph template library (`GraphTemplateService`), paged by reference; with a project, the launch options (`GraphRunLaunchService.options`): each role's providers with their tier and why one is unavailable, and the launch defaults. Never prompt text. See [Graphs](#graphs) | read |
 | `graph validate (TEMPLATE \| --file PATH) [--project P]` | `graph.validate` | `GraphTemplateService.compile` of a saved template, or of a template file's JSON without saving it | read |
 | `graph launch TEMPLATE --project P (--environment ENV \| --new-worktree \| --new-container) [--role KEY=A[/M[@E]][,…]]… [--focus ROLE[.N]=TEXT]… [--focus-file ROLE[.N]=PATH]… [--param KEY=VALUE]… [--input NAME=JSON]… [--input-file NAME=PATH]… [--ticket T [--ticket-input NAME]]` | `graph.launch` | the one launch service every surface uses (`GraphRunLaunchService.launch`, `requestedBy: "cli"`) | metadata, filesystem, provider, external |
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
@@ -673,11 +673,15 @@ file of `--project`; `graph list` prints the references).
   enforcement tier they hold on this host and, for one that is unavailable,
   why (a step's `minEnforcement` floor, or no way to return the role's typed
   results), plus what a launch that leaves a role out binds. Lenses are
-  reported by size.
+  reported by size. An untrusted or engine template still shows, with
+  `launch.launchable: false` and the reason.
 - `graph validate` compiles a saved template, or with `--file PATH` (`-`:
   stdin, at most 512 KiB) a template document that is never saved, and prints
-  the compiler's diagnostics (at most 50, the rest counted) and cost. It exits
-  0 whenever the compile ran; read `ok` and `launchable`.
+  the compiler's diagnostics (at most 50, the rest counted) and cost;
+  `--project` compiles under that project's capability ceiling. It exits 0
+  whenever it answers, even for a document that does not parse (its field
+  errors come back as `template-<code>` diagnostics); read `ok` and
+  `launchable`.
 - `graph launch` runs in an existing environment of the project
   (`--environment`) or a new worktree or restricted container the run creates
   (D7). `--role KEY=AGENT[/MODEL[@EFFORT]]` binds a role (a panel role's
@@ -694,7 +698,8 @@ file of `--project`; `graph list` prints the references).
 
 The client refuses malformed flags and references before sending anything
 (exit 2). Before admission the backend reads the template's launch options,
-so an unknown project, environment, ticket or template (exit 3), an untrusted
+so an unknown project, environment, ticket or template (exit 3), an
+environment of another project (`invalid-input`, exit 2), an untrusted
 project template (`conflict`, exit 8), an engine built-in (`unsupported`,
 exit 8), a template that does not compile or waits on an acknowledgement
 (`not-ready`, exit 8), and an unknown role or input, a list for a one-model
@@ -702,12 +707,23 @@ role, a provider below a step's floor or a parameter outside its declaration
 (`invalid-input`, exit 2) leave no operation record. Every refusal carries
 the launch's own code in `error.details.reason` (`GRAPH_LAUNCH_ERROR_CODES`:
 `untrusted`, `engine-template`, `not-launchable`, `invalid-binding`,
-`invalid-launch`, …). The run's ID is derived from the request key, so a
-replay returns the same run and restart recovery finds it. Receipts, results
-and `graph status` carry IDs, states and counts only (`runId`,
-`environmentId`, `status`, activations by state, sessions and tokens),
-never input values, ticket text, prompts or lens text. `graph cancel` asks
-the run to stop; its record, artifacts and environment are kept.
+`invalid-launch`, …). A launch's intent is the validated input with the
+template reference as written (scope `project:<id>`), so reusing a
+`--request-id` with other flags is `request-conflict`. The launch service's
+idempotency key is `public:<requestKey>` (`graphPublicLaunchRequestId` in
+`public-api/graph-recovery.ts`) and the run's ID is derived from it
+(`graphLaunchRunId`: `launch-` and a SHA-256 prefix over the project and that
+key), so a replay returns the same run and restart recovery finds it.
+Receipts, results and `graph status` carry IDs, states and counts only
+(`runId`, `environmentId`, `status`, activations by state, sessions and
+tokens; `graph status` adds `requestedBy`, `ticketId`, `mock`, timestamps and
+the run's error, cut to 500 characters, with its cause), never input
+values, ticket text, prompts or lens text. `graph cancel` (scope
+`graph-run:<id>`) asks the run to stop; its record, artifacts and
+environment are kept. A run that already ended is refused before admission
+(`conflict`, exit 8, its status in `error.details`); a run already
+cancelling is admitted and succeeds. The coordinator's `launch_graph` is
+separate: see [coordinator.md](coordinator.md#saved-graphs).
 
 ## Exec
 

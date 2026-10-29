@@ -209,6 +209,14 @@ describe("predicate evaluator: roots", () => {
     expect(truthOf(leaf("verify.verdict.complete", "eq", true))).toBe("true");
   });
 
+  test("reads an inlined node's loop root by its plan id (items 401, 402)", () => {
+    const env = { values: { "repair/validate.results": { failures: [] } } };
+    expect(truthOf(leaf("repair/validate.results.failures", "empty"), env)).toBe("true");
+    expect(truthOf(leaf("outer/inner/node.port", "exists"), env)).toBe("false");
+    // Only the root may be a plan id; fields stay plain names.
+    expect(evaluateGraphPredicate(leaf("a.b/c", "exists"), env).error?.code).toBe("malformed");
+  });
+
   test("reads roots from a Map", () => {
     const env = { values: new Map<string, unknown>([["report", report]]) };
     expect(truthOf(leaf("report.issues", "nonEmpty"), env)).toBe("true");

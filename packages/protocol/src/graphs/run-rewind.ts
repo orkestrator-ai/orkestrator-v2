@@ -30,6 +30,7 @@
  *
  * Browser-safe: no `node:`/`bun:` imports.
  */
+import { graphNodeIsolated } from "./isolation.js";
 import type { GraphPlanNode } from "./plan.js";
 import { graphRunActivation } from "./run-lineage.js";
 import type { GraphArtifact, GraphRewind, GraphRun, NodeActivation } from "./run-model.js";
@@ -239,14 +240,23 @@ export function graphRunRestartBlocker(
  * commit are checked by the backend. Code rewinds need a quiet workspace:
  * the run must be paused or finished and no activation may still be
  * admitted (the pipeline's "pause first" rule); a mock run never changes code.
+ * An isolated branch (item 403) is never rewound: a restart already starts it
+ * from its input commit in a fresh worktree.
  */
 export function graphRunCodeRewindBlocker(
-  run: Pick<GraphRun, "status" | "activations" | "mock">,
+  run: Pick<GraphRun, "status" | "activations" | "mock"> & {
+    plan?: { nodes: ReadonlyArray<{ id: string; kind: string; isolation?: "worktree" }> };
+  },
   activationKey: string,
 ): string | undefined {
   if (run.mock) return "A mock run never changes code.";
   const restart = graphRunRestartBlocker(run, activationKey);
   if (restart) return restart;
+  const activation = run.activations.find((entry) => entry.key === activationKey);
+  const node = run.plan?.nodes.find((entry) => entry.id === activation?.nodeId);
+  if (node && graphNodeIsolated(node)) {
+    return "This branch works in its own worktree, created from its input commit on every attempt. Restart it instead; the run's branch is not reset.";
+  }
   if (run.status === "running" || run.status === "waiting") {
     return "Pause the run first: a running node could write to the worktree during the reset.";
   }

@@ -2,10 +2,12 @@ import { useMemo } from "react";
 import { GRAPH_TEMPLATE_BOUNDS, isGraphId } from "@orkestrator/protocol/graphs/grammar";
 import type {
   GraphAgentNode,
+  GraphItemsTruncate,
   GraphLens,
   GraphReplicate,
   GraphSessionSpec,
 } from "@orkestrator/protocol/graphs/template";
+import type { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { resolveReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { useConfigStore } from "@/stores/configStore";
 import { GraphNodeExecutionFields } from "./GraphKindEditors";
@@ -28,10 +30,10 @@ import {
 
 /**
  * The execution form of an agent node (report §7.2 "Execution"): its role
- * (the model slot chosen at launch), replication (D9: over a panel, lenses
- * or samples; the node draws as a stacked "×N" card and its outputs become
- * lists), retry, timeout, failure policy, session mode, the `ask_human` opt-in
- * (D15) and the condition it runs under.
+ * (the model slot chosen at launch), replication (D9: over a panel, lenses,
+ * samples or the items of a list input, item 401; the node draws as a stacked
+ * "×N" card and its outputs become lists), retry, timeout, failure policy,
+ * session mode, the `ask_human` opt-in (D15) and the condition it runs under.
  */
 
 type ReplicateMode = "none" | "panel" | "lenses" | "samples" | "items" | "cross";
@@ -41,7 +43,7 @@ const MODE_LABELS: Readonly<Record<ReplicateMode, string>> = {
   panel: "Over a panel of models",
   lenses: "Over lenses",
   samples: "Samples of one model",
-  items: "Over list items (Phase 4)",
+  items: "Over the items of a list",
   cross: "Combined (JSON)",
 };
 
@@ -180,16 +182,80 @@ function LensesEditor({ node }: { node: GraphAgentNode & { replicate: { over: "l
   );
 }
 
+/** Input ports an `items` fan-out can replicate over: `list<T>`, or a type that declares items. */
+export function graphItemsInputPorts(node: GraphAgentNode, library: GraphTypeLibrary): string[] {
+  return (node.inputs ?? [])
+    .filter((port) => {
+      const resolved = library.resolve(port.type);
+      if (!resolved.ok) return false;
+      const type = resolved.type;
+      return type.kind === "list"
+        ? type.element.kind !== "list"
+        : type.kind === "named" && type.definition.items !== undefined;
+    })
+    .map((port) => port.name);
+}
+
+function ItemsEditor({ node }: { node: GraphAgentNode & { replicate: { over: "items" } } }) {
+  const { library } = useGraphEditor();
+  const editNode = useGraphNodeEdit(node.id);
+  const replicate = node.replicate;
+  const ports = graphItemsInputPorts(node, library);
+  const set = (label: string, change: Partial<typeof replicate>) =>
+    editNode<GraphAgentNode>(label, (current) => ({
+      ...current,
+      replicate: { ...replicate, ...change },
+    }));
+  return (
+    <div className="flex flex-col gap-1.5" data-graph-items-editor="">
+      <SelectField
+        label="Items of"
+        value={replicate.input}
+        hint={
+          ports.length === 0
+            ? "Add an input port of type list<…>, or of a type that declares items."
+            : "One branch per item of this input; each branch sees one item as {{item}}."
+        }
+        options={ports.map((port) => ({ value: port, label: port }))}
+        onChange={(input) => set(`Items of ${input}`, { input })}
+      />
+      <NumberField
+        label="Most branches"
+        value={replicate.maxBranches}
+        min={1}
+        max={GRAPH_TEMPLATE_BOUNDS.maxBranches}
+        hint="The cost bound: the compiler prices the worst case at this many branches."
+        onCommit={(maxBranches) =>
+          set(`Most branches ${maxBranches ?? 1}`, { maxBranches: maxBranches ?? 1 })
+        }
+      />
+      <SelectField
+        label="More items than that"
+        value={replicate.truncate ?? "first"}
+        hint="Truncation is never silent: the run records and shows the items that did not run."
+        options={[
+          { value: "first", label: "Run the first ones, record the rest" },
+          { value: "fail", label: "Fail the node" },
+        ]}
+        onChange={(truncate) =>
+          set(`Truncate ${truncate}`, { truncate: truncate as GraphItemsTruncate })
+        }
+      />
+    </div>
+  );
+}
+
 function replicateMode(replicate: GraphReplicate | undefined): ReplicateMode {
   if (!replicate) return "none";
   return replicate.over;
 }
 
 export function GraphReplicateEditor({ node }: { node: GraphAgentNode }) {
-  const { template } = useGraphEditor();
+  const { template, library } = useGraphEditor();
   const editNode = useGraphNodeEdit(node.id);
   const mode = replicateMode(node.replicate);
   const panelRoles = template.roles.filter((role) => role.multiplicity === "panel");
+  const itemPorts = graphItemsInputPorts(node, library);
   const setReplicate = (label: string, replicate: GraphReplicate | undefined) =>
     editNode<GraphAgentNode>(label, (current) => {
       const next = { ...current };
@@ -206,8 +272,8 @@ export function GraphReplicateEditor({ node }: { node: GraphAgentNode }) {
         options={(Object.keys(MODE_LABELS) as ReplicateMode[]).map((value) => ({
           value,
           label: MODE_LABELS[value],
-          // `items` fan-out is item 401; a combined fan-out is edited as JSON.
-          disabled: value === "items" || (value === "cross" && mode !== "cross"),
+          // A combined fan-out is edited as JSON.
+          disabled: value === "cross" && mode !== "cross",
         }))}
         onChange={(value) => {
           switch (value as ReplicateMode) {
@@ -225,6 +291,13 @@ export function GraphReplicateEditor({ node }: { node: GraphAgentNode }) {
               break;
             case "samples":
               setReplicate("Replicate as samples", { over: "samples", count: 3 });
+              break;
+            case "items":
+              setReplicate("Replicate over items", {
+                over: "items",
+                input: itemPorts[0] ?? node.inputs?.[0]?.name ?? "items",
+                maxBranches: 8,
+              });
               break;
             default:
               break;
@@ -258,7 +331,10 @@ export function GraphReplicateEditor({ node }: { node: GraphAgentNode }) {
           }
         />
       ) : null}
-      {node.replicate?.over === "cross" || node.replicate?.over === "items" ? (
+      {node.replicate?.over === "items" ? (
+        <ItemsEditor node={node as GraphAgentNode & { replicate: { over: "items" } }} />
+      ) : null}
+      {node.replicate?.over === "cross" ? (
         <JsonField
           label="Replicate as JSON"
           value={node.replicate}

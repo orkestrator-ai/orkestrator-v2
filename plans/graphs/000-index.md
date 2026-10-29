@@ -77,19 +77,19 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | in-progress | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
 | 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | in-progress | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |
 | 215 | [215-describe-a-graph.md](215-describe-a-graph.md) | 2 | in-progress | 103, 107, 212 | An agent turns a description into a `graph-template` artifact, repaired against compiler diagnostics, opened as an unsaved draft. |
-| 216 | [216-documentation.md](216-documentation.md) | 2 | not-started | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
+| 216 | [216-documentation.md](216-documentation.md) | 2 | in-progress | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
-- [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node.
-- [ ] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound.
+- [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node. (2026-10-29: ran live on Claude and Codex in one run up to the PR description; the `pr` node was deliberately not run, because opening a pull request needs the user's approval. See [207](207-system-nodes.md) Notes.)
+- [x] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound. (Since item 401 the loop also runs as written, with `items` fan-out: `graph-run-items.test.ts`, `graph-mock-provider.test.ts`.) (evidence: [207](207-system-nodes.md) Notes, "Live verification: `run-validation` in a repair loop": the loop as written converged live in 2 iterations on Claude and Codex after the `run-validation` ancestor-plan fix)
 - [x] Restart from a mid-graph node keeps independent branches and supersedes exactly the descendants.
 - [x] Code rewind works as it does in the pipeline.
 - [ ] A backend restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover activations.
-- [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs.
+- [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs. (2026-10-29: shown tiers matched and the reviewers were refused on Claude, Codex, OpenCode and Pi, by the providers themselves; Grok and Cursor not run. See [209](209-guards-and-enforcement.md) Notes, "Live conformance run".)
 - [x] A mock run of every example template passes with zero provider sessions. (evidence: [213](213-mock-runs.md) Notes, "Tests"; `apps/backend/src/core/graph-mock-provider.test.ts`, "mock runs of the report §9 examples" and "mock runs of the built-ins' duplicates")
-- [ ] The inactive-environment test passes for the run view and human nodes.
-- [ ] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction.
+- [x] The inactive-environment test passes for the run view and human nodes. (evidence: [211](211-run-view.md) and [208](208-human-nodes.md) Notes, "Agent testing"; `e2e/agent-testing/graph-run-view.spec.ts` "a graph launched from Run graph… finishes while its environment is away and rehydrates" and "a human approval waits while its environment is away and is answered later", 3 passed on profile `graphs-208-realstack`)
+- [x] Multi Review and Build Pipeline suites, benchmarks and interleaving tests are unchanged after the `AgentBranchRunner` extraction. (evidence: [204](204-agent-node-executor.md) Notes; 204's commits `6a1d7623e` and `71d437437` touch none of the `multi-review*`, `review-fanout*` or `build-pipeline*` test and bench files, and those suites pass in `mise run test` on `graphs-integration`)
 
 ## Phase 3: Multi Review on the graph runtime
 
@@ -105,9 +105,9 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
-| 401 | [401-items-fanout.md](401-items-fanout.md) | 4 | not-started | 205 | Fan out over the items of a list artifact, bounded by `maxBranches`, with per-item provenance through to fixes. |
+| 401 | [401-items-fanout.md](401-items-fanout.md) | 4 | in-progress | 205 | Fan out over the items of a list artifact, bounded by `maxBranches`, with per-item provenance through to fixes. |
 | 402 | [402-subgraphs.md](402-subgraphs.md) | 4 | in-progress | 107, 204 | Inline templates with namespaced IDs and parameter pass-through; built-in Multi Review usable as a block. |
-| 403 | [403-isolated-branch-worktrees.md](403-isolated-branch-worktrees.md) | 4 | not-started | 205, 210 | One worktree per replicated writer branch, then `select` or agent `merge`; lifecycle, disk and container story. |
+| 403 | [403-isolated-branch-worktrees.md](403-isolated-branch-worktrees.md) | 4 | in-progress | 205, 210 | One worktree per replicated writer branch, then `select` or agent `merge`; lifecycle, disk and container story. |
 | 404 | [404-per-node-user-mcp.md](404-per-node-user-mcp.md) | 4 | in-progress | 106, 204 | Per-session injection of user MCP servers in every bridge, so `mcp:<server>` can grant as well as deny. |
 | 405 | [405-template-sharing.md](405-template-sharing.md) | 4 | in-progress | 109 | Export and import with signatures or digests, and a review flow for project templates. |
 | 406 | [406-coordinator-authoring.md](406-coordinator-authoring.md) | 4 | blocked | 214, 215 | Coordinator writes templates as drafts under the project-template trust rule. Blocked: D6 defers it. |

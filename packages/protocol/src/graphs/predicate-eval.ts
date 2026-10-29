@@ -19,7 +19,13 @@
  * `not`. `exists` is the one leaf that is never unknown: test absence with
  * `{ not: { path, op: "exists" } }`.
  */
-import { GRAPH_TEMPLATE_BOUNDS as B, graphUtf8Bytes, isGraphFieldPath } from "./grammar.js";
+import {
+  GRAPH_PLAN_ID_MAX_CHARS,
+  GRAPH_PLAN_ID_PATTERN,
+  GRAPH_TEMPLATE_BOUNDS as B,
+  graphUtf8Bytes,
+  isGraphFieldPath,
+} from "./grammar.js";
 import {
   GRAPH_PREDICATE_COMPARISONS,
   GRAPH_PREDICATE_OPS,
@@ -190,7 +196,7 @@ function prepareNode(
   const op = entries.get("op");
   if (typeof op !== "string" || !OPS.has(op)) fail("malformed", at(path, "op"), "Unknown operator");
   const leafPath = entries.get("path");
-  if (!isGraphFieldPath(leafPath)) fail("malformed", at(path, "path"), "Expected a field path");
+  if (!isGraphLeafPath(leafPath)) fail("malformed", at(path, "path"), "Expected a field path");
   const leaf = {
     kind: "leaf" as const,
     path: leafPath,
@@ -404,6 +410,24 @@ function evaluateNode(node: Prepared, run: Run): Truth {
       return truth;
     }
   }
+}
+
+/**
+ * A leaf path: a field path, or one whose first segment is a plan id. A loop
+ * inlined from a sub-graph (item 402) reads `<instance>/<node>.<port>…` in its
+ * `until`; the root names the inlined node, the rest are fields.
+ */
+function isGraphLeafPath(value: unknown): value is string {
+  if (isGraphFieldPath(value)) return true;
+  if (typeof value !== "string") return false;
+  const dot = value.indexOf(".");
+  const head = dot < 0 ? value : value.slice(0, dot);
+  return (
+    head.includes("/") &&
+    head.length <= GRAPH_PLAN_ID_MAX_CHARS &&
+    GRAPH_PLAN_ID_PATTERN.test(head) &&
+    (dot < 0 || isGraphFieldPath(value.slice(dot + 1)))
+  );
 }
 
 function settle(prepared: PrepareResult, resolve: Run["resolve"]): GraphPredicateEvaluation {

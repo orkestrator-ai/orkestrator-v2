@@ -7,7 +7,9 @@ import {
 } from "@orkestrator/protocol/graphs/template";
 import { graphBuiltInTemplate } from "@orkestrator/protocol/graphs/builtins";
 import type { GraphTemplateSummary } from "@orkestrator/protocol/graphs/library";
+import { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { GraphPalette } from "./GraphPalette";
+import { graphSystemDefaultPorts } from "./graph-designer-system-actions";
 import type { GraphPaletteItem } from "./graph-designer-edits";
 import { builtInDetail, fixtureSummary } from "./graph-designer.test-fixtures";
 
@@ -31,6 +33,21 @@ describe("GraphPalette", () => {
     }
     fireEvent.click(screen.getByRole("menuitem", { name: /Wait for checks/ }));
     expect(onAdd).toHaveBeenCalledWith({ kind: "system", action: "wait-for-checks" });
+  });
+
+  test("Select branch (item 403) is offered and starts with its candidates and decision ports", () => {
+    const onAdd = mock((_item: GraphPaletteItem) => {});
+    render(<GraphPalette onAdd={onAdd} wrapTarget={null} onWrapInLoop={() => {}} />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "System node" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Select branch/ }));
+    expect(onAdd).toHaveBeenCalledWith({ kind: "system", action: "select-workspace" });
+    expect(graphSystemDefaultPorts("select-workspace", new GraphTypeLibrary())).toEqual({
+      inputs: [
+        { name: "candidates", type: "list<workspace@1>" },
+        { name: "decision", type: "decision@1" },
+      ],
+      outputs: [{ name: "code", type: "workspace@1" }],
+    });
   });
 
   test("the Sub-graph menu lists saved templates by scope; untrusted ones cannot be picked", () => {

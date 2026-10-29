@@ -10,6 +10,7 @@ import {
   environmentCleanupLedgerRow,
   formatBytes,
   formatReport,
+  graphBranchWorktreeRow,
   legacyTurboArtifacts,
   previewPartitionRows,
   readEnvironments,
@@ -231,6 +232,31 @@ describe("disk report", () => {
     database.writeStore("environments", [{ id: "db-env", worktreePath: "/w" }]);
     database.close();
     expect(readEnvironments(migrated)).toEqual([{ id: "db-env", worktreePath: "/w" }]);
+  });
+
+  test("counts isolated graph branch worktrees inside environments, and leftovers Git no longer lists", async () => {
+    const environment = path.join(root, "env");
+    const branch = path.join(
+      environment,
+      ".orkestrator",
+      "graph-branches",
+      "run-1",
+      "implement",
+      "i1",
+    );
+    await mkdir(path.join(branch, "sample.1"), { recursive: true });
+    await mkdir(path.join(branch, "sample.2"), { recursive: true });
+    await writeFile(path.join(branch, "sample.1", "file.txt"), "x".repeat(4096));
+    const row = graphBranchWorktreeRow([
+      { id: "e1", worktreePath: environment },
+      { id: "e2", worktreePath: path.join(root, "missing") },
+      { id: "e3" },
+    ]);
+    // Not a repository here, so neither directory is a registered worktree.
+    expect(row.orphaned).toBe("2 unregistered of 2");
+    expect(row.bytes).toBeGreaterThan(0);
+    expect(row.location).toContain(".orkestrator/graph-branches");
+    expect(graphBranchWorktreeRow([]).orphaned).toBe("0 unregistered of 0");
   });
 
   test("names transcript directories the way Claude Code does", () => {

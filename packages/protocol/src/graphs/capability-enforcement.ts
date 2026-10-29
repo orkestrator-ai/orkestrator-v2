@@ -30,6 +30,7 @@
 import { AGENT_PLATFORMS, type AgentPlatform } from "../agent-platforms.js";
 import { coordinatorCapabilityPolicy } from "../coordinator-web-research.js";
 import {
+  NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING,
   nativeAgentDeniedCapabilities,
   nativeAgentDenialsAreReadOnly,
   type NativeAgentExecutionPolicy,
@@ -293,8 +294,18 @@ function commitBoundary(platform: AgentPlatform): TierAndReason {
   };
 }
 
-const REMOTE_GUARD_REASON =
-  "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider.";
+/**
+ * Why push and GitHub writes are advisory on a writing node: the remote-ref
+ * guard holds them, and the withheld credential (item 209) is said only
+ * where the bridge actually withholds it.
+ */
+function remoteGuardReason(platform: AgentPlatform): string {
+  const withholding = NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING[platform];
+  const guards = withholding.withheld
+    ? "Push and GitHub writes are held by Orkestrator's guards (remote-ref check, withheld GitHub credential), not by the provider."
+    : "Push and GitHub writes are held by Orkestrator's remote-ref guard, not by the provider.";
+  return withholding.gap ? `${guards} ${withholding.gap}` : guards;
+}
 
 function secondaryAxis(
   axis: "subagents" | "mcp" | "web-search",
@@ -464,7 +475,7 @@ export function agentPolicyEnforcement(
         true,
         strongest && strongest.tier !== "advisory"
           ? { tier: strongest.tier }
-          : { tier: "advisory", reason: REMOTE_GUARD_REASON },
+          : { tier: "advisory", reason: remoteGuardReason(platform) },
       );
     }
   }

@@ -129,6 +129,52 @@ function isAncestorOfMain(repository: string, ref: string): boolean {
   );
 }
 
+/** Where isolated graph branches keep their worktrees, inside each environment (item 403). */
+const GRAPH_BRANCH_DIRECTORY = path.join(".orkestrator", "graph-branches");
+
+/**
+ * Isolated graph branch worktrees (item 403): one per running branch, at
+ * `<environment>/.orkestrator/graph-branches/<run>/<node>/i<n>/<branch>`. The
+ * backend removes a branch's worktree when the branch finishes and its Git
+ * branch when the run ends; a leftover the repository no longer lists as a
+ * worktree is counted as unregistered. Containers keep theirs in their own
+ * storage volume, which Settings > Disk usage measures.
+ */
+export function graphBranchWorktreeRow(environments: Environment[]): ReportRow {
+  const runDirectories: string[] = [];
+  let leaves = 0;
+  let unregistered = 0;
+  for (const environment of environments) {
+    if (typeof environment.worktreePath !== "string") continue;
+    const root = path.resolve(environment.worktreePath);
+    const runs = childDirectories(path.join(root, GRAPH_BRANCH_DIRECTORY));
+    if (runs.length === 0) continue;
+    runDirectories.push(...runs);
+    const registered = new Set(
+      gitLines(root, ["worktree", "list", "--porcelain"])
+        .filter((line) => line.startsWith("worktree "))
+        .map((line) => path.resolve(line.slice("worktree ".length))),
+    );
+    for (const run of runs) {
+      for (const node of childDirectories(run)) {
+        for (const iteration of childDirectories(node)) {
+          for (const branch of childDirectories(iteration)) {
+            leaves += 1;
+            if (!registered.has(path.resolve(branch))) unregistered += 1;
+          }
+        }
+      }
+    }
+  }
+  return {
+    location: `<environment>/${GRAPH_BRANCH_DIRECTORY} (isolated graph branches)`,
+    bytes: diskUsage(runDirectories),
+    orphaned: `${unregistered} unregistered of ${leaves}`,
+    owner: "Orkestrator graph runs (removed when the branch finishes, branches when the run ends)",
+    cleanup: "removed automatically; otherwise git worktree remove --force <path>",
+  };
+}
+
 /**
  * Electron's `persist:` partitions for previews in a desktop profile: one per
  * service (cleared by `PreviewPartitionRetention` once the service, its
@@ -324,6 +370,7 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
   const unreferencedWorktrees = workspaces.filter(
     (directory) => !referenced.has(directory) && registeredWorktrees.has(directory),
   );
+  rows.push(graphBranchWorktreeRow(environments));
   rows.push({
     location: context.workspacesRoot,
     bytes: diskUsage([context.workspacesRoot]),

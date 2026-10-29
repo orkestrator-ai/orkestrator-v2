@@ -12,8 +12,10 @@
  *   attempt; retries of the position stay readable in the inspector.
  * - Columns are the longest path through the positions, so a node sits to
  *   the right of everything it consumes. The branches of one replicated
- *   activation share a column, and each loop iteration unrolls to the right
- *   of the one before (a loop carry feeds the next iteration).
+ *   activation share a column (an `items` node's once it expanded, one per
+ *   item, with the fan-out's truncation on each; item 401), and each loop
+ *   iteration unrolls to the right of the one before (a loop carry feeds the
+ *   next iteration).
  * - Positions not reached yet are drawn faded ahead of the work, the next
  *   loop iteration only once it is entered.
  * - A gate shows the outlet it took; edges out of the outlets it did not take
@@ -31,7 +33,8 @@ import type {
 } from "@orkestrator/protocol/graphs/compile";
 import {
   graphActivationSlot,
-  graphNodeBranches,
+  graphLiveItemFanOut,
+  graphRunNodeBranches,
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
@@ -75,6 +78,13 @@ export interface GraphRunFlowNode {
   error?: string;
   /** Activity time, for the default selection. */
   activityAt?: number;
+  /**
+   * An `items` node position's fan-out (item 401): the items that run and the
+   * input's total; more in `total` than `running` means items were truncated.
+   */
+  fanOut?: { running: number; total: number };
+  /** An `items` branch: its item's 1-based index and stable id. */
+  item?: { index: number; id: string };
   /** History a rewind replaced: kept readable, drawn greyed, out of the live run. */
   superseded?: boolean;
   /** The rewind a previous-attempt node (or a superseded activation) belongs to. */
@@ -129,9 +139,16 @@ export function graphBranchLabel(branchKey: string): string {
       if (axis === "panel") return `Panel ${value}`;
       if (axis === "sample") return `Sample ${value}`;
       if (axis === "lens") return value;
+      // An `items` branch key encodes its item's id (`/` as `:`; item 401).
+      if (axis === "item") return `Item ${value.replaceAll(":", "/")}`;
       return part;
     })
     .join(" · ");
+}
+
+/** An `items` fan-out that ran fewer branches than its input held items (item 401). */
+export function graphRunTruncationText(fanOut: { running: number; total: number }): string {
+  return `${fanOut.running} of ${fanOut.total} items run; ${fanOut.total - fanOut.running} truncated`;
 }
 
 export function graphPlanNodeTitle(node: Pick<GraphPlanNode, "id" | "label">): string {
@@ -178,13 +195,18 @@ function groupKey(nodeId: string, iteration: number): string {
   return `${nodeId}#iter=${iteration}`;
 }
 
-function plannedBranchKeys(node: GraphPlanNode, run: GraphRun): (string | undefined)[] {
+function plannedBranchKeys(
+  node: GraphPlanNode,
+  run: GraphRun,
+  iteration: number,
+): (string | undefined)[] {
   try {
-    const branches = graphNodeBranches(node, run.bindings.roles);
+    // An `items` node has branches once its position expanded (item 401).
+    const branches = graphRunNodeBranches(run, node, iteration);
     if (!branches) return [undefined];
     return branches.length > 0 ? branches.map((branch) => branch.key) : [undefined];
   } catch {
-    // `items` replication (item 401) has no branches until it runs.
+    // Bindings that no longer build branches (a retained record) show one position.
     return [undefined];
   }
 }
@@ -272,7 +294,7 @@ export function graphRunFlowModel(
       // The branches the bindings name, in plan order, then any that ran
       // without being named (a binding changed under a retained record).
       const reached = liveByGroup.get(groupKey(node.id, iteration)) ?? [];
-      const planned = plannedBranchKeys(node, run);
+      const planned = plannedBranchKeys(node, run, iteration);
       // A replicated node whose branches only exist once it runs (`items`)
       // has no planned key worth a placeholder beside the ones that ran.
       const unknownBranches = planned.length === 1 && planned[0] === undefined;
@@ -418,6 +440,11 @@ export function graphRunFlowModel(
     for (const slot of groups.get(group) ?? []) {
       const position = positions.get(slot)!;
       const latest = position.attempts[position.attempts.length - 1];
+      const fanOut = graphLiveItemFanOut(run, position.node.id, position.iteration);
+      const item =
+        position.branchKey !== undefined
+          ? fanOut?.items.find((entry) => position.branchKey!.split("+").includes(entry.key))
+          : undefined;
       const title =
         position.branchKey !== undefined
           ? `${graphPlanNodeTitle(position.node)} · ${graphBranchLabel(position.branchKey)}`
@@ -431,6 +458,8 @@ export function graphRunFlowModel(
           iteration: position.iteration,
           ...(position.branchKey !== undefined ? { branchKey: position.branchKey } : {}),
           title,
+          ...(fanOut ? { fanOut: { running: fanOut.items.length, total: fanOut.total } } : {}),
+          ...(item ? { item: { index: item.index, id: item.id } } : {}),
           state: graphActivationFlowState(latest, run),
           // Not reached: faded ahead of the work, or left behind by a finished run.
           placeholder:

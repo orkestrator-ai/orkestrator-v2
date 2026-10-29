@@ -22,7 +22,10 @@
  *   definitely holds for (104's three-valued `filterGraphPredicateList`).
  * - `limit` keeps the first `count` elements.
  * - `flatten` concatenates the list at `path` of one value or of every
- *   element; a missing or null list contributes nothing.
+ *   element; a missing or null list contributes nothing. When `path` is the
+ *   source type's own item list, each element remembers its item's stable
+ *   id, and the stored artifact records it as `sourceItem` (item 401);
+ *   `pick` and one-to-one adapters keep it.
  * - `adapt` runs a named built-in adapter (102's `applyGraphTypeAdapter`), on
  *   each element of a list.
  *
@@ -80,6 +83,10 @@ export type GraphEdgeTransformResult =
 interface Entry {
   value: unknown;
   from?: string;
+  /** The source artifact's item list (path and stable ids), for `flatten` (item 401). */
+  items?: { path: string; ids: readonly string[] };
+  /** The upstream item this element is (a `flatten` over the source type's items). */
+  sourceItem?: string;
 }
 
 type Chain =
@@ -197,7 +204,11 @@ function applyOne(
       return {
         ok: true,
         list,
-        entries: entries.map((entry) => ({ value: pickGraphValue(entry.value, transform.fields) })),
+        // A projection of an item is still that item.
+        entries: entries.map((entry) => ({
+          value: pickGraphValue(entry.value, transform.fields),
+          ...(entry.sourceItem !== undefined ? { sourceItem: entry.sourceItem } : {}),
+        })),
       };
     case "flatten": {
       const flattened: Entry[] = [];
@@ -207,7 +218,19 @@ function applyOne(
         if (flattened.length + nested.length > GRAPH_EDGE_TRANSFORM_MAX_ELEMENTS) {
           return tooMany(index, flattened.length + nested.length);
         }
-        for (const element of nested) flattened.push({ value: element });
+        // Cutting a type's own item list keeps each item's stable id (item 401).
+        const ids =
+          entry.items &&
+          entry.items.path === transform.path &&
+          entry.items.ids.length === nested.length
+            ? entry.items.ids
+            : undefined;
+        nested.forEach((element, position) =>
+          flattened.push({
+            value: element,
+            ...(ids?.[position] !== undefined ? { sourceItem: ids[position] } : {}),
+          }),
+        );
       }
       return { ok: true, list: true, entries: flattened };
     }
@@ -230,7 +253,11 @@ function applyOne(
           if (adapted.length + produced.length > GRAPH_EDGE_TRANSFORM_MAX_ELEMENTS) {
             return tooMany(index, adapted.length + produced.length);
           }
-          for (const value of produced) adapted.push({ value });
+          // A one-to-one adapter keeps the item it adapted.
+          const keep = !toList && entry.sourceItem !== undefined;
+          for (const value of produced) {
+            adapted.push({ value, ...(keep ? { sourceItem: entry.sourceItem } : {}) });
+          }
         }
       } catch {
         return {
@@ -299,6 +326,8 @@ export interface GraphEdgeDeliverySource {
   /** The source artifact id. */
   id: string;
   value: unknown;
+  /** Its type's item list path and the items' stable ids, when it has items (item 401). */
+  items?: { path: string; ids: readonly string[] };
 }
 
 /** What the target port receives from one edge. */
@@ -311,6 +340,8 @@ export type GraphEdgeDelivery =
       values: unknown[];
       /** Lineage of every new artifact: the source artifact ids. */
       inputs: string[];
+      /** Per value, the upstream item it is (a `flatten` over a type's items; item 401). */
+      sourceItems?: (string | undefined)[];
     }
   | {
       kind: "failed";
@@ -371,7 +402,11 @@ export function planGraphEdgeDelivery(input: {
     };
   }
   const chain = runChain(
-    sources.map((source) => ({ value: source.value, from: source.id })),
+    sources.map((source) => ({
+      value: source.value,
+      from: source.id,
+      ...(source.items ? { items: source.items } : {}),
+    })),
     list,
     edge.transform,
   );
@@ -419,10 +454,12 @@ export function planGraphEdgeDelivery(input: {
       message: `Input ${port.name}: a transform cannot make a ${definition.ref} file artifact`,
     };
   }
+  const sourceItems = chain.entries.map((entry) => entry.sourceItem);
   return {
     kind: "store",
     type: definition.ref,
     values,
     inputs: [...new Set(sources.map((source) => source.id))],
+    ...(sourceItems.some((id) => id !== undefined) ? { sourceItems } : {}),
   };
 }

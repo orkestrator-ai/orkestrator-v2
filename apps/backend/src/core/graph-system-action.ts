@@ -19,6 +19,7 @@
 import type { GraphPlanSystemNode } from "@orkestrator/protocol/graphs/compile";
 import {
   graphActivationSlot,
+  type GraphArtifact,
   type GraphArtifactWorkspace,
   type GraphRun,
   type NodeActivation,
@@ -32,6 +33,7 @@ import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { AgentMailMessage, AgentMailSendInput } from "@orkestrator/protocol/agent-mail";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import type { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import type { GraphEnvironmentShell } from "./graph-system-environment.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment, Project } from "./models.js";
@@ -97,6 +99,8 @@ export interface GraphSystemDependencies {
   inlineWaitMs?: number;
   /** Waits between bounded re-reads (mergeability); tests pass an instant one. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Removes isolated branches' worktrees and branches (`select-workspace`, item 403). */
+  branchWorktrees?: Pick<GraphBranchWorktrees, "removeWorktrees" | "deleteBranches">;
 }
 
 export interface GraphSystemEffectOptions<T> {
@@ -202,6 +206,20 @@ export class GraphSystemActionContext {
     const value = "value" in artifact.body ? artifact.body.value : undefined;
     this.values.set(port, value);
     return value as T | undefined;
+  }
+
+  /**
+   * The artifacts of a list input of `type` (a fan-in), each verified, in
+   * port order; empty when the node has none.
+   */
+  async inputList(type: string): Promise<GraphArtifact[]> {
+    const port = this.inputPort(type);
+    if (port === undefined) return [];
+    const ids = this.activation.inputs[port];
+    const list = ids === undefined ? [] : Array.isArray(ids) ? ids : [ids];
+    const artifacts: GraphArtifact[] = [];
+    for (const id of list) artifacts.push(await this.artifacts.requireVerified(this.run.id, id));
+    return artifacts;
   }
 
   async requireInput<T>(type: string): Promise<T> {

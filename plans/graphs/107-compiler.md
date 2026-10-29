@@ -37,7 +37,7 @@ A pure compiler that turns a template into a frozen, hashed plan, or explains ex
 
 - [x] One test per diagnostic code.
 - [x] ~~The report §9 examples compile.~~ (replaced by the next line: §9.3 and §9.4 use a sub-graph and `items` fan-out, which this item must reject until 402 and 401; see Notes)
-- [x] The report §9.1 and §9.2 examples compile with no errors and may launch; §9.3 and §9.4 fail only with `subgraph-unsupported` and `replicate-items-unsupported`, and §9.3's taint warnings are acknowledged in the example.
+- [x] The report §9.1 and §9.2 examples compile with no errors and may launch; §9.3 and §9.4 fail only with `subgraph-unsupported` and `replicate-items-unsupported`, and §9.3's taint warnings are acknowledged in the example. (2026-10-29: since item 401, §9.4 compiles with no errors and `replicate-items-unsupported` is gone; see Notes.)
 - [x] The digest is stable across key order and layout changes.
 
 ## Done when
@@ -207,7 +207,7 @@ from `GRAPH_COMPILE_DIAGNOSTICS`). `detail` carries the delegated code where one
 | `subgraph-unsupported` | error | Since 402 only what inlining cannot keep: `replicate`, `when`, `retry`, `timeoutMs`, `onFailure` on the sub-graph node, a child with loops inside a parent loop, a session continued from a sub-graph, a carry through a transforming child edge. |
 | `subgraph-unpinned` | info | 402: the child is not pinned by digest. |
 | `subgraph-engine-copy` | info | 402: a built-in child runs as a copy on the graph runtime, not on its engine. |
-| `replicate-items-unsupported` | error | `replicate: items` (also inside `cross`), until 401. |
+| `replicate-items-input` | error | An `items` axis (also inside `cross`) names an input that is neither `list<T>` nor of a type that declares `items` (401; replaced `replicate-items-unsupported`). |
 | `output-port-list` | error | An agent output port typed `list<…>` (103). |
 | `output-port-reserved` | error | An agent output named `workflow_result` or a result kind's tool suffix (103). |
 | `error-port-type` | error | An output named `error` that is not `error@1`. |
@@ -267,6 +267,11 @@ reads (`<node>.<port>`). Test in `compile.test.ts`. See [108](108-builtin-templa
 modules now have the same kind of table: `predicate-typecheck.test.ts`, `predicate-eval.test.ts`,
 `prompt-diagnostics.test.ts`, `schema-subset.test.ts`.
 
+**2026-10-29 · Item 401.** `replicate-items-unsupported` was removed when item 401 shipped `items`
+fan-out. Its replacement, `replicate-items-input`, checks the replicated input's type; its case in
+`compile-diagnostics.test.ts` changes §9.4's input to a single `validation-failure@1`. §9.4 now
+compiles with no errors (`compile.test.ts`).
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -274,3 +279,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Compiler passes, plan with digests, cost, lints, taint and acknowledgements, 103's port rules, per-code tests, example acknowledgements; 102 box ticked, 104/105 boxes split. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Recorded the per-code coverage evidence for the Phase 1 exit criterion. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Item 401: `replicate-items-unsupported` replaced by `replicate-items-input` in the table and the per-code tests. · complete; awaiting PR

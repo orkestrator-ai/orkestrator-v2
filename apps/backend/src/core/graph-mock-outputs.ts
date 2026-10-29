@@ -146,6 +146,8 @@ export interface GraphMockStore {
   lineage: readonly string[];
   workspace?: { headRef: string; baseRef?: string };
   itemIds?: readonly string[];
+  /** An `items` branch's item (item 401). */
+  sourceItem?: string;
   criterionIds?: readonly string[];
 }
 
@@ -170,6 +172,7 @@ export async function graphMockStoreOutput(
     inputs: output.lineage,
     ...(output.workspace ? { workspace: output.workspace } : {}),
     ...(output.itemIds ? { itemIds: output.itemIds } : {}),
+    ...(output.sourceItem !== undefined ? { sourceItem: output.sourceItem } : {}),
     ...(output.port.choices || output.criterionIds
       ? {
           validation: {

@@ -413,7 +413,7 @@ describe("renderGraphNodePrompt", () => {
     const node = agentNode({
       prompt: {
         template:
-          "{{> input.items}}{{run.iteration}} {{params.mode}} {{ticket.title}} {{lens.label}} {{branch.key}} {{item.index}} {{item.title}}",
+          "{{> input.items}}{{run.iteration}} {{params.mode}} {{ticket.title}} {{lens.label}} {{branch.key}} {{item.index}} {{item.id}} {{item.title}}",
       },
       inputs: [{ name: "items", type: "list<note@1>", render: "summary" }],
       replicate: {
@@ -440,12 +440,13 @@ describe("renderGraphNodePrompt", () => {
         run: { iteration: 2 },
         lens: { key: "sec", label: "Security", instruction: "Look for holes." },
         branch: { index: 3, key: "lens-sec.item-3", count: 4 },
+        item: { index: 2, id: "notes/note-2" },
         ticket: graphBuiltInType("ticket@1")!.example,
         resultKeys: { report: "k" },
       },
     });
     expect(result.user).toBe(
-      `<orkestrator-evidence port="items" type="note@1" render="summary">\ntitle: Element\n</orkestrator-evidence>2 fast Add CSV export to the reports page Security lens-sec.item-3 3 Element`,
+      `<orkestrator-evidence port="items" type="note@1" render="summary">\ntitle: Element\n</orkestrator-evidence>2 fast Add CSV export to the reports page Security lens-sec.item-3 2 notes/note-2 Element`,
     );
   });
 

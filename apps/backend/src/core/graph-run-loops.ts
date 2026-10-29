@@ -53,7 +53,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
   let ran = false;
   for (const memberId of loop.members) {
     const member = view.node(memberId);
-    for (const branchKey of view.branchKeysOf(member)) {
+    for (const branchKey of view.branchKeysAt(member, iteration)) {
       const activation = view.latestAt(memberId, iteration, branchKey);
       if (!activation || !isGraphActivationTerminal(activation.state)) return { state: "running" };
       if (activation.state !== "skipped") ran = true;
@@ -72,7 +72,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
     const [nodeId, port] = root.split(".") as [string, string];
     if (!loop.members.includes(nodeId)) continue;
     const member = view.node(nodeId);
-    const branches = view.branchKeysOf(member);
+    const branches = view.branchKeysAt(member, iteration);
     const read = (branchKey: string | undefined): { value: unknown } | null => {
       const id = view.latestAt(nodeId, iteration, branchKey)?.outputs[port];
       if (id === undefined) return { value: undefined };
@@ -83,7 +83,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
       }
       return loaded;
     };
-    if (view.branchesOf(member) === null) {
+    if (view.branchesAt(member, iteration) === null) {
       const loaded = read(undefined);
       if (loaded && loaded.value !== undefined) values[root] = loaded.value;
     } else {

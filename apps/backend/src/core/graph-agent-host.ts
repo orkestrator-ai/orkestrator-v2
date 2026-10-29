@@ -11,6 +11,7 @@ import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_COMMIT_PATTERN,
   type GraphActivationBaseline,
+  type GraphActivationWorktree,
   type GraphActivationSession,
   type GraphGuardResult,
   type GraphAgentProgressItem,
@@ -51,7 +52,10 @@ import {
   type GraphAgentGuards,
 } from "./graph-agent-guards.js";
 import { graphAgentPolicy } from "./graph-agent-policy.js";
+import { graphBranchAbsolutePath, graphBranchRoot } from "./graph-branch-worktrees.js";
 import {
+  graphAgentArtifactSources,
+  graphAgentItemBinding,
   graphInputItemIds,
   loadGraphAgentInputs,
   renderGraphAgentPrompt,
@@ -113,6 +117,8 @@ export interface GraphAgentCallFacts {
   enforcement: NonNullable<NodeActivation["enforcement"]>;
   enforcementReason?: string;
   baseline?: GraphActivationBaseline;
+  /** An isolated branch's own worktree (item 403). */
+  worktree?: GraphActivationWorktree;
   /** The activation's guard results (item 209), newest per guard. */
   guards?: GraphGuardResult[];
 }
@@ -220,19 +226,29 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     this.lightSources ??= (async () => {
       const sources: Record<string, string> = {};
       let criterionIds: string[] | undefined;
-      const ids = Object.values(this.context.activation.inputs).flatMap((entry) =>
-        Array.isArray(entry) ? entry : [entry],
-      );
-      const ticketInput = this.context.run.plan.inputs.find((input) =>
-        input.type.startsWith("ticket@"),
-      );
-      const ticketId = ticketInput ? this.context.run.bindings.inputs[ticketInput.name] : undefined;
-      const library = new GraphTypeLibrary(this.context.run.plan.types);
-      for (const id of ticketId ? [...ids, ticketId] : ids) {
-        const artifact = await this.context.artifacts.get(this.context.run.id, id);
+      const { run, node, activation } = this.context;
+      const inputs = node.inputs.flatMap((port) => {
+        const bound = activation.inputs[port.name];
+        const ids = bound === undefined ? [] : Array.isArray(bound) ? bound : [bound];
+        return ids.map((id) => ({ id, port }));
+      });
+      const ticketInput = run.plan.inputs.find((input) => input.type.startsWith("ticket@"));
+      const ticketId = ticketInput ? run.bindings.inputs[ticketInput.name] : undefined;
+      const library = new GraphTypeLibrary(run.plan.types);
+      // An `items` branch cites its own item on the replicated port (item 401).
+      const binding =
+        node.kind === "agent" ? graphAgentItemBinding(run, node, activation) : undefined;
+      const entries: { id: string; port?: (typeof inputs)[number]["port"] }[] = ticketId
+        ? [...inputs, { id: ticketId }]
+        : inputs;
+      for (const { id, port } of entries) {
+        const artifact = await this.context.artifacts.get(run.id, id);
         if (!artifact) continue;
-        // The ids the prompt showed (`graphInputItemIds`), recorded or derived.
-        for (const itemId of graphInputItemIds(library, artifact)) sources[itemId] = artifact.type;
+        // The ids the prompt showed (`graphAgentArtifactSources`), recorded or derived.
+        const itemIds = port
+          ? graphAgentArtifactSources(library, port, artifact, binding)
+          : graphInputItemIds(library, artifact);
+        for (const itemId of itemIds) sources[itemId] = artifact.type;
         if (!criterionIds && artifact.type.startsWith("ticket@") && "value" in artifact.body) {
           const criteria = (artifact.body.value as { criteria?: unknown })?.criteria;
           if (Array.isArray(criteria)) {
@@ -568,6 +584,8 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     const artifactWorkspace = workspace
       ? { headRef: workspace.headRef, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) }
       : undefined;
+    // An `items` branch's outputs stand for its item (item 401).
+    const sourceItem = graphAgentItemBinding(run, this.input.node, activation)?.item.id;
     for (const slot of results.slots) {
       if (!Object.hasOwn(values, slot.port.name)) continue;
       const value = values[slot.port.name];
@@ -580,6 +598,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         inputs: lineage,
         ...(artifactWorkspace ? { workspace: artifactWorkspace } : {}),
         ...(itemIds ? { itemIds } : {}),
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         ...(validation ? { validation } : {}),
         value,
       });
@@ -595,6 +614,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         producer: { nodeId: activation.nodeId, activation: activation.key, port: port.name },
         inputs: lineage,
         workspace: artifactWorkspace!,
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         value: {
           branch: workspace.branch,
           headRef: workspace.headRef,
@@ -613,6 +633,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         node: this.input.node,
         baseline: facts.baseline,
         runId: this.context.run.id,
+        ...(facts.worktree ? { worktree: facts.worktree } : {}),
       });
       facts.guards = mergeGraphGuardResults(facts.guards, results);
     } catch (error) {
@@ -633,6 +654,16 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     const git = this.dependencies.environmentGit;
     if (!git) throw new Error("The environment's Git is unavailable");
     const environmentId = this.context.environmentId;
+    const worktree = this.input.facts.worktree;
+    if (worktree) {
+      // An isolated branch's commit is its own worktree's HEAD, on its branch (item 403).
+      const head = (
+        await git(environmentId, ["-C", worktree.path, "rev-parse", "--verify", "HEAD^{commit}"])
+      ).trim();
+      if (!GRAPH_COMMIT_PATTERN.test(head))
+        throw new Error("The branch worktree's HEAD is not a commit");
+      return { branch: worktree.branch, headRef: head, baseRef: worktree.baseRef };
+    }
     const headRef = (await git(environmentId, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
     if (!GRAPH_COMMIT_PATTERN.test(headRef)) throw new Error("The workspace HEAD is not a commit");
     let branch = (
@@ -690,6 +721,16 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       resultKeys: keys,
       ...(capability ? { capability } : {}),
       resultTools: this.resultTools(),
+      ...(this.input.facts.worktree
+        ? {
+            worktree: {
+              directory: graphBranchAbsolutePath(environment, this.input.facts.worktree.path),
+              branch: this.input.facts.worktree.branch,
+              baseRef: this.input.facts.worktree.baseRef,
+              root: graphBranchRoot(environment),
+            },
+          }
+        : {}),
       targetBranch:
         this.runTargetBranch() ??
         this.dependencies.targetBranch?.(environment) ??
@@ -761,6 +802,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         ? { enforcementReason: facts.enforcementReason }
         : {}),
       ...(facts.baseline ? { baseline: facts.baseline } : {}),
+      ...(facts.worktree ? { worktree: facts.worktree } : {}),
       ...(facts.guards ? { guards: facts.guards } : {}),
       ...(session ? { session } : {}),
     };

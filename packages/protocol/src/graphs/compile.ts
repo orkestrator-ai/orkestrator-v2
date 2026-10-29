@@ -28,6 +28,7 @@ import { inlineGraphSubgraphs } from "./compile-subgraphs.js";
 import {
   checkGraphEdgeTypes,
   checkGraphInputs,
+  checkGraphItemsInputs,
   checkGraphMerges,
   checkGraphRunOutputs,
   computeGraphBranches,
@@ -135,6 +136,7 @@ export function compile(template: unknown, options: GraphCompileOptions = {}): G
   computeGraphBranches(state);
   checkGraphEdgeTypes(state);
   checkGraphInputs(state);
+  checkGraphItemsInputs(state);
   checkGraphMerges(state);
   checkGraphRunOutputs(state);
   checkGraphConditions(state);

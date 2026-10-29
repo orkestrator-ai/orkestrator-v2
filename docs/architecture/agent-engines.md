@@ -842,24 +842,53 @@ drops a policy it cannot validate, so the HTTP bridge provider sends
 names travel in `capabilityPolicy.extendedDeny`, which older validators
 ignore, and bridges read both through `nativeAgentDeniedCapabilities`. Claude
 translates the newer names into `disallowedTools` (`Task`/`Agent`,
-`mcp__<server>__*`, `Bash(git push *)`-style command rules), OpenCode into
-permission rules (`task`, `<server>_*`, bash patterns), and Cursor removes
-`task` for `subagents`. Codex, Cursor and Pi hold an `mcp:<server>` denial
-through the user MCP selection below; on Grok it turns project resources off
-instead. Git and GitHub denials are held by a shell denial where the policy
-has one, otherwise by the post-hoc guards. A Claude
-read-only turn keeps the session's extra denials. A session whose policy
-denies `github.write` (every graph agent node) gets no GitHub credential where
-the bridge builds a per-session environment: Claude (per query,
-`runtimeEnvironmentForSessionQuery`) and Grok (per child, `providerEnv`) drop
-the token variables and the managed credential file, point `GH_CONFIG_DIR` at
-an empty directory and reset Git's credential helpers
-(`withheldGitHubCredentialEnvironment`). Codex, OpenCode, Cursor and Pi share
-one process environment per bridge or server and do not withhold it yet; in a
-container the runtime credential file and Git's `insteadOf` rewrite stay
-readable to every agent. The graph remote-ref guard (item 209) is the
-backstop. How strongly each platform
-holds a policy is `agentPolicyEnforcement`
+`mcp__<server>__*`, `Bash(git push *)`-style command rules, and all of `gh`
+for `github.write`), OpenCode into permission rules (`task`, `<server>_*`,
+bash patterns, `gh` whole), and Cursor removes `task` for `subagents`
+(`NATIVE_AGENT_BRIDGE_EXTENDED_TRANSLATIONS`). Command rules match the
+command as written, so the enforcement matrix still rates them advisory.
+Codex, Cursor and Pi hold an `mcp:<server>` denial through the user MCP
+selection below; for Grok `nativeAgentPolicyForBridge` turns project
+resources off instead. Git and GitHub denials are held by a shell denial
+where the policy has one, otherwise by the Claude and OpenCode rules above,
+otherwise only by the post-hoc guards (`nativeAgentCapabilityHold`). A Claude
+read-only turn keeps the session's extra denials and its MCP grant
+(`readOnlyTurnPolicy`). A session whose policy
+denies `github.write` (every graph agent node) runs without the GitHub
+credential where the bridge can scope an environment to it: the token
+variables (`WITHHELD_GITHUB_ENV_VARS`, including the managed credential file's
+path) are dropped, `GH_CONFIG_DIR` points at an empty directory and Git's
+credential helpers are reset (`withheldGitHubCredentialEnvironment`).
+`NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING` records each platform:
+
+- **Claude** per query (`runtimeEnvironmentForSessionQuery`) and **Grok** per
+  ACP child (`providerEnv`): the agent process itself is spawned without it.
+- **Codex** per thread: the shared app-server keeps it, but the thread's
+  `shell_environment_policy` (`github-credential-config.ts`, on
+  `thread/start`, `thread/resume` and `thread/fork`) excludes the variables
+  and any inherited `GIT_CONFIG_*` entries and sets the replacements, so no
+  command the thread runs sees it. A thread value replaces the process value,
+  so a coordinator process's own exclude list is repeated. Stdio MCP servers
+  get only Codex's default variable set plus what their entry names, and a
+  graph node loads only granted servers. Verified against 0.164.0, before and
+  after a resume, by `live-github-credential.test.ts` (no credits).
+- **Pi** per session: the session's `bash` and `powershell` are the SDK's own
+  definitions with a `spawnHook` that withholds it (passed as `customTools`,
+  which win over the built-ins and any extension tool of the same name, with
+  `defaultActive: false` so the loadout is unchanged), and the bridge's MCP
+  client starts stdio servers with the withheld environment and resolves
+  `mcp.json` references against it, so an entry naming a credential variable
+  is skipped. Pi extensions run inside the bridge process and keep it.
+- **OpenCode** and **Cursor** cannot: every session shares one `opencode
+  serve` process, and Cursor's SDK runs in the bridge process with no
+  per-session environment.
+
+Withholding is defence in depth, never a boundary: SSH keys, a container's
+runtime credential file and Git's `insteadOf` rewrite stay readable, and a
+command can read an ancestor process's environment (`/proc/<pid>/environ` on
+Linux). The graph remote-ref guard (item 209) is the backstop, and the remote
+axis stays advisory on every platform. How strongly each platform holds a policy is
+`agentPolicyEnforcement`
 (`packages/protocol/src/graphs/capability-enforcement.ts`).
 
 ### User MCP servers per session (graphs item 404)
@@ -867,7 +896,8 @@ holds a policy is `agentPolicyEnforcement`
 `capabilityPolicy.userMcpServers` selects the configured (user, or with
 project resources project) MCP servers a session may load: exactly those
 names, `[]` for none, minus any `mcp:<server>` denial; absent keeps every
-configured server. Graph agent nodes always carry it (default `[]`). It is a
+configured server. Graph agent nodes always carry it (default `[]`; see
+[graphs.md](graphs.md#per-node-user-mcp-servers)). It is a
 filter over what each bridge already reads from the user's own files and never
 carries a definition; reserved Orkestrator servers are never filtered. Older
 bridges ignore the field. `NATIVE_AGENT_USER_MCP_SELECTION` records what each
@@ -1530,7 +1560,10 @@ therefore declares the whole attempt: `workflowResultTool` and
 `workflowResultExtraTools` (a subset of the three names) name the rest
 (`ProviderSendOptions`, `bridgePromptBody`; `parseWorkflowResultTurn` takes all
 four). A slot's tool is the per-port `submit_<port>` (its validation tool
-`validate_<port>`), or `submit_graph_output` on OpenCode. One predicate,
+`validate_<port>`; `graphSubmitToolName` in
+`packages/protocol/src/graphs/system-contract.ts`), or on OpenCode the
+generic `submit_graph_output` and `validate_workflow_result`, each call naming
+the slot's key. One predicate,
 `workflowResultTurnAllows(turn, tool, args)`, decides what the turn's own tools
 are: a submission or validation tool with its own slot's key, the status tool
 and `report_progress` with any of the turn's keys, and `read_artifact` and
@@ -1554,6 +1587,24 @@ and `report_progress` with any of the turn's keys, and `read_artifact` and
   with each slot's key and one capability: the activation capability covers
   every slot (`brokerAttempt` accepts it for a key it covers). Per-port names
   are refused there.
+
+**Turn mode.** A node whose compiled policy is read-only (file writes denied
+and the shell denied or non-mutating, `nativeAgentDenialsAreReadOnly`: the
+Observer, Reviewer and Researcher profiles) runs every turn as a read-only
+turn (`graphAgentPolicy` in `graph-agent-policy.ts`): the branch runner
+(`agent-branch-runner.ts`) creates the session and sends each turn with
+`mode: "plan"` and `readOnly: true`, and its interactions resolve as an
+automated review, so each bridge applies the read-only handling above,
+network denial included. One exception: a Researcher on Claude keeps hosted
+search, which a Claude read-only turn turns off, so it runs an ordinary turn
+whose policy still denies writes, the shell and fetching, rated at most
+`provider-configured` (`graphAgentReadOnlyTurn`). A node whose shell may
+mutate (Verifier, Builder, a custom profile that keeps it) runs build turns,
+even with `workspaceAccess` `read` or `none`. The workspace guard checks
+every node whose `workspaceAccess` is not `write` afterwards, whatever its
+turn mode ([graphs.md](graphs.md#guards-and-enforcement)). On OpenCode a
+read-only node that keeps its shell (Reviewer) is marked a reviewer session,
+which admits a constrained read-only shell.
 
 ### Provider qualification
 

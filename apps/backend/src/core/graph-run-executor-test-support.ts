@@ -16,7 +16,8 @@
  * at, so tests can check admission caps. `scripts` give a node's outputs per
  * iteration and branch (item 206's loop tests); `skipKinds` leaves kinds to
  * the real executors (the gate and merge of `graph-node-gate.ts` and
- * `graph-node-merge.ts`).
+ * `graph-node-merge.ts`). An `items` branch's outputs record its item as
+ * `sourceItem`, as the real agent executor does (item 401).
  */
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -28,7 +29,11 @@ import {
   type GraphPlanNode,
 } from "@orkestrator/protocol/graphs/compile";
 import { evaluateGraphPredicate } from "@orkestrator/protocol/graphs/predicates";
-import type { GraphRun, GraphRunBindings } from "@orkestrator/protocol/graphs/run";
+import {
+  graphActivationBranch,
+  type GraphRun,
+  type GraphRunBindings,
+} from "@orkestrator/protocol/graphs/run";
 import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
@@ -210,6 +215,9 @@ export class FakeGraphExecutors {
   async outputs(context: GraphExecutorContext): Promise<Record<string, string>> {
     const outputs: Record<string, string> = {};
     const lineage = Object.values(context.activation.inputs).flat();
+    // As the real agent executor does: an `items` branch's outputs stand for its item (item 401).
+    const sourceItem = graphActivationBranch(context.run, context.node, context.activation)?.item
+      ?.id;
     for (const port of context.node.outputs) {
       if (port.type.startsWith("list<") || port.name === "error") continue;
       const script = this.scripts.get(context.node.id);
@@ -230,6 +238,7 @@ export class FakeGraphExecutors {
         producer: { nodeId: context.node.id, activation: context.activation.key, port: port.name },
         inputs: lineage,
         ...(port.choices ? { validation: { choices: port.choices } } : {}),
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
       };
       // A reference type (`review-package@2`) is sealed as a file, with the
       // value as its descriptor; that needs a run environment with a worktree.

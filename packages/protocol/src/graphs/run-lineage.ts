@@ -8,6 +8,7 @@
  * with compare-and-swap. Superseding never deletes: activations and artifacts
  * stay in the record and the store with their marks (invariant 3).
  */
+import { supersedeGraphItemFanOuts } from "./run-fanout.js";
 import { parseGraphActivationKey } from "./run-identity.js";
 import {
   GRAPH_ACTIVATION_TERMINAL_STATES,
@@ -232,7 +233,8 @@ export function graphLineageDescendants(
 
 /**
  * Records a rewind: marks every activation it lists superseded (naming the
- * rewind), rewinds the node's loop counter, and appends the rewind. Refuses a
+ * rewind), and every `items` fan-out cut from an artifact it lists, rewinds
+ * the node's loop counter, and appends the rewind. Refuses a
  * 51st rewind, a repeated id, and a rewind that lists an unknown or already
  * superseded activation (a repeated restart request must be a no-op upstream,
  * not a second rewind). The listed artifacts are superseded in the artifact
@@ -268,6 +270,12 @@ export function applyGraphRewind(run: GraphRun, rewind: GraphRewind): GraphRunCh
     node?.loop === undefined
       ? run.loopIterations
       : { ...run.loopIterations, [node.loop]: rewind.iteration };
+  // An `items` fan-out cut from a superseded artifact expands again (item 401).
+  const fanOuts = supersedeGraphItemFanOuts(
+    run.fanOuts,
+    rewind.id,
+    new Set(rewind.superseded.artifacts),
+  );
   return {
     ok: true,
     run: {
@@ -279,6 +287,7 @@ export function applyGraphRewind(run: GraphRun, rewind: GraphRewind): GraphRunCh
       ),
       rewinds: [...run.rewinds, rewind],
       loopIterations,
+      ...(fanOuts ? { fanOuts } : {}),
     },
   };
 }

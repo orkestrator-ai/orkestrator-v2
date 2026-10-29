@@ -40,6 +40,11 @@
  */
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import { graphMockValue, graphMockWorkspace } from "@orkestrator/protocol/graphs/mock";
+import {
+  graphActivationBranch,
+  graphBranchWorktreeRef,
+  graphNodeIsolated,
+} from "@orkestrator/protocol/graphs/run";
 import { graphAgentItemIds } from "./graph-agent-results.js";
 import {
   graphMockBaseWorkspace,
@@ -106,13 +111,24 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
     const custom = graphMockCustomOutputs(pin);
     const mode = pin === "generated" ? "generated" : "example";
     // One fake commit per activation: every workspace output of a writing node names it.
-    const commit = graphMockWorkspace({
+    let commit = graphMockWorkspace({
       runId: context.run.id,
       activationKey: context.activation.key,
       port: "code",
       writes,
       ...(base ? { base } : {}),
     });
+    // An isolated branch commits on its own branch (item 403); no worktree is made.
+    if (graphNodeIsolated(node) && context.activation.branchKey !== undefined) {
+      commit = {
+        ...commit,
+        branch: graphBranchWorktreeRef(context.run.id, {
+          nodeId: node.id,
+          iteration: context.activation.iteration,
+          branchKey: context.activation.branchKey,
+        }),
+      };
+    }
     const headRef = writes || base ? commit.headRef : undefined;
     const workspace =
       node.workspaceAccess !== "none" && headRef
@@ -123,6 +139,8 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
           }
         : undefined;
     const outputs: Record<string, string> = {};
+    // An `items` branch's outputs stand for its item, as live runs record (item 401).
+    const sourceItem = graphActivationBranch(context.run, node, context.activation)?.item?.id;
     for (const port of node.outputs) {
       if (graphMockSkipsPort(port)) continue;
       const definition = graphMockDefinition(context.run, port.type);
@@ -147,6 +165,7 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
         lineage,
         ...(workspace ? { workspace } : {}),
         ...(itemIds ? { itemIds } : {}),
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         ...(criterionIds && definition.name === "verification-verdict" ? { criterionIds } : {}),
       });
     }

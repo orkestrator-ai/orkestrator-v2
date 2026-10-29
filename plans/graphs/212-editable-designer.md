@@ -164,6 +164,11 @@ the template schema allows, and the checker reports it). Tests: `GraphSystemPara
 `GraphPalette.test.tsx`, system cases in `GraphKindEditors.test.tsx` and
 `graph-designer-model.test.ts`.
 
+**2026-10-29 · Item 401.** Replicate over `items` is enabled in the Execution form: the input port
+(list ports and ports of a type that declares items), the most branches and the truncation policy
+(`GraphExecutionEditor.tsx`, `GraphItemsEditor.test.tsx`); the prompt editor suggests `item.index`
+and `item.id`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -171,3 +176,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Editable designer: canvas editing with palette, typed connections (compatible targets only, D11 dedupe default, carries), loops, bounded undo, keyboard commands; inspector forms, prompt and type editors; live compile with taint acknowledgements; CAS save with save-as-copy; component, store and Playwright tests; docs; complete; awaiting PR.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Designer uses 207's system action specs: palette, typed params form, spec ports, side-effect badges; catalogue removed. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Item 401: replicate over items enabled in the Execution form. · complete; awaiting PR

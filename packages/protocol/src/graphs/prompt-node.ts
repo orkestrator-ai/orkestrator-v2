@@ -9,6 +9,7 @@
  * user part, last, so every branch shares the cached prefix before it
  * (item 205). Browser-safe.
  */
+import type { GraphBranchWorktreeFrame } from "./system-contract.js";
 import { escapeFramedEvidenceText } from "../review-evidence-frames.js";
 import type {
   AgentEnforcementJudgement,
@@ -77,6 +78,8 @@ export interface GraphNodePromptRenderInput extends GraphPromptNodeContext {
   resultTools?: GraphResultTools;
   /** For the size lint; default 160 KiB of rendered inputs. */
   ceilingBytes?: number;
+  /** An isolated branch's worktree (item 403): the locked frame naming where it works. */
+  worktree?: GraphBranchWorktreeFrame;
 }
 
 export interface GraphNodePromptRender {
@@ -206,6 +209,7 @@ export function renderGraphNodePrompt(input: GraphNodePromptRenderInput): GraphN
     slots,
     ...(capability ? { capability } : {}),
     ...(input.resultTools ? { resultTools: input.resultTools } : {}),
+    ...(input.worktree ? { worktree: input.worktree } : {}),
   });
   const prompt = `${user}\n\n${system}`;
   return {
@@ -237,7 +241,7 @@ function exampleOf(type: GraphValueType | undefined, listItems: number): unknown
 
 /**
  * Values for a designer preview: each input's type example (two elements for
- * a list), the first lens and branch 1, the ticket type's example, and the
+ * a list), the first lens and branch 1, the first item, the ticket type's example, and the
  * parameters' defaults. File paths, artifact ids and result keys are left to
  * the preview's stand-ins.
  */
@@ -263,6 +267,10 @@ export function graphNodePromptPreviewValues(context: GraphPromptNodeContext): G
   if (scope.bound.has("lens") && lenses[0]) values.lens = lenses[0];
   if (scope.bound.has("branch")) {
     values.branch = { index: 1, key: lenses[0] ? `lens-${lenses[0].key}` : "branch-1", count };
+  }
+  // An `items` branch: the first item, under an illustrative id (item 401).
+  if (scope.bound.has("item") && scope.itemsPort !== undefined) {
+    values.item = { index: 1, id: `${scope.itemsPort}/item-1` };
   }
   if (scope.ticketInput !== undefined) {
     const ticket = context.template?.inputs?.find((entry) => entry.name === scope.ticketInput);

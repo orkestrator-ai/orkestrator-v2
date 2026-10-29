@@ -47,9 +47,10 @@ import { prepareEnvironmentAction } from "./graph-system-prepare.js";
 import { openPullRequestAction } from "./graph-system-pull-request.js";
 import { pushBranchAction } from "./graph-system-push.js";
 import { updateTicketAction } from "./graph-system-ticket.js";
+import { selectWorkspaceAction } from "./graph-system-select.js";
 import { runValidationAction, runValidationAndSealAction } from "./graph-system-validation.js";
 
-/** Every version 1 action, by name. */
+/** Every action, by name (`select-workspace` is item 403's). */
 export const GRAPH_SYSTEM_ACTION_HANDLERS: Readonly<
   Record<GraphSystemAction, GraphSystemActionHandler>
 > = Object.freeze({
@@ -61,6 +62,7 @@ export const GRAPH_SYSTEM_ACTION_HANDLERS: Readonly<
   "wait-for-checks": waitForChecksAction,
   "update-ticket": updateTicketAction,
   notify: notifyAction,
+  "select-workspace": selectWorkspaceAction,
 });
 
 /** How soon a running job is looked at without a wake (a safety net; settling wakes it). */

@@ -364,6 +364,40 @@ export function checkGraphInputs(state: GraphCompileState): void {
   }
 }
 
+// ---------------------------------------------------------------- items fan-out
+
+/**
+ * The port an `items` fan-out replicates over must hold items (item 401): a
+ * `list<T>` (one item per element) or a named type that declares `items`
+ * (one item per entry of its item list).
+ */
+export function checkGraphItemsInputs(state: GraphCompileState): void {
+  for (const { node, path } of state.nodes.values()) {
+    if ((node.kind !== "agent" && node.kind !== "subgraph") || !node.replicate) continue;
+    const cross = node.replicate.over === "cross";
+    axesOf(state, node.id).forEach((axis, index) => {
+      if (axis.over !== "items") return;
+      const type = state.inputTypes.get(portKey(node.id, axis.input));
+      if (!type || graphItemsInputHoldsItems(type)) return;
+      state.diagnostics.add(
+        "replicate-items-input",
+        `${node.id} replicates over ${axis.input}, which is ${graphValueTypeLabel(type)}; make it list<T> or a type that declares items`,
+        {
+          nodeId: node.id,
+          port: axis.input,
+          path: cross ? `${path}.replicate.axes[${index}].input` : `${path}.replicate.input`,
+        },
+      );
+    });
+  }
+}
+
+/** Whether a port type holds items an `items` fan-out can replicate over. */
+export function graphItemsInputHoldsItems(type: GraphValueType): boolean {
+  if (type.kind === "list") return type.element.kind !== "list";
+  return type.kind === "named" && type.definition.items !== undefined;
+}
+
 // ---------------------------------------------------------------- merges
 
 function elementSchema(type: GraphValueType): Record<string, unknown> | null {

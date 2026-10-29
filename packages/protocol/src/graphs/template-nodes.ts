@@ -45,12 +45,14 @@ import {
   GRAPH_ORKESTRATOR_CAPABILITY_GROUPS,
   GRAPH_PROVENANCE_MODES,
   GRAPH_RENDER_MODES,
+  GRAPH_ITEMS_TRUNCATE,
   GRAPH_REPLICATE_SOURCES,
   GRAPH_RETRY_CAUSES,
   GRAPH_SYSTEM_ACTIONS,
   GRAPH_TEMPLATE_SCOPES,
   GRAPH_VOTE_TIE_POLICIES,
   GRAPH_WORKSPACE_ACCESS,
+  GRAPH_WORKSPACE_ISOLATION,
 } from "./template-model.js";
 
 // ------------------------------------------------------------- shared pieces
@@ -393,7 +395,7 @@ function checkReplicateAxis(
       break;
     }
     case "items":
-      if (checkObject(value, path, ["over", "input", "maxBranches"], errors)) {
+      if (checkObject(value, path, ["over", "input", "maxBranches", "truncate"], errors)) {
         const inputPath = joinPath(path, "input");
         if (checkGraphKey(value.input, inputPath, errors) && !inputs.has(value.input)) {
           errors.add(inputPath, "unknown_port", "Must name one of this node's input ports");
@@ -405,6 +407,14 @@ function checkReplicateAxis(
           1,
           B.maxBranches,
         );
+        if (value.truncate !== undefined) {
+          checkRequiredEnum(
+            value.truncate,
+            joinPath(path, "truncate"),
+            errors,
+            GRAPH_ITEMS_TRUNCATE,
+          );
+        }
       }
       break;
     case "samples":
@@ -707,6 +717,7 @@ const NODE_FIELDS: Record<(typeof GRAPH_NODE_KINDS)[number], readonly string[]> 
     "prompt",
     "capabilities",
     "workspaceAccess",
+    "isolation",
     "minEnforcement",
     "session",
     "replicate",
@@ -775,6 +786,12 @@ export function checkGraphNode(
         joinPath(path, "workspaceAccess"),
         errors,
         GRAPH_WORKSPACE_ACCESS,
+      );
+      checkOptionalEnum(
+        value.isolation,
+        joinPath(path, "isolation"),
+        errors,
+        GRAPH_WORKSPACE_ISOLATION,
       );
       checkOptionalEnum(
         value.minEnforcement,

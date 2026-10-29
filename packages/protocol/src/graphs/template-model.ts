@@ -231,6 +231,15 @@ export type GraphFailurePolicy = (typeof GRAPH_FAILURE_POLICIES)[number];
 export const GRAPH_WORKSPACE_ACCESS = ["none", "read", "write"] as const;
 export type GraphWorkspaceAccess = (typeof GRAPH_WORKSPACE_ACCESS)[number];
 
+/**
+ * How a replicated writer's branches share the workspace (item 403, D3).
+ * `worktree`: each branch writes its own Git worktree, created from the
+ * node's `workspace@1` input (`graphs/isolation.ts`). Absent: the run's one
+ * workspace, which a replicated node may not write.
+ */
+export const GRAPH_WORKSPACE_ISOLATION = ["worktree"] as const;
+export type GraphWorkspaceIsolation = (typeof GRAPH_WORKSPACE_ISOLATION)[number];
+
 export const GRAPH_ENFORCEMENT_TIERS = ["enforced", "provider-configured", "advisory"] as const;
 export type GraphEnforcementTier = (typeof GRAPH_ENFORCEMENT_TIERS)[number];
 
@@ -306,11 +315,19 @@ export interface GraphLens {
 export const GRAPH_REPLICATE_SOURCES = ["panel", "lenses", "items", "samples"] as const;
 export type GraphReplicateSource = (typeof GRAPH_REPLICATE_SOURCES)[number];
 
+/**
+ * What an `items` fan-out does with items beyond `maxBranches` (item 401):
+ * `first` runs the first `maxBranches` and records the rest as truncated;
+ * `fail` fails the node position before any branch starts.
+ */
+export const GRAPH_ITEMS_TRUNCATE = ["first", "fail"] as const;
+export type GraphItemsTruncate = (typeof GRAPH_ITEMS_TRUNCATE)[number];
+
 /** One fan-out source (report §4.4, D9). */
 export type GraphReplicateAxis =
   | { over: "panel"; role: string }
   | { over: "lenses"; lenses: GraphLens[] }
-  | { over: "items"; input: string; maxBranches: number }
+  | { over: "items"; input: string; maxBranches: number; truncate?: GraphItemsTruncate }
   | { over: "samples"; count: number };
 
 /** Combined sources: the branch set is the product, keys joined in axis order. */
@@ -328,6 +345,8 @@ export interface GraphAgentNode extends GraphNodeCommon, GraphNodeExecution {
   prompt: GraphPromptSpec;
   capabilities: GraphCapabilitySpec;
   workspaceAccess: GraphWorkspaceAccess;
+  /** Replicated writers only: one worktree per branch (item 403). */
+  isolation?: GraphWorkspaceIsolation;
   minEnforcement?: GraphEnforcementTier;
   session?: GraphSessionSpec;
   replicate?: GraphReplicate;
@@ -335,7 +354,10 @@ export interface GraphAgentNode extends GraphNodeCommon, GraphNodeExecution {
   askHuman?: boolean;
 }
 
-/** System actions, version 1 (plan P2.7), plus `run-validation` (report §9.4). */
+/**
+ * System actions, version 1 (plan P2.7), plus `run-validation` (report §9.4)
+ * and `select-workspace` (item 403).
+ */
 export const GRAPH_SYSTEM_ACTIONS = [
   "prepare-environment",
   "run-validation",
@@ -345,6 +367,7 @@ export const GRAPH_SYSTEM_ACTIONS = [
   "wait-for-checks",
   "update-ticket",
   "notify",
+  "select-workspace",
 ] as const;
 export type GraphSystemAction = (typeof GRAPH_SYSTEM_ACTIONS)[number];
 

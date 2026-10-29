@@ -130,6 +130,7 @@ import {
 } from "./coordinator-runtime.js";
 import { drainContainerProcesses } from "./container-readiness.js";
 import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
+import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import {
   activeAgentAccountShellEnvironment,
@@ -1436,6 +1437,18 @@ export async function deleteEnvironment(
         if (files.failed > 0) {
           console.warn(
             `[backend] ${files.failed} graph run artifact director(ies) were not removed for ${environmentId}`,
+          );
+        }
+        // Isolated branch worktrees and branches (item 403): for a local
+        // environment the branches live in the shared repository, so they
+        // must go before the worktree does.
+        const branches = await removeEnvironmentGraphBranchWorktrees(environment, {
+          storage,
+          fence: context.runtime.environments.fence,
+        });
+        if (branches.failed > 0) {
+          console.warn(
+            `[backend] ${branches.failed} graph run(s) kept branch worktrees for ${environmentId}`,
           );
         }
       }

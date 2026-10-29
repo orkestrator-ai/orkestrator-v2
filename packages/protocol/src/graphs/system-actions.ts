@@ -56,6 +56,10 @@ export const GRAPH_TICKET_LIFECYCLE_EVENTS = [
 ] as const;
 export type GraphTicketLifecycleEvent = (typeof GRAPH_TICKET_LIFECYCLE_EVENTS)[number];
 
+/** What `select-workspace` does when the decision names no successful branch (item 403). */
+export const GRAPH_SELECT_FALLBACKS = ["fail", "first"] as const;
+export type GraphSelectFallback = (typeof GRAPH_SELECT_FALLBACKS)[number];
+
 /** Who `notify` mails. */
 export const GRAPH_NOTIFY_TARGETS = ["coordinator", "tab"] as const;
 
@@ -170,7 +174,11 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
         },
       },
       inputs: [
-        port("validation-plan@1", true, "The commands to run, for the commit they name."),
+        port(
+          "validation-plan@1",
+          true,
+          "The commands to run, for the commit they name or an ancestor of it (a repair loop's later commits reuse the plan).",
+        ),
         port("workspace@1", true, "The commit to validate; it must be the environment's HEAD."),
       ],
       outputs: [
@@ -339,6 +347,37 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
         port("markdown@1", false, "Appended to the message."),
       ],
       outputs: [],
+    },
+    "select-workspace": {
+      action: "select-workspace",
+      label: "Select branch",
+      description:
+        "Picks one isolated branch's commit (item 403): the decision's choice names the branch, and the run's branch is fast-forwarded to its commit. Every candidate branch's worktree and branch is then removed.",
+      sideEffect: true,
+      idempotency:
+        "Once per run, node, iteration and chosen commit; a retry or restart reports the same commit without moving the branch again.",
+      params: {
+        fallback: {
+          type: "enum",
+          options: GRAPH_SELECT_FALLBACKS,
+          default: "fail",
+          description:
+            "When the choice names no successful branch: fail the node, or take the first successful branch in branch order.",
+        },
+      },
+      inputs: [
+        port(
+          "list<workspace@1>",
+          true,
+          "The candidate branches: the fan-in of a replicated node with isolation: worktree.",
+        ),
+        port(
+          "decision@1",
+          true,
+          "Its choice names the winning branch: its branch key, the key's last part, or its Git branch.",
+        ),
+      ],
+      outputs: [port("workspace@1", false, "The chosen commit, now on the run's branch.")],
     },
   } satisfies Record<GraphSystemAction, GraphSystemActionSpec>);
 

@@ -28,6 +28,11 @@
  *   next turn once the asking turn has settled (`graph-agent-questions.ts`).
  * - **`session: "continue"`** sends the turn into the provider session of the
  *   activation it continues (the compiler proved the §5.2 constraints).
+ * - **Isolated branches** (`isolation: "worktree"`, item 403) get their own
+ *   worktree from their `workspace@1` input's commit before the guards'
+ *   baseline, recorded on the activation with the first journal write; the
+ *   prompt names it, the guards certify it and the `workspace@1` output is
+ *   its commit on its branch (`graph-branch-worktrees.ts`).
  */
 import type {
   AgentEnforcementHost,
@@ -35,9 +40,11 @@ import type {
 } from "@orkestrator/protocol/graphs/capability-profiles";
 import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
+  graphNodeIsolated,
   isGraphAgentAnswerUndelivered,
   isGraphAgentQuestionOpen,
   type GraphActivationSession,
+  type GraphActivationWorktree,
   type GraphModelBinding,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
@@ -57,6 +64,7 @@ import {
 } from "./graph-agent-guards.js";
 import { graphAgentFloorProblem, graphAgentPolicy } from "./graph-agent-policy.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
+import type { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-questions.js";
 import { GraphAgentResults, type GraphAgentResultService } from "./graph-agent-results.js";
 import { graphAgentBranch } from "./graph-agent-state.js";
@@ -117,6 +125,8 @@ export interface GraphAgentExecutorDependencies {
   enforcementHost?(environment: Environment): AgentEnforcementHost;
   /** Reads Git in the environment (the remote-ref guard, `workspace@1` outputs). */
   environmentGit?: EnvironmentGit;
+  /** Creates isolated branches' worktrees (item 403); without it they fail. */
+  branchWorktrees?: Pick<GraphBranchWorktrees, "create">;
   /**
    * Observes the worktree for the guards (item 209): the backend's
    * `get_environment_uncommitted_paths`. Without one every activation fails
@@ -332,6 +342,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
               ? { enforcementReason: activation.enforcementReason }
               : {}),
             ...(activation.baseline ? { baseline: activation.baseline } : {}),
+            ...(activation.worktree ? { worktree: activation.worktree } : {}),
             ...(activation.guards ? { guards: activation.guards } : {}),
           }
         : {
@@ -340,6 +351,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
             ...(decision.enforcementReason
               ? { enforcementReason: decision.enforcementReason }
               : {}),
+            ...(activation.worktree ? { worktree: activation.worktree } : {}),
             ...(activation.guards ? { guards: activation.guards } : {}),
           };
     if (!session) {
@@ -351,6 +363,17 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
         graphEnforcementGuardResult(node, platform, decision, problem, context.now()),
       ]);
       if (problem) return failed(problem, "guard-violation", facts);
+      // An isolated branch works in its own worktree (item 403), made before
+      // the baseline so the guards know where to look. A retry of this call
+      // reuses the one this activation recorded.
+      if (graphNodeIsolated(node) && !facts.worktree) {
+        try {
+          facts.worktree = await this.createWorktree(context, environment, node);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "The branch worktree failed";
+          return failed(message, "system-error", facts);
+        }
+      }
       // Every guard fails closed: no baseline, no dispatch.
       try {
         facts.baseline = await this.guards.capture(environment, node);
@@ -450,6 +473,28 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
           branch.dispatchState === "prepared" ? { observeAfterMs: 0 } : {},
         );
     }
+  }
+
+  /** The branch's worktree, created from the commit its one `workspace@1` input names. */
+  private async createWorktree(
+    context: GraphExecutorContext,
+    environment: Environment,
+    node: GraphPlanAgentNode,
+  ): Promise<GraphActivationWorktree> {
+    const worktrees = this.dependencies.branchWorktrees;
+    if (!worktrees) throw new Error("Isolated branch worktrees are unavailable in this backend");
+    const port = node.inputs.find((input) => input.type === "workspace@1");
+    const id = port ? context.activation.inputs[port.name] : undefined;
+    if (typeof id !== "string") {
+      throw new Error("The branch has no workspace input to start its worktree from");
+    }
+    const artifact = await context.artifacts.requireVerified(context.run.id, id);
+    const headRef = (
+      "value" in artifact.body ? (artifact.body.value as { headRef?: unknown } | undefined) : null
+    )?.headRef;
+    if (typeof headRef !== "string")
+      throw new Error("The branch's workspace input names no commit");
+    return worktrees.create(environment, context.run, context.activation, headRef);
   }
 
   private release(context: GraphExecutorContext, branch: AgentBranchRecord): void {

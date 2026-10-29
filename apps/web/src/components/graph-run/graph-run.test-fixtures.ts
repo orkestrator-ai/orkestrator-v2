@@ -1,7 +1,8 @@
 /**
  * Graph run fixtures for the run view's tests: runs of the report's worked
  * examples (§9.1 Multi Review with a panel and a gate, §9.2 the Build
- * Pipeline loop), compiled with the real compiler, and activations built
+ * Pipeline loop, §9.4 the `items` fan-out over failures), compiled with the
+ * real compiler, and activations built
  * through the real identity helpers. Test-only.
  */
 import { compile, type CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
@@ -49,11 +50,14 @@ const ROLES: Record<GraphTemplateExampleKey, GraphRun["bindings"]["roles"]> = {
     verifier: { platform: "codex" },
   },
   "design-bake-off": {},
-  "failure-diagnosis": {},
+  "failure-diagnosis": {
+    diagnoser: { platform: "claude" },
+    fixer: { platform: "codex" },
+  },
 };
 
 export function runOf(
-  key: "multi-review" | "build-pipeline-loop",
+  key: "multi-review" | "build-pipeline-loop" | "failure-diagnosis",
   overrides: Partial<GraphRun> = {},
 ): GraphRun {
   const plan = examplePlan(key);

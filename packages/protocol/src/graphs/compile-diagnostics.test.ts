@@ -337,10 +337,17 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     mutate: () => {},
     expect: { nodeId: "review", severity: "info", path: "nodes[4].template" },
   },
-  "replicate-items-unsupported": {
+  "replicate-items-input": {
     from: () => graphTemplateExample("failure-diagnosis"),
-    mutate: () => {},
-    expect: { nodeId: "diagnose", path: "nodes[1].replicate" },
+    mutate: (t) => {
+      // One validation-failure@1 is neither a list nor a type that declares items.
+      const diagnose = agentOf(t, "diagnose");
+      diagnose.inputs![1]!.type = "validation-failure@1";
+      t.edges = t.edges.filter((edge) => edge.id !== "validate-diagnose-failures");
+      diagnose.when = undefined;
+      delete diagnose.when;
+    },
+    expect: { nodeId: "diagnose", port: "failures", path: "nodes[1].replicate.input" },
   },
   "output-port-list": {
     mutate: (t) => {
@@ -582,6 +589,59 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
       agentOf(t, "build").replicate = { over: "samples", count: 2 };
     },
     expect: { nodeId: "build", path: "nodes[0].workspaceAccess" },
+  },
+  "isolation-not-replicated": {
+    mutate: (t) => {
+      agentOf(t, "build").isolation = "worktree";
+    },
+    expect: { nodeId: "build", path: "nodes[0].isolation" },
+  },
+  "isolation-not-writer": {
+    mutate: (t) => {
+      const review = agentOf(t, "review");
+      review.replicate = { over: "samples", count: 2 };
+      review.isolation = "worktree";
+    },
+    expect: { nodeId: "review", path: "nodes[1].isolation" },
+  },
+  "isolation-unpinned": {
+    mutate: (t) => {
+      const build = agentOf(t, "build");
+      build.replicate = { over: "samples", count: 2 };
+      build.isolation = "worktree";
+      build.inputs!.push({ name: "other", type: "workspace@1", required: false });
+    },
+    expect: { nodeId: "build", path: "nodes[0].inputs" },
+  },
+  "isolation-branch-limit": {
+    mutate: (t) => {
+      const build = agentOf(t, "build");
+      build.replicate = { over: "samples", count: 9 };
+      build.isolation = "worktree";
+    },
+    expect: { nodeId: "build", path: "nodes[0].replicate" },
+  },
+  "select-without-isolated-branches": {
+    from: () => withPanel(baseTemplate()),
+    mutate: (t) => {
+      agentOf(t, "review").outputs!.push({ name: "code", type: "workspace@1", required: false });
+      t.nodes.push({
+        id: "select",
+        kind: "system",
+        action: "select-workspace",
+        inputs: [
+          { name: "candidates", type: "list<workspace@1>" },
+          { name: "decision", type: "decision@1", required: false },
+        ],
+        outputs: [{ name: "code", type: "workspace@1" }],
+      });
+      t.edges.push({
+        id: "review-select",
+        from: { node: "review", port: "code" },
+        to: { node: "select", port: "candidates" },
+      });
+    },
+    expect: { nodeId: "select", port: "candidates", path: "nodes[3].inputs[0]" },
   },
 
   // ------------------------------------------------------------ enforcement, taint

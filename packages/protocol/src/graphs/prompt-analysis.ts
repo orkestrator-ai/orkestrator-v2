@@ -24,6 +24,7 @@ import type { GraphJsonSchema } from "./artifact-type-def.js";
 import {
   type GraphPromptScope,
   type GraphPromptSourceBound,
+  GRAPH_PROMPT_ITEM_REF_SOURCE,
   graphPromptSchemaChild,
   graphPromptSchemaIsList,
   graphPromptSchemaPresence,
@@ -181,10 +182,15 @@ function rootResolution(
     }
     case "item": {
       if (!scope.bound.has("item")) return { problem: "unbound-root" };
-      if (path.length === 2 && second === "index") {
+      // `item.index` and `item.id` name the item, before any field of the element.
+      if (path.length === 2 && (second === "index" || second === "id")) {
         return {
-          target: { source: "branch", path: [], schema: source("branch")! },
-          rest: ["index"],
+          target: {
+            source: GRAPH_PROMPT_ITEM_REF_SOURCE,
+            path: [],
+            schema: source(GRAPH_PROMPT_ITEM_REF_SOURCE)!,
+          },
+          rest: [second],
           certain: false,
         };
       }

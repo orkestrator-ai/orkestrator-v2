@@ -21,9 +21,14 @@ import { AgentToolsServer } from "./agent-tools.js";
 import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
-import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
+import {
+  installGraphAgentExecutor,
+  type GraphAgentWiring,
+  type GraphAgentWiringInput,
+} from "./graph-agent-wiring.js";
+import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { compiledPlan } from "./graph-run-executor-test-support.js";
-import { GraphRunService } from "./graph-run-service.js";
+import { GraphRunService, type GraphRunServiceOptions } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { StorageService } from "./storage.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -449,8 +454,22 @@ export interface GraphAgentWorld {
   cleanup(): Promise<void>;
 }
 
+export interface GraphAgentWorldOptions {
+  agent?: AgentPlatform;
+  script?: FakeAgentScript;
+  toolResults?: boolean;
+  /** Replaces the fake repository's Git (item 403 adds worktrees on top of it). */
+  git?: (repo: FakeGraphRepo) => EnvironmentGit;
+  /** Isolated branch worktrees for the agent executor (item 403). */
+  branchWorktrees?: (world: GraphAgentWorld) => GraphAgentWiringInput["branchWorktrees"];
+  /** More run service options per process (item 403's janitor). */
+  serviceOptions?: (world: GraphAgentWorld) => Partial<GraphRunServiceOptions>;
+  /** Registers more executors on each process's run service (a system executor). */
+  executors?: (world: GraphAgentWorld, service: GraphRunService) => void;
+}
+
 export async function graphAgentWorld(
-  options: { agent?: AgentPlatform; script?: FakeAgentScript; toolResults?: boolean } = {},
+  options: GraphAgentWorldOptions = {},
 ): Promise<GraphAgentWorld> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-graph-agent-"));
   const storage = new StorageService(dataDir);
@@ -505,8 +524,10 @@ export async function graphAgentWorld(
           autoAdvance: false,
           observationIntervalMs: 0,
           progressIntervalMs: 0,
+          ...options.serviceOptions?.(world),
         },
       );
+      options.executors?.(world, service);
       // Driven by hand: `init` only marks the workspace locks as known.
       void service.init();
       // Declared before the wiring so its providers can see whether it died.
@@ -521,7 +542,8 @@ export async function graphAgentWorld(
         workflowResults,
         agentTools,
         toolResultsEnabled: () => world.toolResults,
-        environmentGit: repo.git,
+        environmentGit: options.git ? options.git(repo) : repo.git,
+        ...(options.branchWorktrees ? { branchWorktrees: options.branchWorktrees(world) } : {}),
         workspaceProbe: repo.probe,
         lsRemote: repo.lsRemote,
         enforcementHost: () => world.host,

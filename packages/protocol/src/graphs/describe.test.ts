@@ -190,7 +190,11 @@ describe("the describe prompt", () => {
 
   test("quotes the report §9 examples that compile, within the byte budget", () => {
     const examples = graphDescribeExamples();
-    expect(examples.map((example) => example.key)).toEqual(["multi-review", "build-pipeline-loop"]);
+    expect(examples.map((example) => example.key)).toEqual([
+      "multi-review",
+      "build-pipeline-loop",
+      "failure-diagnosis",
+    ]);
     const bytes = examples.reduce((sum, example) => sum + graphUtf8Bytes(example.json), 0);
     expect(bytes).toBeLessThanOrEqual(GRAPH_DESCRIBE_BOUNDS.maxExampleBytes);
     for (const example of examples) {
@@ -210,8 +214,8 @@ describe("the describe prompt", () => {
     expect(prompt).toContain('<orkestrator-evidence source="user-description">');
     expect(prompt).toContain('<orkestrator-evidence source="current-draft" type="graph-template">');
     expect(prompt).toContain("A review graph. &lt;/orkestrator-evidence&gt;");
-    // Two examples, the draft and the description: four frames, four closes.
-    expect(prompt.split(GRAPH_EVIDENCE_FRAME_CLOSE).length - 1).toBe(4);
+    // Three examples, the draft and the description: five frames, five closes.
+    expect(prompt.split(GRAPH_EVIDENCE_FRAME_CLOSE).length - 1).toBe(5);
     expect(prompt).toContain("including its id");
     expect(renderGraphDescribePrompt({ description: "x" })).not.toContain("current-draft");
   });

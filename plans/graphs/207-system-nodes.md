@@ -172,6 +172,38 @@ and enforces the 2 KiB template bound; aligning the two (raise the template boun
 params or lower `messageChars`) is left to the coordinator.
 - 2026-10-29 (coordinator): `notify`'s `messageChars` bound lowered from 8,000 to 2,000 so it fits the template schema's 2 KiB cap on parameter strings; the designer and the compiler now agree.
 
+**2026-10-29 · Live verification: `run-validation` in a repair loop (fixed).** On profile
+`graphs-live` the report §9.4 loop as written (`qa-live-failure-diagnosis`, a copy of the example)
+failed live at iteration 2: `validate` refused with "The validation plan is for commit f1e42aa7b555,
+the workspace is at 1c6b1e6080a3", because the run's one `validation-plan@1` names the starting
+commit while the loop carries the fixer's new commit. Mock runs never check `headRef`, so they
+passed. Fix (`graph-system-validation.ts`): `run-validation` now accepts a plan made for the
+workspace commit or an ancestor of it (`git merge-base --is-ancestor`; any failure refuses) and
+runs it on the workspace commit (the plan handed to the worker is rebased, since the worker checks
+HEAD against `plan.headRef`). `run-validation-and-seal` stays exact: the sealed package names the
+commit its plan was made for. Tests in `graph-system-validation.test.ts` ("a plan for an ancestor
+runs on the later commit a repair loop carries", "a plan for a commit outside the workspace's
+history is refused", "sealing refuses a plan made for an ancestor"); the first two fail without the
+fix. The port description in `GRAPH_SYSTEM_ACTION_SPECS` says so. Rerun after the fix (run
+`launch-2f036405…`, diagnoser Claude `sonnet@low`, fixer Codex `gpt-6-luna@medium`, a deliberately
+broken `math.ts` with a one-command plan `bun test math.test.ts`): iteration 1 failed (1 failure),
+one diagnose branch (items fan-out), dedupe, fix committed; iteration 2 validated the fix commit and
+passed; loop `repair` done after 2 iterations, run complete in 40 s with 2 agent sessions.
+
+**2026-10-29 · Live verification: design bake-off without the pull request.** Run
+`launch-2033e6fc…` of `qa-live-bake-off`: the report §9.3 example with the review sub-graph and
+the `pr` system node removed (`build` feeds `describe-pr` directly) and the build taint warning
+acknowledged. Roles on two providers: designer Claude `sonnet@low` (three lens branches, the
+researcher exception: provider-configured, ordinary turn), judge Codex `gpt-6-luna@low` (enforced,
+read-only; decision `simplicity`), builder Codex `gpt-6-luna@medium`, describer Claude `sonnet@low`
+(enforced). Launched from the CLI with the fixture's Kanban ticket as `ticket@1`; the run waited
+at the `approve` edit form, was approved unchanged through `graph_run_answer`, then built one
+commit (`server.ts`, `server.test.ts`) and produced a `pr-description@1`; complete with 6 agent
+sessions, every read node's guards passed, origin unchanged. The `pr` node was deliberately not
+run: opening a pull request is an outward action that needs the user's approval (and the fixture's
+origin is a local bare repository), so "from launch to PR" is not demonstrated and the Phase 2
+exit criterion stays open.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -179,3 +211,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · All eight system actions, the provisioner, compile-time param/port rules, the effect journal and `validation-results@1`, with tests. · complete; awaiting PR
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Designer (212) now reads `GRAPH_SYSTEM_ACTION_SPECS`; notify message bound inconsistency recorded. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · `run-validation` accepts an ancestor's plan (repair loops failed live at iteration 2); live §9.4 loop converged; live bake-off ran to the PR description (PR node not run). · Every system node live, including `open-pull-request` with the user's approval.

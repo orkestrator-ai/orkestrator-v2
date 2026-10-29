@@ -40,7 +40,7 @@ Users can describe a graph in words and get a valid draft in the designer.
 
 ## Done when
 
-- [ ] "Describe a graph" produces compiling drafts in the designer.
+- [x] "Describe a graph" produces compiling drafts in the designer (live run 2026-10-29, see Notes).
 
 ## Notes
 
@@ -98,9 +98,25 @@ the real workflow result service and agent tools server (MCP), but not yet with 
 isolated `dev:test` profile; that run (describe → compiling draft in the designer) needs the
 real-stack procedure in `docs/development/agent-testing.md` and live credentials.
 
+**2026-10-29 · Live run.** Profile `graphs-live` (`dev:test --fixture`, Claude, Codex, OpenCode
+and Pi credentials), worktree `graphs-live-verify` at `0f24330e3`. A Playwright script
+(`output/agent-testing/graphs-live/scripts/describe.ts`, not committed) signed in with `dev:login`,
+opened the fixture environment's Graphs designer, pressed "Describe a graph", typed "Review the
+change with two reviewers, consolidate their findings, and ask me to approve." and kept the model
+the dialog preselected (Claude, "Default (recommended)"). The job finished in 46 s; the designer
+opened the result itself ("Opened … as an unsaved draft. Review it, then save it before it can
+run."): header "Two-reviewer review with approval (new, unsaved)", toolbar "New graph, not saved
+yet", seven canvas nodes (the visible ones a `plan` agent step and a `package`
+`run-validation-and-seal` step; the compiler's info names an `approve` human step), compile
+panel "0 errors, 0 warnings, 1 info" (`outlet-unused` on the approval's reject outlet), the draft
+absent from the saved library. Screenshots and a content-free `summary.json` under
+`output/agent-testing/graphs-live/describe/` (not committed). One description and one provider;
+other providers and the repair loop under a live model were not exercised.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Result kind, backend job service, prompt, designer dialog and tests; work and test boxes ticked. · Live-model run in a dev:test profile for "Done when".
+- 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · Live describe run in a dev:test designer: compiling unsaved draft; Done when ticked. · complete; awaiting PR

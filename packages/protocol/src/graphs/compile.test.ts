@@ -45,10 +45,11 @@ describe("the report §9 examples", () => {
     expect(result.plan!.subgraphs!.map((instance) => instance.id)).toEqual(["review"]);
   });
 
-  test("§9.4 fails only on its Phase 4 feature (item 401)", () => {
-    expect(errors(graphTemplateExample("failure-diagnosis")).map((d) => d.code)).toEqual([
-      "replicate-items-unsupported",
-    ]);
+  test("§9.4, with its items fan-out, compiles and may launch (item 401)", () => {
+    expect(errors(graphTemplateExample("failure-diagnosis"))).toEqual([]);
+    const result = compile(graphTemplateExample("failure-diagnosis"));
+    expect(result.ok).toBe(true);
+    expect(result.launchable).toBe(true);
   });
 
   test("the design bake-off acknowledges every taint warning it raises", () => {

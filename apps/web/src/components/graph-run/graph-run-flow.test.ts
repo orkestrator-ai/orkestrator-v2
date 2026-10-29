@@ -5,6 +5,7 @@ import {
   graphActivationFlowState,
   graphBranchLabel,
   graphRunFlowModel,
+  graphRunTruncationText,
   type GraphRunFlowModel,
 } from "./graph-run-flow";
 import { act, runOf } from "./graph-run.test-fixtures";
@@ -72,6 +73,53 @@ describe("graphRunFlowModel", () => {
       [first, "pending"],
       [second, "ready"],
     ]);
+  });
+
+  test("an items node is one placeholder until it expands; then its item branches share a column", () => {
+    const waiting = runOf("failure-diagnosis");
+    const before = graphRunFlowModel(waiting.plan, waiting);
+    expect(node(before, slot("diagnose"))).toMatchObject({ placeholder: true });
+    expect(before.nodes.filter((entry) => entry.nodeId === "diagnose")).toHaveLength(1);
+
+    const keys = ["item.validate:failure-1", "item.validate:failure-2"];
+    const run = runOf("failure-diagnosis", {
+      fanOuts: [
+        {
+          nodeId: "diagnose",
+          iteration: 1,
+          sources: ["a".repeat(64), "b".repeat(64)],
+          items: keys.map((key, index) => ({
+            key,
+            index: index + 1,
+            id: `validate/failure-${index + 1}`,
+            artifact: (index ? "b" : "a").repeat(64),
+          })),
+          total: 5,
+          truncatedIds: ["validate/failure-3", "validate/failure-4", "validate/failure-5"],
+          createdAt: "2026-10-29T10:01:00.000Z",
+        },
+      ],
+      activations: [
+        act({ nodeId: "validate" }),
+        act({ nodeId: "diagnose", branchKey: keys[0] }, { state: "running" }),
+        act({ nodeId: "diagnose", branchKey: keys[1] }),
+      ],
+    });
+    const model = graphRunFlowModel(run.plan, run);
+    const first = slot("diagnose", 1, keys[0]);
+    const second = slot("diagnose", 1, keys[1]);
+    expect(columnIndex(model, first)).toBe(columnIndex(model, second));
+    expect(model.columns[columnIndex(model, first)]!.nodeIds).toEqual([first, second]);
+    // No unbranched placeholder beside the item branches.
+    expect(model.nodes.some((entry) => entry.id === slot("diagnose"))).toBe(false);
+    expect(node(model, second)).toMatchObject({
+      title: "diagnose · Item validate/failure-2",
+      item: { index: 2, id: "validate/failure-2" },
+      fanOut: { running: 2, total: 5 },
+    });
+    expect(graphRunTruncationText(node(model, first).fanOut!)).toBe(
+      "2 of 5 items run; 3 truncated",
+    );
   });
 
   test("a gate shows the outlet it took; the other outlet's consumers are skipped", () => {
@@ -237,6 +285,9 @@ describe("graph run flow helpers", () => {
     expect(graphBranchLabel("panel.2")).toBe("Panel 2");
     expect(graphBranchLabel("panel.1+lens.security")).toBe("Panel 1 · security");
     expect(graphBranchLabel("sample.3")).toBe("Sample 3");
+    expect(graphBranchLabel("panel.1+item.validate:iter-2:failure-1")).toBe(
+      "Panel 1 · Item validate/iter-2/failure-1",
+    );
   });
 
   test("activation states map onto the shared vocabulary", () => {

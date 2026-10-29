@@ -23,6 +23,13 @@
  *   commit time after it). Commits a run's own `push-branch` or
  *   `open-pull-request` node pushed are never counted against an agent.
  *
+ * - **Worktree** (isolated branches, item 403): the branch writes its own
+ *   worktree, so the run's checkout gets the read-only guard above, and the
+ *   branch's worktree is certified: it still exists, is on its own branch,
+ *   descends from its base commit and holds no uncommitted change (a
+ *   correctable refusal at submit time first). The remote-ref guard reads
+ *   the commits the branch created in its own worktree.
+ *
  * What the remote-ref guard cannot see: a push to a URL or a remote that is
  * not watched, a push of commits that existed before the turn to another
  * branch, a commit whose date was forged, and GitHub writes that are not
@@ -40,6 +47,7 @@ import {
   GRAPH_COMMIT_PATTERN,
   GRAPH_RUN_BOUNDS,
   type GraphActivationBaseline,
+  type GraphActivationWorktree,
   type GraphGuardKind,
   type GraphGuardOutcome,
   type GraphGuardResult,
@@ -93,11 +101,13 @@ export class GraphAgentGuardError extends Error {
 /** What a guarded submission belongs to, for the acceptance check. */
 export interface GraphGuardedAttempt {
   environmentId: string;
-  node: Pick<GraphPlanAgentNode, "id" | "label" | "workspaceAccess">;
+  node: GuardNode;
   baseline: GraphActivationBaseline | undefined;
+  /** An isolated branch's own worktree (item 403). */
+  worktree?: GraphActivationWorktree;
 }
 
-type GuardNode = Pick<GraphPlanAgentNode, "id" | "label" | "workspaceAccess">;
+type GuardNode = Pick<GraphPlanAgentNode, "id" | "label" | "workspaceAccess" | "isolation">;
 
 /** Remotes watched per activation (the protocol bound). */
 const MAX_REMOTES = GRAPH_RUN_BOUNDS.maxBaselineUpstreamRefs;
@@ -117,9 +127,15 @@ export function graphGuardSubject(node: GuardNode): ReadOnlyGuardSubject {
   return { stage: `Step ${node.label ?? node.id}`, activity: "the step" };
 }
 
-/** Whether the read-only guard applies to a node. */
-export function graphNodeIsReadOnlyGuarded(node: Pick<GuardNode, "workspaceAccess">): boolean {
-  return node.workspaceAccess !== "write";
+/**
+ * Whether the read-only guard applies to a node's view of the run's
+ * checkout: readers, and isolated branches, which write only their own
+ * worktree (item 403).
+ */
+export function graphNodeIsReadOnlyGuarded(
+  node: Pick<GuardNode, "workspaceAccess" | "isolation">,
+): boolean {
+  return node.workspaceAccess !== "write" || node.isolation === "worktree";
 }
 
 /** SHA-256 over a path set: sorted, each path followed by NUL. */
@@ -361,7 +377,56 @@ export class GraphAgentGuards {
     if (snapshot.status === "unknown") return null;
     const change = this.workspaceChange(baseline, snapshot);
     if (change.kind === "digest") return digestRefusal(subject, baseline.pathCount, change.paths);
-    return readOnlyViolationRefusal(subject, change);
+    const refusal = readOnlyViolationRefusal(subject, change);
+    if (refusal || !attempt.worktree) return refusal;
+    return this.worktreeRefusal(attempt.environmentId, attempt.worktree);
+  }
+
+  /** The correctable refusal for a branch whose worktree is off its branch or uncommitted. */
+  private async worktreeRefusal(
+    environmentId: string,
+    worktree: GraphActivationWorktree,
+  ): Promise<WorkflowResultError | null> {
+    const state = await this.worktreeState(environmentId, worktree).catch(() => null);
+    if (!state) return null;
+    if (state.branch !== worktree.branch) {
+      return {
+        code: "worktree_changed",
+        nextAction: "correct",
+        message: `Your worktree \`${worktree.path}\` is no longer on its branch \`${worktree.branch}\`. Switch it back (\`git -C ${worktree.path} switch ${worktree.branch}\`), keep your commits on that branch, then submit again.`,
+      };
+    }
+    if (state.dirty.length === 0) return null;
+    const shown = state.dirty.slice(0, MAX_REFUSAL_PATHS);
+    const listed = shown.map((path) => `- \`${path.replaceAll("`", "'")}\``).join("\n");
+    return {
+      code: "worktree_changed",
+      nextAction: "correct",
+      message: `Your worktree \`${worktree.path}\` has uncommitted changes, so the result cannot be accepted:\n${listed}${state.dirty.length > shown.length ? `\n- …and ${state.dirty.length - shown.length} more.` : ""}\nCommit the work you mean to keep on \`${worktree.branch}\` and remove the rest, then submit again.`,
+    };
+  }
+
+  /** HEAD, branch and uncommitted paths of a branch worktree (`git -C <path>`). */
+  private async worktreeState(
+    environmentId: string,
+    worktree: GraphActivationWorktree,
+  ): Promise<{ head: string; branch: string; dirty: string[]; descends: boolean }> {
+    const git = this.dependencies.git;
+    if (!git) throw new Error("the environment's Git is unavailable");
+    const inWorktree = (args: string[]) => git(environmentId, ["-C", worktree.path, ...args]);
+    const head = (await inWorktree(["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+    if (!GRAPH_COMMIT_PATTERN.test(head)) throw new Error("the worktree HEAD is not a commit");
+    const branch = (
+      await inWorktree(["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "")
+    ).trim();
+    const dirty = (await inWorktree(["status", "--porcelain", "--untracked-files=all"]))
+      .split("\n")
+      .map((line) => line.slice(3).trim())
+      .filter((path) => path.length > 0);
+    const descends = await inWorktree(["merge-base", "--is-ancestor", worktree.baseRef, head])
+      .then(() => true)
+      .catch(() => false);
+    return { head, branch, dirty, descends };
   }
 
   /** An acceptance check for `graph-output` slots; `resolve` names the guarded activation. */
@@ -378,8 +443,8 @@ export class GraphAgentGuards {
 
   /**
    * Certifies a finished turn before its result becomes artifacts: the
-   * read-only guard (read and none nodes) and the remote-ref guard (every
-   * node). Returns the results; throws {@link GraphAgentGuardError} with
+   * read-only guard (read and none nodes, isolated branches), the worktree
+   * guard (isolated branches) and the remote-ref guard (every node). Returns the results; throws {@link GraphAgentGuardError} with
    * them when any guard was violated or could not judge.
    */
   async certify(input: {
@@ -387,6 +452,8 @@ export class GraphAgentGuards {
     node: GuardNode;
     baseline: GraphActivationBaseline | undefined;
     runId: string;
+    /** An isolated branch's own worktree (item 403). */
+    worktree?: GraphActivationWorktree;
   }): Promise<GraphGuardResult[]> {
     const results: GraphGuardResult[] = [];
     let failure: string | undefined;
@@ -395,6 +462,7 @@ export class GraphAgentGuards {
       failure ??= outcome.failure;
     };
     if (graphNodeIsReadOnlyGuarded(input.node)) record(await this.certifyReadOnly(input));
+    if (input.node.isolation === "worktree") record(await this.certifyWorktree(input));
     record(await this.certifyRemote(input));
     if (failure) throw new GraphAgentGuardError(failure, results);
     return results;
@@ -474,11 +542,61 @@ export class GraphAgentGuards {
     };
   }
 
+  private async certifyWorktree(input: {
+    environment: Environment;
+    node: GuardNode;
+    worktree?: GraphActivationWorktree;
+  }): Promise<{ result: GraphGuardResult; failure?: string }> {
+    const at = this.now().toISOString();
+    const subject = graphGuardSubject(input.node);
+    const worktree = input.worktree;
+    if (!worktree) {
+      const message = `${subject.stage} cannot be accepted because it recorded no worktree of its own`;
+      return { result: guardResult("worktree", "unavailable", at, message), failure: message };
+    }
+    let state: Awaited<ReturnType<GraphAgentGuards["worktreeState"]>>;
+    try {
+      state = await this.worktreeState(input.environment.id, worktree);
+    } catch (error) {
+      const message = `${subject.stage} cannot be accepted because its worktree ${worktree.path} could not be read: ${graphCommandErrorLine(error)}`;
+      return { result: guardResult("worktree", "unavailable", at, message), failure: message };
+    }
+    const violated = (message: string, paths?: readonly string[]) => ({
+      result: guardResult("worktree", "violated", at, message, paths),
+      failure: message,
+    });
+    if (state.branch !== worktree.branch) {
+      return violated(
+        `${subject.stage} cannot be accepted because its worktree is no longer on its branch ${worktree.branch}`,
+      );
+    }
+    if (!state.descends) {
+      return violated(
+        `${subject.stage} cannot be accepted because its branch no longer descends from the commit it started from (${worktree.baseRef.slice(0, 12)})`,
+      );
+    }
+    if (state.dirty.length > 0) {
+      return violated(
+        `${subject.stage} cannot be accepted because it left ${state.dirty.length} uncommitted path${state.dirty.length === 1 ? "" : "s"} in its worktree`,
+        state.dirty,
+      );
+    }
+    return {
+      result: guardResult(
+        "worktree",
+        "passed",
+        at,
+        `The branch worktree is on ${worktree.branch}, descends from its base and is committed.`,
+      ),
+    };
+  }
+
   private async certifyRemote(input: {
     environment: Environment;
     node: GuardNode;
     baseline: GraphActivationBaseline | undefined;
     runId: string;
+    worktree?: GraphActivationWorktree;
   }): Promise<{ result: GraphGuardResult; failure?: string }> {
     const at = this.now().toISOString();
     const subject = graphGuardSubject(input.node);
@@ -505,7 +623,7 @@ export class GraphAgentGuards {
     let created: Set<string>;
     let pushedBySystem: ReadonlySet<string>;
     try {
-      created = await this.createdCommits(input.environment, baseline);
+      created = await this.createdCommits(input.environment, baseline, input.worktree);
       pushedBySystem = (await this.dependencies.systemPushes?.(input.runId)) ?? new Set();
     } catch (error) {
       return unavailable(graphCommandErrorLine(error));
@@ -558,16 +676,23 @@ export class GraphAgentGuards {
   private async createdCommits(
     environment: Environment,
     baseline: GraphActivationBaseline,
+    worktree?: GraphActivationWorktree,
   ): Promise<Set<string>> {
-    const git = this.dependencies.git;
-    if (!git) throw new Error("the environment's Git is unavailable");
+    const environmentGit = this.dependencies.git;
+    if (!environmentGit) throw new Error("the environment's Git is unavailable");
+    // An isolated branch commits in its own worktree, from its own base.
+    const git = worktree
+      ? (environmentId: string, args: string[]) =>
+          environmentGit(environmentId, ["-C", worktree.path, ...args])
+      : environmentGit;
+    const base = worktree?.baseRef ?? baseline.headRef;
     const since = Math.floor(Date.parse(baseline.capturedAt!) / 1000) - CLOCK_SKEW_SECONDS;
     const created = new Set<string>();
     const range = await git(environment.id, [
       "log",
       "--format=%H %ct",
       `--max-count=${MAX_CREATED_COMMITS}`,
-      `${baseline.headRef}..HEAD`,
+      `${base}..HEAD`,
     ]);
     for (const line of range.split("\n")) {
       const [sha, time] = line.trim().split(" ");

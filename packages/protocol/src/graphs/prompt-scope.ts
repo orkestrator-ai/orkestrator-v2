@@ -9,7 +9,7 @@
  * | `params.<key>` | always (one per template parameter) | the launch value, else the default |
  * | `run.iteration` | always | the loop iteration, 1-based (1 outside loops) |
  * | `lens.key`, `lens.label`, `lens.instruction` | the node replicates over lenses | the branch's lens |
- * | `item`, `item.index` | the node replicates over items | the branch's element; `item.index` is the branch index |
+ * | `item`, `item.index`, `item.id` | the node replicates over items | the branch's element; `item.index` is its 1-based position in the input list, `item.id` its stable id (item 401) |
  * | `branch.index`, `branch.key`, `branch.count` | the node is replicated | the branch, 1-based |
  * | `ticket` | the template has a `ticket@N` run input | that run input |
  *
@@ -21,7 +21,7 @@
  */
 import type { ArtifactTypeBudgets, ArtifactTypeDef, GraphJsonSchema } from "./artifact-type-def.js";
 import { GRAPH_TEMPLATE_BOUNDS, graphUtf8Bytes, parseGraphTypeRef } from "./grammar.js";
-import { graphSchemaNonNull } from "./schema-subset.js";
+import { graphSchemaAtPath, graphSchemaNonNull } from "./schema-subset.js";
 import type {
   GraphAgentNode,
   GraphInputPortSpec,
@@ -76,6 +76,17 @@ const BRANCH_SCHEMA: GraphJsonSchema = {
   required: ["index", "key", "count"],
   properties: { index: { type: "integer" }, key: { type: "string" }, count: { type: "integer" } },
 };
+/** `item.index` and `item.id` (item 401): the item's position in its input and its stable id. */
+const ITEM_REF_SCHEMA: GraphJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["index", "id"],
+  properties: { index: { type: "integer" }, id: { type: "string" } },
+};
+/** An item id (128 characters, `GRAPH_ITEM_ID_MAX_CHARS`) and an index, as JSON. */
+const ITEM_REF_BYTES = 192;
+/** The source key `item.index` and `item.id` resolve to. */
+export const GRAPH_PROMPT_ITEM_REF_SOURCE = "item.ref";
 const LENS_SCHEMA: GraphJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -178,6 +189,26 @@ export function graphPromptNodeLenses(node: GraphAgentNode): GraphLens[] {
 export function graphPromptItemsPort(node: GraphAgentNode): string | undefined {
   const axis = replicateAxes(node).find((entry) => entry.over === "items");
   return axis?.over === "items" ? axis.input : undefined;
+}
+
+/**
+ * The element one branch of an `items` fan-out sees (item 401): a list's
+ * element, or one entry of the item list of a type that declares `items`.
+ * Undefined for a type that holds no items.
+ */
+export function graphItemsElementType(type: GraphValueType): GraphValueType | undefined {
+  if (type.kind === "list") return type.element;
+  if (type.kind !== "named" || !type.definition.items) return undefined;
+  const { definition } = type;
+  const field = graphSchemaAtPath(definition.schema, definition.items!.path);
+  const items = field ? graphSchemaNonNull(field.schema).schema.items : undefined;
+  if (!items || typeof items !== "object" || Array.isArray(items)) return undefined;
+  return {
+    kind: "shape",
+    schema: items as GraphJsonSchema,
+    budgets: definition.budgets,
+    origin: `${graphValueTypeLabel(type)}.${definition.items!.path}[]`,
+  };
 }
 
 /** `file` for types stored by reference (packages), else `json-frame`. */
@@ -320,8 +351,9 @@ export function graphPromptScope(context: GraphPromptNodeContext): GraphPromptSc
     if (ports.has(spec.name)) continue;
     let type = resolvePortType(spec, context, library);
     const perBranch = spec.name === itemsPort;
-    // Each branch of an `items` node sees one element of the replicated list.
-    if (perBranch && type?.kind === "list") type = type.element;
+    // Each branch of an `items` node sees one element of the replicated list
+    // (or one entry of the item list of a type with `items`).
+    if (perBranch && type) type = graphItemsElementType(type) ?? type;
     const required = spec.required !== false;
     const listItems = Math.max(
       0,
@@ -398,6 +430,13 @@ export function graphPromptScope(context: GraphPromptNodeContext): GraphPromptSc
     bound.add("item");
     const port = ports.get(itemsPort)!;
     sources.set("item", { ...port.bound, key: "item", perBranch: true });
+    sources.set(GRAPH_PROMPT_ITEM_REF_SOURCE, {
+      key: GRAPH_PROMPT_ITEM_REF_SOURCE,
+      bytes: ITEM_REF_BYTES,
+      schema: ITEM_REF_SCHEMA,
+      perBranch: true,
+      optional: false,
+    });
   }
   const ticketInput = context.template?.inputs?.find(
     (input) =>
@@ -517,6 +556,8 @@ export interface GraphPromptElement {
   itemIds?: readonly string[];
   /** A failed branch's `error@1` marker in a fan-in list (`includeFailures`). */
   failure?: boolean;
+  /** The upstream item the artifact stands for (`GraphArtifact.sourceItem`, item 401). */
+  sourceItem?: string;
 }
 
 export const GRAPH_PROMPT_FILE_PATH_MAX_BYTES = 1024;
@@ -531,6 +572,8 @@ export interface GraphPromptValues {
   lens?: GraphLens;
   /** 1-based index, the branch key, and the number of branches. */
   branch?: { index: number; key: string; count: number };
+  /** An `items` branch's item (item 401): its 1-based position in the input and its stable id. */
+  item?: { index: number; id: string };
   /** The `ticket` run input's value. */
   ticket?: unknown;
   /** `file` inputs: what the runtime wrote. */
@@ -582,7 +625,10 @@ export function graphPromptRenderContext(
   }
   if (scope.bound.has("item") && scope.itemsPort !== undefined) {
     if (Object.hasOwn(input, scope.itemsPort)) context.item = input[scope.itemsPort];
-    if (values.branch) aliases.set("item.index", values.branch.index);
+    if (values.item) {
+      aliases.set("item.index", values.item.index);
+      aliases.set("item.id", values.item.id);
+    }
   }
   if (scope.bound.has("ticket") && values.ticket !== undefined) context.ticket = values.ticket;
   return { context, aliases };

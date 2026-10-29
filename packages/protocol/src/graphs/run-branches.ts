@@ -14,15 +14,16 @@
  * multiplies the axes' bounds, and the runtime refuses a binding that would
  * exceed it anyway.
  *
- * `items` replication (one branch per element of a list input) arrives with
- * item 401; the compiler refuses it until then.
+ * `items` replication (item 401) runs one branch per item of a list input,
+ * known only at run time: the runtime records the items it expanded to
+ * (`run-fanout.ts`) and passes them in here, keys `item.<encoded id>`.
  *
  * Browser-safe: the run view draws a replicated node's branches from here.
  */
 import { GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan, GraphPlanNode } from "./plan.js";
 import { isGraphBranchKey } from "./run-identity.js";
-import type { GraphModelBinding, GraphRunBindings } from "./run-model.js";
+import type { GraphFanOutItem, GraphModelBinding, GraphRunBindings } from "./run-model.js";
 
 export interface GraphBranch {
   /** The stable branch key. */
@@ -33,6 +34,8 @@ export interface GraphBranch {
   lens?: string;
   /** One-based sample number, for a samples axis. */
   sample?: number;
+  /** The item, for an items axis (item 401). */
+  item?: GraphFanOutItem;
   /** The role whose binding runs this branch: a lens's own role, else the node's. */
   role: string;
 }
@@ -53,12 +56,15 @@ function boundModels(bindings: GraphRunBindings["roles"], role: string): number 
 
 /**
  * The node's branches in plan order, or `null` when the node is not
- * replicated. Throws {@link GraphBranchError} for `items` replication (item
- * 401), more than 32 branches, or a key outside the branch grammar.
+ * replicated. An `items` axis takes the items the node's fan-out recorded
+ * (`run-fanout.ts`; read a run's with `graphRunNodeBranches`). Throws
+ * {@link GraphBranchError} for an `items` axis without `items`, more than 32
+ * branches, or a key outside the branch grammar.
  */
 export function graphNodeBranches(
   node: GraphPlanNode,
   bindings: GraphRunBindings["roles"],
+  items?: readonly GraphFanOutItem[],
 ): GraphBranch[] | null {
   const replicate = node.kind === "agent" || node.kind === "subgraph" ? node.replicate : undefined;
   if (!replicate) return null;
@@ -98,7 +104,13 @@ export function graphNodeBranches(
           }
           break;
         case "items":
-          throw new GraphBranchError("Replication over list items arrives with item 401");
+          if (!items) {
+            throw new GraphBranchError(
+              `${node.id} replicates over items, which are known only once it expands`,
+            );
+          }
+          for (const item of items) next.push({ ...branch, key: join(item.key), item });
+          break;
       }
     }
     branches = next;

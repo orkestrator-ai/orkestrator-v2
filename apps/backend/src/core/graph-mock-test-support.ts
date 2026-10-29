@@ -12,7 +12,7 @@ import path from "node:path";
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { graphTemplateExamples } from "@orkestrator/protocol/graphs/examples";
-import type { GraphAgentNode, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { FakeAgentProvider } from "./graph-agent-test-support.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
@@ -198,30 +198,14 @@ export async function graphMockWorld(
   return world;
 }
 
-/** Report §9.4 with a static panel instead of `items` (Phase 4), as item 206's loop test. */
-export function failureDiagnosisWithPanel(template: GraphTemplateV1): GraphTemplateV1 {
-  const next = structuredClone(template);
-  next.roles = next.roles.map((role) =>
-    role.key === "diagnoser" ? { key: "diagnoser", multiplicity: "panel", maxPanel: 4 } : role,
-  );
-  const diagnose = next.nodes.find((node) => node.id === "diagnose") as GraphAgentNode;
-  diagnose.replicate = { over: "panel", role: "diagnoser" };
-  diagnose.prompt = {
-    template:
-      "Find the root cause of these validation failures. Do not change any files.\n\n{{> input.code}}\n\n{{> input.failures}}\n",
-  };
-  return next;
-}
-
 /**
- * The examples as mock runs take them, under user-template ids: §9.3 as
- * written (its Multi Review sub-graph inlined at compile, item 402), §9.4
- * with a static panel until replication over items (item 401) lands.
+ * The examples as mock runs take them, under user-template ids, as written:
+ * §9.3 with its Multi Review sub-graph inlined at compile (item 402), §9.4
+ * with its `items` fan-out (item 401).
  */
 export function phase2Examples(): { section: string; template: GraphTemplateV1 }[] {
   return graphTemplateExamples().map((example) => {
-    let template = example.template;
-    if (example.key === "failure-diagnosis") template = failureDiagnosisWithPanel(template);
+    const template = example.template;
     return {
       section: example.reportSection,
       template: { ...template, id: `mock-${template.id}`, revision: 0 },

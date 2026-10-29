@@ -204,7 +204,7 @@ export function GraphLaunchDialog({
   const title = options?.summary.name ?? "Run graph";
   return (
     <Dialog open={open} onOpenChange={(next) => !launching && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[90vh] flex-col gap-3 sm:max-w-2xl">
+      <DialogContent size="2xl" className="flex max-h-[90vh] flex-col gap-3">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Network aria-hidden className="size-4 text-indigo-400" />

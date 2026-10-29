@@ -8,6 +8,8 @@
  *   passes the input commit through (system nodes never commit); a
  *   `review-package@2` is an unwritten mock file (`putMockReference`);
  *   `wait-for-checks` answers its pinned or example `check-summary@1` at once.
+ *   `select-workspace` (item 403) picks with the live choice rule and answers
+ *   the chosen fake commit on the run's branch, without Git.
  * - An action with `sideEffect` (`GRAPH_SYSTEM_ACTION_SPECS`) records "would
  *   have run" in the run's effect journal (state `simulated`, data
  *   `{ wouldRun: GraphMockWouldRun }`, key `would-run:<activation key>`):
@@ -19,8 +21,10 @@ import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import {
   graphMockValue,
   graphMockWorkspace,
+  type GraphMockWorkspaceValue,
   type GraphMockWouldRun,
 } from "@orkestrator/protocol/graphs/mock";
+import { resolveGraphSelectChoice } from "@orkestrator/protocol/graphs/run";
 import {
   GRAPH_SYSTEM_ACTION_SPECS,
   graphSystemActionParams,
@@ -73,13 +77,58 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
+/**
+ * A mock `select-workspace` (item 403): the same choice rule as the live
+ * action, over the candidates' fake commits. Null when nothing can win.
+ */
+function mockSelection(
+  context: GraphExecutorContext,
+  inputs: readonly GraphMockInput[],
+  fallback: unknown,
+): { workspace: GraphMockWorkspaceValue; branchKey: string | null; candidates: number } | null {
+  const artifacts = inputs.find((input) => input.type === "list<workspace@1>")?.artifacts ?? [];
+  const activations = new Map(context.run.activations.map((entry) => [entry.key, entry]));
+  const candidates = artifacts.map((artifact) => {
+    const value = ("value" in artifact.body ? artifact.body.value : undefined) as
+      { branch?: unknown; headRef?: unknown; baseRef?: unknown } | undefined;
+    const branchKey = activations.get(artifact.producer.activation)?.branchKey;
+    return {
+      ...(branchKey !== undefined ? { branchKey } : {}),
+      branch: typeof value?.branch === "string" ? value.branch : "",
+      headRef: typeof value?.headRef === "string" ? value.headRef : "",
+      baseRef: typeof value?.baseRef === "string" ? value.baseRef : null,
+      usable: artifact.type === "workspace@1" && typeof value?.headRef === "string",
+    };
+  });
+  const decision = inputValue(inputs, "decision@1");
+  const resolved = resolveGraphSelectChoice(
+    candidates,
+    field(decision, "choice"),
+    fallback === "first" ? "first" : "fail",
+  );
+  if (!resolved.ok) return null;
+  const chosen = candidates[resolved.index]!;
+  const runBranch = graphMockWorkspace({
+    runId: context.run.id,
+    activationKey: context.activation.key,
+    port: "workspace",
+    writes: true,
+  }).branch;
+  return {
+    workspace: { branch: runBranch, headRef: chosen.headRef, baseRef: chosen.baseRef },
+    branchKey: chosen.branchKey ?? null,
+    candidates: candidates.length,
+  };
+}
+
 /** The sentence and facts of one action's "would have run" record. */
 function describe(
   node: SystemNode,
   params: Record<string, GraphScalarValue>,
   inputs: readonly GraphMockInput[],
+  produced?: GraphMockWorkspaceValue,
 ): { summary: string; details: GraphMockWouldRun["details"] } {
-  const workspace = graphMockBaseWorkspace(inputs);
+  const workspace = node.action === "select-workspace" ? produced : graphMockBaseWorkspace(inputs);
   const branch = workspace?.branch ?? null;
   const headRef = workspace?.headRef ?? null;
   const commands = field(inputValue(inputs, "validation-plan@1"), "commands");
@@ -157,6 +206,19 @@ function describe(
       };
     case "wait-for-checks":
       return { summary: "Reads check results only.", details: {} };
+    case "select-workspace": {
+      const decision = field(inputValue(inputs, "decision@1"), "choice");
+      const candidates =
+        inputs.find((input) => input.type === "list<workspace@1>")?.artifacts.length ?? 0;
+      return {
+        summary: `Would fast-forward the run's branch to ${short(headRef ?? undefined)}${typeof decision === "string" ? ` (branch ${decision.slice(0, 96)})` : ""} and remove ${candidates} branch worktree${candidates === 1 ? "" : "s"}.`,
+        details: {
+          headRef,
+          choice: typeof decision === "string" ? decision.slice(0, 96) : null,
+          candidates,
+        },
+      };
+    }
   }
 }
 
@@ -192,7 +254,18 @@ export class GraphMockSystemExecutor implements GraphNodeExecutor {
     const spec = GRAPH_SYSTEM_ACTION_SPECS[node.action];
     const inputs = await graphMockInputs(context);
     const lineage = inputs.flatMap((input) => input.ids);
-    const base = graphMockBaseWorkspace(inputs);
+    let base = graphMockBaseWorkspace(inputs);
+    if (node.action === "select-workspace") {
+      const selection = mockSelection(context, inputs, node.params?.fallback);
+      if (!selection) {
+        return {
+          state: "failed",
+          error: "Mock run: the decision names no candidate branch",
+          cause: "invalid-result",
+        };
+      }
+      base = selection.workspace;
+    }
     const workspace = base
       ? base
       : graphMockWorkspace({
@@ -243,7 +316,7 @@ export class GraphMockSystemExecutor implements GraphNodeExecutor {
           (entry): entry is [string, GraphScalarValue] => entry[1] !== undefined,
         ),
       );
-      const { summary, details } = describe(node, params, inputs);
+      const { summary, details } = describe(node, params, inputs, workspace);
       const wouldRun: GraphMockWouldRun = {
         action: node.action,
         label: spec.label,

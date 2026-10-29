@@ -67,14 +67,24 @@ function planReplicate(
   if (!node.replicate) return undefined;
   const axes = node.replicate.over === "cross" ? node.replicate.axes : [node.replicate];
   return {
-    axes: axes.map((axis) =>
-      axis.over === "lenses"
-        ? {
+    axes: axes.map((axis) => {
+      switch (axis.over) {
+        case "lenses":
+          return {
             over: "lenses" as const,
             lenses: axis.lenses.map((lens) => ({ ...lens, role: lens.role ?? role ?? "" })),
-          }
-        : { ...axis },
-    ),
+          };
+        case "items":
+          return {
+            over: "items" as const,
+            input: axis.input,
+            maxBranches: axis.maxBranches,
+            truncate: axis.truncate ?? "first",
+          };
+        default:
+          return { ...axis };
+      }
+    }),
     branches: state.branches.get(node.id)!,
     signature: state.replicateSignatures.get(node.id) ?? "",
   };
@@ -195,6 +205,7 @@ function planNode(
         capabilities: planCapabilities(node, compiled),
         ...(floor !== undefined ? { minEnforcement: floor } : {}),
         floorLowered: state.floorLowered.has(node.id),
+        ...(node.isolation ? { isolation: node.isolation } : {}),
         session: node.session ?? { mode: "fresh" },
         ...(replicate ? { replicate } : {}),
         askHuman: node.askHuman === true,

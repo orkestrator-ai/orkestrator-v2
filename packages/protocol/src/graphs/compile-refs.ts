@@ -435,22 +435,10 @@ export function isGraphReservedOutputPortName(name: string): boolean {
   return GRAPH_RESERVED_OUTPUT_PORT_NAMES.includes(name);
 }
 
-/** `replicate: items` (until item 401), agent output names and the `error` port. */
+/** Agent output names and the `error` port. */
 export function checkGraphNodeRules(state: GraphCompileState): void {
   const { diagnostics } = state;
   for (const { node, path } of state.nodes.values()) {
-    axesOf(node).forEach((axis, axisIndex) => {
-      if (axis.over !== "items") return;
-      const cross = "replicate" in node && node.replicate?.over === "cross";
-      diagnostics.add(
-        "replicate-items-unsupported",
-        "Replication over list items is not yet supported (Phase 4, item 401); use panel, lenses or samples",
-        {
-          nodeId: node.id,
-          path: cross ? `${path}.replicate.axes[${axisIndex}]` : `${path}.replicate`,
-        },
-      );
-    });
     if (!("outputs" in node)) {
       if (node.kind === "human") continue; // its `error` port is implicit
       if ("onFailure" in node && node.onFailure === "route") {

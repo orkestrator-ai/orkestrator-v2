@@ -161,6 +161,14 @@ export function graphPromptVariableSuggestions(scope: GraphPromptScope): GraphPr
       });
     }
   }
+  if (scope.bound.has("item")) {
+    for (const [field, detail] of [
+      ["index", "the item's position in the input list (1-based)"],
+      ["id", "the item's stable source id"],
+    ] as const) {
+      suggestions.push({ insert: `item.${field}`, label: `item.${field}`, detail });
+    }
+  }
   for (const root of ["ticket", "item"] as const) {
     if (!scope.bound.has(root)) continue;
     suggestions.push({

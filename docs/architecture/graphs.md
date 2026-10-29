@@ -861,6 +861,43 @@ restart and rewind only ever see ordinary nodes.
   parameter (default, value, or one of the parent's parameters) and role, the
   ports, and the plan nodes it became.
 
+## Multi Review on the graph runtime (item 301)
+
+Behind the `multiReviewEngine` setting (and `ORKESTRATOR_MULTI_REVIEW_ENGINE`),
+`MultiReviewService` runs a review as a graph run of the built-in Multi Review
+template and projects the run onto its Multi Review record, which stays the
+read model of the review tab, the CLI and the coordinator.
+[`review-preparation.md`](review-preparation.md#the-engine-setting-item-301)
+describes the setting, the bindings and the projection; this section records
+what the graph runtime gained for it.
+
+- **Inline launches.** `GraphRunLaunchService.launchInline(request, template,
+  runId, origin)` launches a backend-owned template through the same binding,
+  floor, parameter and workspace-input checks as `launch`, compiled by
+  `GraphTemplateService.compileInlineForLaunch` (trusted, no `engine`, the
+  launch environment's policy under the project ceiling). The run's template
+  names the built-in it copies (`scope: built-in`, `id: multi-review`). The
+  run id is the caller's idempotency key: `multi-review-<workflow id>`, so a
+  pass after a crash between the record and the launch finds the run.
+- **The consolidation built-in follows Multi Review's contract.** A node whose
+  prompt is `{ builtIn: "consolidation" }` (`isGraphReviewConsolidationNode`)
+  now gets what the built-in's text promises: each report carries its author's
+  agent, model and lens label (from the producing activation), every coverage
+  gap a source id `<item label>/coverage-gap-<k>` beside the issues'
+  `<item label>/issue-<k>` (`graphReviewCoverageGapIds`), its provenance
+  sources are classed `issue` and `coverage-gap`, and its `review-report@1`
+  output is checked with `REVIEW_CONSOLIDATION_PROVENANCE` (each finding cites
+  at least one source of its own kind, `reviewModels` left to the backend) and
+  the bespoke wording (`review-consolidation-provenance.ts`). The port's own
+  mode is kept, so `accountForAll` is still stricter. Failed reviewers stay
+  out of the evidence, as in the bespoke prompt.
+- **`targetBranch` and `reviewInstruction` parameters.** A string parameter
+  `targetBranch` in an agent node's scope names the branch its prompt reviews
+  against, ahead of the environment's base branch (`graph-agent-host.ts`). A
+  `reviewInstruction` parameter is read by the discovery review only and wins
+  over `instruction` there, so a template can instruct its reviewers without
+  turning its Fix into a custom Fix.
+
 ## Canvas library decision (spike, 2026-10-29)
 
 **Decision:** the Graphs designer uses React Flow (`@xyflow/react`), pinned

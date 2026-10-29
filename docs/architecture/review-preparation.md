@@ -265,6 +265,63 @@ each step's result kind and turn (`MULTI_REVIEW_STEP_TURNS`,
 template to them. The template cannot express a Fix the user starts by hand
 after an `autoPr`-only launch; that stays an engine behaviour.
 
+## The engine setting (item 301)
+
+Multi Review can run on the graph runtime instead of its own engine (plan
+Phase 3, D5). The app setting `multiReviewEngine` (Settings → Review →
+Multi Review runtime; `"bespoke"` or `"graph"`, absent is bespoke) picks the
+engine of each new review; `ORKESTRATOR_MULTI_REVIEW_ENGINE=graph|bespoke`
+overrides it for testing. The default stays `bespoke` until the graph runtime
+has soaked and the user decides to flip it; the bespoke service is not
+retired. A running review keeps the engine it started on.
+
+Every launch surface (the dialog, `launch_multi_review` and
+`start_multi_review`, the CLI's `review launch`) still calls
+`MultiReviewService.start`, so all of them follow the setting. On `graph` the
+service records `engine: "graph"` and `graphRun.runId`
+(`multi-review-<workflow id>`), and its first pass launches a graph run of the
+built-in Multi Review template inlined as a copy
+(`multi-review-graph-template.ts`): `engine` dropped, `targetBranch` and
+`reviewInstruction` added as parameters, and the target branch written onto the
+package and pull request system nodes. Roles are bound from the review's own
+input: the preparer is `reviewModel` (else `fixModel`), the reviewer panel is
+the reviewers in order with their lenses, the consolidator is
+`consolidationModel` (else the preparer), the fixer is `fixModel`, and the
+pull request describer takes the saved `pr` default. `autoFix` and `autoPr`
+are the run's parameters. A review instruction longer than a graph parameter
+holds (4 KiB) starts on the bespoke engine instead.
+
+The record stays the read model. Each supervision pass reads the run by id and,
+when its revision moved, projects it onto the record under the controller lease
+(`multi-review-graph-projection.ts`): the `plan` activation becomes
+`preparationSession`, `package` the sealed `reviewPackage`, each `review`
+branch `panel.N` reviewer N (status, session, report attributed by the backend,
+`report_progress` issues as provisional findings), `consolidate` the
+`reviewSession`, `consolidatedReport` and `consolidationOverlap`, `fix` the
+`fixSession` and `fixResult`, and `describe-pr`/`pr` the `autoPrLaunch`. The
+consolidated report's graph source ids (`review/panel.2/issue-3`,
+`review/panel.2/coverage-gap-1`) are translated to `reviewer-2/issue-3` by the
+position of the report they name, so provenance and overlap are computed by the
+same functions as for a bespoke review. The run's saves wake the review, so the
+record follows within a pass. Once the run ends the record is marked
+`graphRun.settled` and is an ordinary settled review from then on.
+
+What differs on the graph engine:
+
+- The automatic Fix is an unattended graph agent node that submits a fix
+  result (it may `ask_human`), not the interactive Fix tab: the review shows
+  `fixing`, then `completed`, or `failed` when the result is incomplete, as a
+  structured bespoke Fix does. The pull request is the `open-pull-request`
+  system node after a `describe-pr` agent; only a complete Fix result or a clean
+  report reaches them, the same rule as above.
+- Step controls (restart, stop, pause, resume, nudge, retry) are refused while
+  the run is live; they belong to the graph run view. The manual Fix
+  (`address`, custom Fix) waits until the run settles, then runs as the
+  ordinary interactive handoff, and its completion can still queue the
+  automatic PR.
+- Validation progress (`validationRun`) is not projected: the graph's
+  `package` system node runs and seals the plan in one activation.
+
 ## Performance boundary and verification
 
 Without reusing earlier results, preparation cannot finish before its required

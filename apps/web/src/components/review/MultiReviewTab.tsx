@@ -32,6 +32,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
+import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
@@ -433,11 +434,30 @@ function StepFacts({
   );
 }
 
+/**
+ * A graph-engine review whose run is live (item 301): its steps are graph
+ * activations, so the bespoke step controls are not offered; the graph run
+ * view controls them. Once the run ends the review is an ordinary one.
+ */
+function graphRunLive(workflow: MultiReviewWorkflow | undefined): boolean {
+  return workflow?.engine === "graph" && workflow.graphRun?.settled !== true;
+}
+
+function withoutBespokeStepControls(commands: MultiReviewCommands): MultiReviewCommands {
+  return {
+    address: commands.address,
+    ...(commands.customFix ? { customFix: commands.customFix } : {}),
+    retry: commands.retry,
+    cancel: commands.cancel,
+    stopReviewer: commands.stopReviewer,
+  };
+}
+
 function MultiReviewOverviewTab({
   data,
   isActive,
   hydrateWorkflow = hydrateMultiReviewWorkflow,
-  commands = defaultCommands,
+  commands: providedCommands = defaultCommands,
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
@@ -446,6 +466,9 @@ function MultiReviewOverviewTab({
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
+  const commands = graphRunLive(workflow)
+    ? withoutBespokeStepControls(providedCommands)
+    : providedCommands;
   const [error, setError] = useState<string | null>(null);
   const [presentationNotice, setPresentationNotice] = useState<string | null>(null);
   const [openAfterDelivery, setOpenAfterDelivery] = useState(false);
@@ -1377,6 +1400,7 @@ function MultiReviewOverviewTab({
     const stalled = reviewer.status === "running" && Boolean(reviewer.stalledSince);
     const runtime = runtimeParts(reviewer, reviewer.status === "running", reviewPanelNow);
     const stoppable =
+      !graphRunLive(workflow) &&
       workflow.phase === "reviewing" &&
       (reviewer.status === "pending" || reviewer.status === "running");
     const canUnstick =
@@ -1649,6 +1673,36 @@ function MultiReviewOverviewTab({
       </div>,
     );
   }
+  if (workflow.engine === "graph" && workflow.graphRun) {
+    const runId = workflow.graphRun.runId;
+    notices.push(
+      <div
+        key="graph-engine"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground"
+      >
+        <span>
+          {graphRunLive(workflow)
+            ? "This review runs on the graph runtime. Restart, pause and stop its steps from its graph run."
+            : "This review ran on the graph runtime."}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            requestGraphRunView({
+              runId,
+              projectId: workflow.projectId,
+              environmentId: workflow.environmentId,
+              mock: false,
+              title: "Multi Review",
+            })
+          }
+        >
+          Open graph run
+        </Button>
+      </div>,
+    );
+  }
   if (error || workflow.error) {
     notices.push(
       <div
@@ -1815,7 +1869,7 @@ function MultiReviewOverviewTab({
       </div>
 
       <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
-        {workflow.phase === "failed" && (
+        {workflow.phase === "failed" && workflow.engine !== "graph" && (
           <Button
             variant="outline"
             disabled={pending}

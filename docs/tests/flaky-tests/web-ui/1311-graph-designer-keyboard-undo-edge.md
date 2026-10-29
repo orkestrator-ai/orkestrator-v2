@@ -1,6 +1,6 @@
 # Graphs designer builds the design bake-off on the canvas, compiles it clean and saves it
 
-- **ID:** 1310
+- **ID:** 1311
 - **Status:** open
 - **Date observed:** 2026-10-29
 - **Test:** `Graphs designer builds the design bake-off on the canvas, compiles it clean and saves it`

@@ -140,7 +140,7 @@ pinned in the inspector's Mock run section, "Mock run" saved the draft and start
 environment-less mock run (pins frozen, `mockPins` stored), and `graph_run_effects` showed the PR
 node's `simulated` open-pull-request record while the environment kept no PR. `graph-designer.spec.ts`
 passed; `graph-designer-editing.spec.ts` failed once on a keyboard-undo poll when run after it and
-passed alone (recorded as flake 1310 in `docs/tests/flaky-tests/web-ui/`). Profile stopped and
+passed alone (recorded as flake 1311 in `docs/tests/flaky-tests/web-ui/`). Profile stopped and
 reset.
 
 **2026-10-29 · For 211 (run view).** Label a run by `run.mock`; read "would have run" records with

@@ -3,6 +3,10 @@ import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-da
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {
+  graphOutputContextProblem,
+  graphOutputToolPort,
+} from "@orkestrator/protocol/graphs/output-slots";
+import {
   isReviewFindingPool,
   safeParseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
@@ -16,7 +20,6 @@ import {
   WORKFLOW_RESULT_SCHEMA_VERSION,
   WORKFLOW_RESULT_STORE_VERSION,
   isWorkflowResultKind,
-  workflowResultToolName,
   type WorkflowResultDelivery,
   type WorkflowResultError,
   type WorkflowResultKind,
@@ -32,6 +35,15 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
+import {
+  WORKFLOW_RESULT_MAX_ISSUES as WORKFLOW_RESULT_ISSUE_LIMIT,
+  WorkflowResultRegistry,
+  workflowResultKindDefinition,
+  type WorkflowResultAcceptanceCheck,
+  type WorkflowResultAttempt,
+  type WorkflowResultEnvironmentValidator,
+  type WorkflowResultSlotView,
+} from "./workflow-result-registry.js";
 import {
   WorkflowResultMetrics,
   type WorkflowResultPreflightOutcome,
@@ -79,27 +91,7 @@ export interface WorkflowResultCallerScope {
   projectId: string;
 }
 
-/** The attempt an {@link WorkflowResultAcceptanceCheck} is asked about. */
-export interface WorkflowResultAttempt {
-  resultKey: string;
-  kind: WorkflowResultKind;
-  environmentId: string;
-  projectId: string;
-}
-
-/**
- * A workflow's own precondition on its environment, checked before a result of
- * one kind is validated or accepted. Returns the error to hand the model, or
- * null when the result may proceed.
- *
- * Several owners may register checks for the same kind (a build pipeline's
- * review guard and a graph node's guard both judge `review-report`). A check
- * must therefore return null for every attempt it does not own: another
- * workflow's key, a superseded attempt, a turn it does not guard.
- */
-export type WorkflowResultAcceptanceCheck = (
-  attempt: WorkflowResultAttempt,
-) => Promise<WorkflowResultError | null>;
+export type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt };
 
 /** A committed, first acceptance of a workflow result. Identifiers stay in-process. */
 export interface WorkflowResultAcceptance {
@@ -217,6 +209,16 @@ function validateEntryResult(
   return issues;
 }
 
+/** The environment could not be observed, or no runtime hook is installed. */
+function environmentUnavailable(): WorkflowResultError {
+  return {
+    code: "storage_unavailable",
+    nextAction: "lookup_or_resubmit",
+    message:
+      "The backend could not check this result against the environment. Check status, then submit the same result again.",
+  };
+}
+
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (!value || typeof value !== "object") return value;
@@ -259,6 +261,7 @@ function validReceipt(value: unknown, entry: Partial<StoredWorkflowResult>): boo
 function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.type === "graph-output") return graphOutputContextProblem(value) === null;
   if (value.type === "review-reconciliation") {
     return isReviewFindingPool(value.pool) && safeParseStructuredReviewReport(value.report).success;
   }
@@ -285,6 +288,14 @@ function validStoredEntry(key: string, value: unknown): value is StoredWorkflowR
     STRUCTURED_OUTPUT_PROVIDERS.has(entry.provider as StructuredOutputProvider) &&
     (entry.expectedStoryId === undefined || typeof entry.expectedStoryId === "string") &&
     validContext(entry.context) &&
+    // Only graph output slots persist a schema and their own tool.
+    ((entry.schema === undefined && entry.toolName === undefined) ||
+      (entry.kind === "graph-output" &&
+        (entry.schema === undefined ||
+          (entry.schema !== null &&
+            typeof entry.schema === "object" &&
+            !Array.isArray(entry.schema))) &&
+        (entry.toolName === undefined || graphOutputToolPort(entry.toolName) !== null))) &&
     entry.schemaVersion === WORKFLOW_RESULT_SCHEMA_VERSION &&
     ["open", "accepted", "consumed", "cancelled", "superseded", "exhausted"].includes(
       String(entry.lifecycle),
@@ -349,15 +360,18 @@ export class WorkflowResultService {
   private heldBytes = 0;
   private readonly deliveryCounters = new Map<string, DeliveryCounters>();
   private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
-  private readonly acceptanceChecks = new Map<
-    WorkflowResultKind,
-    WorkflowResultAcceptanceCheck[]
-  >();
   readonly metrics: WorkflowResultMetrics;
+  /** Kind definitions plus this backend's acceptance checks and environment hook. */
+  readonly registry: WorkflowResultRegistry;
 
-  constructor(dataDir: string, metrics: WorkflowResultMetrics = new WorkflowResultMetrics()) {
+  constructor(
+    dataDir: string,
+    metrics: WorkflowResultMetrics = new WorkflowResultMetrics(),
+    registry: WorkflowResultRegistry = new WorkflowResultRegistry(),
+  ) {
     this.dataDir = dataDir;
     this.metrics = metrics;
+    this.registry = registry;
   }
 
   /** The data directory's database, opened on first use (and again after {@link closeStorage}). */
@@ -567,6 +581,78 @@ export class WorkflowResultService {
     }
   }
 
+  /**
+   * One capability for every output slot of a graph activation (report §5.5):
+   * the connection it opens lists `submit_<port>` and `validate_<port>` for
+   * each slot, plus one status tool. Two to
+   * {@link WORKFLOW_RESULT_MAX_ACTIVATION_SLOTS} graph output keys; a single
+   * slot uses {@link capabilityToken}.
+   */
+  activationCapabilityToken(
+    scope: WorkflowResultCallerScope,
+    resultKeys: readonly string[],
+  ): string {
+    if (!validActivationKeys(resultKeys))
+      throw new Error("An activation capability covers 2 to 16 distinct result keys");
+    const signature = this.signActivationCapability(scope, resultKeys);
+    const environmentId = Buffer.from(scope.environmentId, "utf8").toString("base64url");
+    const projectId = Buffer.from(scope.projectId, "utf8").toString("base64url");
+    return `${resultKeys.join(ACTIVATION_KEY_SEPARATOR)}.${environmentId}.${projectId}.${signature}`;
+  }
+
+  /**
+   * Resolves an activation capability: every key must still be a graph
+   * output slot of the signed environment and project. A single-key token is
+   * not an activation token ({@link authenticateCapability} reads it).
+   */
+  async authenticateActivationCapability(token: string): Promise<
+    | (WorkflowResultCallerScope & {
+        workflowResultKeys: string[];
+      })
+    | null
+  > {
+    if (this.pendingAuthentications >= 16 || token.length > 2_048) return null;
+    const [joined, encodedEnvironmentId, encodedProjectId, signature, ...extra] = token.split(".");
+    if (
+      extra.length > 0 ||
+      !joined ||
+      !encodedEnvironmentId ||
+      !encodedProjectId ||
+      !signature ||
+      !/^[A-Za-z0-9_-]{1,684}$/.test(encodedEnvironmentId) ||
+      !/^[A-Za-z0-9_-]{1,684}$/.test(encodedProjectId) ||
+      !/^[A-Za-z0-9_-]{43}$/.test(signature)
+    )
+      return null;
+    const resultKeys = joined.split(ACTIVATION_KEY_SEPARATOR);
+    if (!validActivationKeys(resultKeys)) return null;
+    const environmentId = decodeCapabilityScope(encodedEnvironmentId);
+    const projectId = decodeCapabilityScope(encodedProjectId);
+    if (!environmentId || !projectId) return null;
+    const scope = { environmentId, projectId };
+    const expected = this.signActivationCapability(scope, resultKeys);
+    const actualBytes = Buffer.from(signature);
+    const expectedBytes = Buffer.from(expected);
+    if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes))
+      return null;
+    this.pendingAuthentications += 1;
+    try {
+      for (const resultKey of resultKeys) {
+        const entry = this.readEntry(resultKey);
+        if (
+          !entry ||
+          entry.kind !== "graph-output" ||
+          entry.environmentId !== environmentId ||
+          entry.projectId !== projectId
+        )
+          return null;
+      }
+      return { environmentId, projectId, workflowResultKeys: resultKeys };
+    } finally {
+      this.pendingAuthentications -= 1;
+    }
+  }
+
   /** Verify a signed attempt capability presented through a persistent broker. */
   async authorizeCapability(
     scope: WorkflowResultCallerScope,
@@ -587,6 +673,11 @@ export class WorkflowResultService {
   }
 
   async prepare(input: WorkflowResultSlotInput): Promise<void> {
+    const definition = workflowResultKindDefinition(input.kind);
+    if (!definition.prepareSlot && input.toolName !== undefined)
+      throw new Error("Only graph output slots name their own result tool");
+    // Built-in kinds own their schema; a graph output slot persists its port's.
+    const persisted = definition.prepareSlot?.(input) ?? {};
     this.mutateEntry<void>(input.resultKey, (existing) => {
       if (existing) {
         if (
@@ -595,6 +686,8 @@ export class WorkflowResultService {
           existing.projectId !== input.projectId ||
           existing.provider !== input.provider ||
           existing.expectedStoryId !== input.expectedStoryId ||
+          existing.toolName !== persisted.toolName ||
+          serialize(existing.schema ?? null) !== serialize(persisted.schema ?? null) ||
           serialize(existing.context ?? null) !== serialize(input.context ?? null)
         ) {
           throw new Error("Workflow result key is already bound to another attempt");
@@ -602,9 +695,11 @@ export class WorkflowResultService {
         return { result: undefined };
       }
       const now = new Date().toISOString();
-      const { schema: _schema, ...identity } = input;
+      const { schema: _schema, toolName: _toolName, ...identity } = input;
       const entry: StoredWorkflowResult = {
         ...identity,
+        ...(persisted.schema !== undefined ? { schema: persisted.schema } : {}),
+        ...(persisted.toolName !== undefined ? { toolName: persisted.toolName } : {}),
         schemaVersion: WORKFLOW_RESULT_SCHEMA_VERSION,
         lifecycle: "open",
         createdAt: now,
@@ -746,6 +841,26 @@ export class WorkflowResultService {
       };
       const validation = evaluate();
       if (!validation.ok || !validEntry) return validation;
+      const environment = await this.environmentCheck(resultKey, validEntry, result);
+      if (environment?.refusal || (environment?.issues && environment.issues.length > 0)) {
+        if (this.pendingValidations.get(resultKey) === generation) {
+          this.counters(resultKey).lastValidation = "invalid";
+        }
+        if (environment.refusal) {
+          outcome = environment.refusal.code;
+          return { ok: false, error: environment.refusal };
+        }
+        outcome = "invalid_result";
+        return {
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            message: "The result is not valid. Correct the reported fields before submitting it.",
+            issues: environment.issues,
+          },
+        };
+      }
       const refused = await this.runAcceptanceCheck(resultKey, validEntry);
       if (!refused) {
         // Publish only after the probe succeeds. An older completion must not
@@ -794,32 +909,33 @@ export class WorkflowResultService {
    * this registration.
    */
   addAcceptanceCheck(kind: WorkflowResultKind, check: WorkflowResultAcceptanceCheck): () => void {
-    const checks = this.acceptanceChecks.get(kind) ?? [];
-    checks.push(check);
-    this.acceptanceChecks.set(kind, checks);
-    return () => {
-      const current = this.acceptanceChecks.get(kind);
-      if (!current) return;
-      const index = current.indexOf(check);
-      if (index >= 0) current.splice(index, 1);
-      if (current.length === 0) this.acceptanceChecks.delete(kind);
-    };
+    return this.registry.addAcceptanceCheck(kind, check);
+  }
+
+  /**
+   * Installs the runtime's environment access for validators that need it
+   * (`workspace-commit`, `file-list-paths`; see the registry). Returns a
+   * function that removes it. Without one, a slot that needs it is refused
+   * rather than accepted unchecked.
+   */
+  setEnvironmentValidator(validator: WorkflowResultEnvironmentValidator): () => void {
+    return this.registry.setEnvironmentValidator(validator);
   }
 
   private async runAcceptanceCheck(
     resultKey: string,
     entry: StoredWorkflowResult,
   ): Promise<WorkflowResultError | null> {
-    const checks = this.acceptanceChecks.get(entry.kind);
-    if (!checks) return null;
+    const checks = this.registry.checksFor(entry.kind);
+    if (checks.length === 0) return null;
     const attempt: WorkflowResultAttempt = {
       resultKey,
       kind: entry.kind,
       environmentId: entry.environmentId,
       projectId: entry.projectId,
     };
-    // Copied: a check may unregister itself (or another) while it runs.
-    for (const check of checks.slice()) {
+    // A copy: a check may unregister itself (or another) while it runs.
+    for (const check of checks) {
       try {
         const refusal = await check(attempt);
         if (refusal) return refusal;
@@ -831,6 +947,85 @@ export class WorkflowResultService {
   }
 
   /**
+   * Runs the slot's environment validator on a value that passed every pure
+   * check. Issues are ordinary validation issues; an environment that cannot
+   * be observed (or no installed hook) is a refusal that spends no correction,
+   * because an unchecked value must never be accepted.
+   */
+  private async environmentCheck(
+    resultKey: string,
+    entry: StoredWorkflowResult,
+    value: unknown,
+  ): Promise<
+    | { issues: WorkflowResultValidationIssue[]; refusal?: undefined }
+    | { refusal: WorkflowResultError; issues?: undefined }
+    | null
+  > {
+    const validator = workflowResultKindDefinition(entry.kind).environmentValidator?.(entry);
+    if (!validator) return null;
+    const unavailable = environmentUnavailable();
+    const hook = this.registry.environmentHook();
+    if (!hook) return { refusal: unavailable };
+    try {
+      const issues = await hook({
+        attempt: {
+          resultKey,
+          kind: entry.kind,
+          environmentId: entry.environmentId,
+          projectId: entry.projectId,
+        },
+        validator,
+        value,
+      });
+      return { issues: issues.slice(0, WORKFLOW_RESULT_ISSUE_LIMIT) };
+    } catch {
+      return { refusal: unavailable };
+    }
+  }
+
+  /**
+   * The environment check for a submission, run before its transaction (the
+   * hook is asynchronous). Null when the slot needs none, or when the
+   * transaction will refuse the value anyway; otherwise the outcome, tagged
+   * with the digest it judged so the transaction applies it only to that
+   * exact payload.
+   */
+  private async submissionEnvironmentCheck(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+    result: unknown,
+    validatedDigest: string | undefined,
+    digest: string,
+  ): Promise<
+    | ({ digest: string } & (
+        | { issues: WorkflowResultValidationIssue[]; refusal?: undefined }
+        | { refusal: WorkflowResultError; issues?: undefined }
+      ))
+    | null
+  > {
+    const entry = this.readEntry(resultKey);
+    if (
+      !entry ||
+      entry.environmentId !== scope.environmentId ||
+      entry.projectId !== scope.projectId ||
+      entry.lifecycle !== "open" ||
+      entry.receipt ||
+      !workflowResultKindDefinition(entry.kind).environmentValidator?.(entry)
+    ) {
+      return null;
+    }
+    let candidate = result;
+    if (validatedDigest !== undefined) {
+      const held = this.held.get(resultKey);
+      if (!held || held.digest !== validatedDigest) return null;
+      candidate = held.result;
+    }
+    if (validateEntryResult(entry, candidate).length > 0) return null;
+    const outcome = await this.environmentCheck(resultKey, entry, candidate);
+    return outcome ? { digest, ...outcome } : null;
+  }
+
+  /**
    * The acceptance check for a submission that could still be accepted. A key
    * from another scope, a closed slot or one that already holds a receipt is
    * left to the submission's own rules, so a duplicate still deduplicates.
@@ -839,7 +1034,7 @@ export class WorkflowResultService {
     scope: WorkflowResultCallerScope,
     resultKey: string,
   ): Promise<WorkflowResultError | null> {
-    if (this.acceptanceChecks.size === 0) return null;
+    if (!this.registry.hasAcceptanceChecks()) return null;
     const entry = this.readEntry(resultKey);
     if (
       !entry ||
@@ -950,6 +1145,15 @@ export class WorkflowResultService {
     }
     try {
       const refused = await this.submissionRefusal(scope, resultKey);
+      const environment = refused
+        ? null
+        : await this.submissionEnvironmentCheck(
+            scope,
+            resultKey,
+            result,
+            validatedDigest,
+            resultDigest,
+          );
       return this.mutateEntry<WorkflowResultSubmission>(
         resultKey,
         (entry) => {
@@ -1083,8 +1287,25 @@ export class WorkflowResultService {
           }
           if (!entry.firstSubmissionAt) entry.firstSubmissionAt = new Date().toISOString();
           const validationStartedAt = Date.now();
-          const issues = validateEntryResult(entry, result);
+          let issues = validateEntryResult(entry, result);
           this.metrics.recordValidationDuration(entry.kind, Date.now() - validationStartedAt);
+          if (
+            issues.length === 0 &&
+            workflowResultKindDefinition(entry.kind).environmentValidator?.(entry)
+          ) {
+            // Never accept a value its environment check did not judge.
+            if (!environment || environment.digest !== resultDigest || environment.refusal) {
+              const refusal = environment?.refusal ?? environmentUnavailable();
+              this.metrics.recordSubmission({
+                provider: entry.provider,
+                kind: entry.kind,
+                outcome: "rejected",
+                code: refusal.code,
+              });
+              return { result: { ok: false, error: refusal } };
+            }
+            issues = environment.issues;
+          }
           if (issues.length > 0) {
             // A repeated delivery of the same invalid payload is one correction,
             // not two, so the budget and the metric both key on the digest.
@@ -1192,8 +1413,7 @@ export class WorkflowResultService {
       entry.projectId !== scope.projectId
     )
       return null;
-    const delivery =
-      entry.lifecycle === "open" ? this.deliveryOf(resultKey, entry.kind) : undefined;
+    const delivery = entry.lifecycle === "open" ? this.deliveryOf(resultKey, entry) : undefined;
     return {
       resultKey,
       lifecycle: entry.lifecycle,
@@ -1213,14 +1433,14 @@ export class WorkflowResultService {
   /**
    * Completed validation/submission work for an open slot, with delivery guidance.
    */
-  private deliveryOf(resultKey: string, kind: WorkflowResultKind): WorkflowResultDelivery {
+  private deliveryOf(resultKey: string, entry: StoredWorkflowResult): WorkflowResultDelivery {
     const counters = this.deliveryCounters.get(resultKey);
     const held = this.heldValidation(resultKey);
     const validationCalls = counters?.validationCalls ?? 0;
     const submissionCalls = counters?.submissionCalls ?? 0;
     let hint: string | undefined;
     if (held) {
-      hint = `A validated result is held. Commit it by calling ${workflowResultToolName(kind)} with this resultKey and validatedDigest; do not re-send the result.`;
+      hint = `A validated result is held. Commit it by calling ${workflowResultKindDefinition(entry.kind).toolName(entry)} with this resultKey and validatedDigest; do not re-send the result.`;
     } else if (validationCalls === 0 && submissionCalls === 0) {
       hint =
         "No validation or submission has been processed for this resultKey. Calls may have been rejected by the client or by service size or capacity limits before processing. Check the actual call error before retrying.";
@@ -1270,12 +1490,18 @@ export class WorkflowResultService {
     };
   }
 
+  /**
+   * The kind and provider a key is bound to, for the caller's scope. A graph
+   * output slot also returns what its tools are built from: the port's
+   * schema, tool name and context (`slot`).
+   */
   async binding(
     scope: WorkflowResultCallerScope,
     resultKey: string,
   ): Promise<{
     kind: StoredWorkflowResult["kind"];
     provider: StoredWorkflowResult["provider"];
+    slot?: WorkflowResultSlotView;
   } | null> {
     const entry = this.readEntry(resultKey);
     if (
@@ -1285,7 +1511,16 @@ export class WorkflowResultService {
     ) {
       return null;
     }
-    return { kind: entry.kind, provider: entry.provider };
+    if (entry.kind !== "graph-output") return { kind: entry.kind, provider: entry.provider };
+    return {
+      kind: entry.kind,
+      provider: entry.provider,
+      slot: {
+        ...(entry.schema !== undefined ? { schema: entry.schema } : {}),
+        ...(entry.toolName !== undefined ? { toolName: entry.toolName } : {}),
+        ...(entry.context?.type === "graph-output" ? { context: entry.context } : {}),
+      },
+    };
   }
 
   async consume(resultKey: string): Promise<void> {
@@ -1595,6 +1830,18 @@ export class WorkflowResultService {
     return this.capabilityIdentity;
   }
 
+  private signActivationCapability(
+    scope: WorkflowResultCallerScope,
+    resultKeys: readonly string[],
+  ): string {
+    // Domain-separated from the single-key signature.
+    return createHmac("sha256", this.requireCapabilityIdentity().secret)
+      .update(
+        `activation\0${resultKeys.length}\0${resultKeys.join("\0")}\0${scope.environmentId}\0${scope.projectId}`,
+      )
+      .digest("base64url");
+  }
+
   private signCapability(scope: WorkflowResultCallerScope, resultKey: string): string {
     return createHmac("sha256", this.requireCapabilityIdentity().secret)
       .update(`${resultKey}\0${scope.environmentId}\0${scope.projectId}`)
@@ -1620,6 +1867,20 @@ export interface WorkflowResultReader {
   lookup?<T>(
     resultKey: string,
   ): Promise<{ registered: boolean; result: StructuredOutputResult<T> | null }>;
+}
+
+/** Output slots one activation capability covers: one per output port. */
+export const WORKFLOW_RESULT_MAX_ACTIVATION_SLOTS = 16;
+// Inside the bearer charset (`[A-Za-z0-9_.-]`) and never part of a result key.
+const ACTIVATION_KEY_SEPARATOR = "_";
+
+function validActivationKeys(resultKeys: readonly string[]): boolean {
+  return (
+    resultKeys.length >= 2 &&
+    resultKeys.length <= WORKFLOW_RESULT_MAX_ACTIVATION_SLOTS &&
+    new Set(resultKeys).size === resultKeys.length &&
+    resultKeys.every((resultKey) => /^[0-9a-f-]{36}$/i.test(resultKey))
+  );
 }
 
 function decodeCapabilityScope(encoded: string): string | null {

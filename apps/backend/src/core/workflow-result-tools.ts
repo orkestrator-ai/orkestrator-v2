@@ -14,6 +14,12 @@ import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { z } from "zod";
 import { workflowResultJsonSchema } from "./workflow-result-contracts.js";
+import { graphOutputContext } from "./workflow-result-graph-output.js";
+import {
+  workflowResultKindDefinition,
+  workflowResultProviderSchema,
+  type WorkflowResultSlotView,
+} from "./workflow-result-registry.js";
 import type {
   WorkflowResultCallerScope,
   WorkflowResultService,
@@ -23,6 +29,12 @@ import type { ProvisionalFindingSink, ReportFindingResult } from "./review-provi
 export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   workflowResultKey: string;
   kind: WorkflowResultKind;
+  /**
+   * A graph output slot's own contract (`WorkflowResultService.binding().slot`):
+   * its port schema, `submit_<port>` tool and port context. Built-in kinds
+   * leave it out.
+   */
+  slot?: WorkflowResultSlotView;
 }
 
 function resultResponse(result: WorkflowResultSubmission | WorkflowResultValidation) {
@@ -80,10 +92,34 @@ function resultKeyMismatch(expected: string): WorkflowResultSubmission {
   };
 }
 
+/** The same correction for a connection that serves several slots (one activation). */
+function resultKeysMismatch(expected: readonly string[]): WorkflowResultSubmission {
+  const listed = expected.map((key) => `"${key}"`).join(", ");
+  return {
+    ok: false,
+    error: {
+      code: "invalid_result",
+      nextAction: "correct",
+      message: `This tool connection serves resultKeys ${listed}. Repeat the call with the resultKey of the output you mean; nothing else needs to change.`,
+      issues: [
+        {
+          path: "$.resultKey",
+          code: "result_key_mismatch",
+          message: `Expected one of ${listed}.`,
+        },
+      ],
+    },
+  };
+}
+
 const validatedDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
-function submissionDescription(label: string, authorized: boolean): string {
-  return `Submit the complete and final ${label} for ${authorized ? "the authorized" : "this"} workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} instead. Pass exactly one of \`result\` (the complete payload) or \`validatedDigest\` (the digest ${WORKFLOW_RESULT_VALIDATION_TOOL_NAME} returned, which commits that exact validated payload without re-sending it). The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`;
+function submissionDescription(
+  label: string,
+  authorized: boolean,
+  validationTool: string = WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+): string {
+  return `Submit the complete and final ${label} for ${authorized ? "the authorized" : "this"} workflow attempt. Never use this tool for a probe, placeholder, partial draft, or transport test; use ${validationTool} instead. Pass exactly one of \`result\` (the complete payload) or \`validatedDigest\` (the digest ${validationTool} returned, which commits that exact validated payload without re-sending it). The first accepted payload is final and cannot be replaced. Only retry an accepted submission with the exact same payload.`;
 }
 
 /**
@@ -195,6 +231,21 @@ const REPORT_FINDING_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+const VALIDATION_DESCRIPTION =
+  "Validate one complete workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing the submission tool. A valid result returns a validatedDigest that the submission tool can commit without re-sending the result.";
+
+/**
+ * What the model reads about a graph output port (report §5.5): the port's
+ * description and type beside the generic contract text. The type's schema is
+ * the tool's input schema.
+ */
+function portDescription(scope: WorkflowResultToolScope): string {
+  const context = graphOutputContext(scope.slot ?? {});
+  if (!context) return "";
+  const described = context.description ? ` ${context.description}` : "";
+  return ` This is the \`${context.port}\` output, of type ${context.artifactType}.${described}`;
+}
+
 /** Registers the tools exposed by one attempt-scoped result capability. */
 export function registerWorkflowResultTools(
   server: McpServer,
@@ -202,70 +253,108 @@ export function registerWorkflowResultTools(
   scope: WorkflowResultToolScope,
   findings?: ProvisionalFindingSink | null,
 ): void {
-  const submissionToolName = workflowResultToolName(scope.kind);
-  const resultSchema = z.fromJSONSchema(workflowResultJsonSchema(scope.kind));
-  server.registerTool(
-    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
-    {
-      title: "Validate workflow result",
-      description:
-        "Validate one complete workflow result without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing the submission tool. A valid result returns a validatedDigest that the submission tool can commit without re-sending the result.",
-      inputSchema: z
-        .object({
-          resultKey: z.string().uuid(),
-          result: resultSchema,
-        })
-        .strict(),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
+  registerWorkflowResultSlotTools(server, workflowResults, [scope], findings);
+}
+
+/**
+ * Registers the tools of one activation's result slots: for each slot its
+ * validation and submission tools (`validate_<port>` and `submit_<port>` for a
+ * graph output port, the kind's tools otherwise), then one status tool that
+ * answers for every slot. Each slot's tools answer only for that slot's key.
+ * Tool names must not repeat across the slots.
+ */
+export function registerWorkflowResultSlotTools(
+  server: McpServer,
+  workflowResults: WorkflowResultService,
+  scopes: readonly WorkflowResultToolScope[],
+  findings?: ProvisionalFindingSink | null,
+): void {
+  if (scopes.length === 0) throw new Error("A result capability serves at least one slot");
+  const names = new Set<string>();
+  const slots = scopes.map((scope) => {
+    const view = scope.slot ?? {};
+    const definition = workflowResultKindDefinition(scope.kind);
+    const tools = {
+      submit: definition.toolName(view),
+      validate: definition.validationToolName(view),
+    };
+    for (const name of [tools.submit, tools.validate]) {
+      if (names.has(name))
+        throw new Error(`Result tool ${name} is offered twice on one connection`);
+      names.add(name);
+    }
+    return { scope, view, definition, tools };
+  });
+  for (const { scope, view, definition, tools } of slots) {
+    const resultSchema = z.fromJSONSchema(workflowResultProviderSchema(scope.kind, view));
+    const graphPort = graphOutputContext(view);
+    const port = portDescription(scope);
+    server.registerTool(
+      tools.validate,
+      {
+        title: graphPort ? `Validate ${graphPort.port}` : "Validate workflow result",
+        description: graphPort
+          ? `Validate one complete ${definition.label(view)} without accepting it, consuming a correction attempt, or changing workflow state. Use this instead of probing ${tools.submit}. A valid result returns a validatedDigest that ${tools.submit} can commit without re-sending the result.${port}`
+          : VALIDATION_DESCRIPTION,
+        inputSchema: z
+          .object({
+            resultKey: z.string().uuid(),
+            result: resultSchema,
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
       },
-    },
-    async ({ resultKey, result }) => {
-      if (resultKey !== scope.workflowResultKey) {
-        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
-      }
-      try {
-        return resultResponse(await workflowResults.validate(scope, resultKey, result));
-      } catch {
-        return resultResponse(storageFailure());
-      }
-    },
-  );
-  server.registerTool(
-    submissionToolName,
-    {
-      title: "Submit workflow result",
-      description: submissionDescription(scope.kind.replaceAll("-", " "), false),
-      inputSchema: z
-        .object({
-          resultKey: z.string().uuid(),
-          result: resultSchema.optional(),
-          validatedDigest: validatedDigestSchema.optional(),
-        })
-        .strict(),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
+      async ({ resultKey, result }) => {
+        if (resultKey !== scope.workflowResultKey) {
+          return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+        }
+        try {
+          return resultResponse(await workflowResults.validate(scope, resultKey, result));
+        } catch {
+          return resultResponse(storageFailure());
+        }
       },
-    },
-    async ({ resultKey, result, validatedDigest }) => {
-      if (resultKey !== scope.workflowResultKey) {
-        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
-      }
-      try {
-        return resultResponse(
-          await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
-        );
-      } catch {
-        return resultResponse(storageFailure());
-      }
-    },
-  );
+    );
+    server.registerTool(
+      tools.submit,
+      {
+        title: graphPort ? `Submit ${graphPort.port}` : "Submit workflow result",
+        description: `${submissionDescription(definition.label(view), false, tools.validate)}${port}`,
+        inputSchema: z
+          .object({
+            resultKey: z.string().uuid(),
+            result: resultSchema.optional(),
+            validatedDigest: validatedDigestSchema.optional(),
+          })
+          .strict(),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ resultKey, result, validatedDigest }) => {
+        if (resultKey !== scope.workflowResultKey) {
+          return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+        }
+        try {
+          return resultResponse(
+            await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
+          );
+        } catch {
+          return resultResponse(storageFailure());
+        }
+      },
+    );
+  }
+  const keys = scopes.map((scope) => scope.workflowResultKey);
+  const caller = scopes[0]!;
   server.registerTool(
     "get_workflow_result_status",
     {
@@ -281,12 +370,14 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey }) => {
-      if (resultKey !== scope.workflowResultKey) {
-        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+      if (!keys.includes(resultKey)) {
+        return resultResponse(
+          keys.length === 1 ? resultKeyMismatch(keys[0]!) : resultKeysMismatch(keys),
+        );
       }
       let status;
       try {
-        status = await workflowResults.status(scope, resultKey);
+        status = await workflowResults.status(caller, resultKey);
       } catch {
         return resultResponse(storageFailure());
       }
@@ -306,12 +397,14 @@ export function registerWorkflowResultTools(
       });
     },
   );
+  const only = scopes.length === 1 ? scopes[0]! : undefined;
   if (
+    only &&
     findings &&
-    scope.kind === "review-report" &&
-    findings.accepts(scope, scope.workflowResultKey)
+    only.kind === "review-report" &&
+    findings.accepts(only, only.workflowResultKey)
   ) {
-    registerReportFindingTool(server, scope, findings);
+    registerReportFindingTool(server, only, findings);
   }
 }
 

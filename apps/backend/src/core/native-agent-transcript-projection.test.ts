@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +21,8 @@ import {
   NativeAgentTranscriptProjection,
   type NativeAgentTranscriptProjectionHost,
 } from "./native-agent-transcript-projection.js";
+
+import { transcriptMediaPins } from "./transcript-media-pins.js";
 
 const identity = {
   environmentId: "env-1",
@@ -263,6 +265,90 @@ describe("NativeAgentTranscriptProjection", () => {
       },
       claudeIdentity,
     );
+  });
+
+  test.each(["before-read", "after-read", "quota", "missing"] as const)(
+    "deferred local images stay readable and live without caching (%s)",
+    async (mode) => {
+      const parts: unknown[] = [];
+      const stub = createProviderStub("opencode", {
+        messages: async () => [{ ...textMessage("image", ""), parts }],
+      });
+      await withProjection(stub.provider, async ({ projection, storage }) => {
+        const imagePath = path.join(storage.getDataDir(), "shot.png");
+        await fs.writeFile(imagePath, "first");
+        parts.push({ type: "image", content: imagePath });
+        const projected = await projection.refreshProjection(identity, true);
+        const detailRef = (projected!.messages[0] as { parts: Array<{ detailRef: string }> })
+          .parts[0]!.detailRef;
+        const store = transcriptMediaPins(storage.getDataDir());
+        const pin = spyOn(store, "pin").mockImplementation(async (_identity, read) => {
+          if (mode === "before-read") throw new Error("usage scan failed");
+          const current = await read();
+          if (mode === "after-read") {
+            // A second read would fail: return the bytes already read successfully.
+            await fs.rm(imagePath);
+            throw new Error("pin write failed");
+          }
+          return {
+            ...current,
+            status: "live",
+            reason: mode,
+            sha256: "0".repeat(64),
+            capturedAt: "2026-10-29T10:00:00Z",
+          };
+        });
+        try {
+          for (const contents of ["first", "second"]) {
+            await fs.writeFile(imagePath, contents);
+            const details = await projection.getProjectionToolDetails({ ...identity, detailRef });
+            expect(details.fileDataUrl).toBe(
+              `data:image/png;base64,${Buffer.from(contents).toString("base64")}`,
+            );
+            expect(details.fileSnapshot).toMatchObject({
+              status: "live",
+              reason: mode === "quota" ? "quota" : "missing",
+            });
+          }
+          expect(pin).toHaveBeenCalledTimes(2);
+          await fs.rm(imagePath, { force: true });
+          await expect(
+            projection.getProjectionToolDetails({ ...identity, detailRef }),
+          ).rejects.toThrow();
+        } finally {
+          pin.mockRestore();
+        }
+      });
+    },
+  );
+
+  test("deferred local images keep their pinned bytes and report a missing saved copy", async () => {
+    const parts: unknown[] = [];
+    const stub = createProviderStub("opencode", {
+      messages: async () => [{ ...textMessage("image", ""), parts }],
+    });
+    await withProjection(stub.provider, async ({ projection, storage }) => {
+      const imagePath = path.join(storage.getDataDir(), "shot.png");
+      await fs.writeFile(imagePath, "first");
+      parts.push({ type: "image", content: imagePath });
+      const projected = await projection.refreshProjection(identity, true);
+      const detailRef = (projected!.messages[0] as { parts: Array<{ detailRef: string }> })
+        .parts[0]!.detailRef;
+      const read = () => projection.getProjectionToolDetails({ ...identity, detailRef });
+      expect((await read()).fileSnapshot?.status).toBe("pinned");
+      await fs.writeFile(imagePath, "second");
+      expect((await read()).fileDataUrl).toBe(
+        `data:image/png;base64,${Buffer.from("first").toString("base64")}`,
+      );
+      const root = path.join(storage.getDataDir(), "transcript-media-pins");
+      const [environment] = await fs.readdir(root);
+      await fs.rm(path.join(root, environment!, "blobs"), { recursive: true });
+      const live = await read();
+      expect(live.fileDataUrl).toBe(
+        `data:image/png;base64,${Buffer.from("second").toString("base64")}`,
+      );
+      expect(live.fileSnapshot).toMatchObject({ status: "live", reason: "missing" });
+    });
   });
 
   test("a refresh projects the provider transcript and caches it for in-memory readers", async () => {

@@ -17,6 +17,11 @@ import {
   type TranscriptMediaPdfPreviewRequest,
   type TranscriptMediaPdfPreviewResponse,
 } from "@orkestrator/protocol/transcript-artifact-commands";
+import {
+  TRANSCRIPT_MEDIA_PIN_COMMAND,
+  type TranscriptMediaPinRequest,
+  type TranscriptMediaPinResponse,
+} from "@orkestrator/protocol/transcript-media-pins";
 import type { WorkflowSnapshotV1 } from "@orkestrator/protocol/workflow-snapshot";
 
 export function getTranscriptArtifactCapabilities(): Promise<TranscriptArtifactCapabilities> {
@@ -118,4 +123,11 @@ export function getTranscriptMediaPdfPreview(
   input: TranscriptMediaPdfPreviewRequest,
 ): Promise<TranscriptMediaPdfPreviewResponse> {
   return invoke(TRANSCRIPT_ARTIFACT_COMMANDS.mediaPdfPreview, { ...input });
+}
+
+/** A local image as the naming message first showed it (saved on first use). */
+export function pinTranscriptMedia(
+  input: TranscriptMediaPinRequest,
+): Promise<TranscriptMediaPinResponse> {
+  return invoke(TRANSCRIPT_MEDIA_PIN_COMMAND, { ...input });
 }

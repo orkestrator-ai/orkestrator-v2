@@ -65,3 +65,27 @@ instead of `release/2.0`. Its log is
 `orkestrator-test-run.cjxAtt/native-picker-owner.log.gz`. The separately run
 public-site browser suite passed (10.9 s); it was blocked by the chained
 component-suite failure in the exact browser command.
+
+
+## Transcript media snapshot review repair — 2026-10-29
+
+The exact `mise run test:browser` rerun after media snapshot fixes repeated
+this case in both viewports at line 371: expected `converged`, received
+`unresolved` after five seconds. Component results were 952 passed, 106 skipped
+and four failed (415.8 s); the other failures were the unchanged native branch
+picker. Evidence: `orkestrator-test-run.Tb46kA/review-repair-browser.log.gz`
+under the host temporary directory.
+
+The complete unchanged streaming owner passed alone (exit 0, 44.3 s):
+
+```sh
+mise run test:logged -- --name browser-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1
+```
+
+No transcript scroll implementation, assertion, deadline or skip changed.
+The public-site browser suite, blocked by the full command's component-stage
+failure, passed separately (exit 0, 10.8 s):
+
+```sh
+mise run test:logged -- --name review-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```

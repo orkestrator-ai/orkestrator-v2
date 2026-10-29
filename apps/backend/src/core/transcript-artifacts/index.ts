@@ -3,7 +3,11 @@
 // stays reviewable. The storage layer imports store-layout.js directly:
 // routing it through here would close a runtime import cycle with storage.
 export { registerTranscriptArtifactCommands } from "./commands.js";
-export { registerTranscriptArtifactPdfCommands } from "./commands-pdf.js";
+export {
+  containerRelativePath,
+  registerTranscriptArtifactPdfCommands,
+  type CommandLookup,
+} from "./commands-pdf.js";
 export type { TranscriptArtifactRuntime } from "./runtime.js";
 export {
   attachTranscriptArtifactRuntime,

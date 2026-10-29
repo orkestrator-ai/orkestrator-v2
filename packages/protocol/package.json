@@ -239,6 +239,7 @@
     "./artifact-frame-channel": "./src/artifact-frame-channel.ts",
     "./css-resource-scan": "./src/css-resource-scan.ts",
     "./transcript-artifact-commands": "./src/transcript-artifact-commands.ts",
+    "./transcript-media-pins": "./src/transcript-media-pins.ts",
     "./artifact-host-ipc": "./src/artifact-host-ipc.ts",
     "./testing/rich-content-fixtures": "./src/testing/rich-content-fixtures.ts",
     "./testing/artifact-tool-fixtures": "./src/testing/artifact-tool-fixtures.ts"

@@ -7,6 +7,7 @@ import {
   registerGraphRunRewindCommands,
 } from "./commands-registry-graph-runs.js";
 import { registerGraphDescribeCommands } from "./commands-registry-graph-describe.js";
+import { registerTranscriptMediaCommands } from "./commands-registry-transcript-media.js";
 import { registerGraphMockCommands } from "./commands-registry-graph-mock.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
@@ -329,6 +330,7 @@ export function createCommandRegistry(
   registerWebAnnotationCommands(register);
   registerTranscriptArtifactCommands(register);
   registerTranscriptArtifactPdfCommands(register, (name) => commands.get(name));
+  registerTranscriptMediaCommands(register, (name) => commands.get(name));
   registerProjectCommands(register, dependencies);
   registerProjectCopyCommands(register, dependencies);
   registerControlCommands(register, dependencies);

@@ -4,6 +4,7 @@ import {
   imagePreviewCacheKey,
   readImagePreviewCache,
   readImagePreviewDimensions,
+  readImagePreviewSnapshot,
   writeImagePreviewCache,
   writeImagePreviewDimensions,
 } from "./image-preview-cache";
@@ -64,6 +65,35 @@ describe("image preview cache", () => {
     writeImagePreviewDimensions("other-31", source, { width: 1, height: 1 });
     clearImagePreviewCache();
     expect(readImagePreviewDimensions("other-31", source)).toBeNull();
+  });
+
+  test("keeps snapshot provenance with identical cached bytes and drops it on replacement and eviction", () => {
+    const snapshot = {
+      status: "pinned" as const,
+      capturedAt: "2026-10-29T10:10:00Z",
+      fileModifiedAt: "2026-10-29T10:05:00Z",
+    };
+    writeImagePreviewCache("late", "first", snapshot);
+    writeImagePreviewCache("late", "first");
+    expect(readImagePreviewSnapshot("late", readImagePreviewCache("late"))).toEqual(snapshot);
+    expect(readImagePreviewSnapshot("late", "different")).toBeNull();
+    writeImagePreviewCache("late", "replacement");
+    expect(readImagePreviewSnapshot("late", "replacement")).toBeNull();
+    writeImagePreviewCache("late", "replacement", snapshot);
+    for (let index = 0; index < 32; index++) writeImagePreviewCache(`other-${index}`, "other");
+    expect(readImagePreviewCache("late")).toBeNull();
+    expect(readImagePreviewSnapshot("late", "replacement")).toBeNull();
+  });
+
+  test("live bytes and their note are never retained, including over an older cached copy", () => {
+    writeImagePreviewCache("live", "old");
+    writeImagePreviewCache("live", "now", {
+      status: "live",
+      reason: "quota",
+      capturedAt: "2026-10-29T10:10:00Z",
+    });
+    expect(readImagePreviewCache("live")).toBeNull();
+    expect(readImagePreviewSnapshot("live", "now")).toBeNull();
   });
 
   test("evicts the least recently used entry beyond the count bound", () => {

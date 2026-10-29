@@ -456,6 +456,37 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   Download original, read only when clicked. Markdown images
   (`MediaBlock.tsx`) are images only and do not stream. Attachment
   thumbnails in `NativeMessage.file-parts.tsx` do not yet use these states.
+- **Image versions**: a transcript image keeps the version its message
+  first showed, so an agent overwriting `1-top.png` does not change earlier
+  messages. Inside a message (rich scope plus message identity), the
+  resolver reads a local image through `transcript_media_pin`
+  (`commands-registry-transcript-media.ts`, protocol
+  `transcript-media-pins.ts`) instead of `read_file_base64` /
+  `read_container_file_base64`. The backend invokes those same registered
+  readers on first use, so confinement and error states are unchanged. It
+  then saves the bytes as a pin keyed by environment, conversation, source
+  message and reference (`transcript-media-pins.ts`), and returns the saved
+  copy from then on without touching the file. A provider-reported image
+  behind a detail reference (a Read or view tool, an image part with a
+  provider path) is pinned the same way inside `getProjectionToolDetails`,
+  keyed by its per-message detail reference, and reports provenance as
+  `NativeAgentToolDetails.fileSnapshot`. Pins live under
+  `<dataDir>/transcript-media-pins/<environment digest>/` (`blobs/<sha256>`,
+  stored once per environment, and `pins/<digest>.json`). They are bounded
+  per environment at 512 MiB and 20,000 pins, and are deleted with the
+  environment. Over the byte bound a pin is recorded without bytes and
+  answers `status: "live"`.
+  The image-preview cache holds only bytes that cannot change: inline and
+  remote bytes, and saved pins under a message-scoped key. A live file read
+  (no message to pin to, a backend that predates pins, or a pin answering
+  `live`) is never cached, so it is read again on the next mount instead of
+  showing an earlier copy. A failed pin falls back to the direct read, which
+  reports its own error as before.
+  Pins are made on first display, not when the agent wrote the file. A
+  message first shown after its file was overwritten therefore holds the
+  newer bytes. When the file's modification time (known for host files) is
+  later than the row's clock, the image is labelled **Changed since**; a
+  live copy is labelled **Current file** (`lib/chat/media-snapshot.ts`).
 - **Diffs**: edit and shell rows render backend-prepared change projections
   and hunks (raw-lines-v1 counts and bodies from one measurement); the client
   never counts or diffs. Bodies beyond their budget say so and keep exact

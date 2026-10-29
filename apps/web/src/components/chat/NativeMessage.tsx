@@ -81,8 +81,8 @@ export const NativeMessage = memo(function NativeMessage({
   const messageAgentExpansionScope = JSON.stringify([stableAgentExpansionScope, message.id]);
 
   const richMessageIdentity = useMemo(
-    () => ({ messageId: message.id, role: message.role }),
-    [message.id, message.role],
+    () => ({ messageId: message.id, role: message.role, createdAt: message.createdAt }),
+    [message.id, message.role, message.createdAt],
   );
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);

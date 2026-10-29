@@ -45,7 +45,23 @@ const geometryMessage: Message = {
   ],
 };
 
+const snapshotMessage: Message = {
+  id: "attachment-snapshot-fixture",
+  role: "user",
+  content: "Inspect image versions",
+  createdAt: message.createdAt,
+  parts: [
+    { type: "file", content: "late.svg", detailRef: "snapshot-late" },
+    { type: "file", content: "live.svg", detailRef: "snapshot-live" },
+  ],
+};
+
 async function loadToolDetails(detailRef: string): Promise<NativeAgentToolDetails> {
+  if (detailRef.startsWith("snapshot-")) {
+    const response = await fetch(`/fixture-snapshot-detail?ref=${detailRef}`);
+    if (!response.ok) throw new Error("Preview unavailable");
+    return response.json();
+  }
   const response = await fetch(
     detailRef === "attachment-delayed" ? "/fixture-delayed-detail" : "/fixture-attachment-detail",
   );
@@ -55,16 +71,18 @@ async function loadToolDetails(detailRef: string): Promise<NativeAgentToolDetail
 
 export function NativeAttachmentsFixture() {
   const [visible, setVisible] = useState(true);
-  const geometry = new URLSearchParams(window.location.search).has("geometry");
+  const query = new URLSearchParams(window.location.search);
+  const fixtureMessage = query.has("snapshots")
+    ? snapshotMessage
+    : query.has("geometry")
+      ? geometryMessage
+      : message;
   return (
     <main className="mx-auto max-w-3xl p-4">
       <button onClick={() => setVisible((value) => !value)}>Switch transcript</button>
       {visible ? (
         <section aria-label="Attachments">
-          <NativeMessage
-            message={geometry ? geometryMessage : message}
-            loadToolDetails={loadToolDetails}
-          />
+          <NativeMessage message={fixtureMessage} loadToolDetails={loadToolDetails} />
         </section>
       ) : (
         <p>Other environment</p>

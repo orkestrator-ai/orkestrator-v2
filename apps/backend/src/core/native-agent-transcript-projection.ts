@@ -28,6 +28,7 @@ import type {
   NativeAgentMessagePage,
 } from "./native-agent-service-shared.js";
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import {
   nativeAgentSessionStorageKey,
   nativeCapabilities,
@@ -135,6 +136,7 @@ import {
   type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
 import { readReadableHostFile } from "./path-safety.js";
+import { transcriptMediaPins } from "./transcript-media-pins.js";
 import {
   BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
   readBridgePartDetail as bridgePartDetail,
@@ -4060,12 +4062,53 @@ export class NativeAgentTranscriptProjection {
     // path came from the provider transcript and cannot be replaced by the
     // caller, so this grants one exact lazy read instead of widening a shared
     // directory such as /tmp into a renderer-readable root.
-    const bytes = await readReadableHostFile(entry.localImagePath, [
-      path.dirname(entry.localImagePath),
-    ]);
+    const localImagePath = entry.localImagePath;
+    const readCurrentFile = async () => {
+      const bytes = await readReadableHostFile(localImagePath, [path.dirname(localImagePath)]);
+      const info = await stat(localImagePath).catch(() => null);
+      return { bytes, ...(info ? { modifiedAt: info.mtime.toISOString() } : {}) };
+    };
+    // Reuse a successful read if saving it fails; reader failures still propagate.
+    let currentRead: ReturnType<typeof readCurrentFile> | undefined;
+    const readFile = () => (currentRead ??= readCurrentFile());
+    // The reference is stable per message, part and path, so its first read
+    // is saved and later reads show that copy even after the file changes.
+    const pinned =
+      typeof this.storage.getDataDir === "function"
+        ? await transcriptMediaPins(this.storage.getDataDir())
+            .pin(
+              {
+                environmentId: input.environmentId,
+                logicalSessionKey: input.logicalSessionKey,
+                messageId: input.detailRef,
+                reference: `detail:${localImagePath}`,
+              },
+              readFile,
+            )
+            .catch(() => undefined)
+        : undefined;
+    const current = pinned ? undefined : await readFile();
+    const bytes = pinned ? Buffer.from(pinned.bytes) : current!.bytes;
     return {
       ...entry.details,
-      fileDataUrl: `data:${imageMimeType(entry.localImagePath)};base64,${bytes.toString("base64")}`,
+      fileDataUrl: `data:${imageMimeType(localImagePath)};base64,${bytes.toString("base64")}`,
+      ...(pinned
+        ? {
+            fileSnapshot: {
+              status: pinned.status,
+              capturedAt: pinned.capturedAt,
+              ...(pinned.fileModifiedAt ? { fileModifiedAt: pinned.fileModifiedAt } : {}),
+              ...(pinned.reason ? { reason: pinned.reason } : {}),
+            },
+          }
+        : {
+            fileSnapshot: {
+              status: "live" as const,
+              reason: "missing" as const,
+              capturedAt: new Date(this.host.now()).toISOString(),
+              ...(current?.modifiedAt ? { fileModifiedAt: current.modifiedAt } : {}),
+            },
+          }),
     };
   }
 

@@ -136,7 +136,8 @@ export function cacheToolDetails(details: NativeAgentToolDetails): void {
   // An oversized payload is not retained: holding it would evict every other
   // cached detail to make room, and the caller already has the value it just
   // read, so only the next expand pays for a refetch.
-  if (bytes > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRY_BYTES) return;
+  if (details.fileSnapshot?.status === "live" || bytes > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRY_BYTES)
+    return;
   toolDetailBrowserCache.set(details.detailRef, { details, bytes });
   toolDetailBrowserCacheBytes += bytes;
   while (

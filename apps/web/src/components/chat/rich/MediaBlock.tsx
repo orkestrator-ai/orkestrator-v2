@@ -29,9 +29,12 @@ import {
 import {
   canResolveMedia,
   isRemoteMediaUrl,
-  resolveMediaUrl,
+  resolveMedia,
+  type MediaPinScope,
   type MediaReference,
 } from "@/lib/chat/rich-markdown/media-resolver";
+import { useMediaSnapshotNote } from "@/lib/chat/media-snapshot";
+import type { TranscriptMediaSnapshot } from "@orkestrator/protocol/transcript-media-pins";
 import {
   cacheToolDetails,
   cachedToolDetails,
@@ -39,13 +42,20 @@ import {
 } from "@/components/chat/NativeMessage.shared";
 import { cn } from "@/lib/utils";
 import { MediaGalleryDialog } from "./MediaGallery";
+import { MediaSnapshotBadge } from "./MediaSnapshotBadge";
 
 /** The environment a text part's Markdown images resolve against. */
 export const MediaScopeContext = createContext<{ containerId?: string }>({});
 
 type ImageState =
   | { status: "pending" }
-  | { status: "ready"; url: string; dimensions: MediaDimensions | null; decoded: boolean }
+  | {
+      status: "ready";
+      url: string;
+      dimensions: MediaDimensions | null;
+      decoded: boolean;
+      snapshot?: TranscriptMediaSnapshot;
+    }
   | { status: "blocked" }
   | { status: "outside-workspace" }
   | { status: "denied" }
@@ -84,10 +94,16 @@ function failureCopy(state: FailedImageState): { text: string; name: string } {
   }
 }
 
-function readyOrUnsupported(url: string): ImageState {
+function readyOrUnsupported(url: string, snapshot?: TranscriptMediaSnapshot): ImageState {
   const check = checkLoadedImage(url);
   return check.ok
-    ? { status: "ready", url, dimensions: check.dimensions, decoded: false }
+    ? {
+        status: "ready",
+        url,
+        dimensions: check.dimensions,
+        decoded: false,
+        ...(snapshot ? { snapshot } : {}),
+      }
     : { status: "unsupported", url, reason: check.reason };
 }
 
@@ -139,7 +155,9 @@ function useNearViewport(ref: RefObject<HTMLElement | null>, enabled: boolean): 
  * local path resolves through the environment-scoped media resolver (the
  * backend confines the read) only when the image nears the viewport; a
  * `file://` or otherwise unsafe URL was already removed by the URL policy and
- * shows as blocked.
+ * shows as blocked. Inside a transcript message a local image is pinned: the
+ * message keeps the version it first showed, with a corner label when that
+ * may not be the version it was written against.
  *
  * Layout: a bounded aspect-ratio placeholder until bytes arrive, then the
  * intrinsic size from the image header (width/height attributes) so the box
@@ -159,7 +177,9 @@ export function MarkdownImage(props: { src?: string; alt?: string; title?: strin
 function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
   const { containerId } = useContext(MediaScopeContext);
   const loadToolDetails = useContext(ToolDetailLoaderContext);
-  const group = useRichMessageIdentity()?.messageId ?? "detached";
+  const messageId = useRichMessageIdentity()?.messageId;
+  const scope = useRichTranscriptScope();
+  const group = messageId ?? "detached";
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [galleryOpen, setGalleryOpen] = useState<{ items: GalleryItem[]; index: number } | null>(
     null,
@@ -173,6 +193,17 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
         ? { path: decodePath(rawSource), containerId }
         : null,
     [containerId, rawSource, remote],
+  );
+  const pin = useMemo<MediaPinScope | undefined>(
+    () =>
+      scope && messageId
+        ? {
+            environmentId: scope.environmentId,
+            logicalSessionKey: scope.logicalSessionKey,
+            messageId,
+          }
+        : undefined,
+    [messageId, scope],
   );
   const resolvable = remote || (reference !== null && canResolveMedia(reference));
   const label = alt?.trim() || title?.trim() || rawSource.split(/[\\/]/).pop() || "image";
@@ -194,12 +225,13 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
   useEffect(() => {
     if (!near || state.status !== "pending" || !reference) return;
     let cancelled = false;
-    resolveMediaUrl(reference, {
+    resolveMedia(reference, {
       loadToolDetails,
       detailCache: { read: cachedToolDetails, write: cacheToolDetails },
       cacheImage: true,
+      pin,
     }).then(
-      (url) => !cancelled && setState(readyOrUnsupported(url)),
+      ({ url, snapshot }) => !cancelled && setState(readyOrUnsupported(url, snapshot)),
       (error: unknown) => {
         if (cancelled) return;
         const failure = mediaLoadFailure(error);
@@ -217,9 +249,10 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
     return () => {
       cancelled = true;
     };
-  }, [near, state.status, reference, loadToolDetails]);
+  }, [near, state.status, reference, loadToolDetails, pin]);
 
   const url = state.status === "ready" ? state.url : null;
+  const snapshotNote = useMediaSnapshotNote(state.status === "ready" ? state.snapshot : null);
   useGalleryItem(group, url !== null, {
     title: label,
     element: () => buttonRef.current,
@@ -294,7 +327,7 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
       <button
         ref={buttonRef}
         type="button"
-        aria-label={`Open image: ${label}`}
+        aria-label={`Open image: ${label}${snapshotNote ? `. ${snapshotNote.description}` : ""}`}
         disabled={!url}
         aria-busy={!url}
         data-media-state={state.status}
@@ -352,6 +385,7 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
             Loading image…
           </span>
         )}
+        {url && snapshotNote ? <MediaSnapshotBadge note={snapshotNote} /> : null}
       </button>
       {galleryOpen ? (
         <MediaGalleryDialog

@@ -36,6 +36,8 @@ export interface GraphEditorContextValue {
   acknowledge: (ref: GraphPlanAcknowledgementRef) => void;
   /** Opens the keyboard "Connect to…" or "Move into loop" dialog for a node. */
   command: (command: GraphEditorCommand, nodeId: string) => void;
+  /** The project whose templates a sub-graph node may inline (item 402). */
+  projectId?: string | null;
 }
 
 export const GraphEditorContext = createContext<GraphEditorContextValue | null>(null);

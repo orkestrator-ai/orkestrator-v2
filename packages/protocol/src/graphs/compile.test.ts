@@ -37,11 +37,18 @@ describe("the report §9 examples", () => {
     }
   });
 
-  test("§9.3 and §9.4 fail only on their Phase 4 features (items 402 and 401)", () => {
-    const codes = (key: "design-bake-off" | "failure-diagnosis") =>
-      errors(graphTemplateExample(key)).map((diagnostic) => diagnostic.code);
-    expect(codes("design-bake-off")).toEqual(["subgraph-unsupported"]);
-    expect(codes("failure-diagnosis")).toEqual(["replicate-items-unsupported"]);
+  test("§9.3, with its Multi Review sub-graph inlined, compiles and may launch (item 402)", () => {
+    const result = compile(graphTemplateExample("design-bake-off"));
+    expect(errors(graphTemplateExample("design-bake-off"))).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.launchable).toBe(true);
+    expect(result.plan!.subgraphs!.map((instance) => instance.id)).toEqual(["review"]);
+  });
+
+  test("§9.4 fails only on its Phase 4 feature (item 401)", () => {
+    expect(errors(graphTemplateExample("failure-diagnosis")).map((d) => d.code)).toEqual([
+      "replicate-items-unsupported",
+    ]);
   });
 
   test("the design bake-off acknowledges every taint warning it raises", () => {
@@ -49,25 +56,20 @@ describe("the report §9 examples", () => {
     const result = compile(example);
     expect(result.pendingAcknowledgements).toEqual([]);
     const taint = result.diagnostics.filter((d) => d.code === "taint-reaches-side-effect");
-    expect(taint.map((d) => [d.nodeId, d.severity, d.acknowledgement?.accepted])).toEqual([
-      ["build", "info", true],
-      ["review", "info", true],
-      ["pr", "info", true],
-    ]);
+    const sinks = ["build", "review/plan", "review/package", "review/fix", "review/pr", "pr"];
+    expect(taint.map((d) => [d.nodeId, d.severity, d.acknowledgement?.accepted])).toEqual(
+      sinks.map((sink) => [sink, "info", true]),
+    );
     expect(result.diagnostics.map((d) => d.code)).not.toContain("acknowledgement-stale");
 
     delete example.acknowledgements;
     const bare = compile(example);
-    expect(bare.pendingAcknowledgements.map((ref) => ref.nodeId)).toEqual([
-      "build",
-      "review",
-      "pr",
-    ]);
+    expect(bare.pendingAcknowledgements.map((ref) => ref.nodeId)).toEqual(sinks);
     expect(
       bare.diagnostics.filter(
         (d) => d.code === "taint-reaches-side-effect" && d.severity === "warning",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(sinks.length);
   });
 
   test("costs match the limits the examples declare", () => {
@@ -88,7 +90,13 @@ describe("the report §9 examples", () => {
       agentSessions: { best: 0, worst: 39 },
       peakParallelism: 12,
     });
-    expect(cost("design-bake-off").incomplete).toBe(true);
+    // design 3 + judge 1 + build 1 + inlined Multi Review (plan 1 + 8 + 1 + fix 1 +
+    // describe-pr 1) + describe-pr 1: the sub-graph's sessions count against the parent.
+    expect(cost("design-bake-off")).toMatchObject({
+      agentSessions: { worst: 18 },
+      peakParallelism: 8,
+      incomplete: false,
+    });
     for (const example of graphTemplateExamples()) {
       const result = compile(example.template);
       expect(result.cost!.agentSessions.worst).toBeLessThanOrEqual(

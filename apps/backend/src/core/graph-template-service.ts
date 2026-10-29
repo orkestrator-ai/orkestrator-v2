@@ -41,8 +41,15 @@ import {
   type GraphTemplatesListResult,
 } from "@orkestrator/protocol/graphs/library";
 import {
+  GRAPH_SUBGRAPH_MAX_RESOLUTIONS,
+  graphSubgraphRefKey,
+  type GraphTemplateResolution,
+  type GraphTemplateResolver,
+} from "@orkestrator/protocol/graphs/subgraphs";
+import {
   parseGraphTemplate,
   validateGraphTemplate,
+  type GraphTemplateRef as GraphSubgraphRef,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
@@ -106,6 +113,15 @@ interface CompileContext {
   ceiling: GraphCapabilityCeiling;
   providers?: AgentPlatform[];
   host: AgentEnforcementHost;
+  key: string;
+  /** The project whose templates a sub-graph may name (item 402). */
+  projectId?: string;
+}
+
+/** A template's sub-graph children, read ahead for one synchronous compile (item 402). */
+interface SubgraphResolution {
+  resolve: GraphTemplateResolver;
+  /** What resolved, for the compile cache: a child edit must recompile its parents. */
   key: string;
 }
 
@@ -177,7 +193,7 @@ export class GraphTemplateService {
       resolved.push(...this.resolvedProjectFiles(input.projectId, scan));
     }
     return {
-      templates: resolved.map((entry) => this.summary(entry, context)),
+      templates: await Promise.all(resolved.map((entry) => this.summary(entry, context))),
       project,
       ceiling: context.ceiling,
     };
@@ -190,7 +206,7 @@ export class GraphTemplateService {
     const resolved = await this.resolve(ref);
     const context = await this.compileContext(projectIdFor(ref, input.projectId));
     return {
-      summary: this.summary(resolved, context),
+      summary: await this.summary(resolved, context),
       template: structuredClone(resolved.template),
     };
   }
@@ -219,7 +235,8 @@ export class GraphTemplateService {
         throw new GraphTemplateError("invalid-request", "Save a template before launching it");
       }
       const context = await this.compileContext(input.projectId);
-      const result = compile(target.template, compileOptions(context));
+      const subgraphs = await this.subgraphResolution(target.template, context);
+      const result = compile(target.template, compileOptions(context, subgraphs));
       return compileResponse(null, result, context, "trusted", input.includePlan);
     }
     const resolved = await this.resolve(target.ref);
@@ -241,9 +258,9 @@ export class GraphTemplateService {
     // sandbox may have stopped working since the last probe.
     if (input.forLaunch) this.host = this.hostSource();
     const context = await this.compileContext(projectIdFor(target.ref, input.projectId));
-    const result = this.compileResolved(resolved, context);
+    const result = await this.compileResolved(resolved, context);
     const response = compileResponse(
-      this.summary(resolved, context),
+      await this.summary(resolved, context),
       result,
       context,
       resolved.trust,
@@ -617,8 +634,98 @@ export class GraphTemplateService {
       ceiling,
       ...(providers ? { providers } : {}),
       host,
-      key: JSON.stringify([ceiling, providers ?? null, host.claudeSandbox]),
+      key: JSON.stringify([ceiling, providers ?? null, host.claudeSandbox, projectId ?? null]),
+      ...(projectId ? { projectId } : {}),
     };
+  }
+
+  /**
+   * Reads ahead every template the sub-graphs of `template` name, nested ones
+   * included (item 402), so the compile can resolve them synchronously:
+   * built-ins from code, user templates from the store, and the compile
+   * project's templates only while they are trusted at their current digest
+   * (an untrusted child resolves as `untrusted`, never as content).
+   */
+  private async subgraphResolution(
+    template: unknown,
+    context: CompileContext,
+  ): Promise<SubgraphResolution> {
+    const resolved = new Map<string, GraphTemplateResolution | undefined>();
+    const pending = subgraphRefs(template);
+    let projectFiles: ResolvedTemplate[] | null = null;
+    const projectTemplates = async (projectId: string) => {
+      projectFiles ??= this.resolvedProjectFiles(
+        projectId,
+        await this.projectTemplates.scan(projectId),
+      );
+      return projectFiles;
+    };
+    while (pending.length > 0 && resolved.size < GRAPH_SUBGRAPH_MAX_RESOLUTIONS) {
+      const ref = pending.shift()!;
+      const key = graphSubgraphRefKey(ref);
+      if (resolved.has(key)) continue;
+      const resolution = await this.resolveSubgraph(ref, context, projectTemplates);
+      resolved.set(key, resolution);
+      if (resolution && "template" in resolution)
+        pending.push(...subgraphRefs(resolution.template));
+    }
+    const key = [...resolved]
+      .map(([ref, resolution]) => {
+        if (!resolution) return `${ref}=?`;
+        if ("missing" in resolution) return `${ref}=!${resolution.missing}`;
+        return `${ref}=${graphTemplateDigest(resolution.template)}@${resolution.revision ?? ""}`;
+      })
+      .sort()
+      .join(",");
+    return {
+      resolve: (ref) => {
+        const resolution = resolved.get(graphSubgraphRefKey(ref));
+        return resolution && "template" in resolution
+          ? { ...resolution, template: structuredClone(resolution.template) }
+          : resolution;
+      },
+      key,
+    };
+  }
+
+  private async resolveSubgraph(
+    ref: GraphSubgraphRef,
+    context: CompileContext,
+    projectTemplates: (projectId: string) => Promise<ResolvedTemplate[]>,
+  ): Promise<GraphTemplateResolution | undefined> {
+    switch (ref.scope) {
+      case "builtin": {
+        const template = this.builtinTemplates().find((candidate) => candidate.id === ref.id);
+        return template ? { template } : undefined;
+      }
+      case "user": {
+        const record = this.storage.graphTemplates.getGraphTemplateRecord(ref.id);
+        return record ? { template: record.template, revision: record.revision } : undefined;
+      }
+      case "project": {
+        if (!context.projectId) return { missing: "no-project" };
+        let files: ResolvedTemplate[];
+        try {
+          files = await projectTemplates(context.projectId);
+        } catch {
+          return undefined;
+        }
+        const matches = files.filter((file) =>
+          ref.path !== undefined
+            ? file.ref.scope === "project" && file.ref.path === ref.path
+            : file.template.id === ref.id,
+        );
+        if (matches.length === 0) return undefined;
+        if (matches.length > 1) return { missing: "ambiguous" };
+        const match = matches[0]!;
+        if (match.trust !== "trusted") return { missing: "untrusted" };
+        return {
+          template: match.template,
+          revision: match.revision,
+          ...(match.ref.scope === "project" ? { path: match.ref.path } : {}),
+        };
+      }
+    }
   }
 
   private async enabledProviders(): Promise<AgentPlatform[] | undefined> {
@@ -631,15 +738,19 @@ export class GraphTemplateService {
     }
   }
 
-  private compileResolved(resolved: ResolvedTemplate, context: CompileContext): GraphCompileResult {
-    const key = `${resolved.digest}|${context.key}`;
+  private async compileResolved(
+    resolved: ResolvedTemplate,
+    context: CompileContext,
+  ): Promise<GraphCompileResult> {
+    const subgraphs = await this.subgraphResolution(resolved.template, context);
+    const key = `${resolved.digest}|${context.key}|${subgraphs.key}`;
     const cached = this.compiled.get(key);
     if (cached) {
       this.compiled.delete(key);
       this.compiled.set(key, cached);
       return cached;
     }
-    const result = compile(resolved.template, compileOptions(context));
+    const result = compile(resolved.template, compileOptions(context, subgraphs));
     this.compiled.set(key, result);
     while (this.compiled.size > COMPILE_CACHE_ENTRIES) {
       const oldest = this.compiled.keys().next().value;
@@ -649,8 +760,11 @@ export class GraphTemplateService {
     return result;
   }
 
-  private summary(resolved: ResolvedTemplate, context: CompileContext): GraphTemplateSummary {
-    const result = this.compileResolved(resolved, context);
+  private async summary(
+    resolved: ResolvedTemplate,
+    context: CompileContext,
+  ): Promise<GraphTemplateSummary> {
+    const result = await this.compileResolved(resolved, context);
     const compileSummary = summarizeCompile(result);
     const template = resolved.template;
     return {
@@ -680,12 +794,29 @@ function projectIdFor(ref: GraphTemplateRef, projectId: string | undefined): str
   return ref.scope === "project" ? ref.projectId : projectId;
 }
 
-function compileOptions(context: CompileContext) {
+function compileOptions(context: CompileContext, subgraphs: SubgraphResolution) {
   return {
     ceiling: context.ceiling,
     host: context.host,
     ...(context.providers ? { providers: context.providers } : {}),
+    resolveTemplate: subgraphs.resolve,
   };
+}
+
+/** The sub-graph references of a template (any JSON value; the compiler guards it). */
+function subgraphRefs(template: unknown): GraphSubgraphRef[] {
+  const nodes = (template as { nodes?: unknown } | null)?.nodes;
+  if (!Array.isArray(nodes)) return [];
+  return nodes.flatMap((node) => {
+    const candidate = node as { kind?: unknown; template?: unknown } | null;
+    const ref = candidate?.template as Partial<GraphSubgraphRef> | undefined;
+    return candidate?.kind === "subgraph" &&
+      ref &&
+      typeof ref.scope === "string" &&
+      typeof ref.id === "string"
+      ? [ref as GraphSubgraphRef]
+      : [];
+  });
 }
 
 function summarizeCompile(result: GraphCompileResult): GraphTemplateCompileSummary {

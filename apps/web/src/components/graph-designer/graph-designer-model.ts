@@ -29,6 +29,7 @@ import {
   layoutGraphTemplate,
   type GraphDesignerLayout,
 } from "./graph-designer-layout";
+import { graphDesignerNodeOf } from "./graph-designer-subgraphs";
 
 /**
  * The Graphs designer's projection of a template (plus, when it compiled, its
@@ -138,6 +139,15 @@ export function indexGraphDiagnostics(
     general: [],
   };
   for (const diagnostic of diagnostics) {
+    // A node, edge or loop inlined from a sub-graph (`review/plan`) is shown
+    // on the sub-graph node itself (item 402).
+    const inlined = [diagnostic.nodeId, diagnostic.edgeId, diagnostic.loopId].find(
+      (id) => id !== undefined && id.includes("/"),
+    );
+    if (inlined !== undefined) {
+      push(index.nodes, graphDesignerNodeOf(inlined), diagnostic);
+      continue;
+    }
     if (diagnostic.nodeId) push(index.nodes, diagnostic.nodeId, diagnostic);
     if (diagnostic.edgeId) push(index.edges, diagnostic.edgeId, diagnostic);
     if (diagnostic.loopId) push(index.loops, diagnostic.loopId, diagnostic);

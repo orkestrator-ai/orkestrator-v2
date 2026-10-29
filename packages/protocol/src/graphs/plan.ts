@@ -47,6 +47,7 @@ import type {
   GraphSystemParamValue,
   GraphTemplateEngine,
   GraphTemplateRef,
+  GraphTemplateScope,
   GraphTemplateV1,
   GraphWorkspaceAccess,
   GraphWorkspaceSpec,
@@ -182,8 +183,11 @@ export interface GraphPlanTaint {
 }
 
 interface GraphPlanNodeBase {
+  /** A plan id: inlined sub-graph nodes read `<subgraph>/<node>` (item 402). */
   id: string;
   kind: GraphNodeKind;
+  /** The innermost sub-graph the node was inlined from (a `plan.subgraphs` id). */
+  subgraph?: string;
   label?: string;
   description?: string;
   /** Index in `plan.order`. */
@@ -251,7 +255,10 @@ export interface GraphPlanHumanNode extends GraphPlanNodeBase {
   outlets: string[];
 }
 
-/** Never in a successful plan until item 402; kept so the shape is complete. */
+/**
+ * Never in a successful plan: item 402 inlines every sub-graph node, and one
+ * that cannot be inlined is a compile error. Kept so the shape is complete.
+ */
 export interface GraphPlanSubgraphNode extends GraphPlanNodeBase {
   kind: "subgraph";
   template: GraphTemplateRef;
@@ -299,6 +306,8 @@ export interface GraphPlanLoopCarry {
 export interface GraphPlanLoop {
   id: string;
   label?: string;
+  /** The innermost sub-graph the loop was inlined from. */
+  subgraph?: string;
   /** In plan order. */
   members: string[];
   /** Members no other member feeds: where an iteration starts. */
@@ -308,6 +317,47 @@ export interface GraphPlanLoop {
   until: GraphPredicate;
   maxIterations: number;
   carry: GraphPlanLoopCarry[];
+}
+
+// ---------------------------------------------------------------- sub-graphs
+
+/** What a child parameter reads: a literal, or one of the plan's own parameters. */
+export type GraphPlanParamSource = { value: string | number | boolean } | { param: string };
+
+/**
+ * One inlined sub-graph node (item 402): where its nodes came from, and the
+ * scope they run in. Nested sub-graphs name their enclosing instance.
+ */
+export interface GraphPlanSubgraph {
+  /** The sub-graph node's plan id: the prefix of every node inlined from it. */
+  id: string;
+  /** The enclosing instance, for a sub-graph inside a sub-graph. */
+  parent?: string;
+  label?: string;
+  /** The child as it resolved at compile time. */
+  template: {
+    scope: GraphTemplateScope;
+    id: string;
+    revision: number;
+    /** `graphTemplateDigest` of the child that was inlined. */
+    digest: string;
+    name: string;
+    /** A built-in's engine; the copy runs on the graph runtime regardless (D5). */
+    engine?: GraphTemplateEngine;
+    path?: string;
+  };
+  /** The child's own parameter definitions, which its prompts and conditions read. */
+  parameters: GraphParameter[];
+  /** Child parameter key → literal or plan parameter (nested scopes already composed). */
+  params: Record<string, GraphPlanParamSource>;
+  /** Child role key → plan role key. */
+  roles: Record<string, string>;
+  /** Plan node ids inlined from it, nested ones included, in plan order. */
+  nodes: string[];
+  /** The sub-graph node's input ports → the plan ports that receive them. */
+  inputs: Record<string, GraphPortTarget[]>;
+  /** The sub-graph node's output ports → the plan port each one reads. */
+  outputs: Record<string, GraphPortRef>;
 }
 
 // ---------------------------------------------------------------- the plan
@@ -350,7 +400,7 @@ export interface GraphCompileCost {
   activations: { best: number; worst: number };
   /** The most agent sessions that can run at once (an upper bound). */
   peakParallelism: number;
-  /** Sub-graph nodes are not counted until item 402 inlines them. */
+  /** A sub-graph node could not be inlined (the compile has an error), so it is not counted. */
   incomplete: boolean;
   nodes: GraphCompileCostNode[];
 }
@@ -384,6 +434,8 @@ export interface CompiledGraphPlan {
   nodes: GraphPlanNode[];
   edges: GraphPlanEdge[];
   loops: GraphPlanLoop[];
+  /** Inlined sub-graphs, outermost first; absent when the template has none. */
+  subgraphs?: GraphPlanSubgraph[];
   limits: {
     maxAgentSessions: number;
     maxConcurrentAgents: number;

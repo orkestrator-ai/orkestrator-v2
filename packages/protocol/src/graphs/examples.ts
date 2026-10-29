@@ -493,9 +493,13 @@ function designBriefExample() {
 /**
  * Report §9.3. Added: the judge also emits the chosen brief (citing its
  * source) so the human node has one artifact to edit, and a `describe-pr`
- * node produces the PR description. The briefs are tainted (the designers
- * search the web), so the template acknowledges the compiler's three taint
- * warnings, one per side-effecting node they reach (item 107).
+ * node produces the PR description. The review is the built-in Multi Review
+ * inlined as a sub-graph (item 402): `autoFix` passes this template's
+ * parameter through, `autoPr` is off because this template opens the pull
+ * request itself, on whichever branch the review ends on (`clean` or
+ * `fixed`). The briefs are tainted (the designers search the web), so the
+ * template acknowledges the compiler's taint warnings, one per
+ * side-effecting node they reach, inlined ones included.
  */
 function designBakeOff(): GraphTemplateV1 {
   return {
@@ -506,7 +510,14 @@ function designBakeOff(): GraphTemplateV1 {
     name: "Design bake-off",
     description:
       "Three designers propose briefs through different lenses, a judge picks one, a person approves it, then Build, Multi Review and a pull request.",
-    parameters: [],
+    parameters: [
+      {
+        key: "autoFix",
+        type: "boolean",
+        label: "Fix review findings",
+        default: true,
+      },
+    ],
     roles: [
       { key: "designer", multiplicity: "one" },
       { key: "judge", multiplicity: "one" },
@@ -552,7 +563,10 @@ function designBakeOff(): GraphTemplateV1 {
       { name: "ticket", type: "ticket@1" },
       { name: "target", type: "workspace@1" },
     ],
-    outputs: [{ name: "pr", type: "pr-result@1", from: { node: "pr", port: "pr" } }],
+    // Optional: with autoFix off, a review with findings ends without a pull request.
+    outputs: [
+      { name: "pr", type: "pr-result@1", required: false, from: { node: "pr", port: "pr" } },
+    ],
     workspace: { kind: "environment" },
     nodes: [
       {
@@ -654,8 +668,10 @@ function designBakeOff(): GraphTemplateV1 {
       {
         id: "review",
         kind: "subgraph",
+        // Unpinned: a built-in moves with the app version, and a run freezes
+        // the copy it launched with. The designer pins what the user picks.
         template: { scope: "builtin", id: "multi-review" },
-        params: { autoFix: true, autoPr: false },
+        params: { autoFix: { param: "autoFix" }, autoPr: false },
         roles: {
           preparer: "preparer",
           reviewer: "reviewer",
@@ -666,7 +682,8 @@ function designBakeOff(): GraphTemplateV1 {
         inputs: [{ name: "target", type: "workspace@1" }],
         outputs: [
           { name: "report", type: "review-report@1" },
-          { name: "code", type: "workspace@1", required: false },
+          { name: "clean", type: "workspace@1", required: false },
+          { name: "fixed", type: "workspace@1", required: false },
         ],
       },
       {
@@ -716,9 +733,15 @@ function designBakeOff(): GraphTemplateV1 {
       edge("ticket-build", { input: "ticket" }, { node: "build", port: "ticket" }),
       edge("target-build", { input: "target" }, { node: "build", port: "code" }),
       edge("build-review", { node: "build", port: "code" }, { node: "review", port: "target" }),
+      // The review ends on exactly one of `clean` and `fixed`.
       edge(
-        "review-describe",
-        { node: "review", port: "code" },
+        "review-describe-clean",
+        { node: "review", port: "clean" },
+        { node: "describe-pr", port: "code" },
+      ),
+      edge(
+        "review-describe-fixed",
+        { node: "review", port: "fixed" },
         { node: "describe-pr", port: "code" },
       ),
       edge(
@@ -726,20 +749,33 @@ function designBakeOff(): GraphTemplateV1 {
         { node: "approve", outlet: "approved", port: "brief" },
         { node: "describe-pr", port: "brief" },
       ),
-      edge("review-pr", { node: "review", port: "code" }, { node: "pr", port: "code" }),
+      edge("review-pr-clean", { node: "review", port: "clean" }, { node: "pr", port: "code" }),
+      edge("review-pr-fixed", { node: "review", port: "fixed" }, { node: "pr", port: "code" }),
       edge(
         "describe-pr-pr",
         { node: "describe-pr", port: "description" },
         { node: "pr", port: "description" },
       ),
     ],
-    // design 3 + judge 1 + build 1 + Multi Review (1 + 8 + 1 + 1 + 1) + describe-pr 1.
+    // design 3 + judge 1 + build 1 + Multi Review (plan 1 + reviewers 8 +
+    // consolidate 1 + fix 1 + describe-pr 1) + describe-pr 1; the compiler
+    // sums the inlined nodes against these limits.
     limits: { maxAgentSessions: 18, maxConcurrentAgents: 8 },
     // The human approval node is the mitigation; these record that the user
-    // accepted untrusted briefs reaching build, the review and the PR.
+    // accepted untrusted briefs reaching build, the inlined review's writers,
+    // validation and pull request, and this template's own pull request.
     acknowledgements: [
+      // build
       taintAcknowledgement("d56b47a53670c6167dfdb765d4a7b37335d6c02b818f62a00ae4d587c6b95738"),
-      taintAcknowledgement("03df3ffc07d53d8b12a9ba6b609c37b66f2527ac70dc667716c0153603035211"),
+      // review/plan
+      taintAcknowledgement("34b99290835bb877ad19ec337cd8896241f821d91a899e13d205918741c2d284"),
+      // review/package
+      taintAcknowledgement("2fa1268a39bdc72b65e90c24903afeebe7bf13ffbf07fe76ec1c2cc9e192e6b8"),
+      // review/fix
+      taintAcknowledgement("68161e8aada90977a901eada3aef05cad3bd0542a2249c52eac65a4c8b844c97"),
+      // review/pr (skipped here, as autoPr is off, but the compiler cannot know that)
+      taintAcknowledgement("f884ef2386630f240e24a30a0e58dfae9c4a610b16ac8a489546fbc3af031cda"),
+      // pr
       taintAcknowledgement("374befdfe540379fb5878612a1becef7ef50d42e9258f0f28f897035de63c2b7"),
     ],
     layout: {

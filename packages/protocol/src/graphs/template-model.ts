@@ -429,20 +429,31 @@ export interface GraphHumanNode extends GraphNodeCommon {
   onFailure?: GraphFailurePolicy;
 }
 
+/**
+ * The template a sub-graph node inlines (item 402): a built-in id, a user
+ * template id, or a project template of the compiling project.
+ */
 export interface GraphTemplateRef {
   scope: GraphTemplateScope;
   id: string;
   /** Pin a revision; otherwise the latest at compile time. */
   revision?: number;
+  /**
+   * Pin the child's `graphTemplateDigest`: a later edit of the child is then a
+   * compile error rather than a silent change to this template.
+   */
+  digest?: string;
+  /** Project scope: the `.orkestrator/graphs/*.graph.json` file; otherwise the id must be unique. */
+  path?: string;
 }
 
 /** A literal, or pass-through of one of this template's parameters. */
 export type GraphParameterBinding = GraphScalarValue | { param: string };
 
 /**
- * Another template as one node (Phase 4, item 402). Its inputs and outputs
- * name the inner template's run inputs and outputs. The schema accepts it;
- * the compiler rejects it until 402 ships.
+ * Another template as one node (item 402). Its inputs and outputs name the
+ * inner template's run inputs and outputs; the compiler inlines the inner
+ * template with namespaced ids (`<this node's id>/<inner id>`).
  */
 export interface GraphSubgraphNode extends GraphNodeCommon, GraphNodeExecution {
   kind: "subgraph";

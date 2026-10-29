@@ -16,11 +16,13 @@ import {
   type GraphNodeSpec,
   type GraphSystemAction,
   type GraphSystemNode,
+  type GraphTemplateRef,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
 import { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { layoutGraphTemplate } from "./graph-designer-layout";
 import { moveGraphMockPins } from "./graph-designer-mock";
+import { graphSubgraphNode, graphSubgraphRoles } from "./graph-designer-subgraphs";
 import { graphSystemDefaultPorts } from "./graph-designer-system-actions";
 
 /**
@@ -165,7 +167,9 @@ export type GraphPaletteItem =
   | { kind: "system"; action: GraphSystemAction }
   | { kind: "gate" }
   | { kind: "merge" }
-  | { kind: "human" };
+  | { kind: "human" }
+  /** A saved template as one node (item 402), already read so its ports are known. */
+  | { kind: "subgraph"; ref: GraphTemplateRef; child: GraphTemplateV1 };
 
 function freshAgent(id: string): GraphAgentNode {
   return {
@@ -219,17 +223,21 @@ function freshNode(template: GraphTemplateV1, item: GraphPaletteItem, id: string
       const node: GraphHumanNode = { id, kind: "human", form: { kind: "approve" }, inputs: [] };
       return node;
     }
+    case "subgraph":
+      return graphSubgraphNode(id, item.ref, item.child);
   }
 }
 
 function paletteBaseId(item: GraphPaletteItem): string {
+  if (item.kind === "subgraph") return graphIdFrom(item.child.id, "subgraph");
   return item.kind === "system" ? item.action : item.kind;
 }
 
 /**
  * Adds a node from the palette at `position`. An agent node gets a role of
  * its own name (roles are the model slots chosen at launch), so it compiles
- * before the user picks or shares roles.
+ * before the user picks or shares roles; a sub-graph node gets the child's
+ * roles the template lacks.
  */
 export function addGraphNode(
   template: GraphTemplateV1,
@@ -244,6 +252,8 @@ export function addGraphNode(
   if (node.kind === "agent" && !roles.some((role) => role.key === node.role)) {
     roles = [...roles, { key: node.role, multiplicity: "one" }];
   }
+  // A sub-graph binds each child role to the parent role of the same key.
+  if (item.kind === "subgraph") roles = graphSubgraphRoles(roles, item.child);
   const layout = { ...materializeGraphLayout(template), [id]: round(position) };
   let next: GraphTemplateV1 = { ...template, roles, nodes: [...template.nodes, node], layout };
   if (options.loopId) next = addGraphNodeToLoop(next, id, options.loopId);

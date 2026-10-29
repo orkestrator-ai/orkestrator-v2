@@ -114,6 +114,21 @@ describe("mock pins follow node edits", () => {
     expect(setGraphMockPins(pinned, "judge", []).mockPins).toBeUndefined();
   });
 
+  test("pins on nodes inlined from a sub-graph follow the sub-graph node", () => {
+    const pinned = {
+      ...bakeOff(),
+      mockPins: {
+        judge: ["generated" as const],
+        "review/fix": [{ fail: "provider-error" as const }],
+      },
+    };
+    expect(renameGraphNode(pinned, "review", "check").mockPins).toEqual({
+      judge: ["generated"],
+      "check/fix": [{ fail: "provider-error" }],
+    });
+    expect(removeGraphNode(pinned, "review").mockPins).toEqual({ judge: ["generated"] });
+  });
+
   test("previews answer every output with a value of its type", () => {
     const template = bakeOff();
     const preview = graphMockPreview(

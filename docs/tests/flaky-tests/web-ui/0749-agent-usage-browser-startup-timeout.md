@@ -43,3 +43,15 @@ Evidence: `/tmp/orkestrator-test-run.uKKt7U/unrelated-browser-usage-owner.log.gz
 and its `summary.json`; the broad rerun logs are under
 `/tmp/orkestrator-test-run.OKCGVn/` (compressed on completion). Traces for the
 owner are under `output/playwright/diff-base-usage-owner/`.
+
+The broad rerun exited 1 at its 1,800,000 ms group deadline (1,800.1 seconds
+logged), after starting 960 of 1,040 component cases and reporting 22 failures
+outside the comparison-base change. There was no completed suite summary;
+counts of started cases are not counts of passes. The new comparison-base
+scenario ran on both mobile and desktop without a reported failure, and its
+separate targeted two-viewport run passed. The browser command's initial e2e
+typecheck passed (2,047 files). Its chained public-site suite was not reached.
+Final evidence is `/tmp/orkestrator-test-run.OKCGVn/browser.log.gz` and
+`/tmp/orkestrator-test-run.OKCGVn/summary.json`. This broad command remains
+incomplete/non-green; unrelated browser failures have not been reclassified as
+flakes or repaired by this change.

@@ -1,15 +1,16 @@
 # A reset profile name fails to boot its container fixture on Docker Desktop
 
-Checked against `main` at `930189337` (2026-10-26).
+Checked against `main` at `79f3bc97e` (2026-10-28), Docker Desktop 4.97.0
+(engine 29.9.2, macOS, Apple Silicon, default VirtioFS file sharing).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; worked 2026-10-28.
 
 ### Tasks
 
-1. **Reproduce and diagnose the stale bind source**: show whether Docker Desktop refuses a bind under a deleted and recreated directory tree, and whether production can reach it. Status: open.
-2. **Fix or contain it, and qualify a stop, reset and restart**: choose a fix once the cause is known, then prove that one profile name boots a container fixture twice. Status: open (depends on 1).
+1. **Reproduce and diagnose the stale bind source**: show whether Docker Desktop refuses a bind under a deleted and recreated directory tree, and whether production can reach it. Status: done.
+2. **Fix or contain it, and qualify a stop, reset and restart**: choose a fix once the cause is known, then prove that one profile name boots a container fixture twice. Status: done.
 
 ### 1. Reproduce and diagnose the stale bind source
 
@@ -17,7 +18,19 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Found while qualifying [0020](../containers-and-environments/0020-container-state-observation.md). The file's hypothesis is Docker Desktop file sharing holding state for the deleted tree; its open question is whether `dev:reset` leaves something behind that staging trusts.
 
-**Investigation.** The file's proposed repro (recreate a directory "at the same path" and bind it again) does not match how the paths are built. A staged path is `<dataDir>/portable-inputs/<key>/<revision>/...`: `<key>` is a SHA-256 of the environment id (`environmentStateKey`, `apps/backend/src/core/environment-state-paths.ts:33`), environment ids are `randomUUID()` (`apps/backend/src/core/storage-shared-core.ts:2003`), and every revision is named from a timestamp plus a random suffix and renamed into place from a `.partial` directory (`apps/backend/src/core/portable-inputs.ts:780`-`:857`). So a restarted profile never reuses a staged path. What it does reuse are the ancestors: `dev:reset` deletes the whole profile root, or every child of `data/` except `toolchains` (`removeProfileState`, `apps/desktop/scripts/dev/profile-io.ts:162`), and the next start recreates `profiles/<p>/data/portable-inputs/` at the same place. That points at a cache keyed on a recreated ancestor (for example a virtiofs directory entry or inode cache), consistent with a fresh profile name working at once. Nothing in `dev:reset` is left for staging to trust: the environment, its key and its revisions are all new. Production removes revisions only through `pruneInputRevisions` (`portable-inputs.ts:977`), which deletes whole revisions but leaves their parent, and never reuses a name; the `portable-inputs` root and a per-environment parent are only removed with the data directory or the environment, whose id is never reused. Production exposure therefore looks low, but unproven.
+**Investigation.** The file's proposed repro (recreate a directory "at the same path" and bind it again) does not match how the paths are built. A staged path is `<dataDir>/portable-inputs/<key>/<revision>/...`: `<key>` is a SHA-256 of the environment id (`environmentStateKey`, `apps/backend/src/core/environment-state-paths.ts:33`), environment ids are `randomUUID()` (`apps/backend/src/core/storage-shared-core.ts:2003`), and every revision is named from a timestamp plus a random suffix and renamed into place from a `.partial` directory (`apps/backend/src/core/portable-inputs.ts:780`-`:857`). So a restarted profile never reuses a staged path. What it does reuse are the ancestors: `dev:reset` deleted the whole profile root, or every child of `data/` except `toolchains` (`removeProfileState`, `apps/desktop/scripts/dev/profile-io.ts`), and the next start recreated `profiles/<p>/data/portable-inputs/` at the same place. Nothing in `dev:reset` is left for staging to trust: the environment, its key and its revisions are all new.
+
+**Findings (2026-10-28).** Repros ran with plain `docker run --mount type=bind` on throwaway trees under `~/Library/Application Support`, outside any profile:
+
+- A directory Docker Desktop has resolved, deleted and recreated under the same name can stay stale: every new bind under it fails with "bind source path does not exist", including binds of children with fresh names. It did not clear after 2 minutes or after `touch`ing the parent on the host.
+- Deleting a leaf (or a revision with its children) and creating a sibling with a new name under a kept parent always worked. Recreating the same leaf under a kept parent also worked.
+- With only short-lived `docker run --rm` binds, the failure was intermittent (for example 1 of 3 rounds). When a long-lived container held the bind and read through it, as the fixture's workload does, and was then stopped and removed, recreating the profile-shaped tree failed 6 of 6 times, with or without a 3 second gap. The `--keep-toolchains` shape (only `portable-inputs` recreated) failed 3 of 3.
+- One bind of a kept ancestor, or of the recreated directory itself, cleared the stale entry.
+- Through `mise run dev:test` the old reset behaviour reproduced the exact reported error on the second start of a name (cycle E below).
+
+So it is Docker Desktop's file sharing, not something `dev:reset` left behind. The hazard is precise: a fixed-name directory on a bind source's path that is deleted and recreated. On the staged-input path those are `profiles/<p>`, `data` and `portable-inputs`.
+
+Production exposure is low. `pruneInputRevisions` (`portable-inputs.ts:977`) deletes whole revisions under a kept per-environment directory and never reuses a name, which is the always-working case. The `portable-inputs` root and a per-environment directory are only removed with the data directory or the environment, and environment ids are never reused. The remaining production path is a user deleting and recreating the whole data directory while Docker Desktop keeps running. The bind would then fail clearly until Docker Desktop restarts; nothing is corrupted.
 
 **Decisions.**
 
@@ -40,9 +53,25 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** Until fixed, a reused profile name cannot boot a container fixture on Docker Desktop after a reset.
 
-**Context.** The workaround is a new profile name. The qualification in the file is a stop, reset and restart of one name with a container fixture.
+**Context.** The workaround was a new profile name. The qualification in the file is a stop, reset and restart of one name with a container fixture.
 
-**Investigation.** No code change has been made since the report. If the repro confirms an ancestor cache, the tooling can avoid recreating the same ancestor; if it confirms nothing, the cause is elsewhere and the decision below is premature.
+**Investigation.** The repro confirmed a cache keyed on recreated ancestors, so the tooling must not recreate them. Two shapes were compared under the container-held trigger, each 3 times: keeping `profiles/<p>`, `data` and `portable-inputs` and emptying them (3 of 3 passed); and keeping `profiles/<p>` with a new generation-named data directory (3 of 3 passed). A generation directory under a *recreated* profile root failed 1 of 3. A kept root with a recreated `data` also failed 1 of 3.
+
+**Fix.** `removeProfileState` (`apps/desktop/scripts/dev/profile-io.ts`) now empties the profile root, its data directory and `data/portable-inputs` instead of deleting them, in both reset modes, without following symlinks. A full reset or prune therefore leaves only those empty directories. `pruneProfiles` (`profile-cleanup.ts`) skips such a skeleton silently. It deletes one only under `--older-than` once it is that old, bottom-up with `rmdir`, so anything that appears inside makes the deletion fail rather than be deleted.
+
+**Qualification.** Profile `todo0200-c57ecd`, run with `mise run dev:test --profile todo0200-c57ecd --fixture --fixture-environments local,container --credential-source claude --agent-platforms claude`, then `dev:stop` and `dev:reset` after each start:
+
+| Cycle | Before start | Result |
+| --- | --- | --- |
+| A | No profile | Ready in 25 s; fixture container running with both host binds |
+| B | New reset (skeleton kept) | Ready in 20 s |
+| C | New reset | Ready in 15 s; inside the container the origin bind showed the fixture commit and the staged `.claude`/`.claude.json` were present |
+| D | New reset | Ready in 20 s; then the profile root was deleted by hand, as the old reset did |
+| E | Old reset | **Failed**: `bind source path does not exist: /host_mnt/.../profiles/todo0200-c57ecd/data/portable-inputs/<key>/<revision>/files/claude.json/.claude.json` |
+| F | New reset after E | Failed the same way: the kept directories were the stale ones |
+| G | One `docker run --rm --mount type=bind,source=<profile root>,readonly ... true` | Ready in 20 s |
+
+B and C are the two consecutive passing cycles. D and E show that the old behaviour still fails on this machine. F and G show that a name the old reset already poisoned needs one bind of its profile root (or a Docker Desktop restart), as now documented in `docs/development/agent-testing.md`.
 
 **Decisions.**
 
@@ -64,45 +93,48 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: quicker.
     - Cons: the original sequence worked once before failing.
 
-After `mise run dev:reset --profile <p>`, starting the same profile name again
-with a container fixture failed twice in a row on Docker Desktop 29.9.2
-(macOS, Apple Silicon):
+## Assumptions and decisions
 
-```text
-Error response from daemon: invalid mount config for type "bind": bind source path does not exist:
-/host_mnt/Users/<user>/Library/Application Support/orkestrator-v2-dev/profiles/<p>/data/portable-inputs/<hash>/...
-```
+### Task 1: repro shape
 
-The first failure named a staged `claude-config` directory under a revision
-the host listing showed as present; the second named the revision root. A
-new profile name started cleanly at once with the same image, flags and
-credentials.
+- **Choice.** The recommended recreated-ancestor repro, with new and same leaf names. Extended with a matrix of profile-shaped trees and a long-lived container holding the bind.
+- **Why.** The plain repro reproduced, but only intermittently with short-lived binds. A matrix with isolated bases showed the reported shapes passing 5 of 5 until a container held the bind as the fixture does. Without that trigger a fix could not be judged.
+
+### Task 1: where to run it
+
+- **Choice.** Directly with `docker run --mount type=bind` first (recommended), then through `dev:test` for the before and after comparison.
+- **Why.** The direct runs isolate Docker Desktop and pick the fix. The `dev:test` runs prove the fix on the reported path and show that the old reset still fails there (cycles D and E).
+
+### Task 2: the fix
+
+- **Choice.** Keep the profile root, `data` and `data/portable-inputs` across a reset or prune, emptied (the third option, extended to the profile root). The recommended generation data directory was not taken.
+- **Why.** As written, the recommended option does not stop a reset recreating a bind ancestor. The default reset deletes the profile root, which is itself on every bind path, together with the `profile.json` that would hold the generation. A generation directory under a recreated root failed 1 of 3. Making it work needs the root kept anyway. A `--keep-toolchains` reset would also have to move `toolchains/` into the new generation, and its activation symlinks hold absolute targets under the old data directory. The third option's con ("only helps if the cached ancestor is that exact directory") is answered by the evidence: the hazard is exactly the fixed-name directories on the bind path, and keeping them passed every round.
+- **Cons.** It protects the staged-input path only. A future host bind from another directory under a profile would need the same treatment. A reset or prune leaves three empty directories.
+
+### Task 2: what pruning does with the empty directories
+
+- **Choice.** Pruning keeps the same empty directories as reset (it uses the same removal), skips them silently, and deletes them only under `dev:prune --older-than`.
+- **Why.** Start-up pruning removes the profiles of deleted checkouts, and agents run fixed names from disposable worktrees, so a pruned name is often started again. Deleting the root there would bring the failure back. Leaving the directories forever would pile up after one-off names (`isolated-browser` resets a `qa-browser-<uuid>` profile every run). The age rule handles that without reporting them on every start.
+
+### Task 2: pass criterion
+
+- **Choice.** Two consecutive stop, reset and restart cycles (recommended), plus a same-name baseline with the old reset.
+- **Why.** The failure reproduced twice in a row originally, so two passes are the minimum. The baseline shows that the passes came from the fix, not from a machine that no longer reproduces it.
+
+### Task 2: names poisoned before the fix
+
+- **Choice.** Document a one-off manual recovery (bind the profile root once, or restart Docker Desktop). `dev:test` does not do it automatically.
+- **Why.** It only affects names reset before this change. Automating it would run an extra container on every start and depend on undocumented Docker Desktop behaviour.
+
+### Task 2: the fixture's local git origin bind
+
+- **Choice.** Unchanged.
+- **Why.** Agent-test containers also bind `<profile>/fixtures/origin.git` with `-v` (`commands-containers.ts:342`). `fixtures/` is still deleted on reset, and `prepareFixtureRepository` recreates `origin.git` at the same path on every start, reset or not. In all 5 successful starts the origin was readable inside the container. `-v` creates a missing source instead of failing, and keeping `fixtures/` would not stop `origin.git` itself being recreated. Recorded under open questions instead.
 
 ## Current state
 
-- Seen on 2026-10-26 with
-  `mise run dev:test --profile <p> --fixture --fixture-environments local,container --credential-source claude --agent-platforms claude`:
-  the first start of the name worked, stop and reset, a second start failed,
-  reset, a third start failed; a fresh name worked.
-- Not diagnosed. It looks like Docker Desktop's file sharing still holding
-  state for the deleted directory tree, but that was not confirmed. Whether
-  it also hits production (an environment whose staged inputs are removed
-  and recreated at the same path) is unknown.
-
-## Outstanding work
-
-### Code
-
-1. Reproduce outside the profile tooling: create, bind, delete and recreate a
-   directory at the same path under `~/Library/Application Support`, then
-   bind it again. If Desktop refuses the recreated path, decide whether
-   staged-input revisions (or reset profiles) should never reuse a path, and
-   whether production can hit it.
-
-### Qualification
-
-- Whatever the fix, a stop, reset and restart of one profile name with a
-  container fixture boots.
+- Fixed in the dev tooling: a reset or pruned profile name boots a container fixture again on Docker Desktop (qualified above).
+- Names reset before the fix may stay stuck until their profile root is bound once or Docker Desktop restarts.
 
 ## Constraints and rationale
 
@@ -112,8 +144,10 @@ credentials.
 
 ## Open questions
 
-- Is this Docker Desktop's virtiofs cache, or does `dev:reset` leave
-  something behind that the staging code then trusts?
+- Can the fixture origin bind (`-v <profile>/fixtures/origin.git`) hit the same
+  stale entry, since `origin.git` is recreated at the same path on every start?
+  Not seen in 5 starts; if it is, the symptom would be a workspace clone failure,
+  not a bind error.
 
 ## Related
 

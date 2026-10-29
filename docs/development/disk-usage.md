@@ -110,7 +110,7 @@ ignored files. The project home cannot be moved.
 | Location | Pruned by | When |
 | --- | --- | --- |
 | `<main checkout>/.turbo/cache` (shared by every worktree) | Turborepo, `cacheMaxAge` 7 days and `cacheMaxSize` 10 GB in `turbo.json` | Start of each `turbo run` |
-| `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start | Stopped profiles whose checkout no longer exists |
+| `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start; `dev:prune --older-than` for the empty directories a reset or prune leaves | Stopped profiles whose checkout no longer exists |
 | Worktrees a dev profile registered in an outside repository | `dev:reset`, `dev:prune`, start-up pruning | With the profile; branches only when merged |
 | A profile's macOS `safeStorage` key, the login Keychain item `<electronTitle> Safe Storage` | `dev:reset`, `dev:prune`, start-up pruning | After the profile state is gone; only the title `dev:test` gives that profile id |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
@@ -163,8 +163,11 @@ mise run dev:prune --force              # explicitly discard changes in linked w
 mise run dev:reset --profile <name>     # remove one stopped profile (--stop-first stops it)
 ```
 
-`dev:prune` never touches a running profile, a directory without a valid
-profile sentinel, or a `profile.json` that describes another directory.
+`dev:prune` never touches a running profile or a `profile.json` that
+describes another directory. Directories without a valid profile sentinel
+are kept, except for empty reset skeletons: `--older-than` can remove the
+profile root and its empty `data` and `data/portable-inputs` directories
+after that age. Other entries disqualify a directory from this exception.
 Automatic pruning and ordinary `dev:prune` keep a profile if a linked worktree
 has modified or untracked files. Inspect the reported path before using
 `dev:prune --force` or `dev:reset`, which can discard those files.

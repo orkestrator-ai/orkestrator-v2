@@ -101,13 +101,19 @@ mise run dev:reset --profile codex-typed-qa
 login the API refuses and checks the tab shows the 401 and the `needs-auth`
 sign-in banner, before and after a reload (todo 0235). Give the profile a
 made-up API key from a throwaway `CODEX_HOME`, never a real login; the key goes
-to OpenAI and is refused.
+to OpenAI and is refused. The banner names the API key. With
+`ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` set to the profile's own
+`<dataDir>/agent-credentials/codex` (from `dev:status --json`), the spec then
+writes a second made-up key there, as `codex login --with-api-key` would,
+reloads, and checks the original session, failed turn and conversation rows
+remain, the notice clears without a sign-in, and Send is enabled.
 
 ```bash
 mkdir -m 700 /tmp/qa-refused-codex-home   # holds auth.json: {"auth_mode":"apikey","OPENAI_API_KEY":"sk-proj-<made up>"}
 CODEX_HOME=/tmp/qa-refused-codex-home mise run dev:test --profile codex-refused-qa --fixture --credential-source codex --agent-platforms codex
 # In another terminal:
-ORKESTRATOR_AGENT_TEST_PROFILE=codex-refused-qa ORKESTRATOR_AGENT_TEST_LIVE_REFUSED_LOGIN=1 mise run test:logged -- --name codex-refused-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-refused-login-live.spec.ts --workers=1
+ORKESTRATOR_AGENT_TEST_PROFILE=codex-refused-qa ORKESTRATOR_AGENT_TEST_LIVE_REFUSED_LOGIN=1 \
+  ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME="<dataDir>/agent-credentials/codex" mise run test:logged -- --name codex-refused-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-refused-login-live.spec.ts --workers=1
 mise run dev:stop --profile codex-refused-qa
 mise run dev:reset --profile codex-refused-qa
 ```

@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CODEX_API_KEY_REFUSED_MESSAGE,
+  CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
   CODEX_LOGIN_RENEWAL_FAILED_SUFFIX,
   CODEX_LOGIN_REFUSED_MESSAGE,
   CODEX_LOGIN_RENEWING_MESSAGE,
   isRefusedLoginError,
   nextThreadAuthNotice,
   refusedLoginNotice,
+  withRefusedLoginKind,
 } from "./auth-recovery-notice.js";
 
 let counter = 0;
@@ -67,18 +70,49 @@ describe("Codex refused-login notice", () => {
   });
 
   test("raises a sign-in notice and keeps its occurrence for the same refusal", () => {
-    const first = refusedLoginNotice(undefined, () => "refused-1");
+    const first = refusedLoginNotice(undefined, undefined, () => "refused-1");
     expect(first).toEqual({
       state: "needs-auth",
       message: CODEX_LOGIN_REFUSED_MESSAGE,
       occurrenceId: "refused-1",
     });
-    expect(refusedLoginNotice(first, () => "refused-2")).toBe(first);
+    expect(refusedLoginNotice(first, undefined, () => "refused-2")).toBe(first);
     // A renewal notice, or a failed renewal's, is replaced by a new occurrence.
     const renewing = nextThreadAuthNotice(undefined, { phase: "started" }, () => "renewing");
-    expect(refusedLoginNotice(renewing, () => "refused-3")).toMatchObject({
+    expect(refusedLoginNotice(renewing, undefined, () => "refused-3")).toMatchObject({
       state: "needs-auth",
       occurrenceId: "refused-3",
     });
+  });
+
+  test("names the refused login once `account/read` has said which it is", () => {
+    expect(refusedLoginNotice(undefined, "apiKey", () => "key")).toEqual({
+      state: "needs-auth",
+      message: CODEX_API_KEY_REFUSED_MESSAGE,
+      occurrenceId: "key",
+    });
+    expect(refusedLoginNotice(undefined, "chatgpt", () => "chatgpt").message).toBe(
+      CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
+    );
+    // An API-key user is pointed at the key, and still offered the sign-in.
+    expect(CODEX_API_KEY_REFUSED_MESSAGE).toContain("codex login --with-api-key");
+    expect(CODEX_API_KEY_REFUSED_MESSAGE).toContain("sign in to Codex with ChatGPT");
+  });
+
+  test("a login kind learnt after the refusal rewords it in the same occurrence", () => {
+    const generic = refusedLoginNotice(undefined, undefined, () => "refused-1");
+    const named = withRefusedLoginKind(generic, "apiKey");
+    expect(named).toEqual({
+      state: "needs-auth",
+      message: CODEX_API_KEY_REFUSED_MESSAGE,
+      occurrenceId: "refused-1",
+    });
+    expect(withRefusedLoginKind(named, "apiKey")).toBe(named);
+    // A later refusal before the kind is known again keeps the named wording.
+    expect(refusedLoginNotice(named, undefined, () => "refused-2")).toBe(named);
+    // Other notices are not the refusal's to reword.
+    const renewing = nextThreadAuthNotice(undefined, { phase: "started" }, () => "renewing");
+    expect(withRefusedLoginKind(renewing, "apiKey")).toBe(renewing);
+    expect(withRefusedLoginKind(undefined, "chatgpt")).toBeUndefined();
   });
 });

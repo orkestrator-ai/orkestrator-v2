@@ -24,3 +24,4 @@ export * from "./backend/user-commands";
 export * from "./backend/permission-rules";
 export * from "./backend/graph-runs";
 export * from "./backend/graph-templates";
+export * from "./backend/graph-template-sharing";

@@ -100,6 +100,7 @@
     "./graphs/run-view": "./src/graphs/run-view.ts",
     "./graphs/schema-from-example": "./src/graphs/schema-from-example.ts",
     "./graphs/schema-subset": "./src/graphs/schema-subset.ts",
+    "./graphs/sharing": "./src/graphs/sharing.ts",
     "./graphs/system-actions": "./src/graphs/system-actions.ts",
     "./graphs/template": "./src/graphs/template.ts",
     "./graphs/type-assignability": "./src/graphs/type-assignability.ts",

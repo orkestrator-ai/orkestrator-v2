@@ -2,17 +2,17 @@ import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { ScheduleInputError, type ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
 import { scheduleListFilter, scheduleTimingArgs } from "../commands-registry-scheduled-jobs.js";
-import { ScheduleAuthorityError } from "../scheduled-jobs/executor.js";
-import { ScheduleStateError } from "../scheduled-jobs/model.js";
 import {
   normalizeAction,
+  ScheduleAuthorityError,
   ScheduleConflictError,
+  ScheduledJobCapacityError,
   ScheduleNotFoundError,
+  ScheduleStateError,
   type ScheduleCreateInput,
   type ScheduledJobService,
   type ScheduleUpdateInput,
-} from "../scheduled-jobs/service.js";
-import { ScheduledJobCapacityError } from "../scheduled-jobs/store.js";
+} from "../scheduled-jobs/index.js";
 import { PublicActionError } from "./errors.js";
 import { invalid, onlyActionKeys, optionalInteger, requiredId } from "./input.js";
 import type {

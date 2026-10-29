@@ -48,43 +48,49 @@ test("activity transition events name their session and carry the observer stamp
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: { onActivityTransition?: (event: Record<string, unknown>) => void };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: { onActivityTransition?: (event: Record<string, unknown>) => void };
+        };
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "idle",
-    state: "working",
-    agent: "cursor",
-    logicalSessionKey: "env-env-1:tab-1",
-    observation: { generation: "observer-1", revision: 7 },
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "idle",
+      state: "working",
+      agent: "cursor",
+      logicalSessionKey: "env-env-1:tab-1",
+      observation: { generation: "observer-1", revision: 7 },
+    });
 
-  // Additive and content-free: the addressable session and the stamp a client
-  // uses to invalidate exactly that view and to detect a missed transition.
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "idle",
-        state: "working",
-        agent: "cursor",
-        logical_session_key: "env-env-1:tab-1",
-        generation: "observer-1",
-        revision: 7,
+    // Additive and content-free: the addressable session and the stamp a client
+    // uses to invalidate exactly that view and to detect a missed transition.
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "idle",
+          state: "working",
+          agent: "cursor",
+          logical_session_key: "env-env-1:tab-1",
+          generation: "observer-1",
+          revision: 7,
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("activity transition events omit backend-only provider session identifiers", async () => {
@@ -98,36 +104,42 @@ test("activity transition events omit backend-only provider session identifiers"
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (
-    backend as unknown as {
-      nativeAgents: {
-        options: {
-          onActivityTransition?: (event: Record<string, unknown>) => void;
+  try {
+    const transition = (
+      backend as unknown as {
+        nativeAgents: {
+          options: {
+            onActivityTransition?: (event: Record<string, unknown>) => void;
+          };
         };
-      };
-    }
-  ).nativeAgents.options.onActivityTransition;
+      }
+    ).nativeAgents.options.onActivityTransition;
 
-  transition?.({
-    environmentId: "env-1",
-    sessionKey: "private-storage-key",
-    providerSessionId: "private-provider-id",
-    previousState: "working",
-    state: "idle",
-  });
+    transition?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      previousState: "working",
+      state: "idle",
+    });
 
-  expect(events).toEqual([
-    {
-      event: "native-agent-session-activity",
-      payload: {
-        environment_id: "env-1",
-        previous_state: "working",
-        state: "idle",
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "working",
+          state: "idle",
+        },
       },
-    },
-  ]);
-  await backend.shutdown();
-  await fs.rm(dataDir, { recursive: true, force: true });
+    ]);
+  } finally {
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("probes for an agent-created PR on the backend's own agent-idle edge", async () => {
@@ -260,10 +272,10 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       effectiveAdoption: false,
     });
     const internals = observeOnly as unknown as {
-      context: { loopedReviews: unknown };
-      loopedReviews: unknown;
+      context: { multiReviews: unknown };
+      multiReviews: unknown;
     };
-    expect(internals.context.loopedReviews).toBe(internals.loopedReviews);
+    expect(internals.context.multiReviews).toBe(internals.multiReviews);
   } finally {
     if (previousObserve === undefined) delete process.env[observeKey];
     else process.env[observeKey] = previousObserve;
@@ -497,8 +509,11 @@ test("startup runs the tmux reaper after the PID reaper even when PID reaping fa
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -529,8 +544,11 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -562,7 +580,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
-    loopedReviews: {
+    multiReviews: {
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
@@ -575,7 +593,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.init = mock(async () => {
     calls.push("pipelines:init");
   });
-  internals.loopedReviews.init = mock(async () => {
+  internals.multiReviews.init = mock(async () => {
     calls.push("reviews:init");
     throw new Error("review restore failed");
   });
@@ -594,7 +612,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   internals.buildPipelines.shutdown = mock(async () => {
     calls.push("pipelines:shutdown");
   });
-  internals.loopedReviews.shutdown = mock(async () => {
+  internals.multiReviews.shutdown = mock(async () => {
     calls.push("reviews:shutdown");
     throw new Error("review drain failed");
   });
@@ -1248,6 +1266,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       activityJobClock: { now: time.now, timers: time.timerFactory },
     });
     const internals = backend as unknown as {
+      context: { storage: StorageService };
       commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
       buildPipelines: { init: () => Promise<void> };
       nativeAgents: {
@@ -1279,6 +1298,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.commands.set("reconcile_pending_environment_renames", renames);
     const teardowns = mock(async () => ({ completed: 0 }));
     internals.commands.set("reconcile_tab_teardowns", teardowns);
+    const retiredReviews = spyOn(internals.context.storage, "reconcileRetiredLoopedReviews");
     const { intervals, restore } = controlledIntervals();
 
     try {
@@ -1292,6 +1312,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
         expect(job!.priority).toBe("recovery");
         expect(RECURRING_JOB_CATALOGUE[job!.kind].priority).toBe(job!.priority);
       }
+      const retirementJob = jobs.find((entry) => entry.name === "retired-looped-reviews");
+      expect(retirementJob?.priority).toBe("maintenance");
+      expect(retirementJob?.intervalMs).toBe(60_000);
+      expect(retiredReviews.mock.calls.length).toBeGreaterThan(0);
       // No 2 s bundle and no 60 s tab timer: the jobs own those cadences.
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(intervals.filter((interval) => interval.delay === 60_000)).toHaveLength(0);
@@ -1303,6 +1327,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
         repair: (internals.coordinators.reconcileWorkflowNotifications as ReturnType<typeof mock>)
           .mock.calls.length,
         teardowns: teardowns.mock.calls.length,
+        retiredReviews: retiredReviews.mock.calls.length,
       };
 
       // A hung activity sweep no longer holds back presence refreshes, which
@@ -1330,13 +1355,17 @@ describe("native-agent activity reconciliation lifecycle", () => {
           .calls.length - startup.repair,
       ).toBe(1);
       expect(teardowns.mock.calls.length - startup.teardowns).toBe(1);
+      expect(retiredReviews.mock.calls.length - startup.retiredReviews).toBe(1);
       await time.advance(60_000);
       expect(teardowns.mock.calls.length - startup.teardowns).toBe(2);
+      expect(retiredReviews.mock.calls.length - startup.retiredReviews).toBe(2);
 
       await backend.shutdown();
       const afterShutdown = teardowns.mock.calls.length;
+      const retirementsAfterShutdown = retiredReviews.mock.calls.length;
       await time.advance(120_000);
       expect(teardowns.mock.calls.length).toBe(afterShutdown);
+      expect(retiredReviews.mock.calls.length).toBe(retirementsAfterShutdown);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();
@@ -1880,8 +1909,11 @@ test("turn-end observation finishes before the same-edge prompt queue drain", as
     resume();
     note.mockRestore();
     drain.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1918,8 +1950,11 @@ test("production activity wiring forwards only worker waiting/working edges and 
     ]);
   } finally {
     note.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1978,8 +2013,11 @@ test("production excerpt wiring looks up the exact session and falls back within
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 }, 10_000);
 
@@ -2026,7 +2064,10 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });

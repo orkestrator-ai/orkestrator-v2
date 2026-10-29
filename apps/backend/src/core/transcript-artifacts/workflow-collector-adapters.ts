@@ -6,8 +6,8 @@
  * copy prompts, paths, URLs, tool bodies or report text; labels are fixed
  * strings or model names, and `links.targetRef` values are opaque digests.
  * `links.targetRef` values use the scoped forms the renderer resolves:
- * `multi-review:<runId>`, `multi-review:<runId>:reviewer:<reviewerId>` and
- * `looped-review:<runId>`; a reference that would not match the opaque
+ * `multi-review:<runId>` and `multi-review:<runId>:reviewer:<reviewerId>`; a
+ * reference that would not match the opaque
  * pattern is omitted. Build pipeline nodes carry no links.
  * A status the adapter does not know maps to `unknown` with `rawStatus`.
  * `validation.state` is `accepted` only when the authoritative record states
@@ -15,7 +15,6 @@
  * - Multi Review reviewer: its report is present AND the reviewer completed;
  *   consolidation: the consolidated report is present AND the consolidate
  *   step's runtime completed.
- * - Looped review pass: report present AND the pass completed.
  * - Build pipeline review: the review session's `structuredResultStatus` is
  *   `accepted`; verification: the recorded `verificationResult` (`pass` →
  *   accepted, `fail` → rejected) on the last verify session.
@@ -29,7 +28,7 @@ import type {
 } from "@orkestrator/protocol/workflow-snapshot";
 import { parseUtcTimestamp } from "@orkestrator/protocol/workflow-snapshot";
 
-export const WORKFLOW_SNAPSHOT_KINDS = ["multi-review", "looped-review", "build-pipeline"] as const;
+export const WORKFLOW_SNAPSHOT_KINDS = ["multi-review", "build-pipeline"] as const;
 export type WorkflowSnapshotKind = (typeof WORKFLOW_SNAPSHOT_KINDS)[number];
 
 export interface AdaptedWorkflow {
@@ -315,138 +314,6 @@ export function adaptMultiReview(runId: string, workflow: Json): AdaptedWorkflow
     title: "Multi Review",
     description: `Multi Review with ${asArray(workflow.reviewers).length} reviewer(s)`,
     status: overall(workflow.phase, MULTI_REVIEW_STATUS),
-    nodes,
-    edges,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Looped review
-
-export const LOOPED_REVIEW_STATUS: Record<string, WorkflowStatusV1> = {
-  preparing: "running",
-  discovering: "running",
-  reconciling: "running",
-  fixing: "running",
-  "creating-pr": "running",
-  cancelling: "running",
-  paused: "blocked",
-  failed: "failed",
-  cancelled: "canceled",
-  completed: "succeeded",
-};
-
-const ROUND_STATUS: Record<string, WorkflowStatusV1> = {
-  preparing: "running",
-  reviewing: "running",
-  fixing: "running",
-  completed: "succeeded",
-  failed: "failed",
-};
-
-const PASS_STATUS: Record<string, WorkflowStatusV1> = {
-  discovering: "running",
-  reconciling: "running",
-  completed: "succeeded",
-  failed: "failed",
-};
-
-const PR_STATUS: Record<string, WorkflowStatusV1> = {
-  pending: "pending",
-  running: "running",
-  failed: "failed",
-  created: "succeeded",
-};
-
-export function adaptLoopedReview(runId: string, workflow: Json): AdaptedWorkflow {
-  const loopedTarget = scopedTarget("looped-review", runId);
-  const nodes: WorkflowSnapshotNodeV1[] = [];
-  const edges: WorkflowSnapshotEdgeV1[] = [];
-  const archived = asArray(workflow.archivedPools).filter(isRecord);
-  let previousTail: string | null = null;
-  for (const round of asArray(workflow.rounds)) {
-    if (!isRecord(round) || typeof round.round !== "number") continue;
-    const r = round.round;
-    const prepareId = `round-${r}:prepare`;
-    const roundStatus = mapped(round.status, ROUND_STATUS);
-    nodes.push(
-      node(loopedTarget, {
-        id: prepareId,
-        label: `Round ${r} preparation`,
-        role: "agent",
-        ...(round.package !== undefined ? { status: "succeeded" as const } : roundStatus),
-        ...timing(round.startedAt, undefined),
-        attemptId: `round-${r}`,
-      }),
-    );
-    if (previousTail) edges.push(edge(previousTail, prepareId, "retry"));
-    let tail = prepareId;
-    for (const pass of asArray(round.passes)) {
-      if (!isRecord(pass) || typeof pass.pass !== "number") continue;
-      const passId = `round-${r}:pass-${pass.pass}`;
-      const status = mapped(pass.status, PASS_STATUS);
-      const report = reportCounts(pass.report);
-      nodes.push(
-        node(loopedTarget, {
-          id: passId,
-          label: `Round ${r} review pass ${pass.pass}`,
-          role: "review",
-          ...status,
-          ...timing(pass.startedAt, pass.completedAt),
-          ...(asString(pass.sessionId) ? { attemptId: clean(String(pass.sessionId), 128) } : {}),
-          validation:
-            report && pass.status === "completed"
-              ? { state: "accepted", ...report }
-              : status.status === "failed"
-                ? { state: "rejected" }
-                : report
-                  ? { state: "unknown" }
-                  : { state: "pending" },
-          transcript: asString(pass.sessionId) !== undefined,
-          findings: report !== undefined,
-        }),
-      );
-      edges.push(edge(tail, passId, "dependency"));
-      tail = passId;
-    }
-    const pool = archived.find((entry) => entry.round === r);
-    if (pool || round.status === "fixing") {
-      const fixId = `round-${r}:fix`;
-      nodes.push(
-        node(loopedTarget, {
-          id: fixId,
-          label: `Round ${r} fix`,
-          role: "agent",
-          ...(pool ? { status: "succeeded" as const } : { status: "running" as const }),
-          ...(pool ? timing(undefined, pool.fixedAt) : {}),
-          ...(pool && asString(pool.fixSessionId)
-            ? { attemptId: clean(String(pool.fixSessionId), 128) }
-            : {}),
-          transcript: pool !== undefined,
-        }),
-      );
-      edges.push(edge(tail, fixId, "handoff"));
-      tail = fixId;
-    }
-    previousTail = tail;
-  }
-  const pr = isRecord(workflow.pr) ? workflow.pr : undefined;
-  if (pr && (pr.status !== "pending" || workflow.phase === "creating-pr")) {
-    nodes.push(
-      node(loopedTarget, {
-        id: "pr",
-        label: "Pull request",
-        role: "output",
-        ...mapped(pr.status, PR_STATUS),
-        transcript: asString(pr.sessionId) !== undefined,
-      }),
-    );
-    if (previousTail) edges.push(edge(previousTail, "pr", "handoff"));
-  }
-  return {
-    title: "Looped review",
-    description: `Looped review, round ${typeof workflow.currentRound === "number" ? workflow.currentRound : 0}`,
-    status: overall(workflow.phase, LOOPED_REVIEW_STATUS),
     nodes,
     edges,
   };

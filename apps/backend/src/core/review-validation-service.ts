@@ -18,7 +18,7 @@ import {
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
 import { runCommand } from "./shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
-import type { ReviewPreparationResult } from "./looped-review-prompts.js";
+import type { ReviewPreparationResult } from "./review-prompts.js";
 
 /**
  * Reads a bounded tail from the environment-owned evidence files. The script

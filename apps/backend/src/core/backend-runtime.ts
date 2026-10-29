@@ -16,7 +16,7 @@ import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-run
 import { PublicApiReconciliations } from "./public-api/reconciliations.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux-runtime.js";
-import type { ChangeTrackingService } from "./change-tracking/service.js";
+import type { ChangeTrackingService } from "./change-tracking/index.js";
 import type { BackendEmit } from "./commands-context.js";
 import type { ContainerWorktreeSignalInstaller } from "./container-worktree-signal.js";
 

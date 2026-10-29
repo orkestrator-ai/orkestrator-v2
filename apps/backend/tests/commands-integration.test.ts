@@ -1366,9 +1366,6 @@ exit 0
 
         await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
 
-        expect(context.storage.deleteLoopedReviewWorkflowsByEnvironment).toHaveBeenCalledWith(
-          environment.id,
-        );
         expect(context.storage.deleteMultiReviewWorkflowsByEnvironment).toHaveBeenCalledWith(
           environment.id,
         );

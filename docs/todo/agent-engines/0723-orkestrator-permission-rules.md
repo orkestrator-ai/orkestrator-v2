@@ -1,9 +1,9 @@
 # Orkestrator-owned "always allow" rules that can be listed and removed
 
-Worked on `feature-clarification-18cad6211bd8-r1` from `727f91c8` (2026-10-27).
-All five phases are built and tested. Left: live card runs on real provider
-logins (Needs verification). The durable description is
-[`permission-rules.md`](../../architecture/permission-rules.md).
+Worked on `feature-clarification-18cad6211bd8-r1` from `727f91c8` (2026-10-27)
+and landed as `3d707ddd` (#1348). All five phases are built and tested. Left:
+live card runs on real provider logins (Needs verification). The durable
+description is [`permission-rules.md`](../../architecture/permission-rules.md).
 
 Follows [0001](0001-agent-interactions-and-permissions.md) decision 1 (Claude
 offers no "always allow" option) and
@@ -14,18 +14,237 @@ The standing constraint was: no "always allow" option ships without a way to
 list and remove what it saved, and no provider rules file is ever rewritten
 without a documented format or an API for it.
 
-## Brief
+## Task analysis
 
-Orkestrator keeps its own rules and applies them itself, never in a
-provider's files. When a provider asks for approval, the backend checks its
-rule store first. On a match it answers with plain allow-once (Codex
-`accept`, Claude `allow`, and so on) and adds a transcript note "Approved by
-rule …". Every answer on the wire is allow-once, so removing a rule takes
-effect at once. Rules behave the same for every provider, need no provider
-API, and survive provider upgrades. The safety requirements (fail closed,
-conservative matching, never widening the execution policy, no sensitive data
-in logs, unchanged deny on timeout and disconnect) are the brief's and are
-kept as written in the architecture doc.
+Analysed 2026-10-28 against `main` at `79f3bc97`.
+
+Every code item is done on `main` (`3d707ddd`, #1348) and is not repeated as a
+task; the proof is listed under Current state. No later commit changed the
+rule store, the enforcer, the protocol module or the card. What is left is
+qualification on real logins and two checks that need a person or a live
+provider.
+
+### Tasks
+
+1. **Claude live card run**: Bash, file and `WebFetch` approvals through the app. Status: open (needs a Claude login; billed).
+2. **Pi live card run**: `bash` through the app. Status: open (billed).
+3. **Grok live card run**: a command through the app. Status: open (needs a valid Grok login).
+4. **OpenCode live card run**: `bash`, `edit` and `webfetch` through the app. Status: open (billed; payload fields now confirmed statically).
+5. **Codex card in the app**: the rendered "Approve and remember…" panel, and a rule answering while another environment is shown. Status: open (billed).
+6. **Claude Bash suggestion shape**: the `canUseTool` `suggestions` value for `Bash` on the pinned SDK. Status: open (depends on 1; types confirmed).
+
+### 1. Claude live card run
+
+**Problem.** The Claude path is proved by bridge and backend unit tests only.
+No real Claude request has been answered by a rule.
+
+**Context.** The Claude bridge marks `ruleEligible` only for an untruncated
+`Bash` command with known keys, an absolute file path, an MCP tool with its
+server, or `WebFetch` by host
+(`bridges/claude-bridge/src/services/session-manager-parked-interactions.ts:264-284`).
+The enforcer only answers an `interactive-native` session whose execution
+policy has `approvals` `ask` and is not in plan mode
+([`permission-rules.md`](../../architecture/permission-rules.md), "Fail-closed
+conditions").
+
+**Investigation.** Pinned versions: Claude Code `2.1.309`
+(`packages/toolchain/src/manifest.ts:7`), Agent SDK `0.3.309`
+(`bridges/claude-bridge/package.json:16`). `dev:test` accepts
+`--credential-source <agent>` for every agent platform
+(`apps/desktop/scripts/dev/arguments.ts:28`, `:98-103`). The existing browser
+spec (`e2e/agent-testing/permission-rules.spec.ts`) stages rules straight
+into the database because "a card needs a real, billed provider turn", so it
+does not cover this.
+
+**Decisions.**
+
+- **How to run it?**
+  - **An isolated `mise run dev:test --credential-source claude` profile,
+    driven by hand or with `playwright-cli`, with the outcome recorded in this
+    file (recommended).**
+    - Pros: no billed spec added to the repository; a few short turns cover
+      all three kinds.
+    - Cons: not repeated automatically on a provider bump.
+  - **A gated `*-live.spec.ts` beside `permission-rules.spec.ts`.**
+    - Pros: repeatable on every bump.
+    - Cons: billed on every run; more code to keep for a feature that only
+      acts once a person saves a rule.
+- **What counts as a pass?** (The same bar applies to tasks 2 to 5.)
+  - **The full cycle per approval kind (recommended):** save a rule from the
+    card; the identical next request shows no card and an "Approved by rule"
+    note; Settings → Permissions shows the use; removing the rule from the
+    note makes the next identical request ask again. Also check that the
+    account's Claude `settings.json` `permissions.allow` is unchanged.
+    - Pros: proves creation, application, removal and that nothing reached
+      the provider's own files.
+    - Cons: three turns per kind.
+  - **Only the rule-answered request.**
+    - Pros: one turn fewer per kind.
+    - Cons: removal taking effect at once is the point of the design and
+      would stay unproved.
+
+### 2. Pi live card run
+
+**Problem.** Pi's `bash` path is proved by `bridges/pi-bridge/src/interactions.test.ts`
+only.
+
+**Context.** The Pi bridge marks `bash` with a command and `edit`/`write`
+with a path; the qualification item names only `bash`.
+
+**Investigation.** Pi is pinned at `1.4.0` (`packages/toolchain/src/manifest.ts:11`).
+Nothing has changed in `bridges/pi-bridge/src/interactions.ts` since
+`3d707ddd`.
+
+**Decisions.**
+
+- **Which login?**
+  - **Copy the host Pi login into a disposable `dev:test` profile with
+    `--credential-source pi` (recommended).**
+    - Pros: the profile is thrown away afterwards; no change to the host
+      login.
+    - Cons: billed against the host's Pi provider.
+  - **Run on the production instance.**
+    - Pros: no profile set-up.
+    - Cons: leaves a rule and its applications in the production database.
+- **Pass:** the task 1 cycle for one `bash` command.
+
+### 3. Grok live card run
+
+**Problem.** Grok's path is proved by `bridges/acp-bridge/src/acp-permission-detail.test.ts`
+only, and decision 12 (answer only through `allow_once`) has not been seen
+on a real Grok.
+
+**Context.** The bridge's own fallback for a bare approve picks
+`allow_once`, then `allow_always` (`bridges/acp-bridge/src/acp-session.ts:818-823`).
+The backend's reader only answers a Grok request that offers `allow_once`
+(`apps/backend/src/core/permission-rules/request-detail.ts:100-125`).
+
+**Investigation.** Grok is pinned at `1.0.67`
+(`packages/toolchain/src/manifest.ts:9`).
+[0001](0001-agent-interactions-and-permissions.md) task 3 is blocked on the
+same thing: a valid Grok login on the test host.
+
+**Decisions.**
+
+- **How to prove nothing reached Grok's own settings?**
+  - **Snapshot Grok's settings under `$GROK_HOME` before and after the run
+    and compare (recommended).**
+    - Pros: shows directly that no `allow_always` rule was saved.
+    - Cons: needs the profile's Grok home located first.
+  - **Rely on the unit tests for the answer chosen.**
+    - Pros: no extra step.
+    - Cons: does not cover a Grok release that changes its option kinds.
+- **Pass:** the task 1 cycle for one command, plus the unchanged settings.
+
+### 4. OpenCode live card run
+
+**Problem.** OpenCode needs no bridge change because the backend reads
+`metadata.command` and `metadata.filepath` from its permission requests. The
+file called these fields unverified upstream behaviour; if they were missing,
+OpenCode requests would simply keep asking.
+
+**Context.** `openCodeRuleDetail` (`apps/backend/src/core/permission-rules/request-detail.ts:174-201`)
+matches a command only when `metadata.command` equals the one pattern asked
+about; an edit by an absolute `metadata.filepath`, or else a single pattern
+resolved against the session directory; a fetch by its one URL pattern. The
+SDK types leave `metadata` untyped
+(`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:2045-2058`).
+
+**Investigation.** The pinned OpenCode `1.19.4` binary
+(`packages/toolchain/src/manifest.ts:10`) was searched, not run. It sends:
+- `bash`: `metadata: { command }`, with `patterns` from its own shell parse
+  (`ShellTool.ask`);
+- `edit` (the edit and write tools): `patterns: [relative path]`,
+  `metadata: { filepath, diff }`, where `filepath` is the absolute path;
+- a multi-file patch: `permission: "edit"`, `patterns` relative to the
+  worktree, and `metadata.filepath` set to those relative paths joined by
+  `", "`. `absolutePath` rejects that (it is not absolute and no base is
+  given), and more than one pattern returns `null`, so a multi-file patch
+  asks. A single-file patch resolves its pattern against the session
+  directory;
+- `webfetch`: `patterns: [url]`, `metadata: { url, format, timeout }`.
+
+So the fields exist. What only a live run shows is whether `patterns[0]`
+equals `metadata.command` for a plain command.
+
+**Decisions.**
+
+- **If a plain `bash` command's pattern differs from `metadata.command`?**
+  - **Keep failing closed and record in `permission-rules.md` which command
+    shapes OpenCode makes eligible (recommended).**
+    - Pros: the reader's caution exists because OpenCode's parse can leave
+      out redirects and operators.
+    - Cons: OpenCode command rules may never apply.
+  - **Match on `patterns` when there is exactly one.**
+    - Pros: rules would apply.
+    - Cons: a pattern can omit what the command really runs; this widens
+      what a rule answers.
+- **Multi-file patches always ask.** Accept this and say so in the OpenCode
+  row of `permission-rules.md` (recommended), rather than reading per-file
+  paths from `metadata.files`, which is new scope.
+- **Pass:** the task 1 cycle for `bash`, `edit` and `webfetch`.
+
+### 5. Codex card in the app
+
+**Problem.** Two Codex checks need the app: a person looking at the rendered
+"Approve and remember…" panel, and a rule answering a Codex approval in an
+environment that is not on screen.
+
+**Context.** The Codex match is proved live and credit-free against the pinned
+`0.164.0` binary with a loopback model
+(`bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts`). That
+harness has no app and no renderer. The backend path for an unmounted
+session is unit-tested: "a rule answers a waiting session with no tab mounted
+and no waiting edge" (`apps/backend/src/core/permission-rules/service.test.ts:66-70`).
+
+**Investigation.** The card's fourth action is at
+`apps/web/src/components/native-agent/NativeAgentInteractionCard.tsx:255`,
+and the panel is `RememberRulePanel.tsx`. Neither has been seen with a real
+Codex payload.
+
+**Decisions.**
+
+- **One run or two?**
+  - **One billed Codex session on an isolated profile with two environments
+    (recommended):** remember a rule from the card in environment A and look
+    at the panel; then show environment B while A's agent repeats the
+    command. Pass when A shows the transcript note and no card on return, and
+    no attention badge was raised.
+    - Pros: one login, one session, both checks.
+    - Cons: billed.
+  - **Point the profile's Codex at a loopback model.**
+    - Pros: no credits.
+    - Cons: no such option exists for `dev:test` today; building it is new
+      scope.
+
+### 6. Claude Bash suggestion shape
+
+**Problem.** The card preselects the Claude-proposed prefix, read from
+`canUseTool` `suggestions`. The bridge expects an `addRules` entry for `Bash`
+whose `ruleContent` ends in `:*`.
+
+**Context.** Only the preselection depends on it. A different shape means no
+preselection, never a wrong answer.
+
+**Investigation.** The SDK types on `0.3.309` match the parser:
+`suggestions?: PermissionUpdate[]`
+(`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:239`),
+`PermissionRuleValue = { toolName; ruleContent? }` (`:2584-2587`) and the
+`addRules` member of `PermissionUpdate` (`:2589-2593`). `proposedBashPrefix`
+(`session-manager-parked-interactions.ts:171-201`) strips a trailing `:*`.
+The `:*` suffix itself is a runtime value the types do not fix; the test
+fixture uses `"npm run test:*"` (`session-manager-parked-interactions.test.ts:398`).
+
+**Decisions.**
+
+- **If the live value differs?**
+  - **Adapt `proposedBashPrefix` to the observed form during task 1
+    (recommended).**
+    - Pros: keeps the preselection; cheap.
+    - Cons: one more format to parse.
+  - **Drop the Claude preselection.**
+    - Pros: less code.
+    - Cons: the card loses a useful default for Claude only.
 
 ## Current state
 
@@ -64,7 +283,7 @@ kept as written in the architecture doc.
 - CLI: `orkestrator permissions rules list|remove`.
 - Proof:
   - Protocol: `permission-rules.test.ts`, a hostile command and path corpus
-    (92 tests).
+    (105 tests; 92 was a miscount).
   - Backend `permission-rules/*.test.ts`:
     - the store;
     - the enforcer: automatic answer, removal taking effect at once,
@@ -97,7 +316,46 @@ kept as written in the architecture doc.
     alone; they are recorded, with base reruns, in flake case
     [1171](../../tests/flaky-tests/aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).
 
-## Decisions
+## Outstanding work
+
+### Code
+
+None.
+
+### Qualification
+
+- Live card runs on real logins, through the app (billed):
+  - Claude Bash, file and `WebFetch` approvals (task 1);
+  - Pi `bash` (task 2);
+  - Grok (ACP) command (task 3);
+  - OpenCode `bash`, `edit` and `webfetch` (task 4).
+
+  Each run should save a rule from the card, see the next identical request
+  answered with the transcript note, remove the rule from the note, and see
+  the request ask again. OpenCode's `metadata.command`/`metadata.filepath`
+  are present in the pinned 1.19.4 binary (task 4); whether a plain command's
+  pattern equals `metadata.command` is still unproved, and until it is,
+  OpenCode command requests may simply keep asking.
+- An inactive-environment run through the app: a rule answering a Codex
+  approval while another environment is shown (task 5). The backend path is
+  unit-tested (`service.test.ts`).
+
+## Constraints and rationale
+
+### Brief
+
+Orkestrator keeps its own rules and applies them itself, never in a
+provider's files. When a provider asks for approval, the backend checks its
+rule store first. On a match it answers with plain allow-once (Codex
+`accept`, Claude `allow`, and so on) and adds a transcript note "Approved by
+rule …". Every answer on the wire is allow-once, so removing a rule takes
+effect at once. Rules behave the same for every provider, need no provider
+API, and survive provider upgrades. The safety requirements (fail closed,
+conservative matching, never widening the execution policy, no sensitive data
+in logs, unchanged deny on timeout and disconnect) are the brief's and are
+kept as written in the architecture doc.
+
+### Decisions
 
 1. **Scopes: project and environment only.** There is no host-wide scope. A
    new rule defaults to "this project". An environment rule is deleted with
@@ -151,34 +409,14 @@ kept as written in the architecture doc.
     - Claude `permissions.allow` in the host and account settings and each
       local checkout's `.claude/settings*.json`.
 
-## Outstanding work
-
-### Code
-
-None.
-
-### Qualification
-
-- Live card runs on real logins, through the app (billed):
-  - Claude Bash, file and `WebFetch` approvals;
-  - Pi `bash`;
-  - Grok (ACP) command;
-  - OpenCode `bash`, `edit` and `webfetch`.
-
-  Each run should save a rule from the card, see the next identical request
-  answered with the transcript note, remove the rule from the note, and see
-  the request ask again. OpenCode's `metadata.command`/`metadata.filepath`
-  are unverified upstream behaviour; until confirmed, its requests may simply
-  keep asking.
-- An inactive-environment run through the app: a rule answering a Codex
-  approval while another environment is shown. The backend path is
-  unit-tested (`service.test.ts`).
-
 ## Needs verification
 
-- A look at the rendered "Approve and remember…" panel on a real Codex card.
+- A look at the rendered "Approve and remember…" panel on a real Codex card
+  (task 5).
 - The Claude `canUseTool` `suggestions` shape for `Bash` (`ruleContent` with
-  `:*`) on the pinned SDK. Only the preselection depends on it.
+  `:*`) on the pinned SDK. Only the preselection depends on it. The SDK
+  `0.3.309` types match the bridge's parser; the `:*` value needs a live
+  request (task 6).
 
 ## Related
 

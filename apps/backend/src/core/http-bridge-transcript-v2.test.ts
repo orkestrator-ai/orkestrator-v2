@@ -88,6 +88,33 @@ function runtime(provider: unknown): NativeAgentRuntimeProvider {
 }
 
 describe("bridge transcript v2 negotiation", () => {
+  test.each([false, true])(
+    "a first-message window preserves pages capability %s without a cursor",
+    async (pages) => {
+      const { provider } = httpProvider(
+        () =>
+          Response.json(
+            bridgeTranscriptSummaryUpdate(messages, {
+              ...readOptions,
+              limit: 100,
+              targetBytes: 512 * 1024,
+              pages,
+            }),
+          ),
+        codexConnection,
+      );
+      const snapshot = await runtime(provider).transcriptSnapshot!("session-1", {
+        ...summaryRead,
+        limit: 100,
+      });
+      if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+      expect(snapshot.historyStartIndex).toBe(0);
+      expect(snapshot.complete).toBe(true);
+      expect(snapshot.historyCursor).toBeUndefined();
+      expect(snapshot.historyPageable).toBe(pages);
+    },
+  );
+
   test("an unknown session's 404 does not disable summaries for another session", async () => {
     const { provider, requests } = httpProvider((url) => {
       const parsed = new URL(url);

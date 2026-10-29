@@ -9,7 +9,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Built-in default budget (Code 1)**: choose and apply a default. Status: done.
-2. **Linux Engine arm64 benchmark numbers**: compare the CI report with the targets and record it. Status: partly done (the reports exist in CI and are not recorded; CI misses three targets).
+2. **Linux Engine arm64 benchmark numbers**: compare the CI report with the targets and record it. Status: done 2026-10-28 by [0729](0729-container-benchmark-target-misses.md) (recorded in `container-qualification.md`; the misses are attributed and either fixed or recorded there).
 3. **UI response under multi-environment load**: a real-stack latency measurement with several busy container environments. Status: open (no probe exists).
 4. **Authenticated provider turns under the default**: one real turn through each bridge with the default applied. Status: open.
 5. **In-process tar hasher (deferred)**: replace the per-member `sha256sum` on the source side. Status: deferred (the condition is not met).
@@ -44,9 +44,13 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 | Calls per minute, view open (≤ 36) | 24 | 24 |
 | Followers after grace (0) | 0 | 0 |
 
-Linux arm64 meets every target except Docker calls. The calls figure rose from the 15 recorded here on 2026-10-25 to 26 after the external egress gateway (`c55807f9`, #1279) and to 28 with 0109 (`1aabf049`). The gateway's own container create, start and inspect calls are the likely cause; the source of the extra two is unconfirmed.
+Linux arm64 meets every target except Docker calls. The calls figure rose from the 15 recorded here on 2026-10-25 to 26 after the external egress gateway (`c55807f9`, #1279) and to 28 with 0109 (`1aabf049`). 0729 attributed both steps:
+- the gateway's create, inspects, start and two calls per firewall poll;
+- 0109's GitHub seed copy plus one more readiness poll.
 
-On x64, the 0109 change moved warm start from 1.52 s to 2.14 s and fresh to ready from 3.04 s to 3.40 s. That is consistent with `startDockerContainer`'s extra inspection and network check (`apps/backend/src/core/container-start.ts:185`), but unconfirmed.
+0729 also cut 1 + k calls and re-baselined the target to ≤ 27.
+
+On x64, the 0109 change moved warm start from 1.52 s to 2.14 s and fresh to ready from 3.04 s to 3.40 s. This file first put that down to `startDockerContainer`'s extra inspection and network check. That does not hold: on the success path `startDockerContainer` issues one `docker start`. 0729 traced the rise to readiness-poll quantisation instead (fix: [0870](0870-container-start-poll-quantisation.md)).
 
 No todo records these misses, and the targets were set on a 12-CPU reference host, not a 4-CPU runner.
 
@@ -212,10 +216,10 @@ authenticated provider turns.
   credentials were available here.
 - ~~Benchmark numbers for Docker Desktop and arm64 against the regression
   targets.~~ **Done for Docker Desktop on arm64** (evidence below).
-- **Open:** benchmark numbers on Linux Engine arm64. Neither machine here
-  has it. The weekly `container-live-qualification.yml` job now runs the
-  harness on `ubuntu-24.04-arm` and uploads `container-benchmarks-linux-arm64`;
-  compare its report with the targets and record it here.
+- ~~Benchmark numbers on Linux Engine arm64.~~ **Done 2026-10-28** by
+  [0729](0729-container-benchmark-target-misses.md): the CI reports from
+  `ubuntu-24.04-arm` (and x64) are recorded in
+  [container-qualification.md](../../development/container-qualification.md#benchmarks-on-linux-engine-ci-and-the-call-and-start-time-misses-2026-10-28).
 - **Open:** UI response under multi-environment load. This needs a real-stack
   `dev:test` profile with several busy container environments and a browser
   latency probe. No such probe exists (the efficiency harness counts work,

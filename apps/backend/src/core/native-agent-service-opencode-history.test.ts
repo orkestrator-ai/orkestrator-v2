@@ -9,6 +9,7 @@
  * a legacy full read, which only ever see OpenCode's newest messages.
  */
 import { describe, expect, mock, test } from "bun:test";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { NativeAgentTranscriptView } from "@orkestrator/protocol/native-agent";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { openCodeTranscriptPage, openCodeTranscriptSnapshot } from "./opencode-snapshots.js";
@@ -141,6 +142,12 @@ describe("OpenCode history through the native projection", () => {
         if (joined.status !== "snapshot") throw new Error("expected a joined snapshot");
         expect(JSON.parse(Buffer.from(joined.historyCursor!, "base64url").toString()).v).toBe(1);
         const ids = joined.projection.messages.map((row) => (row as { id: string }).id);
+        const count = (id: "history.joined-v1-page" | "history.joined-v1-page.unnamed-cursor") =>
+          compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
+        const before = {
+          base: count("history.joined-v1-page"),
+          unnamed: count("history.joined-v1-page.unnamed-cursor"),
+        };
         let cursor = joined.historyCursor;
         let pages = 0;
         while (cursor) {
@@ -156,6 +163,9 @@ describe("OpenCode history through the native projection", () => {
         }
         expect([...new Set(ids)]).toEqual(allRows.map((row) => row.id as string));
         expect(ids).toContain(failed.info.id);
+        // Counted as a pageable source that could name no cursor (0232 item 3).
+        expect(count("history.joined-v1-page.unnamed-cursor")).toBe(before.unnamed + pages);
+        expect(count("history.joined-v1-page")).toBe(before.base);
         expect(interactiveSnapshot).toHaveBeenCalled();
         expect(stub.transcriptPage).not.toHaveBeenCalled();
       },

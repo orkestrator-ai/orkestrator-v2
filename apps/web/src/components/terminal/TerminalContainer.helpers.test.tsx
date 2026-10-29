@@ -26,8 +26,6 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
-import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
-
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
@@ -180,18 +178,6 @@ const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
 
 const listMultiReviewWorkflowsMock = mock(async (_environmentId: string) => []);
 
-const listLoopedReviewWorkflowsMock = mock(
-  async (_environmentId: string) =>
-    [] as Array<{
-      version: number;
-      id: string;
-      environmentId: string;
-      snapshot: LoopedReviewWorkflow;
-      updatedAt: string;
-      revision: number;
-    }>,
-);
-
 const writeContainerFileMock = mock(
   async (_containerId: string, filePath: string, _base64Data: string) => `/workspace/${filePath}`,
 );
@@ -272,7 +258,6 @@ mock.module("@/lib/backend", () => ({
   getPaneLayout: getPaneLayoutMock,
   deletePaneLayout: deletePaneLayoutMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
-  listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
@@ -404,7 +389,6 @@ describe("TerminalContainer", () => {
       composeDraftImages: new Map(),
     });
     useNativeComposeStore.setState({ drafts: new Map() });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useMultiReviewStore.setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
@@ -466,8 +450,6 @@ describe("TerminalContainer", () => {
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
     localStorage.clear();
-    listLoopedReviewWorkflowsMock.mockReset();
-    listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeInitialPromptAttachmentsMock.mockClear();
@@ -1318,7 +1300,7 @@ describe("TerminalContainer", () => {
       return null;
     }
 
-    test("reports whether a looped-review tab was actually created", async () => {
+    test("reports whether a multi-review tab was actually created", async () => {
       const accepted = mock((_created: boolean) => {});
       render(
         <TerminalProvider>
@@ -1329,8 +1311,8 @@ describe("TerminalContainer", () => {
             isActive
           />
           <CreateTabHarness
-            type="looped-review"
-            options={{ loopedReviewId: "workflow-1" }}
+            type="multi-review"
+            options={{ multiReviewId: "workflow-1" }}
             onResult={accepted}
           />
         </TerminalProvider>,
@@ -1339,8 +1321,8 @@ describe("TerminalContainer", () => {
       await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
         expect.objectContaining({
-          type: "looped-review",
-          loopedReviewTabData: expect.objectContaining({
+          type: "multi-review",
+          multiReviewTabData: expect.objectContaining({
             workflowId: "workflow-1",
           }),
         }),
@@ -1588,7 +1570,7 @@ describe("TerminalContainer", () => {
       );
     });
 
-    test("rejects a looped-review tab without a workflow id", async () => {
+    test("rejects a multi-review tab without a workflow id", async () => {
       const refused = mock((_created: boolean) => {});
       const originalTabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
       render(
@@ -1599,7 +1581,7 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness type="looped-review" options={{}} onResult={refused} />
+          <CreateTabHarness type="multi-review" options={{}} onResult={refused} />
         </TerminalProvider>,
       );
 
@@ -1607,7 +1589,7 @@ describe("TerminalContainer", () => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toEqual(originalTabs);
     });
 
-    test("reports refusal instead of claiming a looped-review tab was created", async () => {
+    test("reports refusal instead of claiming a multi-review tab was created", async () => {
       usePaneLayoutStore.setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
@@ -1633,8 +1615,8 @@ describe("TerminalContainer", () => {
             isActive
           />
           <CreateTabHarness
-            type="looped-review"
-            options={{ loopedReviewId: "workflow-1" }}
+            type="multi-review"
+            options={{ multiReviewId: "workflow-1" }}
             onResult={refused}
           />
         </TerminalProvider>,

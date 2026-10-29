@@ -1,17 +1,22 @@
 # Mint history cursors directly so joined sync-v1 paging can retire
 
 Checked against `main` at `930189337` (2026-10-26). Items 1 to 3 done on
-2026-10-27 against `863b57821`; item 4 waits on the support window.
+2026-10-27 in #1323 (`5b5cfcdf8`); item 3's counter split done on
+2026-10-29 against `79f3bc97e`. Item 4 waits on the support window.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`, which is the parent of
+#1323 (`5b5cfcdf8`), so the investigation below describes the code before
+items 1 to 3 landed. Its line numbers are stale. Re-checked against
+`79f3bc97e` on 2026-10-29; see **Assumptions and decisions** for where the
+recommended options were followed and where they were not.
 
 ### Tasks
 
-1. **Direct cursor wherever the provider pages**: keep a direct cursor through a backend byte bound, or add a direct mint from the summary window, chosen by a measurement of the no-cursor cases. Status: open.
-2. **`loadEarlierMessages` pages directly**: stop calling the `sync-v1` projection to mint a cursor, with tests for a byte-bounded view, an OpenCode window, a prefix collapse and a held place. Status: open (waits on task 1).
-3. **Keep v1 cursors for older renderers and record the condition**: keep serving v1 cursors, counted by `history.joined-v1-page`, with the retirement condition in the register. Status: partly done (the register row exists).
+1. **Direct cursor wherever the provider pages**: keep a direct cursor through a backend byte bound, or add a direct mint from the summary window, chosen by a measurement of the no-cursor cases. Status: done (2026-10-27, #1323: a direct cursor through the byte bound).
+2. **`loadEarlierMessages` pages directly**: stop calling the `sync-v1` projection to mint a cursor, with tests for a byte-bounded view, an OpenCode window, a prefix collapse and a held place. Status: done (2026-10-27, #1323; the mint remains only as the fallback for a view without a direct cursor).
+3. **Keep v1 cursors for older renderers and record the condition**: keep serving v1 cursors, counted by `history.joined-v1-page`, with the retirement condition in the register. Status: done (condition 2026-10-27; counter split by cause 2026-10-29).
 4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (on task 2 shipping in a Stable release and the support window).
 
 ### 1. Direct cursor wherever the provider pages
@@ -190,11 +195,36 @@ cursor, and that cost a whole transcript read on bridges that page directly.
      byte-bounded view holds the original tool position`
      (`e2e/TranscriptPaging.spec.ts`, fixture flag `bounded`), with the
      fixture failing on any sync-v1 command.
-3. Done 2026-10-27. v1 cursors are still served and counted by
-   `history.joined-v1-page`. The register row now says what they serve and
-   retires them when the Claude `/messages` fallback row has retired, the
-   floor is at or above the first Stable release with this change, and the
-   counter is quiet.
+3. Done 2026-10-27, counter split 2026-10-29. v1 cursors are still served.
+   Each joined page is now counted by why the session's latest progressive
+   view carried no direct cursor (`directHistoryGaps` in
+   `native-agent-transcript-projection.ts`):
+   - `history.joined-v1-page.unpaged-source`: the source has no direct pages
+     (the Claude `/messages` fallback, a bridge without page routes);
+   - `history.joined-v1-page.unnamed-cursor`: the source pages, but no kept
+     row named a cursor (the OpenCode error-row case, or a first-message
+     snapshot whose projected rows exceed the backend byte bound) or the
+     cursor was too long to wrap;
+   - `history.joined-v1-page`: the view had a direct cursor, or no view was
+     read, so the caller paged with a v1 cursor it did not need.
+   Before this change the base id counted every joined page. Covered by
+   `a joined page after … counts under its own cause` (summary transcripts,
+   both causes, failing without the change), the counter assertions in `a
+   view retaining only an error row uses joined paging …` (OpenCode history),
+   and the unchanged pinned test `a pageable provider's sync-v1 projection
+   still mints a joined v1 cursor`, which reads no view and so stays on the
+   base id. The register row names the three ids and retires the path when
+   the Claude `/messages` fallback row has retired, the floor is at or above
+   the first Stable release with 0232, the first-message byte-bound,
+   cursor-boundary and cursor-length cases have direct recovery, and all
+   three counters are quiet.
+   The source's `historyPageable` capability now distinguishes pages from
+   unpaged sources independently of cursor presence. Regression coverage
+   includes a pages-enabled bridge sending its entire 75-row history at
+   start index zero while the backend drops leading rows. A later complete
+   view or direct cursor clears an earlier cause; projection-history capacity
+   eviction and missing-session sync-v1 invalidation clear it too. These paths
+   are covered in the summary-transcripts and transcript-projection owners.
 4. Open, blocked on the support window. Once the register condition holds
    and the counter is quiet on the machines you can reach, remove joined
    paging, the v1 cursor namespace, `projectionHistory` and the renderer's
@@ -203,70 +233,182 @@ cursor, and that cost a whole transcript read on bridges that page directly.
 
 ## Assumptions and decisions
 
-- **Where to give the renderer a direct cursor (item 1).** Options: (a) keep
-  a direct cursor in the progressive view when the backend's bound drops
-  leading rows, naming the first kept row through the provider's page route;
-  (b) add a direct-cursor mint that reads the provider's summary window on a
-  click. Chosen: (a). Why: the measurement shows the no-cursor case is the
-  bound dropping rows on ordinary bridge sessions (36 of 40 shell-heavy
-  sessions), and (b) does not fix it: a fresh summary read names the same
-  snapshot-start position, which the view still starts after, so (b) would
-  need the same repositioning and an extra provider read per click. Pros: no
-  extra read, no new command, and every renderer in the window benefits
-  because they all adopt direct cursors already. Cons: the backend view
-  depends on each provider describing its own cursors (`historyCursorBefore`),
-  and the first page repeats the rows between the view's start and the named
-  position (bounded by one OpenCode message; none for bridges).
-- **Who repositions a cursor.** Options: the projection decodes bridge and
-  OpenCode cursors itself; or each provider exposes `historyCursorBefore` on
-  its snapshot. Chosen: the provider, with the bridge cursor arithmetic in
-  the shared contract module that defines the format. Why: provider cursors
-  stay opaque to the projection, and OpenCode needs the raw message's
-  creation time, which only the snapshot has (a projected row's `createdAt`
-  is not a safe stand-in for a provisional message). Pros: one place per
-  format; an unknown provider simply names nothing. Cons: a function on a
-  snapshot object, which survives spreads but not serialization (no snapshot
-  is serialized today).
-- **Search forward from the first kept row.** Options: name only the first
-  kept row; or the first kept row that can name a cursor. Chosen: the
-  latter. Why: an OpenCode view can start at a message's error row, which no
-  page can end at; the next message can. A later position never leaves a
-  gap, only repeated rows the renderer drops. Cons: a provider that could
-  name no early row would make the first page mostly repeats; the renderer's
-  duplicate-page skip bounds that.
-- **Renderer change for item 2.** Options: gate the renderer's sync-v1 mint
-  behind a new capability (`historyPagingVersions: [1, 2]`) or a per-view
-  field saying only joined paging can help; or keep the mint as the fallback
-  for a view without a direct cursor. Chosen: keep it, documented as a
-  compatibility path. Why: renderers already page directly whenever a view
-  has a cursor, and on a backend with this change a view lacks one only when
-  joined paging is the only way to its history (the Claude `/messages`
-  fallback, a bridge without page routes); a backend before this change still
-  needs the mint for byte-bounded views. A gate would change no outcome.
-  Pros: no protocol change, older renderers fixed by the backend alone. Cons:
-  the renderer cannot tell a missing cursor that is legitimate from a bug,
-  and the mint stays until item 4.
-- **Retirement condition (item 3).** The todo proposed "the floor at or above
-  the first Stable release with item 2". Since the fix is in the backend and
-  every renderer in the window already adopts direct cursors, the condition
-  is instead: no source in the window lacks direct pages (the `/messages`
-  fallback row has retired), the floor has passed the first Stable release
-  with this backend, and the counter is quiet.
-- **Root cause in the bridges.** Options: also make the bridge summary window
-  charge a detail reference for short inline outputs, as OpenCode's measure
-  does; or only reposition in the backend. Chosen: only reposition. Why:
-  bridges in the window would keep the old measure anyway, so the backend
-  must reposition regardless. Pros: one change covers every bridge. Cons:
-  the bridge still sends a few rows the view then drops (wasted bytes, at
-  most the projection's inflation).
-- **Multi Review reviewer windows** (`multi-review-reviewer-transcript.ts`)
-  have the same "bound dropped rows, no direct cursor" rule but their own
-  joined fallback, not sync-v1 paging, so they are out of this file's scope
-  and unchanged.
-- **Measurement.** Real-world frequency would need live sessions or the
-  user's data; neither was used. The measurement is the deterministic
-  efficiency workload above. The production instance on this machine has no
-  `compatibility-path-usage` store to read (checked read-only on 2026-10-27).
+### The Task analysis predates the work (all tasks)
+
+The Task analysis was written against `863b5782`, the parent of #1323, so it
+describes tasks 1 and 2 as open when #1323 had already done them. On
+2026-10-29 the code at `79f3bc97e` was checked against each decision, and
+only the work the recommended options still called for was done: the
+counter split (task 3) and the cause measurement it carries (task 1). Where
+#1323 took a different option from the one marked recommended, the reason is
+given below and still holds.
+
+### How the no-cursor cases are measured (task 1)
+
+Options: a reason counter where `directHistoryCursor` is undefined, per
+provider, on the progressive metrics (recommended); or reasoning from
+fixtures. Chosen: both, in two steps. #1323 measured the case that decided the
+mechanism with deterministic efficiency workload `o` (see **Current state**).
+On 2026-10-29 the reason counter was added, with two changes from the
+recommendation:
+- **It counts joined pages, not views.** A view without a cursor that nobody
+  pages costs nothing. The cause is recorded per session when the view is
+  projected and attributed when a joined page is served.
+- **It lives in the compatibility-path store, not `ProgressiveReadMetric`,
+  and it has no provider label.** `ProgressiveReadMetric` keeps 256
+  in-memory samples and is read only by tests, so it is not a surface anyone
+  can read on a real machine. The compatibility store persists across
+  restarts and is read through `get_compatibility_path_usage` and
+  `/api/metrics`. Its rule is "no session, agent, URL or version", so the
+  causes stand in for the provider. `unpaged-source` is in practice the Claude
+  `/messages` fallback. `unnamed-cursor` includes the OpenCode error-row case,
+  an overlong cursor, and a pageable first-message snapshot whose projected
+  rows exceed the backend byte bound without naming a new cursor.
+
+The original reason names were `byte-bound-dropped-leading`,
+`window-not-whole` and `no-provider-cursor`. Since #1323 the first two only
+remain where no cursor can be named, so they collapse into `unnamed-cursor`,
+and `no-provider-cursor` is `unpaged-source`.
+
+### Which mechanism gives the view a direct cursor (task 1)
+
+Options:
+- (a) keep a direct cursor in the progressive view when the backend's bound
+  drops leading rows, naming the first kept row through the provider's page
+  route;
+- (b) add a direct-cursor mint that reads the provider's summary window on a
+  click (recommended in the Task analysis).
+
+Chosen: (a), in #1323. The code shows (b) is the wrong choice:
+- The no-cursor case is the bound dropping rows on ordinary bridge sessions
+  (36 of 40 shell-heavy sessions). A fresh summary read names the same
+  snapshot-start position, and the view still starts after it, so (b) would
+  need the same repositioning plus an extra provider read per click.
+- The analysis's objection to (a), that it misses the OpenCode window and a
+  prefix collapse, does not hold. OpenCode names a cursor through
+  `openCodeCursorBefore`. After a collapse the renderer adopts whatever
+  direct cursor the new view carries (`adoptDirectCursor`, present since
+  v2.21.0). Both cases are covered by tests.
+
+Pros: no extra read, no new command, and every renderer in the window
+benefits because they all adopt direct cursors already. Cons: the backend
+view depends on each provider describing its own cursors
+(`historyCursorBefore`). The first page also repeats the rows between the
+view's start and the named position: at most one OpenCode message, and none
+for bridges.
+
+### Who repositions a cursor (task 1)
+
+Options: the projection decodes bridge and OpenCode cursors itself; or each
+provider exposes `historyCursorBefore` on its snapshot. Chosen: the provider,
+with the bridge cursor arithmetic in the shared contract module that defines
+the format. Why:
+- provider cursors stay opaque to the projection;
+- OpenCode needs the raw message's creation time, which only the snapshot
+  has. A projected row's `createdAt` is not a safe stand-in for a provisional
+  message.
+
+Pros: one place per format, and an unknown provider simply names nothing.
+Cons: it is a function on a snapshot object, which survives spreads but not
+serialization. No snapshot is serialized today.
+
+### Search forward from the first kept row (task 1)
+
+Options: name only the first kept row; or the first kept row that can name a
+cursor. Chosen: the latter. Why: an OpenCode view can start at a message's
+error row, which no page can end at; the next message can. A later position
+never leaves a gap, only repeated rows the renderer drops. Cons: a provider
+that could name no early row would make the first page mostly repeats. The
+renderer's duplicate-page skip bounds that.
+
+### What the renderer does without a direct cursor (task 2)
+
+Options: feature-detect a new mint and fall back to the `sync-v1` mint
+(recommended); require the new backend; or gate the mint behind a new
+capability or view field. Chosen: keep the `sync-v1` mint as the fallback for
+a view without a direct cursor, which is the recommended fallback. Mechanism
+(a) adds no command, so the thing to detect is the view's own cursor. Why:
+- renderers already page directly whenever a view has a cursor;
+- on a backend with 0232 a view lacks one only when joined paging is the
+  only way to its history, so a gate would change no outcome;
+- a backend before 0232 still needs the mint for byte-bounded views.
+
+Pros: no protocol change, and older renderers are fixed by the backend alone.
+Cons: the mint stays until item 4. The renderer cannot tell a legitimate
+missing cursor from a bug, but the split counters now can.
+
+### The pinned backend test (task 2)
+
+Options: keep `a pageable provider's sync-v1 projection still mints a joined
+v1 cursor` as the older-renderer contract, with direct tests beside it
+(recommended); or invert it. Chosen: keep it (recommended). It still asserts
+the base `history.joined-v1-page` id, which is right: it reads no
+progressive view.
+
+### Splitting the counter, and what to key it on (task 3)
+
+Options: split `history.joined-v1-page` by cause (recommended); or keep one
+counter. Chosen: split. The analysis expected the split to key on which
+command minted the cursor, but mechanism (a) added no command. Every renderer
+in the window also behaves alike (each adopts direct cursors and mints only
+without one), so the backend could not tell an older renderer from the
+current one even in principle. The split therefore keys on why the session's
+latest view had no direct cursor, which is what decides whether the path can
+retire:
+- `unpaged-source` goes quiet when the `/messages` fallback retires;
+- `unnamed-cursor` goes quiet when those cases get direct recovery;
+- the base id should already be quiet on a current backend.
+
+Pros: task 4's "counter is quiet" check now means something per cause, and
+the bridge and boundary retirements are separated. Cons:
+- the base id's older totals mix every cause, so read `lastSeenAt` after
+  this release rather than `count`;
+- the cause is the latest view's, held in a map of at most 512 sessions, so a
+  page for a session evicted from it counts on the base id. Projection-history
+  eviction and sync-v1 invalidation also discard the corresponding cause.
+
+Newer ids already persist safely through older backends sharing the
+database, since `normalizeCompatibilityPathUsage` keeps unknown ids on write.
+
+### The retirement condition (task 3)
+
+The todo proposed "the floor at or above the first Stable release with item
+2". The fix is in the backend, and every renderer in the window already
+adopts direct cursors, so the condition is instead:
+- no source in the window lacks direct pages (the `/messages` fallback row
+  has retired);
+- the first-message byte-bound, cursor-boundary and cursor-length cases have
+  direct recovery;
+- the floor has passed the first Stable release with 0232;
+- all three counters are quiet.
+
+### Root cause in the bridges (task 1)
+
+Options: also make the bridge summary window charge a detail reference for
+short inline outputs, as OpenCode's measure does; or only reposition in the
+backend. Chosen: only reposition. Why: bridges in the window would keep the
+old measure anyway, so the backend must reposition regardless. Pros: one
+change covers every bridge. Cons: the bridge still sends a few rows the view
+then drops. Those are wasted bytes, at most the projection's inflation.
+
+### Multi Review reviewer windows (scope)
+
+`multi-review-reviewer-transcript.ts` has the same "bound dropped rows, no
+direct cursor" rule, but its own joined fallback rather than `sync-v1`
+paging. It is out of this file's scope and unchanged.
+
+### Where item 4 lives (task 4)
+
+Options: keep it here as the last item (recommended); or move it to 0034.
+Chosen: keep it here, so the file closes when the path is gone.
+
+### Measurement data (tasks 1 and 3)
+
+Real-world frequency would need live sessions or the user's data; neither was
+used. The deciding measurement is the deterministic efficiency workload.
+The production instance on this machine had no `compatibility-path-usage`
+store to read (checked read-only on 2026-10-27). The split counters start
+collecting with the first release that carries them.
 
 ## Constraints and rationale
 
@@ -279,11 +421,12 @@ cursor, and that cost a whole transcript read on bridges that page directly.
 
 ## Needs verification
 
-- How often joined pages still happen after this ships: read
-  `history.joined-v1-page` (`get_compatibility_path_usage`) on machines
-  running a release with this change. Not available here: the live instance
-  on this machine keeps no such counter yet, and no disposable profile ran
-  real provider sessions.
+- How often joined pages still happen after this ships, and why: read
+  `history.joined-v1-page`, `history.joined-v1-page.unpaged-source` and
+  `history.joined-v1-page.unnamed-cursor` (`get_compatibility_path_usage`) on
+  machines running a release with the split. Not available here: the live
+  instance on this machine keeps no such counter yet, and no disposable
+  profile ran real provider sessions.
 - A live bridge session of short tool calls (Codex or Claude) in a
   disposable profile: confirm the view reports `historyPaging: "direct"` and
   Load earlier pages without a sync-v1 read. Covered by the bridge-contract

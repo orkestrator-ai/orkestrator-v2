@@ -6,7 +6,7 @@ import type {
   ScheduledJobService,
   ScheduleListFilter,
   ScheduleUpdateInput,
-} from "./scheduled-jobs/service.js";
+} from "./scheduled-jobs/index.js";
 
 /**
  * Scheduled-job commands for the desktop and web UI, and for the

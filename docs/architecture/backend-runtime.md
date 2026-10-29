@@ -114,15 +114,19 @@ declaration:
 | `git-docker-scan-pool.ts` | `gitDockerScanPool` | Bounds Git and Docker work on the host; a pool per backend would multiply the bound. |
 | `change-tracking/environment-projector.ts` | `gitVersionPromise` | The host's Git version. |
 | `change-tracking/legacy-payload.ts` | `compatibilityCache` | A bounded memo of a pure function of its content key. |
-| `design/export-writer.ts` | `destinationLocks`, `destinationOperations` | Serialise writes to one file on the host; the cap bounds the process. |
-| `gateway-support-core.ts` | `activeDynamicCompressions` | CPU-bound compression admission per process (gateway, not core; still on the `import/no-mutable-exports` allowlist). |
+| `design/export-writer.ts` | `destinationLocks`, `destinationOperations` | Serialise writes to one file on the host; the cap bounds the process. Keyed by destination path, not by backend: a copy per backend would let two backends write the same file at once. |
+| `gateway-support-core.ts` | `activeDynamicCompressions` | CPU-bound compression admission per process: the bound protects the host's CPU, so a counter per backend would multiply it (gateway, not core; still on the `import/no-mutable-exports` allowlist for this binding). |
 | `environment-cleanup.ts` | `loggedKeptBranches` | Only de-duplicates a log line. |
 
 `public-api/reconciler.ts` (`reconcilers`) is a registry of functions filled
 at module load, the same for every backend: code wiring, not state.
 
-Further per-backend module state found while doing 0133 (agent-account
-logins and usage caches, container login pushes, the plan-usage cache's
-active account, the GitHub CLI and OpenCode provider logins and OpenCode
-command journals) is listed in
+The export-writer locks and `activeDynamicCompressions` were once proposed
+to move per backend; they stay because each bounds or orders host
+resources, not one backend's work.
+
+Further per-backend module state found after the tmux and account moves
+(agent-account logins and usage caches, container login pushes, the
+plan-usage cache's active account, the GitHub CLI and OpenCode provider
+logins and OpenCode command journals) is listed in
 [0390-backend-module-state-beyond-0133.md](../todo/backend-structure/0390-backend-module-state-beyond-0133.md).

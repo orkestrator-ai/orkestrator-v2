@@ -24,7 +24,7 @@ import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import { mergeabilityFromMergeStateStatus } from "@orkestrator/protocol/pr-merge-readiness";
 import {
-  isSafeLoopedReviewTargetBranch,
+  isSafeReviewTargetBranch,
   REVIEW_PACKAGE_FORMAT,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
   type ReviewPackage,
@@ -903,7 +903,7 @@ export function parseGitPorcelainPaths(output: string): string[] {
   return paths;
 }
 
-export async function generateLoopedReviewPackage(
+export async function generateReviewPackage(
   environmentId: string,
   packageId: string,
   round: number,
@@ -1409,7 +1409,7 @@ export function buildPrDetectionCandidate(
 ): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
   const state = parsePrState(entry.state);
   if (!state || !isValidPrUrl(entry.url)) return null;
-  if (entry.baseRefName !== undefined && !isSafeLoopedReviewTargetBranch(entry.baseRefName)) {
+  if (entry.baseRefName !== undefined && !isSafeReviewTargetBranch(entry.baseRefName)) {
     throw new Error("GitHub returned an invalid pull request base branch");
   }
   const mergeable = typeof entry.mergeable === "string" ? entry.mergeable.toUpperCase() : null;

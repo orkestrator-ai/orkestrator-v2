@@ -578,6 +578,14 @@ mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 
+Scenario backends, and the CLI package tests that start a packaged backend,
+run with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. That skips the boot
+host-reachability check: each backend is a new Docker owner stopped seconds
+after `ready`, so its Linux probe network would belong to an owner nothing
+reaps. A later on-demand check (a container scenario on a rootless daemon, a
+workflow preflight) still runs. A scenario that needs the boot check passes
+the variable through its own `env`.
+
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and
 approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
@@ -674,8 +682,8 @@ Generate the reference before making the change; no artifact is committed
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
-  runs the real feature-planning, build-pipeline, looped-review and
-  multi-review supervisors over a temporary store, in rollback and keyed
+  runs the real feature-planning, build-pipeline and multi-review
+  supervisors over a temporary store, in rollback and keyed
   modes, on one manual clock. Rollback is what
   `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
@@ -1179,6 +1187,25 @@ the workspace and bridge groups use the same temporary directory as the root
 group and the caller: an operator's choice is honoured, and an aggregate run
 with a private `TMPDIR` can be inspected afterwards for leftovers. Before
 2026-10-26 Turbo dropped it and those groups fell back to `/tmp`.
+
+Every Bun test process, and the runner of the `test:browser` Playwright suites,
+then moves to a private `TMPDIR` of its own, `ork-test-tmp-<pid>-<random>`
+(`tests/private-tmpdir.ts`, loaded by `tests/isolate-tmpdir.ts` after the
+other isolation preloads). It is made in the process's temporary directory,
+except on macOS, where it goes under `/private/tmp`: inside the 49-character
+per-user directory, test Unix sockets passed the 104-byte limit. If the shorter
+root denies creation, it retries beneath the existing TMPDIR. If neither root
+allows creation, TMPDIR and its ownership variables stay unchanged. Children
+inherit the selected TMPDIR, so a Playwright browser profile
+(`playwright_chromiumdev_profile-*`, a name with no owner in it) or anything
+else a test leaves lands inside a directory a later run can attribute and
+remove. The preload removes its directory when its `afterAll` runs unless a
+live process still names it; a killed process's directory is removed by the
+next test process once the owner has exited and the directory is an hour old
+(0248). A test that needs the shared temporary directory reads
+`ORKESTRATOR_TEST_PARENT_TMPDIR`. For a leak hunt like 0247's, set
+`ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
+for inspection.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

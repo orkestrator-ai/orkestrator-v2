@@ -221,6 +221,19 @@ is not permission to execute. The editor never changes an execution policy.
     them to the CLI: with the recorded paths of another machine (a
     container's copied home) and no resolvable marketplace, the pinned CLI
     loads no install of its own.
+  - The skill catalogues and their skill-file read allowlists follow the same
+    install rule (`claudeInstalledPluginIdEnablement`), so a turned-off or
+    never-enabled install's skills are neither listed nor readable (todo
+    0205). Settings → Skills on the host (`agent-skills.ts`) reads user
+    settings only, from `$CLAUDE_CONFIG_DIR/settings.json` or else
+    `~/.claude/settings.json`: it has no project, so a project's settings can
+    still change which plugin skills a single session loads. The environment
+    scanner (`environment-agent-skills.ts`) reads user and project settings,
+    as an ordinary session does; local settings are an opt-in per prompt and
+    never change its default. Fixtures in `agent-skills.test.ts` ("Claude
+    plugin discovery") and `environment-agent-skills.test.ts` cover enabled,
+    disabled, never-enabled, project overrides, local-only enablement and
+    `CLAUDE_CONFIG_DIR`.
   - The bridge passes every plugin as a `--plugin-dir` plugin, whose id is
     `<name>@inline` (name from `plugin.json`, else the folder). The CLI skips
     one when the first loaded settings layer (local, then project, then user)

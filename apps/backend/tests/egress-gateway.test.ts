@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getHostPort } from "../src/core/commands-container-exec";
-import { parseNetworkModeOwner, resetNetworkOwnerCache } from "../src/core/container-network-owner";
+import {
+  parseNetworkModeOwner,
+  rememberNetworkOwner,
+  resetNetworkOwnerCache,
+} from "../src/core/container-network-owner";
 import {
   createEgressGateway,
   egressEnforcement,
@@ -13,6 +17,7 @@ import {
   removeRuntimeContainer,
   stopRuntimeContainer,
   sweepOrphanEgressGateways,
+  waitForEgressGatewayFirewall,
   type EgressGatewaySpec,
 } from "../src/core/egress-gateway";
 import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
@@ -41,6 +46,9 @@ async function fakeDaemon(options: {
   gatewayOwner?: string;
   inspectFailsOnce?: boolean;
   firewallAfterRestart?: string;
+  /** Polls that find no report before the firewall shows; then the gateway exits if `exitInstead`. */
+  pendingPolls?: number;
+  exitInstead?: boolean;
 }): Promise<string> {
   const dir = await tempDir("ork-egress-daemon-");
   cleanup.push(dir);
@@ -66,10 +74,14 @@ case "$*" in
   "stop ${GATEWAY}") printf false > ${dir}/gw-running ;;
   "stop wl") printf false > ${dir}/wl-running ;;
   "exec ${GATEWAY} sh -c"*)
-    if [ "$(cat ${dir}/gw-running)" = true ]; then
-      if [ -e ${dir}/restarted ]; then printf '%s' '${options.firewallAfterRestart ?? options.firewall ?? '{"state":"applied"}'}';
-      else printf '%s' '${options.firewall ?? '{"state":"applied"}'}'; fi
-    fi ;;
+    if [ "$(cat ${dir}/gw-running)" != true ]; then
+      echo "Error response from daemon: container ${GATEWAY} is not running" >&2; exit 1
+    fi
+    polls=$(( $(cat ${dir}/polls 2>/dev/null || echo 0) + 1 )); printf '%s' "$polls" > ${dir}/polls
+    if [ "$polls" -le ${options.pendingPolls ?? 0} ]; then exit 0; fi
+    if [ "${options.exitInstead ?? false}" = true ]; then printf false > ${dir}/gw-running; exit 0; fi
+    if [ -e ${dir}/restarted ]; then printf '%s' '${options.firewallAfterRestart ?? options.firewall ?? '{"state":"applied"}'}';
+    else printf '%s' '${options.firewall ?? '{"state":"applied"}'}'; fi ;;
   "port ${GATEWAY} 4097/tcp") printf '127.0.0.1:49200\\n' ;;
   "port wl 4097/tcp") ;;
 esac
@@ -147,6 +159,33 @@ describe("where a runtime's firewall runs", () => {
 });
 
 describe("starting a runtime behind its gateway", () => {
+  for (const failure of ["transport", "malformed"] as const) {
+    test(`a failed exec surfaces a ${failure} inspection failure without polling to a policy timeout`, async () => {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  exec) echo 'exec unavailable' >&2; exit 1 ;;
+  inspect) ${failure === "transport" ? "echo 'daemon transport failed' >&2; exit 1" : "echo 'invalid inspect output'"} ;;
+esac
+`,
+        async (log) => {
+          await expect(
+            waitForEgressGatewayFirewall(GATEWAY, { timeoutMs: 20, pollMs: 1 }),
+          ).rejects.toThrow(
+            failure === "transport"
+              ? "daemon transport failed"
+              : "Unrecognized docker inspect output",
+          );
+          const calls = (await log.read()).trim().split("\n");
+          expect(calls).toHaveLength(2);
+          expect(calls[0]).toStartWith(`exec ${GATEWAY}`);
+          expect(calls[1]).toStartWith("inspect ");
+        },
+      );
+    });
+  }
+
   test("a runtime without a gateway is left to the normal start", async () => {
     await withDockerScript(await fakeDaemon({}), async (log) => {
       expect(await prepareEgressGatewayForStart("other")).toBe("none");
@@ -164,6 +203,41 @@ describe("starting a runtime behind its gateway", () => {
         started,
       );
       expect(calls).not.toContain("start wl");
+    });
+  });
+
+  test("a poll before the firewall applies costs one call, and a stopped gateway is reported", async () => {
+    await withDockerScript(
+      await fakeDaemon({ gatewayRunning: false, pendingPolls: 3 }),
+      async (log) => {
+        expect(await prepareEgressGatewayForStart("wl", { pollMs: 1 })).toBe("ready");
+        const calls = (await log.read()).split("\n");
+        expect(calls.filter((line) => line.startsWith(`exec ${GATEWAY}`))).toHaveLength(4);
+        // Only the lookup before the start inspects the gateway.
+        expect(
+          calls.filter((line) => line.startsWith("inspect") && line.endsWith(GATEWAY)),
+        ).toHaveLength(1);
+      },
+    );
+    resetNetworkOwnerCache();
+    await withDockerScript(
+      await fakeDaemon({ gatewayRunning: false, pendingPolls: 1, exitInstead: true }),
+      async () => {
+        await expect(prepareEgressGatewayForStart("wl", { pollMs: 1 })).rejects.toThrow(
+          "stopped before applying its network policy",
+        );
+      },
+    );
+  });
+
+  test("a running gateway's applied firewall is read once, and a just-created runtime is not inspected", async () => {
+    rememberNetworkOwner("wl", GATEWAY);
+    await withDockerScript(await fakeDaemon({ gatewayRunning: true }), async (log) => {
+      expect(await prepareEgressGatewayForStart("wl", { pollMs: 1 })).toBe("ready");
+      const calls = (await log.read()).split("\n");
+      expect(calls.filter((line) => line.startsWith(`exec ${GATEWAY}`))).toHaveLength(1);
+      expect(calls.some((line) => line.includes("{{.HostConfig.NetworkMode}}"))).toBe(false);
+      expect(calls).not.toContain(`start ${GATEWAY}`);
     });
   });
 
@@ -219,7 +293,13 @@ describe("starting a runtime behind its gateway", () => {
       }),
       async (log) => {
         expect(await prepareEgressGatewayForStart("wl", { pollMs: 1 })).toBe("restarted-gateway");
-        expect(await log.read()).toContain("stop wl");
+        const calls = (await log.read()).trim().split("\n");
+        const reads = calls.filter((line) => line.startsWith(`exec ${GATEWAY}`));
+        expect(reads).toHaveLength(1);
+        expect(calls.filter((line) => line === "stop wl")).toHaveLength(1);
+        expect(calls.indexOf("stop wl")).toBeGreaterThan(calls.indexOf(reads[0]!));
+        expect(calls).not.toContain(`restart ${GATEWAY}`);
+        expect(calls).not.toContain(`start ${GATEWAY}`);
       },
     );
     resetNetworkOwnerCache();

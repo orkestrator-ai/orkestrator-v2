@@ -342,7 +342,7 @@ async function addEnvironment(
   });
 }
 
-async function seedLoopedReviewNativeSessions(
+async function seedUnattendedNativeSessions(
   storage: StorageService,
   count: number,
   logicalSessionKeyForIndex: (index: number) => string,
@@ -361,7 +361,7 @@ async function seedLoopedReviewNativeSessions(
           agent: "codex",
           logicalSessionKey,
           providerSessionId: `provider-${index}`,
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -405,7 +405,7 @@ function pendingInteractionSnapshot(
       id: `interaction-${index}`,
       provider: "codex",
       kind,
-      origin: "looped-review",
+      origin: "automated-review",
       sessionId: "provider-session",
       state: "pending",
       revision: 1,
@@ -464,8 +464,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow-1:discovery:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow-1:discovery:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -475,7 +475,7 @@ describe("NativeAgentService", () => {
           expect.objectContaining({
             provider: "codex",
             kind: "question",
-            workflowSurface: "looped-review",
+            workflowSurface: "automated-review",
             phase: "discovery",
             count: 1,
             providerState: "blocked",
@@ -528,8 +528,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow-1:discovery:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow-1:discovery:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -550,8 +550,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow-1:discovery:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow-1:discovery:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -585,8 +585,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow-1:discovery:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow-1:discovery:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         const warnings = await captureWarnings(() => service.reconcileAgentInteractions());
@@ -618,14 +618,14 @@ describe("NativeAgentService", () => {
       },
       async ({ storage, service }) => {
         for (const suffix of ["a", "b", "c"] as const) {
-          const logicalSessionKey = `looped-review:workflow:${suffix}:Review`;
+          const logicalSessionKey = `automated-review:workflow:${suffix}:Review`;
           await storage.adoptNativeAgentSession({
             key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
             environmentId: "env-1",
             agent: "codex",
             logicalSessionKey,
             providerSessionId: `provider-${suffix}`,
-            origin: "looped-review",
+            origin: "automated-review",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           });
         }
@@ -653,14 +653,14 @@ describe("NativeAgentService", () => {
         },
       },
       async ({ storage, service }) => {
-        const logicalSessionKey = "looped-review:workflow:absent:Review";
+        const logicalSessionKey = "automated-review:workflow:absent:Review";
         await storage.adoptNativeAgentSession({
           key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
           environmentId: "env-1",
           agent: "codex",
           logicalSessionKey,
           providerSessionId: "provider-session",
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -729,14 +729,14 @@ describe("NativeAgentService", () => {
             });
           }
           for (let sessionIndex = 0; sessionIndex < 2; sessionIndex += 1) {
-            const logicalSessionKey = `looped-review:workflow:${sessionIndex}:Review`;
+            const logicalSessionKey = `automated-review:workflow:${sessionIndex}:Review`;
             await storage.adoptNativeAgentSession({
               key: nativeAgentSessionStorageKey(environmentId, "codex", logicalSessionKey),
               environmentId,
               agent: "codex",
               logicalSessionKey,
               providerSessionId: `${environmentId}-provider-${sessionIndex}`,
-              origin: "looped-review",
+              origin: "automated-review",
               interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             });
           }
@@ -788,8 +788,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow:revision:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow:revision:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -842,10 +842,10 @@ describe("NativeAgentService", () => {
         // bounds, not StorageService's per-record persistence path. Seeding the
         // valid durable snapshot once avoids 520 serialized rewrites of a growing
         // JSON file, which could exceed Bun's test timeout under aggregate load.
-        await seedLoopedReviewNativeSessions(
+        await seedUnattendedNativeSessions(
           storage,
           520,
-          (index) => `looped-review:workflow:phase-${index}:Review`,
+          (index) => `automated-review:workflow:phase-${index}:Review`,
         );
         await service.reconcileAgentInteractions();
         expect(interactionInternals(service).trackedInteractions.size).toBe(64);
@@ -886,14 +886,14 @@ describe("NativeAgentService", () => {
         interactionMonitorMode: "observe-only",
       },
       async ({ storage, service }) => {
-        const logicalSessionKey = "looped-review:workflow:status:Review";
+        const logicalSessionKey = "automated-review:workflow:status:Review";
         await storage.adoptNativeAgentSession({
           key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
           environmentId: "env-1",
           agent: "codex",
           logicalSessionKey,
           providerSessionId: "provider-session",
-          origin: "looped-review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
@@ -936,8 +936,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow:timer:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow:timer:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.init();
@@ -982,8 +982,8 @@ describe("NativeAgentService", () => {
         await service.ensureSession({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: "looped-review:workflow:coalesced:Review",
-          origin: "looped-review",
+          logicalSessionKey: "automated-review:workflow:coalesced:Review",
+          origin: "automated-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         const first = service.reconcileAgentInteractions();

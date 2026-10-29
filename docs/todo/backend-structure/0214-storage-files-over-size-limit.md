@@ -7,22 +7,28 @@ scope named only `storage.ts` and `storage-agent-mail.ts`.
 Done on `todo-0214-storage-files-over-size-limit-e4d9bb3f3d4f` from `main` at
 `863b5782` (2026-10-27). **Every item below is done.** The durable description
 is in [`storage.md`](../../architecture/storage.md) (the file table and "Code
-layout"). Delete this file and its index row once the branch has merged
-(decision 7).
+layout"). The branch merged as #1321 (`e8c1b2af9`). A second delegation
+(`todo-0214-storage-file-split-2054bfb3bc39`, 2026-10-29, on `main` at
+`79f3bc97e`) found the splits already on `main`. It re-ran the qualification,
+diagnosed the writer-guard timeouts (flake
+[1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md))
+and moved the leftover test files to
+[0930](0930-storage-test-files-over-size-limit.md). Delete this file and its
+index row once that branch merges (decision 12).
 
 ## Task analysis (historical)
 
 This analysis is a historical snapshot from before the completed implementation.
-The current state, completed work and decisions below supersede its open
-statuses and proposed choices.
+The task statuses are current; the current state, completed work and
+decisions below supersede its proposed choices.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Split `storage-shared-core.ts` by topic**: 2,187 lines of record types, validators and helpers behind `storage-shared.ts`. Status: open.
-2. **Split `NativeAgentSessionsRepository` into collaborators**: `storage-native.ts` is 2,015 lines. Status: open.
-3. **Qualification run**: storage tests with the before/after writer-guard comparison, then `mise run test`. Status: open.
+1. **Split `storage-shared-core.ts` by topic**: 2,187 lines of record types, validators and helpers behind `storage-shared.ts`. Status: done (#1321).
+2. **Split `NativeAgentSessionsRepository` into collaborators**: `storage-native.ts` is 2,015 lines. Status: done (#1321).
+3. **Qualification run**: storage tests with the before/after writer-guard comparison, then `mise run test`. Status: done (2026-10-27 on the #1321 branch; repeated 2026-10-29 on `main`).
 
 ### 1. Split `storage-shared-core.ts` by topic
 
@@ -111,7 +117,7 @@ and pure helpers every repository shares, re-exported through
 
 ## Current state
 
-- `storage-shared-core.ts` is 603 lines: the base JSON guards (`isRecord`,
+- `storage-shared-core.ts` is 603 lines (616 on `main` at `79f3bc97e`): the base JSON guards (`isRecord`,
   `isNonBlankString`, `isPortMapping`, …), the Kanban, feature-plan, Linear and
   GitHub record types, `slugify` and the environment/project/session
   constructors, `exists`/`isMissingFileError`, and the protocol names
@@ -134,7 +140,8 @@ and pure helpers every repository shares, re-exported through
   `workflow-tab-actions.ts` used a moved name; it now imports the pane-layout
   helpers from their module. `tests/unit/version-drift.test.ts` reads
   `defaultConfig`'s allowlist from `storage-shared-config.ts`.
-- `NativeAgentSessionsRepository` (`storage-native.ts`) is 1,192 lines: the
+- `NativeAgentSessionsRepository` (`storage-native.ts`) is 1,192 lines (1,243 at
+  `79f3bc97e`, after #1330): the
   session records and their per-key lease, owner migration, create/adopt,
   controls, resume identity, invalidation, display tails, environment
   deletion, the interaction journal, incomplete-turn notices, turn outcomes
@@ -148,7 +155,8 @@ and pure helpers every repository shares, re-exported through
     exclusion. [0078](../cross-cutting/0078-legacy-prompt-queue-claim-state.md)
     normalizes expired or malformed legacy claims on every load; the startup
     recovery, timer and usage counter are retired.
-  - `NativeAgentDeliveries` (`storage-native-deliveries.ts`, 678 lines,
+  - `NativeAgentDeliveries` (`storage-native-deliveries.ts`, 678 lines, 704 at
+    `79f3bc97e`,
     `repos.nativeAgentDeliveries`): the dispatch journal
     (`dispatchNativeAgentPromptOnce`, confirm, clear, retire) and the steer
     journal (reserve a queued steer, dispatch, reconcile, recover, confirm,
@@ -160,10 +168,13 @@ and pure helpers every repository shares, re-exported through
   deliveries call them. `PromptsRepository`, `NativeAgentSessionsRepository`
   and the facade's delivery forwarders call the new owners;
   no facade method changed name or signature.
-- No `storage*.ts` source file is over 2,000 lines. Two test files are
-  (`storage-agent-mail.test.ts`, 2,292; `storage-writer-guards.test.ts`,
-  2,480, plus `storage.test.ts`, 4,322); they were outside this file's scope
-  and are not followed up here.
+- No `storage*.ts` source file is over 2,000 lines. Four test files are:
+  `src/core/storage.test.ts` (4,322), `tests/storage.test.ts` (3,206),
+  `storage-writer-guards.test.ts` (2,481) and `storage-agent-mail.test.ts`
+  (2,292). They are followed up in
+  [0930](0930-storage-test-files-over-size-limit.md) (decision 10).
+  `storage-native-agent-sessions.test.ts` is 1,970, under the limit, so it was
+  not split.
 
 ## Outstanding work
 
@@ -226,66 +237,165 @@ All on this branch, 2026-10-27.
   recorded in flake case
   [1150](../../tests/flaky-tests/aggregate-validation-runs/1150-storage-files-size-0214-validation.md).
 
+### Follow-up run, 2026-10-29
+
+These runs are on `todo-0214-storage-file-split-2054bfb3bc39`, on `main` at
+`79f3bc97e`. The branch changes only docs, so they measure `main`.
+
+- The same focused set as above: every `src/core/storage*.test.ts`,
+  `tests/storage*.test.ts`, `src/core/native-agent*.test.ts`,
+  `src/core/prompt-queue*.test.ts`, `project-home-environment.test.ts` and
+  `preview-port-publication.test.ts`. That is now 111 files. Run with
+  `bun test --preload ../../tests/setup-node.ts --parallel=6` from
+  `apps/backend`, at load average about 4–6: 2,022 pass, 0 fail (14.3 s). In
+  this run, `name the store they write` took 3.02 s of its 5 s budget.
+- `storage-writer-guards.test.ts` alone, at load about 2: 36 pass (2.5 s). The
+  scan test took 1.44 s, so it didn't time out. No source changed, so with and
+  without this branch are the same tree. The timeout reproduces only under the
+  host load recorded in flake
+  [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md).
+- `mise run test`, at load average about 3.5–7: exit 0 (4 min 26 s). The
+  Codex protocol lockfile, bridges (97 s), root and agent-support (204 s) and
+  workspace (266 s) groups all passed, including `storage-writer-guards`.
+  Evidence: `orkestrator-test-run.dY5sW1/summary.json` under the host
+  temporary directory.
+- `tests/unit/todo-index.test.ts` and `tests/unit/flaky-tests-index.test.ts`:
+  44 pass. `bun fmt --check` on the changed docs (through `mise exec`): clean.
+
 ## Assumptions and decisions
 
-1. **Six topic modules beside a smaller core, not a core rename.** Options:
-   keep `storage-shared-core.ts` as the base and move topics out; dissolve it
-   into topic files only (its direct importers and the `storage-shared-extra.ts`
-   namespace import would all change); or one `storage-shared-records.ts` for
-   every guard. Chose the base plus six topics. Pros: the six direct
-   importers that use only base names (`isRecord`, `createEnvironment`,
-   `isPortMapping`, `KanbanTask`) did not change, and each topic file reads as
-   one subject. Cons: seven files where there was one; the core still carries
-   the protocol re-export block, which is what keeps it at 603 lines.
-2. **The core imports no topic module.** Options: re-export the topics from
-   the core too (so `storage-shared-core.ts` stayed a complete surface) or
-   only from `storage-shared.ts`. Chose `storage-shared.ts` only: the topics
-   import their helpers from the core, so a core that re-exported them would
-   be an import cycle. Pros: no cycle; the one direct importer of a moved name
-   now names its module. Cons: `storage-shared-core.ts` is no longer the whole
-   surface, which the comment at its top says.
-3. **Moved code is byte-for-byte, imports rewritten.** Each topic imports
-   protocol names from the protocol package rather than through the core's
-   re-exports, and `defaultConfig` went with config normalization, so the
-   version-drift test now reads `storage-shared-config.ts`. Pros: a rebase
-   over a branch that edited one of these functions moves a hunk, it does not
-   merge two versions. Cons: the "interaction journal" topic the item named
-   has no module: the core only re-exports the protocol's journal helpers, and
-   the journal's storage is on the repository.
-4. **Two collaborators: prompt-queue persistence and the delivery journals.**
-   Options: prompt-queue persistence alone (about 1,820 lines left, a thin margin);
-   that plus the dispatch and steer journals; or also display tails and the
-   interaction journal (about 100 lines, each a small cohesive section). Chose
-   the two. Pros: the repository keeps the session record and what reads it,
-   the deliveries are the one place a request is parked and settled, and the
-   file is at 1,192 lines. Cons: `NativeAgentDeliveries` (678 lines) is the
-   biggest new file; the queued-steer settlement writes the prompt-queue
-   store from the deliveries class, under the queue store's lease, as it did
-   from the repository.
-5. **Peers in the registry, the session lease kept on the repository.**
-   Options: a shared `NativeAgentSessionStore` (lease, load, save, announce)
-   passed to every class, as `AgentMailStore` is, or the deliveries calling
-   the repository's primitives through `this.repos.nativeAgentSessions`.
-   Chose the registry. Pros: the repository's own methods are unchanged
-   except for four `private` keywords, so other branches editing
-   `storage-native.ts` rebase cleanly, and a test that spies on
-   `repos.nativeAgentSessions.saveNativeAgentSession` still sees the
-   deliveries' writes. Cons: four methods are public that were private
-   (`enqueueNativeAgentSessionMutation`, `assertReadableNativeAgentSession`,
-   `announceNativeAgentRecord`, `scrubPendingNativeAgentDispatchBackups`; the
-   last stays on the repository because adoption also scrubs a parked
-   dispatch); only the storage files can reach them, since nothing outside
-   names a repository.
-6. **`PromptQueueStore` is a store, not a seventh prompt repository.**
-   Options: fold the persistence into `PromptsRepository` (781 lines, the
-   queue operations) or a store class of its own. Chose the store, like
-   `AgentMailStore`: drafts, build pipelines, the deliveries and the prompts
-   repository all go through the same lease and load, and claim recovery has
-   one owner the facade's `init` calls. Cons: 36 lines in
-   `storage-prompts.ts` changed from `nativeAgentSessions.` to
-   `promptQueues.` (the only wide edit in the branch, all mechanical).
-7. **Kept this file, marked Finished.** As with 0009–0013, 0066 and 0163, it
-   stays until the branch merges so the review can read these decisions.
+Decisions 1–7 were made on the #1321 branch (2026-10-27); 8–12 on the
+2026-10-29 follow-up.
+
+### 1. Six topic modules beside a smaller core, not a core rename
+
+Task 1. Options:
+keep `storage-shared-core.ts` as the base and move topics out; dissolve it
+into topic files only (its direct importers and the `storage-shared-extra.ts`
+namespace import would all change); or one `storage-shared-records.ts` for
+every guard. Chose the base plus six topics. Pros: the six direct
+importers that use only base names (`isRecord`, `createEnvironment`,
+`isPortMapping`, `KanbanTask`) did not change, and each topic file reads as
+one subject. Cons: seven files where there was one; the core still carries
+the protocol re-export block, which is what keeps it at 603 lines.
+
+### 2. The core imports no topic module
+
+Task 1. Options: re-export the topics from
+the core too (so `storage-shared-core.ts` stayed a complete surface) or
+only from `storage-shared.ts`. Chose `storage-shared.ts` only: the topics
+import their helpers from the core, so a core that re-exported them would
+be an import cycle. Pros: no cycle; the one direct importer of a moved name
+now names its module. Cons: `storage-shared-core.ts` is no longer the whole
+surface, which the comment at its top says.
+
+### 3. Moved code is byte-for-byte, imports rewritten
+
+Task 1. Each topic imports
+protocol names from the protocol package rather than through the core's
+re-exports, and `defaultConfig` went with config normalization, so the
+version-drift test now reads `storage-shared-config.ts`. Pros: a rebase
+over a branch that edited one of these functions moves a hunk, it does not
+merge two versions. Cons: the "interaction journal" topic the item named
+has no module: the core only re-exports the protocol's journal helpers, and
+the journal's storage is on the repository.
+
+### 4. Two collaborators: prompt-queue persistence and the delivery journals
+
+Task 2. Options: prompt-queue persistence alone (about 1,820 lines left, a thin margin);
+that plus the dispatch and steer journals; or also display tails and the
+interaction journal (about 100 lines, each a small cohesive section). Chose
+the two. Pros: the repository keeps the session record and what reads it,
+the deliveries are the one place a request is parked and settled, and the
+file is at 1,192 lines. Cons: `NativeAgentDeliveries` (678 lines) is the
+biggest new file; the queued-steer settlement writes the prompt-queue
+store from the deliveries class, under the queue store's lease, as it did
+from the repository.
+
+### 5. Peers in the registry, the session lease kept on the repository
+
+Task 2. Options: a shared `NativeAgentSessionStore` (lease, load, save, announce)
+passed to every class, as `AgentMailStore` is, or the deliveries calling
+the repository's primitives through `this.repos.nativeAgentSessions`.
+Chose the registry. Pros: the repository's own methods are unchanged
+except for four `private` keywords, so other branches editing
+`storage-native.ts` rebase cleanly, and a test that spies on
+`repos.nativeAgentSessions.saveNativeAgentSession` still sees the
+deliveries' writes. Cons: four methods are public that were private
+(`enqueueNativeAgentSessionMutation`, `assertReadableNativeAgentSession`,
+`announceNativeAgentRecord`, `scrubPendingNativeAgentDispatchBackups`; the
+last stays on the repository because adoption also scrubs a parked
+dispatch); only the storage files can reach them, since nothing outside
+names a repository.
+
+### 6. `PromptQueueStore` is a store, not a seventh prompt repository
+
+Task 2. Options: fold the persistence into `PromptsRepository` (781 lines, the
+queue operations) or a store class of its own. Chose the store, like
+`AgentMailStore`: drafts, build pipelines, the deliveries and the prompts
+repository all go through the same lease and load, and claim recovery has
+one owner the facade's `init` calls. Cons: 36 lines in
+`storage-prompts.ts` changed from `nativeAgentSessions.` to
+`promptQueues.` (the only wide edit in the branch, all mechanical).
+
+### 7. Kept this file, marked Finished
+
+All tasks. As with 0009–0013, 0066 and 0163, it
+stays until the branch merges so the review can read these decisions.
+
+### 8. Tasks 1 and 2 were not redone
+
+Tasks 1 and 2. The 2026-10-29 delegation asked for both splits again, but they
+were already on `main` (#1321, `e8c1b2af9`). The task list above was only a
+snapshot of the analysis taken before the implementation, so it still said
+open. At `79f3bc97e` the files are `storage-shared-core.ts` 616 lines,
+`storage-native.ts` 1,243, `storage-native-deliveries.ts` 704 and
+`storage-prompt-queue-store.ts` 139. Repeating the work would only have been
+churn, so this branch changes no source. It updates the statuses and line
+counts and records the follow-ups. The analysis's recommended options were
+already taken, with the departures explained in decisions 1–6. The prompt-queue
+store and the delivery journals both moved, rather than the dispatch and steer
+journals alone.
+
+### 9. The guard comparison was not repeated
+
+Task 3. The before-and-after guard comparison measures the split, and the
+2026-10-27 evidence below already covers it (40 stores identical; 126 write sites
+identical apart from the class of four members). This branch has no source
+change, so before and after are the same tree and a new dump would prove
+nothing. Instead it re-ran the focused storage set, the guard file on its own
+and `mise run test` on `main`, to show the merged state is still green (see
+"Validation evidence").
+
+### 10. The over-limit test files went to a new todo
+
+Task 2, decision "Should the over-limit storage test files be handled too?".
+The recommended option was to split `storage-native-agent-sessions.test.ts`
+alongside its source and open a new todo for the rest. That file is 1,970
+lines, under the limit, so splitting it would only be churn and it was left
+alone. The new todo is
+[0930](0930-storage-test-files-over-size-limit.md), since `docs/README.md`
+forbids adding items to an existing todo. The new file also covers
+`tests/storage.test.ts` (3,206 lines), which the analysis missed.
+
+### 11. The writer-guard timeouts were diagnosed but not fixed
+
+Task 3. `name the store they write` pays for the whole backend-wide raw-writer
+scan, which parses and walks 820 files in about 1.4–1.9 s of CPU at idle. On the
+shared 12-core host at load 34–46 that time passes the 5 s default. The details
+are in flake
+[1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md),
+and cases 1290 and 1295 now link to it. Raising the timeout or skipping the test
+would loosen the test, which `AGENTS.md` forbids. Making the scan cheaper
+changes the guard's analysis code, which is beyond a docs-only follow-up. It is
+task 4 of 0930.
+
+### 12. This file is kept until the follow-up merges
+
+All tasks. `docs/README.md` says to delete a finished file once its work has
+merged, and #1321 has merged. The file still holds the decisions behind the
+follow-up branch, so, as with decision 7, it stays until that branch merges.
+After that, delete the file and its index row.
 
 ## Constraints and rationale
 

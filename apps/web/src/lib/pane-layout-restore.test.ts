@@ -854,7 +854,6 @@ describe("reconcilePersistedLayout", () => {
       isLocal: true,
       worktreePath: "/worktrees/current",
       hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1",
-      hasLoopedReview: (workflowId: string) => workflowId === "workflow-1",
       hasMultiReview: (workflowId: string) => workflowId === "multi-1",
     };
     const restored = reconcilePersistedLayout(
@@ -892,11 +891,6 @@ describe("reconcilePersistedLayout", () => {
               id: "build",
               type: "claude-build",
               buildTabData: { environmentId: "old", pipelineId: "pipeline-1", taskId: "task-1" },
-            },
-            {
-              id: "looped",
-              type: "looped-review",
-              loopedReviewTabData: { environmentId: "old", workflowId: "workflow-1" },
             },
             {
               id: "multi",
@@ -948,10 +942,6 @@ describe("reconcilePersistedLayout", () => {
           },
         },
         {
-          id: "looped",
-          loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true },
-        },
-        {
           id: "multi",
           multiReviewTabData: {
             environmentId: "env-1",
@@ -965,7 +955,8 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(restored)).not.toContain("stale");
   });
 
-  test("drops looped-review tabs whose authoritative workflow no longer exists", () => {
+  test("drops tabs of the removed Looped Review feature from older layouts", () => {
+    // Layouts saved before Looped Review was removed can still hold its tabs.
     const restored = reconcilePersistedLayout(
       saved({
         kind: "leaf",
@@ -973,20 +964,17 @@ describe("reconcilePersistedLayout", () => {
         tabs: [
           { id: "plain", type: "plain" },
           {
-            id: "missing-loop",
+            id: "retired-loop",
             type: "looped-review",
             loopedReviewTabData: {
               environmentId: "env-1",
-              workflowId: "missing",
+              workflowId: "workflow-1",
             },
-          },
+          } as never,
         ],
-        activeTabId: "missing-loop",
+        activeTabId: "retired-loop",
       }),
-      {
-        ...context,
-        hasLoopedReview: () => false,
-      },
+      context,
     );
 
     expect(restored?.root).toEqual({
@@ -1257,22 +1245,22 @@ describe("reconcilePersistedLayout", () => {
       },
       {
         name: "review without data",
-        tab: { id: "bad-review-data", type: "looped-review" },
+        tab: { id: "bad-review-data", type: "multi-review" },
       },
       {
         name: "review without a workflow",
         tab: {
           id: "bad-review-workflow",
-          type: "looped-review",
-          loopedReviewTabData: {},
+          type: "multi-review",
+          multiReviewTabData: {},
         },
       },
       {
         name: "review whose workflow is absent",
         tab: {
           id: "bad-review-reference",
-          type: "looped-review",
-          loopedReviewTabData: { workflowId: "missing-workflow" },
+          type: "multi-review",
+          multiReviewTabData: { workflowId: "missing-workflow" },
         },
       },
       {
@@ -1283,7 +1271,7 @@ describe("reconcilePersistedLayout", () => {
     const restoreContext = {
       ...context,
       hasBuildPipeline: () => false,
-      hasLoopedReview: () => false,
+      hasMultiReview: () => false,
     };
 
     for (const { name, tab } of malformedTabs) {

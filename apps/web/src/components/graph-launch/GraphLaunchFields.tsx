@@ -165,7 +165,7 @@ export function GraphLaunchInputField({
             id={id}
             value={draft.inputs[input.name] ?? ""}
             onChange={(event) => onText(event.target.value)}
-            placeholder={autoFilled ? "Filled from the environment's current commit" : "JSON value"}
+            placeholder={autoFilled ? "Filled from the run's environment" : "JSON value"}
             rows={3}
             aria-invalid={problem ? true : undefined}
             aria-describedby={problem ? errorId : undefined}
@@ -173,9 +173,9 @@ export function GraphLaunchInputField({
           />
           {input.autoFill === "environment-head" && (
             <p className="text-[11px] leading-snug text-muted-foreground">
-              {autoFilled
+              {draft.environment === "existing"
                 ? "Filled from the environment's current commit; JSON here overrides it."
-                : "A new environment has no commit yet; give it as JSON, or run in an existing environment."}
+                : "Filled from the new environment's commit once it exists; JSON here overrides it."}
             </p>
           )}
         </>

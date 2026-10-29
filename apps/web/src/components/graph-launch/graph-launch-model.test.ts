@@ -38,10 +38,10 @@ function options(overrides: Partial<GraphLaunchOptions> = {}): GraphLaunchOption
 }
 
 describe("graph launch model", () => {
-  test("a workspace input is filled from an existing environment, required for a new one", () => {
+  test("a workspace input is filled from the run's environment, existing or new", () => {
     const base = initialGraphLaunchDraft(options(), { environmentId: "env-1" });
     expect(base.environment).toBe("new-worktree");
-    expect(graphLaunchInputProblem(workspaceInput, base, null)).toContain("new environment");
+    expect(graphLaunchInputProblem(workspaceInput, base, null)).toBeNull();
     const existing = { ...base, environment: "existing" as const };
     expect(graphLaunchInputProblem(workspaceInput, existing, null)).toBeNull();
     const given = { ...base, inputs: { code: '{"branch":"main"}' } };

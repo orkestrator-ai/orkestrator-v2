@@ -168,12 +168,16 @@ export function graphLaunchParamProblem(
   return graphParamValueProblem(parameter, value as GraphScalarValue);
 }
 
-/** Whether an input is filled from the existing environment when left empty. */
+/**
+ * Whether an input is filled from the run's environment when left empty: an
+ * existing environment's commit at launch, or a new environment's once it
+ * exists (the backend's provisioner stores it before the run starts).
+ */
 export function graphLaunchInputAutoFilled(
   input: GraphLaunchInputOption,
-  draft: Pick<GraphLaunchDraft, "environment">,
+  _draft: Pick<GraphLaunchDraft, "environment">,
 ): boolean {
-  return input.autoFill === "environment-head" && draft.environment === "existing";
+  return input.autoFill === "environment-head";
 }
 
 /** An input's problem in the draft, or null. */
@@ -192,9 +196,6 @@ export function graphLaunchInputProblem(
   }
   if (text === "") {
     if (graphLaunchInputAutoFilled(input, draft)) return null;
-    if (input.autoFill === "environment-head" && input.required) {
-      return `${name} comes from an existing environment's commit; give it as JSON for a new environment`;
-    }
     return input.required ? `${name} needs a value` : null;
   }
   try {

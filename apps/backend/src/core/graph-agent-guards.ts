@@ -21,7 +21,11 @@
  *   at a commit the activation created (committed during its turn: in
  *   `baseline..HEAD` or the worktree's HEAD reflog since the capture, with a
  *   commit time after it). Commits a run's own `push-branch` or
- *   `open-pull-request` node pushed are never counted against an agent.
+ *   `open-pull-request` node pushed are never counted against an agent. When
+ *   another activation whose turn overlapped created the identical commit,
+ *   the push is attributed through each repository's own record of it
+ *   (`graph-agent-remote-attribution.ts`); where Git cannot tell, the guard
+ *   fails closed and says why.
  *
  * - **Worktree** (isolated branches, item 403): the branch writes its own
  *   worktree, so the run's checkout gets the read-only guard above, and the
@@ -56,6 +60,16 @@ import {
 import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import {
+  graphAttributePush,
+  graphCreatedCommits,
+  graphGuardWindow,
+  graphPushEvidence,
+  MAX_GRAPH_GUARD_PEERS,
+  type GraphGuardPeer,
+  type GraphGuardPeerSource,
+  type GraphPushEvidence,
+} from "./graph-agent-remote-attribution.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";
 import {
@@ -84,6 +98,12 @@ export interface GraphAgentGuardDependencies {
   lsRemote?: GraphLsRemote;
   /** Commits the run's system nodes pushed or are pushing (effects `push:<branch>:<sha>`). */
   systemPushes?(runId: string): Promise<ReadonlySet<string>>;
+  /**
+   * Other activations whose turns overlapped (`graphGuardPeerSource`), for
+   * attributing an identical commit. Without it, or when it fails, every
+   * commit the activation created is its own.
+   */
+  peers?: GraphGuardPeerSource;
   now?: () => Date;
 }
 
@@ -116,11 +136,8 @@ const SAFE_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const LS_REMOTE_ATTEMPTS = 3;
 /** Refs a listing may hold before the guard refuses to judge it. */
 const MAX_LISTED_REFS = 100_000;
-/** Commits of the activation the guard looks for on the remote. */
-const MAX_CREATED_COMMITS = 1_000;
-const MAX_REFLOG_ENTRIES = 200;
-/** Clock skew tolerated between the backend and the environment. */
-const CLOCK_SKEW_SECONDS = 2;
+/** Pushed refs attributed one by one; any beyond are blamed on the activation. */
+const MAX_ATTRIBUTED_REFS = 20;
 const MAX_REFUSAL_PATHS = 50;
 
 export function graphGuardSubject(node: GuardNode): ReadOnlyGuardSubject {
@@ -452,6 +469,8 @@ export class GraphAgentGuards {
     node: GuardNode;
     baseline: GraphActivationBaseline | undefined;
     runId: string;
+    /** The activation itself, so it is not its own peer. */
+    activationKey?: string;
     /** An isolated branch's own worktree (item 403). */
     worktree?: GraphActivationWorktree;
   }): Promise<GraphGuardResult[]> {
@@ -596,6 +615,7 @@ export class GraphAgentGuards {
     node: GuardNode;
     baseline: GraphActivationBaseline | undefined;
     runId: string;
+    activationKey?: string;
     worktree?: GraphActivationWorktree;
   }): Promise<{ result: GraphGuardResult; failure?: string }> {
     const at = this.now().toISOString();
@@ -620,15 +640,25 @@ export class GraphAgentGuards {
       const message = `${subject.stage} cannot be accepted because the backend could not verify the upstream refs after the step: ${reason}`;
       return { result: guardResult("remote-ref", "unavailable", at, message), failure: message };
     };
+    const environmentGit = this.dependencies.git;
+    if (!environmentGit) return unavailable("the environment's Git is unavailable");
+    const window = graphGuardWindow(baseline.capturedAt);
     let created: Set<string>;
     let pushedBySystem: ReadonlySet<string>;
     try {
-      created = await this.createdCommits(input.environment, baseline, input.worktree);
+      created = await graphCreatedCommits(
+        environmentGit,
+        input.environment.id,
+        baseline,
+        window,
+        input.worktree,
+      );
       pushedBySystem = (await this.dependencies.systemPushes?.(input.runId)) ?? new Set();
     } catch (error) {
       return unavailable(graphCommandErrorLine(error));
     }
     const changes: string[] = [];
+    const published: PublishedRef[] = [];
     for (const entry of baseline.upstream) {
       let output: string;
       let listing: Map<string, Set<string>>;
@@ -646,18 +676,35 @@ export class GraphAgentGuards {
       for (const [ref, values] of listing) {
         // The run branch was judged above (a system node's push included).
         if (ref === entry.ref) continue;
-        const published = [...values].find((sha) => created.has(sha) && !pushedBySystem.has(sha));
-        if (published) changes.push(`${entry.remote} ${ref} → ${short(published)}`);
+        const sha = [...values].find((value) => created.has(value) && !pushedBySystem.has(value));
+        if (sha) published.push({ remote: entry.remote, ref, sha });
       }
     }
+    const attribution = await this.attribute(
+      { ...input, baseline: { ...baseline, capturedAt: baseline.capturedAt } },
+      environmentGit,
+      published,
+    );
+    changes.push(...attribution.own);
     const remotes = [...new Set(baseline.upstream.map((entry) => entry.remote))];
+    if (changes.length === 0 && attribution.ambiguous.length > 0) {
+      const message = `${subject.stage} cannot be accepted because a push during its turn cannot be attributed (ambiguous): ${attribution.ambiguous.slice(0, 3).join("; ")}${attribution.ambiguous.length > 3 ? ` and ${attribution.ambiguous.length - 3} more` : ""}. The guard fails closed rather than guess.`;
+      return {
+        result: guardResult("remote-ref", "unavailable", at, message),
+        failure: bounded(message, GRAPH_RUN_BOUNDS.maxErrorChars),
+      };
+    }
     if (changes.length === 0) {
+      const others =
+        attribution.others.length > 0
+          ? ` ${attribution.others.slice(0, 3).join("; ")}${attribution.others.length > 3 ? ` and ${attribution.others.length - 3} more` : ""}.`
+          : "";
       return {
         result: guardResult(
           "remote-ref",
           "passed",
           at,
-          `No ref the step could have pushed changed on ${remotes.join(", ")}.`,
+          `No ref the step could have pushed changed on ${remotes.join(", ")}.${others}`,
         ),
       };
     }
@@ -669,59 +716,100 @@ export class GraphAgentGuards {
   }
 
   /**
-   * Commits the activation created during its turn: `baseline..HEAD` and the
-   * worktree's HEAD reflog since the capture, each with a commit time after
-   * it (a fast-forward onto older commits brings none in).
+   * Splits the refs that point at commits this activation created into its
+   * own pushes, pushes another activation's repository recorded (an
+   * identical commit), and ones Git cannot attribute.
    */
-  private async createdCommits(
-    environment: Environment,
-    baseline: GraphActivationBaseline,
-    worktree?: GraphActivationWorktree,
-  ): Promise<Set<string>> {
-    const environmentGit = this.dependencies.git;
-    if (!environmentGit) throw new Error("the environment's Git is unavailable");
-    // An isolated branch commits in its own worktree, from its own base.
-    const git = worktree
-      ? (environmentId: string, args: string[]) =>
-          environmentGit(environmentId, ["-C", worktree.path, ...args])
-      : environmentGit;
-    const base = worktree?.baseRef ?? baseline.headRef;
-    const since = Math.floor(Date.parse(baseline.capturedAt!) / 1000) - CLOCK_SKEW_SECONDS;
-    const created = new Set<string>();
-    const range = await git(environment.id, [
-      "log",
-      "--format=%H %ct",
-      `--max-count=${MAX_CREATED_COMMITS}`,
-      `${base}..HEAD`,
-    ]);
-    for (const line of range.split("\n")) {
-      const [sha, time] = line.trim().split(" ");
-      if (sha && GRAPH_COMMIT_PATTERN.test(sha) && Number(time) >= since) created.add(sha);
+  private async attribute(
+    input: {
+      environment: Environment;
+      baseline: GraphActivationBaseline & { capturedAt: string };
+      runId: string;
+      activationKey?: string;
+      worktree?: GraphActivationWorktree;
+    },
+    environmentGit: EnvironmentGit,
+    published: readonly PublishedRef[],
+  ): Promise<{ own: string[]; others: string[]; ambiguous: string[] }> {
+    const own: string[] = [];
+    const others: string[] = [];
+    const ambiguous: string[] = [];
+    if (published.length === 0) return { own, others, ambiguous };
+    const describe = (push: PublishedRef) => `${push.remote} ${push.ref} → ${short(push.sha)}`;
+    let peers: GraphGuardPeer[] = [];
+    try {
+      peers = (
+        (await this.dependencies.peers?.({
+          runId: input.runId,
+          ...(input.activationKey ? { activationKey: input.activationKey } : {}),
+          since: input.baseline.capturedAt,
+        })) ?? []
+      ).slice(0, MAX_GRAPH_GUARD_PEERS);
+    } catch {
+      // No peers: every commit it created is its own (fail closed).
     }
-    // The reflog is per worktree; a repository without one simply has none.
-    const reflog = await git(environment.id, [
-      "log",
-      "-g",
-      "--date=unix",
-      "--format=%H %ct %gd",
-      `--max-count=${MAX_REFLOG_ENTRIES}`,
-      "HEAD",
-    ]).catch(() => "");
-    for (const line of reflog.split("\n")) {
-      const [sha, time, selector] = line.trim().split(" ");
-      const moved = Number(/@\{(\d+)\}$/.exec(selector ?? "")?.[1]);
-      if (
-        sha &&
-        GRAPH_COMMIT_PATTERN.test(sha) &&
-        Number(time) >= since &&
-        Number.isFinite(moved) &&
-        moved >= since
-      ) {
-        created.add(sha);
+    const createdBy = new Map<GraphGuardPeer, Promise<Set<string> | null>>();
+    const peerCreated = (peer: GraphGuardPeer) => {
+      let created = createdBy.get(peer);
+      if (!created) {
+        // A peer that cannot be read can never clear this activation.
+        created = graphCreatedCommits(
+          environmentGit,
+          peer.environmentId,
+          peer.baseline,
+          graphGuardWindow(peer.baseline.capturedAt, peer.finishedAt),
+          peer.worktree,
+        ).catch(() => null);
+        createdBy.set(peer, created);
       }
+      return created;
+    };
+    const window = graphGuardWindow(input.baseline.capturedAt);
+    const checkout = input.worktree?.path ?? null;
+    for (const [index, push] of published.entries()) {
+      if (index >= MAX_ATTRIBUTED_REFS || peers.length === 0) {
+        own.push(describe(push));
+        continue;
+      }
+      const claimants: GraphGuardPeer[] = [];
+      for (const peer of peers) {
+        if ((await peerCreated(peer))?.has(push.sha)) claimants.push(peer);
+      }
+      if (claimants.length === 0) {
+        own.push(describe(push));
+        continue;
+      }
+      const evidence = (environmentId: string, peerWindow: typeof window) =>
+        graphPushEvidence(environmentGit, environmentId, push, peerWindow);
+      const self: GraphPushEvidence = await evidence(input.environment.id, window);
+      const judged = [];
+      for (const peer of claimants) {
+        judged.push({
+          label: peer.label,
+          evidence: await evidence(
+            peer.environmentId,
+            graphGuardWindow(peer.baseline.capturedAt, peer.finishedAt),
+          ),
+          sameCheckout:
+            peer.environmentId === input.environment.id &&
+            (peer.worktree?.path ?? null) === checkout,
+        });
+      }
+      const attribution = graphAttributePush(self, judged);
+      if (attribution.kind === "self") own.push(describe(push));
+      else if (attribution.kind === "peer") {
+        others.push(`${describe(push)} is an identical commit that ${attribution.peer} pushed`);
+      } else ambiguous.push(`${describe(push)}: ${attribution.reason}`);
     }
-    return created;
+    return { own, others, ambiguous };
   }
+}
+
+/** A ref on a watched remote that points at a commit the activation created. */
+interface PublishedRef {
+  remote: string;
+  ref: string;
+  sha: string;
 }
 
 function branchRef(environment: Pick<Environment, "branch">): string | null {

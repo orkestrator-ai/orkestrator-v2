@@ -7,7 +7,7 @@ status: in-progress
 depends_on: [001, 106, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
-branch: "graphs-209-credentials"
+branch: "graphs-guard-polish"
 pr: ""
 updated: 2026-10-29
 ---
@@ -228,6 +228,64 @@ with and without bubblewrap and the bubblewrap break between launch and dispatch
 `gh auth status`/HTTPS push from a node's shell (agent-test profiles carry no GitHub credential, so
 it could not distinguish withholding from absence). These stay in todo 0031 task 10.
 
+**2026-10-29 · Live findings fixed** (branch `graphs-guard-polish`).
+- **(1) Remote-ref attribution of an identical commit.** New
+  `apps/backend/src/core/graph-agent-remote-attribution.ts`; the created-commit
+  scan moved there (`graphCreatedCommits`, now bounded by a window
+  `graphGuardWindow(capturedAt, finishedAt?)`, ±2 s skew). Unchanged: a ref
+  pointing at a commit the activation created, and no other activation created
+  it, is its push. New: when peers (other agent activations of any non-mock run
+  with a baseline, captured before now and not finished before this capture −
+  2 s; newest 16; `graphGuardPeerSource` over `listAllGraphRuns`, wired by
+  default in `installGraphAgentExecutor`, dependency `peers`/`guardPeers`)
+  created the same commit, each repository's own record of the push decides
+  (`graphPushEvidence` → `pushed | none | unknown`): for a branch, a reflog
+  entry "update by push" to that commit on `refs/remotes/<remote>/<branch>`
+  within the activation's window; for a tag, the local tag at that commit.
+  `graphAttributePush`: own evidence `none` and a peer's `pushed` → passed,
+  detail "… is an identical commit that step <id> of run <id> pushed"; own
+  `pushed` and every claimant `none` → violated; otherwise **ambiguous**:
+  outcome `unavailable` (no protocol change; an older backend can still read
+  the record), detail "cannot be attributed (ambiguous): <ref>: <peer> made
+  the identical commit, and <reason>. The guard fails closed rather than
+  guess." Reasons: a shared repository, no record anywhere (push by URL,
+  reflogs off), unreadable evidence, or a peer in the same checkout. A peer
+  source that fails or a peer that cannot be read clears nobody. At most 20
+  refs are attributed per certification; any beyond are the activation's.
+  `certify` takes `activationKey` so an activation is not its own peer.
+  **Limit, stated plainly:** the live case (two *local* environments of one
+  project) is still failed on both sides, now as ambiguous with the reason
+  instead of a false "pushed". Local environments are worktrees of one
+  repository, which share remote-tracking refs, tags and their reflogs; Git
+  records nothing per worktree for a push, so no Git evidence can say which
+  worktree pushed. Separate clones (container environments) are attributed
+  precisely. A per-activation snapshot of every remote ref was considered and
+  not stored: a ref can point at a commit created after the capture only if
+  it changed during the window, unless an identical commit existed before,
+  which the peer check covers (a peer that pushed and finished more than 2 s
+  before this capture is not considered; the activation is then blamed, fail
+  closed). Dropping the `base..HEAD` source (reflog only) was rejected: a
+  repository with reflogs off would then hide real pushes.
+  Tests: `graph-agent-remote-attribution.test.ts` (fake repos: separate
+  clones → pusher violated, other passed; shared repository and push by URL →
+  both ambiguous; no claiming peer → violated; failing source/unreadable peer
+  clears nobody; same checkout; peer selection) and
+  `graph-agent-remote-attribution.integration.test.ts` (slow tier, real Git:
+  a bare origin, byte-identical commits via fixed author/committer dates, one
+  push; clones → precise, worktrees → both ambiguous).
+- **(2) Claude refusal wording.** `read-only-policy.ts` keeps one decision
+  path and two wordings (`REFUSALS`, `ReadOnlyRefusalRole`):
+  `readOnlyRefusalRole(sessionPolicy, readOnlyTurn)` is `coordinator` in a
+  coordinator process (`ORKESTRATOR_BRIDGE_EXECUTION_POLICY`) or for a
+  non-`readOnly` turn under the coordinator policy, else `read-only`. Graph
+  reviewers and pipeline reviews (`readOnly` turns on an ordinary bridge) now
+  read "This session is read-only, so `git commit` is not available here."
+  with no delegation advice; coordinator wording is unchanged (default role).
+  Passed from `claudeQueryOptions` (`session-manager-prompt-query.ts`). Tests:
+  `read-only-policy.test.ts` (neutral wording for every refusal kind, role
+  rule) and `session-manager-read-only-wording.test.ts` (the launched CLI's
+  hook, review vs coordinator).
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
@@ -237,3 +295,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Codex (per-thread `shell_environment_policy`, live-checked on 0.164.0) and Pi (spawn-hooked shell tools, withheld MCP environment) credential withholding; OpenCode/Cursor struck as impossible; per-platform remote-axis reason; docs. · Inspector rendering (211), live conformance (after 214).
 - 2026-10-29 · coordinator · Ticked "Shown in the inspector": 211's inspector renders the applied tier, its reason and guard results (test cited). · Live conformance remains (todo 0031 task 10).
 - 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · Live conformance on Claude, Codex, OpenCode and Pi: shown tiers matched, every enforced claim held, pushes caught by the remote-ref guard; Done when ticked. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (guard polish, `graphs-guard-polish`) · Live findings fixed: identical-commit attribution through per-repository push evidence (precise for separate clones, explicit ambiguous failure for worktrees of one repository); neutral read-only refusal wording for non-coordinator Claude turns. · complete; awaiting PR

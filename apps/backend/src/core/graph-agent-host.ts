@@ -632,6 +632,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         node: this.input.node,
         baseline: facts.baseline,
         runId: this.context.run.id,
+        activationKey: this.context.activation.key,
         ...(facts.worktree ? { worktree: facts.worktree } : {}),
       });
       facts.guards = mergeGraphGuardResults(facts.guards, results);

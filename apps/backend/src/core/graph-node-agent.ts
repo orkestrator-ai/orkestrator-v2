@@ -65,6 +65,7 @@ import {
 import { graphAgentFloorProblem, graphAgentPolicy } from "./graph-agent-policy.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
+import type { GraphGuardPeerSource } from "./graph-agent-remote-attribution.js";
 import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-questions.js";
 import { GraphAgentResults, type GraphAgentResultService } from "./graph-agent-results.js";
 import { graphAgentBranch } from "./graph-agent-state.js";
@@ -137,6 +138,8 @@ export interface GraphAgentExecutorDependencies {
   lsRemote?: GraphLsRemote;
   /** Commits the run's system nodes pushed, which the remote-ref guard never blames on an agent. */
   systemPushes?(runId: string): Promise<ReadonlySet<string>>;
+  /** Activations whose turns overlapped, for attributing an identical commit (the remote-ref guard). */
+  guardPeers?: GraphGuardPeerSource;
   /** The branch the work targets (built-in prompts). Default the environment's base branch. */
   targetBranch?(environment: Environment): string;
   projectNotes?(projectId: string): Promise<string | undefined>;
@@ -207,6 +210,7 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
       ...(dependencies.environmentGit ? { git: dependencies.environmentGit } : {}),
       ...(dependencies.lsRemote ? { lsRemote: dependencies.lsRemote } : {}),
       ...(dependencies.systemPushes ? { systemPushes: dependencies.systemPushes } : {}),
+      ...(dependencies.guardPeers ? { peers: dependencies.guardPeers } : {}),
     });
   }
 

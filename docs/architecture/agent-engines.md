@@ -1255,11 +1255,15 @@ description; `x-orkestrator-sources` annotations are stripped before a provider
 sees the schema. Values go through the type library's full validation (budgets,
 schema, domain validator), the placeholder check of the result kind a built-in
 type maps to, and, for consolidating ports, provenance against the node's input
-items (`cite`, `accountForAll`). `workspace@1` and `file-list@1` values are also
-checked against the environment's repository through the environment hook the
-backend installs (`workflow-result-environment-validator.ts`); without a hook,
-or when the repository cannot be read, the result is refused without spending a
-correction. One activation with several output ports gets one capability
+items (`cite`, `accountForAll`). Values whose type needs the environment are
+also checked there through the environment hook the backend installs
+(`workflow-result-environment-validator.ts`): a `workspace@1` commit must exist
+and be reachable from its branch, `file-list@1` paths must resolve inside the
+worktree, a `validation-plan@1` must name the workspace HEAD it validates, and a
+`review-package@2` reference must still match its sealed package
+(`verifyEnvironmentReviewPackage`, hashed inside the container for container
+environments). Without a hook, or when the environment cannot be read, the
+result is refused without spending a correction. One activation with several output ports gets one capability
 (`AgentToolsServer.workflowResultActivationConnection`) listing each port's pair
 of tools and one status tool. A slot without a port declaration uses the generic
 `submit_graph_output`, which is also what the OpenCode broker offers.

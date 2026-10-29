@@ -90,6 +90,10 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "environment-cleanup-sweeps": { kind: "document" },
   "workflow-results": { kind: "envelope", collections: ["entries"] },
   "workflow-result-tools": { kind: "document" },
+  // Graph runs (plan P2.1): one row per run, owned by its environment; and
+  // their artifacts, one row per artifact plus a usage row per run, owned by run.
+  "graph-runs": { kind: "record", owner: ownerField("environmentId") },
+  "graph-artifacts": { kind: "record", owner: ownerField("runId") },
 };
 
 /**

@@ -10,6 +10,12 @@
  *   accepts it as a pathspec there: it does not lead through a symbolic link.
  *   The path need not exist (a fix may list the files it deleted); the pure
  *   check has already refused absolute paths, `..` and backslashes.
+ * - `validation-plan@1`: `headRef` is the workspace HEAD the plan will be run
+ *   against (plan P2.1), as the validation worker requires when it starts.
+ * - `review-package@2`: the referenced package still has its byte count and
+ *   SHA-256 and its validation artifacts verify, through the same check the
+ *   pipeline runs before a reviewer reads it (`verifyEnvironmentReviewPackage`,
+ *   hashed inside the container for container environments).
  *
  * Every command runs through the backend's own environment Git port
  * (`createPipelineEnvironmentGit`), so local worktrees and containers behave
@@ -17,6 +23,7 @@
  * the service turns into a refusal that spends no correction (fail closed).
  * Issues carry paths and codes, never file contents.
  */
+import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import type { WorkflowResultValidationIssue } from "@orkestrator/protocol/workflow-results";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type {
@@ -241,14 +248,70 @@ async function checkFileListPaths(
   return issues.slice(0, MAX_ISSUES);
 }
 
+async function checkValidationPlanHead(
+  git: EnvironmentGit,
+  environmentId: string,
+  value: unknown,
+): Promise<WorkflowResultValidationIssue[]> {
+  if (!record(value) || typeof value.headRef !== "string") return [];
+  const head = (await git(environmentId, ["rev-parse", "--verify", "HEAD^{commit}"]))
+    .trim()
+    .toLowerCase();
+  if (!SHA_PATTERN.test(head)) throw new Error("The environment repository is not readable");
+  return value.headRef.toLowerCase() === head
+    ? []
+    : [
+        issue(
+          "$.headRef",
+          "head_mismatch",
+          "headRef is not the workspace HEAD the plan validates; use the current HEAD commit.",
+        ),
+      ];
+}
+
+/** The pipeline's review package check: bytes, SHA-256 and validation artifacts. */
+export type ReviewPackageVerifier = (
+  environmentId: string,
+  reference: ReviewPackageReference,
+) => Promise<{ valid: boolean; reason?: string }>;
+
+async function checkReviewPackage(
+  verify: ReviewPackageVerifier | undefined,
+  environmentId: string,
+  value: unknown,
+): Promise<WorkflowResultValidationIssue[]> {
+  // No verifier means the environment cannot be checked: refuse, never accept.
+  if (!verify) throw new Error("Review package verification is unavailable");
+  const result = await verify(environmentId, value as ReviewPackageReference);
+  return result.valid
+    ? []
+    : [
+        issue(
+          "$",
+          "package_changed",
+          `The review package no longer matches its reference${result.reason ? `: ${result.reason}` : ""}.`,
+        ),
+      ];
+}
+
 /**
  * The environment validator the backend installs on its workflow result
- * service, over the environment Git port.
+ * service, over the environment Git port and the review package check.
  */
-export function gitEnvironmentValidator(git: EnvironmentGit): WorkflowResultEnvironmentValidator {
+export function gitEnvironmentValidator(
+  git: EnvironmentGit,
+  options: { verifyReviewPackage?: ReviewPackageVerifier } = {},
+): WorkflowResultEnvironmentValidator {
   return async ({ attempt, validator, value }: WorkflowResultEnvironmentRequest) => {
-    if (validator === "workspace-commit")
-      return checkWorkspaceCommit(git, attempt.environmentId, value);
-    return checkFileListPaths(git, attempt.environmentId, value);
+    switch (validator) {
+      case "workspace-commit":
+        return checkWorkspaceCommit(git, attempt.environmentId, value);
+      case "file-list-paths":
+        return checkFileListPaths(git, attempt.environmentId, value);
+      case "validation-plan":
+        return checkValidationPlanHead(git, attempt.environmentId, value);
+      case "review-package-reference":
+        return checkReviewPackage(options.verifyReviewPackage, attempt.environmentId, value);
+    }
   };
 }

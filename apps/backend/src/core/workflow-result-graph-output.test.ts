@@ -628,6 +628,28 @@ describe("environment checks through the registry hook", () => {
     await workflowResults.submit(scope, other, { ...workspace, headRef: "not-a-sha" });
     expect(requests.length).toBe(before);
   });
+
+  test("a validation plan port is checked against the workspace HEAD through the hook", async () => {
+    const requests: WorkflowResultEnvironmentRequest[] = [];
+    workflowResults.setEnvironmentValidator(async (request) => {
+      requests.push(request);
+      return request.validator === "validation-plan"
+        ? [{ path: "$.headRef", code: "head_mismatch", message: "Not the workspace HEAD." }]
+        : [];
+    });
+    const slot = graphOutputSlotInput(
+      { resultKey: crypto.randomUUID(), ...scope, provider: "claude" },
+      { name: "plan" },
+      graphBuiltInType("validation-plan@1")!,
+    );
+    await workflowResults.prepare(slot);
+    const plan = graphBuiltInType("validation-plan@1")!.example;
+    expect(await workflowResults.submit(scope, slot.resultKey, plan)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_result", issues: [{ code: "head_mismatch" }] },
+    });
+    expect(requests.map((request) => request.validator)).toEqual(["validation-plan"]);
+  });
 });
 
 describe("structured-output transport: one combined schema per activation", () => {

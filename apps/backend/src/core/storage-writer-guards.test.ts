@@ -1793,6 +1793,7 @@ describe("StorageService store writers", () => {
     expect([...areas.keys()].sort()).toEqual([
       "agentAccounts",
       "coordinators",
+      "graphRuns",
       "kanban",
       "nodes",
       "previewServices",

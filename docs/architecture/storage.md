@@ -36,8 +36,8 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 The area fields are `kanban` (`KanbanStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
-`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`) and
-`agentAccounts` (`AgentAccountsStorage`). Each area type is declared next to
+`nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
+`agentAccounts` (`AgentAccountsStorage`) and `graphRuns` (`GraphRunsStorage`). Each area type is declared next to
 its repository and re-exported from `storage.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
@@ -69,6 +69,7 @@ the change journal.
 | `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
 | `CoordinatorsRepository` | `storage-coordinators.ts` | Coordinator workspaces and workflow associations |
 | `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
+| `GraphRunsRepository` | `storage-graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets) |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
 

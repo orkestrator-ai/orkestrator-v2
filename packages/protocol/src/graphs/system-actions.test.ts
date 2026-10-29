@@ -65,10 +65,12 @@ describe("system action table", () => {
     for (const spec of Object.values(GRAPH_SYSTEM_ACTION_SPECS)) {
       for (const port of [...spec.inputs, ...spec.outputs]) {
         if (port.type === "pull-request-state@1") continue;
+        // A list port (`select-workspace`'s candidates) lists a built-in element type.
+        const element = /^list<(.+)>$/.exec(port.type)?.[1] ?? port.type;
         expect({
           action: spec.action,
           type: port.type,
-          builtIn: !!graphBuiltInType(port.type),
+          builtIn: !!graphBuiltInType(element),
         }).toEqual({
           action: spec.action,
           type: port.type,
@@ -84,6 +86,14 @@ describe("system action table", () => {
         .filter((spec) => !spec.sideEffect)
         .map((spec) => spec.action),
     ).toEqual(["wait-for-checks"]);
+  });
+
+  test("select-workspace falls back only when told to (item 403)", () => {
+    expect(graphSystemActionParams("select-workspace")).toEqual({ fallback: "fail" });
+    expect(checkGraphSystemParams("select-workspace", { fallback: "first" })).toEqual([]);
+    expect(checkGraphSystemParams("select-workspace", { fallback: "best" })).toMatchObject([
+      { param: "fallback", code: "type" },
+    ]);
   });
 
   test("defaults fill absent parameters", () => {

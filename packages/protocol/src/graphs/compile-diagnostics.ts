@@ -244,7 +244,29 @@ export const GRAPH_COMPILE_DIAGNOSTICS = Object.freeze({
   },
   "replicated-writer": {
     severity: "error",
-    summary: "A replicated node may not write the workspace in version 1 (D3).",
+    summary:
+      "A replicated node writes the workspace without `isolation: worktree`; its branches would share one checkout (D3).",
+  },
+  "isolation-not-replicated": {
+    severity: "error",
+    summary: "`isolation: worktree` applies only to a replicated node (item 403).",
+  },
+  "isolation-not-writer": {
+    severity: "error",
+    summary: "`isolation: worktree` applies only to a node that writes the workspace.",
+  },
+  "isolation-unpinned": {
+    severity: "error",
+    summary:
+      "An isolated node needs exactly one single `workspace@1` input: the commit its worktrees start from.",
+  },
+  "isolation-branch-limit": {
+    severity: "error",
+    summary: "An isolated node may run at most 8 branches (`GRAPH_ISOLATION_BOUNDS.maxBranches`).",
+  },
+  "select-without-isolated-branches": {
+    severity: "error",
+    summary: "A `select-workspace` node's candidates do not come from an isolated node's branches.",
   },
 
   // Enforcement, taint and acknowledgements (D4, report §5.13).

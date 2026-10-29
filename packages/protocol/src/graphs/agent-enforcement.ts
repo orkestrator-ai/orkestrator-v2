@@ -247,6 +247,7 @@ export const GRAPH_GUARD_LABELS: Readonly<Record<GraphGuardKind, string>> = Obje
   "read-only": "Read-only workspace",
   "remote-ref": "No pushes",
   enforcement: "Enforcement floor",
+  worktree: "Isolated worktree",
 });
 
 export interface GraphActivationEnforcementView {

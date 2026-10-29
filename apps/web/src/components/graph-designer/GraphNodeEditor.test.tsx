@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
+import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/graphs/isolation-template";
 import type { GraphAgentNode, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { GraphNodeEditor } from "./GraphNodeEditor";
 import { renderWithGraphEditor } from "./graph-editor.test-support";
@@ -117,6 +118,18 @@ describe("GraphNodeEditor", () => {
         .querySelector("[data-graph-floor-lowered]")!
         .getAttribute("data-graph-floor-lowered"),
     ).toBe("acknowledged");
+  });
+
+  test("Capabilities: a replicated writer opts into a worktree per branch, and back (item 403)", () => {
+    const { harness } = renderNode(graphCompetingImplementationsTemplate(), "implement");
+    tab("Capabilities");
+    const isolation = screen.getByLabelText("Isolation") as HTMLSelectElement;
+    expect(isolation.value).toBe("worktree");
+    expect(screen.getByText(/Each branch writes its own Git worktree/)).toBeDefined();
+    fireEvent.change(isolation, { target: { value: "shared" } });
+    expect("isolation" in node(harness.current(), "implement")).toBe(false);
+    fireEvent.change(screen.getByLabelText("Isolation"), { target: { value: "worktree" } });
+    expect((node(harness.current(), "implement") as GraphAgentNode).isolation).toBe("worktree");
   });
 
   test("Execution: replicate over lenses with the lens editor, samples, a new role, retry and ask_human", () => {

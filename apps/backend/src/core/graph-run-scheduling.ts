@@ -35,6 +35,10 @@
  *    workspace, and no reader while a writer holds it, across every run on
  *    the environment ({@link GraphWorkspaceLocks}). A blocked writer is not
  *    overtaken by later workspace users in the same pass, so it cannot starve.
+ *    An isolated branch (item 403) writes only its own worktree, so it holds
+ *    a *reader* on the run's workspace; the environment admits at most
+ *    `GRAPH_ISOLATION_BOUNDS.maxLiveWorktreesPerEnvironment` branch
+ *    worktrees at once (`worktree-limit`).
  * 3. **Admission** ({@link selectGraphAdmissions}): `limits.maxConcurrentAgents`
  *    admitted agent activations at once, and `limits.maxAgentSessions` agent
  *    activations over the run's life (`usage.agentSessions`, counted at
@@ -50,7 +54,10 @@
 import type { GraphPlanNode, GraphPlanRunOutput } from "@orkestrator/protocol/graphs/compile";
 import {
   appendGraphActivation,
+  GRAPH_ISOLATION_BOUNDS,
   graphActivationKey,
+  graphMainWorkspaceAccess,
+  graphNodeIsolated,
   GRAPH_ARTIFACT_BUDGETS,
   GRAPH_RUN_BOUNDS,
   isGraphActivationTerminal,
@@ -437,6 +444,8 @@ export function missingGraphRunOutputs(run: GraphRun): string[] {
 export interface GraphWorkspaceHold {
   writers: number;
   readers: number;
+  /** Admitted isolated branches, each with its own worktree (item 403); absent: none. */
+  worktrees?: number;
 }
 
 const NO_HOLD: GraphWorkspaceHold = { writers: 0, readers: 0 };
@@ -451,10 +460,16 @@ export function graphWorkspaceAllows(
   return hold.writers === 0;
 }
 
-function addHold(hold: GraphWorkspaceHold, access: GraphWorkspaceAccess): GraphWorkspaceHold {
-  if (access === "write") return { ...hold, writers: hold.writers + 1 };
-  if (access === "read") return { ...hold, readers: hold.readers + 1 };
-  return hold;
+function addHold(
+  hold: GraphWorkspaceHold,
+  access: GraphWorkspaceAccess,
+  worktree = false,
+): GraphWorkspaceHold {
+  let next = hold;
+  if (access === "write") next = { ...next, writers: next.writers + 1 };
+  if (access === "read") next = { ...next, readers: next.readers + 1 };
+  if (worktree) next = { ...next, worktrees: (next.worktrees ?? 0) + 1 };
+  return next;
 }
 
 /** The holds of a run's admitted activations. */
@@ -464,7 +479,7 @@ export function graphRunWorkspaceHold(run: GraphRun): GraphWorkspaceHold {
   for (const activation of run.activations) {
     if (!isGraphActivationAdmitted(activation.state)) continue;
     const node = nodes.get(activation.nodeId);
-    if (node) hold = addHold(hold, node.workspaceAccess);
+    if (node) hold = addHold(hold, graphMainWorkspaceAccess(node), graphNodeIsolated(node));
   }
   return hold;
 }
@@ -486,7 +501,10 @@ export class GraphWorkspaceLocks {
         ? NO_HOLD
         : (this.byWorkspace.get(previousWorkspace)?.get(runId) ?? NO_HOLD);
     if (previousWorkspace !== undefined && previousWorkspace !== workspace) this.release(runId);
-    if (workspace === undefined || (hold.writers === 0 && hold.readers === 0)) {
+    if (
+      workspace === undefined ||
+      (hold.writers === 0 && hold.readers === 0 && !(hold.worktrees ?? 0))
+    ) {
       this.release(runId);
     } else {
       let runs = this.byWorkspace.get(workspace);
@@ -497,7 +515,11 @@ export class GraphWorkspaceLocks {
       runs.set(runId, { ...hold });
       this.workspaceOf.set(runId, workspace);
     }
-    return hold.writers < previous.writers || hold.readers < previous.readers;
+    return (
+      hold.writers < previous.writers ||
+      hold.readers < previous.readers ||
+      (hold.worktrees ?? 0) < (previous.worktrees ?? 0)
+    );
   }
 
   release(runId: string): void {
@@ -512,11 +534,13 @@ export class GraphWorkspaceLocks {
   /** What every other run holds on `workspace`. */
   others(workspace: string, runId: string): GraphWorkspaceHold {
     let total = NO_HOLD;
+    let worktrees = 0;
     for (const [owner, hold] of this.byWorkspace.get(workspace) ?? []) {
       if (owner === runId) continue;
       total = { writers: total.writers + hold.writers, readers: total.readers + hold.readers };
+      worktrees += hold.worktrees ?? 0;
     }
-    return total;
+    return worktrees > 0 ? { ...total, worktrees } : total;
   }
 
   /** Workspaces with at least one hold (diagnostics). */
@@ -532,6 +556,8 @@ export type GraphAdmissionBlock =
   | "concurrency"
   /** A writer holds the workspace, or this writer waits for readers (D3). */
   | "workspace-lock"
+  /** The environment already runs its most isolated branch worktrees (item 403). */
+  | "worktree-limit"
   /** Startup recovery has not yet seeded the other runs' locks. */
   | "recovering";
 
@@ -580,7 +606,8 @@ export function selectGraphAdmissions(
       decision.blocked.push({ key: activation.key, reason: "concurrency" });
       continue;
     }
-    const access = node.workspaceAccess;
+    const access = graphMainWorkspaceAccess(node);
+    const worktree = graphNodeIsolated(node);
     if (access !== "none") {
       if (!options.workspaceKnown) {
         decision.blocked.push({ key: activation.key, reason: "recovering" });
@@ -595,7 +622,15 @@ export function selectGraphAdmissions(
         if (access === "write") writerWaiting = true;
         continue;
       }
-      mine = addHold(mine, access);
+      if (
+        worktree &&
+        (mine.worktrees ?? 0) + (options.others.worktrees ?? 0) >=
+          GRAPH_ISOLATION_BOUNDS.maxLiveWorktreesPerEnvironment
+      ) {
+        decision.blocked.push({ key: activation.key, reason: "worktree-limit" });
+        continue;
+      }
+      mine = addHold(mine, access, worktree);
     }
     if (agent) {
       agents += 1;

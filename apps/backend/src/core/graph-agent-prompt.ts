@@ -36,6 +36,7 @@ import {
   type GraphPromptElement,
   type GraphPromptFileRef,
   type GraphPromptValues,
+  type GraphBranchWorktreeFrame,
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
 import {
@@ -520,6 +521,8 @@ export interface GraphAgentPromptInput {
   resultTools: GraphResultTools;
   targetBranch: string;
   notes?: string;
+  /** An isolated branch's worktree (item 403): the locked frame naming where it works. */
+  worktree?: GraphBranchWorktreeFrame;
 }
 
 /** The activation's whole prompt, or {@link GraphAgentPromptError}. */
@@ -568,6 +571,7 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
     },
     ...(builtInText !== undefined ? { builtInText } : {}),
     resultTools: input.resultTools,
+    ...(input.worktree ? { worktree: input.worktree } : {}),
   });
   const errors = rendered.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   if (errors.length > 0) {

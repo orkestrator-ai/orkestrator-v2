@@ -500,8 +500,10 @@ function NodeInspector({
             loop ? ["Loop", loop.label ?? loop.id] : null,
             [
               "Workspace",
-              planNode?.workspaceAccess ??
-                (node.kind === "agent" ? node.workspaceAccess : "by action"),
+              `${
+                planNode?.workspaceAccess ??
+                (node.kind === "agent" ? node.workspaceAccess : "by action")
+              }${node.kind === "agent" && node.isolation === "worktree" ? " · worktree per branch" : ""}`,
             ],
             [
               "On failure",

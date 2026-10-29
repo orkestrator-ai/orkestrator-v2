@@ -22,6 +22,8 @@ import type { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 /** The name a new port carrying each type gets, as the built-in templates name them. */
 const PORT_NAMES: Readonly<Record<string, string>> = {
   "workspace@1": "code",
+  "list<workspace@1>": "candidates",
+  "decision@1": "decision",
   "ticket@1": "ticket",
   "validation-plan@1": "plan",
   "validation-results@1": "results",

@@ -6,7 +6,8 @@
  * `run-branches.ts`, `items` fan-outs in `run-fanout.ts`, stable item ids
  * in `run-items.ts`, an agent activation's branch state and `ask_human`
  * question in `run-agent-session.ts`, a human node's wait and the
- * pending-interaction snapshot in `run-human.ts`.
+ * pending-interaction snapshot in `run-human.ts`, isolated branch worktrees
+ * in `isolation.ts`.
  */
 export * from "./run-model.js";
 export * from "./run-identity.js";
@@ -17,3 +18,4 @@ export * from "./run-fanout.js";
 export * from "./run-items.js";
 export * from "./run-agent-session.js";
 export * from "./run-human.js";
+export * from "./isolation.js";

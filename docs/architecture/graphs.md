@@ -34,6 +34,7 @@ unless noted:
 | Items fan-out (401) | `run-fanout.ts`, `run-branches.ts`; backend `graph-run-fanout.ts`, `graph-run-ready-set.ts`, `graph-edge-transforms.ts` | One branch per item of a list input, bounded by `maxBranches`, recorded as a fan-out on the run; per-item provenance through `sourceItem` (below). |
 | Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
 | Per-node user MCP servers (404) | `native-agent-capabilities.ts` (`userMcpServers`, `NATIVE_AGENT_USER_MCP_SELECTION`), `capability-profiles.ts`; each bridge's MCP loader; backend `opencode-user-mcp.ts`; designer `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` | A node gets none of the user's own MCP servers unless `mcp:<server>` grants one; each provider loads exactly the granted ones where it can (below). |
+| Isolated branch worktrees (403) | `isolation.ts`, `isolation-template.ts`; backend `graph-branch-worktrees.ts`, `graph-system-select.ts` | A replicated writer with `isolation: "worktree"` runs each branch in its own Git worktree; `select-workspace` moves the run's branch to the judged one; a janitor removes what branches no longer need (below). |
 
 | Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
@@ -687,6 +688,108 @@ Nothing is saved on the way, and a run launches only from a saved template
 **Not for the coordinator (D6).** The `graph_describe_*` commands are app
 commands, not public actions, so neither the CLI, `run_action` nor any Control
 MCP tool reaches them (`graph-describe-coordinator.test.ts`).
+
+## Isolated branch worktrees (item 403)
+
+D3 keeps one writer per workspace. Phase 4 adds a way for several branches to
+write at once, each in a workspace of its own: "three competing
+implementations, a judge picks one" (report §6.7, §9.3). The design note is in
+[`plans/graphs/403-isolated-branch-worktrees.md`](../../plans/graphs/403-isolated-branch-worktrees.md).
+
+**Opting in.** An agent node sets `isolation: "worktree"`. The compiler
+accepts a replicated writer only with it (`replicated-writer`), and refuses it
+on a node that is not replicated (`isolation-not-replicated`), does not write
+(`isolation-not-writer`), lacks exactly one single `workspace@1` input
+(`isolation-unpinned`) or can run more than 8 branches
+(`isolation-branch-limit`, `GRAPH_ISOLATION_BOUNDS.maxBranches`). For the
+workspace rules an isolated writer *reads* the run's workspace
+(`graphMainWorkspaceAccess`): its branches run beside each other and beside
+readers, never beside a writer of the run's workspace. The plan node carries
+`isolation` only when it is set. The designer's Capabilities form has an
+**Isolation** choice next to workspace access, and the run inspector shows a
+branch's worktree.
+
+**One worktree per branch.** Before the guards' baseline, the agent executor
+creates the branch's worktree (`GraphBranchWorktrees.create`) with
+`git worktree add -B` from the commit its `workspace@1` input names, at
+`.orkestrator/graph-branches/<run>/<node>/i<iteration>/<branch>` on branch
+`orkestrator-graph/<run>/<node>/i<iteration>/<branch>`
+(`graphBranchWorktreePath`, `graphBranchWorktreeRef`; `:` in a branch key
+becomes `_`). Git runs at the environment root through the environment
+command runner, on the host in the worktree and in a container through
+`docker exec -w /workspace`, so one relative path serves both and `.orkestrator/`
+is Git-excluded first. The activation records it (`NodeActivation.worktree`:
+path, branch, base commit) with its first journal write; a later attempt of the
+same position (a retry or a restart) gets a fresh one from the same commit.
+
+**Sessions and confinement.** Bridges have one working directory per process
+and a container publishes one port per bridge, so a branch's session runs in
+the environment's bridge. Its prompt carries a locked frame
+(`graphBranchWorktreeInstruction`, in the system contract) naming the worktree,
+its branch and base: work, run commands and commit only there, leave the run's
+checkout and other branches alone, never push. Confinement is guarded, not
+enforced:
+
+- the run's checkout gets the read-only guard for the branch's whole turn
+  (`graphNodeIsReadOnlyGuarded` is true for isolated nodes), submit-time
+  refusal included;
+- the `worktree` guard certifies the branch's own worktree: present, on its
+  branch, descending from its base, nothing uncommitted (a correctable
+  `worktree_changed` refusal at submit time first);
+- the remote-ref guard reads the commits created in the branch's own worktree.
+
+The branch's `workspace@1` output is its worktree's HEAD on its own branch,
+with its base as `baseRef`. `push-branch` and `open-pull-request` refuse it
+(they require the run's branch).
+
+**Locks.** An admitted branch holds a reader on the run's workspace and is the
+one writer of its own worktree. The lock table also counts branch worktrees
+per environment: at most 16 are admitted at once
+(`maxLiveWorktreesPerEnvironment`); a branch over it waits with the admission
+block `worktree-limit`.
+
+**`select-workspace`.** A system action: `list<workspace@1>` candidates (the
+isolated node's fan-in) and a `decision@1` whose `choice` names the winner by
+branch key (`sample.2`), the key's last part (`2`) when unique, or Git branch
+(`resolveGraphSelectChoice`). `fallback: "first"` takes the first successful
+branch when the choice names none; the default fails the node. A person picks
+by putting a human `edit` node on the decision. With the run's checkout on its
+branch and free of tracked changes, the branch is fast-forwarded to the chosen
+commit (effect `select-workspace:<slot>:<sha>`, once per slot and commit). A
+branch that moved past the candidates' base is refused, except a tip an earlier
+attempt of the same select put there (an upstream restart), which is reset with
+a backup ref under `refs/orkestrator-graph-backup/<run>/`. Then every
+candidate's worktree and branch is removed. The compiler reports
+`select-without-isolated-branches` when its candidates do not come from an
+isolated node. The palette lists it as **Select branch**.
+
+**Agent merge.** An ordinary builder agent that writes the run's workspace and
+reads the `list<workspace@1>`: the branches stay reachable by name until the
+run ends, so it merges them with Git in the run's checkout.
+
+**Cleanup.** The run service calls the janitor (`GraphBranchWorktreeJanitor`)
+under the run's lock after each saved record, against the stored record. It
+removes the worktree of every isolated activation that is terminal, unless a
+newer live attempt of the same position recorded its own
+(`graphBranchWorktreesToRemove`), and remembers what it removed so a quiet pass
+costs no Git call. When the run ends it removes the run's branches and anything
+left (`removeRun`), and at start-up it sweeps finished runs that still owe a
+cleanup. Environment deletion removes every isolated run's worktrees and
+branches before the worktree or container goes
+(`removeEnvironmentGraphBranchWorktrees`). Removal never follows a link:
+`git worktree remove --force` for a registered worktree, the confined removers
+otherwise. `mise run disk:report` has a row for the branches
+([disk-usage.md](../development/disk-usage.md)).
+
+**Restart, rewind, mock.** A restarted branch is a new attempt in a fresh
+worktree from its input commit. A code rewind of an isolated activation is
+refused (`graphRunCodeRewindBlocker`): its restart already starts from its
+input. A mock run makes no worktree and runs no Git: a mock branch answers a
+`workspace@1` on its own branch name with a fake commit, and a mock
+`select-workspace` picks with the same rule and records "would have run".
+
+`graphCompetingImplementationsTemplate()` is the reference graph: three
+isolated builder samples, a judge, a select.
 
 ## Mock runs (item 213)
 

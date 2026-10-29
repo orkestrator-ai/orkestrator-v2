@@ -76,6 +76,7 @@ import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import type {
   GraphActivationBaseline,
   GraphActivationSession,
+  GraphActivationWorktree,
   GraphGuardResult,
   GraphHumanWait,
   GraphModelBinding,
@@ -123,6 +124,8 @@ export interface GraphActivationFacts {
   enforcement?: GraphEnforcementTier;
   enforcementReason?: string;
   baseline?: GraphActivationBaseline;
+  /** An isolated branch's worktree (item 403), recorded before its session. */
+  worktree?: GraphActivationWorktree;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
   /** Human nodes (item 208): the wait the activation keeps until a person answers. */

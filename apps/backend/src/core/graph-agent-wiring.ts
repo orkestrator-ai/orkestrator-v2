@@ -56,6 +56,8 @@ export interface GraphAgentWiringInput {
   refreshToolResults?(): Promise<void>;
   ceiling?(projectId: string): Promise<GraphCapabilityCeiling | undefined>;
   environmentGit?: EnvironmentGit;
+  /** Creates isolated branches' worktrees (item 403). */
+  branchWorktrees?: GraphAgentExecutorDependencies["branchWorktrees"];
   /** The guards' worktree probe; default `get_environment_uncommitted_paths` through `invoke`. */
   workspaceProbe?: WorkspaceSnapshotProbe;
   /** `git ls-remote` with the environment's credentials (the remote-ref guard). */
@@ -122,6 +124,7 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     ...(input.refreshToolResults ? { refreshToolResults: input.refreshToolResults } : {}),
     ...(input.ceiling ? { ceiling: input.ceiling } : {}),
     ...(input.environmentGit ? { environmentGit: input.environmentGit } : {}),
+    ...(input.branchWorktrees ? { branchWorktrees: input.branchWorktrees } : {}),
     workspaceProbe:
       input.workspaceProbe ??
       commandWorkspaceProbe(
@@ -160,7 +163,12 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
       if (activation.state !== "running" && activation.state !== "awaiting-human") return null;
       const node = run.plan.nodes.find((entry) => entry.id === activation.nodeId);
       if (node?.kind !== "agent") return null;
-      return { environmentId: attempt.environmentId, node, baseline: activation.baseline };
+      return {
+        environmentId: attempt.environmentId,
+        node,
+        baseline: activation.baseline,
+        ...(activation.worktree ? { worktree: activation.worktree } : {}),
+      };
     }),
   );
   const toolHost = new GraphAgentToolHost({

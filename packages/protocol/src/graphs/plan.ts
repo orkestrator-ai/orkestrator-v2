@@ -51,6 +51,7 @@ import type {
   GraphTemplateScope,
   GraphTemplateV1,
   GraphWorkspaceAccess,
+  GraphWorkspaceIsolation,
   GraphWorkspaceSpec,
 } from "./template-model.js";
 import type { GraphValueType } from "./types.js";
@@ -227,6 +228,8 @@ export interface GraphPlanAgentNode extends GraphPlanNodeBase {
   minEnforcement?: AgentEnforcementTier;
   /** The node lowered its profile's floor (acknowledged, or the plan has an error). */
   floorLowered: boolean;
+  /** One worktree per branch (item 403); absent: the run's workspace. */
+  isolation?: GraphWorkspaceIsolation;
   session: GraphSessionSpec;
   replicate?: GraphPlanReplicate;
   askHuman: boolean;

@@ -262,7 +262,19 @@ describe("GraphRunTab inspector", () => {
               detail: "2 paths changed",
               paths: ["src/a.ts", "src/b.ts"],
             },
+            {
+              guard: "worktree",
+              outcome: "passed",
+              at: "2026-10-29T10:04:00.000Z",
+              detail: "The branch worktree is committed.",
+            },
           ],
+          worktree: {
+            path: ".orkestrator/graph-branches/run-1/plan/i1/sample.1",
+            branch: "orkestrator-graph/run-1/plan/i1/sample.1",
+            baseRef: "b".repeat(40),
+            createdAt: "2026-10-29T10:00:00.000Z",
+          },
           session: agentSession({ tokenCount: 12_345, turnMode: "build" }),
         },
       ),
@@ -281,6 +293,13 @@ describe("GraphRunTab inspector", () => {
     const guard = panel.querySelector('[data-graph-guard="read-only"]')!;
     expect(guard.getAttribute("data-graph-guard-outcome")).toBe("violated");
     expect(guard.textContent).toContain("src/b.ts");
+    // An isolated branch (item 403) shows its worktree and the worktree guard.
+    expect(panel.querySelector("[data-graph-worktree]")!.textContent).toContain(
+      "orkestrator-graph/run-1/plan/i1/sample.1",
+    );
+    expect(panel.querySelector('[data-graph-guard="worktree"]')!.textContent).toContain(
+      "Worktree guard",
+    );
     expect(panel.querySelector("[data-graph-usage]")!.textContent).toContain("12");
     expect(panel.querySelector("[data-graph-activation-error]")!.textContent).toContain(
       "guard-violation",

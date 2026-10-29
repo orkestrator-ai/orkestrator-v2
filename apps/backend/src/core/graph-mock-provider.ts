@@ -40,7 +40,11 @@
  */
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import { graphMockValue, graphMockWorkspace } from "@orkestrator/protocol/graphs/mock";
-import { graphActivationBranch } from "@orkestrator/protocol/graphs/run";
+import {
+  graphActivationBranch,
+  graphBranchWorktreeRef,
+  graphNodeIsolated,
+} from "@orkestrator/protocol/graphs/run";
 import { graphAgentItemIds } from "./graph-agent-results.js";
 import {
   graphMockBaseWorkspace,
@@ -107,13 +111,24 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
     const custom = graphMockCustomOutputs(pin);
     const mode = pin === "generated" ? "generated" : "example";
     // One fake commit per activation: every workspace output of a writing node names it.
-    const commit = graphMockWorkspace({
+    let commit = graphMockWorkspace({
       runId: context.run.id,
       activationKey: context.activation.key,
       port: "code",
       writes,
       ...(base ? { base } : {}),
     });
+    // An isolated branch commits on its own branch (item 403); no worktree is made.
+    if (graphNodeIsolated(node) && context.activation.branchKey !== undefined) {
+      commit = {
+        ...commit,
+        branch: graphBranchWorktreeRef(context.run.id, {
+          nodeId: node.id,
+          iteration: context.activation.iteration,
+          branchKey: context.activation.branchKey,
+        }),
+      };
+    }
     const headRef = writes || base ? commit.headRef : undefined;
     const workspace =
       node.workspaceAccess !== "none" && headRef

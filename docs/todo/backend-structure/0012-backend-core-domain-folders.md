@@ -68,7 +68,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state is still to move into the runtime ([0133](0133-backend-module-state-beyond-0066.md)).
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged), so the `storage` slice can be done once, but two storage files are still to be split ([0214](0214-storage-files-over-size-limit.md)), and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)).
 
 **Decisions.**
 

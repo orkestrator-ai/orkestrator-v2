@@ -12,8 +12,8 @@ container log service is one per process. Whichever backend shuts down first
 stops the watcher and the log followers and clears the refreshers for both.
 Production and `dev:test` run one backend per process, so today only a test
 that overlapped two backends could hit this, and no current test does. Found
-in the task analysis of
-[0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md#3-move-the-other-per-backend-rows).
+in the task analysis of todo 0133 (finished and deleted; see
+[backend-runtime.md](../../architecture/backend-runtime.md)).
 
 ## Task analysis
 
@@ -276,13 +276,12 @@ Run on omarchy-hp (Linux) on 2026-10-28.
 
 ## Related
 
-- [0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md): where this was found; owns the wider move.
+- [0390-backend-module-state-beyond-0133.md](0390-backend-module-state-beyond-0133.md): the remaining per-backend module state, after 0133 (finished and deleted).
 - [0066-backend-residual-module-state.md](0066-backend-residual-module-state.md)
 - [0011-backend-runtime-state-ownership.md](0011-backend-runtime-state-ownership.md)
 - [backend-runtime.md](../../architecture/backend-runtime.md)
 
 ## Replaces
 
-Nothing; new on 2026-10-27, split from
-[0133-backend-module-state-beyond-0066.md](0133-backend-module-state-beyond-0066.md)'s
-task analysis.
+Nothing; new on 2026-10-27, split from todo
+0133's task analysis (finished and deleted).

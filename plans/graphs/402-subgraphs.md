@@ -25,7 +25,8 @@ A template can be used as one node of another template.
 
 ## Work
 
-- [x] Write the design note in this file's Notes and get it agreed before building. (Written
+- [x] Write the design note in this file's Notes (written and built on 2026-10-29).
+- [ ] Get the design note agreed by the user. (The user was asked how to handle Phase 4 design notes on 2026-10-29; the question timed out unanswered, and the coordinator proceeded on its recommended option — write the note, build, and have the user review the note in the pull request. Agreement is still pending.)
   2026-10-29; per the user's standing Phase 4 instruction it is reviewed in the pull request.)
 - [x] Compiler inlining with namespaced IDs and parameter pass-through.
 - [x] The built-in Multi Review template usable as a block in user graphs.
@@ -200,3 +201,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Design note written; inlining, resolution, runtime scope, designer and tests built; §9.3 with Multi Review inlined compiles and runs on the graph runtime. · complete; awaiting PR
+- 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.

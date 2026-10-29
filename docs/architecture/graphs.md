@@ -1768,14 +1768,18 @@ environment is away, and a wait surviving a backend restart).
   `ORKESTRATOR_MULTI_REVIEW_ENGINE`) with its parity suites; the default stays
   bespoke, and flipping it and retiring the bespoke service await a soak the
   user decides.
-- **Live verification still needed.** No live-provider run has been recorded
-  for: the design bake-off from launch to PR on two providers; backend restart
-  mid fan-out on a real stack; read-only guards refusing a committing reviewer
-  and the enforcement tiers matching on every provider (todo
-  [0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md),
-  task 10); "Describe a graph" producing a compiling draft with a live model;
-  the coordinator's graph wakes with a live coordinator; and the real-stack
-  inactive-environment path for human nodes (start, switch away, answer later,
-  return; the run view's launch, switch away, finish, return passes in
-  `graph-run-view.spec.ts`). The Phase 2 exit criteria in
+- **Live verification.** Recorded on 2026-10-29 on an isolated profile
+  (item 209 and todo
+  [0031](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md)
+  task 10): the enforcement tiers held and committing reviewers were refused
+  on Claude, Codex, OpenCode and Pi (macOS); "Describe a graph" produced a
+  compiling draft with Claude; the design bake-off (without its sub-graph)
+  ran on Claude and Codex up to, but not including, the PR node; the §9.4
+  loop converged live; and the real-stack inactive-environment paths pass for
+  the run view and for human nodes (`graph-run-view.spec.ts`), including a
+  wait that survives a backend restart. Still open: Grok, Cursor and a Linux
+  host; a live `open-pull-request`, which opens a real pull request and needs
+  the user's approval; a backend restart mid fan-out on a real stack (the
+  seeded interleavings cover it with fakes); and the coordinator's graph
+  wakes with a live coordinator. The Phase 2 exit criteria in
   [`000-index.md`](../../plans/graphs/000-index.md) track them.

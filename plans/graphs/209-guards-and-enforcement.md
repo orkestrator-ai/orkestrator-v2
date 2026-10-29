@@ -45,7 +45,7 @@ What a profile promises is either enforced by the provider or detected by a guar
 
 ## Done when
 
-- [x] Guards and enforcement checks are in place, and the tiers shown match live conformance runs (Claude, Codex, OpenCode and Pi on macOS, 2026-10-29; Grok, Cursor and Linux not run, see Notes and todo 0031 task 10).
+- [ ] Guards and enforcement checks are in place, and the tiers shown match live conformance runs (Claude, Codex, OpenCode and Pi on macOS, 2026-10-29; Grok, Cursor and Linux not run, see Notes and todo 0031 task 10).
 
 ## Notes
 
@@ -237,3 +237,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Codex (per-thread `shell_environment_policy`, live-checked on 0.164.0) and Pi (spawn-hooked shell tools, withheld MCP environment) credential withholding; OpenCode/Cursor struck as impossible; per-platform remote-axis reason; docs. · Inspector rendering (211), live conformance (after 214).
 - 2026-10-29 · coordinator · Ticked "Shown in the inspector": 211's inspector renders the applied tier, its reason and guard results (test cited). · Live conformance remains (todo 0031 task 10).
 - 2026-10-29 · Claude Opus 5.5 (live verification, `graphs-live-verify`) · Live conformance on Claude, Codex, OpenCode and Pi: shown tiers matched, every enforced claim held, pushes caught by the remote-ref guard; Done when ticked. · complete; awaiting PR
+- 2026-10-29 · coordinator · Un-ticked Done-when: the tiers matched on every provider that could run (Claude, Codex, OpenCode, Pi on macOS), but Grok, Cursor and Linux have not been run live, so "every provider" is not yet shown. · Run Grok, Cursor and a Linux host when credentials and a host are available (todo 0031 task 10).

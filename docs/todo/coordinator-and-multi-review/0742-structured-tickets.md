@@ -1,13 +1,210 @@
 # Structured tickets: kinds, tiled sections and checkable acceptance criteria
 
-Built 2026-10-28 on `ticket-types-tiled-view-checkable-acs`. The reference is
-[tickets.md](../../architecture/tickets.md). This file records the design
-decisions and what still needs live evidence.
+Built 2026-10-28 on `ticket-types-tiled-view-checkable-acs` (merged as #1388,
+`ce117241`). The reference is [tickets.md](../../architecture/tickets.md).
+This file records the design decisions and what still needs live evidence.
 
-## Background
+## Task analysis
+
+Analysed 2026-10-28 against `main` at `79f3bc97`.
+
+The build items (schema and tools, the tiled view, checkable criteria in
+Verify) are done and listed with their evidence. What is left is live
+evidence, split here into its four parts.
+
+### Tasks
+
+1. **Schema, storage and tools**: kind, typed sections, JSON storage with migration on read, markdown round trip, tools accept sections. Status: done.
+2. **Tiled view**: ticket dialog and pipeline Ticket node inspector; editing opens a text editor. Status: done.
+3. **Checkable criteria in Verify**: Verify receives the criteria, records a status and evidence for each, the views show the ticks. Status: done.
+4. **Live Verify on each provider**: a real Build pipeline from a structured ticket whose Verify judges each criterion and whose ticks reach the board. Status: open (needs live providers).
+5. **Provider-enforced verdict schema**: each provider's structured output accepts the new verdict schema. Status: open (checked by the runs in 4).
+6. **Legacy ticket round trip in the app**: a legacy ticket opens unchanged, a title-only save leaves it alone, a section edit keeps unchanged ticks. Status: open.
+7. **Coordinator work brief through Control MCP**: a coordinator creates a work brief with `sections` on a real stack. Status: open (needs a live provider).
+
+### 1. Schema, storage and tools
+
+**Problem.** Tickets had one free-text description and one criteria field.
+
+**Context.** Decisions 2 to 7 below.
+
+**Investigation.** Done in #1388 (`ce117241`). `TICKET_KINDS` is
+`["feature", "work-brief"]` (`packages/protocol/src/ticket-sections.ts:28`),
+`DELIVERY_POLICIES` is `commit-only`, `push-no-pr`, `open-pr` (`:86`), and
+`sectionsBasis` is the mirror fingerprint (`:710`). `create_ticket` and
+`update_ticket` accept `sections` (`apps/backend/src/core/control-mcp-tools.ts:1132-1162`,
+`:1196`). A legacy row reads with derived sections and is not rewritten
+(`apps/backend/src/core/storage-kanban-sections.test.ts:43`).
+
+**Decisions.** None; done.
+
+### 2. Tiled view
+
+**Problem.** A long ticket was one block of text.
+
+**Context.** Decision 10 below.
+
+**Investigation.** Done in #1388. `TicketSectionsGrid` is a container-query
+grid, one column, two from `@xl` (36rem), three from `@4xl` (56rem)
+(`apps/web/src/components/tickets/TicketSectionsGrid.tsx:202-205`). It is used
+by the ticket dialog and by `PipelineTicketView`
+(`apps/web/src/components/build-pipeline/PipelineTicketView.tsx:6`). The
+dialog for an existing ticket widens to 48rem through
+`--modal-max-width` (`apps/web/src/components/kanban/KanbanTaskDialog.tsx:166`,
+`:985`), the width of `max-w-3xl`; create mode keeps 560px (`:163-164`,
+`:867`).
+
+**Decisions.** None; done.
+
+### 3. Checkable criteria in Verify
+
+**Problem.** Verify returned one pass or fail with no per-criterion result.
+
+**Context.** Decisions 5, 8 and 9 below.
+
+**Investigation.** Done in #1388. The snapshot stores the ticket's criteria
+ids at start (`apps/backend/src/core/build-pipeline-service-lifecycle.ts:459-490`),
+otherwise derived by `taskSnapshotCriteria`
+(`packages/protocol/src/build-pipeline.ts:110`). The verdict schema adds
+`acceptanceCriteria` with `status` from `passed`, `failed`, `not-checked`
+(`build-pipeline.ts:493-523`); the prompt asks for one entry per id
+(`apps/backend/src/core/build-pipeline-prompts.ts:649`, `:665`). An unreported
+criterion becomes `not-checked` (`build-pipeline.ts:595`). The old two-field
+verdict is still accepted
+(`apps/backend/src/core/workflow-result-contracts.ts:630`). Results are stored
+on the verify session and written to the ticket best effort
+(`apps/backend/src/core/build-pipeline-service-recovery.ts:194-195`, `:436`;
+`record_kanban_criteria_checks` in
+`apps/backend/src/core/commands-registry-kanban.ts:107`).
+
+**Decisions.** None; done.
+
+### 4. Live Verify on each provider
+
+**Problem.** Every part has unit, service and browser-fixture evidence only.
+A Verify step that misreads the criteria would mark tickets wrongly on every
+run.
+
+**Context.** No live spec runs a Build pipeline's Verify against criteria
+(`e2e/agent-testing/` has no such case). The live provider runs for other
+providers are batched in
+[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+
+**Investigation.** Nothing has been run live since #1388.
+
+**Decisions.**
+
+- **What ticket and what result count as a pass?**
+  - **A feature ticket with three criteria: one a command in the checkout proves, one deliberately false, one that cannot be checked in the checkout (for example a deployed page). Pass when Verify returns exactly one entry per id with `passed`, `failed` and `not-checked` in that order, `complete` is false, the failed criterion appears in the Fix step's feedback, and the board card and Ticket node show the ticks (recommended).**
+    - Pros: exercises all three statuses, the Fix feedback and the write-back in one run.
+    - Cons: the false criterion makes the pipeline loop into Fix, so the run is longer.
+  - **A ticket whose criteria all pass.**
+    - Pros: a short run.
+    - Cons: never shows `failed` or `not-checked`, which are the parts most likely to be wrong.
+- **Which providers, and how?**
+  - **Claude and Codex first in a disposable `mise run dev:test` profile, recorded in this file; Cursor, Pi, OpenCode and Grok later with 0031's credential runs (recommended).**
+    - Pros: the two main providers are signed in here; no new harness for a check that needs a judgement call on each verdict.
+    - Cons: manual evidence; a regression needs another manual run.
+  - **A new opt-in live spec.**
+    - Pros: repeatable.
+    - Cons: a lot of harness for a pipeline run with a Fix loop, before anyone knows it fails.
+
+### 5. Provider-enforced verdict schema
+
+**Problem.** Providers that enforce structured output may reject or strip parts
+of the new schema (arrays of objects with an `enum`).
+
+**Context.** The schema has no `maxItems` because several providers reject it
+(`packages/protocol/src/build-pipeline.ts:491-492`). It is handed to the
+provider through `outputSchema`
+(`apps/backend/src/core/http-bridge-prompt-body.ts:33`), which the Claude,
+Codex, Cursor, Pi and ACP bridges read.
+
+**Investigation.** Not run. A rejection would show as a failed Verify turn or a
+verdict accepted through the legacy two-field path with no criteria.
+
+**Decisions.**
+
+- **How should it be checked?**
+  - **As part of the task 4 runs: a pass also needs the verdict to be accepted without the legacy fallback and with no provider schema error in the turn (recommended).**
+    - Pros: no extra runs; it tests the schema exactly as Verify sends it.
+    - Cons: a provider is covered only when its task 4 run happens.
+  - **A separate call per provider with the schema and a trivial prompt.**
+    - Pros: quick, and covers every provider at once.
+    - Cons: bypasses the bridge and the prompt Verify uses, so it can pass where Verify fails.
+
+### 6. Legacy ticket round trip in the app
+
+**Problem.** Derive-on-read and the mirrors are tested in storage and
+components, not in the app with real old tickets.
+
+**Context.** Decisions 2 and 3 below; "Mirrors and migration" in
+[tickets.md](../../architecture/tickets.md).
+
+**Investigation.** Not run.
+
+**Decisions.**
+
+- **Which tickets?**
+  - **A copy of real tickets written before #1388, loaded into a disposable `dev:test` profile (recommended).** Pass when the text opens unchanged, a title-only save leaves `description` and `acceptanceCriteria` byte for byte, and a section edit keeps the ticks of criteria whose text did not change.
+    - Pros: real formatting (bold lead-ins, `Label:` lines, `- [x]` items) that hand-made tickets miss.
+    - Cons: copies user data into a test profile, which must be reset afterwards.
+  - **Hand-made legacy rows.**
+    - Pros: no user data involved.
+    - Cons: only the shapes the tester thinks of.
+
+### 7. Coordinator work brief through Control MCP
+
+**Problem.** No real coordinator has created a ticket with `sections`.
+
+**Context.** `create_ticket` accepts `sections` or plain text
+(`control-mcp-tools.ts:1132`).
+
+**Investigation.** Not run.
+
+**Decisions.**
+
+- **How should it be run?**
+  - **One Claude coordinator turn in the same `dev:test` profile as task 6, asked to create a work brief with summary, constraints, criteria and delivery policy; pass when the ticket shows those tiles and its text mirrors match (recommended).**
+    - Pros: cheap; shares the profile.
+    - Cons: one provider only.
+  - **A new scenario in the live coordinator suite.**
+    - Pros: repeatable, every platform.
+    - Cons: a full suite scenario for one tool call.
+
+## Current state
+
+- Built and merged in #1388; behaviour is in
+  [tickets.md](../../architecture/tickets.md).
+- Two kinds (feature ticket, work brief); typed optional sections stored as
+  JSON with a lossless markdown round trip and two text mirrors; a tiled view
+  in the ticket dialog and the pipeline Ticket node; acceptance criteria that
+  Verify marks passed, failed or not checked with evidence.
+- Evidence is unit, service and browser-fixture tests only.
+
+## Outstanding work
+
+### Qualification
+
+Live evidence (tasks 4 to 7):
+
+- Run a real Build pipeline from a structured ticket on Claude and Codex (then
+  the other providers) and check that Verify returns one entry per criterion,
+  marks unverifiable criteria `not-checked`, and that the ticks reach the board.
+- Check that provider-enforced structured output accepts the new verdict schema
+  on every provider (arrays of objects with an `enum`).
+- Edit a legacy ticket in the app: the text opens unchanged, a title-only save
+  leaves the text alone, and a section edit keeps unchanged criteria's ticks.
+- A coordinator creating a work brief with `sections` through Control MCP on a
+  real stack.
+
+## Constraints and rationale
+
+### Background
 
 The ticket-schema analysis (branches `ticket-schema-analysis-arktech-mini` and
-`ticket-schema-analysis-mbp3`, `docs/research/ticket-schema/`) found:
+`ticket-schema-analysis-mbp3`, `docs/research/ticket-schema/` on those
+branches, not on `main`) found:
 
 - Coordinator prompts say *how* to work (constraints 92%, reporting 88%, git
   workflow 81%) and none had acceptance criteria. Kanban tickets say *what* to
@@ -22,19 +219,6 @@ The ticket-schema analysis (branches `ticket-schema-analysis-arktech-mini` and
 The user decided: two main kinds (work brief and feature ticket); project-wide
 rules go in `AGENTS.md`, not tickets; defined optional subsections stored as
 JSON and shown as tiles; editing stays text; criteria are checkable by Verify.
-
-## Tasks
-
-1. **Schema, storage and tools**: kind, typed sections, JSON storage with
-   migration, markdown round trip, tools accept sections. Status: done.
-2. **Tiled view**: ticket dialog and pipeline Ticket node inspector; editing
-   opens a text editor. Status: done.
-3. **Checkable criteria in Verify**: Verify receives the criteria, records a
-   status and evidence for each, the views show the ticks. Status: done.
-4. **Live evidence**: a real Build pipeline whose Verify judges criteria on
-   each provider, and a real ticket round trip in the app. Status: open.
-
-## Decisions
 
 ### 1. Follow-up and steer messages: a ticket kind, or messages?
 
@@ -151,22 +335,19 @@ JSON and shown as tiles; editing stays text; criteria are checkable by Verify.
 - **Container queries (one, two, three columns at 0, 36rem and 56rem) (chosen).**
   - Pros: the same component works in the wide dialog, the narrow inspector
     and on a phone.
-- The ticket dialog for an existing ticket widens to `max-w-3xl` so tiles can
-  sit side by side; create mode stays narrow and keeps its description and
-  criteria fields (they take markdown with `##` sections).
+- The ticket dialog for an existing ticket widens to 48rem (the width of
+  `max-w-3xl`, set through `--modal-max-width`) so tiles can sit side by side;
+  create mode stays narrow and keeps its description and criteria fields
+  (they take markdown with `##` sections).
 
-## 4. Live evidence
+## Related
 
-**Problem.** Every part has unit, service and browser-fixture evidence only.
+- [tickets.md](../../architecture/tickets.md)
+- [0315-build-pipeline-flow-graph.md](0315-build-pipeline-flow-graph.md) (the
+  pipeline Ticket node)
+- [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
+  (batched provider runs)
 
-**Left:**
+## Replaces
 
-- Run a real Build pipeline from a structured ticket on Claude and Codex (then
-  the other providers) and check that Verify returns one entry per criterion,
-  marks unverifiable criteria `not-checked`, and that the ticks reach the board.
-- Check that provider-enforced structured output accepts the new verdict schema
-  on every provider (arrays of objects with an `enum`).
-- Edit a legacy ticket in the app: the text opens unchanged, a title-only save
-  leaves the text alone, and a section edit keeps unchanged criteria's ticks.
-- A coordinator creating a work brief with `sections` through Control MCP on a
-  real stack.
+Nothing; new design record.

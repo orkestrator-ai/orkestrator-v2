@@ -3,21 +3,28 @@
 Checked against `main` at `00a0cb82` (2026-10-25). Worked on
 `todo-0162-interaction-test-matrix-gaps-aad7b1f9a6f1` from `863b5782`
 (2026-10-27): every code item is done, and the OpenCode abort item turned
-into a behaviour change. One live check of that change is left (see "Needs
-verification").
+into a behaviour change. Finished on
+`todo-0162-interaction-test-matrix-b84e65a019ca` from `79f3bc97`
+(2026-10-29): the backend mapping suite is split by provider, and the live
+OpenCode abort check passed against the pinned CLI. Nothing is left.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against main at `863b5782`.
+
+Statuses re-checked 2026-10-29 against main at `79f3bc97`. The analysis
+was written against the commit before the work landed (#1332), so its
+statuses were stale; the line references in the subsections below are from
+`863b5782`.
 
 ### Tasks
 
-1. **Per-kind expiry on shared timers**: code item 1, expiry tests for Claude, Codex, Grok and Pi kinds that are timed only through another kind. Status: open.
-2. **`mcp-url` expiry**: code item 2, on Claude and Codex. Status: open.
-3. **Backend mapping fixtures**: code item 3, for Claude `file-approval`, Grok's generic `permission` and a Pi-shaped approval. Status: open (Pi has a fixture only in the holds suite).
-4. **Bridge-route coverage**: code item 4, for Claude, Grok and Pi route cells. Status: partly done (a Claude URL elicitation reaches the route only as a cancelled sibling).
-5. **OpenCode abort rejects pending requests**: code item 5. Status: open, and the code may not do it (see below).
-6. **OpenCode deadline**: the open question, whether an OpenCode permission or question gets a backend-enforced deadline. Status: open.
+1. **Per-kind expiry on shared timers**: code item 1, expiry tests for Claude, Codex, Grok and Pi kinds that are timed only through another kind. Status: done (2026-10-27).
+2. **`mcp-url` expiry**: code item 2, on Claude and Codex. Status: done (2026-10-27).
+3. **Backend mapping fixtures**: code item 3, for Claude `file-approval`, Grok's generic `permission` and a Pi-shaped approval. Status: done (fixtures 2026-10-27; suite split by provider 2026-10-29).
+4. **Bridge-route coverage**: code item 4, for Claude, Grok and Pi route cells. Status: done (2026-10-27).
+5. **OpenCode abort rejects pending requests**: code item 5. Status: done (code change and tests 2026-10-27; live check against the pinned CLI 2026-10-29).
+6. **OpenCode deadline**: the open question, whether an OpenCode permission or question gets a backend-enforced deadline. Status: done (decided no; no code).
 
 ### 1. Per-kind expiry on shared timers
 
@@ -147,8 +154,10 @@ Both are fixed (decisions 1 and 2).
 
 - There is no interaction conformance suite. Each bridge tests its own
   kinds, and `apps/backend/src/core/agent-provider-interactions.test.ts`
-  covers the backend mapping and resolve paths. Every kind each bridge emits
-  now has a park, resolve and fail-closed expiry test of its own.
+  and its per-provider siblings (`agent-provider-interactions-{claude,codex,
+  grok,pi,opencode}.test.ts`) cover the backend mapping and resolve paths.
+  Every kind each bridge emits now has a park, resolve and fail-closed
+  expiry test of its own.
 - The backend never enforces a deadline; each bridge denies on its own
   timer (`native-agent-interaction-tracker.ts`).
 - OpenCode publishes no deadline at all (`opencode-interactions.ts`), so an
@@ -187,14 +196,18 @@ Both are fixed (decisions 1 and 2).
    `an unanswered {form,url} elicitation is cancelled after five minutes`.
    Codex: `an unanswered MCP url sign-in is cancelled at its deadline`
    (`{ action: "cancel", content: null }`).
-3. ~~**Backend mapping fixtures.**~~ Done 2026-10-27, in
-   `agent-provider-interactions.test.ts`:
-   - `Claude maps a file approval with its paths and answers it exactly`:
-     title, `File:` lines, accept and decline bodies.
+3. ~~**Backend mapping fixtures.**~~ Done 2026-10-27; the suite they were
+   added to grew to 2,213 lines, so on 2026-10-29 it was split by provider
+   (decision 6), and each fixture now sits in its provider's file:
+   - `Claude maps a file approval with its paths and answers it exactly`
+     (`agent-provider-interactions-claude.test.ts`): title, `File:` lines,
+     accept and decline bodies.
    - `Grok maps a call without command or file detail to a generic
-     permission`: option question, no body, `optionId`/`deny`/`cancel`
-     bodies, a session grant refused.
-   - `Pi approvals map through the Codex shapes and answer with a decision`:
+     permission` (`agent-provider-interactions-grok.test.ts`): option
+     question, no body, `optionId`/`deny`/`cancel` bodies, a session grant
+     refused.
+   - `Pi approvals map through the Codex shapes and answer with a decision`
+     (`agent-provider-interactions-pi.test.ts`):
      the exact `publicApprovals` payload (command, file change, pathless
      file change), confirm disabled for the pathless one, no session grant,
      `approve`/`deny` bodies.
@@ -222,8 +235,8 @@ Both are fixed (decisions 1 and 2).
 
 ### Qualification
 
-- None for the tests; the OpenCode abort change has one live check under
-  "Needs verification".
+- None left. The OpenCode abort check passed on 2026-10-29 (see "Needs
+  verification").
 
 ## Constraints and rationale
 
@@ -237,62 +250,128 @@ Both are fixed (decisions 1 and 2).
 
 ## Needs verification
 
-- **OpenCode abort with a pending permission and question, live.** Start an
-  interactive OpenCode tab under an `ask` policy with a throwaway OpenCode
-  profile, let the turn raise a permission (and, separately, a question),
-  press Stop, and record what `permission.reply` / `question.reject`
-  answer for a request whose turn was just aborted. The code accepts 200 and
-  404; any other status makes Stop report "OpenCode pending requests could
-  not be rejected" even though the turn stopped. Not run here: it needs a
-  model login, and this host's OpenCode logins are the user's own.
+- ~~**OpenCode abort with a pending permission and question, live.**~~
+  Passed 2026-10-29 (decision 8). `opencode-provider-abort.live.test.ts`
+  ran with `RUN_LIVE_OPENCODE_COMPATIBILITY=1` against the pinned
+  `opencode-ai@1.19.4` CLI (installed into a temporary directory; the host's
+  own CLI is 1.19.3), a scripted loopback model and a disposable
+  `HOME`/XDG profile. A turn parked a `bash` permission and a question in
+  the same turn. After `OpenCodeProvider.abort` stopped the turn, OpenCode
+  still held both, so the explicit rejection is what retires them:
+  `permission.reply` and `question.reject` each answered 200. A stale
+  card's later answer got 404, and in the 404 race (another responder
+  rejects first) abort still succeeds. Not run: Stop pressed in the app UI
+  with a real model; the provider path the button calls is the one
+  exercised.
 
 ## Assumptions and decisions
 
-Decisions made on 2026-10-27 while working through the file.
+The first worker made decisions 1 to 5 on 2026-10-27. Decisions 6 to 9
+were made on 2026-10-29. For every task the first worker took the option
+the Task analysis marks (recommended), except task 3's split, which
+decision 6 completes.
 
-1. **What OpenCode abort does with pending requests (item 5).** The item
-   assumed abort already rejected them "as closing the session already
-   does"; it did not. Options: (a) pin today's behaviour (abort leaves them
-   for the server); (b) reject them on abort the way close does, failing the
-   abort when they cannot be read or rejected; (c) reject them best-effort,
-   logging failures. Chose (b), sharing close's code
-   (`rejectPendingOpenCodeRequests`). Pros: a request answered after Stop can
-   no longer grant something to a turn nobody is running, which is what
-   invariant 10 asks; one implementation for both paths. Cons: one more list
-   call pair per abort; if OpenCode answers a rejection after abort with
-   something other than 200 or 404, Stop reports an error although the turn
-   did stop (the live check above). (c) would hide exactly the failure that
-   leaves a request answerable.
-2. **`approve-for-session` on a card that offers none (found by item 3).**
-   The Pi fixture showed the adapter forwarding it: Pi denies any decision
-   other than `approve`, and the ACP path sends `deny`, yet the adapter
-   reported `applied`. The UI and the public action already refuse it (they
-   read `approveForSessionLabel`), so only an internal caller could reach
-   this. Options: (a) leave it and document it in the test; (b) refuse it in
-   `resolveInteraction` for every HTTP bridge when the card has no
-   `approveForSessionLabel`. Chose (b). Pros: the reported outcome is true;
-   one check covers Pi, Grok and Cursor; no provider call is made. Cons:
-   Claude's own refusal in `httpResolutionTarget` is now unreachable; it is
-   kept as the reason Claude never offers the label.
-3. **No backend deadline for OpenCode (open question).** Options: (a) a
-   backend timer that rejects an OpenCode request after the shared default
-   window; (b) none. Chose (b). Unattended sessions never wait: the owner's
-   policy answers their requests at once. An interactive tab waits only
-   while its user can see the card, and Stop and close now reject what is
-   left. Pros: no second timer to keep in step with OpenCode's own state;
-   no request is rejected while its user is reading it. Cons: parity gap with
-   the other providers, whose bridges deny after five minutes; a tab left
-   open with a pending card keeps its turn waiting until someone acts.
-4. **Where the new tests live.** Options: a cross-bridge conformance suite,
-   or each bridge's existing test file. Chose the existing files (plus one
-   new Grok route file beside `acp-interaction-hold.test.ts`), parameterised
-   over kinds where one test already proved the shared timer. Pros: each
-   test sits next to the code and harness it exercises; no new shared
-   fixtures across packages. Cons: the matrix stays spread over seven files;
-   a conformance suite would show missing cells at a glance.
-5. **Codex expiry on the manual clock.** The existing Codex expiry tests
-   sleep against a 50 ms window. The new ones use the `pausing a parked
-   deadline` manual clock instead, so they cannot flake on a busy host.
+### 1. OpenCode abort rejects pending requests explicitly (task 5)
+
+The item assumed abort already rejected them "as closing the session
+already does"; it did not. Options: (a) pin today's behaviour (abort leaves
+them for the server); (b) reject them on abort the way close does, failing
+the abort when they cannot be read or rejected; (c) reject them
+best-effort, logging failures. Chose (b), the recommended option, sharing
+close's code (`rejectPendingOpenCodeRequests`). Pros: a request answered
+after Stop can no longer grant something to a turn nobody is running, which
+is what invariant 10 asks; one implementation for both paths. Cons: one
+more list call pair per abort; if OpenCode answers a rejection after abort
+with something other than 200 or 404, Stop reports an error although the
+turn did stop. (c) would hide exactly the failure that leaves a request
+answerable. Decision 8 confirms the pinned CLI answers 200 and 404.
+
+### 2. Refuse `approve-for-session` on a card that offers none (found by task 3)
+
+The Pi fixture showed the adapter forwarding it: Pi denies any decision
+other than `approve`, and the ACP path sends `deny`, yet the adapter
+reported `applied`. The UI and the public action already refuse it (they
+read `approveForSessionLabel`), so only an internal caller could reach
+this. Options: (a) leave it and document it in the test; (b) refuse it in
+`resolveInteraction` for every HTTP bridge when the card has no
+`approveForSessionLabel`. Chose (b). Pros: the reported outcome is true;
+one check covers Pi, Grok and Cursor; no provider call is made. Cons:
+Claude's own refusal in `httpResolutionTarget` is now unreachable; it is
+kept as the reason Claude never offers the label.
+
+### 3. No backend deadline for OpenCode (task 6)
+
+Options: (a) a backend timer that rejects an OpenCode request after the
+shared default window; (b) none. Chose (b), the recommended option.
+Unattended sessions never wait: the owner's policy answers their requests
+at once. An interactive tab waits only while its user can see the card,
+and Stop and close now reject what is left. Pros: no second timer to keep
+in step with OpenCode's own state; no request is rejected while its user
+is reading it. Cons: parity gap with the other providers, whose bridges
+deny after five minutes; a tab left open with a pending card keeps its turn
+waiting until someone acts. Re-checked on 2026-10-29 (decision 9).
+
+### 4. Tests live in each bridge's existing files (tasks 1, 2 and 4)
+
+Options: a cross-bridge conformance suite, or each bridge's existing test
+file. Chose the existing files, the recommended option (plus one new Grok
+route file beside `acp-interaction-hold.test.ts`), parameterised over kinds
+where one test already proved the shared timer, with `url` added as a
+parameter of the form expiry tests (task 2's recommended option). All of
+task 4's cells were done in the same pass. Pros: each test sits next to
+the code and harness it exercises; no new shared fixtures across packages.
+Cons: the matrix stays spread over seven files; a conformance suite would
+show missing cells at a glance.
+
+### 5. Codex expiry on the manual clock (task 1)
+
+The existing Codex expiry tests sleep against a 50 ms window. The new ones
+use the `pausing a parked deadline` manual clock instead, so they cannot
+flake on a busy host.
+
+### 6. Split the backend mapping suite by provider (task 3)
+
+The first worker added the three fixtures to
+`agent-provider-interactions.test.ts`, the option the analysis said would
+push it past the 2,000-line limit; it reached 2,213 lines. Chose the
+recommended option after the fact: split it by provider. The Claude,
+Codex, Grok, Pi and OpenCode cases moved verbatim to
+`agent-provider-interactions-{claude,codex,grok,pi,opencode}.test.ts`.
+The registration, snapshot-bound, tracker-bound and write-reconciliation
+cases that span providers stay in `agent-provider-interactions.test.ts`.
+`HTTP bridge questions remain pending without a provider write` uses the
+Codex connection, so it moved with Codex. All 33 tests are kept, and every
+file is under 650 lines. Pros: each provider's mapping is in one place; a
+new fixture no longer reopens the limit. Cons: a move-only diff. References
+in 0001 and 0160 now point at the split files.
+
+### 7. Verify rather than redo (all tasks)
+
+The brief for this pass listed all six tasks as open, following the Task
+analysis. The code showed #1332 had already landed every item, so this
+pass checked each named test against the code and re-ran the suites
+instead of writing them again. It acted only on the gaps it found
+(decisions 6 and 8).
+
+### 8. Run the OpenCode abort check with a scripted model (task 5)
+
+"Needs verification" asked for a live tab with a model login. The live test
+from #1332 needs no credentials: a scripted loopback model, a disposable
+`HOME`/XDG profile and the pinned CLI. It asserts the pinned SDK version,
+so it ran against `opencode-ai@1.19.4` installed into a temporary
+directory, not the host's 1.19.3. It read no user settings or logins. It
+answers what the item asked: which statuses OpenCode returns for requests
+whose turn was just aborted. The UI path was not driven; Stop calls the
+same `abort`.
+
+### 9. Keep task 6 closed with no code (task 6)
+
+Took the recommended "no deadline". Nothing in the code argues against it:
+`opencode-interactions.ts` still publishes no `expiresAt`; unattended
+OpenCode sessions are answered by policy; Stop and close reject what is
+left, and the live run in decision 8 shows OpenCode would otherwise keep
+them pending. A backend timer would be the first backend-enforced deadline,
+and would need new pause and hold semantics for no fail-closed gain.
 
 ## Related
 

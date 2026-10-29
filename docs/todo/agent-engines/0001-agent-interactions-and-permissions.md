@@ -426,7 +426,7 @@ or a person.
    (`NativeAgentQuestionCard`, `NativeAgentInteractionCard`). Older clients
    ignore the field; only the backend validates options strictly. Tests:
    `session-manager-parked-interactions.test.ts` ("asks for question previews
-   as Markdown"), `agent-provider-interactions.test.ts` ("Claude question
+   as Markdown"), `agent-provider-interactions-claude.test.ts` ("Claude question
    previews are carried within their budget"), `NativeAgentQuestionCard.test.tsx`
    ("shows an option's preview verbatim"). Not checked against a live model:
    whether Claude actually emits previews for a plain question.

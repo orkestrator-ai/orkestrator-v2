@@ -7,12 +7,44 @@ That branch does not touch `docker/orkestrator-migrate.sh` or
 
 Finished on 2026-10-28: every item is done. #1365 (`beb1ec4c8`) fixed the
 test, and this file now records the corrected cause and the macOS evidence.
-Keep this file until the branch that records it merges, for its decisions,
-then delete it, remove its index row, and remove any remaining references to
-it. Todo 0321 was closed on `main` after its host-dependent failures were
+The branch that records it merged as `e8867f655` (#1368), so the file can now
+be deleted, its index row removed, and any remaining references to it
+removed. Todo 0321 was closed on `main` after its host-dependent failures were
 fixed in #1365; its resolution is recorded in
 [aggregate case 1126](../../tests/flaky-tests/aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md).
 Those failures had different causes from this fixture-order bug.
+
+## Task analysis
+
+Analysed 2026-10-28 against `main` at `79f3bc97`.
+
+Both items are done and merged. The decisions are recorded under
+"Assumptions and decisions" and are not repeated here.
+
+### Tasks
+
+1. **Make the test host-independent**: the two `verified copy helper` completion-timeout cases. Status: done.
+2. **Qualification: the root group passes on macOS**: `mise run test` on a macOS host. Status: done.
+
+### 1. Make the test host-independent
+
+**Problem.** Two cases failed on macOS with `extract.status` `2`.
+
+**Context.** The cause was hard-link order in the archive, not bsdtar (see "Current state").
+
+**Investigation.** Both cases select the regular member `ws/sub/b.bin` (`tests/unit/migrate-copy.test.ts:146-148`), and the status assertion passes `extract.err` as its message (`:169-170`). GNU tar is still preferred, with a skip when it is missing (`NO_GNU_TAR = missingGnuTools("tar")`, `:26`). No commit after `beb1ec4c8` changed the test except `92ed6b099`, which touched only `tests/unit/gnu-shell-tools.ts`. On Linux (omarchy-hp, `main` at `79f3bc97`) the file passes 12/12.
+
+**Decisions.** None; done. See "Assumptions and decisions".
+
+### 2. Qualification: the root group passes on macOS
+
+**Problem.** The fix had to be shown in a full run, not only the one file.
+
+**Context.** The run is recorded under "Outstanding work".
+
+**Investigation.** The root and agent-support group passed on macOS (3208 pass, 0 fail). The workspace and Codex protocol lockfile groups did not start in that run. [0350](0350-rootless-tests-fail-on-macos.md) later recorded a `mise run test` on a macOS host on 2026-10-28 in which all four default-tier groups passed, so "Needs verification" is answered.
+
+**Decisions.** None; done.
 
 ## Current state
 
@@ -41,7 +73,11 @@ Those failures had different causes from this fixture-order bug.
   prints tar's own error. The helper and its production path are unchanged.
   The script still only runs inside the Linux image.
 
-## Items
+## Outstanding work
+
+None.
+
+### Done
 
 1. ~~Make the test host-independent.~~ Done. GNU tar was already preferred,
    with a skip and reason when it is missing (#988). The failure itself was
@@ -61,7 +97,14 @@ Those failures had different causes from this fixture-order bug.
    has nothing to do with this file. The workspace macOS failures previously
    tracked in 0321 were fixed in #1365 and closed on `main`; see
    [aggregate case 1126](../../tests/flaky-tests/aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md).
-   [0350](0350-rootless-tests-fail-on-macos.md) remains separately tracked.
+   [0350](0350-rootless-tests-fail-on-macos.md) was tracked separately and is
+   now finished too.
+
+## Needs verification
+
+Nothing for this file. A full `mise run test` with every group green on
+macOS was still outstanding when this file was finished; 0350's qualification
+records one (all four default-tier groups passed in 564 s on 2026-10-28).
 
 ## Assumptions and decisions
 
@@ -100,8 +143,3 @@ Those failures had different causes from this fixture-order bug.
 - **Nothing durable to move.** The cause is specific to this fixture and is
   already explained by the test's own comment, so no `architecture/` or
   `development/` text changes.
-
-## Needs verification
-
-Nothing for this file. A full `mise run test` with every group green on
-macOS still needs all queued groups to complete; 0350 remains separately tracked.

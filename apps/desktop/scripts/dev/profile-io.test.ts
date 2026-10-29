@@ -290,18 +290,109 @@ describe("development profile lifecycle primitives", () => {
     });
   }
 
-  test("reset never follows a data directory or staged-input root replaced by a symlink", async () => {
-    const { root, profile } = await modelCacheFixture();
-    const outside = path.join(root, "outside");
-    await mkdir(outside, { recursive: true });
-    await writeFile(path.join(outside, "precious.txt"), "unrelated");
-    await symlink(outside, path.join(profile.dataDir, "portable-inputs"));
+  for (const keepToolchains of [false, true]) {
+    for (const child of ["data", "portable-inputs"]) {
+      test(`${keepToolchains ? "toolchain-preserving" : "full"} reset unlinks a pre-existing ${child} symlink`, async () => {
+        const { root, profile } = await modelCacheFixture();
+        const outside = path.join(root, "outside");
+        await mkdir(outside, { recursive: true });
+        await writeFile(path.join(outside, "precious.txt"), "unrelated");
+        const target = child === "data" ? profile.dataDir : path.join(profile.dataDir, child);
+        await rm(target, { recursive: true, force: true });
+        await symlink(outside, target);
 
-    await removeProfileState(profile, false);
+        await removeProfileState(profile, keepToolchains);
 
-    await expect(readFile(path.join(outside, "precious.txt"), "utf8")).resolves.toBe("unrelated");
-    expect(await readdir(profile.dataDir)).toEqual([]);
-  });
+        await expect(readFile(path.join(outside, "precious.txt"), "utf8")).resolves.toBe(
+          "unrelated",
+        );
+        await expect(fs.lstat(target)).rejects.toThrow();
+      });
+    }
+
+    for (const phase of ["checked", "enumerated", "before-delete"] as const) {
+      for (const child of ["data", "portable-inputs"]) {
+        test(`${keepToolchains ? "toolchain-preserving" : "full"} reset aborts when ${child} changes at ${phase}`, async () => {
+          const { root, profile } = await modelCacheFixture();
+          const inputs = path.join(profile.dataDir, "portable-inputs");
+          await mkdir(inputs);
+          await writeFile(path.join(inputs, "precious.txt"), "profile-input");
+          const target = child === "data" ? profile.dataDir : inputs;
+          const outside = path.join(root, "outside");
+          // Mirror the selected names so a traversal through the replacement
+          // would actually delete an external file, including via data's child.
+          const outsideInputs = child === "data" ? path.join(outside, "portable-inputs") : outside;
+          await mkdir(outsideInputs, { recursive: true });
+          await writeFile(path.join(outsideInputs, "precious.txt"), "external-input");
+          let replaced = false;
+
+          await expect(
+            removeProfileState(profile, keepToolchains, {
+              onDirectory: async (directory, currentPhase) => {
+                if (directory !== target || phase !== currentPhase || replaced) return;
+                replaced = true;
+                await rename(target, path.join(root, "original"));
+                await symlink(outside, target);
+              },
+            }),
+          ).rejects.toThrow("symlink");
+
+          expect(replaced).toBe(true);
+          expect(await readFile(path.join(outsideInputs, "precious.txt"), "utf8")).toBe(
+            "external-input",
+          );
+          const originalInput = path.join(
+            root,
+            "original",
+            ...(child === "data" ? ["portable-inputs"] : []),
+            "precious.txt",
+          );
+          expect(await readFile(originalInput, "utf8")).toBe("profile-input");
+        });
+      }
+    }
+
+    for (const replacement of ["symlink", "directory"] as const) {
+      test(`${keepToolchains ? "toolchain-preserving" : "full"} reset detects an ancestor replaced by a ${replacement} during child traversal`, async () => {
+        const { root, profile } = await modelCacheFixture();
+        const inputs = path.join(profile.dataDir, "portable-inputs");
+        await mkdir(inputs);
+        await writeFile(path.join(inputs, "keep"), "original");
+        const outside = path.join(root, "outside");
+        await mkdir(path.join(outside, "portable-inputs"), { recursive: true });
+        await writeFile(path.join(outside, "portable-inputs", "keep"), "external");
+        let replaced = false;
+        await expect(
+          removeProfileState(profile, keepToolchains, {
+            onDirectory: async (directory, phase) => {
+              if (directory !== inputs || phase !== "enumerated") return;
+              replaced = true;
+              await rename(profile.dataDir, path.join(root, "original"));
+              if (replacement === "symlink") await symlink(outside, profile.dataDir);
+              else {
+                await mkdir(path.join(profile.dataDir, "portable-inputs"), { recursive: true });
+                await writeFile(
+                  path.join(profile.dataDir, "portable-inputs", "keep"),
+                  "replacement",
+                );
+              }
+            },
+          }),
+        ).rejects.toThrow(replacement === "symlink" ? "symlink" : "ancestor changed");
+        expect(replaced).toBe(true);
+        expect(await readFile(path.join(root, "original", "portable-inputs", "keep"), "utf8")).toBe(
+          "original",
+        );
+        expect(await readFile(path.join(outside, "portable-inputs", "keep"), "utf8")).toBe(
+          "external",
+        );
+        if (replacement === "directory")
+          expect(
+            await readFile(path.join(profile.dataDir, "portable-inputs", "keep"), "utf8"),
+          ).toBe("replacement");
+      });
+    }
+  }
 
   test("toolchain-preserving reset uses the same symlink-safe deletion path", async () => {
     const { root, profile } = await modelCacheFixture();

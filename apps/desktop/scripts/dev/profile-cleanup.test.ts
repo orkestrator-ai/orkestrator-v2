@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,7 +24,12 @@ import {
   removeProfileKeychainItem,
   type CommandRunner,
 } from "./profile-cleanup.js";
-import { atomicWriteJson, initializeProfile, isRemovedProfileSkeleton } from "./profile-io.js";
+import {
+  atomicWriteJson,
+  initializeProfile,
+  isRemovedProfileSkeleton,
+  removeProfileSkeleton,
+} from "./profile-io.js";
 
 let root: string;
 let roots: RuntimeProfileRoots;
@@ -314,6 +320,148 @@ describe("profile Keychain item", () => {
 });
 
 describe("pruneProfiles", () => {
+  const old = new Date("2026-01-01T00:00:00.000Z");
+  const now = () => Date.parse("2026-01-31T00:00:00.000Z");
+
+  async function oldSkeleton(id: string) {
+    const profile = await createProfile(id);
+    await mkdir(path.join(profile.dataDir, "portable-inputs"));
+    await removeProfile(profile, { keepToolchains: false, roots, run, platform: "linux" });
+    await utimes(profile.profileRoot, old, old);
+    return profile;
+  }
+
+  test("age pruning skips same-name startup paused before metadata publication", async () => {
+    const profile = await oldSkeleton("starting");
+    const directories = [
+      profile.profileRoot,
+      profile.dataDir,
+      path.join(profile.dataDir, "portable-inputs"),
+    ];
+    const identities = await Promise.all(
+      directories.map(async (directory) => (await stat(directory)).ino),
+    );
+    let paused = false;
+
+    await initializeProfile(profile, {
+      beforeMetadata: async () => {
+        paused = true;
+        expect(existsSync(path.join(profile.profileRoot, "profile.json"))).toBe(false);
+        // All startup siblings exist but are still empty at this boundary.
+        expect(await readdir(profile.runtimeDir)).toEqual([]);
+        expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(false);
+        await utimes(profile.profileRoot, old, old);
+        expect(await pruneProfiles({ roots, run, olderThanDays: 14, now })).toEqual([
+          { id: profile.id, action: "kept", reason: "initialization or pruning in progress" },
+        ]);
+        expect(
+          await Promise.all(directories.map(async (directory) => (await stat(directory)).ino)),
+        ).toEqual(identities);
+      },
+    });
+
+    expect(paused).toBe(true);
+    expect(
+      JSON.parse(await readFile(path.join(profile.profileRoot, "profile.json"), "utf8")).id,
+    ).toBe(profile.id);
+    expect(existsSync(path.join(profile.profileRoot, DEV_PROFILE_SENTINEL))).toBe(true);
+    // Successful publication releases the lock.
+    await initializeProfile(profile);
+  });
+
+  test("startup cannot enter a skeleton selected by pruning and can retry after removal", async () => {
+    const profile = await oldSkeleton("selected");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: async () => {
+        await expect(initializeProfile(profile)).rejects.toThrow("pruning is in progress");
+      },
+    });
+    expect(actions(outcomes)).toEqual({ selected: "removed" });
+    await initializeProfile(profile);
+    expect(existsSync(path.join(profile.profileRoot, DEV_PROFILE_SENTINEL))).toBe(true);
+  });
+
+  test("skeleton detection rejects empty startup siblings and unexpected data children", async () => {
+    const profile = await oldSkeleton("shape");
+    for (const unexpected of [profile.runtimeDir, path.join(profile.dataDir, "other")]) {
+      await mkdir(unexpected);
+      expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(false);
+      expect(actions(await pruneProfiles({ roots, run, olderThanDays: 14, now }))).toEqual({
+        shape: "kept",
+      });
+      await rm(unexpected, { recursive: true });
+    }
+    expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
+  });
+
+  test("content arriving after skeleton selection refuses rmdir and reports failure", async () => {
+    const profile = await oldSkeleton("late-content");
+    const late = path.join(profile.dataDir, "portable-inputs", "keep");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: () => writeFile(late, "new input"),
+    });
+    expect(actions(outcomes)).toEqual({ "late-content": "failed" });
+    expect(outcomes[0]?.reason).toContain("ENOTEMPTY");
+    expect(await readFile(late, "utf8")).toBe("new input");
+    expect(existsSync(profile.profileRoot)).toBe(true);
+    // Failure also releases the startup lock.
+    await initializeProfile(profile);
+  });
+
+  test("an already removed selected skeleton is a successful prune", async () => {
+    const profile = await oldSkeleton("disappeared");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: (directory) => rm(directory, { recursive: true }),
+    });
+    expect(actions(outcomes)).toEqual({ disappeared: "removed" });
+    expect(existsSync(profile.profileRoot)).toBe(false);
+  });
+
+  test("an unexpected empty sibling appearing after selection blocks skeleton removal", async () => {
+    const profile = await oldSkeleton("late-directory");
+    const unexpected = path.join(profile.profileRoot, "new-state");
+    const outcomes = await pruneProfiles({
+      roots,
+      run,
+      olderThanDays: 14,
+      now,
+      afterSkeletonSelection: () => mkdir(unexpected),
+    });
+    expect(actions(outcomes)).toEqual({ "late-directory": "failed" });
+    expect(outcomes[0]?.reason).toContain("ENOTEMPTY");
+    expect(existsSync(unexpected)).toBe(true);
+  });
+
+  test("a skeleton descendant disappearing before enumeration is already removed", async () => {
+    const profile = await oldSkeleton("descendant");
+    const inputs = path.join(profile.dataDir, "portable-inputs");
+    const realReaddir = fs.readdir;
+    const enumerate = spyOn(fs, "readdir").mockImplementation((async (
+      ...args: Parameters<typeof fs.readdir>
+    ) => {
+      if (args[0] === inputs) await rm(inputs, { recursive: true, force: true });
+      return realReaddir(...args);
+    }) as typeof fs.readdir);
+    try {
+      await expect(removeProfileSkeleton(profile.profileRoot)).resolves.toBeUndefined();
+    } finally {
+      enumerate.mockRestore();
+    }
+    expect(existsSync(profile.profileRoot)).toBe(false);
+  });
+
   test("removes a stopped profile whose checkout is gone and keeps one that exists", async () => {
     const orphan = await createProfile("orphan", gone());
     await createProfile("current");

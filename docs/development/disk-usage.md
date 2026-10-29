@@ -163,8 +163,11 @@ mise run dev:prune --force              # explicitly discard changes in linked w
 mise run dev:reset --profile <name>     # remove one stopped profile (--stop-first stops it)
 ```
 
-`dev:prune` never touches a running profile, a directory without a valid
-profile sentinel, or a `profile.json` that describes another directory.
+`dev:prune` never touches a running profile or a `profile.json` that
+describes another directory. Directories without a valid profile sentinel
+are kept, except for empty reset skeletons: `--older-than` can remove the
+profile root and its empty `data` and `data/portable-inputs` directories
+after that age. Other entries disqualify a directory from this exception.
 Automatic pruning and ordinary `dev:prune` keep a profile if a linked worktree
 has modified or untracked files. Inspect the reported path before using
 `dev:prune --force` or `dev:reset`, which can discard those files.

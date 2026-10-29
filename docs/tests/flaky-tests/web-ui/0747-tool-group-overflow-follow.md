@@ -181,3 +181,23 @@ mise run test:logged -- --name tool-group-final-owner -- bunx playwright test --
 The passing logged runner discarded its detailed output. The known native
 branch-suggestion failures remain unrepaired; no unrelated implementation,
 assertion, deadline or skip was changed.
+
+
+## Looped Review retirement repair validation — 2026-10-29
+
+- Original command: `mise run test:logged -- --name review-fix-browser -- mise run test:browser`.
+  The component suite used nine workers and reported 926 passed, 105 skipped
+  and three failed in 530.6 s. The mobile waiting-group case at
+  `e2e/ToolGroupFold.spec.ts:442` received inner scrollTop 704 instead of zero
+  at the five-second deadline (`:471`). Both other failures were the existing
+  native branch-suggestion cases in `e2e/AgentLaunchDialog.spec.ts`.
+- Complete unchanged owners: `mise run test:logged -- --name review-fix-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/review-fix-browser-owners`.
+  All 38 ToolGroupFold cases passed. The two branch-suggestion cases still
+  failed (`release/2.0` expected, `rel` received), leaving 40 passed and two
+  failed in 106.7 s. The public-site stage was not reached by the aggregate.
+- Evidence under the host temporary directory:
+  `orkestrator-test-run.mJNZC3/review-fix-browser.log.gz` and
+  `orkestrator-test-run.EKfNAV/review-fix-browser-owners.log.gz`.
+- No owning implementation, assertion, timeout or skip changed. Concurrent
+  worktree validation was active; timing under load remains a hypothesis,
+  not an established cause. The aggregate remains failed.

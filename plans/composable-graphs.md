@@ -1,7 +1,10 @@
 # Composable agent graphs plan
 
 Status: proposed 2026-10-29; all decisions confirmed with the maintainer on
-2026-10-29. Nothing is built yet.
+2026-10-29. Phases 0–2 and the Phase 4 items 401–405 are built, and Phase 3's
+graph-runtime Multi Review is built behind a setting (default unchanged, D23);
+406 is dropped (D24) and 501 waits on Phase 3 (D25). Item status is in
+[`plans/graphs/000-index.md`](graphs/000-index.md).
 
 Work items and their status: [`plans/graphs/000-index.md`](graphs/000-index.md).
 Each Pn.m section below is one numbered file there (P1.7 is `107`).
@@ -53,6 +56,13 @@ decision means editing its row and saying why.
 | D19 | Reviewer lens presets (P0.5) | Editable in Settings. Five presets ship (Security, Performance, Tests and coverage, API and compatibility, Maintainability), and the user can edit, delete and add to them. Free text is always available at launch. | Fixed presets plus free text; free text only. |
 | D20 | Waiting for CI | In version 1. A `wait-for-checks` system node ships in Phase 2. It reads the PR monitor's check status, waits within a bound, and emits a typed result, so graphs can do "open PR → wait for CI → fix if red". | Defer to Phase 4. |
 | D21 | Clean panel review (P0.3) | When a reviewer panel's consolidated report has no issues and no coverage gaps, the Build Pipeline skips Address and goes to Verify, as the single-reviewer path already does. | Always run Address on both paths. |
+| D22 | Phase 4 design notes (401–405) | Approved as built on 2026-10-29: the design notes in each item file stand (items fan-out recorded once per position with explicit truncation; sub-graphs inlined with namespaced ids and pinned digests; opt-in isolated worktrees with guard-checked confinement and `select-workspace`; per-node MCP selection with no user servers by default; signed or digest-checked share bundles with a review panel). The notes were written and built before agreement because the question about Phase 4 timed out; the maintainer reviewed and approved them afterwards. | Review each note in the pull request before merging; approve some and rework others. |
+| D23 | Multi Review default engine (Phase 3) | The graph-runtime Multi Review ships behind `multiReviewEngine` (and `ORKESTRATOR_MULTI_REVIEW_ENGINE`) with the bespoke engine still the default. The maintainer soaks the graph runtime by opting in, then decides the flip; the bespoke service is retired only after the flip, once no supported version needs it. | Flip the default now and keep the bespoke engine for rollback; flip and retire the bespoke service now. |
+| D24 | Coordinator authoring (406) | D6 stands: the coordinator lists, launches, reads and cancels saved templates and never creates or edits them. Item 406 is dropped. | Leave 406 blocked; replace D6 so the coordinator drafts templates that stay untrusted until the user approves them. |
+| D25 | Porting the Build Pipeline (501) | Not started. Decided after Multi Review has soaked on the graph runtime (D23), as Phase 5 says. | Drop the port now; start the parity work now. |
+| D26 | Looped Review built-in (P1.8) | Its engine was removed in #1417 (2026-10-29). The built-in stays as a *retired* description (`engineStatus: "retired"`): listed, duplicable onto the graph runtime, never launched on an engine. | Remove it from the built-ins. |
+| D27 | Taint sources and trusted prompt text (P1.7, §5.13, invariant 5) | Taint starts only at nodes deliberately given web access (`researcher`, an explicit `web.search` or `network` allow) and at `wait-for-checks`; a builder's ambient environment network does not count. In prompt templates every value taken from an input artifact (`input.*`, `item`, `ticket`) renders inside an evidence frame; launch parameters, `run`, `branch` and `lens` values are the user's or the template's own text and stay unframed. | Count every node with network access as a taint source (every graph with two builders would need an acknowledgement); frame every template value, parameters and lenses included. |
+| D28 | Live verification still open | A live `open-pull-request` (which opens a real pull request) is not run without the maintainer naming a test repository, so the Phase 2 "from launch to PR" exit criterion and item 207's live box stay open. | Run it against this repository; drop the criterion. |
 
 ## Non-goals
 

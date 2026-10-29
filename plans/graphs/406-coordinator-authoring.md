@@ -3,9 +3,9 @@ id: 406
 title: "Coordinator authoring"
 phase: 4
 plan: "Phase 4"
-status: blocked
+status: dropped
 depends_on: [214, 215]
-blocked_by: "D6 defers coordinator authoring; a new decision in the plan is needed first."
+blocked_by: ""
 owner: ""
 branch: ""
 pr: ""
@@ -39,10 +39,11 @@ The coordinator can draft templates that the user approves.
 
 ## Notes
 
-None yet.
+- 2026-10-29 · Dropped. The maintainer kept D6 (the coordinator launches saved templates but never creates or edits them) and dropped this item: [D24](../composable-graphs.md#decisions). The coordinator's graph tools stay `list_graph_templates`, `launch_graph`, `get_graph_run` and `cancel_graph_run`; `control-mcp-graph-tools.test.ts` asserts no authoring tool exists.
 
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Blocked, see `blocked_by`.
+- 2026-10-29 · coordinator · Dropped per D24 (D6 stands). · None.

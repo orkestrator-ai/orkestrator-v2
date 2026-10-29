@@ -26,7 +26,7 @@ A node can be given specific user MCP servers, not just denied them.
 ## Work
 
 - [x] Write the design note in this file's Notes (written and built on 2026-10-29).
-- [ ] Get the design note agreed by the user. (The user was asked how to handle Phase 4 design notes on 2026-10-29; the question timed out unanswered, and the coordinator proceeded on its recommended option — write the note, build, and have the user review the note in the pull request. Agreement is still pending.)
+- [x] Get the design note agreed by the user. (Approved as built by the maintainer on 2026-10-29: [D22](../composable-graphs.md#decisions).)
 - [x] Per-session injection of user MCP servers in each bridge (Claude, Codex, OpenCode, Cursor, Grok, Pi), split:
   - [x] Claude: filtered inline set, `strictMcpConfig`, read-only turns keep the grant.
   - [x] Codex: per-thread `mcp_servers.<name>.enabled = false` from `config/read`.
@@ -181,3 +181,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Design note, then per-session user MCP selection in the protocol, compiler, matrix, Claude, Codex, Pi, Cursor and OpenCode (Grok documented as a gap), designer picker, docs and tests. · complete; awaiting PR
 - 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.
+- 2026-10-29 · coordinator · The maintainer approved the design note as built (D22). · Awaiting PR.

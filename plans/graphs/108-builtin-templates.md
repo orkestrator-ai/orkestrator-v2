@@ -211,3 +211,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Three built-ins with `engine`, engine stage tables and exported decisions, pinning tests (mutation-checked on both sides); Looped Review described as retired. · complete; awaiting PR (maintainer to confirm Looped Review stays a built-in)
+- 2026-10-29 · coordinator · The maintainer kept Looped Review as a retired built-in (D26). · Awaiting PR.

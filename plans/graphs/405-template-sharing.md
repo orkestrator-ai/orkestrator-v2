@@ -26,7 +26,7 @@ Templates can be shared safely between people and projects.
 ## Work
 
 - [x] Write the design note in this file's Notes (written and built on 2026-10-29).
-- [ ] Get the design note agreed by the user. (The user was asked how to handle Phase 4 design notes on 2026-10-29; the question timed out unanswered, and the coordinator proceeded on its recommended option — write the note, build, and have the user review the note in the pull request. Agreement is still pending.)
+- [x] Get the design note agreed by the user. (Approved as built by the maintainer on 2026-10-29: [D22](../composable-graphs.md#decisions).)
 - [x] Export and import with signatures or digests.
 - [x] A review flow for project templates.
 - [x] Designer: Share… (export as bundle), Import bundle… (check, then import at the shown digest) and a Review panel with Approve and Reject.
@@ -228,3 +228,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Design note, bundle format and guard, Ed25519 signing, share export/import, trusted keys, project template review with diffs, designer dialogs and review panel, tests; complete; awaiting PR.
 - 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.
+- 2026-10-29 · coordinator · The maintainer approved the design note as built (D22). · Awaiting PR.

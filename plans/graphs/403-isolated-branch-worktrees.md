@@ -26,7 +26,7 @@ Several branches can write code in parallel, for example competing implementatio
 ## Work
 
 - [x] Write the design note in this file's Notes (written and built on 2026-10-29).
-- [ ] Get the design note agreed by the user. (The user was asked how to handle Phase 4 design notes on 2026-10-29; the question timed out unanswered, and the coordinator proceeded on its recommended option — write the note, build, and have the user review the note in the pull request. Agreement is still pending.)
+- [x] Get the design note agreed by the user. (Approved as built by the maintainer on 2026-10-29: [D22](../composable-graphs.md#decisions).)
 - [x] One worktree per replicated writer branch, created from the input snapshot.
 - [x] `select` and agent `merge` nodes. (`select` is the `select-workspace` system action; an agent merge is an ordinary builder node over `list<workspace@1>`; see Notes.)
 - [x] Worktree lifecycle and cleanup, disk accounting (`docs/development/disk-usage.md`), container environments.
@@ -258,3 +258,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Design note, then built isolation (protocol, compiler, executor, guards, scheduler locks, `select-workspace`, janitor, deletion, mock, designer, run view, docs, D3); tests in `graph-isolated-branches.test.ts`, `graph-branch-worktrees.test.ts`, `isolation.test.ts`. · complete; awaiting PR
 - 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.
+- 2026-10-29 · coordinator · The maintainer approved the design note as built (D22). · Awaiting PR.

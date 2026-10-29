@@ -254,3 +254,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Graph-engine Multi Review behind `multiReviewEngine` / `ORKESTRATOR_MULTI_REVIEW_ENGINE` (default bespoke), projected onto the Multi Review record; all eight parity boxes and the tests box ticked with evidence. · Soak, flip and retirement await the user's decision.
 - 2026-10-29 · Claude Opus 5.5 (graphs-audit-fixes) · review instruction as a run input (`markdown@1`); no bespoke fallback, an over-budget instruction refuses a graph start · awaiting PR
+- 2026-10-29 · coordinator · The maintainer chose to keep the bespoke default and soak the graph runtime first (D23). · Soak, then decide the flip.

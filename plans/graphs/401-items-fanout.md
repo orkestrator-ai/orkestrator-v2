@@ -26,7 +26,7 @@ One branch per item of a list artifact, for example per story, per failing test 
 ## Work
 
 - [x] Write the design note in this file's Notes (written and built on 2026-10-29).
-- [ ] Get the design note agreed by the user. (The user was asked how to handle Phase 4 design notes on 2026-10-29; the question timed out unanswered, and the coordinator proceeded on its recommended option — write the note, build, and have the user review the note in the pull request. Agreement is still pending.)
+- [x] Get the design note agreed by the user. (Approved as built by the maintainer on 2026-10-29: [D22](../composable-graphs.md#decisions).)
 - [x] `replicate: { over: "items" }` with `maxBranches`; `{{item}}` and `{{item.index}}` in prompts.
 - [x] Per-item provenance carried through to downstream nodes.
 
@@ -219,3 +219,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Design note written; building. · Implement compiler, runtime, prompts, provenance, view, designer.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Compiler, run record, runtime expansion, prompts, provenance, mock runs, run view, designer, tests and docs. · complete; awaiting PR
 - 2026-10-29 · coordinator · Split the design-note box: written, but agreement is still pending (the user's answer was never received; the build went ahead on the coordinator's recommended default). · Awaiting the user's review.
+- 2026-10-29 · coordinator · The maintainer approved the design note as built (D22). · Awaiting PR.

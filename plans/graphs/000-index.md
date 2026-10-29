@@ -110,7 +110,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 403 | [403-isolated-branch-worktrees.md](403-isolated-branch-worktrees.md) | 4 | in-progress | 205, 210 | One worktree per replicated writer branch, then `select` or agent `merge`; lifecycle, disk and container story. |
 | 404 | [404-per-node-user-mcp.md](404-per-node-user-mcp.md) | 4 | in-progress | 106, 204 | Per-session injection of user MCP servers in every bridge, so `mcp:<server>` can grant as well as deny. |
 | 405 | [405-template-sharing.md](405-template-sharing.md) | 4 | in-progress | 109 | Export and import with signatures or digests, and a review flow for project templates. |
-| 406 | [406-coordinator-authoring.md](406-coordinator-authoring.md) | 4 | blocked | 214, 215 | Coordinator writes templates as drafts under the project-template trust rule. Blocked: D6 defers it. |
+| 406 | [406-coordinator-authoring.md](406-coordinator-authoring.md) | 4 | dropped | 214, 215 | Coordinator writes templates as drafts under the project-template trust rule. Dropped: D6 stands (D24). |
 
 ## Phase 5 (optional): the Build Pipeline
 

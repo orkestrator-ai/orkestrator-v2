@@ -526,7 +526,12 @@ function designBakeOff(): GraphTemplateV1 {
         },
         storage: "value",
         budgets: { maxBytes: 65_536, maxStringBytes: 16_384, maxItems: 100 },
-        render: { summary: ["summary"] },
+        // `describe-pr` reads the chosen brief as markdown (item 105).
+        render: {
+          markdown:
+            "{{summary}}\n\n## Approach\n\n{{approach}}\n\n## Risks\n\n{{#risks}}\n- {{.}}\n{{/risks}}\n\n## Files\n\n{{#filesTouched}}\n- `{{.}}`\n{{/filesTouched}}",
+          summary: ["summary"],
+        },
         example: designBriefExample(),
       },
     ],

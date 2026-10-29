@@ -7,6 +7,7 @@
  */
 
 import { parsePermissionRuleOffer, type PermissionRuleOffer } from "./permission-rules.js";
+import { wrapSystemInstructions } from "./review-evidence-frames.js";
 
 export const AGENT_INTERACTION_CONTRACT_VERSION = 1 as const;
 export const AGENT_INTERACTION_POLICY_VERSION = 1 as const;
@@ -384,6 +385,25 @@ export interface AgentInteractionPolicy {
    * bucket", which is what every policy predating this field did.
    */
   kinds?: Partial<Record<AgentInteractionKind, AgentInteractionPolicyAction>>;
+}
+
+/**
+ * Told to every unattended workflow turn (build stages, graph agent nodes):
+ * nobody can answer a provider input request, and silence is not consent.
+ */
+export const UNATTENDED_POLICY_INSTRUCTION =
+  "This is a non-interactive build session: no user can answer a provider input request. " +
+  "If input is unavailable or declined, choose the safest likely assumption yourself, " +
+  "state that assumption, and continue. Never treat the absence of a person as authorization.";
+
+/** The unattended policy as one system-instructions frame. */
+export function unattendedPolicyFrame(): string {
+  return wrapSystemInstructions(UNATTENDED_POLICY_INSTRUCTION);
+}
+
+/** Append the unattended policy frame to a workflow prompt. */
+export function withUnattendedPolicy(prompt: string): string {
+  return `${prompt}\n\n${unattendedPolicyFrame()}`;
 }
 
 export const INTERACTIVE_AGENT_INTERACTION_POLICY: AgentInteractionPolicy = Object.freeze({

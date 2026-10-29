@@ -31,6 +31,7 @@ import {
 import {
   isOrkestratorArtifactTool,
   isOrkestratorMailTool,
+  isGrantedUserMcpTool,
   isOrkestratorMcpTool,
   isResearchMcpTool,
   isOwnWorkflowResultCall,
@@ -72,7 +73,17 @@ export async function requestToolApproval(
     (isOrkestratorMcpTool(state, toolName) || isResearchMcpTool(state, toolName));
   const ownAttempt =
     isOwnWorkflowResultCall(state, toolName, input) || isOrkestratorArtifactTool(state, toolName);
-  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {
+  // A user MCP server a graph node was granted by name (item 404): the
+  // template's grant admits it through the read-only gate, and approves it
+  // unless the policy asks.
+  const grantedTool = isGrantedUserMcpTool(state, toolName);
+  if (
+    state.readOnly &&
+    !READ_ONLY_TOOLS.has(toolName) &&
+    !coordinatorMail &&
+    !ownAttempt &&
+    !grantedTool
+  ) {
     return {
       block: true,
       reason:
@@ -88,6 +99,7 @@ export async function requestToolApproval(
   }
   const approvals = state.policy?.approvals ?? "auto-approve";
   if (approvals === "auto-approve") return { block: false };
+  if (grantedTool && approvals === "deny") return { block: false };
   if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail || ownAttempt) return { block: false };
   // A worker can always report back: its mail tools never wait on a person.
   if (isOrkestratorMailTool(state, toolName)) return { block: false };

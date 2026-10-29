@@ -22,10 +22,14 @@ import { join, resolve as resolvePath } from "node:path";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentUserMcpGrant,
+  type NativeAgentMcpServer,
+} from "@orkestrator/protocol/native-agent";
 import { agentDirectory, workingDirectory } from "./config.js";
 import {
   BRIDGE_SECRET_ENV,
+  piUserMcpServerFilter,
   resolvePiMcpServers,
   sanitizeMcpName,
   type ResolvedMcpServer,
@@ -120,6 +124,13 @@ interface PiMcpRuntime {
   orkestratorToolNames: Set<string>;
   /** Registered names of the coordinator's research server tools. */
   researchToolNames: Set<string>;
+  /**
+   * Registered names of tools from user servers a graph node was granted
+   * (item 404). The read-only gate admits these like research tools.
+   */
+  grantedToolNames: Set<string>;
+  /** Whether this generation's servers were selected by an explicit grant. */
+  granted: boolean;
   tools: RegisteredMcpTool[];
   connections: PiMcpConnection[];
   /** The tab credential these connections were prepared with; "" for the env. */
@@ -207,6 +218,15 @@ export function isOrkestratorArtifactTool(state: SessionState, toolName: string)
  */
 export function isResearchMcpTool(state: SessionState, toolName: string): boolean {
   return runtimes.get(state)?.researchToolNames.has(toolName) === true;
+}
+
+/**
+ * A tool from a user MCP server the session's policy grants by name (graphs
+ * item 404), by the exact name it was registered under. Only granted servers
+ * were started for such a session, so every user or project tool is one.
+ */
+export function isGrantedUserMcpTool(state: SessionState, toolName: string): boolean {
+  return runtimes.get(state)?.grantedToolNames.has(toolName) === true;
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {
@@ -337,6 +357,8 @@ export async function preparePiMcp(
     inventory: [],
     orkestratorToolNames: new Set(),
     researchToolNames: new Set(),
+    grantedToolNames: new Set(),
+    granted: nativeAgentUserMcpGrant(state.policy) !== undefined,
     tools: [],
     connections: [],
     connectionKey: mcpConnectionKey(state),
@@ -364,6 +386,7 @@ export async function preparePiMcp(
     projectResources: state.policy?.projectResources === true,
     agentMcp: state.agentMcp,
     env: options.env,
+    allowServer: piUserMcpServerFilter(state.policy),
   });
   // Every failure settles into that server's inventory row, so one malformed
   // server cannot fail the attach or strand the servers queued behind it.
@@ -499,6 +522,9 @@ async function connectAndRegister(
     names.push(registered.name);
     if (server.scope === "orkestrator") runtime.orkestratorToolNames.add(registered.name);
     if (server.scope === "research") runtime.researchToolNames.add(registered.name);
+    if (runtime.granted && (server.scope === "user" || server.scope === "project")) {
+      runtime.grantedToolNames.add(registered.name);
+    }
   }
   return {
     id: server.id,

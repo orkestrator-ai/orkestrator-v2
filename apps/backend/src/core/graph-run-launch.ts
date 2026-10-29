@@ -79,7 +79,7 @@ import {
   type GraphRun,
   type GraphRunBindings,
 } from "@orkestrator/protocol/graphs/run";
-import type { GraphRole } from "@orkestrator/protocol/graphs/template";
+import type { GraphRole, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { GraphTypeLibrary, graphTicketFromTaskSnapshot } from "@orkestrator/protocol/graphs/types";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
@@ -120,7 +120,8 @@ export interface GraphRunLaunchStorage {
 
 export interface GraphRunLaunchDependencies {
   storage: GraphRunLaunchStorage;
-  templates: Pick<GraphTemplateService, "compileForLaunch">;
+  templates: Pick<GraphTemplateService, "compileForLaunch"> &
+    Partial<Pick<GraphTemplateService, "compileInlineForLaunch">>;
   runs: Pick<GraphRunService, "create" | "get">;
   /** The settings tiers a launch inherits (environment → repository → app). */
   settingsTiers(projectId: string, environment: Environment | null): Promise<AgentSettingsTiers>;
@@ -363,13 +364,34 @@ export class GraphRunLaunchService {
     }
   }
 
+  /**
+   * Launches a backend-owned template on behalf of a built-in flow (item 301:
+   * Multi Review on the graph runtime) through the same binding, parameter
+   * and input checks as {@link launch}. `request.ref` must name the built-in
+   * the template copies; `runId` is the caller's own idempotency key, so a
+   * repeat returns the run it created. Never saves launch defaults.
+   */
+  async launchInline(
+    request: Omit<GraphLaunchRequest, "requestId" | "saveDefaults">,
+    template: GraphTemplateV1,
+    runId: string,
+    origin: GraphLaunchOrigin,
+  ): Promise<GraphLaunchResult> {
+    try {
+      return await this.launchOnce(request, origin, { template, runId });
+    } catch (error) {
+      throw launchErrorOf(error);
+    }
+  }
+
   private async launchOnce(
     request: GraphLaunchRequest,
     origin: GraphLaunchOrigin,
+    inline?: { template: GraphTemplateV1; runId: string },
   ): Promise<GraphLaunchResult> {
-    const runId = request.requestId
-      ? graphLaunchRunId(request.projectId, request.requestId)
-      : undefined;
+    const runId =
+      inline?.runId ??
+      (request.requestId ? graphLaunchRunId(request.projectId, request.requestId) : undefined);
     if (runId) {
       const existing = await this.deps.storage.graphRuns.getGraphRun(runId);
       if (existing) return this.repeated(existing, request);
@@ -385,11 +407,14 @@ export class GraphRunLaunchService {
       request.projectId,
       templateKey,
     );
-    const compiled = await this.deps.templates.compileForLaunch(
-      request.ref,
-      request.projectId,
-      await this.launchPolicy(environment, create),
-    );
+    const policy = await this.launchPolicy(environment, create);
+    const compiled = inline
+      ? await this.inlineCompiler().compileInlineForLaunch(
+          inline.template,
+          request.projectId,
+          policy,
+        )
+      : await this.deps.templates.compileForLaunch(request.ref, request.projectId, policy);
     const plan = compiled.plan;
     if (!compiled.summary) throw new GraphLaunchError("not-found", "The template was not found");
     if (!compiled.launchable || !plan) {
@@ -480,6 +505,16 @@ export class GraphRunLaunchService {
       },
       repeated: false,
     };
+  }
+
+  private inlineCompiler(): Pick<GraphTemplateService, "compileInlineForLaunch"> {
+    const templates = this.deps.templates as Partial<
+      Pick<GraphTemplateService, "compileInlineForLaunch">
+    >;
+    if (!templates.compileInlineForLaunch) {
+      throw new GraphLaunchError("not-launchable", "Inline launches are unavailable");
+    }
+    return templates as Pick<GraphTemplateService, "compileInlineForLaunch">;
   }
 
   private repeated(run: GraphRun, request: GraphLaunchRequest): GraphLaunchResult {

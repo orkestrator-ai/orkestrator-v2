@@ -14,11 +14,7 @@ import {
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import {
-  type GraphProvenancePlan,
-  type GraphProvenanceWording,
-  validateGraphProvenance,
-} from "@orkestrator/protocol/graphs/provenance";
+import { validateGraphProvenance } from "@orkestrator/protocol/graphs/provenance";
 import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 import {
   WORKFLOW_RESULT_KINDS,
@@ -38,6 +34,10 @@ import {
   parseReviewPreparationResult,
 } from "./review-prompts.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+import {
+  REVIEW_CONSOLIDATION_PROVENANCE,
+  REVIEW_CONSOLIDATION_WORDING,
+} from "./review-consolidation-provenance.js";
 import { graphOutputKindDefinition } from "./workflow-result-graph-output.js";
 import { graphTemplateKindDefinition } from "./workflow-result-graph-template.js";
 import {
@@ -305,38 +305,7 @@ type ConsolidationContext = Extract<
   { type: "consolidated-review" }
 >;
 
-/**
- * Multi Review consolidation as a provenance plan (report §5.9): every merged
- * issue and coverage gap cites at least one source finding of its own class,
- * and leaves `reviewModels` to the backend. Wording keeps the diagnostics the
- * consolidator has always seen.
- */
-export const REVIEW_CONSOLIDATION_PROVENANCE: GraphProvenancePlan = Object.freeze({
-  mode: "cite",
-  fields: [
-    {
-      segments: ["issues", "[]", "reviewSourceIds"],
-      sourceClass: "issue",
-      minCitations: 1,
-      derivedFields: ["reviewModels"],
-    },
-    {
-      segments: ["testCoverageGaps", "[]", "reviewSourceIds"],
-      sourceClass: "coverage-gap",
-      minCitations: 1,
-      derivedFields: ["reviewModels"],
-    },
-  ],
-}) as GraphProvenancePlan;
-
-export const REVIEW_CONSOLIDATION_WORDING: GraphProvenanceWording = Object.freeze({
-  item: "consolidated finding",
-  sourceItem: "source finding",
-  inputs: "the supplied reviewer reports",
-  derived: Object.freeze({
-    reviewModels: "Cite source IDs; the backend derives contributing review models.",
-  }),
-});
+export { REVIEW_CONSOLIDATION_PROVENANCE, REVIEW_CONSOLIDATION_WORDING };
 
 function validateConsolidationContext(
   value: Record<string, unknown>,

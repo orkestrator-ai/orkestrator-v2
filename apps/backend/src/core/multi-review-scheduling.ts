@@ -51,6 +51,9 @@ export function supervisionDemand(
   workflow: MultiReviewWorkflow,
   dispatchesAddressPrompts: boolean,
 ): "none" | "fast" | "observe" {
+  // A graph-engine review only projects its run until the run settles (item
+  // 301); its run's own changes wake it, so observing is the safety net.
+  if (isGraphEngineProjection(workflow)) return workflow.phase === "cancelling" ? "fast" : "observe";
   if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "fast";
   if (workflow.phase === "cancelling") return "fast";
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
@@ -73,6 +76,15 @@ export function supervisionDemand(
     return workflow.validationRun.status === "planned" ? "fast" : "observe";
   }
   return workflow.activeRequest?.state === "sent" ? "observe" : "fast";
+}
+
+/**
+ * A graph-engine review whose run has not settled yet (item 301): the
+ * service projects the run onto it and runs none of its own steps. Once the
+ * run settles the record is an ordinary settled review.
+ */
+export function isGraphEngineProjection(workflow: MultiReviewWorkflow): boolean {
+  return workflow.engine === "graph" && workflow.graphRun?.settled !== true;
 }
 
 /** The initial interactive Fix turn is observed until its durable runtime settles. */
@@ -103,6 +115,7 @@ export function needsAutoPrLaunch(workflow: MultiReviewWorkflow): boolean {
  * | `interactive-fix` | `interactive` Fix turn running/idle before its runtime settles | Observe interactive Fix completion and final usage. |
  * | `reviewers` | `reviewing` | Reviewer fan-out (its own concurrency budget), idle-result grace and final-usage probes. |
  * | `step` | `preparing`, `consolidating`, `fixing` | The single-session step, parked dispatch reconciliation, structured-output deadlines. |
+ * | `graph-run` | graph engine, run not settled (item 301) | Project the graph run onto the record. |
  *
  * Everything else (`interactive` without pending work, `paused`, terminal
  * phases) owes nothing until a command advances it.
@@ -115,13 +128,15 @@ export type MultiReviewObligation =
   | "paused-stop"
   | "interactive-fix"
   | "reviewers"
-  | "step";
+  | "step"
+  | "graph-run";
 
 export function multiReviewObligation(
   workflow: MultiReviewWorkflow,
   dispatchesAddressPrompts: boolean,
 ): MultiReviewObligation | null {
   if (supervisionDemand(workflow, dispatchesAddressPrompts) === "none") return null;
+  if (isGraphEngineProjection(workflow)) return "graph-run";
   if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "result-consumption";
   if (workflow.phase === "cancelling") return "cancelling";
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {

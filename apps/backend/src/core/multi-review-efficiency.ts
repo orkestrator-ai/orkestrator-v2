@@ -60,6 +60,8 @@ export const EFFICIENCY_OPERATIONS = [
   "scheduler.wake",
   // Launch value.
   "launch.duplicate_reviewers",
+  // The graph engine (item 301): one pass projecting a run onto its record.
+  "graph.projection_pass",
 ] as const;
 export type EfficiencyOperation = (typeof EFFICIENCY_OPERATIONS)[number];
 

@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
@@ -637,6 +638,10 @@ export class ConfigRepository {
         `Review focus presets must be at most ${REVIEW_LENS_PRESETS_MAX} presets with distinct ids, each with a label of at most ${REVIEW_LENS_LABEL_MAX_CHARS} characters and an instruction of at most 4 KiB`,
       );
     }
+    const multiReviewEngine = reviewValidated.multiReviewEngine as unknown;
+    if (multiReviewEngine !== undefined && !isMultiReviewEngine(multiReviewEngine)) {
+      throw new Error("The Multi Review engine must be bespoke or graph");
+    }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
       ...(reviewLensPresets === undefined
@@ -693,6 +698,12 @@ export class ConfigRepository {
       // carry it must not silently re-enable a switched-off feature.
       if (validated.mcpManagement === undefined && config.global.mcpManagement !== undefined)
         validated.mcpManagement = config.global.mcpManagement;
+      // A settings save that predates the engine setting keeps the stored one.
+      if (
+        validated.multiReviewEngine === undefined &&
+        config.global.multiReviewEngine !== undefined
+      )
+        validated.multiReviewEngine = config.global.multiReviewEngine;
       if (
         validated.containerResourceLimits === undefined &&
         config.global.containerResourceLimits !== undefined

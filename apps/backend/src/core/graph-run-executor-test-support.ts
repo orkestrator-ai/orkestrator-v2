@@ -117,6 +117,12 @@ export class FakeGraphExecutors {
    * (`rk-<run and activation hash>-<port>`), and the compiled policy as applied.
    */
   withSessions = false;
+  /**
+   * With {@link withSessions}: sessions also name a provider session
+   * (`ps-<run and activation hash>`), the bound model and a token count, as a
+   * dispatched agent's do (item 301's projection reads them).
+   */
+  withProviderSessions = false;
   /** Started executor calls wait on this while set (to observe concurrency). */
   gate: Promise<void> | null = null;
   /** Agent activations still running (started, not completed or cancelled). */
@@ -299,6 +305,15 @@ export class FakeGraphExecutors {
               enforcement: "enforced",
               session: {
                 agent: context.binding?.platform ?? "claude",
+                ...(this.withProviderSessions
+                  ? {
+                      providerSessionId: `ps-${fakeResultKey(context.run.id, context.activation.key)}`,
+                      ...(context.binding?.model !== undefined
+                        ? { model: context.binding.model }
+                        : {}),
+                      tokenCount: 1_000,
+                    }
+                  : {}),
                 requestId: `request-${fakeResultKey(context.run.id, context.activation.key)}`,
                 dispatchState: "sent",
                 resultTransport: "tool-call-v1",

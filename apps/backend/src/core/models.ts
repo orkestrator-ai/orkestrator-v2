@@ -964,6 +964,11 @@ export interface AppConfig {
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
     /**
+     * Which runtime runs new Multi Reviews (item 301). Absent means
+     * `bespoke`; `ORKESTRATOR_MULTI_REVIEW_ENGINE` overrides it for testing.
+     */
+    multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
+    /**
      * Weakest read-only guarantee a coordinator conversation may run under.
      *
      * Absent means `provider-configured`: platforms whose boundary the

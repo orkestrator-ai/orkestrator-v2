@@ -23,6 +23,7 @@ import {
   graphOutputResultInstruction,
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import { GraphTypeLibrary, type GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -690,10 +691,26 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       ...(capability ? { capability } : {}),
       resultTools: this.resultTools(),
       targetBranch:
+        this.runTargetBranch() ??
         this.dependencies.targetBranch?.(environment) ??
         (environment.prBaseBranch?.trim() || environment.delegationBaseBranch?.trim() || "main"),
       ...(await this.notes()),
     });
+  }
+
+  /**
+   * A `targetBranch` parameter in the node's scope names the branch the
+   * prompts review against (item 301: Multi Review's launch picks it), ahead
+   * of the environment's base branch.
+   */
+  private runTargetBranch(): string | undefined {
+    const params = graphPlanScopeParams(
+      this.context.run.plan,
+      this.input.node.subgraph,
+      this.context.run.bindings.params,
+    );
+    const branch = params.targetBranch;
+    return typeof branch === "string" && branch.trim() ? branch.trim() : undefined;
   }
 
   private async notes(): Promise<{ notes?: string }> {

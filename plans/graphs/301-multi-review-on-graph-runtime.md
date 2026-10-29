@@ -3,11 +3,11 @@ id: 301
 title: "Multi Review on the graph runtime"
 phase: 3
 plan: "Phase 3"
-status: not-started
+status: in-progress
 depends_on: [204, 205, 206, 207, 209, 210, 211, 214]
 blocked_by: ""
-owner: ""
-branch: ""
+owner: "Claude Opus 5.5 (implement-graph-tasks)"
+branch: "graphs-301-multireview"
 pr: ""
 updated: 2026-10-29
 ---

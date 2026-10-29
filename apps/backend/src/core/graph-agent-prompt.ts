@@ -55,6 +55,8 @@ import { graphPlanScopeParams, graphPlanSubgraph } from "@orkestrator/protocol/g
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import {
   graphBuiltInPromptText,
+  graphReviewCoverageGapIds,
+  isGraphReviewConsolidationNode,
   type GraphBuiltInPromptInputValue,
 } from "./graph-agent-builtins.js";
 
@@ -178,6 +180,43 @@ export function isGraphFailureMarker(portType: string, artifactType: string): bo
   );
 }
 
+function isReviewReport(type: string): boolean {
+  const parts = parseGraphTypeRef(type);
+  return parts?.name === "review-report" && parts.listDepth === 0;
+}
+
+/** A review report's coverage gap source ids (`graphReviewCoverageGapIds`). */
+function reviewCoverageGapIds(artifact: GraphArtifact): string[] {
+  const value = bodyValue(artifact) as { testCoverageGaps?: unknown } | undefined;
+  const gaps = Array.isArray(value?.testCoverageGaps) ? value.testCoverageGaps.length : 0;
+  return graphReviewCoverageGapIds(artifact.producer, gaps);
+}
+
+/**
+ * Who wrote a review report, as Multi Review labels its reviewers: the
+ * producing activation's agent and model, and the lens label of its panel
+ * position. Undefined when the producer is not an agent activation of the run.
+ */
+function reviewReportAuthor(
+  run: Readonly<GraphRun>,
+  artifact: GraphArtifact,
+): GraphBuiltInPromptInputValue["reviewer"] {
+  const activation = run.activations.find(
+    (candidate) => candidate.key === artifact.producer.activation,
+  );
+  const producer = run.plan.nodes.find(
+    (candidate): candidate is GraphPlanAgentNode =>
+      candidate.kind === "agent" && candidate.id === artifact.producer.nodeId,
+  );
+  if (!activation?.session || !producer) return undefined;
+  const { lens } = graphAgentBranchValues(run, producer, activation);
+  return {
+    agent: activation.session.agent,
+    model: activation.session.model ?? "default",
+    ...(lens ? { focus: lens.label } : {}),
+  };
+}
+
 function isTicket(type: string): boolean {
   return parseGraphTypeRef(type)?.name === "ticket";
 }
@@ -271,6 +310,9 @@ export async function loadGraphAgentInputs(
   let criterionIds: string[] | undefined;
   let inputWorkspace: GraphAgentInputs["inputWorkspace"];
   const loaded = new Map<string, GraphArtifact[]>();
+  // Multi Review's consolidation contract (item 301): issues and coverage gaps
+  // are sources of their own kind, as the built-in's text promises.
+  const reviewConsolidation = isGraphReviewConsolidationNode(node);
   for (const port of node.inputs) {
     const ids = portIds(activation, port);
     if (ids.length === 0) continue;
@@ -282,7 +324,11 @@ export async function loadGraphAgentInputs(
       consumed.push(id);
       readable.set(id, { port: port.name, artifact });
       const itemIds = graphInputItemIds(library, artifact);
-      for (const itemId of itemIds) sources[itemId] = artifact.type;
+      const review = reviewConsolidation && isReviewReport(artifact.type);
+      for (const itemId of itemIds) sources[itemId] = review ? "issue" : artifact.type;
+      if (review) {
+        for (const gapId of reviewCoverageGapIds(artifact)) sources[gapId] = "coverage-gap";
+      }
       facts.push(
         isGraphFailureMarker(port.type, artifact.type)
           ? { failure: true }
@@ -371,8 +417,12 @@ function builtInInputs(
       ? loaded.get(port)?.filter((artifact) => !isGraphFailureMarker(portType, artifact.type))
       : undefined;
     if (!port || !artifacts || artifacts.length === 0) continue;
+    const reviewConsolidation = isGraphReviewConsolidationNode(node);
     const values = artifacts.map((artifact): GraphBuiltInPromptInputValue => {
       const itemIds = graphInputItemIds(library, artifact);
+      const review = reviewConsolidation && isReviewReport(artifact.type);
+      const author = review ? reviewReportAuthor(run, artifact) : undefined;
+      const gapIds = review ? reviewCoverageGapIds(artifact) : [];
       return {
         port,
         type: artifact.type,
@@ -382,6 +432,8 @@ function builtInInputs(
           : {}),
         ...("file" in artifact.body ? { file: { ...artifact.body.file } } : {}),
         ...(itemIds.length > 0 ? { itemIds } : {}),
+        ...(gapIds.length > 0 ? { coverageGapIds: gapIds } : {}),
+        ...(author ? { reviewer: author } : {}),
       };
     });
     result[input.name] = input.list ? values : values[0]!;
@@ -458,6 +510,9 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
       ...(branch ? { branch: { index: branch.index, count: branch.count } } : {}),
       ...(typeof scopeParams.instruction === "string"
         ? { instruction: scopeParams.instruction }
+        : {}),
+      ...(typeof scopeParams.reviewInstruction === "string"
+        ? { reviewInstruction: scopeParams.reviewInstruction }
         : {}),
     });
   }

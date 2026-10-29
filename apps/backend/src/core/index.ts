@@ -187,6 +187,10 @@ import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.
 import { GraphRunAttention } from "./graph-run-attention.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
+import {
+  configuredMultiReviewEngine,
+  MultiReviewGraphEngine,
+} from "./multi-review-graph-engine.js";
 import { launchSettingsTiers } from "./control-shared-actions.js";
 import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {
@@ -229,6 +233,8 @@ export class OrkestratorBackend {
   private readonly graphAgents: GraphAgentWiring;
   /** Launches saved templates from every surface (item 214). */
   private readonly graphLaunches: GraphRunLaunchService;
+  /** Multi Review on the graph runtime (item 301); set once the graph services exist. */
+  private multiReviewGraph: MultiReviewGraphEngine | null = null;
   private readonly graphDescribe: GraphDescribeService;
   private readonly graphDescribeProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
@@ -1126,6 +1132,13 @@ export class OrkestratorBackend {
             session.providerSessionId,
           );
         },
+        // Multi Review on the graph runtime (item 301): the setting, its
+        // override, and the graph services wired below.
+        graph: {
+          engine: async () =>
+            configuredMultiReviewEngine((await storage.loadConfig()).global.multiReviewEngine),
+          runtime: () => this.multiReviewGraph,
+        },
       },
     );
     context.multiReviews = this.multiReviews;
@@ -1274,6 +1287,11 @@ export class OrkestratorBackend {
       host: () => defaultCoordinatorHostCapabilities(),
     });
     context.graphLaunches = this.graphLaunches;
+    this.multiReviewGraph = new MultiReviewGraphEngine({
+      launches: this.graphLaunches,
+      runs: this.graphRuns,
+      storage,
+    });
     // "Describe a graph" (item 215): backend-owned designer agent jobs.
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>

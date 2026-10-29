@@ -312,6 +312,51 @@ export class GraphTemplateService {
     return { ...response, plan: response.plan ?? null };
   }
 
+  /**
+   * For a backend-owned template a service launches on behalf of a built-in
+   * flow (item 301: Multi Review on the graph runtime). Like
+   * {@link compileForLaunch}, but the template is given rather than stored:
+   * it is trusted (the backend wrote it), must carry no `engine`, and is
+   * compiled under the launch environment's policy and the project's ceiling.
+   * Its summary names the built-in it copies (`ref` builtin, its id).
+   */
+  async compileInlineForLaunch(
+    template: GraphTemplateV1,
+    projectId: string,
+    environment?: NativeAgentExecutionPolicy,
+  ): Promise<GraphTemplateCompileResponse & { plan: CompiledGraphPlan | null }> {
+    if (template.engine !== undefined) {
+      throw new GraphTemplateError(
+        "engine-template",
+        "An inline launch runs on the graph runtime; drop the template's engine",
+      );
+    }
+    this.host = this.hostSource();
+    const resolved = this.resolvedBuiltin(structuredClone(template));
+    const context = await this.compileContext(projectId, environment);
+    const result = await this.compileResolved(resolved, context);
+    const response = compileResponse(
+      await this.summary(resolved, context),
+      result,
+      context,
+      "trusted",
+      true,
+    );
+    return {
+      ...response,
+      plan: response.plan ?? null,
+      ...(result.plan
+        ? {
+            providerChoices: graphRoleProviderChoices(
+              result.plan,
+              context.host,
+              context.providers ?? AGENT_PLATFORMS,
+            ),
+          }
+        : {}),
+    };
+  }
+
   // ------------------------------------------------------------ user templates
 
   async save(

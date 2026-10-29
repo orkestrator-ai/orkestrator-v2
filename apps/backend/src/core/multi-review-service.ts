@@ -26,6 +26,7 @@ import {
   type MultiReviewReviewerTranscript,
   type MultiReviewStepKind,
   type MultiReviewStepTranscript,
+  type MultiReviewEngine,
   type MultiReviewWorkflow,
   type MultiReviewWorktreeSnapshot,
   type StartMultiReviewCustomFixInput,
@@ -144,6 +145,15 @@ import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { WorkflowDueScheduler } from "./multi-review-scheduler.js";
 import { systemRecurringTimers } from "./recurring-scheduler.js";
 import {
+  advanceMultiReviewGraph,
+  MultiReviewGraphEngineError,
+  multiReviewGraphRunId,
+  multiReviewWorkflowIdOfRun,
+  type MultiReviewGraphEngine,
+} from "./multi-review-graph-engine.js";
+import { multiReviewInstructionFitsGraph } from "./multi-review-graph-template.js";
+import {
+  isGraphEngineProjection,
   isSupervisedPhase,
   multiReviewDiscovery,
   multiReviewObligation,
@@ -566,6 +576,16 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
   /** Content-free efficiency measurements (tests and benchmarks). */
   efficiency?: MultiReviewEfficiencyObserver;
+  /**
+   * The graph runtime (item 301). `engine` is read once per start (the app
+   * setting `multiReviewEngine` and the `ORKESTRATOR_MULTI_REVIEW_ENGINE`
+   * override); `runtime` is null until the graph services exist. Without it
+   * every review runs on the bespoke engine.
+   */
+  graph?: {
+    engine(): Promise<MultiReviewEngine>;
+    runtime(): MultiReviewGraphEngine | null;
+  };
 }
 
 /** Durable backend owner for reviewer fan-out, consolidation, and fixes. */
@@ -614,6 +634,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly pollGate: ElapsedPollGate;
   /** Findings live reviewers reported through `report_finding`, until a pass collects them. */
   private readonly provisionalFindings: ProvisionalFindingInbox;
+  /** Graph-engine runs projected with nothing to save, by run id (item 301). */
+  private readonly graphProjected = new Map<string, number>();
 
   private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
 
@@ -682,6 +704,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (change.resource === "multi-review" && change.deleted) {
           this.supervisor?.forget(change.id);
         }
+        // A graph-engine review follows its run (item 301): every saved
+        // revision wakes the review that projects it.
+        const graphWorkflow =
+          change.resource === "graph-run" ? multiReviewWorkflowIdOfRun(change.id) : undefined;
+        if (graphWorkflow) this.supervisor?.wake(graphWorkflow, "explicit");
       });
       // Lease renewal rides the scheduler's separate critical pool.
       this.supervisor.addCriticalJob({
@@ -698,6 +725,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // due time from storage; nothing about scheduling survives a restart.
       this.scheduler.start();
       this.armLeaseRenewal();
+      this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
+        const graphWorkflow =
+          change.resource === "graph-run" ? multiReviewWorkflowIdOfRun(change.id) : undefined;
+        if (graphWorkflow) void this.advanceNow(graphWorkflow);
+      });
     }
   }
 
@@ -1093,11 +1125,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       count: multiReviewDuplicateReviewerCount(reviewers),
     });
     const timestamp = nowIso();
+    const workflowId = reservedWorkflowId ?? randomUUID();
+    const graphEngine = await this.graphEngineFor(input);
     const workflow: MultiReviewWorkflow = {
       version: MULTI_REVIEW_WORKFLOW_VERSION,
       controller: "backend",
       // Complete actions reserve this identity durably before any launch I/O.
-      id: reservedWorkflowId ?? randomUUID(),
+      id: workflowId,
+      // The graph runtime runs it (item 301); the first pass launches the run.
+      ...(graphEngine
+        ? { engine: "graph" as const, graphRun: { runId: multiReviewGraphRunId(workflowId) } }
+        : {}),
       environmentId: input.environmentId,
       projectId: input.projectId,
       targetBranch: input.targetBranch,
@@ -1137,7 +1175,53 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     return workflow;
   }
 
+  /**
+   * Whether this start runs on the graph runtime (item 301): the setting or
+   * its override selects it and the graph services are wired. A review
+   * instruction longer than a graph parameter holds stays on the bespoke
+   * engine, which the log says (without the instruction).
+   */
+  private async graphEngineFor(input: StartMultiReviewInput): Promise<boolean> {
+    const graph = this.options.graph;
+    if (!graph || (await graph.engine()) !== "graph") return false;
+    if (!graph.runtime()) {
+      console.warn("[multi-review] The graph engine is selected but unavailable; using bespoke");
+      return false;
+    }
+    if (!multiReviewInstructionFitsGraph(input.reviewInstruction)) {
+      console.info(
+        "[multi-review] The review instruction is longer than a graph parameter holds; using bespoke",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Refuses a bespoke step control on a graph-engine review (item 301): its
+   * steps are graph activations, controlled from the graph run view. Once
+   * the run settles, the manual Fix (`allowSettled`) works as on any review.
+   */
+  private async assertBespokeControl(
+    workflowId: string,
+    action: string,
+    allowSettled = false,
+  ): Promise<void> {
+    const record = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!record || !isMultiReviewWorkflow(record.snapshot)) return;
+    const workflow = record.snapshot;
+    if (workflow.engine !== "graph") return;
+    if (allowSettled && workflow.graphRun?.settled) return;
+    const run = workflow.graphRun?.runId ?? "unknown";
+    throw new MultiReviewGraphEngineError(
+      allowSettled
+        ? `This Multi Review runs on the graph runtime and its run ${run} has not ended; ${action} waits until it has`
+        : `This Multi Review runs on the graph runtime, so ${action} is done from the view of its graph run ${run}`,
+    );
+  }
+
   async address(workflowId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "starting its Fix", true);
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1178,6 +1262,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   async customFix(input: StartMultiReviewCustomFixInput): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(input.workflowId, "starting its Fix", true);
     return this.withLock(input.workflowId, async () => {
       const controlled = await this.loadControlled(input.workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${input.workflowId}`);
@@ -1303,6 +1388,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   async retry(workflowId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "retrying");
     return this.withLock(workflowId, async () => {
       // An explicit restart starts a new admission generation.
       this.evidencePermits.invalidate(workflowId);
@@ -1494,6 +1580,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * transition.
    */
   async stopReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "stopping a reviewer");
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1544,6 +1631,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Stop the environment-owned validation process and continue with its partial evidence. */
   async stopValidation(workflowId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "stopping validation");
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1581,6 +1669,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Discard one reviewer's session and run that reviewer again from its original prompt. */
   async restartReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "restarting a reviewer");
     return this.withLock(workflowId, async () => {
       // An explicit restart starts a new admission generation.
       this.evidencePermits.invalidate(workflowId);
@@ -1670,6 +1759,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     kind: MultiReviewStepKind,
     model?: MultiReviewModelSelection,
   ): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "restarting a step");
     return this.withLock(workflowId, async () => {
       // An explicit restart starts a new admission generation.
       this.evidencePermits.invalidate(workflowId);
@@ -1865,6 +1955,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Stop one active backend-owned step without discarding its provider conversation. */
   async pauseStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "pausing a step");
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1899,6 +1990,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Resume a paused step by dispatching a fresh request in its retained session. */
   async resumeStep(workflowId: string, kind: MultiReviewStepKind): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "resuming a step");
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1938,6 +2030,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Abort a wedged turn, then continue in the same reviewer session. */
   async unstickReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "nudging a reviewer");
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -2008,6 +2101,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         void this.advanceNow(workflowId);
         return workflow;
       }
+      if (isGraphEngineProjection(workflow)) return this.cancelGraphRun(workflow, token);
       workflow.phase = "cancelling";
       supersedePendingAutoPr(workflow);
       this.autoPrRetryAt.delete(workflow.id);
@@ -2019,6 +2113,33 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       void this.advanceNow(workflowId);
       return saved;
     });
+  }
+
+  /**
+   * Cancels a graph-engine review (item 301): the record shows `cancelling`
+   * and the run is cancelled; the projection settles the record once the run
+   * has stopped its activations. A run that never started has nothing to stop.
+   */
+  private async cancelGraphRun(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<MultiReviewWorkflow> {
+    workflow.phase = "cancelling";
+    workflow.cancellingSince = nowIso();
+    delete workflow.error;
+    const saved = await this.save(workflow, token);
+    const engine = this.options.graph?.runtime();
+    const runId = workflow.graphRun!.runId;
+    if (engine && (await engine.run(runId))) {
+      try {
+        await engine.cancel(runId);
+      } catch (error) {
+        // An ended run refuses the cancel; the next pass projects how it ended.
+        console.warn(`[multi-review] Cancelling graph run ${runId} failed:`, errorMessage(error));
+      }
+    }
+    void this.advanceNow(workflow.id);
+    return saved;
   }
 
   /**
@@ -2076,9 +2197,20 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               ]
             : []),
         ];
+        // A graph-engine review's sessions belong to its graph run (item
+        // 301), which keeps them; only a manual Fix started after the run
+        // ended is this record's own.
+        const owned =
+          workflow.engine === "graph"
+            ? targets.filter(
+                (target) =>
+                  workflow.fixLaunch !== undefined &&
+                  target.sessionId === workflow.fixSession?.providerSessionId,
+              )
+            : targets;
         const uniqueTargets = [
           ...new Map(
-            targets.map((target) => [`${target.selection.agent}:${target.sessionId}`, target]),
+            owned.map((target) => [`${target.selection.agent}:${target.sessionId}`, target]),
           ).values(),
         ];
         if (
@@ -2219,8 +2351,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Keeps the keyed index current after an authoritative read or durable write. */
   private noteRecord(workflowId: string, snapshot: unknown): void {
-    if (isMultiReviewWorkflow(snapshot)) this.provisionalFindings.track(snapshot);
-    else this.provisionalFindings.forget(workflowId);
+    // A graph-engine reviewer reports progress to its graph activation.
+    if (isMultiReviewWorkflow(snapshot) && !isGraphEngineProjection(snapshot)) {
+      this.provisionalFindings.track(snapshot);
+    } else {
+      this.provisionalFindings.forget(workflowId);
+    }
     const supervisor = this.supervisor;
     if (!supervisor) return;
     if (!isMultiReviewWorkflow(snapshot)) {
@@ -2520,6 +2656,24 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const existing = await this.storage.getMultiReviewWorkflow(workflowId);
     this.noteRecord(workflowId, existing?.snapshot);
     if (!existing || !isMultiReviewWorkflow(existing.snapshot)) return;
+    if (isGraphEngineProjection(existing.snapshot)) {
+      recordEfficiency(this.options.efficiency, {
+        owner: "multi-review",
+        operation: "graph.projection_pass",
+        phase: efficiencyPhase(existing.snapshot.phase),
+      });
+      await advanceMultiReviewGraph(
+        {
+          engine: () => this.options.graph?.runtime() ?? null,
+          loadControlled: (id) => this.loadControlled(id),
+          save: (workflow, token) => this.save(workflow, token),
+          release: (workflow, token) => this.release(workflow, token),
+          projected: this.graphProjected,
+        },
+        { ...existing.snapshot, backendRevision: existing.revision },
+      );
+      return;
+    }
     const existingPhase = existing.snapshot.phase;
     const pendingAddress =
       existingPhase === "interactive" &&

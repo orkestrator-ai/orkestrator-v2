@@ -518,6 +518,8 @@ export interface CursorSdkLoginProgress {
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
+  /** Which runtime runs new Multi Reviews (item 301); absent means bespoke. */
+  multiReviewEngine?: import("@orkestrator/protocol/multi-review").MultiReviewEngine;
   /** Weakest read-only guarantee a coordinator conversation may run under. */
   coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
   /** Internal marker for the one-time coordinator safety-default migration. */

@@ -40,7 +40,9 @@ import type {
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentBranchParsedResult } from "./agent-branch-types.js";
+import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 import { graphAgentResultKey } from "./graph-agent-state.js";
+import { reviewConsolidationProvenanceFields } from "./review-consolidation-provenance.js";
 import {
   graphOutputCombinedSchema,
   graphOutputPortIssues,
@@ -220,6 +222,14 @@ export class GraphAgentResults {
       {
         ...(this.input.criterionIds ? { criterionIds: this.input.criterionIds } : {}),
         ...(slot.port.provenance ? { sources: this.input.sources } : {}),
+        // A consolidation built-in's review report follows Multi Review's
+        // contract (item 301): its sources are typed issue and coverage-gap.
+        ...(slot.port.provenance &&
+        isGraphReviewConsolidationNode(this.input.node) &&
+        slot.definition.builtIn &&
+        slot.definition.name === "review-report"
+          ? { provenanceFields: reviewConsolidationProvenanceFields() }
+          : {}),
       },
     );
   }

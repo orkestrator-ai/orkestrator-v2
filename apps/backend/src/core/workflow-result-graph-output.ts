@@ -32,6 +32,7 @@ import {
 } from "@orkestrator/protocol/graphs/output-slots";
 import type { GraphOutputPortSpec } from "@orkestrator/protocol/graphs/template";
 import {
+  type GraphProvenanceField,
   type GraphProvenanceSources,
   graphProvenancePlanForSchema,
   validateGraphProvenance,
@@ -65,6 +66,10 @@ import {
   type WorkflowResultSlotView,
   workflowResultKindDefinition,
 } from "./workflow-result-registry.js";
+import {
+  isReviewConsolidationProvenance,
+  REVIEW_CONSOLIDATION_WORDING,
+} from "./review-consolidation-provenance.js";
 
 /** The contract of a `graph-output` slot that names no port type: any object. */
 export const GRAPH_OUTPUT_GENERIC_SCHEMA: JsonSchema = Object.freeze({ type: "object" });
@@ -264,7 +269,14 @@ export const graphOutputKindDefinition: WorkflowResultKindDefinition = {
   },
   contextValidator: (value, slot) => {
     const provenance = graphOutputContext(slot)?.provenance;
-    return provenance ? validateGraphProvenance(value, provenance, provenance.sources) : [];
+    if (!provenance) return [];
+    // Multi Review's consolidation contract keeps the wording it always had.
+    return validateGraphProvenance(
+      value,
+      provenance,
+      provenance.sources,
+      isReviewConsolidationProvenance(provenance) ? REVIEW_CONSOLIDATION_WORDING : undefined,
+    );
   },
   environmentValidator: (slot) => {
     const context = graphOutputContext(slot);
@@ -287,7 +299,16 @@ export function graphOutputSlotInput(
   base: Pick<WorkflowResultSlotInput, "resultKey" | "environmentId" | "projectId" | "provider">,
   port: Pick<GraphOutputPortSpec, "name" | "label" | "description" | "provenance" | "choices">,
   type: GraphTypeDefinition,
-  options: { criterionIds?: string[]; sources?: GraphProvenanceSources } = {},
+  options: {
+    criterionIds?: string[];
+    sources?: GraphProvenanceSources;
+    /**
+     * Rules for the port's provenance fields instead of the type's plain
+     * ones (item 301: a consolidation built-in's review report follows Multi
+     * Review's contract). Each must name one of the type's sources fields.
+     */
+    provenanceFields?: GraphProvenanceField[];
+  } = {},
 ): WorkflowResultSlotInput {
   const problem = graphOutputPortProblem(port.name);
   if (problem) throw new Error(`Output port ${port.name} cannot name a result tool (${problem})`);
@@ -297,6 +318,16 @@ export function graphOutputSlotInput(
     if (!options.sources) throw new Error("A provenance port needs the sources of its inputs");
     const plan = graphProvenancePlanForSchema(port.provenance, schema, type.sources);
     if (!plan) throw new Error(`${type.ref} has a schema outside the portable subset`);
+    if (options.provenanceFields) {
+      const known = new Set(plan.fields.map((field) => graphSchemaSegmentsPath(field.segments)));
+      for (const field of options.provenanceFields) {
+        if (!known.has(graphSchemaSegmentsPath(field.segments)))
+          throw new Error(
+            `Provenance field ${graphSchemaSegmentsPath(field.segments)} is not a sources field of ${type.ref}`,
+          );
+      }
+      plan.fields = options.provenanceFields.map((field) => structuredClone(field));
+    }
     provenance = { ...plan, sources: { ...options.sources } };
   }
   const context: WorkflowGraphOutputContext = {

@@ -40,6 +40,11 @@ import {
   type GraphBuiltInPromptPort,
 } from "@orkestrator/protocol/graphs/prompts";
 import {
+  graphItemIdOwner,
+  graphItemIds,
+  type GraphArtifactProducer,
+} from "@orkestrator/protocol/graphs/run";
+import {
   graphBuiltInType,
   validateGraphArtifactValue,
   type GraphTicketV1,
@@ -96,6 +101,17 @@ export interface GraphBuiltInPromptInputValue {
   file?: { path: string; sha256: string; bytes: number };
   /** Stable per-item source ids of the artifact (types with `items`), in item order. */
   itemIds?: string[];
+  /**
+   * Review reports read by the consolidation built-in: the source ids of the
+   * report's coverage gaps, which `review-report@1` does not list as items
+   * (`graphReviewCoverageGapIds`), in order.
+   */
+  coverageGapIds?: string[];
+  /**
+   * Review reports read by the consolidation built-in: who wrote the report,
+   * from the producing activation, as Multi Review labels its reviewers.
+   */
+  reviewer?: { agent: string; model: string; focus?: string };
 }
 
 export interface GraphBuiltInPromptContext {
@@ -116,6 +132,46 @@ export interface GraphBuiltInPromptContext {
   branch?: { index: number; count: number };
   /** A user instruction param, when the template passes one (e.g. a review instruction). */
   instruction?: string;
+  /**
+   * A `reviewInstruction` param (item 301): the review's own instruction. Only
+   * the discovery review reads it, and it wins over `instruction` there, so a
+   * template can instruct its reviewers without turning its Fix into a custom
+   * fix.
+   */
+  reviewInstruction?: string;
+}
+
+/** The built-in prompt that merges review reports under Multi Review's contract. */
+export const GRAPH_REVIEW_CONSOLIDATION_BUILT_IN = "consolidation";
+
+/**
+ * Whether a node consolidates review reports as Multi Review does (item 301):
+ * its prompt is the consolidation built-in. Such a node's `review-report@1`
+ * output follows Multi Review's provenance contract — every consolidated
+ * issue and coverage gap cites at least one source finding of its own kind,
+ * and leaves `reviewModels` to the backend — because the built-in's text tells
+ * the model exactly that.
+ */
+export function isGraphReviewConsolidationNode(node: {
+  prompt: { builtIn: string } | object;
+}): boolean {
+  return (
+    "builtIn" in node.prompt &&
+    (node.prompt as { builtIn: string }).builtIn === GRAPH_REVIEW_CONSOLIDATION_BUILT_IN
+  );
+}
+
+/**
+ * The source ids of a review report's coverage gaps, which the type does not
+ * list as items: `<the report's item label>/coverage-gap-<k>`, parallel to its
+ * issues' `<label>/issue-<k>` (so `review/panel.2/coverage-gap-1`). Derived
+ * from the producing activation, so they are stable across reads.
+ */
+export function graphReviewCoverageGapIds(
+  producer: GraphArtifactProducer,
+  count: number,
+): string[] {
+  return count > 0 ? graphItemIds(graphItemIdOwner(producer), "coverage-gap", count) : [];
 }
 
 /** A built-in prompt that cannot be written for this activation. The message never quotes a payload. */
@@ -151,7 +207,12 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       inputs.required("code");
       return reviewValidationDiscoveryPrompt(target);
     case "discovery-review":
-      return discoveryReviewText(inputs, context, notes, instruction);
+      return discoveryReviewText(
+        inputs,
+        context,
+        notes,
+        context.reviewInstruction?.trim() ? context.reviewInstruction : instruction,
+      );
     case "consolidation":
       return consolidationText(inputs, target);
     case "fix-review-issues":
@@ -247,9 +308,10 @@ function discoveryReviewText(
 function consolidationText(inputs: BuiltInInputs, target: string): string {
   const reports = inputs.list("reports").map((entry) => ({
     reviewerId: entry.artifactId,
-    agent: UNKNOWN_REVIEWER_LABEL,
-    model: UNKNOWN_REVIEWER_LABEL,
-    report: withSourceIds(inputs.reviewReport(entry), entry.itemIds),
+    agent: entry.reviewer?.agent ?? UNKNOWN_REVIEWER_LABEL,
+    model: entry.reviewer?.model ?? UNKNOWN_REVIEWER_LABEL,
+    ...(entry.reviewer?.focus ? { focus: entry.reviewer.focus } : {}),
+    report: withSourceIds(inputs.reviewReport(entry), entry.itemIds, entry.coverageGapIds),
   }));
   const reviewPackage = inputs.reviewPackage("package");
   try {
@@ -272,24 +334,37 @@ function consolidationText(inputs: BuiltInInputs, target: string): string {
 }
 
 /**
- * Stamps each issue with the artifact's stable item id, as Multi Review stamps
- * its backend-issued source ids before consolidation, so the consolidated
- * report cites ids the graph's provenance check knows. `review-report@1` has
- * items only for `issues`: coverage gaps keep whatever ids the report carries.
+ * Stamps each issue with the artifact's stable item id, and each coverage gap
+ * with its derived source id (`graphReviewCoverageGapIds`), as Multi Review
+ * stamps its backend-issued source ids before consolidation, so the
+ * consolidated report cites ids the graph's provenance check knows.
  */
 function withSourceIds(
   report: StructuredReviewReport,
   itemIds: readonly string[] | undefined,
+  coverageGapIds: readonly string[] | undefined,
 ): StructuredReviewReport {
-  if (!itemIds) return report;
-  if (itemIds.length !== report.issues.length) {
+  if (itemIds && itemIds.length !== report.issues.length) {
     throw new GraphBuiltInPromptError(
       "Built-in prompt consolidation: a report's item ids do not match its issues",
     );
   }
+  if (coverageGapIds && coverageGapIds.length !== report.testCoverageGaps.length) {
+    throw new GraphBuiltInPromptError(
+      "Built-in prompt consolidation: a report's coverage gap ids do not match its gaps",
+    );
+  }
   return {
     ...report,
-    issues: report.issues.map((issue, index) => ({ ...issue, reviewSourceIds: [itemIds[index]!] })),
+    issues: itemIds
+      ? report.issues.map((issue, index) => ({ ...issue, reviewSourceIds: [itemIds[index]!] }))
+      : report.issues,
+    testCoverageGaps: coverageGapIds
+      ? report.testCoverageGaps.map((gap, index) => ({
+          ...gap,
+          reviewSourceIds: [coverageGapIds[index]!],
+        }))
+      : report.testCoverageGaps,
   };
 }
 

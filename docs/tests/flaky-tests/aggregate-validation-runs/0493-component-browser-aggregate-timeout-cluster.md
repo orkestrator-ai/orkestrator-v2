@@ -567,3 +567,46 @@ failure for those observations, without establishing a root cause or fix.
 DataSavingGateway, PipelineFlow, ToolGroupFold and StreamingTranscript were
 not rerun separately in this repair, so their latest failures remain
 unclassified and non-green. All shortcut/settings regression checks passed.
+
+
+## Scheduling switch review — 2026-10-29
+
+The exact browser retry first refused the default fixture port because it
+belonged to another checkout. The same command then ran on free fixture ports:
+
+```sh
+ORKESTRATOR_E2E_PORT=63550 ORKESTRATOR_PUBLIC_E2E_PORT=63552 mise run test:logged -- --name scheduling-review-browser -- mise run test:browser
+```
+
+The component suite reported 937 passed, 105 skipped and four failed in 9.6
+minutes. Both native branch-suggestion cases still received `rel` instead of
+`release/2.0`. Desktop ToolGroupFold's waiting-group case received inner
+scrollTop 704 instead of zero (existing [0747](../web-ui/0747-tool-group-overflow-follow.md)).
+Desktop VirtuosoFollow's re-engagement decision remained `false` instead of
+`auto` (existing [0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md)).
+Settings cases passed. Preparation's DataSavingGateway and PaneBreakpoint
+failures did not recur.
+
+The three complete unchanged owners were rerun with one worker:
+
+```sh
+ORKESTRATOR_E2E_PORT=63550 mise run test:logged -- --name scheduling-browser-owners -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts ToolGroupFold.spec.ts VirtuosoFollow.spec.ts --workers=1 --output output/playwright/scheduling-review-owners
+```
+
+This reported 42 passed, two skipped and two failed in 1.7 minutes. All 38
+ToolGroupFold cases and both desktop VirtuosoFollow cases passed; the two
+native branch-suggestion cases still failed. Their failure is not newly
+classified as intermittent. No owning implementation, assertion, timeout or
+skip changed.
+
+The aggregate did not reach its public-site stage. It passed separately
+(exit 0, 16.9 s):
+
+```sh
+ORKESTRATOR_PUBLIC_E2E_PORT=63552 mise run test:logged -- --name scheduling-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1
+```
+
+Evidence under the host temporary directory:
+`orkestrator-test-run.NFbZp8/scheduling-review-browser.log.gz` and
+`orkestrator-test-run.e92Fv0/scheduling-browser-owners.log.gz`.
+The browser aggregate remains non-green.

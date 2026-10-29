@@ -320,7 +320,7 @@ describe("GraphRunTab inspector", () => {
 });
 
 describe("GraphRunTab actions", () => {
-  test("retry, pause and cancel go to the backend and apply the snapshot it returns", async () => {
+  test("retry, pause, resume and cancel go to the backend and apply the snapshot it returns", async () => {
     const failed = act(
       { nodeId: "review", branchKey: "panel.2" },
       { state: "failed", error: "Provider error" },
@@ -339,9 +339,13 @@ describe("GraphRunTab actions", () => {
       status: "changed",
       run: { ...stored, revision: 3, status: "paused" },
     });
+    handlers.graph_run_resume = () => ({
+      status: "changed",
+      run: { ...stored, revision: 4, status: "running" },
+    });
     handlers.graph_run_cancel = () => ({
       status: "changed",
-      run: { ...stored, revision: 4, status: "cancelling" },
+      run: { ...stored, revision: 5, status: "cancelling" },
     });
     renderTab();
     await screen.findByTestId("graph-run-title");
@@ -352,7 +356,11 @@ describe("GraphRunTab actions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Pause run" }));
     await waitFor(() => expect(screen.getByTestId("graph-run-status").textContent).toBe("Paused"));
-    expect(screen.getByRole("button", { name: "Resume run" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume run" }));
+    await waitFor(() => expect(calls("graph_run_resume")).toHaveLength(1));
+    expect(calls("graph_run_resume")[0]).toEqual({ runId: "run-1" });
+    await waitFor(() => expect(screen.getByTestId("graph-run-status").textContent).toBe("Running"));
+    expect(screen.getByRole("button", { name: "Pause run" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel run…" }));
     const dialog = await screen.findByTestId("graph-run-cancel-dialog");

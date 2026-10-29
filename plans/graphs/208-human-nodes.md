@@ -7,7 +7,7 @@ status: in-progress
 depends_on: [203, 204]
 blocked_by: ""
 owner: "Claude Opus 5.5 (implement-graph-tasks)"
-branch: "graphs-208-human"
+branch: "graphs-208-realstack"
 pr: ""
 updated: 2026-10-29
 ---
@@ -33,9 +33,9 @@ People take part in a run at explicit points, and a waiting run is visible where
 
 ## Tests
 
-- [ ] Inactive-environment path: start, switch away, answer later, return.
+- [x] Inactive-environment path: start, switch away, answer later, return.
   - [x] Component and store level: `GraphHumanNodePanel.test.tsx` (unmount sends nothing, the wait rehydrates from the snapshot on return, the answer is sent, a change event shows it decided); backend: the wait is in the run record (`graph-node-human.test.ts`).
-  - [ ] Real stack (agent testing): needs a launch path (items 213/214); see Notes.
+  - [x] Real stack (agent testing): `graph-run-view.spec.ts` "a human approval waits while its environment is away and is answered later", plus the opt-in profile-restart case; see Notes.
 - [x] Restart while a human node is waiting.
 - [x] The coordinator gets one notice per wait.
 - [x] Edit validation, choose routing, and timeout to the `error` port.
@@ -56,9 +56,13 @@ People take part in a run at explicit points, and a waiting run is visible where
 - 2026-10-29 · Agent testing: an isolated profile (`graphs-208-human`, `--fixture --no-agent-credentials --agent-platforms codex`) ran `graph-run-view.spec.ts` (now also checks `graph_run_pending` and a refused `graph_run_answer` through the gateway) and both designer specs: pass; profile stopped and reset. No command on this branch creates a run (launch is item 214; mock runs 213 are on graphs-integration, not here), so "start, switch away, answer later, return" on a real stack remains: add it to `graph-run-view.spec.ts` once a template of system/gate/human nodes can be launched (no provider credentials needed).
 - 2026-10-29 · Edit of a list input or a file reference is not offered (approve or reject it as it is); the backend refuses it too.
 
+- 2026-10-29 · Agent testing, real stack (launch path from 214). Profile `graphs-208-realstack` (`dev:test --fixture --no-agent-credentials --agent-platforms claude`), worktree `graphs-208-realstack` at `1be568164` plus this change. `e2e/agent-testing/graph-run-view.spec.ts` gains a credential-free template `qa-human-approve` (prepare-environment → human `approve` "First check" → human `approve` "Second check" → gate) and the scenario "a human approval waits while its environment is away and is answered later": launched from "Run graph…" on an existing environment, the user switches to another environment at once; the run reaches `waiting` with `graph_run_pending` listing only First check; the away environment's sidebar row shows the `waiting` marker and the unread attention bell; First check is answered through the command path (`graph_run_answer`, waitId form) while away, a repeat of that answer is refused; Second check then waits; back in the environment the run tab shows "Waiting for you" and the banner "Second check is waiting for you." with the waiting panel, the same after a reload; Second check is approved from the run view (Approve, note, Send), the run completes, the banner and pending list are empty, the sidebar marker leaves `waiting`; a reload shows Complete and both answers recorded (`approved`/`approve`). There is no CLI or public-action answer path (`orkestrator graph` has no answer command, and the Control MCP graph tools do not answer), so the away answer uses the app command through the gateway. Run: `mise run test:logged -- --name agent-graph-run-view -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/graph-run-view.spec.ts` → 3 passed, 1 skipped (the opt-in restart case); results `output/agent-testing/graphs-208-realstack/browser/results.json`, screenshots `04-human-waiting-away.png`, `05-human-waiting-returned.png`, `06-human-answered-complete.png` under `output/agent-testing/graphs-208-realstack/browser/artifacts/` (not committed).
+- 2026-10-29 · Backend restart on a real stack: the harness restarts a profile with state kept (`dev:stop`, then `dev-test.ts` with the stored credential and platform choice, as `cold-restart-live.spec.ts` does), so the spec has an opt-in case (`ORKESTRATOR_AGENT_TEST_GRAPH_RESTART=1`), "a human node waits across a profile restart and is answered afterwards": template `qa-human-restart` (one approval) launched through `graph_run_launch`, waits, the whole profile (backend included) is stopped and started, the same activation and wait id are still pending and the run still `waiting`, the sidebar shows it waiting, it is approved from the run view and completes. Run with `ORKESTRATOR_AGENT_TEST_RUN_ID=graphs-208-realstack-restart ... -g "profile restart"` → 1 passed (13.5 s); screenshot `07-human-waiting-after-restart.png` and the restart launcher log under `output/agent-testing/graphs-208-realstack-restart/browser/artifacts/`. It leaves the profile on a detached launcher (stop it with `dev:stop`); after it the profile no longer reports `testProject`, so run it last or alone. Profile stopped and reset afterwards.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Human executor, answers (`graph_run_answer` human form, `graph_run_pending`), implicit `error` port for timeouts, sidebar activity and attention, coordinator `graph-run` status wake, run view panel and edit form, 210 wiring, tests; real-stack read-side spec passes. · Real-stack inactive-path scenario once 213/214 provide a launch path.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Real-stack inactive-environment path (command answer while away, run-view answer after return, reloads) and opt-in profile-restart case in `graph-run-view.spec.ts`: pass. · complete; awaiting PR

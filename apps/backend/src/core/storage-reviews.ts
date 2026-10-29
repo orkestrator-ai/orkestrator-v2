@@ -6,7 +6,6 @@ import {
   isMultiReviewWorkflow,
   isNonBlankString,
   isNonNegativeInteger,
-  isPersistedLoopedReviewWorkflow,
   isPersistedMultiReviewWorkflow,
   isPositiveInteger,
   isRecord,
@@ -49,7 +48,6 @@ type PortMapping = shared.PortMapping;
 type PrState = shared.PrState;
 type Project = shared.Project;
 type PersistedPaneLayout = shared.PersistedPaneLayout;
-type PersistedLoopedReviewWorkflow = shared.PersistedLoopedReviewWorkflow;
 type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
@@ -115,7 +113,6 @@ export type StorageLayerTypes = [
   PrState,
   Project,
   PersistedPaneLayout,
-  PersistedLoopedReviewWorkflow,
   PersistedMultiReviewWorkflow,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
@@ -158,8 +155,7 @@ function holdsControllerLease(
 }
 
 /**
- * Looped and Multi Review workflows each live in a `record` store, one row per
- * workflow, and every access here touches only the rows it names. A fence
+ * Multi Review workflows live in a `record` store, one row per workflow, and every access here touches only the rows it names. A fence
  * check runs around nearly every provider call a supervisor makes, so it must
  * cost one row however much review history the store retains.
  *
@@ -176,14 +172,6 @@ export class ReviewsRepository {
     private readonly repos: StorageRepositories,
   ) {}
 
-  private enqueueLoopedReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.context.serialize(
-      this.files.loopedReviewsFile(),
-      "looped review workflow storage",
-      operation,
-    );
-  }
-
   private enqueueMultiReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
     return this.context.serialize(
       this.files.multiReviewsFile(),
@@ -193,319 +181,9 @@ export class ReviewsRepository {
   }
 
   /** One committed workflow; `null` when absent, unreadable or invalid. */
-  private loadLoopedReviewWorkflow(workflowId: string): PersistedLoopedReviewWorkflow | null {
-    const stored = this.context.loadStoreRow(this.files.loopedReviewsFile(), workflowId);
-    return isPersistedLoopedReviewWorkflow(stored, workflowId) ? stored : null;
-  }
-
-  /** One committed workflow; `null` when absent, unreadable or invalid. */
   private loadMultiReviewWorkflow(workflowId: string): PersistedMultiReviewWorkflow | null {
     const stored = this.context.loadStoreRow(this.files.multiReviewsFile(), workflowId);
     return isPersistedMultiReviewWorkflow(stored, workflowId) ? stored : null;
-  }
-
-  async getLoopedReviewWorkflow(workflowId: string): Promise<PersistedLoopedReviewWorkflow | null> {
-    if (!isNonBlankString(workflowId)) {
-      throw new Error("Looped review workflow ID must not be blank");
-    }
-    return this.loadLoopedReviewWorkflow(workflowId);
-  }
-
-  async listLoopedReviewWorkflows(environmentId: string): Promise<PersistedLoopedReviewWorkflow[]> {
-    if (!isNonBlankString(environmentId)) {
-      throw new Error("Looped review environment ID must not be blank");
-    }
-    const workflows = await this.context.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
-      this.files.loopedReviewsFile(),
-      () => ({}),
-    );
-    return Object.entries(workflows)
-      .filter(
-        ([workflowId, workflow]) =>
-          isPersistedLoopedReviewWorkflow(workflow, workflowId) &&
-          workflow.environmentId === environmentId,
-      )
-      .map(([, workflow]) => workflow)
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
-  }
-
-  /** Backend supervisors must restore work even when no renderer is mounted. */
-  async listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
-    const workflows = await this.context.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
-      this.files.loopedReviewsFile(),
-      () => ({}),
-    );
-    return Object.entries(workflows)
-      .filter(([workflowId, workflow]) => isPersistedLoopedReviewWorkflow(workflow, workflowId))
-      .map(([, workflow]) => workflow)
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
-  }
-
-  async saveLoopedReviewWorkflow(
-    workflowId: string,
-    environmentId: string,
-    version: number,
-    snapshot: unknown,
-    expectedRevision?: number,
-    controllerFence?: { ownerId: string; token: string },
-    options?: {
-      /**
-       * Rejects the write when the *stored* record has already reached this
-       * version. Evaluated inside the mutation queue so it cannot be overtaken
-       * by a concurrent backend adoption between the caller's read and its
-       * write, which a caller-side check inevitably can be.
-       */
-      rejectStoredVersionAtLeast?: number;
-    },
-  ): Promise<PersistedLoopedReviewWorkflow> {
-    if (!isNonBlankString(workflowId)) {
-      throw new Error("Looped review workflow ID must not be blank");
-    }
-    if (!isNonBlankString(environmentId)) {
-      throw new Error("Looped review environment ID must not be blank");
-    }
-    if (!isPositiveInteger(version)) {
-      throw new Error("Looped review workflow version must be a positive integer");
-    }
-    if (!isRecord(snapshot)) {
-      throw new Error("Looped review snapshot must be a JSON object");
-    }
-    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
-      throw new Error("Looped review expected revision must be a non-negative integer");
-    }
-    if (
-      controllerFence !== undefined &&
-      (!isNonBlankString(controllerFence.ownerId) || !isNonBlankString(controllerFence.token))
-    ) {
-      throw new Error("Looped review controller fence is invalid");
-    }
-    let serializedSnapshot: string | undefined;
-    try {
-      serializedSnapshot = JSON.stringify(snapshot);
-    } catch {
-      throw new Error("Looped review snapshot must be JSON serializable");
-    }
-    if (serializedSnapshot === undefined) {
-      throw new Error("Looped review snapshot must be JSON serializable");
-    }
-    // Review packages intentionally retain complete diffs and changed-file
-    // contents. Reject over-sized snapshots explicitly; never truncate them.
-    if (Buffer.byteLength(serializedSnapshot, "utf8") > 32 * 1024 * 1024) {
-      throw new Error("Looped review snapshot exceeds the 32 MB limit");
-    }
-
-    return this.enqueueLoopedReviewMutation(async () => {
-      if (!(await this.repos.projects.getEnvironment(environmentId))) {
-        throw new Error(`Environment not found: ${environmentId}`);
-      }
-      // The checks run inside the row's own transaction, against the record
-      // being replaced; an invalid stored record reads as absent.
-      const saved = this.context.updateStoreRow<PersistedLoopedReviewWorkflow>(
-        this.files.loopedReviewsFile(),
-        workflowId,
-        (current) => {
-          const previous = isPersistedLoopedReviewWorkflow(current, workflowId)
-            ? current
-            : undefined;
-          if (previous && previous.environmentId !== environmentId) {
-            throw new Error("Looped review workflow belongs to another environment");
-          }
-          if (
-            options?.rejectStoredVersionAtLeast !== undefined &&
-            (previous?.version ?? 0) >= options.rejectStoredVersionAtLeast
-          ) {
-            throw new Error(
-              "Backend-owned looped reviews can only be changed through workflow commands",
-            );
-          }
-          if (
-            controllerFence &&
-            !holdsControllerLease(
-              previous?.controllerLease,
-              controllerFence.ownerId,
-              controllerFence.token,
-            )
-          ) {
-            throw new Error("Looped review controller lease conflict");
-          }
-          if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
-            throw new Error("Looped review workflow revision conflict");
-          }
-          const next: PersistedLoopedReviewWorkflow = {
-            version,
-            id: workflowId,
-            environmentId,
-            snapshot,
-            updatedAt: nowIso(),
-            revision: (previous?.revision ?? 0) + 1,
-            ...(previous?.controllerLease ? { controllerLease: previous.controllerLease } : {}),
-          };
-          return { result: next, value: next };
-        },
-      );
-      this.context.changes.announce("looped-review", workflowId);
-      return saved;
-    });
-  }
-
-  async claimLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    leaseMs: number,
-  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)) {
-      throw new Error("Looped review controller identity must not be blank");
-    }
-    if (!Number.isSafeInteger(leaseMs) || leaseMs < 2_000 || leaseMs > 60_000) {
-      throw new Error("Looped review controller lease is invalid");
-    }
-    return this.enqueueLoopedReviewMutation(async () =>
-      this.context.updateStoreRow<ControllerClaim>(
-        this.files.loopedReviewsFile(),
-        workflowId,
-        (current) => {
-          if (!isPersistedLoopedReviewWorkflow(current, workflowId)) {
-            throw new Error(`Looped review workflow not found: ${workflowId}`);
-          }
-          const workflow = current;
-          const now = Date.now();
-          const currentExpiry = workflow.controllerLease
-            ? Date.parse(workflow.controllerLease.expiresAt)
-            : 0;
-          if (
-            workflow.controllerLease &&
-            workflow.controllerLease.ownerId !== ownerId &&
-            currentExpiry > now
-          ) {
-            return {
-              result: { granted: false, token: "", expiresAt: workflow.controllerLease.expiresAt },
-            };
-          }
-          const heldLease =
-            workflow.controllerLease?.ownerId === ownerId &&
-            currentExpiry > now &&
-            isNonBlankString(workflow.controllerLease.token)
-              ? workflow.controllerLease
-              : null;
-          // Re-granting an unexpired lease to its own holder is the overwhelmingly
-          // common path: every advance claims before it reads, and the poll runs
-          // once a second for every non-terminal workflow — including ones merely
-          // paused or failed. A write here would rewrite this workflow's row, whose
-          // snapshot legitimately holds complete diffs and file contents, and move
-          // the store revision clients watch. Only pay for the write once the
-          // lease is actually close to expiring.
-          if (heldLease && currentExpiry - now >= leaseMs / 2) {
-            return {
-              result: { granted: true, token: heldLease.token, expiresAt: heldLease.expiresAt },
-            };
-          }
-          const token = heldLease ? heldLease.token : randomUUID();
-          const expiresAt = new Date(now + leaseMs).toISOString();
-          return {
-            result: { granted: true, token, expiresAt },
-            value: { ...workflow, controllerLease: { ownerId, token, expiresAt } },
-          };
-        },
-      ),
-    );
-  }
-
-  /**
-   * Whether `ownerId` still holds the controller lease under `token`. Reads
-   * one row and takes no lease, like
-   * {@link ReviewsRepository.validateMultiReviewController}.
-   */
-  async validateLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    token: string,
-  ): Promise<boolean> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token)) {
-      return false;
-    }
-    const workflow = this.loadLoopedReviewWorkflow(workflowId);
-    return holdsControllerLease(workflow?.controllerLease, ownerId, token);
-  }
-
-  async releaseLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    token: string,
-  ): Promise<void> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token)) {
-      return;
-    }
-    await this.enqueueLoopedReviewMutation(async () => {
-      this.context.updateStoreRow(this.files.loopedReviewsFile(), workflowId, (current) => {
-        if (
-          !isPersistedLoopedReviewWorkflow(current, workflowId) ||
-          current.controllerLease?.ownerId !== ownerId ||
-          current.controllerLease.token !== token
-        ) {
-          return { result: undefined };
-        }
-        const { controllerLease: _lease, ...released } = current;
-        return { result: undefined, value: released };
-      });
-    });
-  }
-
-  async deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
-    if (!isNonBlankString(workflowId)) {
-      throw new Error("Looped review workflow ID must not be blank");
-    }
-    await this.enqueueLoopedReviewMutation(async () => {
-      const deleted = this.context.updateStoreRow(
-        this.files.loopedReviewsFile(),
-        workflowId,
-        (current) =>
-          isPersistedLoopedReviewWorkflow(current, workflowId)
-            ? { result: true, delete: true }
-            : { result: false },
-      );
-      if (deleted)
-        this.context.changes.announce("looped-review", workflowId, undefined, undefined, true);
-      // A previous attempt may have committed the delete before its scrub failed.
-      await this.context.scrubSensitiveJsonBackups(
-        this.files.loopedReviewsFile(),
-        (storedId) => storedId !== workflowId,
-      );
-    });
-  }
-
-  async deleteLoopedReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
-    if (!isNonBlankString(environmentId)) {
-      throw new Error("Looped review environment ID must not be blank");
-    }
-    await this.enqueueLoopedReviewMutation(async () => {
-      const storedWorkflows = await this.context.loadJson<Record<string, unknown>>(
-        this.files.loopedReviewsFile(),
-        () => ({}),
-      );
-      // Attributed by the stored environment field alone, so a record this
-      // build cannot otherwise read still leaves with its environment.
-      const removedIds = Object.entries(storedWorkflows)
-        .filter(([, workflow]) => isRecord(workflow) && workflow.environmentId === environmentId)
-        .map(([storedId]) => storedId);
-      if (removedIds.length === 0) return;
-      for (const removedId of removedIds) {
-        this.context.updateStoreRow(this.files.loopedReviewsFile(), removedId, () => ({
-          result: undefined,
-          delete: true,
-        }));
-        this.context.changes.announce("looped-review", removedId, undefined, undefined, true);
-      }
-
-      // Scrub the retired JSON archive, and the WAL and free pages, before
-      // releasing the mutation lease so environment deletion removes all
-      // persisted review evidence.
-      await this.context.scrubSensitiveJsonBackups(
-        this.files.loopedReviewsFile(),
-        (storedId, workflow) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId) &&
-          workflow.environmentId !== environmentId,
-      );
-    });
   }
 
   async getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {

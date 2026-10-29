@@ -218,8 +218,8 @@ async function withService(
     if (command === "get_environment_uncommitted_paths") {
       return { head: "1".repeat(40), paths: [] } as T;
     }
-    if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args) as T;
-    if (command === "verify_looped_review_package") return { valid: true } as T;
+    if (command === "generate_review_package") return testGeneratedReviewPackage(args) as T;
+    if (command === "verify_review_package") return { valid: true } as T;
     if (command === "get_kanban_tasks") return [] as T;
     return undefined as T;
   };

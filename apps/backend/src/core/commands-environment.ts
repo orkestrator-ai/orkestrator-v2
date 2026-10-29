@@ -92,8 +92,7 @@ import {
   parseDockerStatus,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
-import { seedFilesDir } from "./nodes/node-files.js";
-import { readSeedManifest } from "./nodes/node-seed.js";
+import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,

@@ -114,7 +114,11 @@ describe("Orkestrator control MCP server", () => {
           break;
         case "get_config":
           result = {
-            global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+            global: {
+              enabledAgentPlatforms: ["codex"],
+              agentMessaging: { enabled: true },
+              experimentalScheduling: true,
+            },
           };
           break;
         case "get_environment_snapshots":
@@ -445,9 +449,6 @@ describe("Orkestrator control MCP server", () => {
       "edit_worker_tab",
       "request_root_changes",
       "propose_agents_md_update",
-      "start_looped_review",
-      "get_looped_review",
-      "cancel_looped_review",
       "launch_feature_plan",
       "get_feature_plan",
       "custom_fix_multi_review",
@@ -555,6 +556,33 @@ describe("Orkestrator control MCP server", () => {
         COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
       );
     }
+  });
+
+  test("withholds the schedule tools while experimental scheduling is off", async () => {
+    overrides.set("get_config", () => ({
+      global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+    }));
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    });
+    const metadata = await rpc(credential.url, credential.token, "tools/list");
+    const names = metadata.body.result!.tools!.map((tool) => tool.name);
+    expect(names).toContain("send_message");
+    expect(names.filter((name) => name.endsWith("_schedule") || name === "list_schedules")).toEqual(
+      [],
+    );
   });
 
   test("binds coordinator credentials to one project and revokes them", async () => {

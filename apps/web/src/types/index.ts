@@ -298,7 +298,7 @@ export interface EnsureEnvironmentSetupResult extends StartEnvironmentResult {
   environment: Environment;
 }
 
-export interface PersistedLoopedReviewWorkflow<T = unknown> {
+export interface PersistedWorkflowRecord<T = unknown> {
   version: number;
   id: string;
   environmentId: string;
@@ -594,6 +594,8 @@ export interface GlobalConfig {
   terminalHistoryRetentionDays?: number;
   /** Capture raw Codex bridge events for subagent transcript debugging */
   experimentalCodexRawEventLogging?: boolean;
+  /** Experimental: scheduled jobs (Settings → Schedules, schedule tools and actions) */
+  experimentalScheduling?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
   /** Number of days production application logs remain on disk */

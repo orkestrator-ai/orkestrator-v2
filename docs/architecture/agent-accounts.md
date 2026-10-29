@@ -274,7 +274,7 @@ Codex put an `authNotice` on their session read (`GET /session/:id`,
 | Platform | Raised by | Cleared by |
 | --- | --- | --- |
 | Claude | `auth_status` with an `error` (`expired`) or `isAuthenticating` (`needs-auth`); a turn refused with `authentication_failed` (`expired`) | `auth_status` reporting the authentication finished; any real model answer |
-| Codex | `modelProvider/authRecoveryStarted` (`expired`); a turn failed with `unauthorized` or a forwarded 401 (`needs-auth`, "Codex's login was refused. …") | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`) |
+| Codex | `modelProvider/authRecoveryStarted` (`expired`); a turn failed with `unauthorized` or a forwarded 401 (`needs-auth`, worded for the refused login) | `authRecoveryCompleted`, unless its text says the renewal failed, which keeps a `needs-auth` notice; a completed turn; a successful sign-in (`account/login/completed`); a different login stored in `CODEX_HOME` (stored-login reload, `account.signedIn`) |
 
 Codex's completion carries no outcome field (codex 0.162 says succeeded,
 failed-permanent or failed-transient only in its message), so the failure check
@@ -291,7 +291,37 @@ forwards one (`httpConnectionFailed`, `responseStreamConnectionFailed`,
 `needs-auth` notice (`refusedLoginNotice`, `sessions/auth-recovery-notice.ts`).
 Only a 401: a failure with no status or a 5xx never locks the composer. A
 second refusal keeps the occurrence, so a dismissed notice stays dismissed.
-The in-tab sign-in replaces an API key with a ChatGPT login.
+
+The notice names the login `account/read` reports (`account.type`); the
+turn's error does not say. The engine keeps the kind from every signed-in
+answer (`getAccountLoginKind`) and emits `account.loginKind` when it changes,
+because the refusal's own read usually answers after the turn has failed. The
+runtime then rewords the notice in place, keeping its occurrence
+(`withRefusedLoginKind`):
+
+| Login | Notice |
+| --- | --- |
+| API key | "Codex's API key was refused. Replace it with codex login --with-api-key, or sign in to Codex with ChatGPT instead." |
+| ChatGPT | "Codex's ChatGPT login was refused. Sign in to Codex again to keep working." |
+| Not known yet | "Codex's login was refused. Sign in to Codex again to keep working." |
+
+The banner's **Sign in to Codex** is the ChatGPT sign-in, which replaces an
+API key with a ChatGPT login. Orkestrator's Settings have no Codex key field.
+A key stored in `CODEX_HOME` (what `codex login --with-api-key` writes) clears
+the notice without a sign-in: after a refusal the engine fingerprints the
+stored login, and the next `account/read` that finds a different one replaces
+the app-server child and emits `account.signedIn` (checked live on 2026-10-29).
+
+A ChatGPT login refused mid-turn is different: Codex 0.164.0 can recover it.
+Its binary has the refresh reason `unauthorized_recovery` and recovery
+outcomes `recovery_succeeded`, `recovery_failed_permanent` and
+`recovery_failed_transient`. An API key has no recovery steps ("No more
+recovery steps available."). So a ChatGPT 401 sends `authRecoveryStarted` and
+`…Completed`, and a refused refresh ends the turn with `RefreshTokenFailed`
+("Your access token could not be refreshed … Please log out and sign in
+again."). The renewal-failed check and the 401 rule both cover that. Which
+`codexErrorInfo` that turn carries (probably `unauthorized`) has not been seen
+live.
 
 How each tab shows it:
 

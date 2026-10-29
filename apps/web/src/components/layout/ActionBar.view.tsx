@@ -52,7 +52,6 @@ import {
   PanelLeft,
   Play,
   Plus,
-  Repeat2,
   Shield,
   SlidersHorizontal,
   StickyNote,
@@ -276,14 +275,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setScriptLaunchError,
     scriptDialogOpen,
     createScriptButtonRef,
-    loopedReviewDialogOpen,
-    setLoopedReviewDialogOpen,
     multiReviewDialogOpen,
     setMultiReviewDialogOpen,
     multiReviewLaunchPending,
     multiReviewLaunchInFlightRef,
-    loopedReviewLaunchPending,
-    loopedReviewLaunchInFlightRef,
     prDialogTarget,
     setPrDialogTarget,
     prLaunchError,
@@ -343,7 +338,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     openMultiReviewDialog,
     multiReviewLongPress,
     handleMultiReview,
-    handleLoopedReview,
     openScriptDialog,
     scriptLongPress,
     scriptEligibilityError,
@@ -1043,36 +1037,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </Button>
                   </ToolbarTooltipTrigger>
 
-                  <ToolbarTooltipTrigger
-                    tooltip={
-                      <>
-                        <p>Looped Code Review</p>
-                        <p className="text-xs text-muted-foreground">
-                          Discover, reconcile, fix, repeat, and create a PR
-                        </p>
-                      </>
-                    }
-                  >
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={() => setLoopedReviewDialogOpen(true)}
-                      disabled={
-                        !selectedEnvironment ||
-                        !canCreateTab ||
-                        !isRunning ||
-                        !workspaceReady ||
-                        setupRunning ||
-                        loopedReviewLaunchPending
-                      }
-                      aria-label="Looped code review"
-                    >
-                      <Repeat2 className="h-4 w-4" />
-                      {isGrid && <span className="truncate text-xs">Looped review</span>}
-                    </Button>
-                  </ToolbarTooltipTrigger>
-
                   {/* Play Button - Run Commands */}
                   <ToolbarTooltipTrigger
                     tooltip={
@@ -1563,27 +1527,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         preferredFastModes={reviewLaunchDefaults.preferredFastModes}
         onConfirm={handleConfiguredReview}
-      />
-      <ReviewLaunchDialog
-        kind="looped"
-        open={loopedReviewDialogOpen}
-        onOpenChange={(open) => {
-          if (!loopedReviewLaunchInFlightRef.current) {
-            setLoopedReviewDialogOpen(open);
-          }
-        }}
-        defaultTabType={resolveDefaultReviewTabType({
-          defaultAgent: reviewLaunchDefaults.defaultAgent,
-          environment: selectedEnvironment ?? undefined,
-          global: config.global,
-          repositoryConfig: selectedProjectId ? config.repositories[selectedProjectId] : undefined,
-        })}
-        catalog={reviewModelCatalog}
-        preferredModels={reviewLaunchDefaults.preferredModels}
-        preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
-        preferredFastModes={reviewLaunchDefaults.preferredFastModes}
-        busy={loopedReviewLaunchPending}
-        onConfirm={handleLoopedReview}
       />
       <MultiReviewLaunchDialog
         open={multiReviewDialogOpen}

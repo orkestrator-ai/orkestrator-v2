@@ -1743,12 +1743,11 @@ describe("process and platform command behavior", () => {
 });
 
 /**
- * Linear and looped-review commands. The Linear handlers are the only ones
- * here that reach an external service, so `fetch` is stubbed at the module
+ * Linear commands. The Linear handlers reach an external service, so `fetch` is stubbed at the module
  * boundary: everything below it (auth gating, argument validation, GraphQL
  * response mapping and error sanitization) is the real implementation.
  */
-describe("Linear and looped review command behavior", () => {
+describe("Linear command behavior", () => {
   const originalFetch = globalThis.fetch;
 
   type LinearAuth = { apiKey: string; viewer: { id: string; name: string } } | null;
@@ -1791,32 +1790,6 @@ describe("Linear and looped review command behavior", () => {
       },
     } as unknown as CommandContext;
     return { context, getLinearAuth };
-  }
-
-  function createWorkflowContext(workflows: Record<string, unknown>) {
-    const calls: Array<{ method: string; args: unknown[] }> = [];
-    const context = {
-      appRoot: root,
-      resourceRoot: root,
-      emit: mock(() => {}),
-      storage: {
-        getLoopedReviewWorkflow: mock(async (workflowId: string) => {
-          calls.push({ method: "get", args: [workflowId] });
-          return workflows[workflowId] ?? null;
-        }),
-        listLoopedReviewWorkflows: mock(async (environmentId: string) => {
-          calls.push({ method: "list", args: [environmentId] });
-          return Object.values(workflows).filter(
-            (workflow) => (workflow as { environmentId?: string }).environmentId === environmentId,
-          );
-        }),
-        deleteLoopedReviewWorkflow: mock(async (workflowId: string) => {
-          calls.push({ method: "delete", args: [workflowId] });
-          delete workflows[workflowId];
-        }),
-      },
-    } as unknown as CommandContext;
-    return { context, calls };
   }
 
   afterEach(() => {
@@ -1998,80 +1971,5 @@ describe("Linear and looped review command behavior", () => {
       "Expected issueId to be a string",
     );
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  test("reads, lists, and deletes looped review workflows through storage", async () => {
-    const workflows: Record<string, unknown> = {
-      "workflow-1": {
-        version: 1,
-        id: "workflow-1",
-        environmentId: "environment-1",
-        snapshot: { phase: "reviewing" },
-        updatedAt: new Date(0).toISOString(),
-        revision: 3,
-      },
-      "workflow-2": {
-        version: 1,
-        id: "workflow-2",
-        environmentId: "environment-2",
-        snapshot: { phase: "completed" },
-        updatedAt: new Date(0).toISOString(),
-        revision: 1,
-      },
-    };
-    const { context, calls } = createWorkflowContext(workflows);
-
-    expect(
-      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
-    ).toMatchObject({ id: "workflow-1", revision: 3, snapshot: { phase: "reviewing" } });
-
-    // Listing is environment-scoped: another environment's workflow is excluded.
-    expect(
-      await invoke("list_looped_review_workflows", { environmentId: "environment-1" }, context),
-    ).toMatchObject([{ id: "workflow-1" }]);
-
-    await invoke("delete_looped_review_workflow", { workflowId: "workflow-1" }, context);
-
-    expect(
-      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
-    ).toBeNull();
-    expect(calls).toEqual([
-      { method: "get", args: ["workflow-1"] },
-      { method: "list", args: ["environment-1"] },
-      // Deletion reads first so an active backend-owned workflow cannot be
-      // removed without an explicit cancel transition.
-      { method: "get", args: ["workflow-1"] },
-      { method: "delete", args: ["workflow-1"] },
-      { method: "get", args: ["workflow-1"] },
-    ]);
-  });
-
-  test("returns nothing for an unknown looped review workflow or environment", async () => {
-    const { context } = createWorkflowContext({});
-
-    expect(
-      await invoke("get_looped_review_workflow", { workflowId: "missing" }, context),
-    ).toBeNull();
-    expect(
-      await invoke("list_looped_review_workflows", { environmentId: "missing" }, context),
-    ).toEqual([]);
-    // Deleting an absent workflow is a no-op rather than an error.
-    await invoke("delete_looped_review_workflow", { workflowId: "missing" }, context);
-  });
-
-  test("validates looped review workflow arguments", async () => {
-    const { context, calls } = createWorkflowContext({});
-
-    await expect(invoke("get_looped_review_workflow", { workflowId: 1 }, context)).rejects.toThrow(
-      "Expected workflowId to be a string",
-    );
-    await expect(
-      invoke("list_looped_review_workflows", { environmentId: null }, context),
-    ).rejects.toThrow("Expected environmentId to be a string");
-    await expect(invoke("delete_looped_review_workflow", {}, context)).rejects.toThrow(
-      "Expected workflowId to be a string",
-    );
-
-    expect(calls).toEqual([]);
   });
 });

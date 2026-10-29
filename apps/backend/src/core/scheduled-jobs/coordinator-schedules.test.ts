@@ -64,7 +64,11 @@ beforeEach(async () => {
   registerScheduledJobCommands((name, handler) => {
     commands.set(name, handler as never);
   });
-  const context = {} as CommandContext;
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    experimentalScheduling: true,
+  });
+  const context = { storage } as CommandContext;
   const invoke: ControlMcpInvoker = async <T>(
     command: string,
     args: Record<string, unknown> = {},
@@ -78,7 +82,11 @@ beforeEach(async () => {
         return { workspace: workspace() } as T;
       case "get_config":
         return {
-          global: { agentMessaging: { enabled: true }, enabledAgentPlatforms: ["claude"] },
+          global: {
+            agentMessaging: { enabled: true },
+            enabledAgentPlatforms: ["claude"],
+            experimentalScheduling: true,
+          },
         } as T;
       case "get_project_base_branch_tip":
         return { branch: "main", commit: branchTip, ref: "origin/main", fetched: true } as T;

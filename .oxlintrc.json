@@ -187,6 +187,37 @@
               {
                 "group": ["**/design/*", "!**/design/index.js"],
                 "message": "Import the design domain through design/index.js."
+              },
+              {
+                "group": ["**/nodes/*", "!**/nodes/index.js", "!**/nodes/node-store-format.js"],
+                "message": "Import the nodes domain through nodes/index.js."
+              },
+              {
+                "group": [
+                  "**/change-tracking/*",
+                  "!**/change-tracking/index.js",
+                  "!**/change-tracking/ledger-schema.js",
+                  "!@orkestrator/protocol/node/change-tracking/*"
+                ],
+                "message": "Import the change-tracking domain through change-tracking/index.js."
+              },
+              {
+                "group": [
+                  "**/transcript-artifacts/*",
+                  "!**/transcript-artifacts/index.js",
+                  "!**/transcript-artifacts/store-layout.js"
+                ],
+                "message": "Import the transcript-artifacts domain through transcript-artifacts/index.js."
+              },
+              {
+                "group": [
+                  "**/scheduled-jobs/*",
+                  "!**/scheduled-jobs/index.js",
+                  "!**/scheduled-jobs/layout.js",
+                  "!**/scheduled-jobs/store.js",
+                  "!**/scheduled-jobs/tools.js"
+                ],
+                "message": "Import the scheduled-jobs domain through scheduled-jobs/index.js."
               }
             ]
           }
@@ -222,6 +253,31 @@
               {
                 "group": ["**/backend/src/core/design/*", "!**/backend/src/core/design/index.js"],
                 "message": "Import the design domain through design/index.js."
+              },
+              {
+                "group": ["**/backend/src/core/nodes/*", "!**/backend/src/core/nodes/index.js"],
+                "message": "Import the nodes domain through nodes/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/change-tracking/*",
+                  "!**/backend/src/core/change-tracking/index.js"
+                ],
+                "message": "Import the change-tracking domain through change-tracking/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/transcript-artifacts/*",
+                  "!**/backend/src/core/transcript-artifacts/index.js"
+                ],
+                "message": "Import the transcript-artifacts domain through transcript-artifacts/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/scheduled-jobs/*",
+                  "!**/backend/src/core/scheduled-jobs/index.js"
+                ],
+                "message": "Import the scheduled-jobs domain through scheduled-jobs/index.js."
               }
             ]
           }

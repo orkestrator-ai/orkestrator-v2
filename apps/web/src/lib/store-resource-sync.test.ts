@@ -5,19 +5,16 @@ import path from "node:path";
 import * as portalTransport from "@/lib/portal/portal-transport";
 import type { Environment } from "@/types";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
-import { loopedReviewFixture } from "@/test/looped-review-fixture";
 
 // Each of the modules stubbed below has its own test file. Snapshot the real
 // modules before replacing them and restore in afterAll, so a non-isolated run
 // does not leave those suites testing these fakes (AGENTS.md, Bun mock rules).
-import * as realLoopedReview from "@/lib/looped-review-persistence";
 import * as realBuildPipeline from "@/lib/build-pipeline-persistence";
 import * as realMultiReview from "@/lib/multi-review-persistence";
 import * as realPromptQueue from "@/lib/prompt-queue-persistence";
 import * as realPromptQueueSources from "@/lib/prompt-queue-sources";
 
 const realModules = {
-  "@/lib/looped-review-persistence": { ...realLoopedReview },
   "@/lib/build-pipeline-persistence": { ...realBuildPipeline },
   "@/lib/multi-review-persistence": { ...realMultiReview },
   "@/lib/prompt-queue-persistence": { ...realPromptQueue },
@@ -38,13 +35,6 @@ afterAll(() => {
  * downstream store's own loading behaviour.
  */
 
-const hydrateLoopedReviewWorkflow = mock(async (_id: string): Promise<unknown> => undefined);
-const resolveLoopedReviewWorkflow = mock(
-  async (_id: string): Promise<{ status: string; workflow?: unknown }> => ({
-    status: "unreadable",
-  }),
-);
-const hydrateLoopedReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateBuildPipelinesForProject = mock(async (_id: string) => []);
 const hydrateMultiReviewWorkflow = mock(async (_id: string) => null as unknown);
@@ -52,11 +42,6 @@ const hydrateMultiReviewWorkflowsForEnvironment = mock(async (_id: string) => []
 const hydratePromptQueuesForEnvironment = mock(async (_id: string, _sources: unknown) => undefined);
 const createPromptQueueSources = mock(() => []);
 
-mock.module("@/lib/looped-review-persistence", () => ({
-  hydrateLoopedReviewWorkflow,
-  hydrateLoopedReviewWorkflowsForEnvironment,
-  resolveLoopedReviewWorkflow,
-}));
 mock.module("@/lib/build-pipeline-persistence", () => ({
   buildPipelineChangeReadOptions: realBuildPipeline.buildPipelineChangeReadOptions,
   hydrateBuildPipeline,
@@ -91,7 +76,6 @@ const { useConfigStore } = await import("@/stores/configStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
-const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { invalidateProjectSnapshots, useProjectStore } = await import("@/stores/projectStore");
@@ -159,16 +143,10 @@ function pipeline(id: string, backendRevision: number) {
 beforeEach(() => {
   localStorage.clear();
   resetResourceSync();
-  hydrateLoopedReviewWorkflow.mockClear();
-  hydrateLoopedReviewWorkflow.mockImplementation(async () => undefined);
-  resolveLoopedReviewWorkflow.mockClear();
-  resolveLoopedReviewWorkflow.mockImplementation(async () => ({ status: "unreadable" }));
   hydrateBuildPipeline.mockClear();
   hydrateBuildPipeline.mockImplementation(async () => null);
   hydrateBuildPipelinesForProject.mockClear();
   hydrateBuildPipelinesForProject.mockImplementation(async () => []);
-  hydrateLoopedReviewWorkflowsForEnvironment.mockClear();
-  hydrateLoopedReviewWorkflowsForEnvironment.mockImplementation(async () => []);
   hydrateMultiReviewWorkflow.mockClear();
   hydrateMultiReviewWorkflow.mockImplementation(async () => null);
   hydrateMultiReviewWorkflowsForEnvironment.mockClear();
@@ -179,7 +157,6 @@ beforeEach(() => {
   useKanbanStore.setState({ currentProjectId: null, currentNotesProjectId: null });
   useFeaturePlanStore.setState({ currentProjectId: null });
   useProjectStore.setState({ projects: [] });
-  useLoopedReviewStore.setState({ workflows: new Map() });
   useMultiReviewStore.setState({ workflows: new Map() });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -603,64 +580,6 @@ describe("build-pipeline binding", () => {
     await tick();
 
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
-  });
-});
-
-describe("looped-review binding", () => {
-  test("rehydrates the workflow", async () => {
-    dispatchResourceChange({ resource: "looped-review", id: "workflow-1", revision: 1 });
-    await tick();
-
-    expect(resolveLoopedReviewWorkflow).toHaveBeenCalledWith("workflow-1");
-  });
-
-  test("does not reject when the refetch fails", async () => {
-    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => {
-      throw new Error("backend down");
-    });
-
-    dispatchResourceChange({ resource: "looped-review", id: "workflow-1", revision: 1 });
-    await tick();
-
-    expect(resolveLoopedReviewWorkflow).toHaveBeenCalledTimes(1);
-  });
-
-  test("removes a stale projection after authoritative deletion", async () => {
-    const workflow = loopedReviewFixture({ id: "workflow-deleted" });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => ({ status: "missing" }));
-
-    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
-    await tick();
-
-    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(false);
-  });
-
-  test("keeps a workflow whose snapshot this build cannot read", async () => {
-    // A record the backend is still advancing but this bundle fails to
-    // validate — a version skew — must not be mistaken for a deletion, or the
-    // pane-layout reconciliation removes the user's tab along with it.
-    const workflow = loopedReviewFixture({ id: "workflow-unreadable" });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => ({ status: "unreadable" }));
-
-    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
-    await tick();
-
-    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
-  });
-
-  test("keeps a workflow when the refetch itself fails", async () => {
-    const workflow = loopedReviewFixture({ id: "workflow-offline" });
-    useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => {
-      throw new Error("backend down");
-    });
-
-    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
-    await tick();
-
-    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
   });
 });
 
@@ -1557,8 +1476,8 @@ describe("pane-layout binding", () => {
       } as never);
       return pipeline(pipelineId, 1);
     });
-    hydrateLoopedReviewWorkflow.mockImplementationOnce(async (workflowId) => {
-      useLoopedReviewStore.setState({
+    hydrateMultiReviewWorkflow.mockImplementationOnce(async (workflowId) => {
+      useMultiReviewStore.setState({
         workflows: new Map([
           [workflowId, { id: workflowId, environmentId: "env-1", backendRevision: 1 } as never],
         ]),
@@ -1587,8 +1506,8 @@ describe("pane-layout binding", () => {
           },
           {
             id: "review",
-            type: "looped-review",
-            loopedReviewTabData: {
+            type: "multi-review",
+            multiReviewTabData: {
               environmentId: "env-1",
               workflowId: "workflow-remote",
               isLocal: true,
@@ -1606,7 +1525,7 @@ describe("pane-layout binding", () => {
     await tick();
 
     expect(hydrateBuildPipeline).toHaveBeenCalledWith("pipeline-remote");
-    expect(hydrateLoopedReviewWorkflow).toHaveBeenCalledWith("workflow-remote");
+    expect(hydrateMultiReviewWorkflow).toHaveBeenCalledWith("workflow-remote");
     expect(
       usePaneLayoutStore
         .getState()
@@ -1632,7 +1551,7 @@ describe("pane-layout binding", () => {
     const dependencyBlocked = new Promise<void>((resolve) => {
       releaseDependency = resolve;
     });
-    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => {
+    hydrateMultiReviewWorkflow.mockImplementationOnce(async () => {
       markDependencyStarted();
       await dependencyBlocked;
       return undefined;
@@ -1649,8 +1568,8 @@ describe("pane-layout binding", () => {
           { id: "base", type: "plain" },
           {
             id: "review-after-detach",
-            type: "looped-review",
-            loopedReviewTabData: { workflowId: "workflow-after-detach" },
+            type: "multi-review",
+            multiReviewTabData: { workflowId: "workflow-after-detach" },
           },
         ],
         activeTabId: "base",
@@ -2408,8 +2327,8 @@ describe("pane-layout binding", () => {
           { id: "base", type: "plain" },
           {
             id: "stale",
-            type: "looped-review",
-            loopedReviewTabData: { workflowId: "workflow-stale" },
+            type: "multi-review",
+            multiReviewTabData: { workflowId: "workflow-stale" },
           },
         ],
         activeTabId: "base",
@@ -2445,7 +2364,7 @@ describe("pane-layout binding", () => {
     const staleDependencyBlocked = new Promise<void>((resolve) => {
       releaseStaleDependency = resolve;
     });
-    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => {
+    hydrateMultiReviewWorkflow.mockImplementationOnce(async () => {
       markStaleDependencyStarted();
       await staleDependencyBlocked;
       return undefined;
@@ -3021,38 +2940,25 @@ describe("authoritative resync", () => {
 
     expect(hydratePromptQueuesForEnvironment).toHaveBeenCalledWith("env-1", expect.anything());
     expect(loadSessionsForEnvironment).toHaveBeenCalledWith("env-1");
-    expect(hydrateLoopedReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
+    expect(hydrateMultiReviewWorkflowsForEnvironment).toHaveBeenCalledWith("env-1");
     expect(hydrateBuildPipelinesForProject).toHaveBeenCalledWith("project-1");
     expect(loadTasks).toHaveBeenCalledWith("project-1");
     expect(loadNotes).toHaveBeenCalledWith("project-1");
     expect(loadFeatures).toHaveBeenCalledWith("project-1");
   });
 
-  test("removes persisted pipelines and reviews absent from authoritative lists", async () => {
+  test("removes persisted pipelines absent from authoritative lists", async () => {
     useEnvironmentStore.setState({ environments: [environment("env-1")] });
     useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
     useBuildPipelineStore.setState({
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 4)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
-    useLoopedReviewStore.setState({
-      workflows: new Map([
-        [
-          "workflow-1",
-          {
-            id: "workflow-1",
-            environmentId: "env-1",
-            backendRevision: 3,
-          } as never,
-        ],
-      ]),
-    });
 
     requestResourceResync();
     await tick();
 
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
-    expect(useLoopedReviewStore.getState().workflows.has("workflow-1")).toBe(false);
   });
 
   test("keeps unsaved local records when an authoritative list does not contain them", async () => {
@@ -3062,24 +2968,11 @@ describe("authoritative resync", () => {
       pipelines: new Map([["pipeline-1", pipeline("pipeline-1", 0)]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
-    useLoopedReviewStore.setState({
-      workflows: new Map([
-        [
-          "workflow-1",
-          {
-            id: "workflow-1",
-            environmentId: "env-1",
-            backendRevision: 0,
-          } as never,
-        ],
-      ]),
-    });
 
     requestResourceResync();
     await tick();
 
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
-    expect(useLoopedReviewStore.getState().workflows.has("workflow-1")).toBe(true);
   });
 
   test("retries a failed config refresh on the next resync", async () => {
@@ -3203,7 +3096,7 @@ describe("authoritative resync", () => {
     const reviewsBlocked = new Promise<void>((resolve) => {
       releaseReviews = resolve;
     });
-    hydrateLoopedReviewWorkflowsForEnvironment.mockImplementationOnce(async () => {
+    hydrateMultiReviewWorkflowsForEnvironment.mockImplementationOnce(async () => {
       await reviewsBlocked;
       return [];
     });

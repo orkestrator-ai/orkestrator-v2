@@ -7,6 +7,7 @@ import {
   StorageDatabase,
   StorageDatabaseVersionError,
   StoreConflictError,
+  StoreTooLargeError,
   type StoreLayout,
 } from "./storage-database.js";
 
@@ -190,6 +191,40 @@ describe("StorageDatabase", () => {
     );
     db.writeStore("other", { a: 2 }, { expectedRevision: null });
     expect(db.storeRevision("other")).toBe(1);
+  });
+
+  test("refuses a write whose serialized rows exceed maxBytes, writing nothing", async () => {
+    const db = database(await dataDir());
+    const mail = { version: 1, mailboxes: { a: { body: "é".repeat(10) } }, idempotency: {} };
+    db.writeStore("mail", mail);
+    const big = { ...mail, mailboxes: { ...mail.mailboxes, b: { body: "é".repeat(100) } } };
+    // 100 two-byte characters: over 150 bytes, though the string length is not.
+    expect(() => db.writeStore("mail", big, { maxBytes: 150 })).toThrow(StoreTooLargeError);
+    expect(db.storeRevision("mail")).toBe(1);
+    expect(db.readStore("mail")?.value).toEqual(mail);
+    db.writeStore("mail", big, { maxBytes: 400 });
+    expect(db.readStore("mail")?.value).toEqual(big);
+  });
+
+  test("serves a store's serialized rows from the cache until it changes", async () => {
+    const directory = await dataDir();
+    const db = database(directory);
+    db.writeStore("mail", { version: 1, mailboxes: { a: { n: 1 } }, idempotency: {} });
+    const first = db.readStoreSerialized("mail")!;
+    expect(first.revision).toBe(1);
+    expect([...first.rows].map((row) => [row.collection, row.key, row.value])).toEqual([
+      ["mailboxes", "a", '{"n":1}'],
+    ]);
+    // Another connection's commit is seen through the revision.
+    database(directory).writeStore("mail", {
+      version: 1,
+      mailboxes: { a: { n: 1 }, b: { n: 2 } },
+      idempotency: {},
+    });
+    const second = db.readStoreSerialized("mail")!;
+    expect(second.revision).toBe(2);
+    expect([...second.rows].map((row) => row.key).toSorted()).toEqual(["a", "b"]);
+    expect(db.readStoreSerialized("missing")).toBeNull();
   });
 
   test("commits several stores atomically", async () => {

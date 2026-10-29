@@ -1,18 +1,23 @@
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { ScheduleInputError, type ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
-import { scheduleListFilter, scheduleTimingArgs } from "../commands-registry-scheduled-jobs.js";
-import { ScheduleAuthorityError } from "../scheduled-jobs/executor.js";
-import { ScheduleStateError } from "../scheduled-jobs/model.js";
+import {
+  SCHEDULING_DISABLED_MESSAGE,
+  scheduleListFilter,
+  schedulingEnabled,
+  scheduleTimingArgs,
+} from "../commands-registry-scheduled-jobs.js";
 import {
   normalizeAction,
+  ScheduleAuthorityError,
   ScheduleConflictError,
+  ScheduledJobCapacityError,
   ScheduleNotFoundError,
+  ScheduleStateError,
   type ScheduleCreateInput,
   type ScheduledJobService,
   type ScheduleUpdateInput,
-} from "../scheduled-jobs/service.js";
-import { ScheduledJobCapacityError } from "../scheduled-jobs/store.js";
+} from "../scheduled-jobs/index.js";
 import { PublicActionError } from "./errors.js";
 import { invalid, onlyActionKeys, optionalInteger, requiredId } from "./input.js";
 import type {
@@ -35,10 +40,12 @@ function actor(context: PublicActionContext): ScheduleOwner {
   return { kind: "control-mcp", credentialId: context.authority.slice("control-mcp:".length) };
 }
 
-function service(context: PublicActionContext): ScheduledJobService {
+async function service(context: PublicActionContext): Promise<ScheduledJobService> {
   const scheduled = context.command.scheduledJobs;
   if (!scheduled)
     throw new PublicActionError("capability-unavailable", "Scheduled jobs are unavailable");
+  if (!(await schedulingEnabled(context.command.storage)))
+    throw new PublicActionError("capability-unavailable", SCHEDULING_DISABLED_MESSAGE);
   return scheduled;
 }
 
@@ -119,7 +126,9 @@ const scheduleList: ReadActionHandler<{
     };
   },
   async run(input, context) {
-    const all = await guarded(() => service(context).list(actor(context), input.filter));
+    const all = await guarded(async () =>
+      (await service(context)).list(actor(context), input.filter),
+    );
     return {
       result: {
         schedules: all.slice(input.offset, input.offset + input.limit),
@@ -140,7 +149,9 @@ const scheduleGet: ReadActionHandler<{ scheduleId: string }> = {
   async run(input, context) {
     return {
       result: {
-        schedule: await guarded(() => service(context).get(actor(context), input.scheduleId)),
+        schedule: await guarded(async () =>
+          (await service(context)).get(actor(context), input.scheduleId),
+        ),
       },
     };
   },
@@ -165,11 +176,12 @@ const scheduleCreate: MutationActionHandler<ScheduleCreateInput> = {
   },
   async prepare(input, context) {
     // Refused before admission when the caller could not run the action.
-    await guarded(() => context.command.scheduledJobs?.validateFor(actor(context), input.action));
+    const scheduled = await service(context);
+    await guarded(() => scheduled.validateFor(actor(context), input.action));
     return {
       async execute(operation) {
-        const { job } = await guarded(() =>
-          service(context).create(actor(context), input, operation.operationId),
+        const { job } = await guarded(async () =>
+          (await service(context)).create(actor(context), input, operation.operationId),
         );
         return {
           state: "succeeded",
@@ -203,14 +215,17 @@ function scheduleMutation(
       return { value: { scheduleId }, scope: `schedule:${scheduleId}`, intent: { scheduleId } };
     },
     async prepare(input, context) {
+      const scheduled = await service(context);
       if (action !== "schedule.delete") {
-        await guarded(() => service(context).get(actor(context), input.scheduleId));
+        await guarded(() => scheduled.get(actor(context), input.scheduleId));
       }
       return {
         async execute() {
           return {
             state: "succeeded",
-            result: await guarded(() => run(service(context), actor(context), input.scheduleId)),
+            result: await guarded(async () =>
+              run(await service(context), actor(context), input.scheduleId),
+            ),
           };
         },
       };
@@ -239,11 +254,11 @@ const scheduleUpdate: MutationActionHandler<{ scheduleId: string; patch: Schedul
     };
   },
   async prepare(input, context) {
-    await guarded(() => service(context).get(actor(context), input.scheduleId));
+    await guarded(async () => (await service(context)).get(actor(context), input.scheduleId));
     return {
       async execute() {
-        const job = await guarded(() =>
-          service(context).update(actor(context), input.scheduleId, input.patch),
+        const job = await guarded(async () =>
+          (await service(context)).update(actor(context), input.scheduleId, input.patch),
         );
         return {
           state: "succeeded",

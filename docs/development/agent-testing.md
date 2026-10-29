@@ -101,13 +101,19 @@ mise run dev:reset --profile codex-typed-qa
 login the API refuses and checks the tab shows the 401 and the `needs-auth`
 sign-in banner, before and after a reload (todo 0235). Give the profile a
 made-up API key from a throwaway `CODEX_HOME`, never a real login; the key goes
-to OpenAI and is refused.
+to OpenAI and is refused. The banner names the API key. With
+`ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` set to the profile's own
+`<dataDir>/agent-credentials/codex` (from `dev:status --json`), the spec then
+writes a second made-up key there, as `codex login --with-api-key` would,
+reloads, and checks the original session, failed turn and conversation rows
+remain, the notice clears without a sign-in, and Send is enabled.
 
 ```bash
 mkdir -m 700 /tmp/qa-refused-codex-home   # holds auth.json: {"auth_mode":"apikey","OPENAI_API_KEY":"sk-proj-<made up>"}
 CODEX_HOME=/tmp/qa-refused-codex-home mise run dev:test --profile codex-refused-qa --fixture --credential-source codex --agent-platforms codex
 # In another terminal:
-ORKESTRATOR_AGENT_TEST_PROFILE=codex-refused-qa ORKESTRATOR_AGENT_TEST_LIVE_REFUSED_LOGIN=1 mise run test:logged -- --name codex-refused-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-refused-login-live.spec.ts --workers=1
+ORKESTRATOR_AGENT_TEST_PROFILE=codex-refused-qa ORKESTRATOR_AGENT_TEST_LIVE_REFUSED_LOGIN=1 \
+  ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME="<dataDir>/agent-credentials/codex" mise run test:logged -- --name codex-refused-browser -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts codex-refused-login-live.spec.ts --workers=1
 mise run dev:stop --profile codex-refused-qa
 mise run dev:reset --profile codex-refused-qa
 ```
@@ -1653,9 +1659,32 @@ outside repository are unregistered, and their branches are deleted only when
 already merged into the default branch. Preserve downloaded binaries with
 `--keep-toolchains`.
 
+Reset and profile removal leave the profile directory, its `data` and
+`data/portable-inputs` behind, empty when present. With `--keep-toolchains`,
+the profile metadata and sentinel remain in the root, and downloaded
+toolchains remain under `data/toolchains`; other disposable state is cleared.
+Docker Desktop on macOS can go on
+resolving a directory it has seen to the deleted one once it is removed and
+recreated at the same path, and then refuses every container bind under it
+with `bind source path does not exist`. Keeping these three is what lets a
+reset profile name boot a container fixture again. A name that was reset
+before this change can still be stuck that way: bind its profile directory
+once, then restart the profile:
+
+```bash
+docker run --rm --network none --mount "type=bind,source=$HOME/Library/Application Support/orkestrator-v2-dev/profiles/<name>,target=/m,readonly" ubuntu:24.04 true
+```
+
 Profiles whose checkout has since been deleted are removed automatically the
 next time any profile starts. `mise run dev:prune --dry-run` lists what would
-go; `--older-than <days>` also removes stopped profiles idle for that long.
+go; `--older-than <days>` also removes stopped profiles idle for that long, and
+the empty directories a reset or prune left that long ago.
+
+Startup and empty-skeleton pruning coordinate through per-profile locks in
+the development root's `.profile-locks` directory. Pruning skips a locked
+name; startup reports a busy name so it can be retried. A process crash can
+leave a lock behind. Remove that name's lock directory only after confirming
+no startup or prune operation for it is still running.
 
 ## Troubleshooting
 

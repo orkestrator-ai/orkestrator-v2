@@ -75,7 +75,6 @@ type PortMapping = shared.PortMapping;
 type PrState = shared.PrState;
 type Project = shared.Project;
 type PersistedPaneLayout = shared.PersistedPaneLayout;
-type PersistedLoopedReviewWorkflow = shared.PersistedLoopedReviewWorkflow;
 type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
@@ -235,7 +234,6 @@ export type StorageLayerTypes = [
   PrState,
   Project,
   PersistedPaneLayout,
-  PersistedLoopedReviewWorkflow,
   PersistedMultiReviewWorkflow,
   PersistedBuildPipeline,
   PersistedNativeAgentSession,

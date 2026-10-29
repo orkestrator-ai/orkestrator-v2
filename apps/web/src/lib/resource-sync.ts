@@ -28,9 +28,9 @@ import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
  *
  * **Self-echo is expected and harmless.** A client that writes hears its own
  * change back and refetches. That cannot loop, because every subscriber here
- * only *reads*: the two stores that write back to the backend (pane layout and
- * looped review) both compare against what they last persisted before
- * enqueuing, so re-applying an identical snapshot enqueues nothing.
+ * only *reads*: the store that writes back to the backend (pane layout)
+ * compares against what it last persisted before enqueuing, so re-applying an
+ * identical snapshot enqueues nothing.
  *
  * Pane/tab snapshots are included in the subscriber set. Their active-pane and
  * active-tab pointers are authoritative too, so the most recently selected tab

@@ -3,7 +3,11 @@ import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollo
 import { BridgeSessionStore } from "./sessions/persistence.js";
 import { readPersistedSessionTitleEntries } from "./session-title-index.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
-import { CODEX_LOGIN_REFUSED_MESSAGE } from "./sessions/auth-recovery-notice.js";
+import {
+  CODEX_API_KEY_REFUSED_MESSAGE,
+  CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
+  CODEX_LOGIN_REFUSED_MESSAGE,
+} from "./sessions/auth-recovery-notice.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
@@ -246,6 +250,98 @@ describe("refused-login auth notice", () => {
       "a successful sign-in did not clear the refused-login notice",
     );
   });
+
+  test.each([
+    ["apiKey", "after", CODEX_API_KEY_REFUSED_MESSAGE],
+    ["apiKey", "before", CODEX_API_KEY_REFUSED_MESSAGE],
+    ["chatgpt", "after", CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE],
+  ] as const)(
+    "a refused %s login is named once account/read answers (%s the refusal)",
+    async (type, order, expected) => {
+      const h = await harness({
+        "account/read": () => ({ account: { type }, requiresOpenaiAuth: true }),
+        "thread/start": () => ({ thread: threadPayload("thread-1") }),
+        "turn/start": () => ({ turn: { id: "turn-1" } }),
+      });
+      try {
+        if (order === "before") await h.runtime.readAuthStatus();
+        const { sessionId } = h.runtime.createSession({ mode: "build" });
+        await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "req", attachments: [] });
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: refusedError({ httpConnectionFailed: { httpStatusCode: 401 } }),
+          },
+        });
+        await h.drain();
+        await waitUntil(
+          () => h.runtime.getStatus(sessionId)?.authNotice?.message === expected,
+          "the refused login was not named",
+        );
+        const notice = h.runtime.getStatus(sessionId)?.authNotice;
+        expect(notice?.state).toBe("needs-auth");
+        // Naming the login after the fact keeps the occurrence the tab saw.
+        const occurrences = h.events.flatMap((event) =>
+          event.type === "session.updated" && event.sessionId === sessionId
+            ? [(event.data as { authNotice?: { occurrenceId?: string } }).authNotice?.occurrenceId]
+            : [],
+        );
+        expect(new Set(occurrences.filter(Boolean))).toEqual(new Set([notice!.occurrenceId]));
+      } finally {
+        await h.runtime.stop();
+      }
+    },
+  );
+
+  test.each(["logout", "generation-change"])(
+    "a refusal after %s uses unknown-kind wording until the new account read answers",
+    async (reason) => {
+      let account: unknown = { account: { type: "apiKey" }, requiresOpenaiAuth: true };
+      let answerRead!: (value: unknown) => void;
+      const h = await harness({
+        "account/read": () => account,
+        "account/logout": () => ({}),
+        "thread/start": () => ({ thread: threadPayload("thread-1") }),
+      });
+      try {
+        await h.engine.readAccount();
+        expect(h.engine.getAccountLoginKind()).toBe("apiKey");
+        if (reason === "logout") await h.engine.logoutAccount();
+        else {
+          h.child().exit(1);
+          await h.engine.getSupervisor().ensureReady();
+          await h.drain();
+        }
+        expect(h.engine.getAccountLoginKind()).toBeUndefined();
+        account = new Promise((resolve) => {
+          answerRead = resolve;
+        });
+        const { sessionId } = h.runtime.createSession({ mode: "build" });
+        await h.runtime.prompt(sessionId, { prompt: "hi", requestId: "req", attachments: [] });
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "failed", error: refusedError("unauthorized") },
+        });
+        await h.drain();
+        expect(h.runtime.getStatus(sessionId)?.authNotice?.message).toBe(
+          CODEX_LOGIN_REFUSED_MESSAGE,
+        );
+        answerRead({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+        await waitUntil(
+          () =>
+            h.runtime.getStatus(sessionId)?.authNotice?.message ===
+            CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
+          "new account read did not name the refused login",
+        );
+        expect(h.engine.getAccountLoginKind()).toBe("chatgpt");
+      } finally {
+        answerRead?.({ account: null, requiresOpenaiAuth: true });
+        await h.runtime.stop();
+      }
+    },
+  );
 
   test.each([
     [{ responseStreamConnectionFailed: { httpStatusCode: 401 } }],

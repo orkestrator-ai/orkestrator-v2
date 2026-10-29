@@ -1348,7 +1348,7 @@ describe("GlobalSettings", () => {
     expect(instruction.className).toContain("focus-visible:ring-[3px]");
     expect(instruction.className).not.toContain("focus-visible:outline-1");
     expect(
-      screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/),
+      screen.getByText(/Applied to normal, Multi Review, and build-pipeline native reviews/),
     ).toBeTruthy();
     expect(screen.getByText(/cannot remove or override the fixed safety rules/)).toBeTruthy();
 
@@ -2803,6 +2803,22 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           experimentalCodexRawEventLogging: false,
         }),
+        undefined,
+      );
+    });
+  });
+
+  test("saves the experimental scheduling switch, off by default", async () => {
+    render(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable scheduling" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalScheduling: true }),
         undefined,
       );
     });

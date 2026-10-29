@@ -2,8 +2,10 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   PENDING_RENAME_FAILED_MESSAGE,
   PENDING_RENAME_RECOVERED_MESSAGE,
+  PENDING_RENAME_RETRY_MAX_MS,
   PENDING_RENAME_STILL_FAILING_MESSAGE,
   PendingRenameFailureLog,
+  pendingRenameRetryDelayMs,
   summarizePendingRenameFailure,
 } from "./pending-rename-failure-log.js";
 import { CommandFailedError } from "./shell.js";
@@ -44,7 +46,39 @@ describe("summarizePendingRenameFailure", () => {
   });
 });
 
+describe("pendingRenameRetryDelayMs", () => {
+  test("doubles from 30 seconds and stops at 30 minutes", () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 100, 10_000].map(pendingRenameRetryDelayMs)).toEqual([
+      30_000,
+      60_000,
+      120_000,
+      240_000,
+      480_000,
+      960_000,
+      PENDING_RENAME_RETRY_MAX_MS,
+      PENDING_RENAME_RETRY_MAX_MS,
+      PENDING_RENAME_RETRY_MAX_MS,
+      PENDING_RENAME_RETRY_MAX_MS,
+    ]);
+    expect(PENDING_RENAME_RETRY_MAX_MS).toBe(30 * 60_000);
+  });
+
+  test("treats a count below one as the first failure", () => {
+    expect(pendingRenameRetryDelayMs(0)).toBe(30_000);
+  });
+});
+
 describe("PendingRenameFailureLog", () => {
+  test("returns the consecutive failure count for the intent", () => {
+    const log = new PendingRenameFailureLog(() => undefined);
+    expect(log.failed("env-1", PROMPT, codexFailure())).toBe(1);
+    expect(log.failed("env-1", PROMPT, codexFailure())).toBe(2);
+    expect(log.failed("env-2", PROMPT, codexFailure())).toBe(1);
+    expect(log.failed("env-1", "A different first prompt", codexFailure())).toBe(1);
+    log.succeeded("env-1");
+    expect(log.failed("env-1", "A different first prompt", codexFailure())).toBe(1);
+  });
+
   test("logs the first failure in full, then counts at powers of two, never the prompt", () => {
     const warn = mock((..._data: unknown[]) => undefined);
     const log = new PendingRenameFailureLog(warn);

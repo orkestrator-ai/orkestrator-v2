@@ -12,9 +12,10 @@
  *
  * A login the API refuses outright sends no recovery at all: app-server treats
  * an invalid API key as signed in, retries the request and fails the turn with
- * a 401 (`refusedLoginNotice`).
+ * a 401 (`refusedLoginNotice`). The notice names the login `account/read`
+ * reports, because the turn's error does not say which kind was refused.
  */
-import type { EngineError } from "../engine/types.js";
+import type { CodexLoginKind, EngineError } from "../engine/types.js";
 import type { ThreadAuthNotice } from "./thread-registry.js";
 
 const RENEWAL_FAILED =
@@ -51,6 +52,28 @@ export function nextThreadAuthNotice(
 
 export const CODEX_LOGIN_REFUSED_MESSAGE =
   "Codex's login was refused. Sign in to Codex again to keep working.";
+export const CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE =
+  "Codex's ChatGPT login was refused. Sign in to Codex again to keep working.";
+/**
+ * An API-key user is told where the key is replaced as well as offered the
+ * in-tab sign-in, which would switch them to a ChatGPT login. A key stored with
+ * `codex login --with-api-key` clears the notice once the bridge next reads the
+ * account (`requestAccountReloadFromStoredLogin`).
+ */
+export const CODEX_API_KEY_REFUSED_MESSAGE =
+  "Codex's API key was refused. Replace it with codex login --with-api-key, or sign in to Codex with ChatGPT instead.";
+
+const REFUSED_LOGIN_MESSAGES: Record<CodexLoginKind | "unknown", string> = {
+  unknown: CODEX_LOGIN_REFUSED_MESSAGE,
+  chatgpt: CODEX_CHATGPT_LOGIN_REFUSED_MESSAGE,
+  apiKey: CODEX_API_KEY_REFUSED_MESSAGE,
+};
+
+function isRefusedLoginNotice(notice: ThreadAuthNotice | undefined): notice is ThreadAuthNotice {
+  return (
+    notice?.state === "needs-auth" && Object.values(REFUSED_LOGIN_MESSAGES).includes(notice.message)
+  );
+}
 
 /**
  * Whether a failed turn's error is the API refusing the login: app-server's
@@ -66,20 +89,35 @@ export function isRefusedLoginError(error: EngineError | undefined): boolean {
 }
 
 /**
- * The notice for a turn whose login was refused. A refusal already shown keeps
- * its occurrence, so a notice the user dismissed stays dismissed when the
- * next turn is refused the same way.
+ * The notice for a turn whose login was refused, naming the login when
+ * `account/read` has said which it is. A refusal already shown keeps its
+ * occurrence, so a notice the user dismissed stays dismissed when the next
+ * turn is refused the same way, or when the login kind arrives after it.
  */
 export function refusedLoginNotice(
   current: ThreadAuthNotice | undefined,
+  login: CodexLoginKind | undefined,
   newOccurrenceId: () => string,
 ): ThreadAuthNotice {
-  if (current?.state === "needs-auth" && current.message === CODEX_LOGIN_REFUSED_MESSAGE) {
-    return current;
+  if (isRefusedLoginNotice(current)) {
+    // An unknown kind never overwrites a notice that already names the login.
+    const message = login ? REFUSED_LOGIN_MESSAGES[login] : current.message;
+    return current.message === message ? current : { ...current, message };
   }
   return {
     state: "needs-auth",
-    message: CODEX_LOGIN_REFUSED_MESSAGE,
+    message: REFUSED_LOGIN_MESSAGES[login ?? "unknown"],
     occurrenceId: newOccurrenceId(),
   };
+}
+
+/**
+ * A refused-login notice reworded for the login `account/read` reported after
+ * it was raised; any other notice is returned as it is.
+ */
+export function withRefusedLoginKind(
+  current: ThreadAuthNotice | undefined,
+  login: CodexLoginKind,
+): ThreadAuthNotice | undefined {
+  return isRefusedLoginNotice(current) ? refusedLoginNotice(current, login, () => "") : current;
 }

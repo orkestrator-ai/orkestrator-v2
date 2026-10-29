@@ -139,3 +139,19 @@ The unchanged environment-move owner also remained non-green alone:
 five-second deadlines; ensuing continuations encountered removed fixture
 directories. This repeats the deadline failure family above, without
 establishing that the current recurrence passes alone.
+
+## Open verification carried over from retired todo 0133
+
+Todo 0133's removal did not complete these checks. Both remain open here:
+
+- [ ] Obtain a green `mise run test` on a quiet host. The recorded aggregate
+  runs above did not pass; focused reruns do not establish a green full suite.
+- [ ] Run a production-configured backend with a throwaway profile and data
+  directory, following the isolation rules in `AGENTS.md`. Confirm through
+  the construction options introduced by 0133 that a claude-tmux tab exports
+  the active account's `CLAUDE_CONFIG_DIR`, Claude state polls arm the doorbell
+  in a container, the usage view shows OOM counts, and coordinator Claude and
+  Codex logins refresh through the keeper. Record the profile, command and
+  observed results here before marking this check complete. The focused
+  Docker signal and constructor-wiring tests above do not complete this live
+  backend check.

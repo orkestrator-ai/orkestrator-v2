@@ -314,8 +314,6 @@ export function registerProjectCommands(
           return { command: "get_pane_layout", args: { environmentId: change.id } };
         case "build-pipeline":
           return { command: "get_build_pipeline", args: { pipelineId: change.id } };
-        case "looped-review":
-          return { command: "get_looped_review_workflow", args: { workflowId: change.id } };
         case "multi-review":
           return { command: "get_multi_review_workflow", args: { workflowId: change.id } };
         case "kanban":
@@ -951,6 +949,8 @@ export function registerProjectCommands(
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void context.runtime.diffStats.sync(context).catch(() => undefined);
+    // The experimental scheduling switch takes effect now, not at the next tick.
+    context.scheduledJobs?.wake();
   });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
@@ -989,6 +989,7 @@ export function registerProjectCommands(
       days: updated.global.terminalHistoryRetentionDays,
     });
     await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
+    context.scheduledJobs?.wake();
     return redactAppConfig(updated);
   });
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>

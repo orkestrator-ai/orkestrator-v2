@@ -68,7 +68,7 @@ Deletion also keeps some records that mention the environment but belong to
 something that outlives it: feature plans, coordinator workflow associations,
 MCP management operations (retired by design), and the agent interaction
 resolution journal. The journal's entries are fencing records keyed by
-build-pipeline and looped-review claims, not by environment; deleting them by
+build-pipeline claims, not by environment; deleting them by
 inference could allow a duplicate resolution, so they are left to the
 journal's own time and size pruning.
 

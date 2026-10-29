@@ -315,6 +315,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setTerminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
+    experimentalScheduling,
+    setExperimentalScheduling,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -447,8 +449,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Code review instruction
             </h3>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              Applied to normal, build-pipeline, and looped native reviews. Orkestrator adds the
-              fixed safety, workflow, and output-schema contract around it.
+              Applied to normal, Multi Review, and build-pipeline native reviews. Orkestrator adds
+              the fixed safety, workflow, and output-schema contract around it.
             </p>
           </div>
           <span
@@ -2269,7 +2271,26 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderExperimental = () => (
     <div className="max-w-2xl space-y-4">
-      <div>
+      {isWindowMachine(machine) && (
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="experimental-scheduling">Scheduling</Label>
+            <p className="text-xs text-muted-foreground mt-1">
+              Schedules run an action, a prompt to an agent tab or an environment launch at a set
+              time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
+              <code>orkestrator schedule</code> commands and the agents&apos; and coordinators&apos;
+              schedule tools. While it is off, saved schedules are kept but do not fire.
+            </p>
+          </div>
+          <Switch
+            id="experimental-scheduling"
+            checked={experimentalScheduling}
+            onCheckedChange={setExperimentalScheduling}
+            aria-label="Enable scheduling"
+          />
+        </div>
+      )}
+      <div className="border-t border-border/60 pt-5">
         <h3 className="text-sm font-medium text-foreground">Codex Raw Event Logging</h3>
         <p className="text-xs text-muted-foreground mt-1">
           Captures the additional raw Codex bridge events used to validate transcript-derived

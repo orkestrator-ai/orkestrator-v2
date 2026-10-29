@@ -10,8 +10,9 @@ times out after 5 s, so every prompt answers 500 and is parked as "outcome
 unknown", until whatever process holds that pid exits. The likeliest case is a
 container restart: the lock directory is on a persistent volume and the new pid
 namespace hands out small pids again, possibly to the new bridge itself. This
-is the permanent form of the 30 s stall in
-[0059-claude-preference-lock-after-restart.md](0059-claude-preference-lock-after-restart.md),
+is the permanent form of the 30 s stall in todo 0059 (fixed with this file and
+retired on 2026-10-28; the lock rule is in
+[agent-engines.md](../../architecture/agent-engines.md#claude-code), "Claude Code"),
 found in its task analysis (task 1, "New finding", and task 4).
 
 ## Task analysis
@@ -400,14 +401,14 @@ check and 503 refusal in the same change (item 5).
 
 ## Related
 
-- [0059-claude-preference-lock-after-restart.md](0059-claude-preference-lock-after-restart.md)
-  (the 30 s stall; its item 1 start-time check is the same mechanism).
+- [agent-engines.md](../../architecture/agent-engines.md#claude-code) ("Claude Code"): the preference lock
+  rule, moved there when todo 0059 (the 30 s stall, fixed in the same change)
+  was retired on 2026-10-28.
 - [0002-session-lifecycle-consistency.md](0002-session-lifecycle-consistency.md).
 - [container-lifecycle.md](../../architecture/container-lifecycle.md)
   (provider-state volumes).
 
 ## Replaces
 
-Nothing; new on 2026-10-27, split from
-[0059-claude-preference-lock-after-restart.md](0059-claude-preference-lock-after-restart.md)'s
-task analysis.
+Nothing; new on 2026-10-27, split from todo
+0059's task analysis (retired on 2026-10-28).

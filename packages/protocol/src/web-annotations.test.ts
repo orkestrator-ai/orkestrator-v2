@@ -13,6 +13,7 @@ import {
 import {
   assertNoDeclaredProvenance,
   isSafeRelativePath,
+  isWebAnnotationEvidence,
   isWebAnnotationTarget,
   sanitizeWebAnnotationUrl,
   validateWebAnnotationBody,
@@ -121,6 +122,22 @@ describe("web annotation capture validation", () => {
         error: "Image relations and producer basis are assigned by the receiver",
       });
     }
+  });
+
+  test("stored evidence accepts verified source hints but capture input rejects them", () => {
+    const input = fixtureCaptureInput("element");
+    const hint = { producer: "vite-dev", path: "src/settings.tsx", line: 42, verified: false };
+    const withHint = (verified: boolean) => ({
+      ...input,
+      evidence: { ...input.evidence!, sourceHints: [{ ...hint, verified }] },
+    });
+    expect(validateWebAnnotationCaptureInput(withHint(false)).ok).toBe(true);
+    const verifiedInput = withHint(true);
+    expect(isWebAnnotationEvidence(verifiedInput.evidence)).toBe(true);
+    expect(validateWebAnnotationCaptureInput(verifiedInput)).toEqual({
+      ok: false,
+      error: "Source hint verification is assigned by the receiver",
+    });
   });
 
   test("a producer without a recorded basis is client-declared, except legacy imports", () => {

@@ -49,7 +49,7 @@ A `network` denial also removes hosted web tools (they run on the vendor’s ser
 
 ### Human approval points
 
-Questions, plan approvals, command/file approvals, permission prompts and MCP elicitations go through one interaction contract. Interactive sessions wait for the user; unknown kinds fail closed (`deny-and-fail`). Unattended workflows (build pipeline, looped review) decline input and deny authorisation.
+Questions, plan approvals, command/file approvals, permission prompts and MCP elicitations go through one interaction contract. Interactive sessions wait for the user; unknown kinds fail closed (`deny-and-fail`). Unattended workflows (build pipeline) decline input and deny authorisation.
 
 Interactive environments default to **`approvals: "auto-approve"`**. There is no inner sandbox to escalate against on a trusted host checkout, and a container already holds the outer boundary. Set **Ask** on an environment when a human must approve tools. Coordinator sessions deny rather than prompt.
 

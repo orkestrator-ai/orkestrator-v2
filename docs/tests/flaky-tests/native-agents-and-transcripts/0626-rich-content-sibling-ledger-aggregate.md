@@ -37,3 +37,24 @@ assertion, timeout or skip changed. Aggregate evidence is in
 `/tmp/orkestrator-test-run.eqUv2v/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 after finalization; the outer summary is
 `/tmp/orkestrator-test-run.0MSwpb/summary.json`.
+
+## Agent mail review repair validation — 2026-10-29
+
+`mise run test:logged -- --name review-default-tests -- mise run test` at
+`9e82e514b` repeated the same failure on macOS: expected sibling ledger
+length 1, received 0 (211.25 ms). The scheduler reserved workspace/root/bridges/
+protocol slots of 6/1/2/1. Web finished with 10,398 pass, 10 skip and 1 fail
+across 655 files. The aggregate also retained the unrelated setup-terminal
+timeout tracked in
+[1304](../aggregate-validation-runs/1304-agent-mail-read-model-0741-validation.md).
+
+The complete unchanged renderer owner passed alone (exit 0, 1.5 s):
+
+```bash
+mise run test:logged -- --name review-rich-conversation-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.2mai8S/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `orkestrator-test-run.LbkZa8/summary.json` under the host temporary
+directory. No rich-content implementation or test changed. The cause remains
+unconfirmed.

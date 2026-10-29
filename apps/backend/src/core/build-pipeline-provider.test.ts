@@ -173,9 +173,9 @@ describe("createBuildPipelineProvider", () => {
     }
   });
 
-  // Multi Review and looped review pass a launcher's "Default" through as no
-  // model. OpenCode's own server default ignores the provider allowlist, so the
-  // session starts on the effective default instead, and its turns name it.
+  // Multi Review passes a launcher's "Default" through as no model. OpenCode's
+  // own server default ignores the provider allowlist, so the session starts on
+  // the effective default instead, and its turns name it.
   test("starts an unpinned session on the effective default and sends it", async () => {
     const { fake, provider } = goOnlyProvider();
     try {

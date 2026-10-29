@@ -53,10 +53,6 @@ export class StorageFiles {
     return this.file("pane-layouts.json");
   }
 
-  loopedReviewsFile(): string {
-    return this.file("looped-reviews.json");
-  }
-
   multiReviewsFile(): string {
     return this.file("multi-reviews.json");
   }

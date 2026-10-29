@@ -22,7 +22,6 @@ export const RESOURCE_MANIFEST_FILES: Readonly<Record<ResourceManifestKind, stri
   "project-notes": "project-notes.json",
   "feature-plan": "feature-plans.json",
   "pane-layout": "pane-layouts.json",
-  "looped-review": "looped-reviews.json",
   "multi-review": "multi-reviews.json",
   "build-pipeline": "build-pipelines.json",
   "prompt-queue": "prompt-queues.json",

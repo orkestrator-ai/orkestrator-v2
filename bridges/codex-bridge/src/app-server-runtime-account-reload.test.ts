@@ -27,15 +27,29 @@ const reloadCount = (events: EngineEvent[]) =>
   events.filter((event) => event.kind === "account.reload.requested").length;
 
 describe("stored account reload admission", () => {
-  test.each(["account-updated", "stored-login"])(
-    "clears a refused API-key notice after external credential replacement via %s",
-    async (replacement) => {
+  test.each([
+    ["account-updated", "apiKey"],
+    ["account-updated", "chatgpt"],
+    ["stored-login", "apiKey"],
+    ["stored-login", "chatgpt"],
+  ] as const)(
+    "clears a refused API-key notice after external credential replacement via %s with %s",
+    async (replacement, nextLoginKind) => {
+      let replaced = false;
       writeFileSync(
         join(codexHome, "auth.json"),
         JSON.stringify({ OPENAI_API_KEY: "rejected-test-key" }),
       );
       const h = await harness({
-        "account/read": () => ({ account: { type: "apiKey" }, requiresOpenaiAuth: true }),
+        "account/read": () => ({
+          account: {
+            type:
+              replaced && (replacement === "account-updated" || h.children.length > 1)
+                ? nextLoginKind
+                : "apiKey",
+          },
+          requiresOpenaiAuth: true,
+        }),
         "thread/start": () => ({ thread: threadPayload("thread-1") }),
       });
       try {
@@ -66,7 +80,11 @@ describe("stored account reload admission", () => {
         expect(h.engine.isAccountSignInRequired()).toBe(false);
         expect(h.runtime.getStatus(sessionId)?.authNotice?.state).toBe("needs-auth");
         expect(h.children).toHaveLength(1);
+        expect(h.engine.getAccountLoginKind()).toBe("apiKey");
+        const failedMessages = await h.runtime.getMessages(sessionId);
+        const events = observeReloads(h.engine);
         storeLogin();
+        replaced = true;
         if (replacement === "account-updated")
           h.child().notify("account/updated", { authMode: "chatgpt" });
         else await h.engine.readAccount();
@@ -75,6 +93,25 @@ describe("stored account reload admission", () => {
           "external replacement did not clear refused notice",
         );
         if (replacement === "stored-login") expect(h.children).toHaveLength(2);
+        await h.drain();
+        expect(h.engine.getAccountLoginKind()).toBe(nextLoginKind);
+        expect(
+          events
+            .filter(
+              (event) => event.kind === "account.loginKind" || event.kind === "account.signedIn",
+            )
+            .map((event) => event.kind),
+        ).toEqual(
+          nextLoginKind === "chatgpt" || replacement === "stored-login"
+            ? ["account.loginKind", "account.signedIn"]
+            : ["account.signedIn"],
+        );
+        expect(h.runtime.getStatus(sessionId)).toMatchObject({
+          phase: "failed",
+          error: "Login refused",
+        });
+        expect(h.runtime.getStatus(sessionId)?.authNotice).toBeUndefined();
+        expect(await h.runtime.getMessages(sessionId)).toEqual(failedMessages);
         expect(h.runtime.getStatus(sessionId)?.readiness).toBeUndefined();
       } finally {
         await h.runtime.stop();

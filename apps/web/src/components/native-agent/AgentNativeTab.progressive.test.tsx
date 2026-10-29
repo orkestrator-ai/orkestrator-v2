@@ -1457,6 +1457,65 @@ describe("AgentNativeTab progressive controller", () => {
     }
   });
 
+  // The rows travel on the state view for every platform; OpenCode also writes
+  // its own inline error row, which the terminal row defers to.
+  test.each(["claude", "codex", "cursor", "grok", "opencode", "pi"] as const)(
+    "shows a failed %s turn's reason once, after a reload too",
+    async (platform) => {
+      identity.platform = platform;
+      const failure = "Model request failed (HTTP 500): upstream overloaded";
+      const prompt: TestMessage = {
+        id: "user-1",
+        role: "user",
+        content: "hello",
+        createdAt: "2026-10-27T00:00:00.000Z",
+        parts: [{ type: "text", content: "hello" }],
+      };
+      const inline: TestMessage = {
+        id: "error-opencode-assistant-failed",
+        role: "assistant",
+        content: failure,
+        createdAt: "2026-10-27T00:00:01.000Z",
+        parts: [{ type: "text", content: failure }],
+      };
+      const terminalId = "native-terminal:error:fedcba9876543210";
+      for (const visit of ["first load", "reload"]) {
+        transcriptUpdates = [
+          async () =>
+            transcriptSnapshot(
+              `transcript-${platform}-${visit}`,
+              platform === "opencode" ? [prompt, inline] : [prompt],
+            ),
+        ];
+        stateUpdates = [
+          async () =>
+            stateSnapshot(`state-${platform}-${visit}`, {
+              capabilities: nativeAgentCapabilities(platform),
+              turn: { phase: "error", error: failure },
+              terminalMessages: [
+                {
+                  id: terminalId,
+                  role: "system",
+                  content: failure,
+                  parts: [{ type: "text", content: failure }],
+                  createdAt: "1970-01-01T00:00:00.000Z",
+                },
+              ],
+            }),
+        ];
+        const view = renderTab();
+        await waitFor(() => expect(screen.getAllByText(failure)).toHaveLength(1));
+        expect(document.querySelector(`[data-message-id="${terminalId}"]`) !== null).toBe(
+          platform !== "opencode",
+        );
+        view.unmount();
+        // A reload starts from nothing but what the backend answers.
+        useNativeAgentProjectionStore.getState().reset();
+        resetNativeAgentSyncCapabilityForTests();
+      }
+    },
+  );
+
   test("does not announce refresh on every idle poll of an unavailable transcript", async () => {
     useNativeAgentProjectionStore
       .getState()

@@ -20,7 +20,7 @@ interactive:
 | --- | --- | --- |
 | `chart` | A bar, line, area, scatter or donut chart of supplied data | Strict schema + deterministic native render |
 | `mermaid` | A larger or durable diagram | Syntax parse + bounded isolated render |
-| `workflow-snapshot` | A snapshot of an existing Multi Review, Looped Review or Build pipeline run | Backend captures the run itself |
+| `workflow-snapshot` | A snapshot of an existing Multi Review or Build pipeline run | Backend captures the run itself |
 | `html-static` | A designed static page, report or mock-up | Static sanitizer + supervised visual preview |
 | `html-interactive` | An offline calculator, simulation, explorable diagram or mini tool | Executable-package validation + supervised preview + your declared probes |
 

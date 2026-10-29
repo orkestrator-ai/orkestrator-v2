@@ -406,3 +406,43 @@ describe("Mermaid math labels", () => {
     expect(exits).toHaveLength(0);
   });
 });
+
+describe("scratch left by a stop", () => {
+  // Content-free evidence for 0248 task 6: whether production previews leave
+  // scratch behind for startup recovery.
+  for (const [label, kept, expected] of [
+    ["an unverified worker's scratch is counted", true, 1],
+    ["scratch that is already gone is not", false, 0],
+  ] as const) {
+    test(label, async () => {
+      const scratch = mkdtempSync(path.join(tmpdir(), "ork-isolation-left-"));
+      if (!kept) rmSync(scratch, { recursive: true, force: true });
+      const warnings: unknown[][] = [];
+      try {
+        const supervise = fakeSupervise({ reapAfter: null, reaps: { count: 0 } });
+        const target = create({
+          admission: { runningGlobal: 1, runningPerEnvironment: 1 },
+          reaperDelaysMs: [60_000],
+          supervise: () => ({ ...supervise(), scratchDir: () => scratch }),
+          logger: { warn: (...args: unknown[]) => warnings.push(args) },
+        });
+        const result = await target.run(
+          { kind: "mermaid", source: "a", theme: "light" },
+          scope("env-left"),
+          new AbortController().signal,
+        );
+        expect(result.ok).toBe(true);
+        expect(target.stats().quarantined).toBe(1);
+        await target.close();
+        const left = warnings.filter(([message]) =>
+          String(message).includes("worker scratch left for startup recovery"),
+        );
+        expect(left).toEqual(
+          expected ? [[left[0]![0], { count: expected, isolation: "process" }]] : [],
+        );
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+  }
+});

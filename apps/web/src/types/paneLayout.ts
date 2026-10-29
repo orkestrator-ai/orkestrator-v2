@@ -128,12 +128,6 @@ export interface BuildTabData {
   isLocal?: boolean;
 }
 
-export interface LoopedReviewTabData {
-  environmentId: string;
-  workflowId: string;
-  isLocal?: boolean;
-}
-
 export interface MultiReviewTabData {
   environmentId: string;
   workflowId: string;
@@ -253,8 +247,6 @@ export interface TabInfo {
   nativeAgentData?: NativeAgentData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
-  /** Data for dedicated structured/looped review tabs. */
-  loopedReviewTabData?: LoopedReviewTabData;
   /** Data for backend-owned Multi Review tabs. */
   multiReviewTabData?: MultiReviewTabData;
   /** Data for browser tabs */

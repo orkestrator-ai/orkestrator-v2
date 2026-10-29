@@ -1,3 +1,5 @@
+import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
+import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -5,22 +7,27 @@ import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { UserCommandService } from "./user-commands.js";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
 import { workerSessionActivity } from "./worker-session-activity.js";
-import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
-import { defaultOwnerLabel, ScheduledJobService } from "./scheduled-jobs/service.js";
+import {
+  defaultOwnerLabel,
+  ScheduledJobExecutor,
+  ScheduledJobService,
+} from "./scheduled-jobs/index.js";
 import { publicActionHandlers } from "./public-api/registry.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
-import { coordinatorNodeContext } from "./nodes/node-context.js";
-import { NodeCoordination } from "./nodes/node-coordination.js";
-import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   bridgeRemoteCoordinatorEvents,
+  coordinatorNodeContext,
+  createNodeSshFactory,
+  errorCode,
+  NodeCoordination,
   NodeCoordinatorRemote,
-} from "./nodes/node-coordinator-remote.js";
-import { NodePortal } from "./nodes/node-portal.js";
+  NodePortal,
+  NodeService,
+  type NodeServiceOptions,
+} from "./nodes/index.js";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
-import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
-import { createNodeSshFactory } from "./nodes/node-ssh.js";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
@@ -95,13 +102,13 @@ import { StorageService } from "./storage.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
-import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
-import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
 import {
   attachTranscriptArtifactRuntime,
   createTranscriptArtifactService,
-} from "./transcript-artifacts/runtime-wiring.js";
-import type { TranscriptArtifactToolHost } from "./transcript-artifacts/tools.js";
+  type TranscriptArtifactRuntime,
+  type TranscriptArtifactService,
+  type TranscriptArtifactToolHost,
+} from "./transcript-artifacts/index.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
@@ -133,7 +140,6 @@ import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
 } from "./session-title-service.js";
-import { LoopedReviewService } from "./looped-review-service.js";
 import {
   dispatchMultiReviewAddressPrompt,
   recoverMissingMultiReviewFixSession,
@@ -163,7 +169,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
-import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
+import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
@@ -184,7 +190,6 @@ export class OrkestratorBackend {
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
-  private readonly loopedReviews: LoopedReviewService;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
@@ -1047,22 +1052,6 @@ export class OrkestratorBackend {
       },
     );
     context.buildPipelines = this.buildPipelines;
-    this.loopedReviews = new LoopedReviewService(
-      storage,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
-        const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return (await handler(args, context)) as T;
-      },
-      {
-        workflowResults: this.workflowResults,
-        workflowResultRollout: this.workflowResultRollout,
-        resolveAgentToolConnection,
-        assertAgentToolsReachable,
-        workflowAdmission: this.workflowAdmission,
-      },
-    );
-    context.loopedReviews = this.loopedReviews;
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1173,7 +1162,6 @@ export class OrkestratorBackend {
     const owners: (KeyedWorkflowOwner | undefined)[] = [
       this.featurePlanning,
       this.buildPipelines,
-      this.loopedReviews,
       this.multiReviews,
     ];
     return owners.filter((owner): owner is KeyedWorkflowOwner => owner !== undefined);
@@ -1551,14 +1539,32 @@ export class OrkestratorBackend {
       });
     }
 
+    let retiredReviewCleanup: Promise<void> | undefined;
+    const reconcileRetiredReviews = () => {
+      if (retiredReviewCleanup) return retiredReviewCleanup;
+      retiredReviewCleanup = cleanupRetiredLoopedReviews(
+        this.context.storage,
+        async <T>(command: string, args: Record<string, unknown>) => {
+          const handler = this.commands.get(command);
+          if (!handler) throw new Error("Review bridge command is unavailable");
+          return (await handler(args, this.context)) as T;
+        },
+      )
+        .catch(() => {
+          console.warn("[backend] Retired Looped Review cleanup remains pending");
+        })
+        .finally(() => {
+          retiredReviewCleanup = undefined;
+        });
+      return retiredReviewCleanup;
+    };
+    await reconcileRetiredReviews();
+
     // Start durable pipelines only after stale bridge ownership and interrupted
     // environment deletion have been reconciled. A doomed pipeline is skipped
     // without preventing the gateway from becoming available.
     await this.buildPipelines.init().catch((error) => {
       console.warn("[backend] Failed to restore build pipelines:", error);
-    });
-    await this.loopedReviews.init().catch((error) => {
-      console.warn("[backend] Failed to restore looped reviews:", error);
     });
     await this.multiReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore multi reviews:", error);
@@ -1810,6 +1816,14 @@ export class OrkestratorBackend {
           onError: warn("prune agent mail"),
         },
         {
+          name: "retired-looped-reviews",
+          kind: "tab-cleanup",
+          priority: "maintenance",
+          intervalMs: MAINTENANCE_JOB_MS,
+          run: reconcileRetiredReviews,
+          onError: warn("stop retired Looped Review turns"),
+        },
+        {
           name: "tab-teardowns",
           kind: "tab-cleanup",
           priority: "maintenance",
@@ -1924,6 +1938,7 @@ export class OrkestratorBackend {
       // grace period. A one-minute, coalesced sweep is responsive enough without
       // repeatedly parsing layouts or overlapping destructive work.
       this.tabResourceSweep ??= setInterval(() => {
+        void reconcileRetiredReviews();
         reconcileTabTeardownsOnce();
         reconcileOrphanedTabResourcesOnce();
       }, 60_000);
@@ -1959,7 +1974,12 @@ export class OrkestratorBackend {
     // Tell the user now, not when a review stage silently fails to submit its
     // result: can agents in containers reach the agent tools server? Runs in
     // the background (a blocked probe takes seconds) and never rejects.
-    void this.containerHostReachability?.check("boot");
+    // Disposable test backends (the CLI tests and scenarios) turn it off: each
+    // runs on a new data directory, so its probe network would belong to an
+    // owner no reaper revisits. A later on-demand check still runs.
+    if (process.env.ORKESTRATOR_HOST_REACHABILITY_CHECK !== "off") {
+      void this.containerHostReachability?.check("boot");
+    }
   }
 
   /**
@@ -2013,6 +2033,7 @@ export class OrkestratorBackend {
       // The registry writer lease is the data directory's single-writer
       // guard: a second backend sharing it never fires schedules.
       isWriter: () => this.context.registryWriterLease?.isHeld() ?? true,
+      enabled: () => schedulingEnabled(storage),
       ownerLabel: async (owner) => {
         if (owner.kind === "control-mcp") {
           const credential = controlMcp
@@ -2134,6 +2155,9 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Bounded and never rejects: a running host check removes its probe
+    // network (or shutdown removes it) before the process exits.
+    const reachabilitySettled = this.containerHostReachability?.dispose();
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
@@ -2208,11 +2232,6 @@ export class OrkestratorBackend {
           console.warn("[backend] Failed to drain build pipelines:", error);
         }
         try {
-          await this.loopedReviews.shutdown();
-        } catch (error) {
-          console.warn("[backend] Failed to drain looped reviews:", error);
-        }
-        try {
           await this.multiReviews.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain multi reviews:", error);
@@ -2246,6 +2265,7 @@ export class OrkestratorBackend {
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
+        await reachabilitySettled;
         await Promise.race([
           this.webAnnotations.close().catch((error: unknown) => {
             console.warn(

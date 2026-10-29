@@ -93,7 +93,9 @@ own verdicts (a rejected structured result, a lost rebind) add none. A turn
 failed for its login (`unauthorized`, or a 401 `toTurnError` keeps as
 `httpStatusCode`) also raises the thread's `needs-auth` notice
 (`refusedLoginNotice`); never raise it on a failure without a 401, because it
-locks the tab's composer.
+locks the tab's composer. The notice names the login `account/read` last
+reported (`getAccountLoginKind`); a kind that arrives after the refusal
+rewords it in place through `account.loginKind`, keeping its occurrence.
 
 ## File changes and change evidence
 

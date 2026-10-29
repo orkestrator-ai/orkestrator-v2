@@ -210,11 +210,12 @@ What is left is live evidence on a real stack; see **Needs verification**.
 5. ~~**Custom-fix model switches, reviewer subtabs, looped review and
    feature-plan launch** for Multi Review and planning workflows.~~ Done:
    `custom_fix_multi_review`, `open_multi_review` with `reviewerId`,
-   `start_looped_review` / `get_looped_review` / `cancel_looped_review`, and
+   `start_looped_review` / `get_looped_review` / `cancel_looped_review`
+   (since removed with the Looped Review feature), and
    `launch_feature_plan` / `get_feature_plan`.
 
 Follow-ups that are outside these items (the same tools on other nodes,
-status wakes for looped reviews and feature plans, a live-suite scenario)
+status wakes for feature plans, a live-suite scenario)
 are in
 [0395-coordinator-worker-surfaces-follow-ups.md](0395-coordinator-worker-surfaces-follow-ups.md).
 
@@ -270,7 +271,7 @@ Each records the options, the choice, why, and its pros and cons.
    payload hash. Pros: one admit-before-acting rule for every new mutation,
    matching the public CLI contract; a changed payload under a reused key is
    refused. Cons: replays return the stored (bounded) result rather than live
-   state, except custom fix and looped review, which re-read their workflow.
+   state, except custom fix, which re-reads its workflow.
 5. **A pending receipt owned by this same process.** Options: treat it as
    reclaimable (as `reserveCoordinatorWorkflowAssociation` does, relying on
    its own in-process serialization) or as live. Chose live, plus an
@@ -281,10 +282,9 @@ Each records the options, the choice, why, and its pros and cons.
    restarts.
 6. **Retry after a crash between effect and receipt.** Options: refuse;
    re-run blindly; re-run through each action's own identity. Chose the last:
-   terminal job and browser tab IDs derive from the request, a looped review
-   started after the receipt is reattached, and a feature plan created after
-   the receipt with the same message is found again. Pros: no duplicate work
-   in the common crash windows. Cons: looped review and feature plan
+   terminal job and browser tab IDs derive from the request, and a feature
+   plan created after the receipt with the same message is found again. Pros:
+   no duplicate work in the common crash windows. Cons: feature plan
    reattachment is by time and content rather than a stored ID; a plan the
    user created in the same instant could be mistaken for ours (judged
    negligible).
@@ -325,7 +325,7 @@ Each records the options, the choice, why, and its pros and cons.
 12. **Reviewer subtabs.** Options: a new tool; `reviewerId` on
     `open_multi_review`. Chose the parameter, with a deterministic tab ID.
     Pros: one place to open any part of a review. Cons: this node only.
-13. **Looped review and feature plan wakes.** Options: add association kinds
+13. **Feature plan wakes.** Options: add association kinds
     and status-wake rules now; say in the result that there is no wake.
     Chose the latter, pointing at `create_schedule`. Why: status wakes have
     per-kind ownership, budgets and restart rules that deserve their own
@@ -337,8 +337,7 @@ Each records the options, the choice, why, and its pros and cons.
     wants a build already has `start_build_pipeline`. Cons: no one-call
     plan-to-build for coordinators.
 15. **Capabilities.** Terminal launch is `jobs`; browser, tab edits and the
-    root-changes request are `environments`; looped review and custom fix are
-    `multi-review`; feature plans are `tickets`. Side agents get none.
+    root-changes request are `environments`; custom fix is `multi-review`; feature plans are `tickets`. Side agents get none.
 16. **Other nodes.** Options: `nodeId` on every new tool now; this node
     only. Chose this node only, refusing `reviewerId` with `nodeId`. Why: each
     needs a relayed command on the leaf and an outcome-unknown path; that is
@@ -356,7 +355,7 @@ stack with a real provider yet.
 
 - A real coordinator (Claude and Codex at least) calling each new tool in a
   disposable `dev:test` profile, with the worker inactive and then
-  reopened: the terminal, browser, looped-review and reviewer tabs appear
+  reopened: the terminal, browser and reviewer tabs appear
   in the worker, and a closed tab's conversation is still in history.
 - The root-changes dialog end to end in the app: approve applies to a local
   worker and to a container worker (`docker exec … git apply`), reject

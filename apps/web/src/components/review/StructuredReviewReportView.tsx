@@ -25,9 +25,8 @@ import { cn } from "@/lib/utils";
 export { structuredReviewVerdictSummary };
 
 /**
- * Shared so the looped-review pool renders a P1 exactly as the report does. A
- * second hand-written copy would drift, and the two surfaces sit one click
- * apart.
+ * Shared so Multi Review findings and the flow graph render a P1 exactly as
+ * the report does. A second hand-written copy would drift.
  */
 export const reviewSeverityStyles: Record<ReviewIssue["severity"], string> = {
   P0: "border-red-500/40 bg-red-500/8 text-red-300",

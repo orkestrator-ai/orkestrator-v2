@@ -547,9 +547,11 @@ the interrupted handoff. Remaining live checks stay batched with
   was deleted on 2026-10-28 as finished.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the live check is batched.
-- [0059-claude-preference-lock-after-restart.md](../agent-engines/0059-claude-preference-lock-after-restart.md):
-  a Claude bridge killed mid-write delays the re-send of an `absent` request
-  until its preference lock ages out (safe, but slow).
+- Todo 0059 (retired on 2026-10-28; the lock rule is in
+  [agent-engines.md](../../architecture/agent-engines.md#claude-code), "Claude Code"):
+  a Claude bridge killed mid-write delayed the re-send of an `absent` request
+  until its preference lock aged out. A dead owner's lock is now taken over at
+  once, and a lock held by a live owner answers a retryable 503.
 
 ## Replaces
 

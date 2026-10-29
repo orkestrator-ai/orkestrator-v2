@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentMailboxId,
+  agentMailParticipantKey,
   type AgentMailMessage,
   type MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
@@ -53,6 +54,43 @@ function message(id: string, createdAt: string, body: string): AgentMailMessage 
 }
 
 describe("agent mail conversations", () => {
+  test.each([
+    ["worker", "worker on omarchy-hp", undefined],
+    ["Claude 2", "Claude 2 on omarchy-hp", "worker"],
+  ])(
+    "keeps the node sender's environment distinct from title %s",
+    (title, displayName, environmentName) => {
+      const from = {
+        kind: "node" as const,
+        role: "agent" as const,
+        nodeId: "bk_hp",
+        nodeName: "omarchy-hp",
+        projectId: "p",
+        environmentId: "leaf-env",
+        tabId: "tab",
+        title,
+        environmentName: "worker",
+      };
+      const key = agentMailParticipantKey(from);
+      const mailboxes = [
+        {
+          descriptor,
+          messages: [{ ...message("node-mail", "2026-10-18T10:00:00.000Z", "Report"), from }],
+        },
+      ];
+      const [summary] = listAgentMailConversations(mailboxes, { cutoff: 0 });
+      const conversation = agentMailConversationBetween(mailboxes, key, LIVE, {
+        cutoff: 0,
+        revision: 1,
+      });
+      for (const participants of [summary!.participants, conversation.participants]) {
+        const participant = participants.find((candidate) => candidate.key === key)!;
+        expect(participant.displayName).toBe(displayName);
+        expect(participant.environmentName).toBe(environmentName);
+      }
+    },
+  );
+
   test("keep a removed sender's name from its messages and skip expired mail", () => {
     const mailboxes = [
       {

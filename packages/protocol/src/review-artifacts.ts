@@ -1,6 +1,5 @@
 /**
- * The deterministic on-disk layout of a looped-review round's validation
- * evidence.
+ * The deterministic on-disk layout of a review package's validation evidence.
  *
  * Both halves of the contract are derived from here on purpose. The preparation
  * prompt tells the agent exactly where to write each artifact, and the backend

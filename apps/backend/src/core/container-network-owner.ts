@@ -38,12 +38,21 @@ export async function egressGatewayOf(containerId: string): Promise<string | nul
     { timeoutMs: 10_000 },
   );
   const gateway = parseNetworkModeOwner(stdout);
-  if (networkOwners.size >= MAX_NETWORK_OWNERS) {
+  rememberNetworkOwner(containerId, gateway);
+  return gateway;
+}
+
+/**
+ * Records the network a container was just created with (`gatewayId` for
+ * `--network container:<gatewayId>`, otherwise null), so its first start
+ * does not inspect it to find out.
+ */
+export function rememberNetworkOwner(containerId: string, gatewayId: string | null): void {
+  if (networkOwners.size >= MAX_NETWORK_OWNERS && !networkOwners.has(containerId)) {
     const oldest = networkOwners.keys().next().value;
     if (oldest !== undefined) networkOwners.delete(oldest);
   }
-  networkOwners.set(containerId, gateway ?? containerId);
-  return gateway;
+  networkOwners.set(containerId, gatewayId ?? containerId);
 }
 
 /**

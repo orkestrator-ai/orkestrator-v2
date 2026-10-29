@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { RESOURCE_MANIFEST_FILES } from "./storage-changes.js";
+import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
+import { StoreTooLargeError } from "./storage-database.js";
 import { StorageContext } from "./storage-context.js";
 import type { ResourceChange } from "./storage.js";
 import { RESOURCE_MANIFEST_KINDS } from "./storage-shared.js";
@@ -54,6 +56,89 @@ describe("StorageContext", () => {
     ]);
     expect(readStoredValue(dataDir, "project-notes.json")).toHaveLength(1);
   });
+
+  test("uses the compact UTF-8 byte limit for direct and atomic sensitive saves", async () => {
+    const { context, dataDir } = await open();
+    const file = context.file("agent-mail.json");
+    const row = { body: "é".repeat(40) };
+    const value = {
+      version: 1,
+      mailboxes: { ["long-mailbox-key".repeat(100)]: row },
+      idempotency: {},
+      counterparts: {},
+      pendingInject: [],
+    };
+    const compactBytes =
+      Buffer.byteLength(
+        JSON.stringify({
+          ...value,
+          mailboxes: STORAGE_COLLECTION_MARKER,
+          idempotency: STORAGE_COLLECTION_MARKER,
+          counterparts: STORAGE_COLLECTION_MARKER,
+        }),
+        "utf8",
+      ) + Buffer.byteLength(JSON.stringify(row), "utf8");
+    expect(Buffer.byteLength(JSON.stringify(value), "utf8")).toBeGreaterThan(compactBytes);
+    await context.saveSensitiveJson(file, value, { maxBytes: compactBytes });
+    await context.atomically(async () => {
+      await context.saveSensitiveJson(file, value, { maxBytes: compactBytes });
+      expect(await context.loadJson<typeof value | null>(file, () => null)).toEqual(value);
+      expect(context.loadStoreStrict<typeof value>(file)).toEqual({ value });
+      expect(await context.storeExists(file)).toBe(true);
+    });
+    expect(readStoredValue(dataDir, "agent-mail.json")).toEqual(value);
+
+    await expect(
+      context.saveSensitiveJson(file, value, { maxBytes: compactBytes - 1 }),
+    ).rejects.toMatchObject({ name: "StoreTooLargeError", bytes: compactBytes });
+    const revision = context.database.storeRevision("agent-mail");
+    const seen: ResourceChange[] = [];
+    context.changes.addResourceChangeListener((change) => seen.push(change));
+    let buffered = false;
+    await expect(
+      context.atomically(async () => {
+        await context.saveJson(context.file("kanban.json"), [{ id: "must-rollback" }]);
+        await context.saveSensitiveJson(file, value, { maxBytes: compactBytes - 1 });
+        context.changes.announce("kanban", "p1");
+        buffered = true;
+      }),
+    ).rejects.toMatchObject({ name: "StoreTooLargeError", bytes: compactBytes });
+    expect(buffered).toBe(true);
+    expect(context.database.storeRevision("agent-mail")).toBe(revision);
+    expect(readStoredValue(dataDir, "agent-mail.json")).toEqual(value);
+    expect(readStoredValue(dataDir, "kanban.json")).toBeUndefined();
+    expect(seen).toEqual([]);
+  });
+
+  test.each(["row", "whole"] as const)(
+    "retains a buffered size limit when a later %s mutation enlarges the store",
+    async (mutation) => {
+      const { context, dataDir } = await open();
+      const file = context.file("agent-mail.json");
+      await expect(
+        context.atomically(async () => {
+          await context.saveSensitiveJson(file, { mailboxes: {} }, { maxBytes: 100 });
+          if (mutation === "row") {
+            context.updateStoreRow(
+              file,
+              "recipient",
+              () => ({ value: { body: "x".repeat(200) }, result: undefined }),
+              { collection: "mailboxes" },
+            );
+          } else {
+            context.updateStore(
+              file,
+              () => ({ mailboxes: {} }),
+              (store) => {
+                Object.assign(store.mailboxes, { recipient: { body: "x".repeat(200) } });
+              },
+            );
+          }
+        }),
+      ).rejects.toBeInstanceOf(StoreTooLargeError);
+      expect(readStoredValue(dataDir, "agent-mail.json")).toBeUndefined();
+    },
+  );
 
   test("runs one target's critical sections in order and forgets the settled queue", async () => {
     const { context } = await open();

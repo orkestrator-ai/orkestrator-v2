@@ -17,11 +17,10 @@ const {
   execFileAsync,
   existsSync,
   fs,
-  isLoopedReviewWorkflow,
+  isPersistedReviewPackage,
   isReviewPackageReference,
   isProcessRunning,
   localServerHooks,
-  loopedReviewWorkflowAround,
   path,
   requestOk,
   shutdownLocalServers,
@@ -1467,7 +1466,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         },
       };
 
-      const command = commands.get("generate_looped_review_package")!;
+      const command = commands.get("generate_review_package")!;
       const first = (await command(args, context)) as Record<string, unknown>;
       const second = (await command(args, context)) as Record<string, unknown>;
       expect(second).toEqual(first);
@@ -1557,11 +1556,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       );
       // The whole point of the shape assertions above: a generated package has to
       // survive the guard the backend runs before it saves the snapshot.
-      expect(
-        isLoopedReviewWorkflow(
-          loopedReviewWorkflowAround(first, { round: 2, targetBranch: "main" }),
-        ),
-      ).toBe(true);
+      expect(isPersistedReviewPackage(first, 2)).toBe(true);
       // The evidence is reachable from the pinned commits rather than copied
       // into the package, so neither the diff nor any file's bytes travel here.
       expect(reviewPackage).not.toHaveProperty("completeDiff");
@@ -1569,7 +1564,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       expect(JSON.stringify(reviewPackage)).not.toContain(content.trim());
       expect(JSON.stringify(reviewPackage)).not.toContain("all tests passed");
 
-      const verify = commands.get("verify_looped_review_package")!;
+      const verify = commands.get("verify_review_package")!;
       await expect(
         verify({ environmentId: environment.id, reviewPackage: first }, context),
       ).resolves.toMatchObject({ valid: true });
@@ -1763,7 +1758,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const command = commands.get("generate_looped_review_package")!;
+    const command = commands.get("generate_review_package")!;
     const skipped = {
       command: "bun run --cwd apps/ios typecheck",
       status: "skipped",
@@ -1849,11 +1844,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         limitation: "Build ran against a stale cache.",
       },
     ]);
-    expect(
-      isLoopedReviewWorkflow(
-        loopedReviewWorkflowAround(generated, { round: 1, targetBranch: "main" }),
-      ),
-    ).toBe(true);
+    expect(isPersistedReviewPackage(generated, 1)).toBe(true);
 
     // Dropping the skipped entry shifts every later entry's ordinal. Numbering
     // by execution order instead of array position would accept this.
@@ -1885,7 +1876,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const command = commands.get("generate_looped_review_package")!;
+    const command = commands.get("generate_review_package")!;
     const args = {
       environmentId: environment.id,
       packageId,
@@ -1947,7 +1938,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const command = commands.get("generate_looped_review_package")!;
+    const command = commands.get("generate_review_package")!;
     const packageId = "package-contract";
     const ran = {
       command: "bun test tests --parallel",
@@ -2057,7 +2048,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         },
         context,
       ),
-    ).rejects.toThrow("Unexpected generate_looped_review_package field: packageContext");
+    ).rejects.toThrow("Unexpected generate_review_package field: packageContext");
   });
 
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {

@@ -2,10 +2,14 @@ import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   AGENT_MAIL_USER_PARTICIPANT,
   agentMailboxId,
+  agentMailAddressLabel,
+  formatAgentMailAddressLabel,
   isAgentMailBudgetHeld,
   type AgentMailMessageSummary,
+  type AgentMailParticipant,
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 
 export type AgentMailStatusTone = "muted" | "progress" | "warning" | "error";
 
@@ -137,4 +141,44 @@ export function openAgentMailForTab(
 /** Open the conversation between two participants. */
 export function openAgentMailConversation(a: string, b: string): void {
   useAgentMailStore.getState().openPanel({ conversation: [a, b] });
+}
+
+/**
+ * An environment's current name, for mail that names it by id: the
+ * environment store's, or a loaded mailbox descriptor's. Undefined until one
+ * of them knows it, and for an id this node does not have.
+ */
+export function useAgentMailEnvironmentName(environmentId: string | undefined): string | undefined {
+  const fromEnvironments = useEnvironmentStore((state) =>
+    environmentId
+      ? state.environments.find((environment) => environment.id === environmentId)?.name
+      : undefined,
+  );
+  const fromMailboxes = useAgentMailStore((state) => {
+    if (!environmentId) return undefined;
+    for (const mailbox of state.mailboxes.values()) {
+      if (mailbox.descriptor.environmentId === environmentId)
+        return mailbox.descriptor.environmentName;
+    }
+    return undefined;
+  });
+  return fromEnvironments || fromMailboxes || undefined;
+}
+
+/**
+ * A conversation participant as mail names it: an agent by its environment
+ * and tab, `fix-login-bug · Claude 2`; anyone else, coordinators included,
+ * by its own name.
+ */
+export function agentMailParticipantLabel(
+  participant: Pick<AgentMailParticipant, "kind" | "displayName" | "environmentName">,
+): string {
+  if (participant.kind !== "agent" || !participant.environmentName) return participant.displayName;
+  return formatAgentMailAddressLabel(
+    agentMailAddressLabel({
+      environmentId: "",
+      environmentName: participant.environmentName,
+      tabName: participant.displayName,
+    }),
+  );
 }

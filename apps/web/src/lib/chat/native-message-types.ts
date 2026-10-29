@@ -431,12 +431,27 @@ export interface NativeMessage {
   peerMail?: PeerMailPresentation;
 }
 
+/** An agent tab a mail tile names; see `PeerMailPresentation.address`. */
+export interface PeerMailAddress {
+  environmentId: string;
+  environmentName?: string;
+  tabId?: string;
+  tabName?: string;
+  /** The node the tab is on, for a tab on another node. */
+  node?: string;
+}
+
 /** One delivered agent-mail message, as the transcript tile presents it. */
 export interface PeerMailPresentation {
   messageId: string;
   kind: AgentMailKind;
-  /** Display name of the sender. */
+  /** Display name of the sender, or for sent mail `To <recipient>`. */
   sender: string;
+  /**
+   * The agent tab `sender` names, so the tile can name its environment by
+   * the environment's current name when the message did not carry it.
+   */
+  address?: PeerMailAddress;
   subject?: string;
   /** The trust line shown above an expanded body. */
   warning: string;

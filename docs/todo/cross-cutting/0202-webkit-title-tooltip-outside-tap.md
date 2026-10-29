@@ -6,9 +6,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Find and fix the WebKit outside-tap dismissal**: an outside touch tap leaves the title tooltip open in Playwright's WebKit. Status: open.
-2. **Decide whether CI runs the spec under WebKit**: the spec is opt-in under WebKit today. Status: open (depends on 1).
-3. **Qualify on iOS Safari**: tap the title, then the workspace, on a device or simulator, before and after the fix. Status: open (needs a Mac with Xcode; batched with [0031](0031-live-provider-and-platform-qualification.md)).
+1. **Find and fix the WebKit outside-tap dismissal**: an outside touch tap leaves the title tooltip open in Playwright's WebKit. Status: done (fixed in #1322; re-verified 2026-10-29, see Assumptions and decisions 5 and 6).
+2. **Decide whether CI runs the spec under WebKit**: the spec is opt-in under WebKit today. Status: done (CI's `mobile-shell-browser` job runs it in Chromium and WebKit; see decision 7).
+3. **Qualify on iOS Safari**: tap the title, then the workspace, on a device or simulator, before and after the fix. Status: open (a 2026-10-27 run is recorded below, but it could not be repeated on 2026-10-29 because `simctl` hung on this Mac; see decision 8; batched with [0031](0031-live-provider-and-platform-qualification.md)).
 
 ### 1. Find and fix the WebKit outside-tap dismissal
 
@@ -143,13 +143,18 @@ closed. In WebKit it stayed open.
    to the control underneath. The title's touch toggle still works (spec
    steps 1–2, unit tests for touch and pen).
 2. **Done (2026-10-27): decide whether to run this spec under WebKit in CI.**
-   No; it stays opt-in. See decision 3.
+   Yes: `.github/workflows/ci.yml` (`mobile-shell-browser`, matrix
+   `[chromium, webkit]`) runs `e2e/MobileAppShellLayout.spec.ts` in both
+   engines. See decision 7, which replaces decision 3.
 
 ### Qualification
 
-- **Done (2026-10-27): iOS run before and after the fix.** iOS 26.5
-  Simulator, recorded in Current state. Before: a bubble tap left the
-  tooltip open and a tap below it closed it. After: both close it.
+- **Open: iOS run before and after the fix.** A run on an iOS 26.5
+  Simulator (Xcode 27) is recorded in Current state. Before: a bubble tap
+  left the tooltip open and a tap below it closed it. After: both close it.
+  A repeat on 2026-10-29 was not possible here (decision 8). Close this item
+  once that record is accepted, or after a repeat on a Mac where `xcrun
+  simctl list` responds.
 
 ## Constraints and rationale
 
@@ -161,65 +166,125 @@ closed. In WebKit it stayed open.
 
 ## Assumptions and decisions
 
-1. **Diagnose from event traces, not from the guessed cause (2026-10-27).**
-   A temporary spec logged every pointer, touch, mouse and focus event with
-   the target, the title's `aria-expanded` and the tooltip's `data-state`.
-   WebKit, bubble tap: `pointerdown`, `touchstart`, `pointerup` and
-   `touchend` targeted the tooltip content; `mousedown`, `mouseup` and
-   `click` went to the "Workspace" `div` under it. The tooltip stayed open,
-   and the title was never focused (`activeElement` was `BODY` throughout).
-   Chromium, same tap: everything went to the tooltip until `mousedown`,
-   then `focusout` from the title closed it. True outside tap (y 400) in
-   both engines: closed at `pointerdown`. The layer is
-   `@radix-ui/react-dismissable-layer` 1.2.1 under `react-tooltip` 1.4.1,
-   which does not pass `deferPointerDownOutside`. So the todo's guess (wait
-   for the `click`) did not apply, and closing on the outside `pointerdown`
-   would have changed nothing.
-2. **Close from the bubble's `touchend`, not its `pointerdown`
-   (2026-10-27).** Options: (a) close on a touch or pen `pointerdown` on the
-   bubble; (b) close on `touchend` and cancel it, with a pen-only click
-   handler; (c) make the bubble `pointer-events: none` so taps reach what
-   is underneath; (d) put the handlers in the shared `TooltipContent`.
-   Chose (b), local to the title. A trial of (a) closed the tooltip, but
-   React unmounted the bubble before the tap ended. `touchend` then went
-   to a detached node, and the click landed on the `<main>` underneath in
-   both WebKit and Chromium. With (b) the bubble is still mounted when
-   `touchend` fires, and cancelling it suppresses the mouse events and
-   click in both engines (traced) and on iOS (the counter button stayed at
-   0). (c) would turn every dismissing tap into a tap on the workspace. (d)
-   would change every tooltip in the app, while this is the only one that
-   opens on touch. Pros: closes in every engine without relying on focus,
-   and the dismissing tap has no side effects. Cons: a touch that starts
-   on the bubble and turns into a scroll also closes it (Radix already
-   closes tooltips when an ancestor of the trigger scrolls). The pen path
-   relies on the click event carrying `pointerType`, which Chromium and
-   WebKit both set. The touchend click suppression was traced in
-   Playwright's engines; on iOS it was only shown not to click through.
-3. **Keep the WebKit run opt-in, guarded in CI by the unit test
-   (2026-10-27).** Options: (a) add a CI job that installs Playwright WebKit
-   and runs this spec (or every mobile spec) under
-   `ORKESTRATOR_E2E_BROWSER=webkit`; (b) keep WebKit opt-in and add a
-   happy-dom regression test that CI already runs; (c) both. Chose (b). CI
-   runs `mise run test:full`, which does not include the Playwright
-   component suite at all, not even in Chromium. A WebKit job would be the
-   first browser job and would download WebKit and its Linux dependencies
-   on every run. Linux WebKit is also a different port from Safari, and
-   even macOS Playwright WebKit differed from iOS here (it sent the
-   bubble tap's click to the element underneath before the fix; iOS did
-   not). The unit test fails without the fix and checks the exact contract
-   (a cancelled `touchend` closes the tooltip). Pros: no new CI cost, and
-   the regression is still caught. Cons: other WebKit-only behaviour is
-   still found only by opt-in runs; the testing guide's "Other browser
-   engines" section says how to run them.
-4. **Simulator, not a phone (2026-10-27).** The item allowed a device or a
-   simulator. Options: a physical iPhone (none attached to this Mac), the
-   iOS app in the simulator (`mise run dev:ios`, needs a running backend
-   profile), or Safari in the simulator against the component fixture
-   server. Chose the last: the fixture renders the same
-   `MobileAppShellLayout`, needs no backend and touches no real data. Taps
-   went through Device Hub (Xcode 27's simulator window), which delivers
-   them to the simulator as touches. Con: it does not exercise `WKWebView`
-   in the iOS app; the tooltip code is the same in both.
+### 1. Task 1: Diagnose from event traces, not from the guessed cause (2026-10-27)
+
+A temporary spec logged every pointer, touch, mouse and focus event with
+the target, the title's `aria-expanded` and the tooltip's `data-state`.
+WebKit, bubble tap: `pointerdown`, `touchstart`, `pointerup` and
+`touchend` targeted the tooltip content; `mousedown`, `mouseup` and
+`click` went to the "Workspace" `div` under it. The tooltip stayed open,
+and the title was never focused (`activeElement` was `BODY` throughout).
+Chromium, same tap: everything went to the tooltip until `mousedown`,
+then `focusout` from the title closed it. True outside tap (y 400) in
+both engines: closed at `pointerdown`. The layer is
+`@radix-ui/react-dismissable-layer` 1.2.1 under `react-tooltip` 1.4.1,
+which does not pass `deferPointerDownOutside`. So the todo's guess (wait
+for the `click`) did not apply, and closing on the outside `pointerdown`
+would have changed nothing.
+
+### 2. Task 1: Close from the bubble's `touchend`, not its `pointerdown` (2026-10-27)
+
+Options: (a) close on a touch or pen `pointerdown` on the
+bubble; (b) close on `touchend` and cancel it, with a pen-only click
+handler; (c) make the bubble `pointer-events: none` so taps reach what
+is underneath; (d) put the handlers in the shared `TooltipContent`.
+Chose (b), local to the title. A trial of (a) closed the tooltip, but
+React unmounted the bubble before the tap ended. `touchend` then went
+to a detached node, and the click landed on the `<main>` underneath in
+both WebKit and Chromium. With (b) the bubble is still mounted when
+`touchend` fires, and cancelling it suppresses the mouse events and
+click in both engines (traced) and on iOS (the counter button stayed at
+0). (c) would turn every dismissing tap into a tap on the workspace. (d)
+would change every tooltip in the app, while this is the only one that
+opens on touch. Pros: closes in every engine without relying on focus,
+and the dismissing tap has no side effects. Cons: a touch that starts
+on the bubble and turns into a scroll also closes it (Radix already
+closes tooltips when an ancestor of the trigger scrolls). The pen path
+relies on the click event carrying `pointerType`, which Chromium and
+WebKit both set. The touchend click suppression was traced in
+Playwright's engines; on iOS it was only shown not to click through.
+
+### 3. Task 2: Superseded by decision 7. Keep the WebKit run opt-in, guarded in CI by the unit test (2026-10-27)
+
+Options: (a) add a CI job that installs Playwright WebKit
+and runs this spec (or every mobile spec) under
+`ORKESTRATOR_E2E_BROWSER=webkit`; (b) keep WebKit opt-in and add a
+happy-dom regression test that CI already runs; (c) both. Chose (b). CI
+runs `mise run test:full`, which does not include the Playwright
+component suite at all, not even in Chromium. A WebKit job would be the
+first browser job and would download WebKit and its Linux dependencies
+on every run. Linux WebKit is also a different port from Safari, and
+even macOS Playwright WebKit differed from iOS here (it sent the
+bubble tap's click to the element underneath before the fix; iOS did
+not). The unit test fails without the fix and checks the exact contract
+(a cancelled `touchend` closes the tooltip). Pros: no new CI cost, and
+the regression is still caught. Cons: other WebKit-only behaviour is
+still found only by opt-in runs; the testing guide's "Other browser
+engines" section says how to run them.
+
+### 4. Task 3: Simulator, not a phone (2026-10-27)
+
+The item allowed a device or a
+simulator. Options: a physical iPhone (none attached to this Mac), the
+iOS app in the simulator (`mise run dev:ios`, needs a running backend
+profile), or Safari in the simulator against the component fixture
+server. Chose the last: the fixture renders the same
+`MobileAppShellLayout`, needs no backend and touches no real data. Taps
+went through Device Hub (Xcode 27's simulator window), which delivers
+them to the simulator as touches. Con: it does not exercise `WKWebView`
+in the iOS app; the tooltip code is the same in both.
+
+### 5. Task 1: keep the #1322 fix, not the Task analysis's document listener (2026-10-29)
+
+The Task analysis was written after #1322 had merged, but it describes the
+code before the fix (its line references point at the old layout). Its
+recommended fix, a document `touchstart` or `pointerdown` listener in
+`MobileAppShellLayout` that runs while the tooltip is open, would not have
+helped. I traced the events on `main` at `79f3bc97` with a temporary spec (not
+committed) in Playwright WebKit and Chromium. A true outside tap (y 600) already
+closes the tooltip at `pointerdown` in both engines, through Radix's
+`DismissableLayer`. The tap that failed was on the bubble, where `pointerdown`,
+`touchstart`, `pointerup` and `touchend` all target the tooltip content, so an
+outside listener never fires. The existing fix keeps the analysis's preferred
+scope (local to `MobileAppShellLayout`, not the shared `tooltip.tsx`). It sits
+on the bubble itself: `onTouchEnd` at
+`apps/web/src/components/layout/MobileAppShellLayout.tsx:321`. With it, the
+trace shows the bubble tap ending at `touchend`, with no `mousedown`,
+`mouseup` or `click` after it. No code change was needed.
+
+### 6. Task 1: prove the fix is load-bearing in WebKit (2026-10-29)
+
+Following the recommended "instrument the run" approach, I removed the
+bubble's `onTouchEnd` handler locally and ran the spec in WebKit. Two
+`mobile-chromium` cases failed with the bubble still open: "long mobile titles
+… touch and keyboard dismissal" and "touch dismissal suppresses compatibility
+mouse events …". I restored the handler, and the full spec passed in WebKit
+three times over (`--repeat-each 3`: 12 passed, 24 skipped) and once in
+Chromium (6 passed, 6 skipped). The skipped cases are gated by project or
+engine.
+
+### 7. Task 2: CI runs this spec under WebKit, as recommended (2026-10-29)
+
+The recommended option, running only `e2e/MobileAppShellLayout.spec.ts`
+under WebKit in CI, is already in place. #1322 added the
+`mobile-shell-browser` job to `.github/workflows/ci.yml`. It installs each
+browser with `bunx playwright install --with-deps` and runs the spec with
+`ORKESTRATOR_E2E_BROWSER` set to `chromium` and then `webkit`. The
+`desktop-chromium` cases that the spec skips cost nothing, so restricting the
+job to the `mobile-chromium` project would save no time. Decision 3 ("keep it
+opt-in") no longer describes the repository, and the testing guide's "Other
+browser engines" section already matches the CI job. No change needed.
+
+### 8. Task 3: left open; the simulator did not respond on this Mac (2026-10-29)
+
+This Mac has Xcode 26.6 and iOS simulator runtimes (17.5, 18.2 and 26.2), but
+`xcrun simctl list` hung and was killed after 60 s and then 170 s, both inside
+and outside the sandbox, and CoreSimulatorService never started. Per the
+brief, nothing was installed and no device was used. The 2026-10-27 iOS
+record names Xcode 27 and iOS 26.5, neither of which is installed here, so it
+was probably made on a different Mac and cannot be repeated from this one. I
+left the task open rather than marking it done from a record I could not
+reproduce.
 
 ## Open questions
 
@@ -229,7 +294,9 @@ closed. In WebKit it stayed open.
 
 ## Needs verification
 
-- None for this file. A run on a physical phone and in the `WKWebView` iOS
+- Task 3: accept the 2026-10-27 iOS 26.5 Simulator record, or repeat it on
+  a Mac where `xcrun simctl list` responds (decision 8). Otherwise none for
+  this file. A run on a physical phone and in the `WKWebView` iOS
   app is covered by 0035's still-open iOS item, which exercises the same
   shell.
 

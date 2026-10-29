@@ -22,6 +22,7 @@ the item ID (`gh pr list --search "graphs 107"`).
 | 004 | [004-typed-address-report.md](004-typed-address-report.md) | 0 | in-progress | — | Address submits a `fix-result`; Verify reads it instead of the last assistant text, with a fallback for old runs. |
 | 005 | [005-reviewer-lenses.md](005-reviewer-lenses.md) | 0 | in-progress | — | Per-reviewer focus (`lens`) in Multi Review and the pipeline panel; editable presets in Settings. |
 | 006 | [006-pipeline-stage-instructions.md](006-pipeline-stage-instructions.md) | 0 | in-progress | — | `BuildStepConfig.instructions` (≤ 16 KiB) rendered as a framed section in each stage prompt. |
+| 007 | [007-cli-build-pipeline-launch.md](007-cli-build-pipeline-launch.md) | 0 | in-progress | 006 | Public `build.*` actions and `orkestrator build launch\|list\|get\|cancel`, with per-step models, instructions and reviewer lenses. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 

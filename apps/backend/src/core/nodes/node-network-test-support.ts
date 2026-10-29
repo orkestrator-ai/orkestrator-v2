@@ -296,6 +296,15 @@ export class TestNodeNetwork {
     return node;
   }
 
+  /** Stops every node's portal and service, so no link outlives the test. */
+  async stop(): Promise<void> {
+    for (const node of this.nodes.values()) {
+      node.portal.stop();
+      node.dropStreams();
+      await node.service.stop();
+    }
+  }
+
   private async hello(node: TestNode) {
     return {
       schemaVersion: 1,

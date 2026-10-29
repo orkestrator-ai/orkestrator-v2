@@ -21,8 +21,13 @@ import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js
  */
 
 const harnesses: PublicApiHarness[] = [];
+const networks: TestNodeNetwork[] = [];
 
 export async function cleanupNodeTopologies(): Promise<void> {
+  // A running command node keeps invoking the leaf's commands, and closed
+  // storage reopens on use and re-creates its removed data directory, so the
+  // network stops before the harnesses are removed.
+  for (const network of networks.splice(0)) await network.stop();
   for (const harness of harnesses.splice(0)) await harness.cleanup();
   await cleanupSessionHarnesses();
 }
@@ -37,6 +42,7 @@ function attach(harness: PublicApiHarness, node: TestNode): void {
 
 export async function topology(options: { leafRelay?: boolean } = {}) {
   const network = new TestNodeNetwork();
+  networks.push(network);
   const commandNode = await network.add("command", { forceRegistration: true });
   const leafNode = await network.add("leaf");
   leafNode.publicActionRelay = options.leafRelay ?? true;

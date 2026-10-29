@@ -1063,7 +1063,7 @@ What an omitted choice resolves to:
 | Tool | Omitted | Resolves to |
 | --- | --- | --- |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
-| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count; Review preparation and Fix review issues, each falling back to Review |
+| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Fix review issues, each falling back to Review |
 | `launch_multi_review`, `start_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
@@ -1079,12 +1079,24 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
   selection: the pipeline agent for `build`, the saved row for the others, and
   the saved preparation model (Address's when the saved review has one
   reviewer) for `reviewPreparation`. Reviewer rows always name their agent and
-  may carry their own `instructions`.
+  may carry their own `instructions` and a `lens`.
 - `steps.build.agent` decides the pipeline agent.
 - Explicit `reviewers` replace the saved rows; otherwise an explicit
   `steps.review` becomes Reviewer 1.
+- `maxIterations` is optional, from 1 to `MAX_BUILD_PIPELINE_ITERATIONS` (10),
+  the limit the protocol accepts; the tool schema refuses a larger value
+  before anything starts. Omitted, the pipeline's default applies.
 
 Each Multi Review row field is replaced independently.
+
+A reviewer row, in `launch_multi_review`, `start_multi_review` or
+`start_build_pipeline`'s `reviewers`, may carry `lens: { label, instruction }`:
+the reviewer's focus, a label of at most 64 characters and an instruction of at
+most 4 KiB ([reviewer lenses](review-preparation.md#reviewer-lenses)). The
+tools refuse a longer or blank one, and `reviewModel`, `fixModel` and
+`reviewPreparation` take none. Explicit rows replace the saved rows and their
+saved focus. The coordinator is told to set a lens only when the user asks for
+a focus.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
 over the worker's model catalogue, mirroring the launch dialog: an unset or
@@ -1107,7 +1119,8 @@ reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `start_multi_review` reports the same `selection`. `start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
-`instructionsBytes`, not echoed. The environment and tab UI do not show a marker
+`instructionsBytes`, not echoed. A reviewer's lens is reported in every
+`selection` as `{ label, instructionBytes }`. The environment and tab UI do not show a marker
 for overrides yet; that is a tracked follow-up.
 
 ## Complete application actions

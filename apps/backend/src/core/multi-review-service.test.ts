@@ -37,6 +37,8 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { reviewLensSection } from "@orkestrator/protocol/review-lens";
+import { reviewerPanelSection } from "./multi-review-prompts.js";
 import type { ArtifactPublication } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
@@ -8458,6 +8460,75 @@ test("MultiReviewService restarts only the selected reviewer in a fresh session"
     const latestPrompt = [...provider.sends.values()].at(-1)?.prompt;
     expect(latestPrompt).toContain("You are independent reviewer 1 of 2");
     expect(latestPrompt).not.toBe("Please continue");
+  });
+});
+
+test("MultiReviewService records each reviewer's lens as launched and drops a blank one", async () => {
+  await withService(
+    "env-lens-record",
+    new Provider(),
+    async ({ start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "opus", lens: { label: " Security ", instruction: " Trace. " } },
+        { agent: "claude", model: "sonnet" },
+      ]);
+      const saved = (await snapshot(started.id))!;
+      expect(saved.reviewers[0]!.lens).toEqual({ label: "Security", instruction: "Trace." });
+      expect(saved.reviewers[1]).not.toHaveProperty("lens");
+      expect(isMultiReviewWorkflow(saved)).toBe(true);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("MultiReviewService keeps a reviewer's lens through dispatch, restart and later preset edits", async () => {
+  const provider = new Provider();
+  provider.idempotentSessionKeys = true;
+  provider.statusValue = "running";
+  await withService("env-lens-restart", provider, async ({ service, start, snapshot, storage }) => {
+    const lens = { label: "Security", instruction: "Trace untrusted input to its sinks." };
+    const started = await start([
+      { agent: "claude", model: "opus", lens },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const current = await snapshot(started.id);
+      return current?.reviewers.every((reviewer) => reviewer.dispatchState === "sent") ?? false;
+    });
+    const running = (await snapshot(started.id))!;
+    const prompts = running.reviewers.map(
+      (reviewer) => provider.sends.get(reviewer.requestId!)!.prompt,
+    );
+    expect(prompts[0]!.endsWith(reviewLensSection(lens))).toBe(true);
+    expect(prompts[0]).toContain(`${reviewerPanelSection(1, 2)}\n\n${reviewLensSection(lens)}`);
+    expect(prompts[1]!.endsWith(reviewerPanelSection(2, 2))).toBe(true);
+    expect(prompts[0]!.slice(0, prompts[0]!.indexOf(reviewerPanelSection(1, 2)))).toBe(
+      prompts[1]!.slice(0, prompts[1]!.indexOf(reviewerPanelSection(2, 2))),
+    );
+
+    // The preset the lens came from is edited, then deleted: the review keeps its text.
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      reviewLensPresets: [{ id: "security", label: "Security", instruction: "Edited later." }],
+    });
+    await storage.updateGlobalConfig({ ...config.global, reviewLensPresets: [] });
+    expect((await snapshot(started.id))!.reviewers[0]!.lens).toEqual(lens);
+
+    const first = running.reviewers[0]!;
+    const restarted = await service.restartReviewer(started.id, first.id);
+    expect(restarted.reviewers[0]!.lens).toEqual(lens);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewer = (await snapshot(started.id))?.reviewers[0];
+      return reviewer?.dispatchState === "sent" && reviewer.requestId !== first.requestId;
+    });
+    const fresh = (await snapshot(started.id))!.reviewers[0]!;
+    expect(fresh.lens).toEqual(lens);
+    const restartedPrompt = provider.sends.get(fresh.requestId!)!.prompt;
+    expect(restartedPrompt.endsWith(reviewLensSection(lens))).toBe(true);
+    expect(restartedPrompt).not.toContain("Edited later.");
   });
 });
 

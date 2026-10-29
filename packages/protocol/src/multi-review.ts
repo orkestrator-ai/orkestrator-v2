@@ -22,6 +22,7 @@ import {
   REVIEW_FANOUT_MIN_REVIEWERS,
   isReviewerModelSelection,
   isReviewerModelSelectionFields,
+  isReviewStepModelSelection,
   isReviewerRecordList,
   isReviewWorktreeSnapshotRecord,
   isReviewPanelOverlap,
@@ -635,7 +636,14 @@ function nonBlank(value: unknown, max = 512): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 
-export const isMultiReviewModelSelection = isReviewerModelSelection;
+/**
+ * A preparation, consolidation or fix selection. A lens is a reviewer's focus,
+ * so these refuse one ({@link isMultiReviewReviewerSelection} accepts it).
+ */
+export const isMultiReviewModelSelection = isReviewStepModelSelection;
+
+/** A reviewer row, which may carry the reviewer's lens. */
+export const isMultiReviewReviewerSelection = isReviewerModelSelection;
 
 const isMultiReviewModelSelectionFields = isReviewerModelSelectionFields;
 
@@ -662,7 +670,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
-    !value.reviewers.every(isMultiReviewModelSelection) ||
+    !value.reviewers.every(isMultiReviewReviewerSelection) ||
     (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
     !isMultiReviewModelSelection(value.fixModel)
   ) {

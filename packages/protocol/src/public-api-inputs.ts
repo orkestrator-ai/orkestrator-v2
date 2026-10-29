@@ -17,6 +17,7 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
+import { REVIEW_LENS_INSTRUCTION_MAX_BYTES, REVIEW_LENS_LABEL_MAX_CHARS } from "./review-lens.js";
 import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
@@ -341,6 +342,35 @@ const reviewSelection: PublicJsonSchema = {
   },
   required: ["agent", "model"],
   additionalProperties: false,
+};
+
+/** A Multi Review reviewer row, which alone may carry a focus. */
+const reviewerSelection: PublicJsonSchema = {
+  ...reviewSelection,
+  properties: {
+    ...reviewSelection.properties,
+    lens: {
+      type: "object",
+      description:
+        "This reviewer's focus. The reviewer looks hardest at it and still reports critical issues outside it. The text is copied into the review, so later preset edits never change it.",
+      properties: {
+        label: {
+          type: "string",
+          minLength: 1,
+          maxLength: REVIEW_LENS_LABEL_MAX_CHARS,
+          description: "Short name of the focus, one line.",
+        },
+        instruction: {
+          type: "string",
+          minLength: 1,
+          maxLength: REVIEW_LENS_INSTRUCTION_MAX_BYTES,
+          description: `What to look at hardest; at most ${REVIEW_LENS_INSTRUCTION_MAX_BYTES} bytes of UTF-8.`,
+        },
+      },
+      required: ["label", "instruction"],
+      additionalProperties: false,
+    },
+  },
 };
 
 const createEnvironmentFields: Record<string, PublicJsonSchema> = {
@@ -1284,8 +1314,8 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             minItems: 1,
             maxItems: 32,
             description:
-              "Reviewer rows. Omitted: the saved Multi Review reviewers. Set only when the user asks for specific reviewers.",
-            items: reviewSelection,
+              "Reviewer rows, each with an optional focus (lens). Omitted: the saved Multi Review reviewers and their saved focus. Set only when the user asks for specific reviewers or a focus.",
+            items: reviewerSelection,
           },
           reviewModel: {
             ...reviewSelection,
@@ -1319,6 +1349,17 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       examples: [
         { environmentId: "env-1" },
         { environmentId: "env-1", autoFix: true, autoPr: true },
+        {
+          environmentId: "env-1",
+          reviewers: [
+            {
+              agent: "claude",
+              model: "claude-opus-5",
+              lens: { label: "Security", instruction: "Trace untrusted input to its sinks." },
+            },
+            { agent: "codex", model: "gpt-5.5" },
+          ],
+        },
       ],
     },
     "review.list": {

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { SHIPPED_REVIEW_LENS_PRESETS } from "@orkestrator/protocol/review-lens";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
@@ -1220,5 +1221,67 @@ describe("BuildLaunchDialog step instructions", () => {
     view.rerender(dialog(true));
     submit();
     expect(onConfirm.mock.calls[0]![0].steps.build).not.toHaveProperty("instructions");
+  });
+});
+
+describe("BuildLaunchDialog reviewer focus", () => {
+  const security = { label: "Security", instruction: "Trace untrusted input." };
+  const fanoutDefaults = {
+    steps: {
+      review: { agent: "claude" as const, model: "claude-b", lens: security },
+      address: { agent: "codex" as const, model: "codex-a" },
+      verify: { agent: "codex" as const, model: "codex-a" },
+      pr: { agent: "claude" as const, model: "claude-a" },
+      "resolve-conflicts": { agent: "claude" as const, model: "claude-b" },
+    },
+    reviewers: [
+      { agent: "claude" as const, model: "claude-b", lens: security },
+      { agent: "codex" as const, model: "codex-a" },
+    ],
+    reviewPreparation: { agent: "codex" as const, model: "codex-a" },
+  };
+
+  test("each reviewer card opens on its saved focus and submits the chosen one", () => {
+    const { onConfirm } = renderDialog({ pipelineDefaults: fanoutDefaults });
+    // Only reviewer cards offer a focus.
+    expect(screen.getByRole("combobox", { name: "Reviewer 1 focus" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Build focus" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /preparation.*focus/i })).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 2 focus" }), {
+      target: { value: "preset:tests-and-coverage" },
+    });
+    submit();
+    const selection = onConfirm.mock.calls[0]![0];
+    const tests = SHIPPED_REVIEW_LENS_PRESETS.find((preset) => preset.id === "tests-and-coverage")!;
+    expect(selection.reviewers?.map((reviewer) => reviewer.lens)).toEqual([
+      security,
+      { label: tests.label, instruction: tests.instruction },
+    ]);
+    // Reviewer 1 is the review step.
+    expect(selection.steps.review.lens).toEqual(security);
+    expect(selection.steps.address).not.toHaveProperty("lens");
+    expect(selection.reviewPreparation).not.toHaveProperty("lens");
+  });
+
+  test("a single reviewer takes a focus too, and an incomplete custom focus blocks the launch", () => {
+    const { onConfirm } = renderDialog();
+    const select = screen.getByRole("combobox", { name: "Review focus" });
+    fireEvent.change(select, { target: { value: "custom:" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Review focus label" }), {
+      target: { value: "Migrations" },
+    });
+    const start = screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Review focus instruction" }), {
+      target: { value: "Check both directions." },
+    });
+    expect(start.disabled).toBe(false);
+    submit();
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.steps.review.lens).toEqual({
+      label: "Migrations",
+      instruction: "Check both directions.",
+    });
+    expect(selection.reviewers).toBeUndefined();
   });
 });

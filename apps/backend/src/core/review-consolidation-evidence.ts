@@ -19,6 +19,10 @@
  * - Per-finding `reviewModels` is dropped: the reviewer's agent and model are
  *   stated once on the reviewer, and the backend re-derives provenance from
  *   the cited source IDs anyway.
+ * - A reviewer that ran with a lens carries its label as `focus`, so the
+ *   consolidator knows why coverage differs. Only the label travels: the
+ *   instruction was for the reviewer, and the label is bounded to 64
+ *   characters, so it is required content and never reduced.
  *
  * When the envelope exceeds the budget, only prose explicitly classified as
  * optional presentation is removed, in a fixed order. Findings, gaps, their
@@ -41,6 +45,8 @@ export interface ConsolidationSourceReport {
   reviewerId: string;
   agent: string;
   model: string;
+  /** The reviewer's lens label, when it ran with one. */
+  focus?: string;
   report: StructuredReviewReport;
 }
 
@@ -50,6 +56,8 @@ export interface ConsolidationReviewerEvidence {
   reviewerId: string;
   agent: string;
   model: string;
+  /** The reviewer's lens label; absent when it had none. */
+  focus?: string;
   verdict: StructuredReviewReport["verdict"];
   reviewSummary: string;
   summaryOfChange?: string;
@@ -273,6 +281,7 @@ export function buildConsolidationEvidence(
       reviewerId: entry.reviewerId,
       agent: entry.agent,
       model: entry.model,
+      ...(entry.focus ? { focus: entry.focus } : {}),
       verdict: report.verdict,
       reviewSummary: report.reviewSummary,
       summaryOfChange: report.summaryOfChange,

@@ -1,10 +1,15 @@
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import {
+  REVIEW_LENS_INSTRUCTION_MAX_BYTES,
+  reviewLensFromText,
+  type ReviewLens,
+} from "@orkestrator/protocol/review-lens";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicNodeList } from "@orkestrator/protocol/public-api-resources";
 import { CliError } from "../errors.js";
 import { keyValues, table } from "../format.js";
 import { readTextSource } from "../inputs.js";
-import type { CommandSpec } from "../spec.js";
+import type { CommandContext, CommandSpec } from "../spec.js";
 import { optionalBoolean, REQUEST_ID_OPTION, stringOption, submit } from "./common.js";
 import { finishRun, submitRun, validateWaitOptions, WAIT_OPTIONS } from "./session.js";
 
@@ -49,6 +54,81 @@ function parseSelection(raw: string, flag: string) {
 }
 
 const SELECTION_HELP = "AGENT=MODEL[@EFFORT], e.g. codex=gpt-5.5@high.";
+
+/** `N=VALUE`: a 1-based reviewer position and the text or path for its focus. */
+function parsePositioned(raw: string, flag: string): { position: number; value: string } {
+  const match = /^(\d+)=([\s\S]*)$/.exec(raw);
+  const position = match ? Number(match[1]) : 0;
+  if (!match || !Number.isSafeInteger(position) || position < 1 || !match[2]) {
+    throw new CliError(
+      "invalid-input",
+      `${flag} expects N=VALUE with N a reviewer position from 1`,
+    );
+  }
+  return { position, value: match[2] };
+}
+
+/**
+ * Each reviewer's focus from `--focus N=TEXT` and `--focus-file N=PATH`. The
+ * first line is the label and the rest the instruction (a single line is
+ * both), so a file reads like a commit message. Positions name `--reviewer`
+ * rows, which a focus therefore requires.
+ */
+async function reviewerLenses(
+  context: CommandContext,
+  options: Record<string, unknown>,
+  reviewerCount: number,
+): Promise<Map<number, ReviewLens>> {
+  const entries = [
+    ...((options.focus as string[] | undefined) ?? []).map((raw) => ({
+      flag: "--focus",
+      ...parsePositioned(raw, "--focus"),
+      file: false,
+    })),
+    ...((options["focus-file"] as string[] | undefined) ?? []).map((raw) => ({
+      flag: "--focus-file",
+      ...parsePositioned(raw, "--focus-file"),
+      file: true,
+    })),
+  ];
+  const lenses = new Map<number, ReviewLens>();
+  if (entries.length > 0 && reviewerCount === 0) {
+    throw new CliError(
+      "invalid-input",
+      "--focus and --focus-file name --reviewer rows by position; pass the reviewers too",
+    );
+  }
+  for (const entry of entries) {
+    if (entry.position > reviewerCount) {
+      throw new CliError(
+        "invalid-input",
+        `${entry.flag} ${entry.position}= names reviewer ${entry.position}, but only ${reviewerCount} --reviewer rows were given`,
+      );
+    }
+    if (lenses.has(entry.position)) {
+      throw new CliError("invalid-input", `Reviewer ${entry.position} has more than one focus`);
+    }
+    const text = entry.file
+      ? await readTextSource(context.io, {
+          file: entry.value,
+          label: `Reviewer ${entry.position} focus`,
+          // The label line and its separator ride on top of the instruction.
+          maxBytes: REVIEW_LENS_INSTRUCTION_MAX_BYTES + 512,
+          names: { file: "--focus-file", stdin: "--focus-file -" },
+          required: true,
+        })
+      : entry.value;
+    try {
+      lenses.set(entry.position, reviewLensFromText(text ?? ""));
+    } catch (error) {
+      throw new CliError(
+        "invalid-input",
+        `${entry.flag} for reviewer ${entry.position}: ${(error as Error).message}`,
+      );
+    }
+  }
+  return lenses;
+}
 
 const AGENT_OPTIONS = [
   {
@@ -246,6 +326,20 @@ export const workflowCommands: CommandSpec[] = [
         description: `Reviewer row (repeatable): ${SELECTION_HELP}`,
       },
       {
+        name: "focus",
+        kind: "list",
+        valueName: "N=TEXT",
+        description:
+          "Focus (lens) for --reviewer row N (repeatable): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB); one line is both.",
+      },
+      {
+        name: "focus-file",
+        kind: "list",
+        valueName: "N=PATH",
+        description:
+          "Read --reviewer row N's focus from a local file, laid out like --focus (repeatable).",
+      },
+      {
         name: "review-model",
         kind: "string",
         valueName: "SELECTION",
@@ -285,14 +379,21 @@ export const workflowCommands: CommandSpec[] = [
     ],
     inputFields: {
       reviewer: "reviewers",
+      focus: "reviewers",
+      "focus-file": "reviewers",
       "instruction-file": "reviewInstruction",
     },
     idOutput: "workflow ID",
     async run(context, parsed) {
       const options = parsed.options;
-      const reviewers = ((options.reviewer as string[] | undefined) ?? []).map((raw) =>
+      const rows = ((options.reviewer as string[] | undefined) ?? []).map((raw) =>
         parseSelection(raw, "--reviewer"),
       );
+      const lenses = await reviewerLenses(context, options, rows.length);
+      const reviewers = rows.map((row, index) => {
+        const lens = lenses.get(index + 1);
+        return lens ? { ...row, lens } : row;
+      });
       const reviewModel = stringOption(options, "review-model");
       const fixModel = stringOption(options, "fix-model");
       const autoFix = optionalBoolean(options, "auto-fix");

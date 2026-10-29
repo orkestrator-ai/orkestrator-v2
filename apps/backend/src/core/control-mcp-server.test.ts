@@ -678,6 +678,139 @@ describe("Orkestrator control MCP server", () => {
     expect(JSON.stringify(selection)).not.toContain("Write the test first.");
   });
 
+  test("Multi Review launch tools and start_build_pipeline carry reviewer lenses", async () => {
+    const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const call = (name: string, args: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", { name, arguments: args });
+    const lens = { label: "Security", instruction: "Trace untrusted input to its sinks." };
+    const lensSummary = { label: "Security", instructionBytes: 35 };
+    const workflow = {
+      id: "review-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "preparing",
+      reviewers: [
+        { id: "r1", agent: "codex", model: "gpt-5.6-codex", status: "pending", lens },
+        { id: "r2", agent: "codex", model: "gpt-5.6-codex", status: "pending" },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6-codex" },
+    };
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      ui: { status: "opened" },
+      workflow,
+    }));
+    overrides.set("start_coordinator_multi_review", () => workflow);
+    const reviewers = [
+      { agent: "codex", model: "gpt-5.6-codex", lens },
+      { agent: "codex", model: "gpt-5.6-codex" },
+    ];
+
+    const launched = await call("launch_multi_review", {
+      requestId: "launch-lens",
+      environmentId: "env-1",
+      reviewers,
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
+        ?.args.input,
+    ).toMatchObject({ reviewers });
+    const launchedSelection = launched.body.result?.structuredContent?.selection as {
+      reviewers: unknown[];
+    };
+    expect(launchedSelection.reviewers[0]).toMatchObject({ lens: lensSummary });
+    expect(JSON.stringify(launchedSelection)).not.toContain(lens.instruction);
+
+    const started = await call("start_multi_review", {
+      requestId: "start-lens",
+      buildPipelineId: "pipeline-1",
+      environmentId: "env-1",
+      targetBranch: "main",
+      reviewers,
+    });
+    expect(started.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
+        .input,
+    ).toMatchObject({ reviewers });
+    expect(
+      (started.body.result!.structuredContent!.selection as { reviewers: unknown[] }).reviewers[0],
+    ).toMatchObject({ lens: lensSummary });
+
+    const launches = () =>
+      invocations.filter((entry) => entry.command === "launch_coordinator_multi_review_action")
+        .length;
+    const before = launches();
+    for (const args of [
+      { reviewers: [{ ...reviewers[0], lens: { label: "x".repeat(65), instruction: "x" } }] },
+      { reviewers: [{ ...reviewers[0], lens: { label: "L", instruction: "é".repeat(2049) } }] },
+      { reviewers: [{ ...reviewers[0], lens: { label: "L" } }] },
+      { fixModel: { agent: "codex", model: "gpt-5.6-codex", lens } },
+    ]) {
+      const refused = await call("launch_multi_review", {
+        requestId: "launch-bad-lens",
+        environmentId: "env-1",
+        ...args,
+      });
+      expect(refused.body.result?.isError).toBe(true);
+    }
+    expect(launches()).toBe(before);
+
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: { review: { agent: "codex", lens } },
+      reviewers: [
+        { agent: "codex", lens },
+        { agent: "claude", instructions: "Performance." },
+      ],
+    }));
+    const build = await call("start_build_pipeline", {
+      requestId: "build-lens",
+      taskId: "task-1",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      taskTitle: "Task",
+      taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+      reviewers: [
+        { agent: "codex", lens },
+        { agent: "claude", instructions: "Performance." },
+      ],
+    });
+    expect(build.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({ reviewers: [{ agent: "codex", lens }, { agent: "claude" }] });
+    const buildSelection = build.body.result?.structuredContent?.selection as Record<
+      string,
+      unknown
+    >;
+    expect(buildSelection).toMatchObject({
+      steps: { review: { agent: "codex", lens: lensSummary } },
+      reviewers: [
+        { agent: "codex", lens: lensSummary },
+        { agent: "claude", instructionsBytes: 12 },
+      ],
+    });
+    expect(JSON.stringify(buildSelection)).not.toContain(lens.instruction);
+    const refusedBuild = await call("start_build_pipeline", {
+      requestId: "build-bad-lens",
+      taskId: "task-1",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      taskTitle: "Task",
+      taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+      reviewers: [{ agent: "codex", lens: { label: "Two\nlines", instruction: "x" } }],
+    });
+    expect(refusedBuild.body.result?.isError).toBe(true);
+  });
+
   test("binds coordinator credentials to one project and revokes them", async () => {
     overrides.set("get_projects", () => [
       { id: "project-1", name: "Allowed", localPath: "/allowed" },

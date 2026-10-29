@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   publicErrorEnvelope,
   publicSuccessEnvelope,
@@ -227,6 +229,69 @@ describe("review and pr commands", () => {
     });
     const bad = await box.run(["review", "launch", "env-1", "--reviewer", "gpt-5.5", "--json"]);
     expect(bad.code).toBe(2);
+  });
+
+  test("review launch sends each reviewer's focus from --focus and --focus-file", async () => {
+    const { box, gateway } = await fixture((request) =>
+      request.body.args.action === "review.launch"
+        ? envelope(
+            publicSuccessEnvelope(
+              "review.launch",
+              { workflowId: "review-1", phase: "reviewing", reused: false },
+              receipt("review.launch"),
+            ),
+          )
+        : undefined,
+    );
+    const focusFile = path.join(box.root, "security.md");
+    await writeFile(focusFile, "Security\n\nTrace untrusted input to its sinks.\nCheck auth.\n");
+    const run = await box.run([
+      "review",
+      "launch",
+      "env-1",
+      "--reviewer",
+      "codex=gpt-5.5@high",
+      "--reviewer",
+      "claude=opus",
+      "--reviewer",
+      "pi=default",
+      "--focus-file",
+      `1=${focusFile}`,
+      "--focus",
+      "3=Migrations",
+      "--json",
+    ]);
+    expect(run.code).toBe(0);
+    expect(requestsFor(gateway, "review.launch")[0]?.body.args.input).toEqual({
+      environmentId: "env-1",
+      reviewers: [
+        {
+          agent: "codex",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          lens: {
+            label: "Security",
+            instruction: "Trace untrusted input to its sinks.\nCheck auth.",
+          },
+        },
+        { agent: "claude", model: "opus" },
+        { agent: "pi", model: "default", lens: { label: "Migrations", instruction: "Migrations" } },
+      ],
+    });
+    // The receipt the CLI prints is the backend's: IDs and states, no focus text.
+    expect(run.out).not.toContain("Trace untrusted input");
+
+    for (const argv of [
+      ["--focus", "1=Security"],
+      ["--reviewer", "claude=opus", "--focus", "2=Security"],
+      ["--reviewer", "claude=opus", "--focus", "Security"],
+      ["--reviewer", "claude=opus", "--focus", `1=${"x".repeat(65)}`],
+      ["--reviewer", "claude=opus", "--focus", "1=A", "--focus", "1=B"],
+    ]) {
+      const bad = await box.run(["review", "launch", "env-1", ...argv, "--json"]);
+      expect(bad.code).toBe(2);
+    }
+    expect(requestsFor(gateway, "review.launch")).toHaveLength(1);
   });
 
   test("pr create and pr resolve submit runs with a request key", async () => {

@@ -14,9 +14,10 @@ import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
 import {
   agentSelectionSchema,
   asArray,
+  reviewerSelectionSchema,
   assertCoordinatorLaunchBaseOnBranch,
   buildPipelineSelection,
-  buildStepSchema,
+  buildReviewerSchema,
   buildStepOverrideSchema,
   isRecord,
   nodeIdField,
@@ -272,12 +273,12 @@ export function registerCoordinatorWorkflowTools(
             "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step, or gives instructions for it. A step that names only instructions keeps its saved agent and model.",
           ),
         reviewers: z
-          .array(buildStepSchema)
+          .array(buildReviewerSchema)
           .min(1)
           .max(32)
           .optional()
           .describe(
-            "Optional. Replaces the saved Multi Review reviewer rows for the review step. Omit to use them. Set only when the user asks for specific reviewers or for instructions per reviewer.",
+            "Optional. Replaces the saved Multi Review reviewer rows (and their saved focus) for the review step. Omit to use them. Set only when the user asks for specific reviewers, for a focus (lens) per reviewer, or for instructions per reviewer.",
           ),
         reviewPreparation: buildStepOverrideSchema
           .optional()
@@ -432,12 +433,12 @@ export function registerCoordinatorWorkflowTools(
         targetBranch: z.string().trim().min(1).max(500),
         reviewInstruction: z.string().max(100_000).optional(),
         reviewers: z
-          .array(agentSelectionSchema)
+          .array(reviewerSelectionSchema)
           .min(1)
           .max(32)
           .optional()
           .describe(
-            "Optional. Omit to use the user's saved reviewer rows. Set only when the user asks for specific reviewers.",
+            "Optional. Omit to use the user's saved reviewer rows and their saved focus. Set only when the user asks for specific reviewers or a focus (lens) per reviewer.",
           ),
         reviewModel: agentSelectionSchema
           .optional()

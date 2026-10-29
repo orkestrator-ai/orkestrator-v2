@@ -609,6 +609,8 @@ export interface GlobalConfig {
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */
   reviewInstruction?: string;
+  /** Reviewer focus presets; absent means the shipped five (`review-lens.ts`). */
+  reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
   agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
 }
 

@@ -45,6 +45,12 @@ import {
   validateConfigReviewInstruction,
   validateGlobalReviewInstruction,
 } from "./storage-shared.js";
+import {
+  REVIEW_LENS_LABEL_MAX_CHARS,
+  REVIEW_LENS_PRESETS_MAX,
+  isReviewLensPresetList,
+  sanitizeReviewLensPresets,
+} from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
@@ -623,8 +629,19 @@ export class ConfigRepository {
         throw new Error("Default projects folder must be an absolute path");
       }
     }
+    // A launcher copies a preset's text into the reviewer it starts, so a list
+    // that breaks the bounds is refused here rather than trimmed.
+    const reviewLensPresets = reviewValidated.reviewLensPresets as unknown;
+    if (reviewLensPresets !== undefined && !isReviewLensPresetList(reviewLensPresets)) {
+      throw new Error(
+        `Review focus presets must be at most ${REVIEW_LENS_PRESETS_MAX} presets with distinct ids, each with a label of at most ${REVIEW_LENS_LABEL_MAX_CHARS} characters and an instruction of at most 4 KiB`,
+      );
+    }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
+      ...(reviewLensPresets === undefined
+        ? {}
+        : { reviewLensPresets: sanitizeReviewLensPresets(reviewLensPresets) }),
       notificationSounds: normalizeNotificationSoundSettings(reviewValidated.notificationSounds),
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
       defaultProjectsDirectory: requestedDefaultProjectsDirectory || undefined,

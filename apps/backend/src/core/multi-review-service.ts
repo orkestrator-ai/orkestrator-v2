@@ -37,6 +37,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { AgentModel, NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
@@ -1095,9 +1096,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       autoFix: input.autoFix ?? false,
       ...(input.autoPr ? { autoPr: true } : {}),
       ...(input.reviewInstruction ? { reviewInstruction: input.reviewInstruction } : {}),
-      reviewers: reviewers.map((selection) => ({
+      // A reviewer's lens is the text the launcher copied in; the record keeps
+      // it, so editing the preset it came from never changes this review.
+      reviewers: reviewers.map(({ lens, ...selection }) => ({
         id: randomUUID(),
         ...selection,
+        ...reviewLensField(lens),
         status: "pending" as const,
       })),
       ...(reviewModelSelection ? { reviewModel: reviewModelSelection } : {}),
@@ -3419,12 +3423,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(workflow.reviewPackage
         ? {
             beforeAdmission: () => this.verifyReviewEvidence(workflow, token, "fanout"),
-            reviewerPrompt: async (index: number, count: number) =>
+            reviewerPrompt: async (
+              index: number,
+              count: number,
+              reviewer: MultiReviewWorkflow["reviewers"][number],
+            ) =>
               createPackagedMultiReviewerPrompt({
                 reviewPackage: workflow.reviewPackage!,
                 reviewInstruction: workflow.reviewInstruction,
                 reviewerNumber: index + 1,
                 reviewerCount: count,
+                lens: reviewer.lens,
               }),
           }
         : {}),

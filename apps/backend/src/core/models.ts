@@ -1063,6 +1063,11 @@ export interface AppConfig {
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
+    /**
+     * Reviewer focus presets the launchers offer (`review-lens.ts`). Absent
+     * means the shipped five; a stored list, even an empty one, is the user's.
+     */
+    reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal

@@ -1406,6 +1406,21 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
+  test("shows the focus each reviewer was launched with", () => {
+    const ready = readyWorkflow();
+    ready.reviewers[0]!.lens = { label: "Security", instruction: "Trace untrusted input." };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+    expect(flowNode("Reviewer 1 ·").textContent).toContain("Focus: Security");
+    expect(flowNode("Reviewer 2 ·").textContent).not.toContain("Focus:");
+  });
+
   test("cannot open a reviewer that never opened a provider session", () => {
     const ready = readyWorkflow();
     delete ready.reviewers[0]!.providerSessionId;

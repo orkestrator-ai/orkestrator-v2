@@ -443,6 +443,91 @@ crash leave a send on the wire to land later, and must deduplicate it. Without a
 ever attempted for fails the seed, and the fake provider starts half of all
 continuations late, so the status read still shows the restart they continue.
 
+## Reviewer lenses
+
+A reviewer in a panel can have a focus, a lens: `lens?: { label, instruction }`
+on `ReviewerModelSelection`
+([`review-fanout.ts`](../../packages/protocol/src/review-fanout.ts)). The
+guard, presets and prompt section live in
+[`review-lens.ts`](../../packages/protocol/src/review-lens.ts)
+(`@orkestrator/protocol/review-lens`).
+
+- **Bounds.** The label is one line of at most 64 characters
+  (`REVIEW_LENS_LABEL_MAX_CHARS`, counted in code points); the instruction is
+  at most 4 KiB of UTF-8 (`REVIEW_LENS_INSTRUCTION_MAX_BYTES`). Both must be
+  non-blank. `isReviewerModelSelection` and `isReviewerRecord` check a lens
+  when one is present. Only reviewer rows take one: the preparation,
+  consolidation and fix selections use `isReviewStepModelSelection`
+  (`isMultiReviewModelSelection`), which refuses it.
+- **Prompt.** The lens is the reviewer's own text, so it goes after the panel
+  position (`reviewerPanelTail` in `multi-review-prompts.ts`): the packaged and
+  live-worktree Multi Review prompts and the Build Pipeline fan-out prompt end
+  with the panel section and then a framed "**Review focus**" section with the
+  label and instruction inside `<reviewer-focus>` … `</reviewer-focus>`
+  (`reviewLensSection`, framed like the per-stage instructions, markers in the
+  text escaped). The preamble asks for depth in the area without narrowing the
+  review: critical issues outside the focus must still be reported, and the
+  result format, permissions and rules are unchanged. A Build Pipeline
+  reviewer's own instructions follow the lens. Everything before the panel
+  section is byte-identical across a panel whatever lenses it uses, and a
+  reviewer without a lens gets the prompt it got before lenses. Per
+  [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification),
+  Claude caches only up to a message boundary, so the shared prefix is kept
+  for providers that cache inside one message and for future multi-block
+  prompts; the lens does not change what Claude can cache today. A
+  single-reviewer Build Pipeline review renders the review step's lens after
+  its contract and before the step's instructions.
+- **Consolidation.** Each reviewer entry in the compact evidence carries its
+  lens label as `focus` (`buildConsolidationEvidence`); the instruction is not
+  sent. A label is at most 64 characters, so it is required content and never
+  removed by the budget reductions. When any reviewer has a focus, the prompt
+  adds one paragraph: coverage differs by design, and a finding is never
+  dropped or downgraded for lying outside a reviewer's focus. A panel without
+  lenses gets the same consolidation prompt as before. Overlap counts and
+  provenance read source IDs and are unchanged.
+- **Record and restart.** A launch copies the text onto the reviewer record
+  (Multi Review trims it in `start`; the Build Pipeline stores it on
+  `reviewers` / `steps.review` and copies it onto each fan-out record). A
+  restarted or retried reviewer, a fresh pipeline pass, a rewind and a backend
+  restart all render the stored text. Editing or deleting the preset it came
+  from changes nothing that already started.
+- **Presets.** The app setting `reviewLensPresets` (config.json `global`) is a
+  list of at most 20 `{ id, label, instruction }` (`REVIEW_LENS_PRESETS_MAX`)
+  with the lens bounds and distinct ids. Absent means the five shipped presets
+  (`SHIPPED_REVIEW_LENS_PRESETS`: `security`, `performance`,
+  `tests-and-coverage`, `api-and-compatibility`, `maintainability`), so an
+  improvement to their text reaches anyone who never edited them; a stored
+  list, even an empty one, is the user's own. `updateGlobalConfig` refuses an
+  invalid list; a hand-edited file keeps its valid presets when read. A command
+  node passes the setting to its leaves with the other inherited preferences.
+  Settings → Review edits it beside the Multi Review defaults
+  (`ReviewLensPresetsEditor.tsx`): edit, delete, reorder, add, and restore the
+  shipped five (they return first, with their text; the user's own presets are
+  kept). The public CLI's `settings` commands cover project and environment
+  settings only, so this app setting has no CLI flag.
+- **Launchers.** Each reviewer row in `MultiReviewLaunchDialog.tsx` and each
+  reviewer card in `BuildLaunchDialog.tsx` has a Focus select
+  (`ReviewLensField.tsx`): no focus, a preset, or custom text (label and
+  instruction). Choosing a preset copies its text; Custom starts from the
+  chosen preset's text. An incomplete custom focus blocks the launch. Rows on
+  one model with different lenses are not reported as duplicates.
+- **Saved defaults.** `MultiReviewAgentSettings.reviewerLenses` keeps a lens
+  (or null) per reviewer position from Reviewer 1, additional reviewers
+  included, edited on each row of the Multi Review defaults. The Multi Review
+  button, the Build launcher's reviewer rows and coordinator launches that omit
+  their rows start from them.
+- **Callers.** The coordinator's `launch_multi_review`, `start_multi_review`
+  and `start_build_pipeline` accept `lens` on reviewer rows and report it as
+  `{ label, instructionBytes }`. The public `review.launch` action accepts it on
+  `reviewers`, and `orkestrator review launch` sets it with `--focus N=TEXT` or
+  `--focus-file N=PATH` ([public CLI](public-cli.md)).
+- **Compatibility.** Records without lenses read as before. A Build Pipeline
+  backend that predates lenses ignores the field. The Multi Review launch
+  guards were already strict about keys, so an older backend refuses a launch
+  whose reviewer row carries a lens instead of ignoring it; rows without a
+  focus send no `lens` key and launch as before. An older backend cannot read a
+  record written with a lens.
+
 ## Panel value measurements
 
 Three content-free measurements show what each reviewer adds and whether the

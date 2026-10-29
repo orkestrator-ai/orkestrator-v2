@@ -24,6 +24,7 @@ import {
   type ReviewIssue,
   type StructuredReviewReport,
 } from "./structured-review.js";
+import { isReviewLens, type ReviewLens } from "./review-lens.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import {
@@ -47,6 +48,12 @@ export interface ReviewerModelSelection {
   reasoningEffort?: string;
   /** Fast/Normal choice pinned when this durable reviewer was admitted. */
   fastMode?: boolean;
+  /**
+   * This reviewer's focus (`review-lens.ts`). The launcher copies the text, so
+   * the record keeps what the reviewer ran with. Only reviewer rows carry one:
+   * the guards for preparation, consolidation and fix selections refuse it.
+   */
+  lens?: ReviewLens;
 }
 
 export type ReviewerStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -350,14 +357,27 @@ export function isReviewerModelSelectionFields(value: Record<string, unknown>): 
   if (!isAgentPlatform(value.agent) || !nonBlank(value.model)) return false;
   return (
     (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
-    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
+    (value.lens === undefined || isReviewLens(value.lens))
   );
 }
 
+/** A reviewer row: a model selection that may carry the reviewer's lens. */
 export function isReviewerModelSelection(value: unknown): value is ReviewerModelSelection {
-  if (!record(value) || !hasOnlyKeys(value, ["agent", "model", "reasoningEffort", "fastMode"]))
+  if (
+    !record(value) ||
+    !hasOnlyKeys(value, ["agent", "model", "reasoningEffort", "fastMode", "lens"])
+  )
     return false;
   return isReviewerModelSelectionFields(value);
+}
+
+/**
+ * A selection for a single-session step (preparation, consolidation, fix). A
+ * lens means nothing there, so it is refused rather than silently dropped.
+ */
+export function isReviewStepModelSelection(value: unknown): value is ReviewerModelSelection {
+  return isReviewerModelSelection(value) && value.lens === undefined;
 }
 
 const REVIEWER_STATUSES = new Set<ReviewerStatus>([
@@ -373,6 +393,7 @@ const REVIEWER_KEYS = [
   "model",
   "reasoningEffort",
   "fastMode",
+  "lens",
   "id",
   "status",
   "modelUnpinned",

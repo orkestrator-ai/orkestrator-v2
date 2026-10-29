@@ -38,6 +38,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { normalizeBuildStepInstructions } from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { AppConfig } from "./models.js";
 import {
   type BuildPipelineProvider,
@@ -418,6 +419,8 @@ export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepCo
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
       ...instructionsField(step.instructions),
+      // Only a reviewer has a focus; any other step's lens would be dormant.
+      ...(key === "review" ? reviewLensField(step.lens) : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -444,6 +447,7 @@ export function normalizeReviewers(
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
       ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
       ...instructionsField(reviewer.instructions),
+      ...reviewLensField(reviewer.lens),
     };
   });
 }
@@ -451,7 +455,10 @@ export function normalizeReviewers(
 export function normalizeReviewPreparation(
   selection: BuildStepConfig | undefined,
 ): BuildStepConfig | undefined {
-  return selection ? normalizeSteps({ review: selection })?.review : undefined;
+  if (!selection) return undefined;
+  // Preparation and consolidation are not reviewers, so a lens is dropped.
+  const { lens: _lens, ...step } = selection;
+  return normalizeSteps({ review: step })?.review;
 }
 
 export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {

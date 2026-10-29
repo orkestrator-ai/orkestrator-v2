@@ -182,7 +182,7 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
-| `review launch ENV [--reviewer A=M[@E]]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation | provider |
+| `review launch ENV [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation. `--focus`/`--focus-file` set `--reviewer` row N's `lens` ([reviewer lenses](review-preparation.md#reviewer-lenses)): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB), one line is both; the receipt carries no lens text | provider |
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
 | `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
@@ -398,7 +398,9 @@ environment's running exec commands.
 `PUBLIC_PROJECT_SETTINGS`, `PUBLIC_ENVIRONMENT_SETTINGS`): repository branch
 defaults, port mappings, files to copy, entry port, allowed domains, and the
 agent defaults (`agent.defaultAgent`, `agent.<platform>.mode|model|reasoningEffort|fastMode`).
-Credentials are never settable here.
+Credentials are never settable here. App-level settings, such as the review
+focus presets (`reviewLensPresets`), have no CLI key; Settings in the app edits
+them.
 
 `get` reports the stored value, the effective value, its source tier
 (environment → repository → global → default) and when it applies

@@ -39,6 +39,7 @@ import {
   type PipelineFixResult,
 } from "./build-pipeline-address-report.js";
 import { isBuildStepInstructions } from "./build-pipeline-stage-instructions.js";
+import { isReviewLens, type ReviewLens } from "./review-lens.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -350,6 +351,12 @@ export interface BuildStepConfig {
    * Fix reads Build's.
    */
   instructions?: string;
+  /**
+   * A reviewer's focus (`review-lens.ts`): read on the review step and on each
+   * `reviewers` entry only, and dropped from every other step when stored.
+   * Rendered after the reviewer's panel position and before its instructions.
+   */
+  lens?: ReviewLens;
 }
 
 export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
@@ -1460,7 +1467,8 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
     isOptionalNonBlankString(value.model) &&
     isOptionalNonBlankString(value.reasoningEffort) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
-    (value.instructions === undefined || isBuildStepInstructions(value.instructions))
+    (value.instructions === undefined || isBuildStepInstructions(value.instructions)) &&
+    (value.lens === undefined || isReviewLens(value.lens))
   );
 }
 

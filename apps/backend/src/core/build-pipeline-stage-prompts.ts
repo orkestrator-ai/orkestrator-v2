@@ -18,6 +18,7 @@ import {
   pipelineStepInstructions,
   withBuildStepInstructions,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import { withReviewLens } from "@orkestrator/protocol/review-lens";
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -121,12 +122,17 @@ export class BuildPipelineStagePrompts {
       if (!pipeline.reviewPackage) {
         throw new Error("Cannot review without an immutable review package");
       }
+      // A single reviewer has no panel position, but it may have a lens: it
+      // follows the review contract and precedes the step's instructions.
       return {
-        prompt: createDiscoveryPrompt({
-          reviewPackage: pipeline.reviewPackage,
-          reviewInstruction: config.global.reviewInstruction,
-          context: buildPipelineReviewPackageContext(pipeline, notes).context,
-        }),
+        prompt: withReviewLens(
+          createDiscoveryPrompt({
+            reviewPackage: pipeline.reviewPackage,
+            reviewInstruction: config.global.reviewInstruction,
+            context: buildPipelineReviewPackageContext(pipeline, notes).context,
+          }),
+          pipeline.steps?.review?.lens,
+        ),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };

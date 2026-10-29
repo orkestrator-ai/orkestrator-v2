@@ -1412,7 +1412,10 @@ function MultiReviewOverviewTab({
         state: reviewerFlowState(reviewer.status),
         stalled,
         statusLabel: reviewerStatusLabel(reviewer, workflow.reviewers),
-        detail: modelDetail(reviewer, false),
+        // The focus the reviewer ran with, as recorded at launch.
+        detail: reviewer.lens
+          ? `${modelDetail(reviewer, false)} · Focus: ${reviewer.lens.label}`
+          : modelDetail(reviewer, false),
         runtime,
         runtimeLabel: `${name} runtime and token usage`,
         pendingLabel:

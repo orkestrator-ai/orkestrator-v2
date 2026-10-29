@@ -50,6 +50,13 @@ import {
   BuildStepInstructionsField,
   buildStepInstructionsTooLong,
 } from "./BuildStepInstructionsField";
+import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
+import {
+  ReviewLensField,
+  launchedReviewLens,
+  reviewLensDraftError,
+  useReviewLensPresets,
+} from "@/components/review/ReviewLensField";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
@@ -58,6 +65,8 @@ export interface BuildLaunchStepSelection {
   fastMode?: boolean;
   /** The user's own instructions for this step, trimmed; absent when blank. */
   instructions?: string;
+  /** Review step and reviewer rows only: the reviewer's focus, copied from a preset or typed. */
+  lens?: ReviewLens;
 }
 
 export interface BuildLaunchSelection {
@@ -440,6 +449,19 @@ function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]
   );
 }
 
+/**
+ * Each reviewer's starting focus: the saved lens of its Multi Review position
+ * (`pipelineDefaults.reviewers`), or the review step's for a single reviewer.
+ */
+function initialLenses(
+  pipelineDefaults: BuildPipelineConfiguredDefaults | undefined,
+): Array<ReviewLens | undefined> {
+  const configured = pipelineDefaults?.reviewers?.length
+    ? pipelineDefaults.reviewers
+    : [pipelineDefaults?.steps.review];
+  return configured.map((reviewer) => (reviewer?.lens ? { ...reviewer.lens } : undefined));
+}
+
 /** Instructions are keyed by card: a step key, `reviewer:N` or `reviewPreparation`. */
 type InstructionsKey = Exclude<BuildStepKey, "review"> | `reviewer:${number}` | "reviewPreparation";
 
@@ -459,6 +481,7 @@ function BuildStepCard({
   instructions,
   instructionsHint,
   onInstructionsChange,
+  lens,
   state,
   resolved,
   models,
@@ -481,6 +504,12 @@ function BuildStepCard({
   instructions: string;
   instructionsHint?: string;
   onInstructionsChange: (value: string) => void;
+  /** A reviewer card's Focus field. */
+  lens?: {
+    value: ReviewLens | undefined;
+    presets: readonly ReviewLensPreset[];
+    onChange: (value: ReviewLens | undefined) => void;
+  };
   state: StepState;
   resolved: ResolvedStep;
   models: AgentModel[];
@@ -589,6 +618,16 @@ function BuildStepCard({
         </p>
       )}
 
+      {lens && (
+        <ReviewLensField
+          id={`${controlId.replace(/-model$/, "")}-focus`}
+          reviewerLabel={title}
+          value={lens.value}
+          presets={lens.presets}
+          onChange={lens.onChange}
+        />
+      )}
+
       {(stepKey === "review" || stepKey === "verify") && (
         <p className="mt-2 text-[11px] leading-snug text-zinc-500" role="note">
           {stepKey === "review"
@@ -687,6 +726,9 @@ export function BuildLaunchDialog({
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
   // Per launch: instructions are never saved as defaults, so every open starts empty.
   const [instructions, setInstructions] = useState<Partial<Record<InstructionsKey, string>>>({});
+  // Each reviewer opens on its position's saved focus; edits are per launch.
+  const lensPresets = useReviewLensPresets();
+  const [lenses, setLenses] = useState(() => initialLenses(pipelineDefaults));
   const wasOpenRef = useRef(false);
   const touchedRef = useRef(new Set<string>());
   const environmentGroupId = useId();
@@ -750,6 +792,7 @@ export function BuildLaunchDialog({
       });
       setIncludeComments(commentContext?.defaultIncluded ?? true);
       setInstructions({});
+      setLenses(initialLenses(pipelineDefaults));
       resetLaunchState();
       return;
     }
@@ -858,6 +901,14 @@ export function BuildLaunchDialog({
   const instructionsTooLong = Object.values(instructions).some(
     (value) => value !== undefined && buildStepInstructionsTooLong(value),
   );
+  const visibleLenses = lenses.slice(0, Math.max(1, reviewers.length));
+  const lensError = visibleLenses.some((lens) => reviewLensDraftError(lens) !== null);
+  const updateLens = (index: number, value: ReviewLens | undefined) =>
+    setLenses((current) => {
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
 
   const commentContextLabel = commentContext
     ? `Include ${commentContext.count} comment${commentContext.count === 1 ? "" : "s"} in build context`
@@ -884,7 +935,7 @@ export function BuildLaunchDialog({
           </DialogTitle>
           <DialogDescription>
             Choose the workspace, then assign a model to every stage of the pipeline. Any stage can
-            also take your own instructions.
+            also take your own instructions, and each reviewer a focus.
           </DialogDescription>
         </DialogHeader>
 
@@ -893,7 +944,7 @@ export function BuildLaunchDialog({
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy || instructionsTooLong) return;
+            if (busy || instructionsTooLong || lensError) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             const selectedSteps = Object.fromEntries(
@@ -909,6 +960,7 @@ export function BuildLaunchDialog({
                       resolvedStep.effort === "default" ? undefined : resolvedStep.effort,
                     fastMode: resolvedStep.fastMode,
                     ...instructionsField(instructions[instructionsKeyFor(key)]),
+                    ...(key === "review" ? launchedReviewLens(lenses[0]) : {}),
                   },
                 ];
               }),
@@ -921,6 +973,7 @@ export function BuildLaunchDialog({
                       : {
                           ...cleanStep(reviewer, catalog),
                           ...instructionsField(instructions[`reviewer:${index}`]),
+                          ...launchedReviewLens(lenses[index]),
                         },
                   )
                 : undefined;
@@ -1091,6 +1144,11 @@ export function BuildLaunchDialog({
                           onInstructionsChange={(value) =>
                             updateInstructions(`reviewer:${card.index}`, value)
                           }
+                          lens={{
+                            value: lenses[card.index],
+                            presets: lensPresets,
+                            onChange: (value) => updateLens(card.index, value),
+                          }}
                           state={state}
                           resolved={resolvedReviewers[card.index] ?? resolved.review}
                           models={models}
@@ -1153,6 +1211,7 @@ export function BuildLaunchDialog({
               disabled={
                 busy ||
                 instructionsTooLong ||
+                lensError ||
                 (environmentType === "containerized" && !dockerAvailable) ||
                 (environmentType === "local" && !localEnvironmentAvailable)
               }

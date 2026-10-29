@@ -92,7 +92,7 @@ import {
   pipelineReviewerInstructions,
   withBuildStepInstructions,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
-import { reviewerPanelSection } from "./multi-review-prompts.js";
+import { reviewerPanelTail } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
   MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
@@ -124,6 +124,7 @@ import { readTranscriptProgressSample } from "./transcript-progress.js";
 import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import {
   beginWorkflowArtifactTurn,
   settleArtifactDispatchTurn,
@@ -261,15 +262,24 @@ export class BuildPipelineReviewFanout {
     const workspaceBaseline = await this.deps.captureWorkspaceBaseline(pipeline);
     // One batch, so the shared environment, config, and model catalogue are
     // read once for the whole fan-out rather than once per reviewer.
+    const configs = pipelineReviewerConfigs(pipeline);
     const selections = await this.deps.settingsForSelections(
       pipeline,
-      pipelineReviewerConfigs(pipeline).map((config) => ({
+      configs.map((config) => ({
         agent: config.agent,
         model: config.model,
         effort: config.reasoningEffort,
       })),
     );
-    pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig), workspaceBaseline };
+    // Each record keeps its reviewer's lens, copied from the stored row, so a
+    // fresh pass after a restart or rewind runs the same focus.
+    pipeline.reviewFanout = {
+      reviewers: selections.map((selection, index) => ({
+        ...reviewerFromConfig(selection),
+        ...reviewLensField(configs[index]?.lens),
+      })),
+      workspaceBaseline,
+    };
     recordEfficiency(this.deps.efficiency, {
       owner: "build-pipeline",
       operation: "launch.duplicate_reviewers",
@@ -539,14 +549,14 @@ export class BuildPipelineReviewFanout {
           elapsedMs: Date.now() - started,
         });
       },
-      reviewerPrompt: async (index, count) => {
+      reviewerPrompt: async (index, count, reviewer) => {
         const reviewPackage = pipeline.reviewPackage;
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
         // Shared package prompt first so every reviewer's prefix is identical;
-        // the panel position and the reviewer's own instructions are the only
-        // per-reviewer text, and they come last.
+        // the panel position, the reviewer's lens and its own instructions are
+        // the only per-reviewer text, and they come last, in that order.
         return withBuildStepInstructions(
           [
             createDiscoveryPrompt({
@@ -554,7 +564,7 @@ export class BuildPipelineReviewFanout {
               reviewInstruction: await this.deps.reviewInstruction(),
               context: await this.deps.reviewContext(pipeline),
             }),
-            reviewerPanelSection(index + 1, count),
+            reviewerPanelTail(index + 1, count, reviewer.lens),
           ].join("\n\n"),
           pipelineReviewerInstructions(pipeline, index),
         );

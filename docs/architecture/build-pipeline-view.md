@@ -5,7 +5,8 @@ graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
-with the Git guard (2026-10-29), and per-stage instructions (2026-10-29).
+with the Git guard (2026-10-29), per-stage instructions (2026-10-29), and
+reviewer lenses (2026-10-29).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -225,6 +226,33 @@ feature builds, the coordinator) is bounded by the same check.
   The Build card notes that Fix uses them too. Instructions belong to one
   launch: the dialog starts empty every time it opens, and saved build defaults
   (action defaults) hold models only.
+
+## Reviewer lenses
+
+Each reviewer can have a focus, a lens (`BuildStepConfig.lens`, the shape and
+bounds of `ReviewerModelSelection.lens`; see
+[reviewer lenses](review-preparation.md#reviewer-lenses)). Only the review step
+and the `reviewers` rows keep one: `normalizeSteps` drops a lens from every
+other step and `normalizeReviewPreparation` from the preparation step.
+
+- **Prompt.** A fan-out reviewer's prompt is the shared package prompt, its
+  panel section, its "**Review focus**" section and then its own instructions
+  frame, so the prefix before the panel section stays byte-identical across the
+  panel. A single reviewer has no panel section; the review step's lens follows
+  the review contract and precedes the step's instructions.
+- **Record.** The stored row keeps the text the launcher copied. Each fan-out
+  pass copies it onto the reviewer's record (`reviewFanout.reviewers[i].lens`),
+  so a retried reviewer, a fresh pass after a restart or rewind, and a backend
+  restart render the same focus. The consolidation evidence carries each
+  reviewer's label as `focus`.
+- **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
+  saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
+  the Build button, feature and ticket builds and the coordinator start from
+  the same focus as the Multi Review button.
+- **Launcher.** Each reviewer card in `BuildLaunchDialog.tsx` (and the single
+  Review card) has a Focus select (`ReviewLensField.tsx`): no focus, a saved
+  preset, or custom text. It opens on the position's saved focus; an
+  incomplete custom focus disables Start build.
 
 ## Inspector and actions
 

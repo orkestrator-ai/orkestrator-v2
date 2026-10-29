@@ -604,8 +604,13 @@ export interface ReviewFanoutHost {
   /**
    * Optional owner-built prompt. The build pipeline uses this to hand every
    * reviewer the same immutable package instead of exposing the live worktree.
+   * The reviewer's own text (its lens) must come last, after its position.
    */
-  reviewerPrompt?(reviewerIndex: number, reviewerCount: number): Promise<string>;
+  reviewerPrompt?(
+    reviewerIndex: number,
+    reviewerCount: number,
+    reviewer: ReviewerRecord,
+  ): Promise<string>;
   /**
    * Re-verifies the pinned worktree and returns the prompt projection of it.
    * Owners choose whether drift is fatal or is recorded for prompt qualification.
@@ -1131,7 +1136,7 @@ export class ReviewFanoutRunner {
       let prompt = reviewer.schemaRepairPrompt ?? reviewer.continuationPrompt;
       if (!prompt) {
         if (host.reviewerPrompt) {
-          prompt = await host.reviewerPrompt(index, reviewerCount);
+          prompt = await host.reviewerPrompt(index, reviewerCount, reviewer);
         } else {
           if (!host.reviewSnapshot) {
             throw new Error(`${host.label} has no reviewer evidence source`);
@@ -1144,6 +1149,7 @@ export class ReviewFanoutRunner {
             reviewerCount,
             worktree,
             worktreeChangedDuringReview: host.worktreeChangedDuringReview?.() === true,
+            lens: reviewer.lens,
           });
         }
         this.record({ operation: "reviewer.prompt", bytes: Buffer.byteLength(prompt, "utf8") });

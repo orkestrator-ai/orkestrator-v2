@@ -121,7 +121,7 @@ const reviewLaunch: MutationActionHandler<LaunchInput> = {
     // coordinator tool uses it.
     if (!isLaunchMultiReviewActionInput({ ...value, requestId: "validate" })) {
       throw invalid(
-        "Multi Review input is invalid: reviewers, reviewModel and fixModel take {agent, model, reasoningEffort?}",
+        "Multi Review input is invalid: reviewers take {agent, model, reasoningEffort?, lens?: {label, instruction}} (label at most 64 characters, instruction at most 4 KiB); reviewModel and fixModel take {agent, model, reasoningEffort?}",
       );
     }
     return { value, scope: `environment:${environmentId}`, intent: value };

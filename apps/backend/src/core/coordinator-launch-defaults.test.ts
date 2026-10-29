@@ -309,6 +309,41 @@ describe("coordinator launch overrides", () => {
     expect(resolved.reviewers).toEqual(reviewers);
     expect((resolved.steps as Record<string, BuildStepConfig>).review).toEqual(reviewers[0]);
   });
+  test("omitted rows carry the saved lens of each position; explicit rows replace them", async () => {
+    const security = { label: "Security", instruction: "Trace untrusted input." };
+    const tests = { label: "Tests", instruction: "Name the missing cases." };
+    const withLenses: AgentSettingsTier = {
+      ...global,
+      multiReview: { reviewerCount: 3, reviewerLenses: [security, null, tests] },
+    };
+    const lensSettings = {
+      tiers: { global: withLenses },
+      global: withLenses,
+      enabledAgentPlatforms: ["claude", "codex"],
+    };
+    const review = await multiReviewInputWithDefaults({}, lensSettings, async () => catalog);
+    const reviewers = review.reviewers as Array<{ lens?: unknown }>;
+    expect(reviewers.map((row) => row.lens)).toEqual([security, undefined, tests]);
+    // Preparation and fix never take a lens.
+    expect(review.reviewModel).not.toHaveProperty("lens");
+    expect(review.fixModel).not.toHaveProperty("lens");
+    const explicit = await multiReviewInputWithDefaults(
+      { reviewers: [{ agent: "codex", model: "gpt-5.6-codex" }] },
+      lensSettings,
+      async () => catalog,
+    );
+    expect(explicit.reviewers).toEqual([{ agent: "codex", model: "gpt-5.6-codex" }]);
+
+    const build = buildPipelineInputWithDefaults({}, lensSettings);
+    expect((build.reviewers as BuildStepConfig[]).map((row) => row.lens)).toEqual([
+      security,
+      undefined,
+      tests,
+    ]);
+    expect((build.steps as Record<string, BuildStepConfig>).review?.lens).toEqual(security);
+    expect(build.reviewPreparation).not.toHaveProperty("lens");
+    expect(isStartBuildPipelineInput({ ...startFields, ...build })).toBe(true);
+  });
   test("partial Multi Review overrides preserve explicit rows and false auto-actions", async () => {
     const fixModel = { agent: "codex", model: "explicit-fix" };
     const reviewers = [{ agent: "claude", model: "explicit-review" }];

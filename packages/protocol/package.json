@@ -138,6 +138,7 @@
     "./review-evidence-frames": "./src/review-evidence-frames.ts",
     "./review-fanout": "./src/review-fanout.ts",
     "./review-instruction": "./src/review-prompt.ts",
+    "./review-lens": "./src/review-lens.ts",
     "./review-prompt": "./src/review-prompt.ts",
     "./review-workflow": "./src/review-workflow.ts",
     "./runtime-health": "./src/runtime-health.ts",

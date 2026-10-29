@@ -12,6 +12,8 @@
  * - Reviewer 1 is the Review action default; Reviewer 2 is Review 2 when it
  *   names an enabled platform, else Review; Reviewer 3 onward are the saved
  *   additional reviewers, each falling back to Review.
+ * - Each reviewer carries the saved focus for its position
+ *   (`multiReview.reviewerLenses`), as the button's rows do.
  * - Preparation/consolidation and Fix use their own action default when it
  *   names an enabled platform, else Review.
  * - Each row layers its action's model, effort and speed over that platform's
@@ -59,6 +61,7 @@ import {
   type MultiReviewModelSelection,
 } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { reviewLensField } from "@orkestrator/protocol/review-lens";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 
 export interface MultiReviewDefaultRows {
@@ -175,8 +178,12 @@ export function multiReviewDefaultRows(
       ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
     });
   });
+  const lenses = settings.global?.multiReview?.reviewerLenses ?? [];
   return {
-    reviewers: reviewers.map((row) => concreteRow(row, catalog)),
+    reviewers: reviewers.map((row, index) => ({
+      ...concreteRow(row, catalog),
+      ...reviewLensField(lenses[index] ?? undefined),
+    })),
     reviewModel: concreteRow(configuredRow("reviewPreparation") ?? review, catalog),
     fixModel: concreteRow(configuredRow("fixReviewIssues") ?? review, catalog),
   };

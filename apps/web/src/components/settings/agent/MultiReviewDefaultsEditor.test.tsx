@@ -167,7 +167,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
     expect(
       screen.getByText(
-        "Choose how many independent reviewers a Multi Review click, feature build, or ticket build starts and the model each one uses. Reviewer 1 and Reviewer 2 are shared with the Defaults page.",
+        "Choose how many independent reviewers a Multi Review click, feature build, or ticket build starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with the Defaults page.",
       ),
     ).toBeTruthy();
   });
@@ -300,5 +300,62 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(screen.getByTestId("multi-review-default-0 speed-inherit-label").textContent).toBe(
       "Provider default",
     );
+  });
+});
+
+describe("MultiReviewDefaultsEditor focus", () => {
+  test("saves a focus per reviewer position, including additional reviewers, as copied text", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    const presets = [{ id: "mine", label: "Migrations", instruction: "Check both directions." }];
+
+    function Harness() {
+      const [tier, setTier] = useState<AgentSettingsTier>({ multiReview: { reviewerCount: 3 } });
+      return (
+        <MultiReviewDefaultsEditor
+          tier={tier}
+          onChange={(next) => {
+            setTier(next);
+            onChange(next);
+          }}
+          tiers={{ global: tier }}
+          canInherit={false}
+          enabledPlatforms={["claude", "codex"]}
+          catalog={catalog}
+          lensPresets={presets}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 3 focus" }), {
+      target: { value: "preset:mine" },
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.reviewerLenses).toEqual([
+      null,
+      null,
+      { label: "Migrations", instruction: "Check both directions." },
+    ]);
+    fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 1 focus" }), {
+      target: { value: "custom:" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Reviewer 1 focus label" }), {
+      target: { value: "Security" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Reviewer 1 focus instruction" }), {
+      target: { value: "Trace untrusted input." },
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.reviewerLenses?.[0]).toEqual({
+      label: "Security",
+      instruction: "Trace untrusted input.",
+    });
+    // Fewer reviewers drop the positions that no longer exist.
+    fireEvent.click(screen.getByRole("button", { name: "Use one fewer reviewer" }));
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview).toEqual({
+      reviewerLenses: [{ label: "Security", instruction: "Trace untrusted input." }],
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Reviewer 1 focus" }), {
+      target: { value: "" },
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].multiReview?.reviewerLenses).toBeUndefined();
   });
 });

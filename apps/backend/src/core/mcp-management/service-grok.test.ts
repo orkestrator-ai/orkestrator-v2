@@ -172,8 +172,11 @@ describe("Grok adapter", () => {
       expect(entry(snapshot, "grok:compat-claude-user", "a").status).toBe("policy-excluded");
     } finally {
       // The fixture's service writes into custom; settle it first.
-      await fixture.cleanup();
-      rmSync(custom, { recursive: true, force: true });
+      try {
+        await fixture.cleanup();
+      } finally {
+        rmSync(custom, { recursive: true, force: true });
+      }
     }
   });
 

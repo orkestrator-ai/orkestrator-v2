@@ -298,11 +298,25 @@ export class TestNodeNetwork {
 
   /** Stops every node's portal and service, so no link outlives the test. */
   async stop(): Promise<void> {
-    for (const node of this.nodes.values()) {
-      node.portal.stop();
-      node.dropStreams();
-      await node.service.stop();
-    }
+    // Reject even a request that reaches fetch after its link has stopped.
+    for (const node of this.nodes.values()) node.online = false;
+    const results = await Promise.allSettled(
+      Array.from(this.nodes.values(), async (node) => {
+        try {
+          node.portal.stop();
+        } finally {
+          try {
+            node.dropStreams();
+          } finally {
+            await node.service.stop();
+          }
+        }
+      }),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) throw new AggregateError(errors, "Failed to stop test node network");
   }
 
   private async hello(node: TestNode) {

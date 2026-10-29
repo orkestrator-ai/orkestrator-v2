@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,13 +22,15 @@ setDefaultTimeout(30_000);
 const roots: string[] = [];
 const runtimes: BackendRuntime[] = [];
 
-afterEach(async () => {
+async function cleanupFixtures() {
   const finished = runtimes.splice(0);
   for (const runtime of finished) runtime.shutdown();
   // A diff scan still running writes the worktree's Git exclude file.
   await Promise.all(finished.map((runtime) => runtime.diffStats.settled()));
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
+}
+
+afterEach(cleanupFixtures);
 
 async function setup() {
   const root = await fs.realpath(
@@ -132,6 +134,81 @@ async function commitFixture(projectPath: string, root: string) {
   await runCommand("git", ["-C", projectPath, "remote", "add", "origin", origin]);
   await runCommand("git", ["-C", projectPath, "fetch", "origin"]);
 }
+
+test("fixture teardown waits for an in-flight diff scan's exclude write before removing its root", async () => {
+  const { root, projectPath, context, storage } = await setup();
+  await commitFixture(projectPath, root);
+  const tracking = context.runtime.diffStats;
+  const excludeFile = path.join(projectPath, ".git", "info", "exclude");
+  let reachedWrite!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    reachedWrite = resolve;
+  });
+  let releaseWrite!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let reachedSettlement!: () => void;
+  const settling = new Promise<void>((resolve) => {
+    reachedSettlement = resolve;
+  });
+  const realWrite = fs.writeFile.bind(fs);
+  let writeCompleted = false;
+  const write = spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+    if (args[0] === excludeFile) {
+      reachedWrite();
+      await released;
+    }
+    await realWrite(...args);
+    if (args[0] === excludeFile) writeCompleted = true;
+  });
+  const realRm = fs.rm.bind(fs);
+  let excludeAtRemoval: string | undefined;
+  const remove = spyOn(fs, "rm").mockImplementation(async (...args) => {
+    if (args[0] === root) {
+      expect(writeCompleted).toBe(true);
+      excludeAtRemoval = await fs.readFile(excludeFile, "utf8");
+    }
+    return realRm(...args);
+  });
+  const realSettled = tracking.settled.bind(tracking);
+  const settled = spyOn(tracking, "settled").mockImplementation(() => {
+    reachedSettlement();
+    return realSettled();
+  });
+  let cleanup: Promise<void> | undefined;
+  try {
+    tracking.service.track({
+      environmentId: "cleanup-scan",
+      kind: "local",
+      worktreePath: projectPath,
+      comparisonRef: "origin/main",
+    });
+    await writing;
+    cleanup = cleanupFixtures();
+    await settling;
+    expect(await fs.stat(root).catch(() => null)).not.toBeNull();
+    expect(await fs.readFile(excludeFile, "utf8")).not.toContain(".orkestrator");
+    releaseWrite();
+    await cleanup;
+    expect(excludeAtRemoval).toContain(".orkestrator");
+    expect(await fs.stat(root).catch(() => null)).toBeNull();
+    // All scanner writes have finished; another event-loop turn cannot recreate it.
+    await Bun.sleep(0);
+    expect(await fs.stat(root).catch(() => null)).toBeNull();
+  } finally {
+    releaseWrite();
+    try {
+      await cleanup;
+      await realSettled();
+    } finally {
+      write.mockRestore();
+      remove.mockRestore();
+      settled.mockRestore();
+      storage.close();
+    }
+  }
+});
 
 test("start uses and persists both explicit and configured roots; generic reads stay within the worktree", async () => {
   for (const explicit of [false, true]) {

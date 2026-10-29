@@ -602,8 +602,11 @@ Host: omarchy-hp, Arch Linux x86_64 (kernel 7.2.8), Bun 1.4.4, load average
 1 to 19. Each run used an empty private `TMPDIR` at
 `/tmp/ork0247s.XXXX/tmp` (short, so socket paths are unaffected), outside
 Turbo, after `bunx turbo run build --filter=@orkestrator/backend`. The commands
-were the same as the baseline: `mise exec -- bun run --cwd bridges/<bridge> test:bridge`
-for the five bridges, then `mise exec -- bun run --cwd apps/backend test:workspace`.
+were the same as the baseline: the `test:bridge` script in each of
+`bridges/claude-bridge`,
+`bridges/codex-bridge`, `bridges/acp-bridge`, `bridges/pi-bridge`, and
+`bridges/cursor-bridge` (run from that workspace with `mise exec -- bun run`),
+then `mise exec -- bun run --cwd apps/backend test:workspace`.
 
 The baseline predates test tiers. `mise run test` now runs only the default
 tier, which leaves out most of the listed owners (`environment-move`,
@@ -972,6 +975,25 @@ No prefix was newly opted into `tests/temp-sweep.ts`, because every cause
 could be removed at source. Not taken: per-group private `TMPDIR` in
 `scripts/test-all.ts`. It would hide leaks rather than fix them, and the
 sweeps keep finding new ones.
+
+### Task 1: review follow-up on cleanup failures and late work (2026-10-29)
+
+Chose nested `finally` blocks for the relocated MCP homes and backend data
+directories, so a rejected fixture cleanup or shutdown still removes the
+directory while surfacing the error. For node topologies, chose to attempt
+every node shutdown and every harness cleanup, then report the collected
+errors. The network marks all nodes offline before waiting, so a late
+transport request cannot reopen removed SQLite storage. These changes stay
+in test helpers; production shutdown behavior is unchanged.
+
+Added regressions for a queued scan pass and a new scan key arriving after
+`SharedScanQueue.settled()` starts waiting, a rejected node stop followed by
+cleanup of other nodes and harnesses, and a late command request after the
+network and real-storage fixtures are removed. The worktree-location test
+holds the real scanner's Git exclude-file write and runs the same cleanup
+function registered with `afterEach`, proving that `DiffStatsTracking.settled()`
+finishes the write before removal. The sweep instructions now name the real
+bridge directories rather than a placeholder parsed by the documentation guard.
 
 ### Task 2: preview scratch leaks in production, and is swept at startup only
 

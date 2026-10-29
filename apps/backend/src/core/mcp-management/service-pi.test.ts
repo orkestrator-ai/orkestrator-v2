@@ -594,8 +594,11 @@ describe("Pi adapter", () => {
       expect(JSON.parse(readFileSync(file, "utf8")).mcpServers["fixture-b"]).toBeUndefined();
     } finally {
       // The fixture's service writes into custom; settle it first.
-      await fixture.cleanup();
-      rmSync(custom, { recursive: true, force: true });
+      try {
+        await fixture.cleanup();
+      } finally {
+        rmSync(custom, { recursive: true, force: true });
+      }
     }
   });
 });

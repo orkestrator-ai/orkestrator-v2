@@ -107,3 +107,49 @@ test("settled waits for the running pass and the pass queued behind it, even whe
   expect(await queued).toBe(2);
   expect(queue.stats().keys).toBe(0);
 });
+
+for (const followupKey of ["key", "new-key"]) {
+  test(`settled includes work queued at ${followupKey} after waiting starts`, async () => {
+    const queue = new SharedScanQueue<void>();
+    let releaseFirst!: () => void;
+    let releaseFollowup!: () => void;
+    let followupStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      followupStarted = resolve;
+    });
+    const first = queue.run(
+      "key",
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    let settled = false;
+    const settlement = queue.settled().then(() => {
+      settled = true;
+    });
+    const followupGate = new Promise<void>((resolve) => {
+      releaseFollowup = resolve;
+    });
+    const followup = queue.run(followupKey, () => {
+      followupStarted();
+      return followupGate;
+    });
+    try {
+      releaseFirst();
+      await first;
+      await started;
+      // Flush the original snapshot's promise reactions while the late work is held.
+      await Bun.sleep(0);
+      expect(settled).toBe(false);
+      releaseFollowup();
+      await settlement;
+      expect(settled).toBe(true);
+      expect(queue.stats().keys).toBe(0);
+    } finally {
+      releaseFirst();
+      releaseFollowup();
+      await Promise.all([first, followup, settlement]);
+    }
+  });
+}

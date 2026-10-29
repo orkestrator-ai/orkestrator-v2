@@ -277,8 +277,11 @@ describe("OpenCode layers match the pinned binary's load order", () => {
       ).rejects.toThrow("read-only-source");
     } finally {
       // The fixture's service writes into configDir; settle it first.
-      await fixture.cleanup();
-      rmSync(configDir, { recursive: true, force: true });
+      try {
+        await fixture.cleanup();
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
     }
   });
 

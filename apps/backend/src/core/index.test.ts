@@ -85,8 +85,11 @@ test("activity transition events name their session and carry the observer stamp
       },
     ]);
   } finally {
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -131,8 +134,11 @@ test("activity transition events omit backend-only provider session identifiers"
       },
     ]);
   } finally {
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -503,8 +509,11 @@ test("startup runs the tmux reaper after the PID reaper even when PID reaping fa
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -535,8 +544,11 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
     expect(calls).toEqual(["pid", "tmux"]);
   } finally {
     console.warn = originalWarn;
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1886,8 +1898,11 @@ test("turn-end observation finishes before the same-edge prompt queue drain", as
     resume();
     note.mockRestore();
     drain.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1924,8 +1939,11 @@ test("production activity wiring forwards only worker waiting/working edges and 
     ]);
   } finally {
     note.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1984,8 +2002,11 @@ test("production excerpt wiring looks up the exact session and falls back within
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 }, 10_000);
 
@@ -2032,7 +2053,10 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
-    await backend.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   }
 });

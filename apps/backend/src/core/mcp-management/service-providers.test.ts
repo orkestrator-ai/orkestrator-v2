@@ -278,8 +278,11 @@ describe("provider adapters", () => {
       expect(read().mcp?.["fixture-b"]).toBeUndefined();
     } finally {
       // The fixture's service writes into custom; settle it first.
-      await fixture.cleanup();
-      rmSync(custom, { recursive: true, force: true });
+      try {
+        await fixture.cleanup();
+      } finally {
+        rmSync(custom, { recursive: true, force: true });
+      }
     }
   });
 });

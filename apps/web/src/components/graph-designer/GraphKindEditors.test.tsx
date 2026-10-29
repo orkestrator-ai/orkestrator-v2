@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import type {
-  GraphGateNode,
-  GraphHumanNode,
-  GraphMergeNode,
-  GraphNodeSpec,
-  GraphSystemNode,
-  GraphTemplateV1,
+import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
+import {
+  GRAPH_SYSTEM_ACTIONS,
+  type GraphGateNode,
+  type GraphHumanNode,
+  type GraphMergeNode,
+  type GraphNodeSpec,
+  type GraphSystemNode,
+  type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
 import {
   GraphGateEditor,
@@ -30,57 +32,75 @@ function commit(input: HTMLElement, value: string) {
 }
 
 describe("GraphSystemEditor", () => {
-  test("switches the action and offers the action's default ports", () => {
-    const { harness } = renderWithGraphEditor(kindsTemplate(), (template) => (
+  test("switches the action, shows the compiler's port messages and offers the spec's default ports", () => {
+    const { harness, container } = renderWithGraphEditor(kindsTemplate(), (template) => (
       <GraphSystemEditor node={nodeOf<GraphSystemNode>(template, "pr")} />
     ));
+    expect(container.querySelector("[data-graph-system-port-issues]")).toBeNull();
     expect(screen.queryByRole("button", { name: "Use default ports" })).toBeNull();
     fireEvent.change(screen.getByLabelText("Action"), { target: { value: "wait-for-checks" } });
     expect(nodeOf<GraphSystemNode>(harness.current(), "pr").action).toBe("wait-for-checks");
+    const issues = container.querySelector("[data-graph-system-port-issues]") as HTMLElement;
+    expect(issues.textContent).toContain("wait-for-checks does not read pr-description@1");
+    expect(issues.textContent).toContain("wait-for-checks does not produce pr-result@1");
+    expect(issues.textContent).toContain("pr needs an input of type pr-result@1");
     fireEvent.click(screen.getByRole("button", { name: "Use default ports" }));
     const node = nodeOf<GraphSystemNode>(harness.current(), "pr");
+    // The spec's required inputs and its outputs, named as the built-ins name them.
     expect(node.inputs).toEqual([{ name: "pr", type: "pr-result@1" }]);
     expect(node.outputs).toEqual([{ name: "checks", type: "check-summary@1" }]);
+    expect(container.querySelector("[data-graph-system-port-issues]")).toBeNull();
     expect(harness.edits.map((entry) => entry.label)).toEqual([
       "Change action",
       "Use the default ports of Wait for checks",
     ]);
   });
 
-  test("adds, edits, retypes, renames and removes params; known fields come from the catalogue", () => {
+  test("labels, side effect and idempotency come from the action's spec", () => {
+    const { container } = renderWithGraphEditor(kindsTemplate(), (template) => (
+      <GraphSystemEditor node={nodeOf<GraphSystemNode>(template, "pr")} />
+    ));
+    const action = screen.getByLabelText("Action") as HTMLSelectElement;
+    const labels = Array.from(action.options).map((option) => option.text);
+    expect(labels).toEqual(GRAPH_SYSTEM_ACTIONS.map((id) => GRAPH_SYSTEM_ACTION_SPECS[id].label));
+    const spec = GRAPH_SYSTEM_ACTION_SPECS["open-pull-request"];
+    expect(screen.getByText(spec.description)).toBeTruthy();
+    const header = within(screen.getByRole("region", { name: "System action" }));
+    expect(header.getByText("side effect")).toBeTruthy();
+    expect(container.querySelector("[data-graph-system-idempotency]")!.textContent).toContain(
+      spec.idempotency,
+    );
+    // wait-for-checks only reads.
+    fireEvent.change(action, { target: { value: "wait-for-checks" } });
+    expect(container.querySelector('[data-graph-badge="side-effect"]')).toBeNull();
+  });
+
+  test("lists the types the action reads and produces and adds a missing port", () => {
     const { harness, container } = renderWithGraphEditor(kindsTemplate(), (template) => (
       <GraphSystemEditor node={nodeOf<GraphSystemNode>(template, "pr")} />
     ));
-    const params = () => nodeOf<GraphSystemNode>(harness.current(), "pr").params;
-    fireEvent.click(screen.getByRole("button", { name: /^Param$/ }));
-    expect(params()).toEqual({ param: "" });
-    fireEvent.change(screen.getByLabelText("param value"), { target: { value: "main" } });
-    expect(params()).toEqual({ param: "main" });
-    commit(
-      within(container.querySelector("[data-graph-system-params]") as HTMLElement).getByLabelText(
-        "Key",
-      ),
-      "base",
-    );
-    expect(params()).toEqual({ base: "main" });
-    fireEvent.change(screen.getByLabelText("base kind"), { target: { value: "string-list" } });
-    expect(params()).toEqual({ base: ["main"] });
-    fireEvent.change(screen.getByLabelText("base values, one per line"), {
-      target: { value: "main\nrelease" },
-    });
-    expect(params()).toEqual({ base: ["main", "release"] });
-    fireEvent.change(screen.getByLabelText("base kind"), { target: { value: "boolean" } });
-    expect(params()).toEqual({ base: false });
-    fireEvent.click(screen.getByRole("button", { name: "Remove param base" }));
-    expect(params()).toBeUndefined();
-    // update-ticket knows `record`.
-    fireEvent.change(screen.getByLabelText("Action"), { target: { value: "update-ticket" } });
-    fireEvent.click(screen.getByRole("button", { name: /Record/ }));
-    expect(params()).toEqual({ record: "criteria" });
+    const row = (key: string) =>
+      container.querySelector(`[data-graph-system-port="${key}"]`) as HTMLElement;
+    expect(row("input:workspace@1").textContent).toContain("required");
+    expect(row("input:workspace@1").textContent).toContain("on code");
+    expect(row("output:pr-result@1").textContent).toContain("on pr");
+    fireEvent.click(screen.getByRole("button", { name: "Add output pull-request-state@1" }));
+    expect(nodeOf<GraphSystemNode>(harness.current(), "pr").outputs).toEqual([
+      { name: "pr", type: "pr-result@1" },
+      { name: "state", type: "pull-request-state@1" },
+    ]);
+    expect(row("output:pull-request-state@1").textContent).toContain("on state");
+    // An optional input of another action.
+    fireEvent.change(screen.getByLabelText("Action"), { target: { value: "wait-for-checks" } });
+    expect(row("input:workspace@1").textContent).toContain("optional");
+    expect(harness.edits.map((entry) => entry.label)).toEqual([
+      "Add output pull-request-state@1",
+      "Change action",
+    ]);
   });
 
-  test("the params JSON fallback commits valid objects within the template bounds", () => {
-    const { harness } = renderWithGraphEditor(kindsTemplate(), (template) => (
+  test("the params JSON fallback commits objects within the template bounds; the spec's rules show", () => {
+    const { harness, container } = renderWithGraphEditor(kindsTemplate(), (template) => (
       <GraphSystemEditor node={nodeOf<GraphSystemNode>(template, "pr")} />
     ));
     fireEvent.click(screen.getByRole("button", { name: "JSON" }));
@@ -90,6 +110,9 @@ describe("GraphSystemEditor", () => {
       draft: true,
       labels: ["a", "b"],
     });
+    expect(container.querySelector("[data-graph-system-param-issues]")!.textContent).toBe(
+      "open-pull-request takes no parameter labels (it takes targetBranch, draft)",
+    );
     fireEvent.change(text, { target: { value: '{"Bad-Key": 1}' } });
     expect(screen.getByRole("alert").textContent).toContain("identifier");
     expect(graphSystemParamsProblem({ nested: { a: 1 } })).toMatch(/nested/);
@@ -98,6 +121,16 @@ describe("GraphSystemEditor", () => {
         Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, i])),
       ),
     ).toMatch(/At most 16/);
+    // Back in the form, the unknown key is listed with its problem and can be removed.
+    fireEvent.click(screen.getByRole("button", { name: "Form" }));
+    const labels = container.querySelector('[data-graph-system-param="labels"]') as HTMLElement;
+    expect(labels.querySelector('[data-graph-param-issue="unknown"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove param labels" }));
+    expect(nodeOf<GraphSystemNode>(harness.current(), "pr").params).toEqual({ draft: true });
+    // Switching action drops the params the new action does not take.
+    fireEvent.change(screen.getByLabelText("Action"), { target: { value: "push-branch" } });
+    expect(nodeOf<GraphSystemNode>(harness.current(), "pr").params).toBeUndefined();
+    expect(screen.getByText("Push branch takes no params.")).toBeTruthy();
   });
 
   test("execution fields: retry, timeout and failure policy", () => {

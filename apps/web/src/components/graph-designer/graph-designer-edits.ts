@@ -18,8 +18,9 @@ import {
   type GraphSystemNode,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
+import { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 import { layoutGraphTemplate } from "./graph-designer-layout";
-import { GRAPH_SYSTEM_ACTION_CATALOGUE } from "./graph-designer-system-actions";
+import { graphSystemDefaultPorts } from "./graph-designer-system-actions";
 
 /**
  * Pure template edits for the editable designer (item 212). Each takes a
@@ -178,19 +179,17 @@ function freshAgent(id: string): GraphAgentNode {
   };
 }
 
-function freshNode(item: GraphPaletteItem, id: string): GraphNodeSpec {
+function freshNode(template: GraphTemplateV1, item: GraphPaletteItem, id: string): GraphNodeSpec {
   switch (item.kind) {
     case "agent":
       return freshAgent(id);
     case "system": {
-      const info = GRAPH_SYSTEM_ACTION_CATALOGUE[item.action];
-      const node: GraphSystemNode = {
-        id,
-        kind: "system",
-        action: item.action,
-        inputs: info.inputs.map((port) => ({ ...port })),
-        outputs: info.outputs.map((port) => ({ ...port })),
-      };
+      // The action's spec (207) says what it reads and produces.
+      const ports = graphSystemDefaultPorts(
+        item.action,
+        new GraphTypeLibrary(template.types ?? []),
+      );
+      const node: GraphSystemNode = { id, kind: "system", action: item.action, ...ports };
       return node;
     }
     case "gate": {
@@ -239,7 +238,7 @@ export function addGraphNode(
 ): { template: GraphTemplateV1; nodeId: string } {
   const taken = new Set(template.nodes.map((node) => node.id));
   const id = options.id ?? uniqueGraphId(paletteBaseId(item), taken);
-  const node = freshNode(item, id);
+  const node = freshNode(template, item, id);
   let roles = template.roles;
   if (node.kind === "agent" && !roles.some((role) => role.key === node.role)) {
     roles = [...roles, { key: node.role, multiplicity: "one" }];

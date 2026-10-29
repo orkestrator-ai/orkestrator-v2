@@ -137,9 +137,37 @@ saves `qa-bake-off-copy`. `graph-designer.spec.ts` (110) still passes. Screensho
   new unsaved draft (revision reset to 0, `engine` dropped) and the pane-layout effect does not reload
   over it. Save creates it; a taken id surfaces as a conflict with Save as copy.
 
+**2026-10-29 · System nodes use 207's specs (on `graphs-integration`).** The designer's own
+`GRAPH_SYSTEM_ACTION_CATALOGUE` is gone; `GRAPH_SYSTEM_ACTION_SPECS` (protocol
+`./graphs/system-actions`) is the single source for the palette's System submenu (label,
+description, a `side effect` badge), the system node form and a new node's ports.
+`graph-designer-system-actions.ts` keeps only presentation: `graphSystemPortName(type)` (the
+built-ins' port names, since specs bind ports by type), `graphSystemDefaultPorts(action, library)`
+(required inputs, plus every output whose type the template can resolve, so
+`pull-request-state@1` is left out until the template declares it) and the default/bounds hint
+labels. `GraphSystemEditor` moved to its own file (re-exported from `GraphKindEditors`): it shows
+the spec's description, idempotency and side effect, lists the types the action reads and
+produces with the port carrying each (`Add input|output <type>` for a missing one), shows the
+compiler's `system-port-unsupported`/`system-input-missing` messages for the node and then offers
+"Use default ports"; changing the action drops params the new one does not take.
+`GraphSystemParamsEditor` is a typed form per spec param (boolean and enum selects with
+"Default (…)"/"Not set", integer with placeholder default and range, branch/id commit fields,
+free text as typed, a text area for long text); clearing a field drops the key. Messages are
+`checkGraphSystemParams`'s, i.e. exactly the compiler's `system-param-invalid` messages, with the
+issue code (`detail`) on `data-graph-param-issue`: fields refuse type/range/format errors
+(`graphSystemParamValueIssue`), stored required/conflict/unknown issues show under their field or
+at the top; unknown keys are listed with a remove button. The JSON fallback stays (template
+bounds) and lists the same issues. System node faces carry `data.sideEffect` and a side-effect
+badge (`SideEffectBadge` in `graph-form-controls.tsx`). There is no list param type: 207's
+params are scalars only, so the form has no list control (the JSON fallback still accepts what
+the template schema allows, and the checker reports it). Tests: `GraphSystemParamsEditor.test.tsx`,
+`GraphPalette.test.tsx`, system cases in `GraphKindEditors.test.tsx` and
+`graph-designer-model.test.ts`.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 · Editable designer: canvas editing with palette, typed connections (compatible targets only, D11 dedupe default, carries), loops, bounded undo, keyboard commands; inspector forms, prompt and type editors; live compile with taint acknowledgements; CAS save with save-as-copy; component, store and Playwright tests; docs; complete; awaiting PR.
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Designer uses 207's system action specs: palette, typed params form, spec ports, side-effect badges; catalogue removed. · complete; awaiting PR

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { graphBuiltInTemplate } from "@orkestrator/protocol/graphs/builtins";
 import { compile } from "@orkestrator/protocol/graphs/compile";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
+import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import {
   GRAPH_INPUTS_NODE_ID,
@@ -186,6 +187,27 @@ describe("buildGraphCanvasModel", () => {
     const { model } = compiledModel(template);
     expect(model.undrawnEdges).toEqual([template.edges[0]!.id]);
     expect(model.edges.some((edge) => edge.id === template.edges[0]!.id)).toBe(false);
+  });
+
+  test("marks system nodes whose action has a side effect", () => {
+    const template = pipeline();
+    const { model } = compiledModel(template);
+    const system = template.nodes.filter((node) => node.kind === "system");
+    expect(system.length).toBeGreaterThan(0);
+    for (const node of template.nodes) {
+      const face = templateNode(model, node.id);
+      const marked = node.kind === "system" && GRAPH_SYSTEM_ACTION_SPECS[node.action].sideEffect;
+      expect(face.data.sideEffect).toBe(marked ? true : undefined);
+      expect(face.ariaLabel!.includes("side effect")).toBe(marked);
+    }
+    const waiting = pipeline();
+    waiting.nodes = waiting.nodes.map((node) =>
+      node.kind === "system" ? { ...node, action: "wait-for-checks" } : node,
+    );
+    const faces = compiledModel(waiting).model;
+    expect(system.every((node) => templateNode(faces, node.id).data.sideEffect === undefined)).toBe(
+      true,
+    );
   });
 
   test("labels node faces by kind and replication", () => {

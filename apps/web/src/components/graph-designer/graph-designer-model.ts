@@ -16,6 +16,7 @@ import {
   type GraphReplicate,
   type GraphTemplateV1,
 } from "@orkestrator/protocol/graphs/template";
+import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
 import {
   GraphTypeLibrary,
   graphTypeFamily,
@@ -191,6 +192,8 @@ export type GraphCanvasNodeData = {
   enforcement?: GraphEnforcementTier;
   /** The replication badge, such as `×3`, `×panel` or `×1–32`. */
   replication?: string;
+  /** A system node whose action changes something outside the run (its spec's `sideEffect`). */
+  sideEffect?: boolean;
   inputs: GraphDesignerPortView[];
   outputs: GraphDesignerPortView[];
   outlets: GraphDesignerOutletView[];
@@ -433,11 +436,14 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
     const detail = graphNodeDetail(node);
     const enforcement = enforcementFloor(node, planNode);
     const replication = replicationBadge(node, planNode);
+    const sideEffect =
+      node.kind === "system" && GRAPH_SYSTEM_ACTION_SPECS[node.action]?.sideEffect === true;
     const ariaLabel = [
       title,
       GRAPH_NODE_KIND_LABELS[node.kind].toLowerCase(),
       detail,
       replication ? `replicated ${replication}` : null,
+      sideEffect ? "side effect" : null,
       nodeDiagnostics.errors > 0
         ? `${nodeDiagnostics.errors} error${nodeDiagnostics.errors === 1 ? "" : "s"}`
         : null,
@@ -464,6 +470,7 @@ export function buildGraphCanvasModel(input: GraphCanvasModelInput): GraphCanvas
         detail,
         ...(enforcement ? { enforcement } : {}),
         ...(replication ? { replication } : {}),
+        ...(sideEffect ? { sideEffect } : {}),
         inputs,
         outputs,
         outlets,

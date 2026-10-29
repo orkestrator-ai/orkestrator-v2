@@ -14,10 +14,12 @@ import {
   type GraphDesignerPortView,
   type GraphDiagnosticCounts,
 } from "./graph-designer-model";
+import { SideEffectBadge } from "./graph-form-controls";
 
 /**
  * Node faces of the Graphs designer canvas (report §7.2): the title, then
- * `{role} · {profile}`, then the enforcement and replication badges, then the
+ * `{role} · {profile}`, then the enforcement, replication and side-effect
+ * badges (a system action that changes something outside the run), then the
  * typed ports. Port handles carry their type family's colour. A replicated
  * node draws as a stacked card with its "×N" badge (D9).
  *
@@ -298,7 +300,7 @@ function GraphNodeFaceImpl({ data, selected }: NodeProps<GraphCanvasTemplateNode
         >
           {data.detail}
         </div>
-        {/* Row 3: the enforcement floor and replication badges. */}
+        {/* Row 3: the enforcement floor, replication and side-effect badges. */}
         <div className="mt-1 flex min-h-4 items-center gap-1.5">
           {data.enforcement ? (
             <span
@@ -321,6 +323,7 @@ function GraphNodeFaceImpl({ data, selected }: NodeProps<GraphCanvasTemplateNode
               {data.replication}
             </span>
           ) : null}
+          {data.sideEffect ? <SideEffectBadge /> : null}
         </div>
       </div>
       {rows > 0 ? (

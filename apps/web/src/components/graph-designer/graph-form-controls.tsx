@@ -464,3 +464,23 @@ export function EntryCard({ children, className }: { children: ReactNode; classN
     </div>
   );
 }
+
+/**
+ * Marks a system action that changes something outside the run's own
+ * records (`sideEffect` in the action's spec, item 207); a mock run records
+ * such a node as "would have run" instead (item 213).
+ */
+export function SideEffectBadge({ className }: { className?: string }) {
+  return (
+    <span
+      data-graph-badge="side-effect"
+      title="Side effect: changes something outside the run (an environment, the remote, a pull request, a ticket or a mailbox). A mock run records it as would-have-run."
+      className={cn(
+        "shrink-0 rounded border border-amber-400/40 px-1 text-[10px] leading-4 text-amber-300",
+        className,
+      )}
+    >
+      side effect
+    </span>
+  );
+}

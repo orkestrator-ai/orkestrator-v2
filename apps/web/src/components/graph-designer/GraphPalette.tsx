@@ -1,4 +1,5 @@
 import { Bot, Boxes, ChevronDown, Cog, GitMerge, Repeat, Split, UserRound } from "lucide-react";
+import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
 import { GRAPH_SYSTEM_ACTIONS } from "@orkestrator/protocol/graphs/template";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,12 +10,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { GraphPaletteItem } from "./graph-designer-edits";
-import { GRAPH_SYSTEM_ACTION_CATALOGUE } from "./graph-designer-system-actions";
+import { SideEffectBadge } from "./graph-form-controls";
 
 /**
  * The palette of the editable canvas (report §7.2): Agent, System (a submenu
  * of actions), Gate, Merge, Human and Loop region. A node is added at the
- * centre of the visible canvas and selected, so its form opens. Loop region
+ * centre of the visible canvas and selected, so its form opens. The System
+ * submenu lists each action's label and description from its spec (item
+ * 207) and marks the side-effecting ones. Loop region
  * wraps the selected node; more members join by dragging them onto the frame
  * or with "Move into loop". Sub-graphs arrive in Phase 4 (item 402).
  */
@@ -52,18 +55,25 @@ export function GraphPalette({
             <ChevronDown className="size-3" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="bottom" align="start" className="w-64">
+        <DropdownMenuContent side="bottom" align="start" className="w-80">
           <DropdownMenuLabel>System actions</DropdownMenuLabel>
           {GRAPH_SYSTEM_ACTIONS.map((action) => {
-            const info = GRAPH_SYSTEM_ACTION_CATALOGUE[action];
+            const spec = GRAPH_SYSTEM_ACTION_SPECS[action];
             return (
               <DropdownMenuItem
                 key={action}
+                data-graph-system-action={action}
                 onSelect={() => onAdd({ kind: "system", action })}
+                title={spec.description}
                 className="flex flex-col items-start gap-0"
               >
-                <span className="text-xs font-medium">{info.label}</span>
-                <span className="text-[11px] text-muted-foreground">{info.description}</span>
+                <span className="flex w-full items-center gap-1.5 text-xs font-medium">
+                  {spec.label}
+                  {spec.sideEffect ? <SideEffectBadge className="ml-auto" /> : null}
+                </span>
+                <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                  {spec.description}
+                </span>
               </DropdownMenuItem>
             );
           })}

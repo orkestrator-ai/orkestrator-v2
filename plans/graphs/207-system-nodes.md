@@ -162,9 +162,19 @@ runs in a real stack; no live GitHub/Docker run was made (fakes cover git/gh/com
 production shell reuses the PR monitor's credential paths). Edge transforms on system-node inputs
 are not applied (102/205 own value transforms).
 
+**2026-10-29 · Designer (212) reads the specs.** The editable designer now takes labels,
+descriptions, `sideEffect`, idempotency, ports and params from `GRAPH_SYSTEM_ACTION_SPECS` and
+validates params with `checkGraphSystemParams` (see 212's Notes); its own catalogue is removed.
+Inconsistency found: notify's `message` allows 8,000 characters (`GRAPH_SYSTEM_PARAM_BOUNDS.messageChars`)
+but the template schema (101) caps every param string at `maxSystemParamStringBytes` (2 KiB), so
+a message over 2 KiB is `template-invalid` before the spec's bound applies. The designer shows
+and enforces the 2 KiB template bound; aligning the two (raise the template bound for system
+params or lower `messageChars`) is left to the coordinator.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · All eight system actions, the provisioner, compile-time param/port rules, the effect journal and `validation-results@1`, with tests. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Designer (212) now reads `GRAPH_SYSTEM_ACTION_SPECS`; notify message bound inconsistency recorded. · complete; awaiting PR

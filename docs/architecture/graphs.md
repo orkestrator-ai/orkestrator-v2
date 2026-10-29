@@ -122,7 +122,9 @@ sub-graphs and to the run outputs, and lets loop members leave their frame.
 `GraphCanvas` takes a `GraphCanvasEditor` (from `useGraphDesignerEditing`):
 
 - *Palette* (`GraphPalette`, a toolbar on the canvas): Agent, System (a menu of
-  the eight actions with their default ports, `graph-designer-system-actions.ts`),
+  the eight actions, labelled, described and marked "side effect" from 207's
+  `GRAPH_SYSTEM_ACTION_SPECS`; a new node gets the spec's required inputs and
+  the outputs the template can name, `graph-designer-system-actions.ts`),
   Gate, Merge, Human, Loop region (wraps the selected node) and Sub-graph
   (disabled, Phase 4). A node is added at the centre of the view and selected.
   A new agent gets a role of its own name, which follows its first rename.
@@ -186,10 +188,14 @@ numbers commit on blur or Enter after validation, free text as typed):
   lenses with the lens editor and the Settings presets (D19), or samples;
   `items` waits for item 401; session fresh or continue; `ask_human`; retry,
   timeout and on-failure; `when`).
-- system, gate, merge, human (`GraphKindEditors.tsx`, `GraphMergeHumanEditors.tsx`):
-  the action and a generic params editor (`GraphSystemParamsEditor`: keys and
-  scalar or list values within the template bounds, the keys the built-ins use,
-  JSON fallback; per-action rules are item 207's); gate branches with
+- system, gate, merge, human (`GraphSystemEditor.tsx`, `GraphKindEditors.tsx`,
+  `GraphMergeHumanEditors.tsx`): the action from its spec (description,
+  idempotency, side effect, the types it reads and produces with the port
+  carrying each, the compiler's port diagnostics and "Use default ports") and a
+  typed params form (`GraphSystemParamsEditor`: one field per spec parameter
+  with its default, range and description; messages from
+  `checkGraphSystemParams`, the compiler's `system-param-invalid` ones; JSON
+  fallback within the template bounds); gate branches with
   `GraphPredicateEditor` (104's operators, path suggestions from the input
   schemas via `graph-designer-scopes.ts`, live type check, JSON fallback) and
   outlet renames that follow the edges; merge strategy with key, choice and

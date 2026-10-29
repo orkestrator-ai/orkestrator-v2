@@ -1,136 +1,107 @@
-import { GRAPH_TEMPLATE_BOUNDS } from "@orkestrator/protocol/graphs/grammar";
+import { GRAPH_TEMPLATE_BOUNDS, isGraphKey } from "@orkestrator/protocol/graphs/grammar";
+import {
+  GRAPH_SYSTEM_ACTION_SPECS,
+  type GraphSystemParamSpec,
+} from "@orkestrator/protocol/graphs/system-actions";
 import type {
   GraphInputPortSpec,
   GraphOutputPortSpec,
   GraphSystemAction,
-  GraphSystemParamValue,
 } from "@orkestrator/protocol/graphs/template";
+import type { GraphTypeLibrary } from "@orkestrator/protocol/graphs/types";
 
 /**
- * The designer's catalogue of system actions (report §6.6, plan P2.7): what
- * each does, and the ports a new node of that action starts with, following
- * the built-in templates and the report's examples. The ports are a starting
- * point the user may change; the compiler and the action's executor (item
- * 207) are the authority on what an action accepts.
- *
- * Params: the template schema allows up to 16 keys, each a scalar or a list
- * of scalars. Per-action param rules belong to the executor (item 207); until
- * the protocol exports them, `params` lists only keys the built-ins already
- * use, and the editor accepts any key within the template bounds.
+ * The designer's view of the system actions (items 207, 212). What each
+ * action is called, does, reads, produces and takes as parameters comes from
+ * the protocol's `GRAPH_SYSTEM_ACTION_SPECS`, the table the compiler and the
+ * backend executor read; only presentation lives here: the name a new port of
+ * each type gets (the built-in templates' names, since the spec binds ports
+ * by type) and how a parameter's default and range read in a form.
  */
 
-export type GraphSystemParamKind = "string" | "number" | "boolean" | "string-list";
+/** The name a new port carrying each type gets, as the built-in templates name them. */
+const PORT_NAMES: Readonly<Record<string, string>> = {
+  "workspace@1": "code",
+  "ticket@1": "ticket",
+  "validation-plan@1": "plan",
+  "validation-results@1": "results",
+  "review-package@2": "package",
+  "pr-description@1": "description",
+  "pr-result@1": "pr",
+  "pull-request-state@1": "state",
+  "check-summary@1": "checks",
+  "verification-verdict@1": "verdict",
+  "text@1": "text",
+  "markdown@1": "markdown",
+};
 
-export interface GraphSystemParamField {
-  key: string;
-  label: string;
-  kind: GraphSystemParamKind;
-  description: string;
-  /** Suggested values for a string param. */
-  options?: readonly string[];
+/** A port name for `type`: the built-ins' name, else the type's name as an identifier. */
+export function graphSystemPortName(type: string): string {
+  const known = PORT_NAMES[type];
+  if (known) return known;
+  const words = type.replace(/@.*$/, "").split(/[^A-Za-z0-9]+/);
+  const name = words
+    .filter(Boolean)
+    .map((word, index) =>
+      index === 0
+        ? word.charAt(0).toLowerCase() + word.slice(1)
+        : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join("");
+  return isGraphKey(name) ? name : "port";
 }
 
-export interface GraphSystemActionInfo {
-  action: GraphSystemAction;
-  label: string;
-  description: string;
-  inputs: readonly GraphInputPortSpec[];
-  outputs: readonly GraphOutputPortSpec[];
-  params: readonly GraphSystemParamField[];
+/**
+ * The ports a new node of `action` starts with: one per input the action
+ * requires and one per output it produces whose type the template can name
+ * (`pull-request-state@1` is a custom type a template declares, so it is
+ * left out until the template does). Optional inputs are added from the
+ * node's form.
+ */
+export function graphSystemDefaultPorts(
+  action: GraphSystemAction,
+  library: GraphTypeLibrary,
+): { inputs: GraphInputPortSpec[]; outputs: GraphOutputPortSpec[] } {
+  const spec = GRAPH_SYSTEM_ACTION_SPECS[action];
+  return {
+    inputs: spec.inputs
+      .filter((port) => port.required)
+      .map((port) => ({ name: graphSystemPortName(port.type), type: port.type })),
+    outputs: spec.outputs
+      .filter((port) => library.resolve(port.type).ok)
+      .map((port) => ({ name: graphSystemPortName(port.type), type: port.type })),
+  };
 }
 
-const CODE_IN: GraphInputPortSpec = { name: "code", type: "workspace@1" };
-const CODE_OUT: GraphOutputPortSpec = { name: "code", type: "workspace@1" };
-const PLAN_IN: GraphInputPortSpec = { name: "plan", type: "validation-plan@1" };
+/** How a parameter's default reads in a form ("Default (yes)"), or "Not set". */
+export function graphSystemParamDefaultLabel(spec: GraphSystemParamSpec): string {
+  if (spec.type === "string" || spec.default === undefined) return "Not set";
+  if (spec.type === "boolean") return `Default (${spec.default ? "yes" : "no"})`;
+  return `Default (${spec.default})`;
+}
 
-export const GRAPH_SYSTEM_ACTION_CATALOGUE: Readonly<
-  Record<GraphSystemAction, GraphSystemActionInfo>
-> = Object.freeze({
-  "prepare-environment": {
-    action: "prepare-environment",
-    label: "Prepare environment",
-    description: "Sets up the run's environment for the ticket and hands on its workspace.",
-    inputs: [{ name: "ticket", type: "ticket@1" }],
-    outputs: [CODE_OUT],
-    params: [],
-  },
-  "run-validation": {
-    action: "run-validation",
-    label: "Run validation",
-    description: "Runs a validation plan's commands against the workspace.",
-    inputs: [PLAN_IN, CODE_IN],
-    outputs: [CODE_OUT],
-    params: [],
-  },
-  "run-validation-and-seal": {
-    action: "run-validation-and-seal",
-    label: "Run validation and seal",
-    description: "Runs the validation plan and seals a hash-verified review package.",
-    inputs: [PLAN_IN, CODE_IN],
-    outputs: [{ name: "package", type: "review-package@2" }],
-    params: [],
-  },
-  "push-branch": {
-    action: "push-branch",
-    label: "Push branch",
-    description: "Pushes the workspace's commit to the remote, once per commit.",
-    inputs: [CODE_IN],
-    outputs: [],
-    params: [],
-  },
-  "open-pull-request": {
-    action: "open-pull-request",
-    label: "Open pull request",
-    description: "Pushes, then opens or updates the pull request with the given description.",
-    inputs: [CODE_IN, { name: "description", type: "pr-description@1" }],
-    outputs: [{ name: "pr", type: "pr-result@1" }],
-    params: [],
-  },
-  "wait-for-checks": {
-    action: "wait-for-checks",
-    label: "Wait for checks",
-    description: "Waits, within a bound, for the pull request's CI checks and reports them.",
-    inputs: [{ name: "pr", type: "pr-result@1" }],
-    outputs: [{ name: "checks", type: "check-summary@1" }],
-    params: [],
-  },
-  "update-ticket": {
-    action: "update-ticket",
-    label: "Update ticket",
-    description: "Moves the ticket, comments on it or records its acceptance criteria.",
-    inputs: [],
-    outputs: [],
-    params: [
-      {
-        key: "record",
-        label: "Record",
-        kind: "string",
-        description: "What to record on the ticket, such as the acceptance criteria results.",
-        options: ["criteria"],
-      },
-    ],
-  },
-  notify: {
-    action: "notify",
-    label: "Notify",
-    description: "Sends agent mail to the coordinator or a tab.",
-    inputs: [],
-    outputs: [],
-    params: [],
-  },
-});
-
-/** Keys, string sizes and list lengths a system node's params stay within. */
-export const GRAPH_SYSTEM_PARAM_BOUNDS = Object.freeze({
-  maxParams: GRAPH_TEMPLATE_BOUNDS.maxSystemParams,
-  maxListItems: GRAPH_TEMPLATE_BOUNDS.maxSystemParamListItems,
-  maxStringBytes: GRAPH_TEMPLATE_BOUNDS.maxSystemParamStringBytes,
-});
-
-/** The editor's kind for a param value it finds in a template. */
-export function graphSystemParamKind(value: GraphSystemParamValue): GraphSystemParamKind {
-  if (Array.isArray(value)) return "string-list";
-  if (typeof value === "number") return "number";
-  if (typeof value === "boolean") return "boolean";
-  return "string";
+/**
+ * The bounds of a parameter as a short hint: "1–360", "at most 200
+ * characters". A text parameter the spec allows to be longer than a template
+ * stores one (101's per-value byte bound) shows the template's bound.
+ */
+export function graphSystemParamBoundsHint(spec: GraphSystemParamSpec): string | null {
+  switch (spec.type) {
+    case "integer":
+      return `${spec.min}–${spec.max}`;
+    case "string": {
+      const format =
+        spec.format === "branch"
+          ? "a branch name, "
+          : spec.format === "id"
+            ? "one word without spaces, "
+            : "";
+      const bytes = GRAPH_TEMPLATE_BOUNDS.maxSystemParamStringBytes;
+      return spec.maxChars > bytes
+        ? `${format}at most ${bytes} bytes in a template`
+        : `${format}at most ${spec.maxChars} characters`;
+    }
+    default:
+      return null;
+  }
 }

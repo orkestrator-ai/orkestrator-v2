@@ -125,6 +125,7 @@ interface CoreFieldsSnapshot {
   terminalHistoryGlobalRetentionMb: number;
   terminalHistoryRetentionDays: number;
   experimentalCodexRawEventLogging: boolean;
+  experimentalScheduling: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
   webClientEnabled: boolean;
@@ -173,6 +174,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     terminalHistoryRetentionDays:
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalCodexRawEventLogging: global.experimentalCodexRawEventLogging ?? true,
+    experimentalScheduling: global.experimentalScheduling ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     webClientEnabled: global.webClientEnabled ?? true,
@@ -253,6 +255,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalCodexRawEventLogging ?? true,
+    global.experimentalScheduling ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
@@ -352,6 +355,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
     global.experimentalCodexRawEventLogging ?? true,
   );
+  const [experimentalScheduling, setExperimentalScheduling] = useState(
+    global.experimentalScheduling ?? false,
+  );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -449,6 +455,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
+    setExperimentalScheduling(global.experimentalScheduling ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
@@ -625,6 +632,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryGlobalRetentionMb,
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
+      experimentalScheduling,
       debugLogging,
       debugLogRetentionDays,
       webClientEnabled,
@@ -657,6 +665,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryGlobalRetentionMb,
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
+      experimentalScheduling,
       debugLogging,
       debugLogRetentionDays,
       webClientEnabled,
@@ -827,6 +836,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         terminalHistoryGlobalRetentionMb: number;
         terminalHistoryRetentionDays: number;
         experimentalCodexRawEventLogging: boolean;
+        experimentalScheduling: boolean;
         debugLogging: boolean;
         debugLogRetentionDays: number;
         webClientEnabled: boolean;
@@ -866,6 +876,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         terminalHistoryGlobalRetentionMb,
         terminalHistoryRetentionDays,
         experimentalCodexRawEventLogging,
+        experimentalScheduling,
         debugLogging,
         debugLogRetentionDays,
         webClientEnabled,
@@ -1115,6 +1126,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setTerminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
+    experimentalScheduling,
+    setExperimentalScheduling,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

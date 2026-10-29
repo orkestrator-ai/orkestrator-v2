@@ -31,8 +31,24 @@ function actorOf(args: Record<string, unknown>): ScheduleOwner {
   return actor ?? { kind: "operator" };
 }
 
-function service(context: CommandContext): ScheduledJobService {
+export const SCHEDULING_DISABLED_MESSAGE =
+  "Scheduling is experimental and turned off. Turn it on in Settings → Experimental.";
+
+/**
+ * Scheduling is an experimental feature, off unless
+ * `global.experimentalScheduling` is on. While it is off every schedule
+ * command and public action is refused, the schedule tools are not offered
+ * and nothing fires; stored schedules are kept.
+ */
+export async function schedulingEnabled(
+  storage: Pick<CommandContext["storage"], "loadConfig">,
+): Promise<boolean> {
+  return (await storage.loadConfig()).global.experimentalScheduling === true;
+}
+
+async function service(context: CommandContext): Promise<ScheduledJobService> {
   if (!context.scheduledJobs) throw new Error("Scheduled jobs are unavailable");
+  if (!(await schedulingEnabled(context.storage))) throw new Error(SCHEDULING_DISABLED_MESSAGE);
   return context.scheduledJobs;
 }
 
@@ -115,20 +131,18 @@ export function scheduleListFilter(args: Record<string, unknown>): ScheduleListF
 }
 
 export function registerScheduledJobCommands(register: CommandRegistrar): void {
-  register("list_scheduled_jobs", (args, context) => ({
-    schedules: service(context).list(actorOf(args), scheduleListFilter(args)),
+  register("list_scheduled_jobs", async (args, context) => ({
+    schedules: (await service(context)).list(actorOf(args), scheduleListFilter(args)),
     revision: Date.now(),
   }));
-  register("get_scheduled_job", (args, context) =>
-    service(context).get(actorOf(args), requiredString(args, "scheduleId")),
+  register("get_scheduled_job", async (args, context) =>
+    (await service(context)).get(actorOf(args), requiredString(args, "scheduleId")),
   );
   register("create_scheduled_job", async (args, context) => {
     const requestId = optionalString(args, "requestId");
-    const { job, replayed } = await service(context).create(
-      actorOf(args),
-      scheduleCreateArgs(args),
-      requestId,
-    );
+    const { job, replayed } = await (
+      await service(context)
+    ).create(actorOf(args), scheduleCreateArgs(args), requestId);
     return { schedule: job, replayed };
   });
   register("update_scheduled_job", async (args, context) => {
@@ -141,18 +155,22 @@ export function registerScheduledJobCommands(register: CommandRegistrar): void {
         ? { expectedRevision: optionalInteger(args, "expectedRevision") }
         : {}),
     };
-    return service(context).update(actorOf(args), requiredString(args, "scheduleId"), input);
+    return (await service(context)).update(
+      actorOf(args),
+      requiredString(args, "scheduleId"),
+      input,
+    );
   });
-  register("pause_scheduled_job", (args, context) =>
-    service(context).pause(actorOf(args), requiredString(args, "scheduleId")),
+  register("pause_scheduled_job", async (args, context) =>
+    (await service(context)).pause(actorOf(args), requiredString(args, "scheduleId")),
   );
-  register("resume_scheduled_job", (args, context) =>
-    service(context).resume(actorOf(args), requiredString(args, "scheduleId")),
+  register("resume_scheduled_job", async (args, context) =>
+    (await service(context)).resume(actorOf(args), requiredString(args, "scheduleId")),
   );
-  register("run_scheduled_job", (args, context) =>
-    service(context).runNow(actorOf(args), requiredString(args, "scheduleId")),
+  register("run_scheduled_job", async (args, context) =>
+    (await service(context)).runNow(actorOf(args), requiredString(args, "scheduleId")),
   );
-  register("delete_scheduled_job", (args, context) =>
-    service(context).delete(actorOf(args), requiredString(args, "scheduleId")),
+  register("delete_scheduled_job", async (args, context) =>
+    (await service(context)).delete(actorOf(args), requiredString(args, "scheduleId")),
   );
 }

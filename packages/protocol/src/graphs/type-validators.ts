@@ -29,6 +29,7 @@ export const GRAPH_BUILT_IN_VALIDATOR_IDS = [
   "ticket-sections",
   "workspace-commit",
   "validation-plan",
+  "validation-results",
   "review-package-reference",
   "structured-review-report",
   "review-finding",
@@ -232,6 +233,49 @@ function checkPrDescription(value: unknown): WorkflowResultValidationIssue[] {
   return issues;
 }
 
+function checkValidationResults(value: unknown): WorkflowResultValidationIssue[] {
+  if (!record(value) || !Array.isArray(value.failures)) {
+    return [issue("$", "invalid_type", "Expected validation results")];
+  }
+  const issues: WorkflowResultValidationIssue[] = [];
+  if (typeof value.headRef !== "string" || !SHA_PATTERN.test(value.headRef)) {
+    issues.push(issue("$.headRef", "invalid_value", "Expected a full commit SHA"));
+  }
+  const total = typeof value.total === "number" ? value.total : 0;
+  const passed = typeof value.passed === "number" ? value.passed : 0;
+  const failures = value.failures.filter(record);
+  if (passed + failures.length > total) {
+    issues.push(issue("$.total", "invalid_value", "Passed and failing commands exceed the total"));
+  }
+  const ids = new Set<string>();
+  failures.forEach((failure, index) => {
+    if (typeof failure.id !== "string") return;
+    if (ids.has(failure.id)) {
+      issues.push(issue(`$.failures[${index}].id`, "duplicate", "A command is listed once"));
+    }
+    ids.add(failure.id);
+  });
+  const failed = failures.some((failure) => failure.state === "failed");
+  const consistent = (() => {
+    switch (value.state) {
+      case "passed":
+        return failures.length === 0;
+      case "failed":
+        return failed;
+      case "incomplete":
+        return !failed && failures.length > 0;
+      default:
+        return false;
+    }
+  })();
+  if (!consistent) {
+    issues.push(
+      issue("$.state", "invalid_value", "The state does not agree with the listed failures"),
+    );
+  }
+  return issues.slice(0, MAX_ISSUES);
+}
+
 function checkCheckSummary(value: unknown): WorkflowResultValidationIssue[] {
   if (!record(value) || !Array.isArray(value.failing)) {
     return [issue("$", "invalid_type", "Expected a check summary")];
@@ -355,6 +399,13 @@ const VALIDATORS: readonly GraphBuiltInValidator[] = [
       checks: `headRef equals the workspace HEAD being validated; ${PLACEHOLDER_CHECKS}`,
       existing: `${CONTRACTS_MODULE} (kind validation-plan)`,
     },
+  },
+  {
+    id: "validation-results",
+    summary:
+      "The state agrees with the failures (passed: none; failed: a failed command; incomplete: only unfinished ones), each command once.",
+    wraps: "graphs/type-validators.ts (new)",
+    check: checkValidationResults,
   },
   {
     id: "review-package-reference",

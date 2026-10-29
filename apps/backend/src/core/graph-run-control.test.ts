@@ -685,12 +685,27 @@ describe("loops (§9.2, §9.4)", () => {
       explanation,
       files: ["src/a.ts"],
     });
-    const failure = (command: string) => ({ command, summary: "fails", output: "1 failed" });
-    h.world.fakes.scripts.set("validate", ({ port, iteration }) =>
-      port === "results"
-        ? { failures: iteration === 1 ? [failure("bun test a"), failure("bun test b")] : [] }
-        : undefined,
-    );
+    const failure = (id: string, command: string) => ({
+      id,
+      command,
+      state: "failed",
+      exitCode: 1,
+      summary: "fails",
+      output: "1 failed",
+    });
+    h.world.fakes.scripts.set("validate", ({ port, iteration }) => {
+      if (port !== "results") return undefined;
+      const failures =
+        iteration === 1 ? [failure("a", "bun test a"), failure("b", "bun test b")] : [];
+      return {
+        headRef: "a".repeat(40),
+        state: failures.length > 0 ? "failed" : "passed",
+        total: 2,
+        passed: 2 - failures.length,
+        failures,
+        limitations: [],
+      };
+    });
     h.world.fakes.scripts.set("diagnose", ({ branchKey }) => ({
       diagnoses:
         branchKey === "panel.1"

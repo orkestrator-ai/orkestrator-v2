@@ -26,7 +26,13 @@ import {
   withPanel,
 } from "./compile-fixtures.test-support.js";
 import { graphTemplateExample } from "./examples.js";
-import type { ArtifactTypeDef, GraphLoopRegion, GraphTemplateV1 } from "./template.js";
+import type {
+  ArtifactTypeDef,
+  GraphLoopRegion,
+  GraphSystemNode,
+  GraphSystemParamValue,
+  GraphTemplateV1,
+} from "./template.js";
 
 interface Case {
   /** The template to start from; default the clean base. */
@@ -51,6 +57,27 @@ const THING: ArtifactTypeDef = {
   storage: "value",
   budgets: { maxBytes: 4096 },
 };
+
+/** Adds a `push-branch` node (index 2) that pushes Build's commit. */
+function withPush(
+  template: GraphTemplateV1,
+  params: Record<string, GraphSystemParamValue> = {},
+): GraphSystemNode {
+  const node: GraphSystemNode = {
+    id: "push",
+    kind: "system",
+    action: "push-branch",
+    params,
+    inputs: [{ name: "code", type: "workspace@1" }],
+  };
+  template.nodes.push(node);
+  template.edges.push({
+    id: "build-push",
+    from: { node: "build", port: "code" },
+    to: { node: "push", port: "code" },
+  });
+  return node;
+}
 
 const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case> = {
   // ------------------------------------------------------------ template, refs
@@ -183,6 +210,25 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
       agentOf(t, "build").onFailure = "route";
     },
     expect: { nodeId: "build", path: "nodes[0].onFailure" },
+  },
+  "system-param-invalid": {
+    mutate: (t) => {
+      withPush(t, { force: true });
+    },
+    expect: { nodeId: "push", path: "nodes[2].params.force", detail: "unknown" },
+  },
+  "system-port-unsupported": {
+    mutate: (t) => {
+      withPush(t).outputs = [{ name: "report", type: "fix-result@1" }];
+    },
+    expect: { nodeId: "push", port: "report", detail: "output-type" },
+  },
+  "system-input-missing": {
+    mutate: (t) => {
+      const node = withPush(t);
+      node.action = "open-pull-request";
+    },
+    expect: { nodeId: "push", path: "nodes[2].inputs" },
   },
 
   // ------------------------------------------------------------ topology

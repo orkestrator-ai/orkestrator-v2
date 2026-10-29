@@ -22,6 +22,7 @@ import type { ReviewContractValidationError } from "@orkestrator/protocol/struct
 import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
 import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   errorMessage,
   resumablePhase,
@@ -241,9 +242,7 @@ export class BuildPipelineRecovery {
     await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (passed) {
-      await this.updateKanbanLifecycle(pipeline, {
-        comment: "✅ Validation complete",
-      });
+      await this.updateKanbanLifecycle(pipeline, buildPipelineKanbanUpdate("validation-complete"));
       await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
       await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
@@ -369,12 +368,10 @@ export class BuildPipelineRecovery {
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
     });
-    await this.updateKanbanLifecycle(pipeline, {
-      status: "review",
-      prUrl: detection.url,
-      prState: detection.state,
-      comment: `🔗 PR raised: ${detection.url}`,
-    });
+    await this.updateKanbanLifecycle(
+      pipeline,
+      buildPipelineKanbanUpdate("pr-raised", { url: detection.url, state: detection.state }),
+    );
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
@@ -441,9 +438,10 @@ export class BuildPipelineRecovery {
       try {
         pipeline.completionCommentStatus = "posting";
         await this.ctx.save(pipeline, pipeline.backendRevision);
-        await this.updateKanbanLifecycle(pipeline, {
-          status: pipeline.phase === "complete" ? "review" : "backlog",
-        });
+        await this.updateKanbanLifecycle(
+          pipeline,
+          buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
+        );
         pipeline.completionCommentStatus = "posted";
         pipeline.completionCommentPostedAt = new Date().toISOString();
         delete pipeline.completionCommentError;

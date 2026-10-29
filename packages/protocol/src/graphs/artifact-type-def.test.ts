@@ -12,10 +12,10 @@ function errorsOf(template: unknown): Array<[string, string]> {
   return result.ok ? [] : result.errors.map((error) => [error.path, error.code]);
 }
 
-/** The §9.4 template with its `diagnosis@1` type (index 2) edited. */
+/** The §9.4 template with its `diagnosis@1` type (index 1) edited. */
 function withDiagnosis(edit: (type: Draft) => void): Draft {
   const template: Draft = graphTemplateExample("failure-diagnosis");
-  edit(template.types[2]);
+  edit(template.types[1]);
   return template;
 }
 
@@ -39,7 +39,7 @@ describe("custom artifact types", () => {
 
   test("a custom type cannot take a built-in name", () => {
     expect(errorsOf(withDiagnosis((type) => (type.name = "review-report")))).toEqual([
-      ["types[2].name", "built_in_type"],
+      ["types[1].name", "built_in_type"],
     ]);
   });
 
@@ -49,7 +49,7 @@ describe("custom artifact types", () => {
         (schema) => (schema.properties.diagnoses.items.properties.rootCause.pattern = "^[A-Z]"),
         [
           [
-            "types[2].schema.properties.diagnoses.items.properties.rootCause.pattern",
+            "types[1].schema.properties.diagnoses.items.properties.rootCause.pattern",
             "unsupported_keyword",
           ],
         ],
@@ -57,8 +57,8 @@ describe("custom artifact types", () => {
       [
         (schema) => (schema.properties.diagnoses.items = { $ref: "#/definitions/diagnosis" }),
         [
-          ["types[2].schema.properties.diagnoses.items.$ref", "unsupported_keyword"],
-          ["types[2].schema.properties.diagnoses.items.type", "required"],
+          ["types[1].schema.properties.diagnoses.items.$ref", "unsupported_keyword"],
+          ["types[1].schema.properties.diagnoses.items.type", "required"],
         ],
       ],
       [
@@ -68,23 +68,23 @@ describe("custom artifact types", () => {
           }),
         [
           [
-            "types[2].schema.properties.diagnoses.items.properties.files.oneOf",
+            "types[1].schema.properties.diagnoses.items.properties.files.oneOf",
             "unsupported_keyword",
           ],
-          ["types[2].schema.properties.diagnoses.items.properties.files.type", "required"],
+          ["types[1].schema.properties.diagnoses.items.properties.files.type", "required"],
         ],
       ],
       [
         (schema) => (schema.properties.diagnoses.items.required = ["rootCause", "explanation"]),
-        [["types[2].schema.properties.diagnoses.items.properties.files", "not_required"]],
+        [["types[1].schema.properties.diagnoses.items.properties.files", "not_required"]],
       ],
       [
         (schema) => delete schema.additionalProperties,
-        [["types[2].schema.additionalProperties", "required"]],
+        [["types[1].schema.additionalProperties", "required"]],
       ],
       [
         (schema) => (schema.properties.diagnoses.maxItems = 32),
-        [["types[2].schema.properties.diagnoses.maxItems", "unsupported_keyword"]],
+        [["types[1].schema.properties.diagnoses.maxItems", "unsupported_keyword"]],
       ],
     ];
     for (const [edit, expected] of cases) {
@@ -94,7 +94,7 @@ describe("custom artifact types", () => {
 
   test("items must name a non-null list field", () => {
     expect(errorsOf(withDiagnosis((type) => (type.items.path = "missing")))).toEqual([
-      ["types[2].items.path", "unknown_path"],
+      ["types[1].items.path", "unknown_path"],
     ]);
     expect(
       errorsOf(
@@ -104,7 +104,7 @@ describe("custom artifact types", () => {
           type.items.path = "note";
         }),
       ),
-    ).toEqual([["types[2].items.path", "not_a_list"]]);
+    ).toEqual([["types[1].items.path", "not_a_list"]]);
     expect(
       errorsOf(
         withDiagnosis((type) => {
@@ -113,7 +113,7 @@ describe("custom artifact types", () => {
           };
         }),
       ),
-    ).toEqual([["types[2].items.path", "not_a_list"]]);
+    ).toEqual([["types[1].items.path", "not_a_list"]]);
   });
 
   test("shared and summary fields must exist", () => {
@@ -125,8 +125,8 @@ describe("custom artifact types", () => {
         }),
       ),
     ).toEqual([
-      ["types[2].sharedFields[1]", "unknown_path"],
-      ["types[2].render.summary[0]", "unknown_path"],
+      ["types[1].sharedFields[1]", "unknown_path"],
+      ["types[1].render.summary[0]", "unknown_path"],
     ]);
   });
 
@@ -134,8 +134,8 @@ describe("custom artifact types", () => {
     expect(
       errorsOf(withDiagnosis((type) => (type.example = { diagnoses: [{ rootCause: "x" }] }))),
     ).toEqual([
-      ["types[2].example.diagnoses[0].explanation", "missing_field"],
-      ["types[2].example.diagnoses[0].files", "missing_field"],
+      ["types[1].example.diagnoses[0].explanation", "missing_field"],
+      ["types[1].example.diagnoses[0].files", "missing_field"],
     ]);
     expect(
       errorsOf(
@@ -144,7 +144,7 @@ describe("custom artifact types", () => {
           type.example = DIAGNOSIS_EXAMPLE;
         }),
       ).map(([path, code]) => [path, code]),
-    ).toContainEqual(["types[2].example.diagnoses[0].rootCause", "too_large"]);
+    ).toContainEqual(["types[1].example.diagnoses[0].rootCause", "too_large"]);
     // Field references and the example are not judged against an invalid schema.
     expect(
       errorsOf(
@@ -153,7 +153,7 @@ describe("custom artifact types", () => {
           type.example = { wrong: true };
         }),
       ),
-    ).toEqual([["types[2].schema.pattern", "unsupported_keyword"]]);
+    ).toEqual([["types[1].schema.pattern", "unsupported_keyword"]]);
   });
 
   test("provenance fields are recognised in custom schemas", () => {
@@ -177,7 +177,7 @@ describe("custom artifact types", () => {
         }),
       ),
     ).toEqual([
-      [`types[2].schema.properties.sources.${GRAPH_SCHEMA_SOURCES_KEYWORD}`, "not_applicable"],
+      [`types[1].schema.properties.sources.${GRAPH_SCHEMA_SOURCES_KEYWORD}`, "not_applicable"],
     ]);
   });
 });

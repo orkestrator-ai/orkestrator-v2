@@ -38,7 +38,8 @@ The area fields are `kanban` (`KanbanStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
-(`GraphTemplatesStorage`) and `graphRuns` (`GraphRunsStorage`). Each area type is declared next to
+(`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`) and `graphEffects`
+(`GraphEffectsStorage`). Each area type is declared next to
 its repository and re-exported from `storage.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
@@ -72,6 +73,7 @@ the change journal.
 | `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
 | `GraphTemplatesRepository` | `storage-graph-templates.ts` | `graph-templates`: user graph templates (one row each, revision compare-and-swap inside the row's transaction) and per-project trust records and capability ceilings; a project's row is deleted with the project |
 | `GraphRunsRepository` | `storage-graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets); run writes and deletions announce the `graph-run` resource |
+| `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease |
 | `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
 | `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
 

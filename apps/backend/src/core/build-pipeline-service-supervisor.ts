@@ -32,6 +32,7 @@ import {
   readProviderStatus,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   errorMessage,
   sessionForCurrentPhase,
@@ -1397,10 +1398,10 @@ export class BuildPipelineSupervisor {
     }
     const dispatch = await (async () => {
       if (sessionPhase === "build") {
-        await this.recovery.updateKanbanLifecycle(pipeline, {
-          status: "in-progress",
-          comment: "🔨 Build started",
-        });
+        await this.recovery.updateKanbanLifecycle(
+          pipeline,
+          buildPipelineKanbanUpdate("build-started"),
+        );
       }
       // A review over an immutable package runs as a Multi Review reviewer
       // does: plan mode with the read-only mutation boundary.

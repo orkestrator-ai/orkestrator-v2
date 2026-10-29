@@ -164,6 +164,14 @@ lifts them) and may not be named `workflow_result` or a result kind's tool suffi
 `isGraphReservedOutputPortName`). Result keys are minted by the runtime (204), not the template;
 port names already satisfy `^[a-z][A-Za-z0-9_]*$` ≤ 48, inside `^[A-Za-z0-9_-]{1,128}$`.
 
+**2026-10-29 · Item 402 (sub-graphs).** `subgraph-unsupported` no longer rejects every
+sub-graph: 402 inlines them before the passes (`compile-subgraphs.ts`) and adds the
+`subgraph-*` codes in the table below, each with a case in `compile-diagnostics.test.ts`.
+§9.3 now compiles cleanly and may launch with the built-in Multi Review inlined; its taint
+acknowledgements were replaced (six sinks: build, review/plan, review/package, review/fix,
+review/pr, pr). The two "§9.3 fails only with `subgraph-unsupported`" statements above are
+historical. See [402](402-subgraphs.md).
+
 **2026-10-29 · Findings for others.** Built-in budgets exceed the 160 KiB prompt ceiling
 (`ticket@1` 256 KiB, `review-report@1` 384 KiB), so any user template that inlines one gets
 `prompt-size-over-ceiling` (§9.3's designers and judge do); 102/105 may want to reconcile budgets
@@ -186,7 +194,19 @@ from `GRAPH_COMPILE_DIAGNOSTICS`). `detail` carries the delegated code where one
 | `outlet-not-applicable` | error | An outlet on another kind of node. |
 | `unknown-role` | error | A node, panel axis, lens or sub-graph binding names a missing role. |
 | `role-multiplicity` | error | Panel replication on a one-model role, or a panel role without panel replication. |
-| `subgraph-unsupported` | error | Any `subgraph` node, until 402. |
+| `subgraph-unresolved` | error | 402: the child does not resolve (`detail`: `not-found`, `untrusted`, `ambiguous`, `no-project`, `no-resolver`, `invalid`). |
+| `subgraph-digest-mismatch` | error | 402: a pinned `digest` or `revision` the child no longer has. |
+| `subgraph-recursive` | error | 402: a child contains itself, directly or through others. |
+| `subgraph-depth` | error | 402: nesting deeper than `GRAPH_SUBGRAPH_MAX_DEPTH` (4). |
+| `subgraph-too-large` | error | 402: the flat plan exceeds `GRAPH_PLAN_BOUNDS`, an inlined id exceeds 128 characters, or more than 64 children resolve. |
+| `subgraph-port-mismatch` | error | 402: node ports that are not the child's run inputs/outputs (name, type, requiredness), render/collect/provenance/choices on them, or an edge to an undeclared port. |
+| `subgraph-param-binding` | error | 402: an unknown child parameter, a literal that does not fit, a pass-through of another type, enum options or range, or a child parameter with no default left unbound. |
+| `subgraph-role-binding` | error | 402: an unknown or unbound child role, another multiplicity, or a parent panel wider than the child's. |
+| `subgraph-type-conflict` | error | 402: the child defines a custom type differently. |
+| `subgraph-workspace` | error | 402: a child that needs an environment in a `workspace: none` parent. |
+| `subgraph-unsupported` | error | Since 402 only what inlining cannot keep: `replicate`, `when`, `retry`, `timeoutMs`, `onFailure` on the sub-graph node, a child with loops inside a parent loop, a session continued from a sub-graph, a carry through a transforming child edge. |
+| `subgraph-unpinned` | info | 402: the child is not pinned by digest. |
+| `subgraph-engine-copy` | info | 402: a built-in child runs as a copy on the graph runtime, not on its engine. |
 | `replicate-items-input` | error | An `items` axis (also inside `cross`) names an input that is neither `list<T>` nor of a type that declares `items` (401; replaced `replicate-items-unsupported`). |
 | `output-port-list` | error | An agent output port typed `list<…>` (103). |
 | `output-port-reserved` | error | An agent output named `workflow_result` or a result kind's tool suffix (103). |

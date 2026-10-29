@@ -8,6 +8,7 @@ import {
   type GraphTrustedSigningKey,
 } from "@orkestrator/protocol/graphs/sharing";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import { GRAPH_LAUNCH_BOUNDS, type GraphLaunchDefaults } from "@orkestrator/protocol/graphs/launch";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import type { StorageContext } from "./storage-context.js";
 import { isRecord, nowIso } from "./storage-shared.js";
@@ -34,6 +35,12 @@ export interface PersistedGraphProjectSettings {
   ceilingUpdatedAt?: string;
   /** At most {@link GRAPH_LIBRARY_BOUNDS.maxTrustRecords}, one per path. */
   trust: GraphTemplateTrustRecord[];
+  /**
+   * Launch defaults per template (item 214), keyed by `graphTemplateRefKey`.
+   * At most {@link GRAPH_LAUNCH_BOUNDS.maxSavedDefaultsPerProject}; the least
+   * recently saved is dropped first.
+   */
+  launchDefaults?: Record<string, GraphLaunchDefaults>;
   updatedAt: string;
 }
 
@@ -119,6 +126,16 @@ function isPersistedGraphProjectSettings(
     (value.ceiling === undefined || isRecord(value.ceiling)) &&
     Array.isArray(value.trust) &&
     value.trust.every(isTrustRecord) &&
+    (value.launchDefaults === undefined || isRecord(value.launchDefaults)) &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isLaunchDefaults(value: unknown): value is GraphLaunchDefaults {
+  return (
+    isRecord(value) &&
+    isRecord(value.roles) &&
+    isRecord(value.params) &&
     typeof value.updatedAt === "string"
   );
 }
@@ -442,6 +459,33 @@ export class GraphTemplatesRepository {
     return { settings, revoked: result };
   }
 
+  /** The launch defaults saved for one template in a project (item 214), if any. */
+  getGraphLaunchDefaults(projectId: string, templateKey: string): GraphLaunchDefaults | null {
+    const stored = this.getGraphProjectSettings(projectId)?.launchDefaults?.[templateKey];
+    return isLaunchDefaults(stored) ? structuredClone(stored) : null;
+  }
+
+  /**
+   * Saves (or with `null`, forgets) one template's launch defaults. Bounded:
+   * past the per-project cap the least recently saved entry is dropped.
+   */
+  saveGraphLaunchDefaults(
+    projectId: string,
+    templateKey: string,
+    defaults: GraphLaunchDefaults | null,
+  ): void {
+    this.updateProjectSettings(projectId, (settings) => {
+      const entries = Object.entries(settings.launchDefaults ?? {}).filter(
+        ([key, value]) => key !== templateKey && isLaunchDefaults(value),
+      );
+      if (defaults) entries.push([templateKey, defaults]);
+      entries.sort((a, b) => a[1].updatedAt.localeCompare(b[1].updatedAt));
+      const kept = entries.slice(-GRAPH_LAUNCH_BOUNDS.maxSavedDefaultsPerProject);
+      if (kept.length > 0) settings.launchDefaults = Object.fromEntries(kept);
+      else delete settings.launchDefaults;
+    });
+  }
+
   /** A project's approved copies and rejections (item 405). */
   getGraphProjectApprovals(projectId: string): PersistedGraphProjectApprovals | null {
     const stored = this.context.loadStoreRow(this.graphTemplatesFile(), projectId, {
@@ -608,6 +652,8 @@ export type GraphTemplatesStorage = Pick<
   | "setGraphProjectCeiling"
   | "approveGraphProjectTemplate"
   | "revokeGraphProjectTemplate"
+  | "getGraphLaunchDefaults"
+  | "saveGraphLaunchDefaults"
   | "announceGraphProjectTemplatesChanged"
   | "getGraphProjectApprovals"
   | "rejectGraphProjectTemplate"

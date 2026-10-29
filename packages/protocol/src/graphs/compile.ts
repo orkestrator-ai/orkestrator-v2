@@ -3,8 +3,9 @@
  * template to a frozen-friendly, hashed plan, or an exact account of what is
  * wrong with it.
  *
- * `compile(template, options)` guards the template (item 101), then runs the
- * passes in order: references and types (compile-refs), topology and loops
+ * `compile(template, options)` guards the template (item 101), inlines its
+ * sub-graphs (compile-subgraphs, item 402), then runs the passes in order on
+ * the flat template: references and types (compile-refs), topology and loops
  * (compile-graph), ports and edges (compile-ports), conditions
  * (compile-conditions), agent nodes (compile-agents), workspace rules
  * (compile-workspace), taint (compile-taint), cost and limits (cost), and
@@ -23,6 +24,7 @@ import {
   computeGraphTopology,
 } from "./compile-graph.js";
 import { assembleGraphPlan } from "./compile-plan.js";
+import { inlineGraphSubgraphs } from "./compile-subgraphs.js";
 import {
   checkGraphEdgeTypes,
   checkGraphInputs,
@@ -66,6 +68,11 @@ export { GRAPH_RESERVED_OUTPUT_PORT_NAMES, isGraphReservedOutputPortName } from 
 export { GRAPH_DEFAULT_COLLECT_POLICY } from "./compile-plan.js";
 export { graphMaxWeightAntichain } from "./cost.js";
 export { sha256Hex } from "./sha256.js";
+export type {
+  GraphTemplateResolution,
+  GraphTemplateResolver,
+  GraphSubgraphMissingReason,
+} from "./subgraphs.js";
 
 export interface GraphCompileResult {
   /** No error diagnostics. */
@@ -103,7 +110,14 @@ export function compile(template: unknown, options: GraphCompileOptions = {}): G
       pendingAcknowledgements: [],
     };
   }
-  const state = new GraphCompileState(guard.value, resolveGraphCompileOptions(options));
+  const resolved = resolveGraphCompileOptions(options);
+  const inlined = inlineGraphSubgraphs(guard.value, resolved.resolveTemplate);
+  const state = new GraphCompileState(inlined.template, resolved, {
+    source: guard.value,
+    result: inlined,
+  });
+  for (const diagnostic of inlined.diagnostics) state.diagnostics.adopt(diagnostic);
+  state.diagnostics.mapPath = inlined.mapPath;
 
   checkGraphLibraryTypes(state);
   resolveGraphPortTypes(state);

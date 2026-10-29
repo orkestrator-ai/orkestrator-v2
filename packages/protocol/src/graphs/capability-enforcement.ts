@@ -312,6 +312,10 @@ function secondaryAxis(
           };
     case "mcp":
       if (platform === "claude" || platform === "opencode") return { tier: "provider-configured" };
+      // The bridge disables (Codex), never connects (Pi) or never passes
+      // (Cursor) a denied server.
+      if (platform === "codex" || platform === "cursor") return { tier: "provider-configured" };
+      if (platform === "pi") return { tier: "enforced" };
       if (readOnly && platform !== "grok") {
         return {
           tier: "provider-configured",
@@ -329,6 +333,51 @@ function secondaryAxis(
       }
       // Pi has no hosted search to remove.
       return platform === "pi" ? { tier: "enforced" } : { tier: "provider-configured" };
+  }
+}
+
+/**
+ * How strongly `platform` loads only the configured MCP servers a policy
+ * selects (`capabilityPolicy.userMcpServers`, item 404). Never more than the
+ * selection on the first five; Grok cannot be narrowed at all.
+ */
+function userMcpSelectionAxis(platform: AgentPlatform, readOnly: boolean): TierAndReason {
+  switch (platform) {
+    case "pi":
+      // The bridge's own MCP client is the only one in the session.
+      return { tier: "enforced" };
+    case "claude":
+      return {
+        tier: "provider-configured",
+        reason: "The CLI loads only the bridge's inline MCP set (strict MCP configuration).",
+      };
+    case "codex":
+      return {
+        tier: "provider-configured",
+        reason: "app-server disables every other configured server for this thread.",
+      };
+    case "opencode":
+      return {
+        tier: "provider-configured",
+        reason:
+          "Other servers still run in OpenCode's shared process; this session's permission rules refuse their tools.",
+      };
+    case "cursor":
+      return readOnly
+        ? {
+            tier: "provider-configured",
+            reason: "Read-only turns load only Orkestrator's own MCP server.",
+          }
+        : {
+            tier: "provider-configured",
+            reason:
+              "The SDK gets only the selected servers inline; user and project settings are not loaded.",
+          };
+    case "grok":
+      return {
+        tier: "advisory",
+        reason: "Grok loads every MCP server in its own configuration; none can be removed.",
+      };
   }
 }
 
@@ -424,7 +473,9 @@ export function agentPolicyEnforcement(
   }
   if (denied.has("subagents"))
     add("subagents", false, secondaryAxis("subagents", platform, readOnly));
-  if ([...denied].some((capability) => capability.startsWith("mcp:"))) {
+  if (policy.capabilityPolicy?.userMcpServers !== undefined) {
+    add("mcp", false, userMcpSelectionAxis(platform, readOnly));
+  } else if ([...denied].some((capability) => capability.startsWith("mcp:"))) {
     add("mcp", false, secondaryAxis("mcp", platform, readOnly));
   }
 

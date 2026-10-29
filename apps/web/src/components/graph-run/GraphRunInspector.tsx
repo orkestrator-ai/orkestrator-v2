@@ -11,7 +11,7 @@ import {
   graphArtifactRendering,
   graphArtifactTypeDefinition,
 } from "./GraphArtifactView";
-import { GraphHumanNodePanel } from "./GraphHumanNodePanel";
+import { GraphHumanNodePanel, type GraphHumanNodeAnswer } from "./GraphHumanNodePanel";
 import { GraphQuestionAnswerForm, type GraphQuestionAnswer } from "./GraphQuestionAnswerForm";
 import { graphRunTruncationText, type GraphRunFlowNode } from "./graph-run-flow";
 
@@ -175,11 +175,13 @@ function ActivationDetails({
   node,
   activation,
   onAnswer,
+  onHumanAnswer,
 }: {
   run: GraphRun;
   node: GraphRunFlowNode;
   activation: NodeActivation;
   onAnswer: (activation: NodeActivation, answer: GraphQuestionAnswer) => Promise<void>;
+  onHumanAnswer?: (activation: NodeActivation, answer: GraphHumanNodeAnswer) => Promise<void>;
 }) {
   const planNode = planNodeOf(run, activation.nodeId);
   const session = activation.session;
@@ -205,6 +207,7 @@ function ActivationDetails({
           node={planNode}
           activation={activation}
           disabled={!runOpen || run.status === "cancelling"}
+          {...(onHumanAnswer ? { onAnswer: onHumanAnswer } : {})}
         />
       ) : null}
       {node.item || (node.fanOut && node.fanOut.total > node.fanOut.running) ? (
@@ -348,6 +351,7 @@ export function GraphRunInspector({
   isActive,
   ownsGlobalShortcuts,
   onAnswer,
+  onHumanAnswer,
   onSelectActivation,
 }: {
   run: GraphRun;
@@ -357,6 +361,8 @@ export function GraphRunInspector({
   isActive: boolean;
   ownsGlobalShortcuts: boolean;
   onAnswer: (activation: NodeActivation, answer: GraphQuestionAnswer) => Promise<void>;
+  /** Answers a waiting human node (item 208). */
+  onHumanAnswer?: (activation: NodeActivation, answer: GraphHumanNodeAnswer) => Promise<void>;
   /** Selects a superseded activation of a previous attempt (expanding it). */
   onSelectActivation: (attemptId: string, activationKey: string) => void;
 }) {
@@ -498,7 +504,13 @@ export function GraphRunInspector({
         />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-          <ActivationDetails run={run} node={node} activation={activation} onAnswer={onAnswer} />
+          <ActivationDetails
+            run={run}
+            node={node}
+            activation={activation}
+            onAnswer={onAnswer}
+            {...(onHumanAnswer ? { onHumanAnswer } : {})}
+          />
         </div>
       )}
     </div>

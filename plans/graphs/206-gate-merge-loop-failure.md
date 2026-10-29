@@ -114,7 +114,9 @@ the artifact its `until` reads. Carries read the producer's latest live activati
 iteration (**fix:** a carry from a replicated producer now collects its branches instead of waiting
 forever). The iteration is in every key (`prepare#iter=2#attempt=1`). Tested on the §9.2 shape
 (converges at 2; bound at 3) and §9.4 with a static panel (flatten at delivery → dedupe → fix →
-revalidate; converges when failures are empty).
+revalidate; converges when failures are empty). (2026-10-29: since item 401 §9.4 also runs as
+written, with `items` fan-out, in `graph-run-items.test.ts`; the static-panel test stays as panel
+coverage.)
 
 **2026-10-29 · Failure** (`graph-run-scheduling.ts` header). Retry while `attempts` allow and the
 cause is in `retry.on` (only `provider-error`, `invalid-result`, `timeout` can be); same inputs, new

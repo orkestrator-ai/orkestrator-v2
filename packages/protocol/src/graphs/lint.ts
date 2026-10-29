@@ -47,7 +47,8 @@ export function graphPromptContextFor(
   }
   return {
     node,
-    template: state.template,
+    // An inlined node reads its child template's parameters (item 402).
+    template: { ...state.template, parameters: state.parametersOf(node.id) },
     library: state.library,
     portTypes,
     listItems,

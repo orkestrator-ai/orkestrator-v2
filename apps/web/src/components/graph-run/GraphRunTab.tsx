@@ -48,6 +48,7 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { modelsForAgent } from "@/lib/agent-launch";
 import {
+  answerGraphRunHumanNode,
   answerGraphRunQuestion,
   cancelGraphRun,
   graphRunRewindBackend,
@@ -70,6 +71,7 @@ import { useGraphRunCodeRewind } from "./GraphRunCodeRewindDialog";
 import { GraphRunFlowGraph, graphRunNodeView } from "./GraphRunFlowGraph";
 import { GraphRunInspector } from "./GraphRunInspector";
 import type { GraphQuestionAnswer } from "./GraphQuestionAnswerForm";
+import type { GraphHumanNodeAnswer } from "./GraphHumanNodePanel";
 import {
   graphRunNodeActions,
   graphRunSessionTabOptions,
@@ -403,6 +405,18 @@ function GraphRunView({
     void useGraphRunStore.getState().loadRun(run.id);
   };
 
+  const answerHuman = async (activation: NodeActivation, reply: GraphHumanNodeAnswer) => {
+    const wait = activation.human;
+    if (!wait) return;
+    await answerGraphRunHumanNode({
+      runId: run.id,
+      activationKey: activation.key,
+      waitId: wait.id,
+      ...reply,
+    });
+    void useGraphRunStore.getState().loadRun(run.id);
+  };
+
   const contextMenuFor = (node: GraphRunFlowNode, actions: GraphRunActionSpec[]): ReactNode => {
     const own = actions.filter((action) => !action.runWide);
     const wide = actions.filter((action) => action.runWide);
@@ -411,7 +425,10 @@ function GraphRunView({
       return (
         <ContextMenuItem
           key={action.key}
-          disabled={pending !== null && action.key !== "open-session"}
+          disabled={
+            (pending !== null && action.key !== "open-session") || Boolean(action.disabledReason)
+          }
+          title={action.disabledReason}
           onSelect={() => perform(node, action.key)}
         >
           <Icon />
@@ -608,7 +625,11 @@ function GraphRunView({
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1.5 text-xs"
-                      disabled={pending !== null && action.key !== "open-session"}
+                      disabled={
+                        (pending !== null && action.key !== "open-session") ||
+                        Boolean(action.disabledReason)
+                      }
+                      title={action.disabledReason}
                       onClick={() => perform(selected, action.key)}
                     >
                       <Icon className="size-3.5" />
@@ -626,6 +647,7 @@ function GraphRunView({
               isActive={isActive}
               ownsGlobalShortcuts={isActive}
               onAnswer={answer}
+              onHumanAnswer={answerHuman}
               onSelectActivation={(attemptId, activationKey) => {
                 setAttemptExpanded(viewKey, attemptId, true);
                 setPinnedId(activationKey);

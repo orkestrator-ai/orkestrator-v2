@@ -33,6 +33,7 @@
 import { evaluateGraphPredicate } from "@orkestrator/protocol/graphs/predicates";
 import { isGraphActivationTerminal } from "@orkestrator/protocol/graphs/run";
 import type { GraphPlanLoop } from "@orkestrator/protocol/graphs/compile";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import { graphPredicatePaths } from "./graph-run-ready-set.js";
 import type { GraphRunView } from "./graph-run-view.js";
 
@@ -97,7 +98,7 @@ export function graphLoopState(view: GraphRunView, loop: GraphPlanLoop): GraphLo
   if (missing.length > 0) return { state: "needs-values", ids: missing };
   const decision = evaluateGraphPredicate(loop.until, {
     values,
-    params: view.run.bindings.params,
+    params: graphPlanScopeParams(view.run.plan, loop.subgraph, view.run.bindings.params),
     run: { iteration },
   });
   if (decision.value) return { state: "done", reason: "converged", iteration };

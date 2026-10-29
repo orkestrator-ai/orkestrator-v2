@@ -19,7 +19,9 @@ import type { GraphCompileState } from "./compile-state.js";
 import { type GraphAgentNode, isGraphRunInputRef } from "./template-model.js";
 
 function checkCapabilities(state: GraphCompileState, node: GraphAgentNode, path: string): void {
-  for (const issue of checkGraphCapabilities(node.capabilities, node.workspaceAccess)) {
+  for (const issue of checkGraphCapabilities(node.capabilities, node.workspaceAccess, {
+    providers: state.options.providers,
+  })) {
     const field =
       issue.code === "capability-workspace-write-denied" ||
       issue.code === "capability-workspace-read-writable"

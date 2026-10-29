@@ -943,7 +943,8 @@ or prompted **settles**, so it can keep track and respond without polling
 **Ownership.** Only resources with a coordinator workflow association: the
 durable record written at launch or prompt time with the coordinator and
 conversation ids (`launch_multi_review`, `start_multi_review`,
-`start_build_pipeline`, and the delegations `launch_environment`,
+`start_build_pipeline`, `launch_graph` (a `graph-run` association), and the
+delegations `launch_environment`,
 `launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
 build the user started in the UI has no association and never wakes a
 coordinator. Notices go to the main coordinator, like every other report, and
@@ -966,8 +967,18 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification), `failed` (error) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
+| Graph run | waiting for a person (`waiting`): the run is `waiting` or a step is `awaiting-human` (a human node, or an agent's `ask_human` question), keyed by the waiting positions, with the steps' node ids | `settled` |
+| Graph run | ended: `completed`, `failed` (bounded error and cause), `cancelled`, keyed `ended:<status>` | always |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
+
+A graph run (item 214) is reduced over two run events only, `graphRunStatus`:
+it ended, or it waits for a person. Anything else, nodes finishing included, is
+progress. A wait's key is the sorted set of waiting positions (activation key,
+attempt and open question id), so the same wait observed again sends nothing,
+and a new wait after the run resumed is sent again. A human node (item 208)
+needs nothing beyond putting its activation in `awaiting-human`. Graph runs are
+launched on this node only, so a `graph-run` association never has a `nodeId`.
 
 Individual reviewers finishing never wakes anyone: that is progress, and a
 seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
@@ -1009,8 +1020,8 @@ structured `notice` (resource kind and ids, state, tone), a subject such as
 "Multi Review api-fix is ready to address", a bounded Markdown body (at most
 eight 400-character detail lines) and the calls that read more or act —
 `get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
-`get_build_pipeline`, `resume_build_pipeline`, `get_tab_state`,
-`get_tab_transcript` — written out with their arguments. In the transcript it
+`get_build_pipeline`, `resume_build_pipeline`, `get_graph_run`,
+`get_tab_state`, `get_tab_transcript` — written out with their arguments. In the transcript it
 is a mail tile toned by the notice.
 
 **No wake storms.**

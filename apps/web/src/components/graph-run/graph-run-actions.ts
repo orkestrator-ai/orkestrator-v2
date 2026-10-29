@@ -5,15 +5,22 @@ import {
   graphActivationSkipRefusal,
   graphRunActions,
 } from "@orkestrator/protocol/graphs/run-view";
+import {
+  graphRunCodeRewindBlocker,
+  graphRunRestartBlocker,
+} from "@orkestrator/protocol/graphs/run-rewind";
 import type { GraphRunFlowNode } from "./graph-run-flow";
 
 /**
  * Which actions the run view offers for a node (plan P2.11): retry, restart
  * from here, rewind code to here, skip, open session, and the run-wide
  * pause, resume and cancel. Pure, so the faces, the context menus and the
- * inspector agree, and the backend's own checks (`run-view.ts`) decide the
- * same way for retry and skip. Approve, edit and choose live in the human
- * node's inspector slot (item 208).
+ * inspector agree, and the backend's own checks decide the same way: retry
+ * and skip by `run-view.ts`, restart and code rewind by item 210's
+ * `graphRunRestartBlocker` and `graphRunCodeRewindBlocker`. "Rewind code to
+ * here" stays listed, disabled with the reason, when only the code rewind is
+ * refused (a running run must be paused first), so the way to it is visible.
+ * Approve, edit and choose live in the human node's inspector slot (item 208).
  */
 export type GraphRunActionKey =
   | "expand-attempt"
@@ -32,14 +39,9 @@ export interface GraphRunActionSpec {
   label: string;
   /** Run-wide controls sit after the node's own actions. */
   runWide?: boolean;
+  /** Listed but refused now, and why (shown as the control's title). */
+  disabledReason?: string;
 }
-
-const RESTARTABLE = new Set<NodeActivation["state"]>([
-  "complete",
-  "failed",
-  "skipped",
-  "cancelled",
-]);
 
 /** The activation's input `workspace@1` commit a code rewind resets to, when it has one. */
 export function graphActivationWorkspaceInput(
@@ -72,14 +74,17 @@ export function graphRunNodeActions(run: GraphRun, node: GraphRunFlowNode): Grap
     if (graphActivationRetryRefusal(run, activation) === null) {
       actions.push({ key: "retry", label: "Retry" });
     }
-    const restartable =
-      RESTARTABLE.has(activation.state) &&
-      run.status !== "cancelling" &&
-      run.status !== "provisioning";
-    if (restartable) {
+    // A position not reached yet has nothing to restart; skip covers it.
+    const started = activation.state !== "waiting" && activation.state !== "ready";
+    if (started && graphRunRestartBlocker(run, activation.key) === undefined) {
       actions.push({ key: "restart", label: "Restart from here" });
       if (graphActivationWorkspaceInput(run, activation)) {
-        actions.push({ key: "rewind-code", label: "Rewind code to here…" });
+        const blocked = graphRunCodeRewindBlocker(run, activation.key);
+        actions.push({
+          key: "rewind-code",
+          label: "Rewind code to here…",
+          ...(blocked ? { disabledReason: blocked } : {}),
+        });
       }
     }
     if (graphActivationSkipRefusal(run, activation) === null) {

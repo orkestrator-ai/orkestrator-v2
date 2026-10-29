@@ -49,6 +49,7 @@ import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinato
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
+import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
   mimeTypeForFilename,
@@ -570,6 +571,12 @@ export function openCodePermissionRules(
      * registered them under (`opencode-coordinator-research.ts`).
      */
     researchTools?: readonly string[];
+    /**
+     * The MCP servers the directory's instance lists, for a policy that
+     * selects its user servers (graphs item 404,
+     * `openCodeConfiguredMcpServersFor`). Their rules come last.
+     */
+    configuredMcpServers?: readonly string[];
   } = {},
 ) {
   const action =
@@ -613,6 +620,9 @@ export function openCodePermissionRules(
       action: "deny" as const,
     })),
     ...openCodeExtendedCapabilityDenials(policy),
+    ...(options.configuredMcpServers
+      ? openCodeUserMcpRules(policy, options.configuredMcpServers)
+      : []),
   ];
 }
 

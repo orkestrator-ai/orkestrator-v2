@@ -12,8 +12,9 @@
  *   writes. Agents never hold the last two (D12); a system node pushes.
  * - `subagents`: the agent's own sub-agent tool (Claude `Task`/`Agent`,
  *   OpenCode `task`, Cursor `task`).
- * - `mcp:<server>`: one named MCP server. Deny only until per-session user
- *   servers exist (plan item 404).
+ * - `mcp:<server>`: one named MCP server the user configured. A denial
+ *   removes it; a graph node's grant selects it through
+ *   `capabilityPolicy.userMcpServers` (item 404, below).
  * - `orkestrator:<group>`: Orkestrator's own tool groups. The backend holds
  *   these through the activation's credential, so they never reach a bridge.
  *
@@ -105,15 +106,21 @@ export function isNativeAgentCapability(value: unknown): value is NativeAgentCap
   );
 }
 
+/** Whether `name` is a server name `mcp:<server>` accepts. */
+export function isNativeAgentMcpServerName(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length <= NATIVE_AGENT_MCP_SERVER_NAME_MAX_CHARS &&
+    NATIVE_AGENT_MCP_SERVER_NAME_PATTERN.test(name)
+  );
+}
+
 /** The server a `mcp:<server>` capability names, or undefined. */
 export function nativeAgentMcpServer(capability: string): string | undefined {
   if (!capability.startsWith("mcp:")) return undefined;
   const server = capability.slice(4);
-  return server.length > 0 &&
-    server.length <= NATIVE_AGENT_MCP_SERVER_NAME_MAX_CHARS &&
-    NATIVE_AGENT_MCP_SERVER_NAME_PATTERN.test(server)
-    ? server
-    : undefined;
+  return isNativeAgentMcpServerName(server) ? server : undefined;
 }
 
 /** The group an `orkestrator:<group>` capability names, or undefined. */
@@ -184,6 +191,117 @@ export function nativeAgentDenialsAreReadOnly(denied: Iterable<string>): boolean
   );
 }
 
+// ------------------------------------------------------- user MCP servers (404)
+
+/** Most names `capabilityPolicy.userMcpServers` may list. */
+export const NATIVE_AGENT_USER_MCP_SERVERS_MAX = 32;
+
+/** Whether `value` is a valid `userMcpServers` list: bounded, valid, unique names. */
+export function isNativeAgentUserMcpServerList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= NATIVE_AGENT_USER_MCP_SERVERS_MAX &&
+    value.every(isNativeAgentMcpServerName) &&
+    new Set(value).size === value.length
+  );
+}
+
+/**
+ * The configured MCP servers a session may load, when its policy selects
+ * them: `userMcpServers` minus every `mcp:<server>` denial (a denial wins).
+ * `undefined` when the policy selects nothing, which keeps every configured
+ * server the session's configuration provides, minus denials
+ * (`nativeAgentAllowsUserMcpServer`). `[]` means none.
+ */
+export function nativeAgentUserMcpGrant(
+  policy: Pick<NativeAgentExecutionPolicy, "capabilityPolicy"> | undefined,
+): string[] | undefined {
+  const listed = policy?.capabilityPolicy?.userMcpServers;
+  if (!isNativeAgentUserMcpServerList(listed)) return undefined;
+  const denied = new Set(
+    nativeAgentDeniedCapabilities(policy)
+      .map(nativeAgentMcpServer)
+      .filter((name): name is string => name !== undefined),
+  );
+  return listed.filter((name) => !denied.has(name));
+}
+
+/**
+ * Whether a session under `policy` may load the configured (user or
+ * project) MCP server `name`. Reserved Orkestrator servers are not
+ * configured servers: callers never pass them here.
+ */
+export function nativeAgentAllowsUserMcpServer(
+  policy: Pick<NativeAgentExecutionPolicy, "capabilityPolicy"> | undefined,
+  name: string,
+): boolean {
+  const grant = nativeAgentUserMcpGrant(policy);
+  if (grant) return grant.includes(name);
+  return !nativeAgentDeniedCapabilities(policy).includes(`mcp:${name}`);
+}
+
+/**
+ * Whether the policy narrows the configured MCP servers at all: it selects
+ * them, or it denies at least one. A bridge whose filtering costs something
+ * (a configuration read, dropped setting sources) does it only then.
+ */
+export function nativeAgentRestrictsUserMcp(
+  policy: Pick<NativeAgentExecutionPolicy, "capabilityPolicy"> | undefined,
+): boolean {
+  return (
+    nativeAgentUserMcpGrant(policy) !== undefined ||
+    nativeAgentDeniedCapabilities(policy).some((capability) => capability.startsWith("mcp:"))
+  );
+}
+
+/** How a current bridge delivers `userMcpServers` (item 404). */
+export interface NativeAgentUserMcpSelection {
+  /** Whether a grant is delivered on ordinary turns. */
+  ordinary: boolean;
+  /** Whether a grant is delivered on read-only turns. */
+  readOnly: boolean;
+  /** Why a grant is not delivered somewhere, for diagnostics. */
+  gap?: string;
+}
+
+/**
+ * Per platform: whether the current bridge loads exactly the selected
+ * configured servers. `docs/architecture/graphs.md` describes the
+ * mechanism on each; where a grant is not delivered, the session still
+ * never loads more than the bridge would without the selection.
+ */
+export const NATIVE_AGENT_USER_MCP_SELECTION: Readonly<
+  Record<AgentPlatform, NativeAgentUserMcpSelection>
+> = Object.freeze({
+  // Inline `mcpServers` filtered, `strictMcpConfig`, read-only hook admits grants.
+  claude: Object.freeze({ ordinary: true, readOnly: true }),
+  // Per-thread `mcp_servers.<name>.enabled = false` for everything else.
+  codex: Object.freeze({ ordinary: true, readOnly: true }),
+  // The bridge's own MCP client connects only to the selected servers.
+  pi: Object.freeze({ ordinary: true, readOnly: true }),
+  // Session permission rules refuse other servers' tools in the shared process.
+  opencode: Object.freeze({ ordinary: true, readOnly: true }),
+  cursor: Object.freeze({
+    ordinary: true,
+    readOnly: false,
+    gap: "Cursor's read-only turns load only Orkestrator's own MCP server, so a granted server is not offered there.",
+  }),
+  grok: Object.freeze({
+    ordinary: false,
+    readOnly: false,
+    gap: "Grok loads every MCP server in its own configuration and cannot be given a subset per session, so this node gets all of them on Grok.",
+  }),
+});
+
+/** Whether `platform` delivers a grant on a turn of this kind. */
+export function nativeAgentUserMcpSelectionDelivered(
+  platform: AgentPlatform,
+  readOnly: boolean,
+): boolean {
+  const selection = NATIVE_AGENT_USER_MCP_SELECTION[platform];
+  return readOnly ? selection.readOnly : selection.ordinary;
+}
+
 /** What a bridge translates among the post-legacy capabilities. */
 export type NativeAgentExtendedTranslation =
   "git.commit" | "git.push" | "github.write" | "subagents" | "mcp";
@@ -204,14 +322,17 @@ export const NATIVE_AGENT_BRIDGE_EXTENDED_TRANSLATIONS: Readonly<
   claude: Object.freeze(["git.commit", "git.push", "github.write", "subagents", "mcp"] as const),
   // Session permission rules: `task`, `<server>_*`, bash command patterns.
   opencode: Object.freeze(["git.commit", "git.push", "github.write", "subagents", "mcp"] as const),
-  // `disallowedTools: ["task"]`. MCP is one tool group in its SDK.
-  cursor: Object.freeze(["subagents"] as const),
-  // Codex ignores tool lists; its only levers are the sandbox and config.
-  codex: Object.freeze([] as const),
+  // `disallowedTools: ["task"]`. MCP is one tool group in its SDK, so a
+  // session that narrows its servers gets them inline from the bridge and no
+  // settings source (item 404).
+  cursor: Object.freeze(["subagents", "mcp"] as const),
+  // Codex ignores tool lists; its levers are the sandbox and config, which
+  // also disables a denied MCP server per thread (item 404).
+  codex: Object.freeze(["mcp"] as const),
   // Grok's tool removal is a fixed agent profile for deny-policy children.
   grok: Object.freeze([] as const),
-  // Pi applies no capability denial outside its read-only gate.
-  pi: Object.freeze([] as const),
+  // Pi's own MCP client skips a denied server (item 404); nothing else.
+  pi: Object.freeze(["mcp"] as const),
 });
 
 function extendedTranslationOf(capability: NativeAgentCapability): NativeAgentExtendedTranslation {
@@ -279,6 +400,7 @@ export function nativeAgentCapabilityHold(
  * the backend. Where the target platform does not translate an `mcp:<server>`
  * denial, repository configuration is turned off as its stand-in; the git and
  * GitHub stand-ins need no change on the wire (`nativeAgentCapabilityHold`).
+ * `userMcpServers` travels as the effective grant (denied names removed).
  * Idempotent, and the identity for a policy that uses only legacy names.
  */
 export function nativeAgentPolicyForBridge(
@@ -303,6 +425,7 @@ export function nativeAgentPolicyForBridge(
     (capability) => nativeAgentCapabilityHold(platform, capability, denied) === "project-resources",
   );
   const allow = capabilities.allow?.filter(isLegacyNativeAgentCapability);
+  const userMcpServers = nativeAgentUserMcpGrant(policy);
   return {
     ...policy,
     ...(projectResourcesStandIn ? { projectResources: false } : {}),
@@ -310,6 +433,7 @@ export function nativeAgentPolicyForBridge(
       deny: legacy,
       ...(allow && allow.length > 0 ? { allow } : {}),
       ...(extended.length > 0 ? { extendedDeny: extended } : {}),
+      ...(userMcpServers ? { userMcpServers } : {}),
     },
   };
 }

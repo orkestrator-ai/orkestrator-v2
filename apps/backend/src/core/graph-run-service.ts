@@ -34,6 +34,7 @@ import {
   replaceGraphActivation,
   type GraphRun,
   type GraphRunBindings,
+  type GraphRunLaunchInfo,
   type GraphRunTemplateRef,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
@@ -148,6 +149,8 @@ export interface GraphRunLaunch {
   inputs?: Record<string, unknown>;
   /** A mock run (item 213): mock executors only, no sessions, no side effects. */
   mock?: boolean;
+  /** Who launched it and how (item 214): ids only. */
+  launch?: GraphRunLaunchInfo;
   /** Mock runs only: the effective pins and step delay, frozen on the run. */
   mockOptions?: GraphMockRunOptions;
 }
@@ -457,6 +460,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       template: { ...launch.template },
       plan,
       bindings: { roles: structuredClone(launch.roles), params, inputs: {} },
+      ...(launch.launch ? { launch: structuredClone(launch.launch) } : {}),
       status: running ? "running" : "provisioning",
       mock: launch.mock ?? false,
       ...(launch.mock && launch.mockOptions
@@ -523,7 +527,12 @@ export class GraphRunService implements KeyedWorkflowOwner {
     const inputs: { name: string; type: string; value: unknown }[] = [];
     for (const input of plan.inputs) {
       if (!(input.name in given)) {
-        if (input.required) throw launchError(`The run input ${input.name} is required`);
+        // A run that creates its environment stores its empty `workspace@1`
+        // inputs from that environment's HEAD once it exists (item 214).
+        const deferred = launch.environmentId === undefined && input.type === "workspace@1";
+        if (input.required && !deferred) {
+          throw launchError(`The run input ${input.name} is required`);
+        }
         continue;
       }
       const resolution = library.resolve(input.type);

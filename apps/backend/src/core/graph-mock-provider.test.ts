@@ -1,6 +1,7 @@
 /**
- * Mock runs end to end (item 213): the report §9 examples (§9.3 without its
- * sub-graph; §9.4 with its `items` fan-out, item 401) and every built-in's duplicate
+ * Mock runs end to end (item 213): the report §9 examples as written (§9.3
+ * with its Multi Review sub-graph inlined, item 402; §9.4 with its `items`
+ * fan-out, item 401) and every built-in's duplicate
  * run to completion on the real scheduler, gates and merges, with the mock
  * agent, system and human executors, while the live agent and system
  * executors sit behind recording fakes that must see nothing. Deterministic:
@@ -10,6 +11,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { GraphMockWouldRun } from "@orkestrator/protocol/graphs/mock";
 import { GRAPH_BUILT_IN_TEMPLATE_IDS } from "@orkestrator/protocol/graphs/builtins";
 import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
+import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type { GraphAgentNode, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { GraphMockRuns, graphMockInputs } from "./graph-mock-launch.js";
@@ -321,9 +323,16 @@ describe("pinned sequences", () => {
     const rejected = await w.finish(
       (await w.launch(ref, { pins: { approve: [{ outlet: "rejected" }] } })).id,
     );
-    // Rejected: build and everything after it skip, so the required PR output is missing.
-    expect(rejected.status).toBe("failed");
-    expect(rejected.activations.find((a) => a.nodeId === "build")?.state).toBe("skipped");
+    // Rejected: build and everything after it skip. The PR run output is optional
+    // (item 402: a review with findings and autoFix off ends without one), so the
+    // run completes, without a pull request or a "would have run" record for one.
+    expect(rejected.status).toBe("complete");
+    expect(rejected.activations.find((a) => a.nodeId === "approve")?.outlet).toBe("rejected");
+    for (const nodeId of ["build", "review/plan", "describe-pr", "pr"]) {
+      expect(rejected.activations.find((a) => a.nodeId === nodeId)?.state).toBe("skipped");
+    }
+    expect(await wouldRun(w, rejected)).toEqual([]);
+    expectNoLiveWork(w, rejected);
     await expect(w.launch(ref, { pins: { approve: ["pause"] } })).rejects.toThrow(
       /cannot run human nodes/,
     );
@@ -335,7 +344,73 @@ describe("pinned sequences", () => {
       (run) => run.status === "waiting",
     );
     expect(paused.status).toBe("waiting");
-    expect(paused.activations.find((a) => a.nodeId === "approve")?.state).toBe("awaiting-human");
+    const waiting = paused.activations.find((a) => a.nodeId === "approve")!;
+    expect(waiting.state).toBe("awaiting-human");
+    // A person answers the paused wait (item 208's answer path); the mock carries on.
+    await withPeople.humanAnswers.answer(
+      { runId: paused.id, activationKey: waiting.key },
+      { waitId: waiting.human!.id, decision: "approve" },
+      "user",
+    );
+    const answered = await withPeople.finish(paused.id);
+    expect(answered.status).toBe("complete");
+    expect(answered.activations.find((a) => a.nodeId === "approve")?.outlet).toBe("approved");
+    expectNoLiveWork(withPeople, answered);
+  });
+
+  test("§9.3's inlined Multi Review reads its own scope and takes pins on its nodes", async () => {
+    const template = phase2Examples().find((entry) => entry.section === "9.3")!.template;
+    const w = await world();
+    const ref = await w.save(template);
+    const state = (run: GraphRun, nodeId: string) =>
+      run.activations.filter((a) => a.nodeId === nodeId).map((a) => a.state);
+
+    // autoFix off reaches the inlined Fix through the sub-graph's passed-through
+    // parameter: findings and no Fix end the review on neither branch, so there
+    // is no pull request (the run output is optional) and no PR record.
+    const unfixed = await w.finish((await w.launch(ref, { params: { autoFix: false } })).id);
+    expect(unfixed.status).toBe("complete");
+    expect(unfixed.bindings.params).toEqual({ autoFix: false });
+    expect(state(unfixed, "review/consolidate")).toEqual(["complete"]);
+    expect(unfixed.activations.find((a) => a.nodeId === "review/has-findings")?.outlet).toBe(
+      "findings",
+    );
+    for (const nodeId of ["review/fix", "review/fix-complete", "describe-pr", "pr", "review/pr"]) {
+      expect(state(unfixed, nodeId)).toEqual(["skipped"]);
+    }
+    expect((await wouldRun(w, unfixed)).map((effect) => effect.nodeId)).toEqual(["review/package"]);
+    expectNoLiveWork(w, unfixed);
+
+    // A pin on an inlined node (a plan id with `/`): a clean consolidated report
+    // takes the review's `clean` branch, and the PR ships that branch.
+    const example = graphBuiltInType("review-report@1")!.example as Record<string, unknown>;
+    const clean = { ...example, issues: [], testCoverageGaps: [] };
+    const launched = await w.launch(ref, {
+      pins: { "review/consolidate": [{ outputs: { report: clean } }] },
+    });
+    expect(launched.mockOptions?.pins?.["review/consolidate"]).toHaveLength(1);
+    const shipped = await w.finish(launched.id);
+    expect(shipped.status).toBe("complete");
+    const gate = shipped.activations.find((a) => a.nodeId === "review/has-findings")!;
+    expect(gate.outlet).toBe("clean");
+    expect(state(shipped, "review/fix")).toEqual(["skipped"]);
+    const pr = shipped.activations.find((a) => a.nodeId === "pr")!;
+    expect(pr.state).toBe("complete");
+    expect(pr.inputs.code).toBe(gate.outputs.code!);
+    const records = await wouldRun(w, shipped);
+    expect(records.find((effect) => effect.nodeId === "pr")?.wouldRun?.action).toBe(
+      "open-pull-request",
+    );
+    expect(records.some((effect) => effect.nodeId === "review/pr")).toBe(false);
+    expectNoLiveWork(w, shipped);
+
+    // Pins on inlined nodes are checked against the compiled plan at launch.
+    await expect(w.launch(ref, { pins: { "review/nowhere": ["example"] } })).rejects.toThrow(
+      /no node review\/nowhere/,
+    );
+    await expect(w.launch(ref, { pins: { "review/has-findings": ["example"] } })).rejects.toThrow(
+      /take no pins/,
+    );
   });
 
   test("an edit pin stores the edited value on the approved outlet", async () => {

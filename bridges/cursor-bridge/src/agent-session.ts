@@ -47,6 +47,8 @@ import { COORDINATOR_SKILLS_SERVER, hostSkillCustomTools } from "./coordinator-s
 import {
   cursorMcpServers,
   cursorInlineMcpServers,
+  cursorSettingSources,
+  cursorUserMcpServerFilter,
   hostOrkestratorCustomTools,
   hostResearchCustomTools,
   mcpConnectionKey,
@@ -437,9 +439,15 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
+  // A graph node loads only the user servers it was granted (item 404). Read-
+  // only attaches already load nothing but Orkestrator's own entries.
+  const selectServers = readOnly ? undefined : cursorUserMcpServerFilter(policy);
   const mcpServers = await cursorMcpServers(state.agentMcp, {
     readOnly,
     projectResources: policy.projectResources,
+    ...(selectServers
+      ? { userServers: selectServers, configHome: configHomeForTests ?? homedir() }
+      : {}),
   });
   // A provider-sandbox coordinator cannot call HTTP MCP: the SDK's approval
   // path fails closed with no callback. Host those tools in-process instead.
@@ -494,11 +502,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       // Read-only coordinators keep only the injected Orkestrator MCP server.
       // User settings would otherwise load the host's MCP catalog through the
       // same `mcp` capability the allowlist has to grant for delegation.
-      settingSources: readOnly
-        ? []
-        : policy.projectResources
-          ? ["user", "project", "team", "plugins"]
-          : ["user"],
+      settingSources: cursorSettingSources(policy, {
+        readOnly,
+        selectsServers: selectServers !== undefined,
+      }),
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
       ...(customTools ? { customTools } : {}),
@@ -523,7 +530,12 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         })()
       : {}),
     ...(httpMcpServerNames.length > 0
-      ? { mcpServers: cursorInlineMcpServers(mcpServers, !readOnly && policy.projectResources) }
+      ? {
+          mcpServers: cursorInlineMcpServers(
+            mcpServers,
+            !readOnly && policy.projectResources && !selectServers,
+          ),
+        }
       : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);

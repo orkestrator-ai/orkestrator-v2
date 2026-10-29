@@ -130,7 +130,7 @@ export function GraphConnectDialog({
   const verdict = chosen?.verdict;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" aria-describedby={undefined}>
+      <DialogContent size="lg" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>Connect</DialogTitle>
           <DialogDescription>
@@ -222,7 +222,7 @@ export function GraphLoopDialog({
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+      <DialogContent size="md" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>Loop region for {node?.label ?? nodeId}</DialogTitle>
           <DialogDescription>

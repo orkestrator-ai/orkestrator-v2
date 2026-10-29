@@ -99,6 +99,7 @@ import {
   type GraphItemFanOut,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import type {
   GraphCollectPolicy,
   GraphEdgeSource,
@@ -722,7 +723,8 @@ function decideWhen(
   if ("missing" in scope) return { kind: "missing", ids: scope.missing };
   const decision = evaluateGraphPredicate(node.when!, {
     values: scope.values,
-    params: view.run.bindings.params,
+    // An inlined sub-graph's node reads its own scope's parameters (item 402).
+    params: graphPlanScopeParams(view.run.plan, node.subgraph, view.run.bindings.params),
     run: { iteration },
   });
   return { kind: "decided", value: decision.value === true };

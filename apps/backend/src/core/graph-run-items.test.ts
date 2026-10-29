@@ -6,7 +6,7 @@
  * and system executors. Deterministic: a manual clock, no waits.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
+import { compile, type CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import { validateGraphProvenance } from "@orkestrator/protocol/graphs/provenance";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
@@ -223,6 +223,101 @@ describe("§9.4 with items fan-out", () => {
     // The branch's citable source is its own item, not its siblings'.
     expect(inputs.sources["validate/failure-2"]).toBe("validation-failure@1");
     expect(inputs.sources["validate/failure-1"]).toBeUndefined();
+  });
+});
+
+describe("inside an inlined sub-graph (item 402)", () => {
+  test("§9.4 inlined as a child fans out under namespaced ids, keys and source items", async () => {
+    const h = await harness();
+    const child = { ...graphTemplateExample("failure-diagnosis"), id: "repair-loop" };
+    const parent: GraphTemplateV1 = {
+      format: "orkestrator.graph",
+      formatVersion: 1,
+      id: "nested-repair",
+      revision: 1,
+      name: "Nested repair",
+      parameters: [],
+      roles: [
+        { key: "diagnoser", multiplicity: "one" },
+        { key: "fixer", multiplicity: "one" },
+      ],
+      inputs: [
+        { name: "plan", type: "validation-plan@1" },
+        { name: "target", type: "workspace@1" },
+      ],
+      outputs: [
+        {
+          name: "results",
+          type: "validation-results@1",
+          from: { node: "repair", port: "results" },
+        },
+      ],
+      workspace: { kind: "environment" },
+      nodes: [
+        {
+          id: "repair",
+          kind: "subgraph",
+          template: { scope: "user", id: "repair-loop" },
+          roles: { diagnoser: "diagnoser", fixer: "fixer" },
+          inputs: [
+            { name: "plan", type: "validation-plan@1" },
+            { name: "target", type: "workspace@1" },
+          ],
+          outputs: [{ name: "results", type: "validation-results@1" }],
+        },
+      ],
+      edges: [
+        { id: "plan-repair", from: { input: "plan" }, to: { node: "repair", port: "plan" } },
+        { id: "target-repair", from: { input: "target" }, to: { node: "repair", port: "target" } },
+      ],
+      limits: { maxAgentSessions: 39, maxConcurrentAgents: 12 },
+    };
+    const result = compile(parent, {
+      resolveTemplate: (ref) =>
+        ref.scope === "user" && ref.id === "repair-loop"
+          ? { template: structuredClone(child) }
+          : undefined,
+    });
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const plan = result.plan!;
+    const diagnoseNode = plan.nodes.find((node) => node.id === "repair/diagnose")!;
+    expect(diagnoseNode.fanOut).toEqual({ min: 0, max: 12 });
+    h.world.fakes.scripts.set("repair/validate", ({ port, iteration }) =>
+      port === "results" ? results(iteration === 1 ? [failure("a"), failure("b")] : []) : undefined,
+    );
+    h.world.fakes.scripts.set("repair/diagnose", ({ branchKey }) =>
+      diagnosis(branchKey === "item.repair:validate:failure-2" ? "typo" : "race"),
+    );
+    const run = await finish(h, (await launch(h, plan)).id);
+    expect(run.status).toBe("complete");
+    expect(run.loopIterations["repair/repair"]).toBe(2);
+    const fanOut = run.fanOuts![0]!;
+    expect(fanOut.nodeId).toBe("repair/diagnose");
+    expect(fanOut.items.map((item) => [item.key, item.id])).toEqual([
+      ["item.repair:validate:failure-1", "repair/validate/failure-1"],
+      ["item.repair:validate:failure-2", "repair/validate/failure-2"],
+    ]);
+    for (const item of fanOut.items) {
+      const branch = latest(run, "repair/diagnose", 1, item.key);
+      expect(branch.key).toBe(`repair/diagnose#iter=1#branch=${item.key}#attempt=1`);
+      expect((await artifact(h, run, item.artifact)).sourceItem).toBe(item.id);
+      expect((await artifact(h, run, branch.outputs.diagnosis!)).sourceItem).toBe(item.id);
+    }
+    const merged = await artifact(h, run, latest(run, "repair/dedupe").outputs.diagnosis!);
+    expect(merged.itemSources).toEqual([
+      ["repair/diagnose/item.repair:validate:failure-1/diagnosis-1"],
+      ["repair/diagnose/item.repair:validate:failure-2/diagnosis-1"],
+    ]);
+    // The inlined branch's prompt reads its item like any other.
+    if (diagnoseNode.kind !== "agent") throw new Error("diagnose is an agent");
+    const inputs = await loadGraphAgentInputs(
+      run,
+      diagnoseNode,
+      latest(run, "repair/diagnose", 1, "item.repair:validate:failure-2"),
+      h.world.artifacts,
+    );
+    expect(inputs.values.item).toEqual({ index: 2, id: "repair/validate/failure-2" });
+    expect(Object.keys(inputs.sources)).toContain("repair/validate/failure-2");
   });
 });
 

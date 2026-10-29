@@ -115,12 +115,16 @@ export type CommandContext = {
   graphTemplates?: import("./graph-template-service.js").GraphTemplateService;
   /** Graph runs: launch, read, cancel, pause and resume (items 202, 203; launch surfaces 214). */
   graphRuns?: import("./graph-run-service.js").GraphRunService;
+  /** Launches a saved graph template from every surface (item 214). */
+  graphLaunches?: import("./graph-run-launch.js").GraphRunLaunchService;
   /** Agent `ask_human` questions and their answers (item 204; `graph_run_answer`). */
   graphQuestions?: import("./graph-agent-questions.js").GraphAgentQuestions;
   /** "Describe a graph" jobs, one per environment (item 215). */
   graphDescribe?: import("./graph-describe-service.js").GraphDescribeService;
   /** Mock run launches and their retention (item 213; `graph_run_mock`). */
   graphMock?: import("./graph-mock-launch.js").GraphMockRuns;
+  /** Human node answers (item 208; `graph_run_answer`'s human-node form). */
+  graphHumanAnswers?: import("./graph-node-human.js").GraphHumanAnswers;
 };
 
 export type CommandHandler = (

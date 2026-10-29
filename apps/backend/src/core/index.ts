@@ -155,7 +155,10 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import { coordinatorProviderQualification } from "./coordinator-providers.js";
+import {
+  coordinatorProviderQualification,
+  defaultCoordinatorHostCapabilities,
+} from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -180,7 +183,12 @@ import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
+import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
+import { GraphRunAttention } from "./graph-run-attention.js";
 import { GraphRunService } from "./graph-run-service.js";
+import { GraphRunLaunchService } from "./graph-run-launch.js";
+import { launchSettingsTiers } from "./control-shared-actions.js";
+import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
@@ -219,10 +227,14 @@ export class OrkestratorBackend {
   private readonly graphRuns: GraphRunService;
   private readonly graphSystemExecutor: GraphNodeSystemExecutor;
   private readonly graphAgents: GraphAgentWiring;
+  /** Launches saved templates from every surface (item 214). */
+  private readonly graphLaunches: GraphRunLaunchService;
   private readonly graphDescribe: GraphDescribeService;
   private readonly graphDescribeProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
   private readonly graphMock: GraphMockRuns;
+  /** Waiting graph runs in the sidebar: activity and attention (item 208). */
+  private readonly graphRunAttention: GraphRunAttention;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1130,7 +1142,21 @@ export class OrkestratorBackend {
     this.graphRuns = new GraphRunService(storage, {
       artifacts: graphArtifacts,
       workflowAdmission: this.workflowAdmission,
-      provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
+      provisioner: new GraphRunEnvironmentProvisioner({
+        storage,
+        invoke: invokeCommand,
+        // Run inputs a launch on a new environment deferred to it (item 214).
+        workspaceHead: async (environment) => ({
+          branch: environment.branch,
+          headRef: (
+            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ])
+          ).trim(),
+        }),
+      }),
       // Code rewinds (item 210) share the pipeline's Git port and reservation.
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
       codeRewindReservation: (run, operation) =>
@@ -1152,6 +1178,13 @@ export class OrkestratorBackend {
     // Gates and merges are deterministic (item 206); mock runs use them too.
     this.graphRuns.executors.register(createGraphGateExecutor());
     this.graphRuns.executors.register(createGraphMergeExecutor());
+    // Human nodes (item 208): a person approves, edits or chooses; mock runs use it too.
+    this.graphRuns.executors.register(createGraphHumanExecutor());
+    context.graphHumanAnswers = new GraphHumanAnswers({
+      runs: this.graphRuns,
+      artifacts: graphArtifacts,
+    });
+    this.graphRunAttention = new GraphRunAttention(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
@@ -1214,6 +1247,33 @@ export class OrkestratorBackend {
       captureTranscript: createGraphRunTranscriptCapture({ storage }),
     });
     context.graphQuestions = this.graphAgents.questions;
+    // Every launch surface (item 214) goes through one service.
+    this.graphLaunches = new GraphRunLaunchService({
+      storage,
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      settingsTiers: (projectId, environment) =>
+        launchSettingsTiers(
+          invokeCommand,
+          projectId,
+          environment ? (environment as unknown as Record<string, unknown>) : undefined,
+        ),
+      // Result tools when the rollout admits them, structured output otherwise.
+      structuredResults: (platform) =>
+        this.workflowResultRollout.allows(platform, "graph-output") ||
+        STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(platform),
+      workspaceHead: async (environment) => {
+        const headRef = (
+          await graphShell.git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
+        ).trim();
+        return { branch: environment.branch, headRef };
+      },
+      linkTicket: async (taskId, environmentId) => {
+        await invokeCommand("update_kanban_task", { taskId, environmentId });
+      },
+      host: () => defaultCoordinatorHostCapabilities(),
+    });
+    context.graphLaunches = this.graphLaunches;
     // "Describe a graph" (item 215): backend-owned designer agent jobs.
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
@@ -1733,11 +1793,26 @@ export class OrkestratorBackend {
     await this.graphRuns.init().catch((error) => {
       console.warn("[backend] Failed to restore graph runs:", error);
     });
+    // Runs that ended before they had an environment are bounded (item 214).
+    void this.graphLaunches.sweep().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to sweep graph runs without an environment:",
+        error instanceof Error ? error.name : "error",
+      );
+    });
     await this.graphDescribe.init().catch((error) => {
       console.warn("[backend] Failed to restore graph describe jobs:", error);
     });
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
+
+    // Waiting runs light the sidebar again after a restart; runs in the background.
+    void this.graphRunAttention.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore graph run attention:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
     );
@@ -2163,6 +2238,12 @@ export class OrkestratorBackend {
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
+  private requireGraphLaunches() {
+    const launches = this.context.graphLaunches;
+    if (!launches) throw new Error("Graph launches are unavailable");
+    return launches;
+  }
+
   /** The scheduler and the executor that runs each fire as its owner. */
   private createScheduledJobs(storage: StorageService): ScheduledJobService {
     const handlers = publicActionHandlers();
@@ -2175,6 +2256,11 @@ export class OrkestratorBackend {
         coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
+      // Scheduled graph launches (item 214) go through the one launch service.
+      graphs: {
+        launch: (request, origin) => this.requireGraphLaunches().launch(request, origin),
+        options: (input) => this.requireGraphLaunches().options(input),
+      },
       ...(controlMcp.callCoordinatorTool &&
       controlMcp.listCoordinatorTools &&
       controlMcp.credentialPolicy
@@ -2362,6 +2448,7 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.graphRunAttention.stop();
     this.agentHumanPrompts.stop();
     // Non-recursive project-template watches: closing them never blocks.
     this.graphTemplates.shutdown();

@@ -34,6 +34,7 @@ import {
   type GraphRun,
   type GraphRunBindings,
 } from "@orkestrator/protocol/graphs/run";
+import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
 import { GraphArtifactStore } from "./graph-artifacts.js";
@@ -76,6 +77,14 @@ export function graphTypeExample(plan: CompiledGraphPlan, ref: string): unknown 
   if (builtIn) return structuredClone(builtIn.example);
   const custom = plan.types.find((type) => `${type.name}@${type.version}` === ref);
   return custom?.example === undefined ? undefined : structuredClone(custom.example);
+}
+
+/** Whether a type reference is stored as a value or as a sealed file. */
+function graphTypeStorage(plan: CompiledGraphPlan, ref: string): "value" | "reference" | undefined {
+  return (
+    graphBuiltInType(ref)?.storage ??
+    plan.types.find((type) => `${type.name}@${type.version}` === ref)?.storage
+  );
 }
 
 /** What a script sees: one output port of one activation. */
@@ -195,15 +204,25 @@ export class FakeGraphExecutors {
       if (scripted === null) continue;
       const value = scripted ?? graphTypeExample(context.run.plan, port.type);
       if (value === undefined) continue;
-      const artifact = await context.artifacts.putValue({
+      const common = {
         runId: context.run.id,
         type: port.type,
         producer: { nodeId: context.node.id, activation: context.activation.key, port: port.name },
         inputs: lineage,
         ...(port.choices ? { validation: { choices: port.choices } } : {}),
         ...(sourceItem !== undefined ? { sourceItem } : {}),
-        value,
-      });
+      };
+      // A reference type (`review-package@2`) is sealed as a file, with the
+      // value as its descriptor; that needs a run environment with a worktree.
+      const artifact =
+        graphTypeStorage(context.run.plan, port.type) === "reference"
+          ? await context.artifacts.putFile({
+              ...common,
+              contents: Buffer.from(JSON.stringify(value)),
+              extension: "json",
+              value,
+            })
+          : await context.artifacts.putValue({ ...common, value });
       outputs[port.name] = artifact.id;
     }
     return outputs;
@@ -248,7 +267,11 @@ export class FakeGraphExecutors {
           (branch) =>
             evaluateGraphPredicate(branch.when, {
               values,
-              params: context.run.bindings.params,
+              params: graphPlanScopeParams(
+                context.run.plan,
+                node.subgraph,
+                context.run.bindings.params,
+              ),
               run: { iteration: context.activation.iteration },
             }).value,
         )?.to ?? node.otherwise;

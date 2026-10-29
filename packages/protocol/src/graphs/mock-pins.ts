@@ -84,7 +84,10 @@ export type GraphMockPin =
   | { fail: GraphErrorCause; message?: string }
   | { outlet: string; outputs?: Record<string, unknown> };
 
-/** Node id → its pin sequence. */
+/**
+ * Node id → its pin sequence. Ids are plan node ids: a template's own node,
+ * or a node inlined from one of its sub-graphs (`review/fix`, item 402).
+ */
 export type GraphMockPins = Record<string, GraphMockPin[]>;
 
 /** What a mock run carries (`GraphRun.mockOptions`). */
@@ -221,9 +224,10 @@ export function checkGraphMockPins(
   path: string,
   errors: FieldErrorCollector,
 ): void {
+  // Plan node ids: a pin may target a node inlined from a sub-graph (`review/fix`).
   const entries = checkGraphRecord(value, path, errors, {
     max: GRAPH_MOCK_PIN_BOUNDS.maxNodes,
-    key: "id",
+    key: "plan-id",
   });
   if (!entries) return;
   for (const [nodeId, sequence] of entries) {
@@ -325,6 +329,18 @@ export interface GraphMockPinNode {
 export interface GraphMockPinTarget {
   library: GraphTypeLibrary;
   nodes: ReadonlyMap<string, GraphMockPinNode>;
+  /**
+   * A template's sub-graph nodes. Their inlined children (`<id>/...`) exist
+   * only once the child is resolved and inlined, so pins on them are checked
+   * at launch against the compiled plan, not against the template.
+   */
+  subgraphs?: ReadonlySet<string>;
+}
+
+/** Whether a pin targets a node inlined from one of the target's unresolved sub-graphs. */
+function inlinedIntoUnresolved(target: GraphMockPinTarget, nodeId: string): boolean {
+  const slash = nodeId.indexOf("/");
+  return slash > 0 && target.subgraphs?.has(nodeId.slice(0, slash)) === true;
 }
 
 export const GRAPH_MOCK_PIN_ISSUE_CODES = [
@@ -361,7 +377,9 @@ const PINNABLE = new Set(["agent", "system", "human"]);
 /** The targets of a template (the designer). */
 export function graphMockPinTargetFromTemplate(template: GraphTemplateV1): GraphMockPinTarget {
   const nodes = new Map<string, GraphMockPinNode>();
+  const subgraphs = new Set<string>();
   for (const node of template.nodes) {
+    if (node.kind === "subgraph") subgraphs.add(node.id);
     const declared = "outputs" in node ? (node.outputs ?? []) : [];
     const outputs: GraphMockPinPort[] = declared.map((port) => ({
       name: port.name,
@@ -383,7 +401,7 @@ export function graphMockPinTargetFromTemplate(template: GraphTemplateV1): Graph
       ...(edit ? { edit } : {}),
     });
   }
-  return { library: new GraphTypeLibrary(template.types ?? []), nodes };
+  return { library: new GraphTypeLibrary(template.types ?? []), nodes, subgraphs };
 }
 
 /** The targets of a compiled plan (the backend, at launch). */
@@ -480,6 +498,7 @@ export function graphMockPinIssues(
   const issues: GraphMockPinIssue[] = [];
   for (const [nodeId, sequence] of Object.entries(pins ?? {})) {
     const node = target.nodes.get(nodeId);
+    if (!node && inlinedIntoUnresolved(target, nodeId)) continue;
     if (!node) {
       issues.push({
         code: "mock-pin-unknown-node",

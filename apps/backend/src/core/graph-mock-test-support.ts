@@ -20,6 +20,7 @@ import { GraphMockRuns, type GraphMockLaunchInput } from "./graph-mock-launch.js
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
 import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
+import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
@@ -51,6 +52,8 @@ export interface GraphMockWorld {
   artifacts: GraphArtifactStore;
   service: GraphRunService;
   mock: GraphMockRuns;
+  /** Answers human waits as `graph_run_answer` does (item 208). */
+  humanAnswers: GraphHumanAnswers;
   provider: FakeAgentProvider;
   calls: GraphMockWorldCalls;
   time: ManualTime;
@@ -137,15 +140,13 @@ export async function graphMockWorld(
     inlineWaitMs: 0,
   });
   service.executors.register(system);
-  if (options.humanExecutor) {
-    // A stand-in for item 208's executor: waits until the test answers.
-    service.executors.register({
-      kind: "human",
-      start: async () => ({ state: "awaiting-human", observeAfterMs: null }),
-      observe: async () => ({ state: "unchanged", observeAfterMs: null }),
-      cancel: async () => ({ state: "cancelled" }),
-    });
-  }
+  // Item 208's live human executor and its answer path, as the backend wires them.
+  if (options.humanExecutor) service.executors.register(createGraphHumanExecutor());
+  const humanAnswers = new GraphHumanAnswers({
+    runs: service,
+    artifacts,
+    clock: () => new Date(GRAPH_MOCK_WORLD_EPOCH + time.now()),
+  });
   installGraphMockExecutors(service.executors, { storage, owner: "mock-test" });
   const mock = new GraphMockRuns({ templates, runs: service, storage });
 
@@ -158,6 +159,7 @@ export async function graphMockWorld(
     artifacts,
     service,
     mock,
+    humanAnswers,
     provider,
     calls,
     time,
@@ -196,37 +198,14 @@ export async function graphMockWorld(
   return world;
 }
 
-/** Report §9.3 without the sub-graph (Phase 4): build feeds describe-pr and the PR directly. */
-export function designBakeOffWithoutSubgraph(template: GraphTemplateV1): GraphTemplateV1 {
-  const next = structuredClone(template);
-  next.nodes = next.nodes.filter((node) => node.id !== "review");
-  next.edges = next.edges.filter(
-    (edge) => !["build-review", "review-describe", "review-pr"].includes(edge.id),
-  );
-  next.edges.push(
-    {
-      id: "build-describe",
-      from: { node: "build", port: "code" },
-      to: { node: "describe-pr", port: "code" },
-    },
-    { id: "build-pr", from: { node: "build", port: "code" }, to: { node: "pr", port: "code" } },
-  );
-  next.roles = next.roles.filter(
-    (role) => !["preparer", "reviewer", "consolidator"].includes(role.key),
-  );
-  if (next.layout) delete next.layout.review;
-  return next;
-}
-
 /**
- * The examples as the runtime runs them, under user-template ids: §9.3
- * without its sub-graph (item 402); §9.4 as written, with its `items`
- * fan-out (item 401).
+ * The examples as mock runs take them, under user-template ids, as written:
+ * §9.3 with its Multi Review sub-graph inlined at compile (item 402), §9.4
+ * with its `items` fan-out (item 401).
  */
 export function phase2Examples(): { section: string; template: GraphTemplateV1 }[] {
   return graphTemplateExamples().map((example) => {
-    let template = example.template;
-    if (example.key === "design-bake-off") template = designBakeOffWithoutSubgraph(template);
+    const template = example.template;
     return {
       section: example.reportSection,
       template: { ...template, id: `mock-${template.id}`, revision: 0 },

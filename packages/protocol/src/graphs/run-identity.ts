@@ -2,7 +2,8 @@
  * Names and identities of runs, activations and artifacts (plan P2.1).
  *
  * - Activation keys: `node#iter=<n>#branch=<key>#attempt=<n>`, the branch
- *   segment present only for replicated nodes. Branch keys are stable across
+ *   segment present only for replicated nodes. `node` is a plan node id, so a
+ *   node inlined from a sub-graph reads `review/consolidate#iter=1#attempt=1`. Branch keys are stable across
  *   retries (P2.5) and never contain `#` or `=`, so a key parses back exactly.
  * - Reference artifact files: `.orkestrator/graph-artifacts/<run-id>/<sha256>`
  *   with an optional short extension. The path is derived from the run and the
@@ -17,7 +18,7 @@
  * SHA-256; the default is the pure implementation the browser uses.
  */
 import { canonicalJson } from "../canonical-json.js";
-import { GRAPH_ID_PATTERN, GRAPH_TEMPLATE_BOUNDS, graphUtf8Bytes } from "./grammar.js";
+import { graphUtf8Bytes, isGraphPlanId } from "./grammar.js";
 import {
   GRAPH_ARTIFACT_FORMAT_VERSION,
   GRAPH_RUN_BOUNDS,
@@ -65,11 +66,8 @@ function validCounter(value: number, max: number): boolean {
 
 /** The activation key; throws on parts no key may hold. */
 export function graphActivationKey(parts: GraphActivationKeyParts): string {
-  if (
-    !GRAPH_ID_PATTERN.test(parts.nodeId) ||
-    parts.nodeId.length > GRAPH_TEMPLATE_BOUNDS.maxIdChars
-  ) {
-    throw new Error("Activation node id must be a graph id");
+  if (!isGraphPlanId(parts.nodeId)) {
+    throw new Error("Activation node id must be a plan node id");
   }
   if (!validCounter(parts.iteration, GRAPH_RUN_BOUNDS.maxIteration)) {
     throw new Error(`Activation iteration must be 1..${GRAPH_RUN_BOUNDS.maxIteration}`);
@@ -85,7 +83,7 @@ export function graphActivationKey(parts: GraphActivationKeyParts): string {
 }
 
 const ACTIVATION_KEY_PATTERN =
-  /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)#iter=([1-9][0-9]*)(?:#branch=([A-Za-z0-9][A-Za-z0-9._+:-]*))?#attempt=([1-9][0-9]*)$/;
+  /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*)#iter=([1-9][0-9]*)(?:#branch=([A-Za-z0-9][A-Za-z0-9._+:-]*))?#attempt=([1-9][0-9]*)$/;
 
 /** The key's parts, or null for anything {@link graphActivationKey} would not produce. */
 export function parseGraphActivationKey(key: unknown): GraphActivationKeyParts | null {

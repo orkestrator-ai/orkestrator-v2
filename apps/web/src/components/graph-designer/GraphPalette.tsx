@@ -9,7 +9,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { GraphTemplateSummary } from "@orkestrator/protocol/graphs/library";
 import type { GraphPaletteItem } from "./graph-designer-edits";
+import type { GraphSubgraphChoice } from "./graph-designer-subgraphs";
 import { SideEffectBadge } from "./graph-form-controls";
 
 /**
@@ -19,20 +21,33 @@ import { SideEffectBadge } from "./graph-form-controls";
  * submenu lists each action's label and description from its spec (item
  * 207) and marks the side-effecting ones. Loop region
  * wraps the selected node; more members join by dragging them onto the frame
- * or with "Move into loop". Sub-graphs arrive in Phase 4 (item 402).
+ * or with "Move into loop". "Sub-graph" (item 402) lists the saved
+ * templates by scope; picking one adds it as one node, pinned to its current
+ * digest, with ports from its run inputs and outputs.
  */
 
 const BUTTON = "h-7 gap-1.5 px-2 text-xs";
+
+const SCOPES = [
+  { scope: "builtin", label: "Built-in" },
+  { scope: "user", label: "Your templates" },
+  { scope: "project", label: "Project templates" },
+] as const;
 
 export function GraphPalette({
   onAdd,
   wrapTarget,
   onWrapInLoop,
+  subgraphs,
+  onAddSubgraph,
 }: {
   onAdd: (item: GraphPaletteItem) => void;
   /** The selected node, which "Loop region" wraps; null when none is selected. */
   wrapTarget: string | null;
   onWrapInLoop: (nodeId: string) => void;
+  /** Saved templates the "Sub-graph" menu offers (item 402). */
+  subgraphs?: readonly GraphSubgraphChoice[];
+  onAddSubgraph?: (summary: GraphTemplateSummary) => void;
 }) {
   return (
     <div
@@ -102,18 +117,59 @@ export function GraphPalette({
       >
         <Repeat className="size-3.5" /> Loop region
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className={BUTTON}
-        disabled
-        title="Sub-graphs (another saved template as one node) arrive in Phase 4"
-      >
-        <Boxes className="size-3.5" /> Sub-graph
-        <span className="rounded border border-border px-1 text-[9px] text-muted-foreground">
-          Phase 4
-        </span>
-      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={BUTTON}
+            aria-label="Sub-graph node"
+            disabled={!subgraphs || subgraphs.length === 0}
+            title={
+              !subgraphs || subgraphs.length === 0
+                ? "No saved template to use as a sub-graph yet"
+                : "Use a saved template as one node"
+            }
+          >
+            <Boxes className="size-3.5" /> Sub-graph
+            <ChevronDown className="size-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="start" className="max-h-96 w-80 overflow-y-auto">
+          {SCOPES.map(({ scope, label }) => {
+            const choices = (subgraphs ?? []).filter((choice) => choice.summary.scope === scope);
+            if (choices.length === 0) return null;
+            return (
+              <div key={scope}>
+                <DropdownMenuLabel>{label}</DropdownMenuLabel>
+                {choices.map(({ summary, disabled }) => (
+                  <DropdownMenuItem
+                    key={`${summary.scope}:${summary.id}:${summary.ref.scope === "project" ? summary.ref.path : ""}`}
+                    data-graph-subgraph-choice={`${summary.scope}:${summary.id}`}
+                    disabled={disabled !== undefined}
+                    onSelect={() => onAddSubgraph?.(summary)}
+                    title={disabled ?? summary.description}
+                    className="flex flex-col items-start gap-0"
+                  >
+                    <span className="flex w-full items-center gap-1.5 text-xs font-medium">
+                      {summary.name}
+                      <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                        {summary.id}
+                      </span>
+                    </span>
+                    <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                      {disabled ??
+                        (summary.engine
+                          ? "Runs here as a copy on the graph runtime"
+                          : (summary.description ?? `Revision ${summary.revision}`))}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

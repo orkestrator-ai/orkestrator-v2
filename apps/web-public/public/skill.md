@@ -155,7 +155,7 @@ orkestrator --node <NODE_ID> environment list --json
 orkestrator --node all environment list --json    # every machine, tagged by node
 ```
 
-Review, build and PR commands (changes; pass `--request-id`):
+Review, build, graph and PR commands (changes; pass `--request-id`):
 
 ```bash
 orkestrator review launch <ENV_ID> --request-id review-1   # Multi Review with saved defaults
@@ -166,6 +166,11 @@ orkestrator build launch <TICKET_ID> --project <PROJECT_ID> --type local --reque
 orkestrator build launch <TICKET_ID> --project <PROJECT_ID> --environment <ENV_ID> \
   --instructions verify="Run the CLI help" --request-id build-2  # per-step instructions
 orkestrator build get <BUILD_ID>
+orkestrator graph list --project <PROJECT_ID>                # saved graph templates
+orkestrator graph show user:<ID> --project <PROJECT_ID>     # roles, providers, defaults
+orkestrator graph launch user:<ID> --project <PROJECT_ID> --new-worktree \
+  --ticket <TICKET_ID> --role reviewer=claude,codex --request-id graph-1
+orkestrator graph status <RUN_ID>
 ```
 
 - **Output:** `--json` prints exactly one envelope:

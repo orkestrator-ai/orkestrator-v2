@@ -14,6 +14,7 @@ import {
   joinPath,
 } from "../field-validation.js";
 import {
+  GRAPH_DIGEST_PATTERN,
   GRAPH_TEMPLATE_BOUNDS as B,
   GraphNameScope,
   checkGraphBoolean,
@@ -614,6 +615,13 @@ function checkHumanForm(
 
 // ------------------------------------------------------------ subgraph pieces
 
+/**
+ * A project template file (`isGraphProjectTemplatePath` in library.ts, which
+ * imports this module and so cannot be imported here; a test keeps them equal).
+ */
+export const GRAPH_PROJECT_TEMPLATE_PATH =
+  /^\.orkestrator\/graphs\/[A-Za-z0-9][A-Za-z0-9._-]{0,116}\.graph\.json$/;
+
 function checkSubgraphFields(
   node: Record<string, unknown>,
   path: string,
@@ -622,7 +630,7 @@ function checkSubgraphFields(
   const templatePath = joinPath(path, "template");
   if (
     checkPresent(node.template, templatePath, errors) &&
-    checkObject(node.template, templatePath, ["scope", "id", "revision"], errors)
+    checkObject(node.template, templatePath, ["scope", "id", "revision", "digest", "path"], errors)
   ) {
     checkRequiredEnum(
       node.template.scope,
@@ -639,6 +647,33 @@ function checkSubgraphFields(
       Number.MAX_SAFE_INTEGER,
       true,
     );
+    const digest = node.template.digest;
+    if (
+      digest !== undefined &&
+      (typeof digest !== "string" || !GRAPH_DIGEST_PATTERN.test(digest))
+    ) {
+      errors.add(
+        joinPath(templatePath, "digest"),
+        "pattern",
+        "Must be a lower-case SHA-256 hex digest",
+      );
+    }
+    const file = node.template.path;
+    if (file !== undefined) {
+      if (typeof file !== "string" || !GRAPH_PROJECT_TEMPLATE_PATH.test(file)) {
+        errors.add(
+          joinPath(templatePath, "path"),
+          "pattern",
+          "Must name a file in .orkestrator/graphs ending in .graph.json",
+        );
+      } else if (node.template.scope !== "project") {
+        errors.add(
+          joinPath(templatePath, "path"),
+          "not_applicable",
+          "Only a project template has a path",
+        );
+      }
+    }
   }
   if (node.params !== undefined) {
     const paramsPath = joinPath(path, "params");

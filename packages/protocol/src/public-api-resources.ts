@@ -842,6 +842,160 @@ export interface PublicBuildPipelineActionResult {
   reused?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Graphs (item 214)
+
+/** `graph.list` items and the head of `graph.show`: metadata and compile counts, never prompts. */
+export interface PublicGraphTemplateSummary {
+  /** The reference to pass back: `builtin:<id>`, `user:<id>` or `project:<path>`. */
+  template: string;
+  scope: "builtin" | "user" | "project";
+  id: string;
+  name: string;
+  revision: number;
+  digest: string;
+  trust: "trusted" | "untrusted" | "changed";
+  /** Trusted, not an engine template, and compiles with nothing pending. */
+  launchable: boolean;
+  /** A built-in running on its own engine (never launchable as a graph). */
+  engine: string | null;
+  errors: number;
+  warnings: number;
+  pendingAcknowledgements: number;
+  /** The compile estimate, or null when the template does not compile. */
+  agentSessions: { best: number; worst: number } | null;
+}
+
+/** One model binding by selection; a lens by size only. */
+export interface PublicGraphBindingSummary {
+  agent: string;
+  model: string | null;
+  reasoningEffort: string | null;
+  fastMode: boolean | null;
+  lens: { labelBytes: number; instructionBytes: number } | null;
+}
+
+/** `graph.show` with a project: what a launch there may bind. */
+export interface PublicGraphLaunchView {
+  launchable: boolean;
+  blockedReason: string | null;
+  roles: Array<{
+    key: string;
+    panel: boolean;
+    maxPanel: number;
+    /** The strongest enforcement floor among the role's steps. */
+    floor: string | null;
+    providers: Array<{
+      agent: string;
+      tier: string;
+      available: boolean;
+      unavailableReason: string | null;
+    }>;
+    /** What a launch that leaves the role out binds. */
+    default: PublicGraphBindingSummary[];
+  }>;
+  /** Saved values, else the template's defaults. */
+  params: Record<string, string | number | boolean | null>;
+  environment: {
+    default: "new-worktree" | "new-container" | "existing";
+    create: "worktree" | "container" | null;
+  };
+}
+
+export interface PublicGraphTemplateDetail extends PublicGraphTemplateSummary {
+  description: string | null;
+  roles: Array<{
+    key: string;
+    label: string | null;
+    multiplicity: "one" | "panel";
+    maxPanel: number | null;
+    defaultsFrom: string[];
+  }>;
+  parameters: Array<{
+    key: string;
+    type: string;
+    label: string | null;
+    default: string | number | boolean | null;
+    min: number | null;
+    max: number | null;
+    options: string[] | null;
+  }>;
+  inputs: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    /** A `ticket@1` input: `--ticket` fills it. */
+    ticket: boolean;
+  }>;
+  /** The template's nodes (`nodes` is reserved for aggregate reads across command nodes). */
+  steps: Array<{ id: string; kind: string; label: string | null; role: string | null }>;
+  workspace: { kind: "environment" | "none"; create: "worktree" | "container" | null };
+  /** With `projectId` only. */
+  launch: PublicGraphLaunchView | null;
+}
+
+/** `graph.validate`: the compile result, diagnostics bounded. */
+export interface PublicGraphValidation {
+  /** The saved template compiled, or null for inline text. */
+  template: string | null;
+  ok: boolean;
+  launchable: boolean;
+  /** Trust alone stops a launch. */
+  blockedBy: "untrusted" | "changed" | null;
+  errors: number;
+  warnings: number;
+  infos: number;
+  pendingAcknowledgements: number;
+  diagnostics: Array<{
+    code: string;
+    severity: "error" | "warning" | "info";
+    message: string;
+    nodeId: string | null;
+    path: string | null;
+  }>;
+  /** Diagnostics beyond the returned ones, counted only. */
+  omittedDiagnostics: number;
+  planDigest: string | null;
+  cost: {
+    agentSessions: { best: number; worst: number };
+    activations: { best: number; worst: number };
+    peakParallelism: number;
+  } | null;
+}
+
+/** `graph.status`: one run by states and counts, never inputs, outputs or prompts. */
+export interface PublicGraphRunSummary {
+  id: string;
+  projectId: string;
+  /** Null while a run that creates its environment provisions it. */
+  environmentId: string | null;
+  template: { id: string; revision: number; name: string; scope: string | null };
+  status: string;
+  mock: boolean;
+  requestedBy: string | null;
+  ticketId: string | null;
+  /** Live (not superseded) node activations by state. */
+  activations: Record<string, number>;
+  usage: { agentSessions: number; tokens: number };
+  /** Bounded failure reason; never a payload. */
+  error: string | null;
+  errorCause: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+  revision: number;
+}
+
+/** `graph.launch` and `graph.cancel` results: IDs and states only. */
+export interface PublicGraphRunActionResult {
+  runId: string;
+  projectId: string;
+  environmentId: string | null;
+  status: string;
+  template: { id: string; revision: number; name: string };
+}
+
 /** `permission.rule.list`: this node's Orkestrator permission rules (todo 0723). */
 export interface PublicPermissionRuleList {
   rules: import("./permission-rules.js").NativeAgentPermissionRule[];

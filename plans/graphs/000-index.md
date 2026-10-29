@@ -69,20 +69,20 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 205 | [205-replication-and-collection.md](205-replication-and-collection.md) | 2 | in-progress | 204 | `replicate` over panel, lenses and samples (≤ 32); stable branch keys; collect policies; zip edges. |
 | 206 | [206-gate-merge-loop-failure.md](206-gate-merge-loop-failure.md) | 2 | in-progress | 104, 203 | Gates with skipped subtrees, deterministic merges (dedupe default), bounded loops with carried ports, retry and `onFailure`. |
 | 207 | [207-system-nodes.md](207-system-nodes.md) | 2 | in-progress | 201, 203 | `prepare-environment`, `run-validation-and-seal`, `push-branch`, `open-pull-request`, `wait-for-checks`, `update-ticket`, `notify`. |
-| 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | not-started | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
+| 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | in-progress | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
 | 209 | [209-guards-and-enforcement.md](209-guards-and-enforcement.md) | 2 | in-progress | 001, 106, 204 | Read-only guard on read/none nodes, remote-ref guard on every agent node, GitHub credential withheld, `minEnforcement` checks. |
 | 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | in-progress | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
 | 211 | [211-run-view.md](211-run-view.md) | 2 | in-progress | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |
 | 212 | [212-editable-designer.md](212-editable-designer.md) | 2 | in-progress | 107, 109, 110 | Canvas editing with undo, inspector forms, prompt and type editors, live compile, safe save, taint acknowledgement. |
 | 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | in-progress | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
-| 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | not-started | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |
+| 214 | [214-launch-surfaces.md](214-launch-surfaces.md) | 2 | in-progress | 109, 204, 211 | Generated launch dialog; action bar, Kanban and designer entry points; CLI `orkestrator graph`; Control MCP tools; status wakes; schedules. |
 | 215 | [215-describe-a-graph.md](215-describe-a-graph.md) | 2 | in-progress | 103, 107, 212 | An agent turns a description into a `graph-template` artifact, repaired against compiler diagnostics, opened as an unsaved draft. |
 | 216 | [216-documentation.md](216-documentation.md) | 2 | not-started | 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215 | `docs/architecture/graphs.md` and a user guide, catalogued in `docs/README.md`; related docs updated. |
 
 Exit criteria (tick when demonstrated, and link the evidence from the item that proved it):
 
 - [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node.
-- [ ] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound.
+- [ ] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound. (Since item 401 the loop also runs as written, with `items` fan-out: `graph-run-items.test.ts`, `graph-mock-provider.test.ts`.)
 - [x] Restart from a mid-graph node keeps independent branches and supersedes exactly the descendants.
 - [x] Code rewind works as it does in the pipeline.
 - [ ] A backend restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover activations.
@@ -106,9 +106,9 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | ID | File | Phase | Status | Depends on | Summary |
 | --- | --- | --- | --- | --- | --- |
 | 401 | [401-items-fanout.md](401-items-fanout.md) | 4 | in-progress | 205 | Fan out over the items of a list artifact, bounded by `maxBranches`, with per-item provenance through to fixes. |
-| 402 | [402-subgraphs.md](402-subgraphs.md) | 4 | not-started | 107, 204 | Inline templates with namespaced IDs and parameter pass-through; built-in Multi Review usable as a block. |
+| 402 | [402-subgraphs.md](402-subgraphs.md) | 4 | in-progress | 107, 204 | Inline templates with namespaced IDs and parameter pass-through; built-in Multi Review usable as a block. |
 | 403 | [403-isolated-branch-worktrees.md](403-isolated-branch-worktrees.md) | 4 | not-started | 205, 210 | One worktree per replicated writer branch, then `select` or agent `merge`; lifecycle, disk and container story. |
-| 404 | [404-per-node-user-mcp.md](404-per-node-user-mcp.md) | 4 | not-started | 106, 204 | Per-session injection of user MCP servers in every bridge, so `mcp:<server>` can grant as well as deny. |
+| 404 | [404-per-node-user-mcp.md](404-per-node-user-mcp.md) | 4 | in-progress | 106, 204 | Per-session injection of user MCP servers in every bridge, so `mcp:<server>` can grant as well as deny. |
 | 405 | [405-template-sharing.md](405-template-sharing.md) | 4 | in-progress | 109 | Export and import with signatures or digests, and a review flow for project templates. |
 | 406 | [406-coordinator-authoring.md](406-coordinator-authoring.md) | 4 | blocked | 214, 215 | Coordinator writes templates as drafts under the project-template trust rule. Blocked: D6 defers it. |
 

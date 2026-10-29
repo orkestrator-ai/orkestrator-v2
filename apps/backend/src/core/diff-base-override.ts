@@ -40,7 +40,11 @@ export function diffBaseGitForEnvironment(
     throw new Error("Start the environment to choose a comparison base");
   }
   return (args) =>
-    dockerExec(containerId, `git ${args.map((arg) => quoteShell(arg)).join(" ")}`, 30_000);
+    dockerExec(
+      containerId,
+      `cd /workspace && git ${args.map((arg) => quoteShell(arg)).join(" ")}`,
+      30_000,
+    );
 }
 
 /** Local and remote-tracking branches, most recently committed first. */

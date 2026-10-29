@@ -1,3 +1,4 @@
+import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
 import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
 import { AgentAccountStatusFixture } from "./AgentAccountStatusFixture";
@@ -1915,6 +1916,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
+  if (window.location.pathname === "/diff-base") installDiffBaseFixture();
   if (window.location.pathname === "/change-tracking") return <ChangeTrackingFixture />;
   if (window.location.pathname === "/diff-viewer") {
     installDiffViewerFixture();
@@ -2039,9 +2041,11 @@ function fixtureForPath() {
         <DataSavingGatewayFixture />
       </Suspense>
     );
+  if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }
 
+if (window.location.pathname === "/diff-base") installDiffBaseFixture();
 if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

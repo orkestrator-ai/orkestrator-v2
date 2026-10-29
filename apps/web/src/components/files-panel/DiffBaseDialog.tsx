@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DiffBaseBranch, DiffBaseCommit } from "@orkestrator/protocol/diff-stats";
 import {
@@ -42,25 +42,38 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const pendingSaves = new Map<string, Promise<boolean>>();
+
 /**
  * Saves (or, with `null`, clears) an environment's comparison base and applies
  * the answer locally without waiting for the environment snapshot. Reports a
  * failure itself; resolves to whether it saved.
  */
-export async function saveDiffBase(
+export function saveDiffBase(
   environmentId: string,
   base: { ref: string; commit: string } | null,
 ): Promise<boolean> {
-  try {
-    const updated = await backend.setEnvironmentDiffBase(environmentId, base);
-    useEnvironmentStore.getState().updateEnvironment(environmentId, {
-      diffBaseOverride: updated.diffBaseOverride ?? null,
-    });
-    return true;
-  } catch (error) {
-    toast.error("Could not change the comparison base", { description: errorMessage(error) });
-    return false;
-  }
+  const previous = pendingSaves.get(environmentId);
+  const save = async (): Promise<boolean> => {
+    try {
+      const updated = await backend.setEnvironmentDiffBase(environmentId, base);
+      // Requests and response updates run in order, across every entry point.
+      // Apply successful earlier saves even if a later queued save might fail.
+      useEnvironmentStore.getState().updateEnvironment(environmentId, {
+        diffBaseOverride: updated.diffBaseOverride ?? null,
+      });
+      return true;
+    } catch (error) {
+      toast.error("Could not change the comparison base", { description: errorMessage(error) });
+      return false;
+    }
+  };
+  const task = (previous ?? Promise.resolve(true)).then(save);
+  pendingSaves.set(environmentId, task);
+  void task.finally(() => {
+    if (pendingSaves.get(environmentId) === task) pendingSaves.delete(environmentId);
+  });
+  return task;
 }
 
 /**
@@ -101,7 +114,11 @@ export function DiffBaseDialog({ environmentId, open, onOpenChange }: DiffBaseDi
       <DialogContent size="md">
         {/* Mounted per opening so every opening starts from the stored choice. */}
         {open && environment && (
-          <DiffBaseForm environment={environment} onDone={() => onOpenChange(false)} />
+          <DiffBaseForm
+            key={environment.id}
+            environment={environment}
+            onDone={() => onOpenChange(false)}
+          />
         )}
       </DialogContent>
     </Dialog>
@@ -109,6 +126,13 @@ export function DiffBaseDialog({ environmentId, open, onOpenChange }: DiffBaseDi
 }
 
 function DiffBaseForm({ environment, onDone }: { environment: Environment; onDone: () => void }) {
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const branchId = useId();
   const commitId = useId();
   const repository = useConfigStore(
@@ -127,7 +151,8 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
       live = false;
     };
   }, [environment.id]);
-  const branchList = branches?.value ?? [];
+  const branchLoad = branches?.key === environment.id ? branches : null;
+  const branchList = branchLoad?.value ?? [];
 
   const [chosenRef, setChosenRef] = useState<string | null>(null);
   const selectedRef = chosenRef ?? defaultDiffBaseRef(branchList, environment, repository);
@@ -137,16 +162,32 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
     if (!selectedRef) return;
     let live = true;
     backend.listEnvironmentDiffBaseCommits(environment.id, selectedRef).then(
-      (value) => live && setCommits({ key: selectedRef, value }),
-      (error: unknown) => live && setCommits({ key: selectedRef, error: errorMessage(error) }),
+      (value) => live && setCommits({ key: `${environment.id}:${selectedRef}`, value }),
+      (error: unknown) =>
+        live && setCommits({ key: `${environment.id}:${selectedRef}`, error: errorMessage(error) }),
     );
     return () => {
       live = false;
     };
   }, [environment.id, selectedRef]);
   // An answer for a different branch is still loading as far as this one goes.
-  const commitLoad = commits && commits.key === selectedRef ? commits : null;
-  const commitList = commitLoad?.value ?? [];
+  const commitLoad = commits && commits.key === `${environment.id}:${selectedRef}` ? commits : null;
+  const fetchedCommits = commitLoad?.value ?? [];
+  const savedCommit = override?.ref === selectedRef ? override : null;
+  const commitList: DiffBaseCommit[] =
+    commitLoad?.value &&
+    savedCommit &&
+    !fetchedCommits.some((item) => item.commit === savedCommit.commit)
+      ? [
+          ...fetchedCommits,
+          {
+            ...savedCommit,
+            subject: savedCommit.subject ?? "Saved comparison base",
+            author: "",
+            committedAt: "",
+          },
+        ]
+      : fetchedCommits;
 
   const [chosenCommit, setChosenCommit] = useState<string | null>(null);
   const listed = (commit: string | null | undefined) =>
@@ -161,13 +202,15 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
   const save = async (base: { ref: string; commit: string } | null) => {
     setSaving(true);
     const saved = await saveDiffBase(environment.id, base);
-    setSaving(false);
-    if (saved) onDone();
+    if (mounted.current) {
+      setSaving(false);
+      if (saved) onDone();
+    }
   };
 
   const localBranches = branchList.filter((branch) => branch.kind === "local");
   const remoteBranches = branchList.filter((branch) => branch.kind === "remote");
-  const loadError = branches?.error ?? commitLoad?.error;
+  const loadError = branchLoad?.error ?? commitLoad?.error;
 
   return (
     <>
@@ -183,12 +226,12 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
         <div className="grid gap-2">
           <Label htmlFor={branchId}>Branch</Label>
           <Select
-            value={selectedRef ?? undefined}
+            value={selectedRef ?? ""}
             onValueChange={(ref) => {
               setChosenRef(ref);
               setChosenCommit(null);
             }}
-            disabled={!branches?.value || saving}
+            disabled={!branchLoad?.value || saving}
           >
             <SelectTrigger id={branchId} className="w-full">
               <SelectValue placeholder={branches ? "No branches" : "Loading branches…"} />
@@ -221,7 +264,7 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
         <div className="grid gap-2">
           <Label htmlFor={commitId}>Commit</Label>
           <Select
-            value={selectedCommit ?? undefined}
+            value={selectedCommit ?? ""}
             onValueChange={setChosenCommit}
             disabled={!commitLoad?.value || saving}
           >
@@ -237,7 +280,7 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
                 <SelectItem key={commit.commit} value={commit.commit} title={commit.commit}>
                   <span className="min-w-0 truncate">{commit.subject || "(no subject)"}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {index === 0 ? "latest · " : ""}
+                    {index === 0 && fetchedCommits.length > 0 ? "latest · " : ""}
                     {formatRelativeTime(commit.committedAt)}
                   </span>
                 </SelectItem>
@@ -264,7 +307,9 @@ function DiffBaseForm({ environment, onDone }: { environment: Environment; onDon
           Cancel
         </Button>
         <Button
-          disabled={saving || !selectedRef || !selectedCommit}
+          disabled={
+            saving || !branchLoad?.value || !commitLoad?.value || !selectedRef || !selectedCommit
+          }
           onClick={() =>
             selectedRef && selectedCommit && void save({ ref: selectedRef, commit: selectedCommit })
           }

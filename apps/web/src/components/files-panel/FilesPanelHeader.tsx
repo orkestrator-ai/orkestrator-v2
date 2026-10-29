@@ -80,17 +80,19 @@ export function FilesPanelHeader({
           {/* Right-click, or long-press on touch, picks the commit Changes are measured from. */}
           <ContextMenu>
             <ContextMenuTrigger asChild disabled={!changeEnvironmentId || !onChooseDiffBase}>
-              <TabsTrigger
-                value="changes"
-                className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
-              >
-                Changes
-                {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
-                  <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
-                    {changesCount}
-                  </span>
-                )}
-              </TabsTrigger>
+              <span className="inline-flex">
+                <TabsTrigger
+                  value="changes"
+                  className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
+                >
+                  Changes
+                  {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
+                    <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
+                      {changesCount}
+                    </span>
+                  )}
+                </TabsTrigger>
+              </span>
             </ContextMenuTrigger>
             <ContextMenuContent>
               <ContextMenuItem onSelect={() => onChooseDiffBase?.()}>

@@ -1588,6 +1588,7 @@ export async function startEnvironmentOnce(
         worktreeBaseDir,
         branch: worktree.branch,
         createdFromCommit: worktree.createdFromCommit,
+        diffBaseOverride: null,
         status: "running",
         lifecycleError: null,
       });
@@ -1843,6 +1844,7 @@ export function discardedRuntimeSetupUpdates(): Partial<Environment> {
     setupStartedAt: undefined,
     setupCompletedAt: undefined,
     createdFromCommit: undefined,
+    diffBaseOverride: null,
     hostEntryPort: undefined,
   };
 }
@@ -1955,8 +1957,12 @@ async function recreateEnvironmentOnceUnfenced(
     cleanupEnvironmentSetupState(context, environment.id);
     // Setup belongs to a runtime: the new one runs it again (the preserved
     // checkout is kept, so the clone step is skipped). The workspace itself,
-    // and the commit it was created from, carry over unchanged.
-    const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();
+    // its creation commit and its chosen comparison base carry over unchanged.
+    const {
+      createdFromCommit: _kept,
+      diffBaseOverride: _keptOverride,
+      ...setupReset
+    } = discardedRuntimeSetupUpdates();
     await context.storage.updateEnvironment(environment.id, setupReset);
     return startEnvironmentOnce(environment.id, context, schedulePendingRename);
   }

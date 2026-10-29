@@ -24,3 +24,16 @@ its cause remains unconfirmed. No rich-content implementation, assertion,
 timeout or skip changed. Aggregate evidence is in
 `/tmp/orkestrator-test-run.DpxCwj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 after completion; the outer summary is `/tmp/orkestrator-test-run.vHWLs2/summary.json`.
+
+## Comparison-base review fixes — 2026-10-29
+
+`mise run test:logged -- --name root-tests -- mise run test` repeated the
+sibling-ledger failure on Linux (229.74 ms): expected one sibling ledger row,
+received zero at line 187. The complete unchanged owner passed separately:
+`mise run test:logged -- --name unrelated-rich-content-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`
+(exit 0, 3.0 seconds logged). This is a recurrence of the existing intermittent
+failure; its cause remains unconfirmed. No rich-content implementation,
+assertion, timeout or skip changed. Aggregate evidence is in
+`/tmp/orkestrator-test-run.eqUv2v/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+after finalization; the outer summary is
+`/tmp/orkestrator-test-run.0MSwpb/summary.json`.

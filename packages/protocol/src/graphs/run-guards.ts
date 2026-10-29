@@ -74,6 +74,7 @@ import {
   GRAPH_RUN_FORMAT,
   GRAPH_RUN_FORMAT_VERSION,
   GRAPH_RUN_INPUT_PRODUCER,
+  GRAPH_RUN_LAUNCHERS,
   GRAPH_RUN_STATUSES,
   GRAPH_TEMPLATE_SCOPES,
   type GraphArtifact,
@@ -349,6 +350,7 @@ const RUN_FIELDS = [
   "template",
   "plan",
   "bindings",
+  "launch",
   "status",
   "mock",
   "mockOptions",
@@ -393,7 +395,9 @@ function checkPlan(
 }
 
 function checkBinding(value: unknown, path: string, errors: FieldErrorCollector): void {
-  if (!checkObject(value, path, ["platform", "model", "reasoningEffort", "fastMode"], errors)) {
+  if (
+    !checkObject(value, path, ["platform", "model", "reasoningEffort", "fastMode", "lens"], errors)
+  ) {
     return;
   }
   if (!isAgentPlatform(value.platform)) {
@@ -404,6 +408,37 @@ function checkBinding(value: unknown, path: string, errors: FieldErrorCollector)
   if (value.fastMode !== undefined && typeof value.fastMode !== "boolean") {
     errors.add(joinPath(path, "fastMode"), "type", "Expected a boolean");
   }
+  if (
+    value.lens !== undefined &&
+    checkObject(value.lens, joinPath(path, "lens"), ["label", "instruction"], errors)
+  ) {
+    checkText(value.lens.label, joinPath(path, "lens.label"), errors, B.maxShortTextChars, false);
+    // The instruction is prose: line breaks are allowed.
+    if (checkRequired(value.lens.instruction, joinPath(path, "lens.instruction"), errors)) {
+      checkString(value.lens.instruction, joinPath(path, "lens.instruction"), errors, {
+        min: 1,
+        max: B.maxLensInstructionChars,
+      });
+    }
+  }
+}
+
+function checkLaunch(value: unknown, errors: FieldErrorCollector): void {
+  if (value === undefined) return;
+  if (!checkObject(value, "launch", ["requestedBy", "create", "ticket", "scheduleId"], errors)) {
+    return;
+  }
+  checkEnum(value.requestedBy, "launch.requestedBy", errors, GRAPH_RUN_LAUNCHERS);
+  if (value.create !== undefined) {
+    checkEnum(value.create, "launch.create", errors, ["worktree", "container"] as const);
+  }
+  if (
+    value.ticket !== undefined &&
+    checkObject(value.ticket, "launch.ticket", ["taskId"], errors)
+  ) {
+    checkText(value.ticket.taskId, "launch.ticket.taskId", errors, B.maxIdChars, false);
+  }
+  checkText(value.scheduleId, "launch.scheduleId", errors, B.maxIdChars);
 }
 
 function checkBindings(value: unknown, path: string, errors: FieldErrorCollector): void {
@@ -920,6 +955,7 @@ export function validateGraphRun(
     }
   }
   checkBindings(value.bindings, "bindings", errors);
+  checkLaunch(value.launch, errors);
   checkEnum(value.status, "status", errors, GRAPH_RUN_STATUSES);
   if (typeof value.mock !== "boolean") errors.add("mock", "type", "Expected a boolean");
   if (value.mockOptions !== undefined) {

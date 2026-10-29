@@ -133,6 +133,107 @@ describe("the run's own environment (GraphRunProvisioner)", () => {
     });
   });
 
+  test("the launch's environment choice wins over the template's, and the ticket is linked once ready", async () => {
+    const w = await world();
+    const { make, created } = provisionerWorld(w);
+    const run: GraphRun = {
+      ...w.run,
+      environmentId: undefined,
+      status: "provisioning",
+      launch: { requestedBy: "user", create: "container", ticket: { taskId: "t-7" } },
+    };
+    const signal = new AbortController().signal;
+    expect(await make().provision(run, signal)).toEqual({ state: "pending" });
+    expect(created[0]).toMatchObject({
+      environmentType: "containerized",
+      networkAccessMode: "restricted",
+    });
+    expect(w.commands.count("update_kanban_task")).toBe(0);
+    await w.storage.updateEnvironment("e-new", { status: "running" });
+    expect(await make().provision(run, signal)).toEqual({ state: "ready", environmentId: "e-new" });
+    expect(
+      w.commands.calls
+        .filter((call) => call.command === "update_kanban_task")
+        .map((call) => call.args),
+    ).toEqual([{ taskId: "t-7", environmentId: "e-new" }]);
+  });
+
+  test("a run whose workspace input waits for the new environment gets its HEAD with the ready report", async () => {
+    const w = await world();
+    const { created } = provisionerWorld(w);
+    const run: GraphRun = {
+      ...w.run,
+      environmentId: undefined,
+      status: "provisioning",
+      // The target is the new environment's code: no artifact yet.
+      plan: {
+        ...w.run.plan,
+        inputs: [...w.run.plan.inputs, { name: "target", type: "workspace@1", required: true }],
+      },
+      launch: { requestedBy: "user", create: "worktree" },
+    };
+    const head = "d".repeat(40);
+    const make = () =>
+      new GraphRunEnvironmentProvisioner({
+        storage: w.storage,
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+          if (command === "create_environment") {
+            created.push(args);
+            const environment = {
+              ...(await w.storage.getEnvironment("e1"))!,
+              id: "e-new",
+              order: 2,
+              status: "running" as const,
+              controlRequestId: args.controlRequestId as string,
+            };
+            await w.storage.addEnvironment(environment);
+            return environment as T;
+          }
+          return w.commands.invoke<T>(command, args);
+        },
+        workspaceHead: async (environment) => ({ branch: environment.branch, headRef: head }),
+      });
+    const report = await make().provision(run, new AbortController().signal);
+    expect(report).toEqual({
+      state: "ready",
+      environmentId: "e-new",
+      workspace: { branch: "feature/csv", headRef: head },
+    });
+  });
+
+  test("a mock run never links its ticket", async () => {
+    const w = await world();
+    const { make } = provisionerWorld(w);
+    const run: GraphRun = {
+      ...w.run,
+      environmentId: undefined,
+      status: "provisioning",
+      mock: true,
+      launch: { requestedBy: "user", ticket: { taskId: "t-7" } },
+    };
+    await make().provision(run, new AbortController().signal);
+    await w.storage.updateEnvironment("e-new", { status: "running" });
+    await make().provision(run, new AbortController().signal);
+    expect(w.commands.count("update_kanban_task")).toBe(0);
+  });
+
+  test("a launch that chose a new environment provisions even a template without `workspace.create`", async () => {
+    const w = await systemWorld();
+    worlds.push(w);
+    const { make, created } = provisionerWorld(w);
+    const report = await make().provision(
+      {
+        ...w.run,
+        environmentId: undefined,
+        status: "provisioning",
+        launch: { requestedBy: "cli", create: "worktree" },
+      },
+      new AbortController().signal,
+    );
+    expect(report).toEqual({ state: "pending" });
+    expect(created[0]).toMatchObject({ environmentType: "local" });
+  });
+
   test("a template without `workspace.create` cannot be provisioned", async () => {
     const w = await systemWorld();
     worlds.push(w);

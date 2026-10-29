@@ -155,7 +155,10 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import { coordinatorProviderQualification } from "./coordinator-providers.js";
+import {
+  coordinatorProviderQualification,
+  defaultCoordinatorHostCapabilities,
+} from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -183,6 +186,9 @@ import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphRunAttention } from "./graph-run-attention.js";
 import { GraphRunService } from "./graph-run-service.js";
+import { GraphRunLaunchService } from "./graph-run-launch.js";
+import { launchSettingsTiers } from "./control-shared-actions.js";
+import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
@@ -221,6 +227,8 @@ export class OrkestratorBackend {
   private readonly graphRuns: GraphRunService;
   private readonly graphSystemExecutor: GraphNodeSystemExecutor;
   private readonly graphAgents: GraphAgentWiring;
+  /** Launches saved templates from every surface (item 214). */
+  private readonly graphLaunches: GraphRunLaunchService;
   private readonly graphDescribe: GraphDescribeService;
   private readonly graphDescribeProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
@@ -1134,7 +1142,21 @@ export class OrkestratorBackend {
     this.graphRuns = new GraphRunService(storage, {
       artifacts: graphArtifacts,
       workflowAdmission: this.workflowAdmission,
-      provisioner: new GraphRunEnvironmentProvisioner({ storage, invoke: invokeCommand }),
+      provisioner: new GraphRunEnvironmentProvisioner({
+        storage,
+        invoke: invokeCommand,
+        // Run inputs a launch on a new environment deferred to it (item 214).
+        workspaceHead: async (environment) => ({
+          branch: environment.branch,
+          headRef: (
+            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
+              "rev-parse",
+              "--verify",
+              "HEAD^{commit}",
+            ])
+          ).trim(),
+        }),
+      }),
       // Code rewinds (item 210) share the pipeline's Git port and reservation.
       environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
       codeRewindReservation: (run, operation) =>
@@ -1225,6 +1247,33 @@ export class OrkestratorBackend {
       captureTranscript: createGraphRunTranscriptCapture({ storage }),
     });
     context.graphQuestions = this.graphAgents.questions;
+    // Every launch surface (item 214) goes through one service.
+    this.graphLaunches = new GraphRunLaunchService({
+      storage,
+      templates: this.graphTemplates,
+      runs: this.graphRuns,
+      settingsTiers: (projectId, environment) =>
+        launchSettingsTiers(
+          invokeCommand,
+          projectId,
+          environment ? (environment as unknown as Record<string, unknown>) : undefined,
+        ),
+      // Result tools when the rollout admits them, structured output otherwise.
+      structuredResults: (platform) =>
+        this.workflowResultRollout.allows(platform, "graph-output") ||
+        STRUCTURED_OUTPUT_PROVIDER_VALUES.includes(platform),
+      workspaceHead: async (environment) => {
+        const headRef = (
+          await graphShell.git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
+        ).trim();
+        return { branch: environment.branch, headRef };
+      },
+      linkTicket: async (taskId, environmentId) => {
+        await invokeCommand("update_kanban_task", { taskId, environmentId });
+      },
+      host: () => defaultCoordinatorHostCapabilities(),
+    });
+    context.graphLaunches = this.graphLaunches;
     // "Describe a graph" (item 215): backend-owned designer agent jobs.
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
@@ -1744,6 +1793,13 @@ export class OrkestratorBackend {
     await this.graphRuns.init().catch((error) => {
       console.warn("[backend] Failed to restore graph runs:", error);
     });
+    // Runs that ended before they had an environment are bounded (item 214).
+    void this.graphLaunches.sweep().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to sweep graph runs without an environment:",
+        error instanceof Error ? error.name : "error",
+      );
+    });
     await this.graphDescribe.init().catch((error) => {
       console.warn("[backend] Failed to restore graph describe jobs:", error);
     });
@@ -2182,6 +2238,12 @@ export class OrkestratorBackend {
   }
 
   /** Orkestrator's own listeners can never be registered as preview targets. */
+  private requireGraphLaunches() {
+    const launches = this.context.graphLaunches;
+    if (!launches) throw new Error("Graph launches are unavailable");
+    return launches;
+  }
+
   /** The scheduler and the executor that runs each fire as its owner. */
   private createScheduledJobs(storage: StorageService): ScheduledJobService {
     const handlers = publicActionHandlers();
@@ -2194,6 +2256,11 @@ export class OrkestratorBackend {
         coordinators: storage.coordinators,
       },
       publicHandlers: () => handlers,
+      // Scheduled graph launches (item 214) go through the one launch service.
+      graphs: {
+        launch: (request, origin) => this.requireGraphLaunches().launch(request, origin),
+        options: (input) => this.requireGraphLaunches().options(input),
+      },
       ...(controlMcp.callCoordinatorTool &&
       controlMcp.listCoordinatorTools &&
       controlMcp.credentialPolicy

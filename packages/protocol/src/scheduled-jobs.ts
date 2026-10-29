@@ -9,6 +9,7 @@
  * owner used to create it. See `docs/architecture/scheduled-jobs.md`.
  */
 
+import type { GraphLaunchRequest } from "./graphs/launch.js";
 import { decodePublicSessionId } from "./public-api-resources.js";
 import {
   nextCronFire,
@@ -93,6 +94,10 @@ export type ScheduleOwner =
  * - `launch`: a new environment with an agent and an initial prompt
  *   (`environment.launch` / `launch_environment`). Without `baseCommit` the
  *   base branch's newest commit is resolved when the schedule fires.
+ * - `graph`: a saved graph template launched (item 214) through the graph
+ *   launch service as `requestedBy: "schedule"`. The operator's only (the
+ *   app, the CLI); a coordinator schedules its own `launch_graph` tool with
+ *   `kind: "action"`. Never authoring.
  */
 export type ScheduleAction =
   | { kind: "action"; action: string; input: Record<string, unknown> }
@@ -117,7 +122,14 @@ export type ScheduleAction =
       baseBranch?: string;
       baseCommit?: string;
       nodeId?: string;
-    };
+    }
+  | { kind: "graph"; request: ScheduleGraphLaunch };
+
+/**
+ * A scheduled graph launch: a launch request without its idempotency key
+ * (each fire supplies `sched:<fireId>`) and without saving defaults.
+ */
+export type ScheduleGraphLaunch = Omit<GraphLaunchRequest, "requestId" | "saveDefaults">;
 
 export type ScheduleState = "active" | "paused" | "completed";
 
@@ -237,6 +249,7 @@ export function scheduleOwnerProjectId(owner: ScheduleOwner): string | undefined
 /** Project a schedule's action targets, when it names one. */
 export function scheduleActionProjectId(action: ScheduleAction): string | undefined {
   if (action.kind === "launch") return action.projectId;
+  if (action.kind === "graph") return action.request.projectId;
   if (action.kind === "action" && typeof action.input.projectId === "string") {
     return action.input.projectId;
   }
@@ -246,6 +259,11 @@ export function scheduleActionProjectId(action: ScheduleAction): string | undefi
 /** Environments a schedule's action targets, used to pause it when one is deleted. */
 export function scheduleActionEnvironmentIds(action: ScheduleAction): string[] {
   if (action.kind === "prompt") return [action.environmentId];
+  if (action.kind === "graph") {
+    return action.request.environment.kind === "existing"
+      ? [action.request.environment.environmentId]
+      : [];
+  }
   if (action.kind !== "action") return [];
   const ids: string[] = [];
   for (const key of ["environmentId", "toEnvironmentId"]) {

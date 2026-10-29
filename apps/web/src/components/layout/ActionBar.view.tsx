@@ -1,4 +1,5 @@
 import { DesignLaunchButton } from "@/components/design/DesignLaunchButton";
+import { RunGraphButton } from "@/components/graph-launch/RunGraphButton";
 import {
   cloneElement,
   createContext,
@@ -941,6 +942,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       {isGrid && <span className="truncate text-xs">Graphs</span>}
                     </Button>
                   </ToolbarTooltipTrigger>
+
+                  <RunGraphButton
+                    environmentId={selectedEnvironment?.id}
+                    projectId={selectedEnvironment?.projectId ?? null}
+                    showLabel={isGrid}
+                  />
 
                   <ToolbarTooltipTrigger
                     tooltip={

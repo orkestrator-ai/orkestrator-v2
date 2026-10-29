@@ -432,11 +432,13 @@ describe("published MCP tool schemas are provider-portable", () => {
         "jobs",
         "build-pipelines",
         "multi-review",
+        "graphs",
         "mail",
       ],
     });
     const tools = await listTools(credential.url, credential.token);
     expect(tools.map((tool) => tool.name)).toContain("launch_multi_review");
+    expect(tools.map((tool) => tool.name)).toContain("launch_graph");
     expectPortable("orkestrator-control/coordinator", tools);
   });
 });

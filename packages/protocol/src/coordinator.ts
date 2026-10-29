@@ -283,7 +283,7 @@ export interface CoordinatorWorkflowAssociation {
   coordinatorId: string;
   projectId: string;
   conversationId?: string;
-  /** `graph-run`: a graph run (item 208 wires its status wake; item 214 records it at launch). */
+  /** `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id). */
   kind: "environment" | "build-pipeline" | "multi-review" | "graph-run";
   resourceId: string;
   /**
@@ -328,6 +328,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "address_multi_review",
   "adopt_workflow",
   "cancel_build_pipeline",
+  "cancel_graph_run",
   "cancel_multi_review",
   "cancel_schedule",
   "compare_project_files",
@@ -339,6 +340,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "get_build_pipeline",
   "get_environment",
   "get_feature_plan",
+  "get_graph_run",
   "get_launch_options",
   "get_message",
   "get_message_status",
@@ -349,12 +351,14 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "get_ticket",
   "launch_environment",
   "launch_feature_plan",
+  "launch_graph",
   "launch_job",
   "launch_multi_review",
   "launch_node_environment",
   "launch_terminal",
   "list_agents",
   "list_environments",
+  "list_graph_templates",
   "list_mailboxes",
   "list_node_environments",
   "list_nodes",

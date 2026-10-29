@@ -171,3 +171,31 @@ describe("project settings", () => {
     expect(store.getGraphProjectSettings("p1")?.trust).toEqual([]);
   });
 });
+
+describe("launch defaults (item 214)", () => {
+  test("saved per template per project, bounded with the least recently saved dropped", async () => {
+    const store = storage.graphTemplates;
+    const project = (await storage.addProject(createProject("https://example.invalid/r.git", root)))
+      .id;
+    const defaults = (minute: number) => ({
+      roles: { reviewer: [{ platform: "claude" as const }] },
+      params: { autoFix: true },
+      environment: "new-worktree" as const,
+      updatedAt: `2026-10-29T10:${String(minute).padStart(2, "0")}:00.000Z`,
+    });
+    store.saveGraphLaunchDefaults(project, "user:a", defaults(0));
+    expect(store.getGraphLaunchDefaults(project, "user:a")).toEqual(defaults(0));
+    expect(store.getGraphLaunchDefaults(project, "user:b")).toBeNull();
+    expect(store.getGraphLaunchDefaults("other", "user:a")).toBeNull();
+    // The trust records and ceiling of the project are untouched by it.
+    expect(store.getGraphProjectSettings(project)?.trust).toEqual([]);
+    for (let index = 1; index <= 64; index += 1) {
+      store.saveGraphLaunchDefaults(project, `user:t${index}`, defaults(index % 60));
+    }
+    const kept = Object.keys(store.getGraphProjectSettings(project)?.launchDefaults ?? {});
+    expect(kept).toHaveLength(64);
+    expect(kept).not.toContain("user:a");
+    store.saveGraphLaunchDefaults(project, "user:t1", null);
+    expect(store.getGraphLaunchDefaults(project, "user:t1")).toBeNull();
+  });
+});

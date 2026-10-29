@@ -115,6 +115,8 @@ export type CommandContext = {
   graphTemplates?: import("./graph-template-service.js").GraphTemplateService;
   /** Graph runs: launch, read, cancel, pause and resume (items 202, 203; launch surfaces 214). */
   graphRuns?: import("./graph-run-service.js").GraphRunService;
+  /** Launches a saved graph template from every surface (item 214). */
+  graphLaunches?: import("./graph-run-launch.js").GraphRunLaunchService;
   /** Agent `ask_human` questions and their answers (item 204; `graph_run_answer`). */
   graphQuestions?: import("./graph-agent-questions.js").GraphAgentQuestions;
   /** "Describe a graph" jobs, one per environment (item 215). */

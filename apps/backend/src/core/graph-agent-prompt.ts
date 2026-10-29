@@ -212,13 +212,30 @@ export function graphAgentBranchValues(
   if (position < 0) return {};
   const branch = branches[position]!;
   const lensAxis = node.replicate.axes.find((axis) => axis.over === "lenses");
+  // A template lens wins; otherwise a panel member's own lens (item 214).
   const lens =
     branch.lens !== undefined && lensAxis?.over === "lenses"
       ? lensAxis.lenses.find((entry) => entry.key === branch.lens)
-      : undefined;
+      : panelMemberLens(run, branch);
   return {
     ...(lens ? { lens: { key: lens.key, label: lens.label, instruction: lens.instruction } } : {}),
     branch: { index: position + 1, key: branch.key, count: branches.length },
+  };
+}
+
+/** The lens a panel member was launched with, keyed by its panel position. */
+function panelMemberLens(
+  run: Readonly<GraphRun>,
+  branch: { role: string; panelIndex?: number },
+): GraphLens | undefined {
+  if (branch.panelIndex === undefined) return undefined;
+  const bound = run.bindings.roles[branch.role];
+  const member = Array.isArray(bound) ? bound[branch.panelIndex] : undefined;
+  if (!member?.lens) return undefined;
+  return {
+    key: `panel-${branch.panelIndex + 1}`,
+    label: member.lens.label,
+    instruction: member.lens.instruction,
   };
 }
 

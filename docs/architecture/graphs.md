@@ -36,6 +36,7 @@ unless noted:
 | Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
 | Run view (211) | `run-view.ts`; backend `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts`; web `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` | The `graph-run` tab: a run on the shared flow graph with an inspector and controls, rehydrated from revisioned snapshots (below). |
+| Launching (214) | `launch.ts`; backend `graph-run-launch.ts`, `commands-registry-graph-launch.ts`; web `lib/backend/graph-launch.ts`, `components/graph-launch/` | One launch service behind the launch dialog, the designer's Run, the CLI, the coordinator's Control MCP tools and scheduled jobs (below). |
 
 ## Guards and enforcement (item 209)
 
@@ -316,7 +317,7 @@ name, in the tab chrome; D17). The designer lists the environment's runs under
 its library (`GraphRunsList`); a row calls
 `createTab("graph-run", { graphRun: { runId, title } })`, and there is one tab
 per run (`openGraphRunTab`, `components/graph-run/graph-run-open-tab.ts`).
-Item 214 adds the launch entry points. The pane layout keeps only
+Item 214 adds the launch entry points ("Launching" below). The pane layout keeps only
 `TabInfo.graphRunData = { runId, title? }`; the component is lazy-loaded from
 `PaneLeafContainer`.
 
@@ -404,6 +405,131 @@ Open session (the agent's provider session in a native tab that refuses to
 start a fresh one), and the run-wide Pause, Resume and Cancel (with a
 confirmation). Mock runs are labelled "Mock run" in the header and "mock" in
 the list.
+
+## Launching (item 214)
+
+Every entry point launches the same run through one backend service,
+`GraphRunLaunchService` (`apps/backend/src/core/graph-run-launch.ts`), with
+the request shape in `@orkestrator/protocol/graphs/launch`
+(`GraphLaunchRequest`: `ref`, `projectId`, `environment`, `roles?`,
+`params?`, `inputs?`, `ticket?`, `saveDefaults?`, `requestId?`). The surface
+supplies the origin (`requestedBy`: `user`, `cli`, `coordinator` or
+`schedule`, plus `scheduleId`); a request body can never claim one. The run
+records it, ids only, as `GraphRun.launch = {requestedBy, create?, ticket?,
+scheduleId?}`.
+
+**What a launch does.**
+
+1. *Resolve and compile.* `GraphTemplateService.compileForLaunch(ref,
+   projectId, environment)` refuses an untrusted or changed project template
+   (`untrusted`), a built-in on its own engine (`engine-template`) and, since
+   the request names a stored `ref` only, any unsaved draft. The template is
+   compiled under the **real** launch environment's execution policy (an
+   existing environment's own, or the policy a new worktree or restricted
+   container gets; `resolveEnvironmentExecutionPolicy(..., "build-pipeline")`)
+   and the project's ceiling, so `plan.context.environment` is what the run's
+   agents get. Compile errors or pending acknowledgements are
+   `not-launchable`.
+2. *Bind roles.* Each role takes the request's binding, else the defaults
+   saved for this template in this project (while every provider they name is
+   still enabled and the shape still fits), else the settings defaults read as
+   item 108 decided (`graphRoleDefaultBindings`): a one-model role takes the
+   first `defaultsFrom` action key with a usable saved platform, else the
+   app's default agent; a panel takes one position per key (an unset key
+   takes the first key's binding), then one per `additionalReviewers` entry,
+   and a panel that reads `additionalReviewers` takes the saved reviewer
+   lenses by position. Panels take 1..`maxPanel` models. A panel member may
+   carry a `lens` (`GraphModelBinding.lens`, P0.5's reviewer lens, copied at
+   launch); a template lens axis wins over it, otherwise its prompt renders it
+   as the branch's focus.
+3. *Check bindings* (`invalid-binding`): the provider is enabled, meets the
+   `minEnforcement` floor of every node bound to its role on this host
+   (`graphRoleProviderChoices` / `graphBindingFloorProblems`, item 209, the
+   same judgement dispatch re-checks), and can return the role's typed
+   results (result tools when the rollout admits `graph-output`, structured
+   output otherwise; a role whose nodes only produce `workspace@1` needs
+   neither).
+4. *Parameters and inputs* (`invalid-launch`): `graphLaunchParams` takes the
+   given value, then the saved one, then the declared default, and checks each
+   against its declaration. Run inputs must be value types. `ticket: {taskId,
+   input?}` fills the template's (only, or named) `ticket@1` input through
+   `graphTicketFromTaskSnapshot`, with the ticket's own criterion ids. An empty
+   `workspace@1` input is filled from the environment's branch and HEAD: at
+   launch for an existing environment, and by the provisioner for a new one
+   (its ready report carries the HEAD and the pass stores the input before the
+   run starts; a new environment without a commit fails the run).
+5. *Create.* `GraphRunService.create` on an existing environment, or with no
+   environment for a new one (D7): the provisioner (item 207) creates the
+   kind the launch chose (`launch.create`, before the template's
+   `workspace.create`). The ticket is linked to the run's environment
+   (`update_kanban_task {environmentId}`) at launch, or by the provisioner
+   when it creates one; a mock run never links.
+
+`requestId` derives the run id (`launch-<sha256(project, key)>`), so a
+repeat returns the run it created (`repeated: true`) and a repeat with a
+different template or environment is `conflict`. Refusal codes are
+`GRAPH_LAUNCH_ERROR_CODES`, the same on every surface.
+
+**Defaults.** `saveDefaults: true` stores the roles, parameters and
+environment kind per template per project in the `graph-templates` store's
+`projects` row (`launchDefaults`, keyed by `graphTemplateRefKey`, at most 64
+per project, least recently saved dropped first). `graph_launch_options`
+returns them as `saved` and starts every picker from them.
+
+**Commands.** `graph_launch_options {ref, projectId, environmentId?,
+create?}` → `GraphLaunchOptions` (per role every enabled provider with its
+tier, `available` and an `unavailableReason`; parameters; inputs with
+`ticket`, `launchable` and `autoFill`; the environment default; the compile
+cost; saved defaults). `graph_run_launch {…GraphLaunchRequest}` →
+`GraphLaunchResult {runId, projectId, environmentId?, status, template,
+repeated}`, launched as `user`.
+
+**Surfaces.** All of them call the same service, so every entry point
+launches the same run:
+
+- *The launch dialog* (`components/graph-launch/GraphLaunchDialog.tsx`,
+  generated from `GraphLaunchOptions`): a template picker when opened without
+  one, inputs (a `ticket@1` input takes a Kanban ticket; `workspace@1` inputs
+  say they come from the run's environment), one picker per role offering
+  only `available` providers and showing every provider's tier and why one is
+  not offered, panel editors with a lens per member (item 005's
+  `ReviewLensField` and presets), parameters (toggles, numbers, enums, text),
+  the environment choice and the cost estimate (`graphLaunchCostEstimate`,
+  the compile cost scaled by the bound panel sizes). It starts from the saved
+  defaults and launches with `saveDefaults: true`.
+- *Entry points* (D17): "Run graph…" in the environment action bar
+  (`RunGraphButton`), "Run graph…" on a Kanban card (the ticket as input),
+  and "Run" in the designer header (a dirty or new draft is saved first; it
+  launches the stored template). After a launch, `openLaunchedGraphRun`
+  (`components/graph-launch/open-launched-run.ts`) asks for the run's tab
+  through item 213's `requestGraphRunView` (`lib/graph-run-navigation.ts`),
+  the same path Mock run uses; the active environment's terminal container
+  answers requests naming it, and one made while that environment is off
+  screen waits until it is shown again.
+- *The CLI*: `orkestrator graph list | show | validate | launch | status |
+  cancel` over the `graph.*` public actions
+  ([public-cli.md](public-cli.md#graphs)), launched as `cli` with a
+  `requestId` derived from the public request key.
+- *The coordinator* (D6): Control MCP `list_graph_templates`, `launch_graph`,
+  `get_graph_run` and `cancel_graph_run` (`control-mcp-graph-tools.ts`,
+  `coordinator-graph-actions.ts`), launched as `coordinator`. There is no
+  tool that creates, saves, edits, duplicates, imports or describes a
+  template. A launch reserves a `graph-run` workflow association before it
+  acts; the status wake (item 208's `graph-run-coordinator-status.ts`) sends
+  one notice per wait for a person and one when the run ends (terminal
+  notices whatever the wake setting, as for every workflow).
+- *Schedules*: a `graph` schedule action ([scheduled-jobs.md](scheduled-jobs.md))
+  holds a launch request, validated when the schedule is created, and fires
+  as `schedule` with `requestId` `sched:<fireId>`, so a fire replayed after a
+  restart finds its run instead of launching twice.
+
+**Runs that end without an environment.** A failed provisioning leaves a run
+no environment deletion will remove. `GraphRunLaunchService.sweep()` (at
+startup and after every launch) keeps at most 20 such terminal runs per
+project and none that ended more than 7 days ago
+(`storage.graphRuns.deleteEnvironmentlessGraphRun`, shared with item 213, which refuses a
+run with an environment or one still going). Mock runs keep item 213's own
+retention and are skipped.
 
 ## Describe a graph (item 215)
 

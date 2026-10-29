@@ -464,6 +464,24 @@ export class CoordinatorsRepository {
     });
   }
 
+  /**
+   * Drops a reservation whose launch was refused before it created anything
+   * (a graph launch's definite refusal, item 214), so the same request id can
+   * be retried with a corrected payload. Only a still-pending reservation this
+   * process holds is removed; whether one was.
+   */
+  async releasePendingCoordinatorWorkflowAssociation(associationId: string): Promise<boolean> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.pending || association.claimPid !== process.pid) return false;
+      store.workflows = store.workflows.filter((item) => item.id !== associationId);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return true;
+    });
+  }
+
   async addCoordinatorWorkflowRequestAlias(
     associationId: string,
     coordinatorId: string,
@@ -880,6 +898,7 @@ export type CoordinatorsStorage = Pick<
   | "saveCoordinatorWorkflowAssociation"
   | "reserveCoordinatorWorkflowAssociation"
   | "completeCoordinatorWorkflowAssociation"
+  | "releasePendingCoordinatorWorkflowAssociation"
   | "addCoordinatorWorkflowRequestAlias"
   | "openCoordinatorDelegation"
   | "listOpenCoordinatorDelegations"

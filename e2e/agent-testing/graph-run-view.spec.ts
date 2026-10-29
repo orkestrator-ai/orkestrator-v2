@@ -129,3 +129,148 @@ test("the Graphs designer lists the environment's runs from the backend", async 
     await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
   }
 });
+
+/** Credential-free: prepare-environment (no setup script) and a gate on its commit. */
+const QA_TEMPLATE = {
+  format: "orkestrator.graph",
+  formatVersion: 1,
+  id: "qa-launch-rehydrate",
+  revision: 0,
+  name: "QA launch rehydrate",
+  description: "Credential-free: prepare the environment, then gate on its commit.",
+  parameters: [],
+  roles: [],
+  inputs: [],
+  outputs: [{ name: "code", type: "workspace@1", from: { node: "prepare", port: "code" } }],
+  workspace: { kind: "environment" },
+  nodes: [
+    {
+      id: "prepare",
+      kind: "system",
+      action: "prepare-environment",
+      params: { setup: false },
+      outputs: [{ name: "code", type: "workspace@1" }],
+    },
+    {
+      id: "has-commit",
+      kind: "gate",
+      inputs: [{ name: "code", type: "workspace@1" }],
+      branches: [{ when: { path: "code.headRef", op: "nonEmpty" }, to: "ready" }],
+      otherwise: "empty",
+    },
+  ],
+  edges: [
+    {
+      id: "prepare-code",
+      from: { node: "prepare", port: "code" },
+      to: { node: "has-commit", port: "code" },
+    },
+  ],
+  limits: { maxAgentSessions: 1, maxConcurrentAgents: 1 },
+};
+
+test("a graph launched from Run graph… finishes while its environment is away and rehydrates", async ({
+  page,
+}, testInfo) => {
+  const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+  const status = devJson("dev:status", profile);
+  expect(status.status).toBe("ready");
+  const login = devJson("dev:login", profile);
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    const request = route.request().postDataJSON();
+    if (request?.command === "check_claude_cli") await route.fulfill({ json: { result: false } });
+    else await route.continue();
+  });
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(login.loginUrl);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    const body = await response.json().catch(() => null);
+    expect(response.ok() && !body?.error, command).toBe(true);
+    return body.result as T;
+  };
+
+  const projects =
+    await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
+  const project = projects.find((candidate) => candidate.localPath === status.testProject)!;
+  expect(project).toBeTruthy();
+  await invoke("graph_template_save", { template: QA_TEMPLATE, expectedRevision: 0 }).catch(
+    () => undefined,
+  );
+  const env = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name: "graph-launch-run",
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  const other = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name: "graph-launch-away",
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  try {
+    await invoke("start_environment", { environmentId: env.id });
+    await invoke("start_environment", { environmentId: other.id });
+    await page.reload();
+    await openEnvironment(page, project.name, env.name);
+
+    // Launch from the action bar: the dialog is generated from the template.
+    await page.getByRole("button", { name: "Run graph…" }).first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Run graph", { exact: true })).toBeVisible();
+    await dialog.getByLabel("Template").selectOption({ label: "QA launch rehydrate" });
+    await expect(dialog.getByRole("radiogroup", { name: "Environment" })).toBeVisible();
+    await dialog.getByRole("radio", { name: "Existing environment" }).click();
+    await page.screenshot({ path: testInfo.outputPath("02-launch-dialog.png") });
+    await dialog.getByRole("button", { name: "Launch" }).click();
+    await expect(dialog).toBeHidden();
+
+    // The run's tab opens in this environment.
+    const runTab = page.locator("[data-graph-run]");
+    await expect(runTab).toBeVisible();
+    const runId = await runTab.getAttribute("data-graph-run");
+    expect(runId).toBeTruthy();
+
+    // Switch away at once; the run finishes in the background.
+    await openEnvironment(page, project.name, other.name);
+    await expect(runTab).toBeHidden();
+    await expect
+      .poll(
+        async () =>
+          (await invoke<{ status: string; run?: { status: string } }>("graph_run_get", { runId }))
+            .run?.status,
+        { timeout: 60_000 },
+      )
+      .toBe("complete");
+
+    // Return: the tab shows the finished run, read from the backend.
+    await openEnvironment(page, project.name, env.name);
+    await expect(page.locator(`[data-graph-run="${runId}"]`)).toBeVisible();
+    await expect(page.locator("[data-graph-run-status]")).toHaveAttribute(
+      "data-graph-run-status",
+      "complete",
+    );
+    await page.screenshot({ path: testInfo.outputPath("03-run-complete.png") });
+
+    // A reload rehydrates the same tab and state.
+    await page.reload();
+    await openEnvironment(page, project.name, env.name);
+    await expect(page.locator("[data-graph-run-status]")).toHaveAttribute(
+      "data-graph-run-status",
+      "complete",
+    );
+    const listed = await invoke<Array<{ id: string; status: string }>>("graph_runs_list", {
+      environmentId: env.id,
+    });
+    expect(listed.map((run) => [run.id, run.status])).toEqual([[runId, "complete"]]);
+  } finally {
+    await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
+    await invoke("stop_environment", { environmentId: other.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
+  }
+});

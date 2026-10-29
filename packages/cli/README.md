@@ -152,6 +152,11 @@ orkestrator environment exec "$ENV" --wait -- bun test
   with per-step models (`--step`), per-step instructions (`--instructions`,
   `--instructions-file`) and reviewer rows with a focus (`--reviewer`,
   `--focus`); omitted choices use the saved Build defaults.
+- `graph list|show|validate|launch|status|cancel` runs saved graph templates
+  (made in the app's designer) in an existing environment or a new worktree or
+  container, with role models (`--role`), panel focus (`--focus`), parameters
+  (`--param`), inputs (`--input`, `--input-file`) and a Kanban ticket
+  (`--ticket`); omitted choices use the template's saved launch defaults.
 - Connected to a command node, `--node NODE_ID` runs any command on one of its
   leaf nodes (`orkestrator node list`); `--node all` lists projects,
   environments or attention across every node, tagged by node.

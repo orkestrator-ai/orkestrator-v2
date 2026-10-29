@@ -124,7 +124,10 @@ function mockButton(): HTMLButtonElement {
 beforeEach(() => {
   userTemplates = [];
   requests = [];
-  stopListening = onGraphRunViewRequested((request) => requests.push(request));
+  stopListening = onGraphRunViewRequested((request) => {
+    requests.push(request);
+    return true;
+  });
   installBackend();
 });
 
@@ -159,6 +162,7 @@ describe("GraphDesignerTab mock run", () => {
           projectId: "project-1",
           environmentId: ENVIRONMENT_ID,
           mock: true,
+          title: "Build Pipeline loop",
         },
       ]),
     );

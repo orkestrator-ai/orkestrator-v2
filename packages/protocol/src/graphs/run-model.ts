@@ -71,6 +71,8 @@ export const GRAPH_RUN_BOUNDS = Object.freeze({
   maxAttempt: 1_000,
   /** Short provider-facing strings: model, effort, transport, session id. */
   maxShortTextChars: 256,
+  /** A panel member's lens instruction (P0.5 bounds it at 4 KiB of UTF-8). */
+  maxLensInstructionChars: 4 * 1024,
   maxResultKeyChars: 128,
   /** Ports per activation and direction (template `maxPortsPerDirection`). */
   maxPorts: GRAPH_TEMPLATE_BOUNDS.maxPortsPerDirection,
@@ -172,6 +174,31 @@ export interface GraphModelBinding {
   model?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /**
+   * A panel member's focus (item 214, P0.5's reviewer lens): the launch copies
+   * the text, so editing a preset later changes no run. A lens axis in the
+   * template wins over it.
+   */
+  lens?: { label: string; instruction: string };
+}
+
+/** Who launched a run (item 214). */
+export const GRAPH_RUN_LAUNCHERS = ["user", "coordinator", "schedule", "cli"] as const;
+export type GraphRunLauncher = (typeof GRAPH_RUN_LAUNCHERS)[number];
+
+/**
+ * How a run was launched (item 214): identifiers only, never content. The
+ * provisioner reads `create` before the plan's own default, and links
+ * `ticket` to the environment it creates.
+ */
+export interface GraphRunLaunchInfo {
+  requestedBy: GraphRunLauncher;
+  /** The environment kind a run without one creates; the plan's `workspace.create` otherwise. */
+  create?: "worktree" | "container";
+  /** The Kanban ticket bound as the run's `ticket@1` input. */
+  ticket?: { taskId: string };
+  /** The scheduled job that launched it. */
+  scheduleId?: string;
 }
 
 export interface GraphRunBindings {
@@ -200,6 +227,8 @@ export interface GraphRun {
   /** Frozen at launch; `verifyGraphPlanDigest` must hold on every load. */
   plan: CompiledGraphPlan;
   bindings: GraphRunBindings;
+  /** Absent on runs created before item 214 and by direct service calls. */
+  launch?: GraphRunLaunchInfo;
   status: GraphRunStatus;
   /** A mock run (P2.13): canned outputs, no provider sessions, no side effects. */
   mock: boolean;

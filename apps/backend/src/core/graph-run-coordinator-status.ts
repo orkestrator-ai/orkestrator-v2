@@ -10,7 +10,8 @@
  *   stays open while another is answered, a restart of the backend, or a
  *   second observer therefore never repeats a notice; a new wait (a later
  *   node, or a restarted one) always sends one.
- * - **Finished.** `complete`, `failed` or `cancelled`, once (terminal).
+ * - **Finished.** `complete`, `failed` or `cancelled`, once (terminal), sent
+ *   whatever the wake setting, as every terminal workflow notice is.
  *
  * Running is progress, not a status. Details are content-free: node names,
  * form kinds, counts and the run's bounded error, never a question's text, a
@@ -70,7 +71,7 @@ export function graphRunCoordinatorStatus(run: GraphRun): CoordinatorStatus | nu
           `${run.usage.agentSessions} agent session${run.usage.agentSessions === 1 ? "" : "s"}, ${run.usage.tokens} tokens.`,
         ],
         tools: tools(run),
-        mode: "settled",
+        mode: "off",
       };
     case "failed":
       return {
@@ -81,7 +82,7 @@ export function graphRunCoordinatorStatus(run: GraphRun): CoordinatorStatus | nu
         headline: "failed",
         details: run.error ? [`Error: ${run.error}`] : [],
         tools: tools(run),
-        mode: "settled",
+        mode: "off",
       };
     case "cancelled":
       return {
@@ -92,7 +93,7 @@ export function graphRunCoordinatorStatus(run: GraphRun): CoordinatorStatus | nu
         headline: "was cancelled",
         details: [],
         tools: tools(run),
-        mode: "settled",
+        mode: "off",
       };
     default:
       break;

@@ -148,6 +148,10 @@ orkestrator environment exec "$ENV" --wait -- bun test
 - `review launch|list|get|open|address|cancel` drives Multi Review, and `pr
   create` / `pr resolve` open the Create PR and Resolve Conflicts agent tabs
   (runs you can `--wait` on; neither merges).
+- `build launch|list|get|cancel` drives a Kanban ticket's Build Pipeline,
+  with per-step models (`--step`), per-step instructions (`--instructions`,
+  `--instructions-file`) and reviewer rows with a focus (`--reviewer`,
+  `--focus`); omitted choices use the saved Build defaults.
 - Connected to a command node, `--node NODE_ID` runs any command on one of its
   leaf nodes (`orkestrator node list`); `--node all` lists projects,
   environments or attention across every node, tagged by node.

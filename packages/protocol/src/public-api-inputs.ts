@@ -17,7 +17,7 @@
  */
 
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
-import { REVIEW_LENS_INSTRUCTION_MAX_BYTES, REVIEW_LENS_LABEL_MAX_CHARS } from "./review-lens.js";
+import { BUILD_ACTION_INPUTS, REVIEW_LENS_INPUT } from "./public-api-inputs-build.js";
 import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
@@ -349,27 +349,7 @@ const reviewerSelection: PublicJsonSchema = {
   ...reviewSelection,
   properties: {
     ...reviewSelection.properties,
-    lens: {
-      type: "object",
-      description:
-        "This reviewer's focus. The reviewer looks hardest at it and still reports critical issues outside it. The text is copied into the review, so later preset edits never change it.",
-      properties: {
-        label: {
-          type: "string",
-          minLength: 1,
-          maxLength: REVIEW_LENS_LABEL_MAX_CHARS,
-          description: "Short name of the focus, one line.",
-        },
-        instruction: {
-          type: "string",
-          minLength: 1,
-          maxLength: REVIEW_LENS_INSTRUCTION_MAX_BYTES,
-          description: `What to look at hardest; at most ${REVIEW_LENS_INSTRUCTION_MAX_BYTES} bytes of UTF-8.`,
-        },
-      },
-      required: ["label", "instruction"],
-      additionalProperties: false,
-    },
+    lens: REVIEW_LENS_INPUT,
   },
 };
 
@@ -1402,6 +1382,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       input: schema({ workflowId }, ["workflowId"]),
       examples: [{ workflowId: "review-1" }],
     },
+    ...BUILD_ACTION_INPUTS,
     "pr.create": {
       capability: "sessions.control",
       confirmation: "voice",

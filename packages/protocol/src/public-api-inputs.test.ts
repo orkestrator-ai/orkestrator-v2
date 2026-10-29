@@ -226,7 +226,8 @@ describe("public action input contract", () => {
       "environment.delete": "always",
       "environment.exec": "voice",
       "session.interaction.resolve": "voice:approval",
-      // Both push to the remote.
+      // Each pushes to the remote (a build's last step opens its PR).
+      "build.launch": "voice",
       "pr.create": "voice",
       "pr.resolve": "voice",
       "run.discard": "always",

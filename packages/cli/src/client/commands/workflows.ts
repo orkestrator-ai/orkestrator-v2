@@ -36,7 +36,7 @@ interface ReviewActionResult {
 }
 
 /** `AGENT=MODEL[@EFFORT]`, e.g. `codex=gpt-5.5@high`. */
-function parseSelection(raw: string, flag: string) {
+export function parseSelection(raw: string, flag: string) {
   const equals = raw.indexOf("=");
   const agent = raw.slice(0, equals);
   if (equals <= 0 || !(AGENT_PLATFORMS as readonly string[]).includes(agent)) {
@@ -53,10 +53,10 @@ function parseSelection(raw: string, flag: string) {
   return { agent, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 
-const SELECTION_HELP = "AGENT=MODEL[@EFFORT], e.g. codex=gpt-5.5@high.";
+export const SELECTION_HELP = "AGENT=MODEL[@EFFORT], e.g. codex=gpt-5.5@high.";
 
 /** `N=VALUE`: a 1-based reviewer position and the text or path for its focus. */
-function parsePositioned(raw: string, flag: string): { position: number; value: string } {
+export function parsePositioned(raw: string, flag: string): { position: number; value: string } {
   const match = /^(\d+)=([\s\S]*)$/.exec(raw);
   const position = match ? Number(match[1]) : 0;
   if (!match || !Number.isSafeInteger(position) || position < 1 || !match[2]) {
@@ -74,7 +74,7 @@ function parsePositioned(raw: string, flag: string): { position: number; value: 
  * both), so a file reads like a commit message. Positions name `--reviewer`
  * rows, which a focus therefore requires.
  */
-async function reviewerLenses(
+export async function reviewerLenses(
   context: CommandContext,
   options: Record<string, unknown>,
   reviewerCount: number,

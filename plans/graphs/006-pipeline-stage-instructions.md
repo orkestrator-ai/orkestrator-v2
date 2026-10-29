@@ -42,7 +42,7 @@ Users can add their own instructions to each Build Pipeline stage.
 ## Done when
 
 - [x] Per-stage instructions round-trip through launch, record, restart and the coordinator tools.
-- [ ] Per-stage instructions round-trip through the CLI (no public CLI command launches a build pipeline; see Notes).
+- [x] Per-stage instructions round-trip through the CLI: delivered by [007](007-cli-build-pipeline-launch.md) (`orkestrator build launch --instructions`), with its round-trip test.
 
 ## Notes
 
@@ -125,3 +125,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Per-step instructions guarded, stored, framed in every stage prompt, launched from the dialog, feature builds and the coordinator; supervisor split under 2,000 lines; docs updated. · CLI box open: no CLI build launch exists (needs its own item).
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · CLI box ticked: [007](007-cli-build-pipeline-launch.md) added the `build.*` actions and `orkestrator build launch`. · complete; awaiting PR

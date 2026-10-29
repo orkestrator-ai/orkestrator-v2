@@ -756,10 +756,13 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
       checkObject(
         value.code,
         codePath,
-        ["headRef", "backupRef", "from", "upstream", "upstreamCommitsDropped"],
+        ["headRef", "backupRef", "from", "upstream", "upstreamCommitsDropped", "pending"],
         errors,
       )
     ) {
+      if (value.code.pending !== undefined && value.code.pending !== true) {
+        errors.add(joinPath(codePath, "pending"), "type", "Expected true when present");
+      }
       checkPattern(
         value.code.headRef,
         joinPath(codePath, "headRef"),

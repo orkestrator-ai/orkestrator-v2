@@ -19,7 +19,6 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
   isBuildPipeline,
-  isActiveBuildPhase,
   BUILD_PIPELINE_VERSION,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
@@ -67,8 +66,12 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { resetWorktreeToCommit } from "./build-pipeline-code-rewind.js";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import {
+  assertNoOtherWorkflowWriting,
+  resetWorktreeToCommit,
+  withWorkspaceCodeRewindReservation,
+  type EnvironmentGit,
+} from "./workspace-code-rewind.js";
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -429,32 +432,17 @@ export class BuildPipelineContext {
   }
 
   async withCodeRewindReservation<T>(pipeline: BuildPipeline, run: () => Promise<T>): Promise<T> {
-    const fence = this.options.environmentFence ?? this.rewindFence;
-    return fence.withExclusiveMutation(pipeline.environmentId, [], async () => {
-      // Resolve the path only after moves/replacements are excluded. A write
-      // already in flight on that path makes binding refuse the reservation.
-      const environment = await this.storage.getEnvironment(pipeline.environmentId);
-      if (!environment) throw new Error("Environment not found");
-      fence.bindMovePaths(
-        pipeline.environmentId,
-        environment.worktreePath ? [environment.worktreePath] : [],
-      );
-      for (const record of await this.storage.listAllBuildPipelines()) {
-        const sibling = record.snapshot;
-        if (
-          record.id !== pipeline.id &&
-          isBuildPipeline(sibling) &&
-          sibling.environmentId === pipeline.environmentId &&
-          (isActiveBuildPhase(sibling.phase) ||
-            sibling.sessions.some((session) => session.status === "running"))
-        ) {
-          throw new Error(
-            "Another pipeline may write to this environment. Pause it before rewinding code.",
-          );
-        }
-      }
-      await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
-      return run();
+    return withWorkspaceCodeRewindReservation({
+      fence: this.options.environmentFence ?? this.rewindFence,
+      storage: this.storage,
+      environmentId: pipeline.environmentId,
+      assertQuiet: async () => {
+        await assertNoOtherWorkflowWriting(this.storage, pipeline.environmentId, {
+          pipelineId: pipeline.id,
+        });
+        await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
+      },
+      run,
     });
   }
 

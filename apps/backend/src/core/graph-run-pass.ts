@@ -176,6 +176,12 @@ export interface GraphRunPassDependencies {
   wake(runId: string): void;
   /** A run released workspace holds; other runs on the environment may proceed. */
   released(environmentId: string, runId: string): void;
+  /**
+   * Before a pass over a run that is not finished, with the record the pass
+   * read: returns the record to pass over, or null to skip this pass (a code
+   * rewind's journaled reset that must finish first; item 210).
+   */
+  prepare?(run: GraphRun): Promise<GraphRun | null>;
 }
 
 export interface GraphRunPassOptions {
@@ -835,7 +841,9 @@ export async function runGraphRunPass(
     deps.memory(runId).nextDelayMs = null;
     return { run, stats: null };
   }
-  const pass = new GraphRunPass(deps, run, options);
+  const prepared = deps.prepare ? await deps.prepare(run) : run;
+  if (!prepared) return { run, stats: null };
+  const pass = new GraphRunPass(deps, prepared, options);
   const stored = await pass.execute();
   return { run: stored, stats: pass.stats };
 }

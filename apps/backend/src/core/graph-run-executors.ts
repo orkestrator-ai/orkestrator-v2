@@ -31,7 +31,9 @@
  * - `cancel` is called for admitted activations when the run is cancelled or
  *   fails, or the activation times out. Report `cancelled` once the work has
  *   stopped (or the terminal state it reached first); `unchanged` asks to be
- *   called again on a later pass.
+ *   called again on a later pass. A restart (item 210) calls it too, outside
+ *   a pass but under the run's lock, for admitted activations it supersedes
+ *   (`restarted`), a few times before it supersedes them regardless.
  *
  * Every call gets the pass's `AbortSignal` (aborted when the backend stops)
  * and, under the keyed driver, the pass's `workflow-provider` admission
@@ -100,6 +102,8 @@ export const GRAPH_CANCEL_REASONS = [
   "run-failed",
   /** The activation ran past its node's `timeoutMs`. */
   "timeout",
+  /** A restart or code rewind supersedes the activation (item 210); a new attempt replaces it. */
+  "restarted",
 ] as const;
 export type GraphCancelReason = (typeof GRAPH_CANCEL_REASONS)[number];
 

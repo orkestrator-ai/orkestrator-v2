@@ -168,12 +168,16 @@ export interface GraphLineageDescendants {
 }
 
 /**
- * What a restart of `activationKey` must supersede (report §8.5): the
- * activation, every artifact it produced, every activation that consumed one
- * of those artifacts, transitively, and every artifact whose lineage reaches
- * one of them. Already-superseded activations and artifacts are left out, so
+ * The artifact lineage below `activationKey` (report §8.5): the activation,
+ * every artifact it produced, every activation that consumed one of those
+ * artifacts, transitively, and every artifact whose lineage reaches one of
+ * them. Already-superseded activations and artifacts are left out, so
  * independent branches and earlier attempts stay as they are. Null when the
  * activation does not exist or is already superseded.
+ *
+ * A restart supersedes more than the lineage: what read a forwarding node
+ * (a gate's outlet), what a node's outcome skipped, and the later iterations
+ * of a rewound loop. `graphRestartScope` (`run-rewind.ts`) adds those.
  */
 export function graphLineageDescendants(
   run: GraphRun,
@@ -184,9 +188,14 @@ export function graphLineageDescendants(
   if (!root || root.state === "superseded") return null;
   const activationSet = new Set<string>([root.key]);
   const live = artifacts.filter((artifact) => artifact.state === "live");
-  const liveIds = new Set(live.map((artifact) => artifact.id));
-  // The root's recorded outputs, even one whose envelope names another producer.
-  const artifactSet = new Set<string>(Object.values(root.outputs).filter((id) => liveIds.has(id)));
+  // Seeded from what the root produced: a gate or human node's outputs that
+  // forward its inputs belong to their upstream producers, which a restart
+  // of the forwarding node must keep.
+  const artifactSet = new Set<string>(
+    live
+      .filter((artifact) => artifact.producer.activation === root.key)
+      .map((artifact) => artifact.id),
+  );
   let changed = true;
   while (changed) {
     changed = false;

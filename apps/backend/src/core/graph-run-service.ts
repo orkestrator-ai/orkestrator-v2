@@ -17,7 +17,9 @@
  * Launch surfaces (item 214) compile a template against the launch
  * environment, resolve role bindings and parameters, and call {@link
  * GraphRunService.create}. Executors for each node kind (204–208) register on
- * {@link GraphRunService.executors}.
+ * {@link GraphRunService.executors}. Restart and code rewind (item 210) are
+ * {@link GraphRunService.restart}, {@link GraphRunService.previewCodeRewind}
+ * and {@link GraphRunService.rewindCode} (`graph-run-rewind.ts`).
  */
 import { randomUUID } from "node:crypto";
 import type { CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
@@ -38,6 +40,7 @@ import type { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphStorageError, isGraphStorageError } from "./graph-run-errors.js";
 import { GraphNodeExecutorRegistry } from "./graph-run-executors.js";
 import {
+  GRAPH_RUN_HUMAN_WAIT_MS,
   GRAPH_RUN_OBSERVATION_MS,
   GRAPH_RUN_PROGRESS_MS,
   GraphRunMemory,
@@ -58,6 +61,18 @@ import {
   type GraphRunObligation,
 } from "./graph-run-supervisor.js";
 import { isGraphActivationAdmitted, transitionGraphRun } from "./graph-run-transitions.js";
+import {
+  GraphRunRewindError,
+  GraphRunRewinds,
+  graphRunPendingCodeRewind,
+  type GraphRewindOptions,
+} from "./graph-run-rewind.js";
+import type {
+  GraphRunCodeRewindPreview,
+  GraphRunRestartResult,
+} from "@orkestrator/protocol/graphs/run-rewind";
+import type { Environment } from "./models.js";
+import type { EnvironmentGit } from "./workspace-code-rewind.js";
 import {
   reviewFanoutConcurrency,
   type ReviewFanoutConcurrency,
@@ -127,6 +142,13 @@ export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
   concurrency?: Partial<ReviewFanoutConcurrency>;
   observationIntervalMs?: number;
   progressIntervalMs?: number;
+  /** Git in a run's worktree, for code rewinds (item 210); absent: unavailable. */
+  environmentGit?: EnvironmentGit;
+  /**
+   * Holds a run's environment exclusively while a code rewind's reset commits
+   * and refuses while another workflow may write to it (item 210).
+   */
+  codeRewindReservation?: <T>(run: GraphRun, operation: () => Promise<T>) => Promise<T>;
   /** False: no supervisor; callers drive passes with `advanceNow` (tests). */
   autoAdvance?: boolean;
   clock?: () => Date;
@@ -135,6 +157,8 @@ export interface GraphRunServiceOptions extends KeyedWorkflowServiceOptions {
 type GraphRunStorage = {
   graphRuns: GraphRunsStorage;
   addResourceChangeListener?(listener: ResourceChangeListener): () => void;
+  /** A run's environment, for its pull request state (restart refusals). */
+  getEnvironment?(id: string): Promise<Environment | null>;
 };
 
 function launchError(message: string): GraphRunServiceError {
@@ -160,6 +184,8 @@ export class GraphRunService implements KeyedWorkflowOwner {
   private readonly passed = new Set<string>();
   /** Counts of the latest pass per run (the efficiency benchmark reads them). */
   private readonly lastStats = new Map<string, GraphRunPassStats>();
+  /** Restarts and code rewinds (item 210). */
+  private readonly rewinds: GraphRunRewinds;
 
   constructor(
     private readonly storage: GraphRunStorage,
@@ -189,7 +215,22 @@ export class GraphRunService implements KeyedWorkflowOwner {
           "explicit",
           (obligation) => obligation === "advance" || obligation === "observe",
         ),
+      prepare: (run) => this.finishPendingCodeRewind(run),
     };
+    this.rewinds = new GraphRunRewinds({
+      storage: storage.graphRuns,
+      artifacts: options.artifacts,
+      executors: this.executors,
+      clock: this.passDeps.clock,
+      locked: (runId, operation) => this.withLock(runId, operation),
+      signal: () => this.stopController.signal,
+      wake: (runId) => this.wake(runId, "explicit"),
+      ...(storage.getEnvironment
+        ? { environment: (id: string) => storage.getEnvironment!(id) }
+        : {}),
+      ...(options.environmentGit ? { git: options.environmentGit } : {}),
+      ...(options.codeRewindReservation ? { reserve: options.codeRewindReservation } : {}),
+    });
   }
 
   // ------------------------------------------------------------ lifecycle
@@ -581,6 +622,97 @@ export class GraphRunService implements KeyedWorkflowOwner {
     });
     this.requestObservation(runId, activationKey);
     return updated!;
+  }
+
+  /**
+   * Restarts one activation (item 210): it, everything that depended on it
+   * and their artifacts are superseded, and the next pass reruns it with the
+   * same inputs as a new attempt. A finished run reopens. A repeated request
+   * is a no-op; see `graph-run-rewind.ts` for every rule. Throws a
+   * `GraphRunRewindError`.
+   */
+  async restart(
+    runId: string,
+    activationKey: string,
+    options: GraphRewindOptions = {},
+  ): Promise<GraphRunRestartResult> {
+    this.requireEnabled();
+    return this.afterRewind(await this.rewinds.restart(runId, activationKey, options));
+  }
+
+  /** What "Rewind code to here" on an activation would do, and why it cannot now (item 210). */
+  async previewCodeRewind(
+    runId: string,
+    activationKey: string,
+  ): Promise<GraphRunCodeRewindPreview> {
+    return this.rewinds.previewCodeRewind(runId, activationKey);
+  }
+
+  /**
+   * Resets the run's worktree to the activation's input commit and restarts
+   * it (item 210). `expectedHead` is the HEAD the confirmed preview showed.
+   */
+  async rewindCode(
+    runId: string,
+    activationKey: string,
+    expectedHead: string,
+    options: GraphRewindOptions = {},
+  ): Promise<GraphRunRestartResult> {
+    this.requireEnabled();
+    try {
+      return this.afterRewind(
+        await this.rewinds.rewindCode(runId, activationKey, expectedHead, options),
+      );
+    } catch (error) {
+      // A journaled rewind whose reset did not finish is stored: schedule it,
+      // so the next pass finishes the reset.
+      const stored = await this.get(runId).catch(() => null);
+      if (stored && graphRunPendingCodeRewind(stored)) this.wake(runId, "explicit");
+      throw error;
+    }
+  }
+
+  private requireEnabled(): void {
+    if (!this.enabled) {
+      throw new GraphRunRewindError(
+        "unavailable",
+        "Graph runs are disabled (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK)",
+      );
+    }
+  }
+
+  private afterRewind(result: GraphRunRestartResult): GraphRunRestartResult {
+    this.noteRecord(result.run);
+    if (!result.repeated) {
+      // Superseded activations hold nothing any more: let waiting work in.
+      const environmentId = result.run.environmentId;
+      const released = this.workspaceLocks.set(
+        result.run.id,
+        environmentId,
+        graphRunWorkspaceHold(result.run),
+      );
+      if (released && environmentId) this.passDeps.released(environmentId, result.run.id);
+      this.wake(result.run.id, "explicit");
+    }
+    return result;
+  }
+
+  /**
+   * Before a pass: finishes a code rewind whose reset a crash interrupted,
+   * before a running run plans again. Null (skip the pass; retried in 30 s)
+   * while it cannot finish. A paused or stopping run passes as usual.
+   */
+  private async finishPendingCodeRewind(run: GraphRun): Promise<GraphRun | null> {
+    if (!graphRunPendingCodeRewind(run)) return run;
+    if (run.status !== "running" && run.status !== "waiting") return run;
+    try {
+      return await this.rewinds.finishPending(run, { strict: true });
+    } catch (error) {
+      const code = error instanceof GraphRunRewindError ? error.code : "error";
+      console.warn(`[graph-runs] Run ${run.id} waits for its code rewind to finish (${code})`);
+      this.memory(run.id).nextDelayMs = GRAPH_RUN_HUMAN_WAIT_MS;
+      return null;
+    }
   }
 
   /** Runs a pass now, under the run's lock (explicit commands, tests and benchmarks). */

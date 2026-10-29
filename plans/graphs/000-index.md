@@ -71,7 +71,7 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 | 207 | [207-system-nodes.md](207-system-nodes.md) | 2 | in-progress | 201, 203 | `prepare-environment`, `run-validation-and-seal`, `push-branch`, `open-pull-request`, `wait-for-checks`, `update-ticket`, `notify`. |
 | 208 | [208-human-nodes.md](208-human-nodes.md) | 2 | not-started | 203, 204 | Approve, edit and choose nodes; waiting surfaces in the sidebar, run view and coordinator; optional timeout. |
 | 209 | [209-guards-and-enforcement.md](209-guards-and-enforcement.md) | 2 | not-started | 001, 106, 204 | Read-only guard on read/none nodes, remote-ref guard on every agent node, GitHub credential withheld, `minEnforcement` checks. |
-| 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | not-started | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
+| 210 | [210-restart-and-rewind.md](210-restart-and-rewind.md) | 2 | in-progress | 201, 203, 204 | Restart supersedes exactly the lineage descendants; loop-aware; code rewind reuses the pipeline's. |
 | 211 | [211-run-view.md](211-run-view.md) | 2 | not-started | 201, 204 | `graph-run` tab on `flow-graph/` via `graphRunFlowModel`; inspector with artifacts; actions; rehydration. |
 | 212 | [212-editable-designer.md](212-editable-designer.md) | 2 | in-progress | 107, 109, 110 | Canvas editing with undo, inspector forms, prompt and type editors, live compile, safe save, taint acknowledgement. |
 | 213 | [213-mock-runs.md](213-mock-runs.md) | 2 | not-started | 204, 206, 207 | `graph-mock-provider.ts` answers from examples, schemas or pinned sequences; zero sessions; side effects only recorded. |
@@ -83,8 +83,8 @@ Exit criteria (tick when demonstrated, and link the evidence from the item that 
 
 - [ ] The design bake-off graph (report §9.3, without the subgraph) runs end to end on at least two providers, from launch to PR. It uses lenses, a judge, a human approval and a system PR node.
 - [ ] The failure-diagnosis loop (report §9.4, with a static panel instead of `items`) converges or stops at its bound.
-- [ ] Restart from a mid-graph node keeps independent branches and supersedes exactly the descendants.
-- [ ] Code rewind works as it does in the pipeline.
+- [x] Restart from a mid-graph node keeps independent branches and supersedes exactly the descendants.
+- [x] Code rewind works as it does in the pipeline.
 - [ ] A backend restart in the middle of a fan-out recovers without re-dispatching. Interleaving seeds cover activations.
 - [ ] Read-only guards refuse a committing reviewer on every provider. Enforcement tiers shown in the UI match the live conformance runs.
 - [ ] A mock run of every example template passes with zero provider sessions.

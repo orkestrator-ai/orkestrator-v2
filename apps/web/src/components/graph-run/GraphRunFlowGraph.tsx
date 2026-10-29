@@ -8,13 +8,14 @@ import {
   History,
   Inbox,
   Server,
+  TriangleAlert,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import {
   graphBranchBinding,
-  graphNodeBranches,
+  graphActivationBranch,
   type GraphRun,
 } from "@orkestrator/protocol/graphs/run";
 import { GRAPH_SYSTEM_ACTION_SPECS } from "@orkestrator/protocol/graphs/system-actions";
@@ -28,7 +29,11 @@ import {
 import { flowNodeHeight, summarizeFlowEdges } from "@/components/flow-graph/flow-graph-model";
 import { pipelineFlowLayout } from "@/components/build-pipeline/pipeline-flow-layout";
 import { runtimeParts } from "@/lib/review/runtime-summary";
-import type { GraphRunFlowModel, GraphRunFlowNode } from "./graph-run-flow";
+import {
+  graphRunTruncationText,
+  type GraphRunFlowModel,
+  type GraphRunFlowNode,
+} from "./graph-run-flow";
 
 /** The shortest the graph sizes itself to, so the inspector keeps the room. */
 const GRAPH_RUN_FLOW_MIN_HEIGHT = 240;
@@ -90,7 +95,7 @@ export function graphRunNodeDetail(
       const session = node.activation?.session;
       const binding = session
         ? { platform: session.agent, model: session.model, reasoningEffort: session.effort }
-        : agentBinding(planNode, node.branchKey, run);
+        : agentBinding(planNode, node.branchKey, node.iteration ?? 1, run);
       if (!binding) return `Role ${planNode.role}${attempt}`;
       return (
         [binding.platform, modelLabel(binding.platform, binding.model), binding.reasoningEffort]
@@ -116,21 +121,21 @@ export function graphRunNodeDetail(
 function agentBinding(
   node: Extract<GraphPlanNode, { kind: "agent" }>,
   branchKey: string | undefined,
+  iteration: number,
   run: GraphRun,
 ) {
   let role = node.role;
   let panelIndex: number | undefined;
   if (branchKey !== undefined) {
     try {
-      const branch = graphNodeBranches(node, run.bindings.roles)?.find(
-        (candidate) => candidate.key === branchKey,
-      );
+      // An `items` branch's other axes come from its position's fan-out (item 401).
+      const branch = graphActivationBranch(run, node, { iteration, branchKey });
       if (branch) {
         role = branch.role;
         panelIndex = branch.panelIndex;
       }
     } catch {
-      // Branches the runtime cannot build yet (`items`) show the node's role.
+      // Bindings that no longer build branches (a retained record) show the node's role.
     }
   }
   return graphBranchBinding(
@@ -232,6 +237,14 @@ export function graphRunNodeView({
       >
         <CircleHelp className="size-3" aria-hidden />
         {node.activation?.session?.question ? "Question for you" : "Your decision is needed"}
+      </span>
+    ) : node.fanOut && node.fanOut.total > node.fanOut.running ? (
+      <span
+        data-graph-run-truncated=""
+        className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-amber-300"
+      >
+        <TriangleAlert className="size-3" aria-hidden />
+        {graphRunTruncationText(node.fanOut)}
       </span>
     ) : undefined,
     canOpen,

@@ -30,6 +30,7 @@ import type {
   GraphFailurePolicy,
   GraphGateBranch,
   GraphHumanForm,
+  GraphItemsTruncate,
   GraphLens,
   GraphMergeStrategy,
   GraphNodeKind,
@@ -149,7 +150,8 @@ export interface GraphPlanReplicate {
   axes: Array<
     | { over: "panel"; role: string }
     | { over: "lenses"; lenses: Array<Required<Pick<GraphLens, "role">> & GraphLens> }
-    | { over: "items"; input: string; maxBranches: number }
+    /** `truncate` filled (`first` by default; item 401). */
+    | { over: "items"; input: string; maxBranches: number; truncate: GraphItemsTruncate }
     | { over: "samples"; count: number }
   >;
   branches: GraphPlanBranches;

@@ -45,6 +45,7 @@ import {
   GRAPH_PARAMETER_TYPES,
   GRAPH_PROVENANCE_MODES,
   GRAPH_RENDER_MODES,
+  GRAPH_ITEMS_TRUNCATE,
   GRAPH_RETRY_CAUSES,
   GRAPH_ROLE_DEFAULT_ACTION_KEYS,
   GRAPH_ROLE_MULTIPLICITIES,
@@ -299,10 +300,15 @@ function replicateAxis(withCross: boolean): Schema {
   return object(
     {
       over: choice(
-        withCross ? ["panel", "lenses", "samples", "cross"] : ["panel", "lenses", "samples"],
+        withCross
+          ? ["panel", "lenses", "items", "samples", "cross"]
+          : ["panel", "lenses", "items", "samples"],
       ),
       role: text("panel: the panel role."),
       lenses: list(lens()),
+      input: text("items: the input port (list<T>, or a type with items) to fan out over."),
+      maxBranches: integer("items: the most branches; items beyond it are truncated."),
+      truncate: choice(GRAPH_ITEMS_TRUNCATE, "items: run the first maxBranches, or fail."),
       count: integer("samples: how many."),
       ...(withCross ? { axes: list(replicateAxis(false), "cross: the combined axes.") } : {}),
     },
@@ -314,8 +320,8 @@ function node(): Schema {
   return object(
     {
       id: text("kebab-case, unique"),
-      // Sub-graphs (item 402) and replicate over items (item 401) are not
-      // compiled yet, so the contract does not offer them.
+      // Sub-graphs (item 402) are not compiled yet, so the contract does not
+      // offer them.
       kind: choice(["agent", "system", "gate", "merge", "human"]),
       label: text(),
       description: text(),

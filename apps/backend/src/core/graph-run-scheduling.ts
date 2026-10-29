@@ -52,6 +52,7 @@ import {
   appendGraphActivation,
   graphActivationKey,
   GRAPH_ARTIFACT_BUDGETS,
+  GRAPH_RUN_BOUNDS,
   isGraphActivationTerminal,
   type GraphRun,
   type NodeActivation,
@@ -91,6 +92,8 @@ export interface GraphPlanningResult {
   skipped: number;
   retried: number;
   loopsAdvanced: number;
+  /** `items` fan-outs recorded (item 401). */
+  fanOuts: number;
   /** Artifact values a `when`, `until` or edge delivery needs before planning can go further. */
   needValues: string[];
   /** Artifacts to store (edge deliveries, routed errors) before planning can go further. */
@@ -193,8 +196,8 @@ function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
     // failure marker (`includeFailures`, item 205): the `error@1` artifact is
     // recorded as the activation's `error` output before consumers read it.
     const routed = node.onFailure === "route";
-    const marker =
-      !routed && view.branchesOf(node) !== null && graphFailureMarkersWanted(view.plan, node.id);
+    const replicated = (node.kind === "agent" || node.kind === "subgraph") && !!node.replicate;
+    const marker = !routed && replicated && graphFailureMarkersWanted(view.plan, node.id);
     if ((!routed && !marker) || activation.outputs[GRAPH_ERROR_PORT] !== undefined) continue;
     const key = errorKey(activation);
     const known = view.outcomes.get(key);
@@ -215,6 +218,11 @@ function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
         0,
         GRAPH_ARTIFACT_BUDGETS.maxInputs,
       );
+      // A failed `items` branch's marker names the item it failed on (item 401).
+      const item =
+        activation.branchKey === undefined
+          ? undefined
+          : view.branchAt(node, activation.iteration, activation.branchKey)?.item;
       decisions.requests.push({
         key,
         purpose: "error",
@@ -222,6 +230,7 @@ function failurePolicy(view: GraphRunView, at: string): FailureDecisions {
         type: "error@1",
         values: [graphRoutedErrorValue(node, activation, view.liveAttempts(activation))],
         inputs: lineage,
+        ...(item ? { sourceItems: [item.id] } : {}),
       });
     }
   }
@@ -253,6 +262,7 @@ export function planGraphRun(
     skipped: 0,
     retried: 0,
     loopsAdvanced: 0,
+    fanOuts: 0,
     needValues: [],
     needArtifacts: [],
     waiting: 0,
@@ -311,6 +321,21 @@ export function planGraphRun(
     view.requests.forEach((request, key) => needArtifacts.set(key, request));
     result.waiting = ready.waiting;
     result.doneLoops = [...done];
+    if (ready.fanOuts.length > 0) {
+      const fanOuts = [...(current.fanOuts ?? []), ...ready.fanOuts];
+      if (fanOuts.length > GRAPH_RUN_BOUNDS.maxFanOuts) {
+        return {
+          ...result,
+          run: current,
+          failure: {
+            error: `A run records at most ${GRAPH_RUN_BOUNDS.maxFanOuts} items fan-outs`,
+            cause: "budget-exceeded",
+          },
+        };
+      }
+      current = { ...current, fanOuts };
+      result.fanOuts += ready.fanOuts.length;
+    }
     for (const activation of ready.created) {
       const appended = append(current, activation);
       if ("failure" in appended) return { ...result, run: current, failure: appended.failure };
@@ -350,7 +375,7 @@ export function graphSurplusBranches(run: GraphRun): NodeActivation[] {
   for (const activations of open.values()) {
     const { nodeId, iteration } = activations[0]!;
     const node = view.node(nodeId);
-    const branches = view.branchKeysOf(node);
+    const branches = view.branchKeysAt(node, iteration);
     const readers = run.plan.edges.filter(
       (edge) => "node" in edge.from && edge.from.node === nodeId,
     );

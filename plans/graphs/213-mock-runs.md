@@ -155,9 +155,16 @@ session (no transcript); `mockOptions.stepMs` (designer: 1,000 ms) makes them vi
 `GraphRunLaunch.mock` + `mockOptions` for a launch surface's own mock option. `requestGraphRunView`
 works for real runs too. The designer's Run button can sit beside "Mock run" in the header.
 
+**2026-10-29 · Item 401.** The §9.4 example now runs as written, with its `items` fan-out:
+`phase2Examples()` no longer swaps in a static panel (`failureDiagnosisWithPanel` is gone), and
+`graph-mock-provider.test.ts` checks one diagnosis branch per failure on every iteration, each
+output carrying its failure as `sourceItem`. Mock agent outputs of an item branch record
+`sourceItem` as live runs do.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-29 · plan · Created from the plan. · Not started.
 - 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Mock executors, schema-driven generator and pins in protocol, would-have-run records, environment-less `graph_run_mock`, designer button and pin editor; tests and docs; real-stack designer check passed. · complete; awaiting PR
+- 2026-10-29 · Claude Opus 5.5 (implement-graph-tasks) · Item 401: §9.4 mock run uses `items` fan-out as written. · complete; awaiting PR

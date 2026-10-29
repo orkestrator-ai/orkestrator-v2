@@ -51,6 +51,8 @@ import {
 } from "./graph-agent-guards.js";
 import { graphAgentPolicy } from "./graph-agent-policy.js";
 import {
+  graphAgentArtifactSources,
+  graphAgentItemBinding,
   graphInputItemIds,
   loadGraphAgentInputs,
   renderGraphAgentPrompt,
@@ -219,19 +221,29 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     this.lightSources ??= (async () => {
       const sources: Record<string, string> = {};
       let criterionIds: string[] | undefined;
-      const ids = Object.values(this.context.activation.inputs).flatMap((entry) =>
-        Array.isArray(entry) ? entry : [entry],
-      );
-      const ticketInput = this.context.run.plan.inputs.find((input) =>
-        input.type.startsWith("ticket@"),
-      );
-      const ticketId = ticketInput ? this.context.run.bindings.inputs[ticketInput.name] : undefined;
-      const library = new GraphTypeLibrary(this.context.run.plan.types);
-      for (const id of ticketId ? [...ids, ticketId] : ids) {
-        const artifact = await this.context.artifacts.get(this.context.run.id, id);
+      const { run, node, activation } = this.context;
+      const inputs = node.inputs.flatMap((port) => {
+        const bound = activation.inputs[port.name];
+        const ids = bound === undefined ? [] : Array.isArray(bound) ? bound : [bound];
+        return ids.map((id) => ({ id, port }));
+      });
+      const ticketInput = run.plan.inputs.find((input) => input.type.startsWith("ticket@"));
+      const ticketId = ticketInput ? run.bindings.inputs[ticketInput.name] : undefined;
+      const library = new GraphTypeLibrary(run.plan.types);
+      // An `items` branch cites its own item on the replicated port (item 401).
+      const binding =
+        node.kind === "agent" ? graphAgentItemBinding(run, node, activation) : undefined;
+      const entries: { id: string; port?: (typeof inputs)[number]["port"] }[] = ticketId
+        ? [...inputs, { id: ticketId }]
+        : inputs;
+      for (const { id, port } of entries) {
+        const artifact = await this.context.artifacts.get(run.id, id);
         if (!artifact) continue;
-        // The ids the prompt showed (`graphInputItemIds`), recorded or derived.
-        for (const itemId of graphInputItemIds(library, artifact)) sources[itemId] = artifact.type;
+        // The ids the prompt showed (`graphAgentArtifactSources`), recorded or derived.
+        const itemIds = port
+          ? graphAgentArtifactSources(library, port, artifact, binding)
+          : graphInputItemIds(library, artifact);
+        for (const itemId of itemIds) sources[itemId] = artifact.type;
         if (!criterionIds && artifact.type.startsWith("ticket@") && "value" in artifact.body) {
           const criteria = (artifact.body.value as { criteria?: unknown })?.criteria;
           if (Array.isArray(criteria)) {
@@ -567,6 +579,8 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     const artifactWorkspace = workspace
       ? { headRef: workspace.headRef, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) }
       : undefined;
+    // An `items` branch's outputs stand for its item (item 401).
+    const sourceItem = graphAgentItemBinding(run, this.input.node, activation)?.item.id;
     for (const slot of results.slots) {
       if (!Object.hasOwn(values, slot.port.name)) continue;
       const value = values[slot.port.name];
@@ -579,6 +593,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         inputs: lineage,
         ...(artifactWorkspace ? { workspace: artifactWorkspace } : {}),
         ...(itemIds ? { itemIds } : {}),
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         ...(validation ? { validation } : {}),
         value,
       });
@@ -594,6 +609,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
         producer: { nodeId: activation.nodeId, activation: activation.key, port: port.name },
         inputs: lineage,
         workspace: artifactWorkspace!,
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         value: {
           branch: workspace.branch,
           headRef: workspace.headRef,

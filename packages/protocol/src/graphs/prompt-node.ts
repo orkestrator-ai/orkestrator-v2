@@ -237,7 +237,7 @@ function exampleOf(type: GraphValueType | undefined, listItems: number): unknown
 
 /**
  * Values for a designer preview: each input's type example (two elements for
- * a list), the first lens and branch 1, the ticket type's example, and the
+ * a list), the first lens and branch 1, the first item, the ticket type's example, and the
  * parameters' defaults. File paths, artifact ids and result keys are left to
  * the preview's stand-ins.
  */
@@ -263,6 +263,10 @@ export function graphNodePromptPreviewValues(context: GraphPromptNodeContext): G
   if (scope.bound.has("lens") && lenses[0]) values.lens = lenses[0];
   if (scope.bound.has("branch")) {
     values.branch = { index: 1, key: lenses[0] ? `lens-${lenses[0].key}` : "branch-1", count };
+  }
+  // An `items` branch: the first item, under an illustrative id (item 401).
+  if (scope.bound.has("item") && scope.itemsPort !== undefined) {
+    values.item = { index: 1, id: `${scope.itemsPort}/item-1` };
   }
   if (scope.ticketInput !== undefined) {
     const ticket = context.template?.inputs?.find((entry) => entry.name === scope.ticketInput);

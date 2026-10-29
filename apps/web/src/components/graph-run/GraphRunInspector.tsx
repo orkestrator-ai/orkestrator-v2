@@ -13,7 +13,7 @@ import {
 } from "./GraphArtifactView";
 import { GraphHumanNodePanel } from "./GraphHumanNodePanel";
 import { GraphQuestionAnswerForm, type GraphQuestionAnswer } from "./GraphQuestionAnswerForm";
-import type { GraphRunFlowNode } from "./graph-run-flow";
+import { graphRunTruncationText, type GraphRunFlowNode } from "./graph-run-flow";
 
 /**
  * The body of the run view's inspector for the selected node (plan P2.11,
@@ -206,6 +206,28 @@ function ActivationDetails({
           activation={activation}
           disabled={!runOpen || run.status === "cancelling"}
         />
+      ) : null}
+      {node.item || (node.fanOut && node.fanOut.total > node.fanOut.running) ? (
+        <Section title="Item">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs" data-graph-item="">
+            {node.item ? (
+              <>
+                <dt className="text-muted-foreground">Item</dt>
+                <dd className="break-all">
+                  {node.item.index} · <span className="font-mono">{node.item.id}</span>
+                </dd>
+              </>
+            ) : null}
+            {node.fanOut && node.fanOut.total > node.fanOut.running ? (
+              <>
+                <dt className="text-muted-foreground">Fan-out</dt>
+                <dd className="text-amber-300" data-graph-item-truncated="">
+                  {graphRunTruncationText(node.fanOut)}
+                </dd>
+              </>
+            ) : null}
+          </dl>
+        </Section>
       ) : null}
       {activation.error ? (
         <Section title="Error">

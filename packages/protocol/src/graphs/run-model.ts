@@ -82,6 +82,13 @@ export const GRAPH_RUN_BOUNDS = Object.freeze({
   maxInputs: GRAPH_TEMPLATE_BOUNDS.maxRunInputs,
   maxLoops: GRAPH_TEMPLATE_BOUNDS.maxLoops,
   maxIteration: GRAPH_TEMPLATE_BOUNDS.maxLoopIterations,
+  /**
+   * `items` fan-out records a run keeps (item 401), superseded ones included:
+   * at most one live per node position, and every one names a position.
+   */
+  maxFanOuts: 500,
+  /** Truncated item ids one fan-out record names (the count is always kept). */
+  maxTruncatedItemIds: 32,
 } as const);
 
 /** Per-run artifact budgets (report §5.2, §5.11). */
@@ -209,6 +216,11 @@ export interface GraphRun {
   rewinds: GraphRewind[];
   /** Loop id → the iteration it is on (1-based); a restart inside a loop rewinds it. */
   loopIterations: Record<string, number>;
+  /**
+   * The branch sets `items` fan-outs expanded to (item 401, `run-fanout.ts`),
+   * in the order they were recorded. Absent until the first one.
+   */
+  fanOuts?: GraphItemFanOut[];
   usage: GraphRunUsage;
   /** Compare-and-swap revision; the store bumps it on every save. */
   revision: number;
@@ -370,6 +382,42 @@ export interface NodeActivation {
   supersededBy?: string;
 }
 
+// ---------------------------------------------------------------- items fan-outs
+
+/** One item an `items` fan-out runs a branch for (item 401). */
+export interface GraphFanOutItem {
+  /** The branch key segment, `item.<encoded id>` (`graphItemBranchSegment`). */
+  key: string;
+  /** 1-based position in the input list. */
+  index: number;
+  /** The item's stable id (`run-items.ts`). */
+  id: string;
+  /** The artifact holding it: the element artifact of a list, or the input artifact itself. */
+  artifact: string;
+}
+
+/**
+ * The branch set an `items` node expanded to at one node position (item
+ * 401). Recorded with the branch activations and never recomputed, so a
+ * retried, restarted or recovered branch reads the same item.
+ */
+export interface GraphItemFanOut {
+  nodeId: string;
+  /** 1-based; 1 outside loops. */
+  iteration: number;
+  /** The items input's artifact ids it was cut from, in order (its lineage). */
+  sources: string[];
+  /** The items that run, in input order: at most the axis's `maxBranches`. */
+  items: GraphFanOutItem[];
+  /** Items the input held; more than `items.length` means truncated. */
+  total: number;
+  /** Ids of the items that do not run, in input order, at most {@link GRAPH_RUN_BOUNDS.maxTruncatedItemIds}. */
+  truncatedIds?: string[];
+  createdAt: string;
+  /** The rewind that superseded it: it is history, and the position expands again. */
+  supersededBy?: string;
+}
+
 // ---------------------------------------------------------------- rewinds
 
 /** `restart`: rerun a node with the same inputs; `rewind-code`: reset the workspace first. */
@@ -482,6 +530,13 @@ export interface GraphArtifact {
    * `maxItemIds` ids in all.
    */
   itemSources?: string[][];
+  /**
+   * The upstream item this artifact stands for (item 401): the element an
+   * edge `flatten` cut from a typed item list, or an output (or failure
+   * marker) of an `items` branch, which inherits its branch's item. Part of
+   * the artifact id when present.
+   */
+  sourceItem?: string;
   state: GraphArtifactState;
   /** The rewind that superseded it. */
   supersededBy?: string;

@@ -107,6 +107,8 @@ export interface GraphArtifactInput {
   itemIds?: readonly string[];
   /** A merge's output: per item, the source item ids folded into it (parallel to `itemIds`). */
   itemSources?: readonly (readonly string[])[];
+  /** The upstream item it stands for (item 401): a `flatten` element, an `items` branch's output. */
+  sourceItem?: string;
   /** Domain context for the type's validator: a decision port's choices, a ticket's criteria. */
   validation?: GraphTypeValidationContext;
 }
@@ -210,6 +212,7 @@ export class GraphArtifactStore {
         producer: input.producer,
         inputs,
         ...(input.workspace ? { workspace: input.workspace } : {}),
+        ...(input.sourceItem !== undefined ? { sourceItem: input.sourceItem } : {}),
       },
       graphStorageHash,
     );
@@ -229,6 +232,7 @@ export class GraphArtifactStore {
       ...(input.itemSources
         ? { itemSources: input.itemSources.map((sources) => [...sources]) }
         : {}),
+      ...(input.sourceItem !== undefined ? { sourceItem: input.sourceItem } : {}),
       state: "live",
     };
   }

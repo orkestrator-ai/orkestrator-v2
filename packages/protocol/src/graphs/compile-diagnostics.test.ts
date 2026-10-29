@@ -182,10 +182,17 @@ const CASES: Record<GraphCompileDiagnosticCode | GraphCapabilityIssueCode, Case>
     },
     expect: { nodeId: "inner", path: "nodes[2].kind" },
   },
-  "replicate-items-unsupported": {
+  "replicate-items-input": {
     from: () => graphTemplateExample("failure-diagnosis"),
-    mutate: () => {},
-    expect: { nodeId: "diagnose", path: "nodes[1].replicate" },
+    mutate: (t) => {
+      // One validation-failure@1 is neither a list nor a type that declares items.
+      const diagnose = agentOf(t, "diagnose");
+      diagnose.inputs![1]!.type = "validation-failure@1";
+      t.edges = t.edges.filter((edge) => edge.id !== "validate-diagnose-failures");
+      diagnose.when = undefined;
+      delete diagnose.when;
+    },
+    expect: { nodeId: "diagnose", port: "failures", path: "nodes[1].replicate.input" },
   },
   "output-port-list": {
     mutate: (t) => {

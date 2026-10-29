@@ -39,9 +39,13 @@ import {
   type GraphResultTools,
 } from "@orkestrator/protocol/graphs/prompts";
 import {
+  graphActivationBranch,
   graphArtifactItemIds,
-  graphNodeBranches,
+  graphItemList,
+  graphNodeItemsAxis,
+  graphRunNodeBranches,
   type GraphArtifact,
+  type GraphFanOutItem,
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
@@ -199,14 +203,19 @@ function portIds(activation: Readonly<NodeActivation>, port: GraphPlanInputPort)
   return Array.isArray(bound) ? [...bound] : [bound];
 }
 
-/** Lens and branch values of a replicated activation. */
+/** Lens, branch and item values of a replicated activation. */
 export function graphAgentBranchValues(
   run: Readonly<GraphRun>,
   node: GraphPlanAgentNode,
   activation: Readonly<NodeActivation>,
-): { lens?: GraphLens; branch?: { index: number; key: string; count: number } } {
+): {
+  lens?: GraphLens;
+  branch?: { index: number; key: string; count: number };
+  item?: { index: number; id: string };
+} {
   if (!node.replicate || activation.branchKey === undefined) return {};
-  const branches = graphNodeBranches(node, run.bindings.roles) ?? [];
+  // An `items` node's branches are its position's fan-out (item 401).
+  const branches = graphRunNodeBranches(run, node, activation.iteration) ?? [];
   const position = branches.findIndex((entry) => entry.key === activation.branchKey);
   if (position < 0) return {};
   const branch = branches[position]!;
@@ -218,7 +227,46 @@ export function graphAgentBranchValues(
   return {
     ...(lens ? { lens: { key: lens.key, label: lens.label, instruction: lens.instruction } } : {}),
     branch: { index: position + 1, key: branch.key, count: branches.length },
+    ...(branch.item ? { item: { index: branch.item.index, id: branch.item.id } } : {}),
   };
+}
+
+/** The item an `items` branch runs on, and the port it replicates over (item 401). */
+export function graphAgentItemBinding(
+  run: Readonly<GraphRun>,
+  node: GraphPlanAgentNode,
+  activation: Readonly<NodeActivation>,
+): { port: string; item: GraphFanOutItem } | undefined {
+  const axis = graphNodeItemsAxis(node);
+  const item = axis ? graphActivationBranch(run, node, activation)?.item : undefined;
+  return axis && item ? { port: axis.input, item } : undefined;
+}
+
+/**
+ * The provenance ids one input artifact contributes, by id → its type: its
+ * items' ids, except on an `items` branch's replicated port, which
+ * contributes exactly the branch's item (plus a list element's own items):
+ * the branch saw that item only (item 401).
+ */
+export function graphAgentArtifactSources(
+  library: GraphTypeLibrary,
+  port: Pick<GraphPlanInputPort, "name" | "type" | "fanIn">,
+  artifact: Pick<GraphArtifact, "type" | "producer" | "itemIds" | "body">,
+  binding?: { port: string; item: GraphFanOutItem },
+): string[] {
+  if (!binding || binding.port !== port.name) return graphInputItemIds(library, artifact);
+  return [binding.item.id, ...(isListInput(port) ? graphInputItemIds(library, artifact) : [])];
+}
+
+function isListInput(port: Pick<GraphPlanInputPort, "type" | "fanIn">): boolean {
+  return port.fanIn || port.type.startsWith("list<");
+}
+
+/** One entry of a value's item list, for a type-with-items `items` branch. */
+function itemOfValue(library: GraphTypeLibrary, type: string, value: unknown, index: number) {
+  const parts = parseGraphTypeRef(type);
+  const items = parts ? library.definition(parts.name, parts.version)?.items : undefined;
+  return items ? graphItemList(items, value)?.[index - 1] : undefined;
 }
 
 /**
@@ -253,31 +301,45 @@ export async function loadGraphAgentInputs(
   let criterionIds: string[] | undefined;
   let inputWorkspace: GraphAgentInputs["inputWorkspace"];
   const loaded = new Map<string, GraphArtifact[]>();
+  const binding = graphAgentItemBinding(run, node, activation);
   for (const port of node.inputs) {
     const ids = portIds(activation, port);
     if (ids.length === 0) continue;
     const list: GraphArtifact[] = [];
     const facts: GraphPromptElement[] = [];
+    // An `items` branch sees one item on the port it replicates over (item 401).
+    const perItem = binding?.port === port.name;
     for (const id of ids) {
       const artifact = await verified(id, port.name);
       list.push(artifact);
       consumed.push(id);
       readable.set(id, { port: port.name, artifact });
-      const itemIds = graphInputItemIds(library, artifact);
-      for (const itemId of itemIds) sources[itemId] = artifact.type;
-      facts.push(
-        isGraphFailureMarker(port.type, artifact.type)
-          ? { failure: true }
-          : itemIds.length > 0
-            ? { itemIds }
-            : {},
-      );
+      for (const itemId of graphAgentArtifactSources(library, port, artifact, binding)) {
+        sources[itemId] = artifact.type;
+      }
+      // A typed item is one entry of the artifact: its own id is the branch's item.
+      const itemIds = perItem && !isListInput(port) ? [] : graphInputItemIds(library, artifact);
+      const sourceItem = perItem ? binding!.item.id : artifact.sourceItem;
+      const fact: GraphPromptElement = isGraphFailureMarker(port.type, artifact.type)
+        ? { failure: true }
+        : {
+            ...(itemIds.length > 0 ? { itemIds } : {}),
+            ...(sourceItem !== undefined ? { sourceItem } : {}),
+          };
+      facts.push(fact);
     }
-    if (facts.some((fact) => fact.failure || fact.itemIds)) elements[port.name] = facts;
+    if (facts.some((fact) => fact.failure || fact.itemIds || fact.sourceItem !== undefined)) {
+      elements[port.name] = facts;
+    }
     loaded.set(port.name, list);
-    const listPort = parseGraphTypeRef(port.type)?.listDepth ? true : ids.length > 1;
+    const listPort = !perItem && (parseGraphTypeRef(port.type)?.listDepth ? true : ids.length > 1);
     const values = list.map(bodyValue);
-    inputs[port.name] = listPort ? values : values[0];
+    inputs[port.name] =
+      perItem && !isListInput(port)
+        ? itemOfValue(library, list[0]!.type, values[0], binding!.item.index)
+        : listPort
+          ? values
+          : values[0];
     const first = list[0]!;
     if (port.render === "file" && !listPort && "file" in first.body) {
       files[port.name] = {
@@ -327,7 +389,7 @@ export async function loadGraphAgentInputs(
     ...(inputWorkspace ? { inputWorkspace } : {}),
   };
   if ("builtIn" in node.prompt) {
-    result.builtInInputs = builtInInputs(run, node, loaded);
+    result.builtInInputs = builtInInputs(run, node, loaded, binding);
   }
   return result;
 }
@@ -336,6 +398,7 @@ function builtInInputs(
   run: Readonly<GraphRun>,
   node: GraphPlanAgentNode,
   loaded: ReadonlyMap<string, GraphArtifact[]>,
+  binding?: { port: string; item: GraphFanOutItem },
 ): Record<string, GraphBuiltInPromptInputValue | GraphBuiltInPromptInputValue[]> {
   const prompt = node.prompt as { builtIn: string };
   const definition = graphBuiltInPrompt(prompt.builtIn);
@@ -346,21 +409,29 @@ function builtInInputs(
   const result: Record<string, GraphBuiltInPromptInputValue | GraphBuiltInPromptInputValue[]> = {};
   for (const input of definition.inputs) {
     const port = bound.get(input.name);
-    const portType = node.inputs.find((candidate) => candidate.name === port)?.type ?? "";
+    const portSpec = node.inputs.find((candidate) => candidate.name === port);
+    const portType = portSpec?.type ?? "";
     // Today's builders take the reports themselves: failed branches' markers stay out.
     const artifacts = port
       ? loaded.get(port)?.filter((artifact) => !isGraphFailureMarker(portType, artifact.type))
       : undefined;
     if (!port || !artifacts || artifacts.length === 0) continue;
     const values = artifacts.map((artifact): GraphBuiltInPromptInputValue => {
-      const itemIds = graphInputItemIds(library, artifact);
+      let itemIds = graphInputItemIds(library, artifact);
+      let value = "value" in artifact.body ? artifact.body.value : undefined;
+      // A typed `items` branch's builder sees its own item only (item 401).
+      if (binding?.port === port && !isListInput(portSpec!)) {
+        const narrowed = narrowToItem(library, artifact.type, value, binding.item.index);
+        if (narrowed !== undefined) {
+          value = narrowed;
+          itemIds = [binding.item.id];
+        }
+      }
       return {
         port,
         type: artifact.type,
         artifactId: artifact.id,
-        ...("value" in artifact.body && artifact.body.value !== undefined
-          ? { value: artifact.body.value }
-          : {}),
+        ...(value !== undefined ? { value } : {}),
         ...("file" in artifact.body ? { file: { ...artifact.body.file } } : {}),
         ...(itemIds.length > 0 ? { itemIds } : {}),
       };
@@ -368,6 +439,30 @@ function builtInInputs(
     result[input.name] = input.list ? values : values[0]!;
   }
   return result;
+}
+
+/** The value with its item list cut to the one entry at `index` (1-based). */
+function narrowToItem(
+  library: GraphTypeLibrary,
+  type: string,
+  value: unknown,
+  index: number,
+): unknown {
+  const parts = parseGraphTypeRef(type);
+  const items = parts ? library.definition(parts.name, parts.version)?.items : undefined;
+  if (!items || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entry = graphItemList(items, value)?.[index - 1];
+  if (entry === undefined) return undefined;
+  const copy = structuredClone(value) as Record<string, unknown>;
+  const segments = items.path.split(".");
+  let holder: Record<string, unknown> = copy;
+  for (const segment of segments.slice(0, -1)) {
+    const next = holder[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next)) return undefined;
+    holder = next as Record<string, unknown>;
+  }
+  holder[segments.at(-1)!] = [entry];
+  return copy;
 }
 
 function promptContext(run: Readonly<GraphRun>, node: GraphPlanAgentNode) {

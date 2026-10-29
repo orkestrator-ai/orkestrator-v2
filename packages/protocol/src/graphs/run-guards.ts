@@ -352,6 +352,7 @@ const RUN_FIELDS = [
   "activations",
   "rewinds",
   "loopIterations",
+  "fanOuts",
   "usage",
   "revision",
   "createdAt",
@@ -844,6 +845,86 @@ function checkRewind(value: unknown, path: string, errors: FieldErrorCollector):
   return idOk ? (value.id as string) : null;
 }
 
+const FAN_OUT_FIELDS = [
+  "nodeId",
+  "iteration",
+  "sources",
+  "items",
+  "total",
+  "truncatedIds",
+  "createdAt",
+  "supersededBy",
+];
+
+/** One `items` fan-out record (item 401); returns its live position, or null. */
+function checkFanOut(
+  value: unknown,
+  path: string,
+  errors: FieldErrorCollector,
+  context: { nodeIds: ReadonlySet<string> | null; rewindIds: ReadonlySet<string> },
+): string | null {
+  if (!checkObject(value, path, FAN_OUT_FIELDS, errors)) return null;
+  const nodeOk = checkPattern(
+    value.nodeId,
+    joinPath(path, "nodeId"),
+    errors,
+    GRAPH_ID_PATTERN,
+    64,
+    "a node id",
+  );
+  if (nodeOk && context.nodeIds && !context.nodeIds.has(value.nodeId as string)) {
+    errors.add(joinPath(path, "nodeId"), "unknown_node", "The frozen plan has no such node");
+  }
+  checkCount(value.iteration, joinPath(path, "iteration"), errors, 1, B.maxIteration);
+  const sourcesPath = joinPath(path, "sources");
+  if (
+    checkRequired(value.sources, sourcesPath, errors) &&
+    checkArray(value.sources, sourcesPath, errors, { max: B.maxPortArtifacts })
+  ) {
+    value.sources.forEach((id, index) => checkArtifactId(id, joinPath(sourcesPath, index), errors));
+  }
+  const itemsPath = joinPath(path, "items");
+  let running = 0;
+  if (
+    checkRequired(value.items, itemsPath, errors) &&
+    checkArray(value.items, itemsPath, errors, { max: GRAPH_TEMPLATE_BOUNDS.maxBranches })
+  ) {
+    running = value.items.length;
+    const keys = new Set<string>();
+    value.items.forEach((item, index) => {
+      const itemPath = joinPath(itemsPath, index);
+      if (!checkObject(item, itemPath, ["key", "index", "id", "artifact"], errors)) return;
+      if (!isGraphBranchKey(item.key) || !(item.key as string).startsWith("item.")) {
+        errors.add(joinPath(itemPath, "key"), "pattern", "Must be an item branch key segment");
+      } else if (keys.has(item.key as string)) {
+        errors.add(joinPath(itemPath, "key"), "duplicate", "Duplicate item branch key");
+      } else {
+        keys.add(item.key as string);
+      }
+      checkCount(item.index, joinPath(itemPath, "index"), errors, 1, BUDGETS.maxItemIds);
+      checkText(item.id, joinPath(itemPath, "id"), errors, BUDGETS.maxItemIdChars, false);
+      checkArtifactId(item.artifact, joinPath(itemPath, "artifact"), errors);
+    });
+  }
+  checkCount(value.total, joinPath(path, "total"), errors, running, BUDGETS.maxItemIds);
+  if (value.truncatedIds !== undefined) {
+    const truncatedPath = joinPath(path, "truncatedIds");
+    if (checkArray(value.truncatedIds, truncatedPath, errors, { max: B.maxTruncatedItemIds })) {
+      value.truncatedIds.forEach((id, index) =>
+        checkText(id, joinPath(truncatedPath, index), errors, BUDGETS.maxItemIdChars, false),
+      );
+    }
+  }
+  checkTimestamp(value.createdAt, joinPath(path, "createdAt"), errors);
+  if (value.supersededBy !== undefined) {
+    if (!context.rewindIds.has(value.supersededBy as string)) {
+      errors.add(joinPath(path, "supersededBy"), "mismatch", "Must name one of the run's rewinds");
+    }
+    return null;
+  }
+  return nodeOk ? `${value.nodeId as string}#iter=${String(value.iteration)}` : null;
+}
+
 export interface GraphRunValidationOptions {
   /**
    * Re-checks the frozen plan's digest. Defaults to `verifyGraphPlanDigest`;
@@ -970,6 +1051,22 @@ export function validateGraphRun(
     checkCount(iteration, loopPath, errors, 1, B.maxIteration);
   }
   if (
+    value.fanOuts !== undefined &&
+    checkArray(value.fanOuts, "fanOuts", errors, { max: B.maxFanOuts })
+  ) {
+    const nodeIds = plan ? new Set(plan.nodes.map((node) => node.id)) : null;
+    const positions = new Set<string>();
+    value.fanOuts.forEach((fanOut, index) => {
+      const path = joinPath("fanOuts", index);
+      const position = checkFanOut(fanOut, path, errors, { nodeIds, rewindIds });
+      if (position === null) return;
+      if (positions.has(position)) {
+        errors.add(path, "duplicate", "A node position has at most one live fan-out");
+      }
+      positions.add(position);
+    });
+  }
+  if (
     checkRequired(value.usage, "usage", errors) &&
     checkObject(value.usage, "usage", ["agentSessions", "tokens", "cacheReadTokens"], errors)
   ) {
@@ -1020,6 +1117,7 @@ const ARTIFACT_FIELDS = [
   "body",
   "itemIds",
   "itemSources",
+  "sourceItem",
   "state",
   "supersededBy",
 ] as const;
@@ -1164,6 +1262,7 @@ export function validateGraphArtifact(value: unknown): FieldValidation<GraphArti
       });
     }
   }
+  checkText(value.sourceItem, "sourceItem", errors, BUDGETS.maxItemIdChars);
   checkEnum(value.state, "state", errors, GRAPH_ARTIFACT_STATES);
   if (value.state === "superseded") {
     checkPattern(
@@ -1207,6 +1306,7 @@ export function verifyGraphArtifactIdentity(
       producer: artifact.producer,
       inputs: artifact.inputs,
       ...(artifact.workspace ? { workspace: artifact.workspace } : {}),
+      ...(artifact.sourceItem !== undefined ? { sourceItem: artifact.sourceItem } : {}),
     },
     hash,
   );

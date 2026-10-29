@@ -30,11 +30,58 @@ unless noted:
 | Library and trust (109) | `library.ts`; backend `graph-template-service.ts`, `commands-registry-graphs.ts`; web `lib/backend/graph-templates.ts` | Built-in, user (backend store, revision compare-and-swap) and project (`.orkestrator/graphs/*.graph.json`) templates; project templates are untrusted until the user approves their digest; a per-project capability ceiling; the `graph_template*` commands. |
 | Sharing and review (405) | `sharing.ts`; backend `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graph-sharing.ts`; web `lib/backend/graph-template-sharing.ts`, designer `GraphShareDialogs.tsx`, `GraphTemplateReviewPanel.tsx` | Share bundles (`orkestrator.graph-bundle` v1: the template with its custom types, `graphTemplateDigest`, a whole-content digest, optional Ed25519 signature by the installation's key). A tampered bundle is refused; anything else imports as a user template only after the user confirms its digest, shown with a capability summary. Untrusted and changed project templates are reviewed with that summary and a diff against the last approved copy, then approved or rejected. |
 | Run record (201) | `run.ts`, backend `graph-runs` store | Run, activation and artifact records for the Phase 2 runtime. |
+| Items fan-out (401) | `run-fanout.ts`, `run-branches.ts`; backend `graph-run-fanout.ts`, `graph-run-ready-set.ts`, `graph-edge-transforms.ts` | One branch per item of a list input, bounded by `maxBranches`, recorded as a fan-out on the run; per-item provenance through `sourceItem` (below). |
 | Guards and enforcement (209) | `agent-enforcement.ts`; backend `graph-agent-guards.ts`, `graph-agent-policy.ts` | Each agent node's tier per provider and host, the launch pickers' choices per role, and the post-hoc guards around every activation (below). |
 
 | Mock runs (213) | `mock.ts` (`mock-pins.ts`, `mock-values.ts`, `schema-sample.ts`); backend `graph-mock-provider.ts`, `graph-mock-outputs.ts`, `graph-mock-system.ts`, `graph-mock-launch.ts`, `commands-registry-graph-mock.ts`; web `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` | Runs a stored template with canned answers on the real runtime: no provider sessions, no tokens, no side effects (below). |
 | Designer (110, 212) | `apps/web/src/components/graph-designer/`, `apps/web/src/stores/graphDesignerStore.ts` | The Graphs designer tab: library, canvas, inspector and compile panel; user templates and new graphs are edited on the canvas (below). |
 | Run view (211) | `run-view.ts`; backend `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts`; web `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` | The `graph-run` tab: a run on the shared flow graph with an inspector and controls, rehydrated from revisioned snapshots (below). |
+
+## Items fan-out (item 401)
+
+`replicate: { over: "items", input, maxBranches, truncate? }` runs one branch
+per item of a list input (report §4.4, §5.8; D9, D10). The design note with
+its reasons is in [`plans/graphs/401-items-fanout.md`](../../plans/graphs/401-items-fanout.md).
+
+- **Input.** The port must be `list<T>` (one item per element artifact) or of a
+  named type that declares `items` (one item per entry of its item list);
+  otherwise the compiler reports `replicate-items-input`. Per branch the port
+  and `{{item}}` hold the element; `{{item.index}}` is its 1-based position in
+  the input and `{{item.id}}` its stable id (these two win over element fields
+  of the same name).
+- **Compile-time bound.** The fan-out runs 0 to `maxBranches` branches, times
+  the other axes of a `cross` (keys joined in axis order). The cost estimate,
+  `fanout-too-wide` (32 per node) and the limits use the worst case.
+- **Expansion.** The ready set resolves the position once as a whole: its
+  non-zip inputs through their edge transforms, then its `when` on the whole
+  list. An absent input or a false `when` skips the position, a failed
+  delivery fails it (one unbranched activation). Otherwise
+  `expandGraphItems` (`graph-run-fanout.ts`) records a `GraphItemFanOut` on the
+  run (`run.fanOuts`: the items that run, `total`, the truncated ids) and the
+  branch activations are created in the same planning round, each with its
+  item's artifact on the replicated port. An empty list records an empty
+  fan-out and one unbranched skip, so consumers skip. The record is never
+  recomputed: retries, restarts and a recovered backend read it.
+- **Truncation is explicit.** `truncate: "first"` (default) runs the first
+  `maxBranches` items and records the rest; `"fail"` fails the position with
+  `budget-exceeded` naming both counts before any branch starts.
+- **Branch keys** are `item.<encoded id>` (`graphItemBranchSegment`: `/` as
+  `:`, `+` as `_`, `$` dropped; over 64 characters a hash; a repeated id gets
+  `.2`). Derived from the item's id, so zip edges pair the same item, a
+  filtered or reordered input keeps each item's key, and the item ids of a
+  branch's outputs name the item (`diagnose/item.validate:failure-3/diagnosis-1`).
+- **Item ids.** A list element is its artifact's `sourceItem`, else its
+  producer's label (`review/panel.2`); a type with `items` gives each entry
+  its `run-items.ts` id.
+- **Provenance.** `GraphArtifact.sourceItem` (part of the artifact id when
+  present) is set on elements an edge `flatten` cuts from a typed item list,
+  on every output of an item branch and on a failed item branch's failure
+  marker. On an item branch the replicated port contributes exactly the
+  branch's item to the citable sources, so a per-finding fix cites the finding
+  it fixed. Prompts show `Source item: <id>` (`"sourceItem"` in a JSON frame).
+- **Restart and rewind.** Restarting one branch keeps the fan-out. A rewind
+  that supersedes one of its source artifacts supersedes it (`supersededBy`),
+  and the position expands again from the live input.
 
 ## Guards and enforcement (item 209)
 
@@ -239,9 +286,10 @@ numbers commit on blur or Enter after validation, free text as typed):
   opt-ins, a JSON fallback, `minEnforcement` with D4's lowered-floor note and
   Acknowledge, and the per-provider matrix `GraphEnforcementMatrix`),
   Execution (`GraphExecutionEditor`: role or a new one, replicate over a panel,
-  lenses with the lens editor and the Settings presets (D19), or samples;
-  `items` waits for item 401; session fresh or continue; `ask_human`; retry,
-  timeout and on-failure; `when`).
+  lenses with the lens editor and the Settings presets (D19), samples, or the
+  items of a list input (the input port, the most branches and the truncation
+  policy; item 401); session fresh or continue; `ask_human`; retry, timeout
+  and on-failure; `when`).
 - system, gate, merge, human (`GraphSystemEditor.tsx`, `GraphKindEditors.tsx`,
   `GraphMergeHumanEditors.tsx`): the action from its spec (description,
   idempotency, side effect, the types it reads and produces with the port
@@ -346,7 +394,10 @@ through `GraphRunFlowGraph`, with the build pipeline's column layout. A flow
 node is a node position (plan node, loop iteration, branch; id
 `node#iter=N[#branch=K]`), the run's inputs, or a previous attempt. Columns are
 the longest path over the positions: the branches of a replicated node share a
-column, and each loop iteration unrolls to the right of the last (a carry feeds
+column (an `items` node is one placeholder until it expands, then one position
+per item, named by its id, with "N of M items run; K truncated" on the face
+and in the inspector's Item section when the fan-out truncated), and each loop
+iteration unrolls to the right of the last (a carry feeds
 the next iteration; the next iteration is drawn once entered). Positions not
 reached are faded (`placeholder`), "ahead" while the run is live and "not
 reached" after it ended. A gate or human node shows the outlet it took, edges
@@ -423,7 +474,7 @@ reminder and bounded repair turns are the runner's. The prompt
 registries (node kinds, built-in types, built-in prompts, system actions with
 their parameters from `GRAPH_SYSTEM_ACTION_SPECS`, predicates, loops,
 replicate, profiles and bounds), quotes the report §9 examples that compile
-today (§9.1 and §9.2; at most 16 KiB), and puts the draft to modify and the
+today (§9.1, §9.2 and §9.4; at most 16 KiB), and puts the draft to modify and the
 description in evidence frames.
 
 **The result kind.** `graph-template` (`submit_graph_template`, validated by

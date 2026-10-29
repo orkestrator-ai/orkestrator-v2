@@ -36,9 +36,8 @@
 import {
   boundGraphError,
   GRAPH_RUN_LIMIT_CODES,
+  graphActivationBranch,
   graphBranchBinding,
-  graphNodeBranches,
-  type GraphBranch,
   isGraphActivationTerminal,
   isGraphRunTerminal,
   type GraphModelBinding,
@@ -81,6 +80,7 @@ import type {
   GraphArtifactOutcome,
   GraphArtifactOutcomes,
   GraphArtifactRequest,
+  GraphLoadedValue,
 } from "./graph-run-view.js";
 import { runBoundedTasks, type ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
@@ -265,12 +265,10 @@ class GraphRunPass {
     artifactsStored: 0,
     maxConcurrentCalls: 0,
   };
-  private readonly values = new Map<string, { value: unknown }>();
+  private readonly values = new Map<string, GraphLoadedValue>();
   /** Edge deliveries and routed errors planning decided or this pass stored. */
   private readonly outcomes: GraphArtifactOutcomes = new Map();
   private planning: GraphPlanningResult | null = null;
-  /** Branches per replicated node; bindings are frozen, so one computation per pass. */
-  private readonly branches = new Map<string, GraphBranch[] | null>();
   /** Tail of the serialized journal writes; never rejects. */
   private journalTail: Promise<void> = Promise.resolve();
   /** Surplus branches this pass already asked to stop. */
@@ -373,12 +371,8 @@ class GraphRunPass {
 
   private binding(node: GraphPlanNode, activation: NodeActivation): GraphModelBinding | undefined {
     if (node.kind !== "agent") return undefined;
-    if (!this.branches.has(node.id)) {
-      this.branches.set(node.id, graphNodeBranches(node, this.run.bindings.roles));
-    }
-    const branch = this.branches
-      .get(node.id)
-      ?.find((candidate) => candidate.key === activation.branchKey);
+    // An `items` branch's other axes come from its position's fan-out (item 401).
+    const branch = graphActivationBranch(this.run, node, activation);
     return graphBranchBinding(this.run.bindings.roles, branch?.role ?? node.role, branch);
   }
 
@@ -670,8 +664,21 @@ class GraphRunPass {
       if (this.values.has(id)) continue;
       const artifact = await this.deps.storage.getGraphArtifact(this.run.id, id).catch(() => null);
       this.stats.valueLoads += 1;
-      const body = artifact?.state === "live" ? artifact.body : undefined;
-      this.values.set(id, { value: body && "value" in body ? body.value : undefined });
+      const live = artifact?.state === "live" ? artifact : undefined;
+      this.values.set(id, {
+        value: live && "value" in live.body ? live.body.value : undefined,
+        // What deriving item ids needs (edge `flatten`, `items` fan-out; item 401).
+        ...(live
+          ? {
+              artifact: {
+                type: live.type,
+                producer: live.producer,
+                ...(live.itemIds ? { itemIds: live.itemIds } : {}),
+                ...(live.sourceItem !== undefined ? { sourceItem: live.sourceItem } : {}),
+              },
+            }
+          : {}),
+      });
     }
   }
 
@@ -682,18 +689,27 @@ class GraphRunPass {
       let outcome: GraphArtifactOutcome;
       try {
         const ids: string[] = [];
-        for (const value of request.values) {
+        for (const [index, value] of request.values.entries()) {
+          const sourceItem = request.sourceItems?.[index];
           const artifact = await this.deps.artifacts.putValue({
             runId: this.run.id,
             type: request.type,
             producer: request.producer,
             inputs: request.inputs,
             value,
+            ...(sourceItem !== undefined ? { sourceItem } : {}),
           });
           this.stats.artifactsStored += 1;
           ids.push(artifact.id);
-          // Consumers' `when` read these values; they are known already.
-          this.values.set(artifact.id, { value });
+          // Consumers' `when` and an `items` fan-out read these; they are known already.
+          this.values.set(artifact.id, {
+            value,
+            artifact: {
+              type: artifact.type,
+              producer: artifact.producer,
+              ...(artifact.sourceItem !== undefined ? { sourceItem: artifact.sourceItem } : {}),
+            },
+          });
         }
         outcome = { ok: true, ids };
       } catch (error) {

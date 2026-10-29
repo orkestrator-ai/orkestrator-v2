@@ -8,6 +8,10 @@
  * run. `add` records an activation the round just created so downstream
  * nodes see it in the same round (a skip propagates in one pass).
  *
+ * An `items` node's branches exist once it expanded: the view reads the
+ * run's fan-out records and those the round adds (item 401), so a
+ * position's branch set is {@link GraphRunView.branchesAt} per iteration.
+ *
  * Artifacts the runtime itself makes (an edge's transformed values, a routed
  * failure's `error@1`; item 206) are asked for through {@link
  * GraphRunView.requests} and remembered in the pass's {@link
@@ -25,15 +29,38 @@ import type {
 import {
   graphActivationSlot,
   graphNodeBranches,
+  graphNodeItemsAxis,
   type GraphArtifactProducer,
   type GraphBranch,
+  type GraphItemFanOut,
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
-import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import {
+  GraphTypeLibrary,
+  type GraphErrorCause,
+  type GraphTypeDefinition,
+} from "@orkestrator/protocol/graphs/types";
 
-/** A loaded artifact value; `undefined` value when the artifact could not be read. */
-export type GraphValueCache = ReadonlyMap<string, { value: unknown }>;
+/**
+ * What planning knows of an artifact besides its value (item 401): enough to
+ * derive its items' ids and the upstream item it stands for.
+ */
+export interface GraphLoadedArtifact {
+  type: string;
+  producer: GraphArtifactProducer;
+  itemIds?: readonly string[];
+  sourceItem?: string;
+}
+
+/** A loaded artifact value (`undefined` value when it could not be read), with its envelope facts. */
+export interface GraphLoadedValue {
+  value: unknown;
+  artifact?: GraphLoadedArtifact;
+}
+
+/** Loaded artifact values by id. */
+export type GraphValueCache = ReadonlyMap<string, GraphLoadedValue>;
 
 /** Value artifacts planning asks the pass to store (one request, one or more values). */
 export interface GraphArtifactRequest {
@@ -46,6 +73,8 @@ export interface GraphArtifactRequest {
   values: unknown[];
   /** Lineage: the artifact ids the values were made from. */
   inputs: string[];
+  /** Per value, the upstream item it stands for (item 401), parallel to `values`. */
+  sourceItems?: (string | undefined)[];
   /** Deliveries: the edge and input port, for a failure message. */
   edgeId?: string;
   port?: string;
@@ -58,18 +87,26 @@ export type GraphArtifactOutcome =
 /** Outcomes the pass keeps for its planning calls (mutable; planning memoises into it). */
 export type GraphArtifactOutcomes = Map<string, GraphArtifactOutcome>;
 
+function position(nodeId: string, iteration: number): string {
+  return `${nodeId}#iter=${iteration}`;
+}
+
 export class GraphRunView {
   readonly plan: CompiledGraphPlan;
   private readonly nodes = new Map<string, GraphPlanNode>();
   private readonly edges = new Map<string, GraphPlanEdge>();
   private readonly loops = new Map<string, GraphPlanLoop>();
+  /** `node#iter` → the position's branches (`items` nodes differ per iteration). */
   private readonly branches = new Map<string, GraphBranch[] | null>();
+  /** `node#iter` → the live `items` fan-out of the position (item 401). */
+  private readonly fanOuts = new Map<string, GraphItemFanOut>();
   /** Slot → latest live (not superseded) activation. */
   private readonly latest = new Map<string, NodeActivation>();
   /** Slot → live activations (retries count against `retry.attempts`). */
   private readonly liveCount = new Map<string, number>();
   /** Slot → highest attempt ever used, superseded included. */
   private readonly maxAttempt = new Map<string, number>();
+  private library: GraphTypeLibrary | undefined;
 
   /** Artifacts this round asked the pass to store, by outcome key. */
   readonly requests = new Map<string, GraphArtifactRequest>();
@@ -86,6 +123,11 @@ export class GraphRunView {
     for (const edge of run.plan.edges) this.edges.set(edge.id, edge);
     for (const loop of run.plan.loops) this.loops.set(loop.id, loop);
     for (const activation of run.activations) this.index(activation);
+    for (const fanOut of run.fanOuts ?? []) {
+      if (fanOut.supersededBy === undefined) {
+        this.fanOuts.set(position(fanOut.nodeId, fanOut.iteration), fanOut);
+      }
+    }
   }
 
   private index(activation: NodeActivation): void {
@@ -129,22 +171,64 @@ export class GraphRunView {
     return { loop, carry };
   }
 
+  /** A named, non-list type of the plan, or undefined. */
+  typeDefinition(ref: string): GraphTypeDefinition | undefined {
+    this.library ??= new GraphTypeLibrary(this.plan.types);
+    const resolution = this.library.resolve(ref);
+    return resolution.ok && resolution.type.kind === "named"
+      ? resolution.type.definition
+      : undefined;
+  }
+
   inputPort(nodeId: string, port: string): GraphPlanInputPort | undefined {
     return this.node(nodeId).inputs.find((input) => input.name === port);
   }
 
-  /** The node's branches (null when not replicated). Throws for `items` (item 401). */
-  branchesOf(node: GraphPlanNode): GraphBranch[] | null {
-    if (!this.branches.has(node.id)) {
-      this.branches.set(node.id, graphNodeBranches(node, this.run.bindings.roles));
-    }
-    return this.branches.get(node.id)!;
+  /** Records an `items` fan-out created in this round (item 401). */
+  addFanOut(fanOut: GraphItemFanOut): void {
+    const key = position(fanOut.nodeId, fanOut.iteration);
+    this.fanOuts.set(key, fanOut);
+    this.branches.delete(key);
   }
 
-  /** Branch keys of a node; `[undefined]` for an unreplicated node. */
-  branchKeysOf(node: GraphPlanNode): (string | undefined)[] {
-    const branches = this.branchesOf(node);
+  /** The live `items` fan-out of a node position, if it expanded. */
+  fanOutAt(nodeId: string, iteration: number): GraphItemFanOut | undefined {
+    return this.fanOuts.get(position(nodeId, iteration));
+  }
+
+  /**
+   * The node's branches at one position, or null when the position is one
+   * unbranched activation: an unreplicated node, or an `items` node that has
+   * not expanded, or expanded to no items (item 401).
+   */
+  branchesAt(node: GraphPlanNode, iteration: number): GraphBranch[] | null {
+    const items = graphNodeItemsAxis(node) !== undefined;
+    const key = items ? position(node.id, iteration) : node.id;
+    if (!this.branches.has(key)) {
+      let branches: GraphBranch[] | null;
+      if (items) {
+        const fanOut = this.fanOutAt(node.id, iteration);
+        branches =
+          fanOut && fanOut.items.length > 0
+            ? graphNodeBranches(node, this.run.bindings.roles, fanOut.items)
+            : null;
+      } else {
+        branches = graphNodeBranches(node, this.run.bindings.roles);
+      }
+      this.branches.set(key, branches);
+    }
+    return this.branches.get(key)!;
+  }
+
+  /** Branch keys of a node position; `[undefined]` for one unbranched activation. */
+  branchKeysAt(node: GraphPlanNode, iteration: number): (string | undefined)[] {
+    const branches = this.branchesAt(node, iteration);
     return branches ? branches.map((branch) => branch.key) : [undefined];
+  }
+
+  /** One branch of a node position. */
+  branchAt(node: GraphPlanNode, iteration: number, branchKey: string): GraphBranch | undefined {
+    return this.branchesAt(node, iteration)?.find((branch) => branch.key === branchKey);
   }
 
   /** The loop's current 1-based iteration. */

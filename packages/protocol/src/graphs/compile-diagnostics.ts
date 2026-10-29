@@ -69,9 +69,10 @@ export const GRAPH_COMPILE_DIAGNOSTICS = Object.freeze({
     severity: "error",
     summary: "Sub-graph nodes are not yet supported (Phase 4, item 402).",
   },
-  "replicate-items-unsupported": {
+  "replicate-items-input": {
     severity: "error",
-    summary: "Replication over list items is not yet supported (Phase 4, item 401).",
+    summary:
+      "An `items` fan-out replicates over an input port of type `list<T>` or of a type that declares `items` (item 401).",
   },
   "error-port-type": {
     severity: "error",

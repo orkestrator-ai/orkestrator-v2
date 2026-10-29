@@ -28,6 +28,8 @@ import {
   GRAPH_RUN_FORMAT_VERSION,
   GRAPH_RUN_INPUT_PRODUCER,
   graphNodeBranches,
+  graphNodeItemsAxis,
+  type GraphFanOutItem,
   isGraphRunTerminal,
   replaceGraphActivation,
   type GraphRun,
@@ -96,6 +98,14 @@ import {
 
 /** Runs whose latest pass counts are kept for diagnostics and the benchmark. */
 const MAX_RETAINED_PASS_STATS = 256;
+
+/** The item a launch check crosses an `items` axis with (item 401): only its roles matter. */
+const GRAPH_LAUNCH_STAND_IN_ITEM: GraphFanOutItem = {
+  key: "item.launch-check",
+  index: 1,
+  id: "launch-check",
+  artifact: "0".repeat(64),
+};
 
 export type GraphRunServiceErrorCode =
   /** The `graph-run` domain is rolled back (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`). */
@@ -539,7 +549,13 @@ export class GraphRunService implements KeyedWorkflowOwner {
       if (node.kind !== "agent") continue;
       let branches;
       try {
-        branches = graphNodeBranches(node, launch.roles);
+        // An `items` axis expands at run time (item 401); one stand-in item
+        // checks the roles its other axes run on.
+        branches = graphNodeBranches(
+          node,
+          launch.roles,
+          graphNodeItemsAxis(node) ? [GRAPH_LAUNCH_STAND_IN_ITEM] : undefined,
+        );
       } catch (error) {
         throw launchError(error instanceof Error ? error.message : "Unsupported replication");
       }

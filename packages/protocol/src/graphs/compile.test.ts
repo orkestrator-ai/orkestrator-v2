@@ -37,11 +37,14 @@ describe("the report §9 examples", () => {
     }
   });
 
-  test("§9.3 and §9.4 fail only on their Phase 4 features (items 402 and 401)", () => {
+  test("§9.3 fails only on its Phase 4 feature (item 402); §9.4 compiles with items fan-out (item 401)", () => {
     const codes = (key: "design-bake-off" | "failure-diagnosis") =>
       errors(graphTemplateExample(key)).map((diagnostic) => diagnostic.code);
     expect(codes("design-bake-off")).toEqual(["subgraph-unsupported"]);
-    expect(codes("failure-diagnosis")).toEqual(["replicate-items-unsupported"]);
+    expect(codes("failure-diagnosis")).toEqual([]);
+    const result = compile(graphTemplateExample("failure-diagnosis"));
+    expect(result.ok).toBe(true);
+    expect(result.launchable).toBe(true);
   });
 
   test("the design bake-off acknowledges every taint warning it raises", () => {

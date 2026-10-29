@@ -25,6 +25,9 @@
  * element with a `Source ids:` line, one id per item in order. A failed
  * branch's `error@1` marker in a fan-in list (`includeFailures`) renders as
  * `{"branchFailed": …}` in JSON and as a `Branch failed` line otherwise.
+ * An element that stands for an upstream item (an `items` branch's output, a
+ * `flatten` element; item 401) shows it as `"sourceItem"` in JSON and as a
+ * `Source item:` line otherwise.
  *
  * The designer's preview and the agent executor both call these, so a
  * preview is byte for byte what the agent gets, apart from what only the
@@ -133,12 +136,19 @@ function elementsOf(value: unknown, depth: number): unknown[] {
 
 /** The JSON key an item's stable id is shown under in a `json-frame`. */
 export const GRAPH_PROMPT_SOURCE_ID_KEY = "sourceId";
+/** The JSON key an element's upstream item is shown under in a `json-frame` (item 401). */
+export const GRAPH_PROMPT_SOURCE_ITEM_KEY = "sourceItem";
 /** The JSON key a failed branch's marker is wrapped in. */
 export const GRAPH_PROMPT_BRANCH_FAILED_KEY = "branchFailed";
 
 /** The line after an element whose items have ids. */
 export function graphPromptSourceIdsLine(itemIds: readonly string[]): string {
   return `Source ids (one per item, in order): ${itemIds.join(", ")}`;
+}
+
+/** The line after an element that stands for an upstream item (item 401). */
+export function graphPromptSourceItemLine(sourceItem: string): string {
+  return `Source item: ${sourceItem}`;
 }
 
 /** The text a failed branch's `error@1` marker renders as outside JSON. */
@@ -175,10 +185,20 @@ function decoratedElement(
   facts: GraphPromptElement | undefined,
 ): unknown {
   if (facts?.failure) return { [GRAPH_PROMPT_BRANCH_FAILED_KEY]: element };
+  const object = !!element && typeof element === "object" && !Array.isArray(element);
+  // The upstream item first, so it reads as what the element is about.
+  const withSource =
+    facts?.sourceItem !== undefined && object
+      ? {
+          [GRAPH_PROMPT_SOURCE_ITEM_KEY]: facts.sourceItem,
+          ...(element as Record<string, unknown>),
+        }
+      : element;
   const ids = facts?.itemIds;
   const items = port.definition?.items;
-  if (!ids || ids.length === 0 || !items) return element;
-  if (!element || typeof element !== "object" || Array.isArray(element)) return element;
+  if (!ids || ids.length === 0 || !items) return withSource;
+  if (!object) return element;
+  element = withSource;
   const segments = items.path.split(".");
   const copy = structuredClone(element) as Record<string, unknown>;
   let holder: Record<string, unknown> | undefined = copy;
@@ -222,10 +242,12 @@ function perElement(
   const parts = elementsOf(value, port.listDepth).map((element, index) => {
     const fact = facts?.[index];
     if (fact?.failure) return graphPromptBranchFailedText(element);
-    const text = render(element);
-    return fact?.itemIds && fact.itemIds.length > 0
-      ? `${text}\n\n${graphPromptSourceIdsLine(fact.itemIds)}`
-      : text;
+    const lines = [render(element)];
+    if (fact?.sourceItem !== undefined) lines.push(graphPromptSourceItemLine(fact.sourceItem));
+    if (fact?.itemIds && fact.itemIds.length > 0) {
+      lines.push(graphPromptSourceIdsLine(fact.itemIds));
+    }
+    return lines.join("\n\n");
   });
   return escapeFramedEvidenceText(parts.join(GRAPH_PROMPT_ELEMENT_SEPARATOR));
 }

@@ -181,6 +181,8 @@ export interface GraphArtifactIdentity {
   producer: GraphArtifactProducer;
   inputs: readonly string[];
   workspace?: GraphArtifactWorkspace;
+  /** The upstream item it stands for (item 401); hashed only when present, so older ids hold. */
+  sourceItem?: string;
 }
 
 /** The artifact id: the envelope's immutable part, hashed. */
@@ -208,6 +210,7 @@ export function graphArtifactId(
               : { baseRef: identity.workspace.baseRef }),
           }
         : null,
+      ...(identity.sourceItem === undefined ? {} : { sourceItem: identity.sourceItem }),
     }),
   );
 }

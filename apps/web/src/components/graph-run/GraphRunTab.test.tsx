@@ -201,6 +201,47 @@ describe("GraphRunTab faces", () => {
   });
 });
 
+describe("GraphRunTab items fan-out (item 401)", () => {
+  test("item branches read their item on the face and in the inspector; truncation is shown", async () => {
+    const keys = ["item.validate:failure-1", "item.validate:failure-2"];
+    stored = runOf("failure-diagnosis", {
+      fanOuts: [
+        {
+          nodeId: "diagnose",
+          iteration: 1,
+          sources: ["a".repeat(64), "b".repeat(64)],
+          items: keys.map((key, index) => ({
+            key,
+            index: index + 1,
+            id: `validate/failure-${index + 1}`,
+            artifact: (index ? "b" : "a").repeat(64),
+          })),
+          total: 3,
+          truncatedIds: ["validate/failure-3"],
+          createdAt: "2026-10-29T10:01:00.000Z",
+        },
+      ],
+      activations: [
+        act({ nodeId: "validate" }),
+        act({ nodeId: "diagnose", branchKey: keys[0] }),
+        act({ nodeId: "diagnose", branchKey: keys[1] }, { state: "running" }),
+      ],
+    });
+    renderTab();
+    await screen.findByTestId("graph-run-title");
+    const face = faceOf("diagnose · Item validate/failure-2");
+    expect(face.querySelector("[data-graph-run-truncated]")?.textContent).toBe(
+      "2 of 3 items run; 1 truncated",
+    );
+    fireEvent.click(face);
+    const item = await within(inspector()).findByText("validate/failure-2");
+    expect(item.closest("[data-graph-item]")).not.toBeNull();
+    expect(inspector().querySelector("[data-graph-item-truncated]")?.textContent).toBe(
+      "2 of 3 items run; 1 truncated",
+    );
+  });
+});
+
 describe("GraphRunTab inspector", () => {
   test("shows the profile, the tier actually enforced and why, guards, usage and errors", async () => {
     stored = reviewRun([

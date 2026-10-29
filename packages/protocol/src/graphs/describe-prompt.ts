@@ -49,9 +49,9 @@ export interface GraphDescribeExample {
 
 /**
  * The report §9 examples that compile without errors, in report order, while
- * their compact JSON fits `maxBytes` together. The others use Phase 4 parts
- * (sub-graphs, replicate over items) the compiler still refuses, and would
- * teach the agent to write what cannot compile.
+ * their compact JSON fits `maxBytes` together. The others use a Phase 4 part
+ * (sub-graphs) the compiler still refuses, and would teach the agent to write
+ * what cannot compile.
  */
 export function graphDescribeExamples(
   maxBytes: number = GRAPH_DESCRIBE_BOUNDS.maxExampleBytes,

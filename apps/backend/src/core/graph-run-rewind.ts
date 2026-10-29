@@ -53,7 +53,7 @@ import {
   GRAPH_RUN_INPUT_PRODUCER,
   applyGraphRewind,
   graphBranchBinding,
-  graphNodeBranches,
+  graphActivationBranch,
   graphRunActivation,
   type GraphArtifact,
   type GraphRewind,
@@ -685,9 +685,7 @@ export class GraphRunRewinds {
 
   private binding(run: GraphRun, node: GraphPlanNode, activation: NodeActivation) {
     if (node.kind !== "agent") return undefined;
-    const branch = graphNodeBranches(node, run.bindings.roles)?.find(
-      (candidate) => candidate.key === activation.branchKey,
-    );
+    const branch = graphActivationBranch(run, node, activation);
     return graphBranchBinding(run.bindings.roles, branch?.role ?? node.role, branch);
   }
 

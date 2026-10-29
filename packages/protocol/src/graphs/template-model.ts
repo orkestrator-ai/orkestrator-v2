@@ -306,11 +306,19 @@ export interface GraphLens {
 export const GRAPH_REPLICATE_SOURCES = ["panel", "lenses", "items", "samples"] as const;
 export type GraphReplicateSource = (typeof GRAPH_REPLICATE_SOURCES)[number];
 
+/**
+ * What an `items` fan-out does with items beyond `maxBranches` (item 401):
+ * `first` runs the first `maxBranches` and records the rest as truncated;
+ * `fail` fails the node position before any branch starts.
+ */
+export const GRAPH_ITEMS_TRUNCATE = ["first", "fail"] as const;
+export type GraphItemsTruncate = (typeof GRAPH_ITEMS_TRUNCATE)[number];
+
 /** One fan-out source (report §4.4, D9). */
 export type GraphReplicateAxis =
   | { over: "panel"; role: string }
   | { over: "lenses"; lenses: GraphLens[] }
-  | { over: "items"; input: string; maxBranches: number }
+  | { over: "items"; input: string; maxBranches: number; truncate?: GraphItemsTruncate }
   | { over: "samples"; count: number };
 
 /** Combined sources: the branch set is the product, keys joined in axis order. */

@@ -40,6 +40,7 @@
  */
 import type { GraphPlanNode } from "@orkestrator/protocol/graphs/compile";
 import { graphMockValue, graphMockWorkspace } from "@orkestrator/protocol/graphs/mock";
+import { graphActivationBranch } from "@orkestrator/protocol/graphs/run";
 import { graphAgentItemIds } from "./graph-agent-results.js";
 import {
   graphMockBaseWorkspace,
@@ -123,6 +124,8 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
           }
         : undefined;
     const outputs: Record<string, string> = {};
+    // An `items` branch's outputs stand for its item, as live runs record (item 401).
+    const sourceItem = graphActivationBranch(context.run, node, context.activation)?.item?.id;
     for (const port of node.outputs) {
       if (graphMockSkipsPort(port)) continue;
       const definition = graphMockDefinition(context.run, port.type);
@@ -147,6 +150,7 @@ export class GraphMockAgentExecutor implements GraphNodeExecutor {
         lineage,
         ...(workspace ? { workspace } : {}),
         ...(itemIds ? { itemIds } : {}),
+        ...(sourceItem !== undefined ? { sourceItem } : {}),
         ...(criterionIds && definition.name === "verification-verdict" ? { criterionIds } : {}),
       });
     }

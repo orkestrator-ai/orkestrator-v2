@@ -1,6 +1,6 @@
 /**
- * Mock runs end to end (item 213): the report §9 examples (Phase 4 parts
- * replaced as the Phase 2 exit criteria say) and every built-in's duplicate
+ * Mock runs end to end (item 213): the report §9 examples (§9.3 without its
+ * sub-graph; §9.4 with its `items` fan-out, item 401) and every built-in's duplicate
  * run to completion on the real scheduler, gates and merges, with the mock
  * agent, system and human executors, while the live agent and system
  * executors sit behind recording fakes that must see nothing. Deterministic:
@@ -100,6 +100,35 @@ describe("mock runs of the report §9 examples", () => {
       expect(effects.every((effect) => effect.state === "simulated")).toBe(true);
     });
   }
+
+  test("§9.4 runs as written: one diagnosis branch per failure, every iteration, to its bound", async () => {
+    const w = await world();
+    const template = phase2Examples().find((entry) => entry.section === "9.4")!.template;
+    const diagnose = template.nodes.find((node) => node.id === "diagnose") as GraphAgentNode;
+    expect(diagnose.replicate).toEqual({ over: "items", input: "failures", maxBranches: 12 });
+    const run = await w.finish((await w.launch(await w.save(template))).id);
+    expect(run.status).toBe("complete");
+    expectNoLiveWork(w, run);
+    // The mock validation keeps failing, so the loop stops at its bound.
+    expect(await loopState(w, run, "repair")).toMatchObject({ state: "done", reason: "bound" });
+    expect(run.fanOuts?.map((fanOut) => [fanOut.iteration, fanOut.items.map((i) => i.id)])).toEqual(
+      [1, 2, 3].map((iteration) => [
+        iteration,
+        [iteration === 1 ? "validate/failure-1" : `validate/iter-${iteration}/failure-1`],
+      ]),
+    );
+    for (const fanOut of run.fanOuts ?? []) {
+      const branch = run.activations.find(
+        (activation) =>
+          activation.nodeId === "diagnose" &&
+          activation.iteration === fanOut.iteration &&
+          activation.branchKey === fanOut.items[0]!.key,
+      )!;
+      expect(branch.state).toBe("complete");
+      const output = await w.storage.graphRuns.getGraphArtifact(run.id, branch.outputs.diagnosis!);
+      expect(output?.sourceItem).toBe(fanOut.items[0]!.id);
+    }
+  });
 
   test("§9.3 opens no pull request: the PR node records what it would have done", async () => {
     const w = await world();

@@ -36,3 +36,57 @@ was not built. That file is not in the default tier.
 No implementation, assertion, wait, timeout or skip in these owners changed.
 The branch's own owners passed: all agent mail, coordinator, agent tools,
 storage context and storage database suites.
+
+## Review repair validation, 2026-10-29
+
+Review preparation reran `mise run test` at `b750ce439`. The workspace group
+failed only `preview-terminal-roots.test.ts > the spawned local setup terminal
+is a managed root until it exits` on its 20,000 ms deadline (20,000.79 ms).
+The root, bridges and Codex protocol groups passed. The recorded preparation
+artifacts are under
+`.orkestrator/review-artifacts/review-validation-f6c7a656-e2bc-4c01-8979-a0e009bdcdb5/`.
+
+The review repair's first isolated rerun also timed out (20,002.57 ms):
+
+```bash
+mise run test:logged -- --name review-preview-terminal-root -- bun test --cwd apps/backend ./src/core/preview-terminal-roots.test.ts --parallel=1 --only-failures
+```
+
+Result: 1 pass, 1 fail, 5 assertions, 2 tests in one file (20.20 s).
+Failure artifact: `orkestrator-test-run.IyM5IM` under the host temporary
+directory. This observation does not establish a new cause; the earlier
+pass-after-retry evidence above remains the basis for tracking it as flaky.
+The review repair changes only storage code and tests; the terminal owner
+and its timeout are unchanged.
+
+The exact default command was rerun after the storage repair at `9e82e514b`:
+
+```bash
+mise run test:logged -- --name review-default-tests -- mise run test
+```
+
+The scheduler reserved workspace/root/bridges/protocol worker slots of
+6/1/2/1, waiting 323.6 s for another worktree's exclusive resource. The full
+run finished in 529.1 s including that wait (outer wrapper: 530.3 s).
+Root (3,249 pass), bridges and protocol lockfile passed. Workspace retained
+two failures in unchanged owners:
+
+- Backend: 10,184 pass, 87 skip, 1 fail; the same setup-terminal timeout
+  recurred (20,001.22 ms).
+- Web: 10,398 pass, 10 skip, 1 fail; the sibling ledger had length 0 instead
+  of 1 in `rich-conversation-revocation.test.tsx` (211.25 ms), a recurrence
+  of [0626](../native-agents-and-transcripts/0626-rich-content-sibling-ledger-aggregate.md).
+  Its complete isolated owner passed (exit 0, 1.5 s).
+
+Evidence: `orkestrator-test-run.2mai8S` (group logs and summary) and
+`orkestrator-test-run.LbkZa8` (outer wrapper) under the host temporary directory.
+All targeted storage regressions and backend typechecking passed; changed
+TypeScript files passed formatting and lint. The two unrelated owners were
+not changed or weakened by this repair.
+
+The post-aggregate isolated terminal-owner rerun used the same
+`review-preview-terminal-root` command above and timed out again
+(20,002.33 ms; 1 pass, 1 fail, 5 assertions; 20.27 s for the file, 20.3 s
+logged). Evidence: `orkestrator-test-run.yg7qQY` under the host temporary
+directory. This owner remains non-green in this repair; no new cause or
+resolution is claimed.

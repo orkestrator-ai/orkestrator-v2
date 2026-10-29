@@ -1,6 +1,6 @@
 # Preview setup-terminal process-root aggregate timeout
 
-- **ID:** 1304
+- **ID:** 1306
 - **Status:** open
 - **Date observed:** 2026-10-29 (macOS, Bun 1.4.4).
 - **Test:** `preview terminal process roots > the spawned local setup terminal is a managed root until it exits`.

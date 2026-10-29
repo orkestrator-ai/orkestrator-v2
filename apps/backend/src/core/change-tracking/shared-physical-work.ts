@@ -105,6 +105,17 @@ export class SharedScanQueue<T> {
   stats() {
     return { joined: this.joined, executed: this.executed, keys: this.states.size };
   }
+
+  /** Resolves once no pass is running or queued, including passes queued meanwhile. */
+  async settled(): Promise<void> {
+    for (;;) {
+      const pending = [...this.states.values()].flatMap((state) =>
+        [state.running, state.queued].filter((pass): pass is Promise<T> => pass !== null),
+      );
+      if (pending.length === 0) return;
+      await Promise.allSettled(pending);
+    }
+  }
 }
 
 interface SharedWatcher {

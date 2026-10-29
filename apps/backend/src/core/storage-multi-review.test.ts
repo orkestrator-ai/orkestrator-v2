@@ -46,15 +46,11 @@ async function withStorage(
   run: (storage: StorageService) => Promise<void>,
   options: {
     legacyMultiReviews?: Record<string, unknown>;
-    legacyLoopedReviews?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-storage-multi-review-"));
   try {
-    for (const [file, records] of [
-      ["multi-reviews.json", options.legacyMultiReviews],
-      ["looped-reviews.json", options.legacyLoopedReviews],
-    ] as const) {
+    for (const [file, records] of [["multi-reviews.json", options.legacyMultiReviews]] as const) {
       if (!records) continue;
       // A pre-SQLite store and its backup: the first open imports them and
       // moves both into the retired JSON archive.
@@ -466,72 +462,62 @@ test("an environment sweep removes every Multi Review record that names it", asy
   });
 });
 
-test.each(["multi", "looped"] as const)(
-  "%s review deletion retries scrubbing after the row deletion committed",
-  async (kind) => {
-    const secret = `${kind}-RETRY-DELETE-SECRET-3f6a`;
-    const kept = `${kind}-RETRY-DELETE-KEPT-9b2c`;
-    const persisted = (id: string, marker: string) => ({
-      version: 1,
-      id,
-      environmentId: "env-1",
-      snapshot: { ...completed(id), targetBranch: marker },
-      updatedAt: new Date(0).toISOString(),
-      revision: 1,
-    });
-    const records = {
-      "review-1": persisted("review-1", secret),
-      "review-2": persisted("review-2", kept),
-    };
-    await withStorage(
-      async (storage) => {
-        const dataDir = storeDir(storage);
-        const remove = (id: string) =>
-          kind === "multi"
-            ? storage.deleteMultiReviewWorkflow(id)
-            : storage.deleteLoopedReviewWorkflow(id);
-        const get = (id: string) =>
-          kind === "multi"
-            ? storage.getMultiReviewWorkflow(id)
-            : storage.getLoopedReviewWorkflow(id);
-        const changes: unknown[] = [];
-        const unsubscribe = storage.addResourceChangeListener((change) => changes.push(change));
-        const scrub = spyOn(
-          storageInternals(storage).context,
-          "scrubSensitiveJsonBackups",
-        ).mockRejectedValueOnce(new Error("scrub interrupted"));
-        try {
-          await expect(remove("review-1")).rejects.toThrow("scrub interrupted");
-          expect(await get("review-1")).toBeNull();
-          expect(storageFilesContain(dataDir, secret)).toBe(true);
-          const stamp = (await fs.readdir(path.join(dataDir, LEGACY_JSON_DIRECTORY)))[0]!;
-          const archiveFiles = ["", ".bak.1"].map((suffix) =>
-            path.join(dataDir, LEGACY_JSON_DIRECTORY, stamp, `${kind}-reviews.json${suffix}`),
-          );
-          for (const file of archiveFiles)
-            expect(await fs.readFile(file, "utf8")).toContain(secret);
+test("multi review deletion retries scrubbing after the row deletion committed", async () => {
+  const secret = "multi-RETRY-DELETE-SECRET-3f6a";
+  const kept = "multi-RETRY-DELETE-KEPT-9b2c";
+  const persisted = (id: string, marker: string) => ({
+    version: 1,
+    id,
+    environmentId: "env-1",
+    snapshot: { ...completed(id), targetBranch: marker },
+    updatedAt: new Date(0).toISOString(),
+    revision: 1,
+  });
+  const records = {
+    "review-1": persisted("review-1", secret),
+    "review-2": persisted("review-2", kept),
+  };
+  await withStorage(
+    async (storage) => {
+      const dataDir = storeDir(storage);
+      const remove = (id: string) => storage.deleteMultiReviewWorkflow(id);
+      const get = (id: string) => storage.getMultiReviewWorkflow(id);
+      const changes: unknown[] = [];
+      const unsubscribe = storage.addResourceChangeListener((change) => changes.push(change));
+      const scrub = spyOn(
+        storageInternals(storage).context,
+        "scrubSensitiveJsonBackups",
+      ).mockRejectedValueOnce(new Error("scrub interrupted"));
+      try {
+        await expect(remove("review-1")).rejects.toThrow("scrub interrupted");
+        expect(await get("review-1")).toBeNull();
+        expect(storageFilesContain(dataDir, secret)).toBe(true);
+        const stamp = (await fs.readdir(path.join(dataDir, LEGACY_JSON_DIRECTORY)))[0]!;
+        const archiveFiles = ["", ".bak.1"].map((suffix) =>
+          path.join(dataDir, LEGACY_JSON_DIRECTORY, stamp, `multi-reviews.json${suffix}`),
+        );
+        for (const file of archiveFiles) expect(await fs.readFile(file, "utf8")).toContain(secret);
 
-          await remove("review-1");
+        await remove("review-1");
 
-          expect(scrub).toHaveBeenCalledTimes(2);
-          expect(changes).toHaveLength(1);
-          expect(await get("review-1")).toBeNull();
-          expect(storageFilesContain(dataDir, secret)).toBe(false);
-          for (const file of archiveFiles) {
-            const archived = await fs.readFile(file, "utf8");
-            expect(archived).not.toContain(secret);
-            expect(archived).toContain(kept);
-          }
-          expect((await get("review-2"))?.snapshot).toMatchObject({ targetBranch: kept });
-        } finally {
-          scrub.mockRestore();
-          unsubscribe();
+        expect(scrub).toHaveBeenCalledTimes(2);
+        expect(changes).toHaveLength(1);
+        expect(await get("review-1")).toBeNull();
+        expect(storageFilesContain(dataDir, secret)).toBe(false);
+        for (const file of archiveFiles) {
+          const archived = await fs.readFile(file, "utf8");
+          expect(archived).not.toContain(secret);
+          expect(archived).toContain(kept);
         }
-      },
-      kind === "multi" ? { legacyMultiReviews: records } : { legacyLoopedReviews: records },
-    );
-  },
-);
+        expect((await get("review-2"))?.snapshot).toMatchObject({ targetBranch: kept });
+      } finally {
+        scrub.mockRestore();
+        unsubscribe();
+      }
+    },
+    { legacyMultiReviews: records },
+  );
+});
 
 test("a successful fence read cannot authorize a save after another backend takes over", async () => {
   await withStorage(async (storage) => {

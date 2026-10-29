@@ -694,7 +694,7 @@ from it (`orkestrator-v2:dev-182ff15b4e1f`):
 | `slash-inactive-container2` | container | Codex | Failed at the stale-draft step: the refusal took 5.7 s, past Playwright's 5 s default. The assertion now waits 30 s, like its neighbours |
 | `slash-inactive-container3` | container | Codex, Claude | **Codex passed every step** (193 s, 0 skipped). Claude passed the first four steps, including the stale draft, then hit the picker symptom again after the narrow-viewport reload |
 | `slash-inactive-container4` | container | Claude | **Passed every step** (284 s, 0 skipped) |
-| `slash-claude-local-retired` | host worktree | Claude | Failed: the restart right after Send parked the dispatch, and the same-id retry came back `unknown (HTTP 500)`. The restarted bridge waited out the killed process's preference lock ([0059](../agent-engines/0059-claude-preference-lock-after-restart.md)). The spec retried once only, so the card stayed |
+| `slash-claude-local-retired` | host worktree | Claude | Failed: the restart right after Send parked the dispatch, and the same-id retry came back `unknown (HTTP 500)`. The restarted bridge waited out the killed process's preference lock (todo 0059, fixed on 2026-10-28; see [agent-engines.md](../../architecture/agent-engines.md#claude-code), "Claude Code"). The spec retried once only, so the card stayed |
 | `slash-claude-container-retired` | container | Claude | Failed: the 0710 picker symptom after the hard reload |
 | `slash-claude-local-r2` | host worktree | Claude | **Passed** (101 s, 0 skipped), after the spec learned to retry again on `unknown` |
 | `slash-claude-container-r2` | container | Claude | **Passed** (209 s, 0 skipped) |
@@ -713,7 +713,8 @@ Spec changes made during these runs:
   (diagnosed: the dispatch revalidates against the bridge, 5.7 s under load).
 - After a restart, a same-id retry that answers `unknown` is retried again, up
   to four times, as a user would press Retry again; at-most-once is still
-  asserted. The cause of the `unknown` is todo 0059.
+  asserted. The cause of the `unknown` was todo 0059, fixed
+  and retired on 2026-10-28.
 - The restart steps annotate `retired-without-retry` when a parked dispatch is
   settled as lost by reconciliation (follow-up 1). None of the passing runs
   parked a dispatch at all (the restart came after the turn's first reply);

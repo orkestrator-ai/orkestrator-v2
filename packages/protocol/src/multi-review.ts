@@ -13,7 +13,7 @@ import {
 import {
   isReviewPackageReference,
   type ReviewPackageReference,
-  isSafeLoopedReviewTargetBranch,
+  isSafeReviewTargetBranch,
 } from "./review-workflow.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
@@ -655,7 +655,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     ]) ||
     !nonBlank(value.environmentId) ||
     !nonBlank(value.projectId) ||
-    !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
+    !isSafeReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
     (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
     (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||
@@ -1001,7 +1001,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !nonBlank(value.id) ||
     !nonBlank(value.environmentId) ||
     !nonBlank(value.projectId) ||
-    !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
+    !isSafeReviewTargetBranch(value.targetBranch) ||
     getReviewInstructionValidationError(value.reviewInstruction) !== null ||
     (value.autoFix !== undefined && typeof value.autoFix !== "boolean") ||
     (value.autoPr !== undefined && typeof value.autoPr !== "boolean") ||

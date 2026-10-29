@@ -22,10 +22,6 @@ import {
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
 import {
-  hydrateLoopedReviewWorkflowsForEnvironment,
-  resolveLoopedReviewWorkflow,
-} from "@/lib/looped-review-persistence";
-import {
   hydrateMultiReviewWorkflow,
   hydrateMultiReviewWorkflowsForEnvironment,
 } from "@/lib/multi-review-persistence";
@@ -41,7 +37,6 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   applyProjectSnapshot,
@@ -142,22 +137,6 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         !authoritativeIds.has(pipelineId)
       ) {
         store.removePipeline(pipelineId);
-      }
-    }
-  };
-
-  const refreshLoopedReviewsForEnvironment = async (environmentId: string): Promise<void> => {
-    const authoritative = await hydrateLoopedReviewWorkflowsForEnvironment(environmentId);
-    if (disposed) return;
-    const authoritativeIds = new Set(authoritative.map(({ id }) => id));
-    const store = useLoopedReviewStore.getState();
-    for (const [workflowId, workflow] of store.workflows) {
-      if (
-        workflow.environmentId === environmentId &&
-        workflow.backendRevision > 0 &&
-        !authoritativeIds.has(workflowId)
-      ) {
-        store.removeWorkflow(workflowId);
       }
     }
   };
@@ -403,9 +382,6 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       if (includes("session")) {
         tasks.push(useSessionStore.getState().loadSessionsForEnvironment(environmentId));
       }
-      if (includes("looped-review")) {
-        tasks.push(refreshLoopedReviewsForEnvironment(environmentId));
-      }
       if (includes("multi-review")) {
         tasks.push(hydrateMultiReviewWorkflowsForEnvironment(environmentId));
       }
@@ -592,36 +568,6 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         .catch((error) => {
           console.warn(
             `[store-resource-sync] Failed to refresh build pipeline ${pipelineId}:`,
-            error,
-          );
-          throw error;
-        });
-    }),
-  );
-
-  unsubscribes.push(
-    onResourceChanged("looped-review", ({ id: workflowId }) => {
-      // hydrate compares backend revisions against the local snapshot, so a
-      // workflow this client is actively driving is not clobbered by its own echo.
-      return resolveLoopedReviewWorkflow(workflowId)
-        .then((result) => {
-          // Only an authoritative "no such record" removes the projection. A
-          // snapshot this bundle cannot read still exists and is very likely
-          // still being advanced, so dropping it would delete the user's tab
-          // over a version skew.
-          if (result.status === "missing") {
-            useLoopedReviewStore.getState().removeWorkflow(workflowId);
-            return;
-          }
-          if (result.status === "unreadable") {
-            console.warn(
-              `[store-resource-sync] Keeping looped review ${workflowId}: its snapshot could not be read`,
-            );
-          }
-        })
-        .catch((error) => {
-          console.warn(
-            `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
             error,
           );
           throw error;

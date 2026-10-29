@@ -5,9 +5,9 @@ import { createHash } from "node:crypto";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
-  LOOPED_REVIEW_MAX_CONTEXT_BYTES,
-  LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
-  LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
+  REVIEW_MAX_CONTEXT_BYTES,
+  REVIEW_MAX_CONTEXT_LIST_ENTRIES,
+  REVIEW_MAX_CONTEXT_TEXT_LENGTH,
   type PersistedReviewPackage,
   type ReviewPackageContext,
 } from "@orkestrator/protocol/review-workflow";
@@ -95,15 +95,15 @@ export function buildPipelineReviewPackageContext(
   const task = pipeline.taskSnapshot;
   const limitations: string[] = [];
   const truncateText = (value: string, label: string): string => {
-    if (value.length <= LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) return value;
+    if (value.length <= REVIEW_MAX_CONTEXT_TEXT_LENGTH) return value;
     limitations.push(
-      `${label} was truncated from ${value.length} to ${LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH} characters for the persisted review context.`,
+      `${label} was truncated from ${value.length} to ${REVIEW_MAX_CONTEXT_TEXT_LENGTH} characters for the persisted review context.`,
     );
-    return value.slice(0, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    return value.slice(0, REVIEW_MAX_CONTEXT_TEXT_LENGTH);
   };
   const truncateList = (values: string[], label: string): string[] => {
     const bounded = values
-      .slice(0, LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES)
+      .slice(0, REVIEW_MAX_CONTEXT_LIST_ENTRIES)
       .map((value, index) => truncateText(value, `${label} entry ${index + 1}`));
     if (values.length > bounded.length) {
       limitations.push(
@@ -142,7 +142,7 @@ export function buildPipelineReviewPackageContext(
   };
 
   const serializedBytes = (): number => Buffer.byteLength(JSON.stringify(context), "utf8");
-  if (serializedBytes() > LOOPED_REVIEW_MAX_CONTEXT_BYTES) {
+  if (serializedBytes() > REVIEW_MAX_CONTEXT_BYTES) {
     const originalBytes = serializedBytes();
     // Keep the highest-signal ticket identity for longest. Lower-priority prose
     // and list tails are discarded deterministically until the protocol's
@@ -156,7 +156,7 @@ export function buildPipelineReviewPackageContext(
       "ticketTitle",
     ];
     for (const key of shrinkOrder) {
-      while (serializedBytes() > LOOPED_REVIEW_MAX_CONTEXT_BYTES && context[key] !== undefined) {
+      while (serializedBytes() > REVIEW_MAX_CONTEXT_BYTES && context[key] !== undefined) {
         const value = context[key];
         if (Array.isArray(value)) {
           if (value.length <= 1) {
@@ -174,7 +174,7 @@ export function buildPipelineReviewPackageContext(
       }
     }
     limitations.push(
-      `Ticket context was reduced from ${originalBytes} bytes to ${serializedBytes()} bytes to fit the ${LOOPED_REVIEW_MAX_CONTEXT_BYTES}-byte persisted-context limit.`,
+      `Ticket context was reduced from ${originalBytes} bytes to ${serializedBytes()} bytes to fit the ${REVIEW_MAX_CONTEXT_BYTES}-byte persisted-context limit.`,
     );
   }
 

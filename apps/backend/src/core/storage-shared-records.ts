@@ -4,7 +4,6 @@ import type {
   PersistedBuildPipeline,
   PersistedComposeDraft,
   PersistedFileDraft,
-  PersistedLoopedReviewWorkflow,
   PersistedMultiReviewWorkflow,
   PersistedPromptQueue,
 } from "./models.js";
@@ -12,30 +11,6 @@ import { isNonBlankString, isPositiveInteger, isRecord } from "./storage-shared-
 
 export const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 export const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
-
-export function isPersistedLoopedReviewWorkflow(
-  value: unknown,
-  expectedId?: string,
-): value is PersistedLoopedReviewWorkflow {
-  return (
-    isRecord(value) &&
-    isPositiveInteger(value.version) &&
-    isNonBlankString(value.id) &&
-    (expectedId === undefined || value.id === expectedId) &&
-    isNonBlankString(value.environmentId) &&
-    isRecord(value.snapshot) &&
-    typeof value.updatedAt === "string" &&
-    Number.isFinite(Date.parse(value.updatedAt)) &&
-    isPositiveInteger(value.revision) &&
-    (value.controllerLease === undefined ||
-      (isRecord(value.controllerLease) &&
-        isNonBlankString(value.controllerLease.ownerId) &&
-        (value.controllerLease.token === undefined ||
-          isNonBlankString(value.controllerLease.token)) &&
-        typeof value.controllerLease.expiresAt === "string" &&
-        Number.isFinite(Date.parse(value.controllerLease.expiresAt))))
-  );
-}
 
 export function isPersistedMultiReviewWorkflow(
   value: unknown,

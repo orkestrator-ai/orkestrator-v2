@@ -1,6 +1,6 @@
 # Data-saving gateway browser test times out in the aggregate
 
-- **ID:** 1304
+- **ID:** 1310
 - **Status:** open
 - **Date observed:** 2026-10-29
 - **Test:** `[mobile-chromium] data saving survives reload, stays client-local and preserves event latency through resume and reconnect`

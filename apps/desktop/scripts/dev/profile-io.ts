@@ -9,7 +9,7 @@ import {
 import { restrictGrokAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants, lstatSync, rmdirSync, unlinkSync, type Stats } from "node:fs";
 import {
   chmod,
   cp,
@@ -29,6 +29,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { tryLockProfile } from "./profile-lock.js";
 
 import {
   DEV_PROFILE_FORMAT_VERSION,
@@ -70,8 +71,24 @@ export async function atomicWriteJson(
   }
 }
 
-export async function initializeProfile(profile: RuntimeProfile): Promise<string> {
+export async function initializeProfile(
+  profile: RuntimeProfile,
+  options: { beforeMetadata?: () => void | Promise<void> } = {},
+): Promise<string> {
   parseRuntimeProfile(profile);
+  const unlock = tryLockProfile(profile.profileRoot);
+  if (!unlock) throw new Error("Profile initialization or pruning is in progress; retry startup");
+  try {
+    return await initializeLockedProfile(profile, options);
+  } finally {
+    unlock();
+  }
+}
+
+async function initializeLockedProfile(
+  profile: RuntimeProfile,
+  options: { beforeMetadata?: () => void | Promise<void> },
+): Promise<string> {
   assertWorktreePathUnlinked(profile.profileRoot);
   assertWorktreePathUnlinked(profile.worktreeDir);
   const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
@@ -110,6 +127,7 @@ export async function initializeProfile(profile: RuntimeProfile): Promise<string
     assertWorktreePathUnlinked(directory);
     await chmod(directory, 0o700);
   }
+  await options.beforeMetadata?.();
   recheckProfile();
   recheckWorktrees();
   const profilePath = path.join(profile.profileRoot, "profile.json");
@@ -154,33 +172,137 @@ async function removeExternalWorktreeDir(profile: RuntimeProfile): Promise<void>
     await rm(profile.worktreeDir, { recursive: true, force: true });
 }
 
+/** Names to keep as they are, or to empty in place, while clearing a directory. */
+type ClearPlan = { readonly [name: string]: "keep" | ClearPlan };
+
+type ClearDirectoryOptions = {
+  /** Deterministic barriers for replacement races; revalidated after each one. */
+  onDirectory?: (
+    directory: string,
+    phase: "checked" | "enumerated" | "before-delete",
+  ) => void | Promise<void>;
+};
+
+/** Revalidate every directory and ancestor across asynchronous traversal. */
+async function clearDirectory(
+  directory: string,
+  plan: ClearPlan,
+  options: ClearDirectoryOptions,
+): Promise<void> {
+  const recheck = captureWorktreePathIdentity(directory);
+  await options.onDirectory?.(directory, "checked");
+  recheck();
+  const entries = await readdir(directory);
+  await options.onDirectory?.(directory, "enumerated");
+  recheck();
+  for (const name of entries) {
+    const target = path.join(directory, name);
+    const rule = Object.hasOwn(plan, name) ? plan[name] : undefined;
+    if (rule === "keep") continue;
+    await options.onDirectory?.(directory, "before-delete");
+    recheck();
+    // No asynchronous recursive rm: it could traverse a replaced ancestor
+    // after our check. Check again after enumeration and before every unlink
+    // or rmdir, with no await between that check and the filesystem mutation.
+    let stats: Stats;
+    try {
+      stats = lstatSync(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (stats.isDirectory()) {
+      await clearDirectory(target, rule ?? {}, options);
+      recheck();
+      // Also reject replacement of the child itself while clearing it.
+      const current = lstatSync(target);
+      if (!current.isDirectory() || current.dev !== stats.dev || current.ino !== stats.ino)
+        throw new Error("Profile directory changed during reset");
+      if (!rule) rmdirSync(target);
+    } else {
+      unlinkSync(target);
+    }
+  }
+}
+
 /**
  * Delete disposable profile state without ever following directory symlinks.
  * Kept as one tested production helper so both reset modes retain that safety
  * property when provider-owned credential paths are added or changed.
+ *
+ * The profile root, its data directory and `portable-inputs` are emptied, not
+ * deleted. Docker Desktop on macOS can go on resolving a directory it has
+ * looked up to the deleted one once it is removed and recreated at the same
+ * path, and then refuses every bind under it as "bind source path does not
+ * exist" until it restarts. Staged portable inputs are the only host binds,
+ * and their key and revision directories get fresh names each time, so
+ * keeping these three is what lets a removed profile name boot containers
+ * again (todo 0200). `pruneProfiles` recognises what is left.
  */
 export async function removeProfileState(
   profile: RuntimeProfile,
   keepToolchains: boolean,
+  options: ClearDirectoryOptions = {},
 ): Promise<void> {
   const recheckProfile = captureWorktreePathIdentity(profile.profileRoot);
   await removeExternalWorktreeDir(profile);
   recheckProfile();
-  if (!keepToolchains) {
-    await rm(profile.profileRoot, { recursive: true, force: true });
-    return;
-  }
-  for (const child of await readdir(profile.profileRoot)) {
-    if (child === "profile.json" || child === ".orkestrator-dev-profile") continue;
-    if (child === "data") {
-      for (const dataChild of await readdir(profile.dataDir).catch(() => [])) {
-        if (dataChild !== "toolchains") {
-          await rm(path.join(profile.dataDir, dataChild), { recursive: true, force: true });
-        }
-      }
-    } else {
-      await rm(path.join(profile.profileRoot, child), { recursive: true, force: true });
+  const data: ClearPlan = {
+    "portable-inputs": {},
+    ...(keepToolchains ? { toolchains: "keep" } : {}),
+  };
+  await clearDirectory(
+    profile.profileRoot,
+    {
+      [path.relative(profile.profileRoot, profile.dataDir)]: data,
+      ...(keepToolchains ? { "profile.json": "keep", [DEV_PROFILE_SENTINEL]: "keep" } : {}),
+    },
+    options,
+  );
+}
+
+/** Whether a profile directory holds only the empty directories a full removal keeps. */
+export async function isRemovedProfileSkeleton(profileRoot: string): Promise<boolean> {
+  const matches = async (directory: string, plan: ClearPlan): Promise<boolean> => {
+    const recheck = captureWorktreePathIdentity(directory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    recheck();
+    for (const entry of entries) {
+      const rule = plan[entry.name];
+      if (!Object.hasOwn(plan, entry.name) || !rule || rule === "keep" || !entry.isDirectory())
+        return false;
+      if (!(await matches(path.join(directory, entry.name), rule))) return false;
+      recheck();
     }
+    return true;
+  };
+  return matches(profileRoot, { data: { "portable-inputs": {} } }).catch(() => false);
+}
+
+/**
+ * Delete what a full removal left behind, bottom-up with `rmdir`, so a file
+ * that appears meanwhile (a start of the same name) fails it instead of
+ * being deleted.
+ */
+export async function removeProfileSkeleton(directory: string): Promise<void> {
+  return removeSkeletonDirectory(directory, { data: { "portable-inputs": {} } });
+}
+
+async function removeSkeletonDirectory(directory: string, plan: ClearPlan): Promise<void> {
+  try {
+    const recheck = captureWorktreePathIdentity(directory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    recheck();
+    for (const entry of entries) {
+      recheck();
+      const rule = Object.hasOwn(plan, entry.name) ? plan[entry.name] : undefined;
+      if (entry.isDirectory() && rule && rule !== "keep")
+        await removeSkeletonDirectory(path.join(directory, entry.name), rule);
+    }
+    recheck();
+    rmdirSync(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 

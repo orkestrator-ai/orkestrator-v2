@@ -12,19 +12,8 @@ import { useUIStore } from "@/stores/uiStore";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
-/**
- * Selects another machine's project in the sidebar, as choosing one of this
- * machine's projects in the search does: it is recorded as recently used,
- * its machine section, folder and project are expanded wherever the sidebar
- * shows it, a machine filter that hides it is cleared, and the row is
- * highlighted and scrolled into view. Nothing is opened, and nothing is
- * written to the machine or to this window's workspace stores.
- *
- * Where the current layout cannot show the project (sorted by activity, or a
- * merged list hiding its disconnected machine), selection switches to the
- * by-machine project view, which keeps a machine's last-known projects.
- */
-export function useRevealMachineProject(): (machine: MachineView, projectId: string) => void {
+/** Expands a project's ancestors and clears a hiding filter without changing grouping or selection. */
+export function useExpandMachineProject(): (machine: MachineView, projectId: string) => void {
   const machines = useMachineViews();
   const layout = usePortalLayout();
   const { portalState } = useFederation();
@@ -35,7 +24,6 @@ export function useRevealMachineProject(): (machine: MachineView, projectId: str
       const project = machine.projects.find((entry) => entry.ref.projectId === projectId);
       if (!project) return;
       const views = useMachineViewStore.getState();
-      views.recordRecent([project.key]);
       if (views.machineFilter !== ALL_MACHINES && views.machineFilter !== machine.connectionId) {
         views.setMachineFilter(ALL_MACHINES);
       }
@@ -66,6 +54,32 @@ export function useRevealMachineProject(): (machine: MachineView, projectId: str
       if (repository?.folder) {
         views.setFolderKeyCollapsed(sidebarFolderKey("repository", repository.folder), false);
       }
+    },
+    [layout, machines, selfId],
+  );
+}
+
+/**
+ * Selects another machine's project in the sidebar, as choosing one of this
+ * machine's projects in the search does: it is recorded as recently used,
+ * its machine section, folder and project are expanded wherever the sidebar
+ * shows it, a machine filter that hides it is cleared, and the row is
+ * highlighted and scrolled into view. Nothing is opened, and nothing is
+ * written to the machine or to this window's workspace stores.
+ *
+ * Where the current layout cannot show the project (sorted by activity, or a
+ * merged list hiding its disconnected machine), selection switches to the
+ * by-machine project view, which keeps a machine's last-known projects.
+ */
+export function useRevealMachineProject(): (machine: MachineView, projectId: string) => void {
+  const expand = useExpandMachineProject();
+  return useCallback(
+    (machine: MachineView, projectId: string) => {
+      const project = machine.projects.find((entry) => entry.ref.projectId === projectId);
+      if (!project) return;
+      expand(machine, projectId);
+      const views = useMachineViewStore.getState();
+      views.recordRecent([project.key]);
       views.revealProject(project.key);
 
       const ui = useUIStore.getState();
@@ -77,6 +91,6 @@ export function useRevealMachineProject(): (machine: MachineView, projectId: str
         views.setGrouping("machine");
       }
     },
-    [layout, machines, selfId],
+    [expand],
   );
 }

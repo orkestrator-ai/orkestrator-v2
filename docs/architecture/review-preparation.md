@@ -291,7 +291,7 @@ seconds per generation on local disk, against reviews that take minutes. Contain
 `review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
 admission, isolation), `multi-review-service-efficiency.test.ts` and
 `multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),
-`storage-multi-review.test.ts` and `storage-looped-review-controller.test.ts`
+`storage-multi-review.test.ts`
 (fence checks read one row without the lease),
 `structured-review/budgets.test.ts` (reports) and
 `review-consolidation-evidence.test.ts` (consolidation input). Open

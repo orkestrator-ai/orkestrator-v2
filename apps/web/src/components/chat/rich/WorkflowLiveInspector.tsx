@@ -35,7 +35,7 @@ export interface WorkflowLiveState {
   changedIds: ReadonlySet<string>;
 }
 
-const WORKFLOW_RESOURCE_KINDS = ["multi-review", "looped-review", "build-pipeline"] as const;
+const WORKFLOW_RESOURCE_KINDS = ["multi-review", "build-pipeline"] as const;
 const DEFAULT_POLL_MS = 4_000;
 const MAX_BACKOFF_MS = 30_000;
 const STALE_AFTER_FAILURES = 2;

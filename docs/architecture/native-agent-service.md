@@ -19,16 +19,19 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | Interaction observations, sweep detections, the observe-only monitor timer and its round-robin cursors, per-session retry back-off, the pending-interaction read cache. |
 | `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry, the rollback interval timer. |
 | `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
+| `NativeAgentSessionOperations` | `native-agent-session-operations.ts` | No state. The session controls that are not a dispatch: Stop and its abort ladder (taking the dispatcher's mutation intent and turn-interrupt fences), background-task stop, suggested prompts, the resume list, resume and closing the session it replaced, fork, session and MCP actions, sign-in, composer controls and interaction answers. |
 
 `native-agent-queue-message.ts` holds the pure `queue*` readers for one
-persisted prompt-queue message.
+persisted prompt-queue message, and `native-agent-projection-helpers.ts` the
+projection's pure helpers (image paths, notices, usage merging, progress
+folding, discovery keys).
 
 What stays on the service is the work that is not a cluster of state: trusted
 session input (coordinator authority), `ensureSession` / `adoptSession` /
 `inspectSession`, bridge start and peek, the dispatch path
-(`dispatchAdmittedPrompt` holds the storage lease across provider I/O), Stop,
-resume, fork, session actions, controls, sign-in, mail injection and turn
-outcomes, provider teardown and moves. Its own state is the stop flag, the
+(`dispatchAdmittedPrompt` holds the storage lease across provider I/O), steer
+(the persisted-steer dispatch it shares with the prompt queue), mail injection
+and turn outcomes, provider teardown and moves. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
 is tracked in, and the turn-outcome retry bookkeeping.
 
@@ -43,12 +46,13 @@ dispatching the startup prompt, the dispatcher settling a parked dispatch, the
 projection scheduling that settle) is a callback rather than an abstract
 method. The service constructs, in order: catalogues, the observation broker,
 the provider registry, turn recovery, the projection, the prompt-queue
-dispatcher, the launch reconciler and the interaction tracker. A callback that
+dispatcher, the launch reconciler, the interaction tracker and the session
+operations. A callback that
 names a later collaborator only runs after construction.
 
 Public service methods whose work moved (`getTranscriptUpdate`,
-`reconcileAgentActivity`, `notifyPromptQueueChanged`, `withSessionWorkFence` and
-the rest) are one-line delegates, so callers and the command registry see the
+`reconcileAgentActivity`, `notifyPromptQueueChanged`, `withSessionWorkFence`,
+`stopProjectionSession` and the rest) are one-line delegates, so callers and the command registry see the
 same surface as before.
 
 ## Lifecycle

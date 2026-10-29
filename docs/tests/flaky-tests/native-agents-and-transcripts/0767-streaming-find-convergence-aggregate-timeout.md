@@ -26,3 +26,20 @@ one-worker owner rerun, but that owner failed two different reflow cases
 not establish a complete isolated owner pass. Commands, counts, and artifacts
 are recorded in [1126](../aggregate-validation-runs/1126-cross-machine-search-validation-workspace-failures.md#review-fix-validation-2026-10-27).
 Status remains open; no assertion, timeout, or skip changed.
+
+## Recurrence during private-TMPDIR review repair, 2026-10-29
+
+`mise run test:logged -- --name review-browser-rerun -- mise run test:browser`
+repeated the mobile failure at line 371: expected `converged`, received
+`unresolved` after five seconds. The component suite used nine workers and
+reported 930 passed, 105 skipped and three failed across 1,038 cases (7.7 minutes).
+The other two failures were the existing native branch-picker cases.
+The complete unchanged owner passed alone (exit 0, 46.5 seconds):
+
+```sh
+mise run test:logged -- --name streaming-transcript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1
+```
+
+Failure evidence is in `orkestrator-test-run.0GmfuV/review-browser-rerun.log.gz`.
+Concurrent repository validation was active; contention remains a hypothesis.
+No transcript behavior, assertion, deadline or skip was changed. Status remains open.

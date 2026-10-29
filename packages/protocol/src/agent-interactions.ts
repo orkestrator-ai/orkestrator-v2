@@ -129,7 +129,8 @@ export const AGENT_INTERACTION_ORIGINS = [
   "interactive-tmux",
   "coordinator",
   "build-pipeline",
-  "looped-review",
+  /** Unattended reviewer, consolidation and fix sessions of Multi Review and review fan-out. */
+  "automated-review",
 ] as const;
 export type AgentInteractionOrigin = (typeof AGENT_INTERACTION_ORIGINS)[number];
 
@@ -450,7 +451,7 @@ export const AGENT_INTERACTION_OUTCOMES = [
 export type AgentInteractionOutcome = (typeof AGENT_INTERACTION_OUTCOMES)[number];
 
 export interface AgentInteractionResolutionClaim {
-  workflowType: "build-pipeline" | "looped-review";
+  workflowType: "build-pipeline";
   workflowId: string;
   phase: string;
   /** Pipeline/review revision or generation fencing this claim. */
@@ -1061,7 +1062,7 @@ function isResolutionClaim(value: unknown): value is AgentInteractionResolutionC
   )
     return false;
   return (
-    (value.workflowType === "build-pipeline" || value.workflowType === "looped-review") &&
+    value.workflowType === "build-pipeline" &&
     isId(value.workflowId) &&
     isBoundedString(value.phase, 256) &&
     ((typeof value.fence === "string" && isId(value.fence)) || isNonNegativeInteger(value.fence)) &&

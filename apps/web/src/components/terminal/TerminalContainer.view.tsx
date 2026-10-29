@@ -61,8 +61,6 @@ import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
-import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
@@ -833,9 +831,8 @@ export function TerminalContainer({
         beginHydration(environmentId);
         void Promise.allSettled([
           backend.getPaneLayout(environmentId),
-          hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
           hydrateMultiReviewWorkflowsForEnvironment(environmentId),
-        ]).then(async ([layoutResult, workflowResult, multiReviewResult]) => {
+        ]).then(async ([layoutResult, multiReviewResult]) => {
           // These independent snapshots need not describe the same instant.
           // A launch between the list read and the layout read must not make
           // reconciliation discard its new tab and seed a competing terminal.
@@ -856,12 +853,6 @@ export function TerminalContainer({
           paneHydrationRequestsRef.current.delete(environmentId);
           if (paneStore.hydration.get(environmentId) !== "pending") return;
 
-          if (workflowResult.status === "rejected") {
-            console.warn(
-              "[TerminalContainer] Failed to restore looped reviews:",
-              workflowResult.reason,
-            );
-          }
           if (multiReviewResult.status === "rejected") {
             console.warn(
               "[TerminalContainer] Failed to restore multi reviews:",
@@ -905,14 +896,10 @@ export function TerminalContainer({
             worktreePath: latestEnvironment.worktreePath,
             hasBuildPipeline: (pipelineId) =>
               dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
-            hasLoopedReview: (workflowId) =>
+            hasMultiReview: (workflowId) =>
               // A failed workflow-list request means existence is unknown,
               // not that every persisted review was deleted. Preserve those
               // tabs so their own read-through view can retry hydration.
-              dependenciesUnknown ||
-              workflowResult.status === "rejected" ||
-              useLoopedReviewStore.getState().workflows.has(workflowId),
-            hasMultiReview: (workflowId) =>
               dependenciesUnknown ||
               multiReviewResult.status === "rejected" ||
               useMultiReviewStore.getState().workflows.has(workflowId),
@@ -1367,25 +1354,6 @@ export function TerminalContainer({
 
       if (type === "browser") {
         return createBrowserTab(options?.initialUrl, activePaneId, options?.displayTitle);
-      }
-
-      if (type === "looped-review") {
-        if (!options?.loopedReviewId) {
-          console.warn("[TerminalContainer] Refusing looped-review tab without workflow ID");
-          return false;
-        }
-        const newTab: TabInfo = {
-          id: createUniqueTabId("looped-review"),
-          type: "looped-review",
-          displayTitle: options.displayTitle ?? "Looped Review",
-          loopedReviewTabData: {
-            environmentId,
-            workflowId: options.loopedReviewId,
-            isLocal: isLocalEnvironment,
-          },
-        };
-        addTab(activePaneId, newTab, environmentId);
-        return true;
       }
 
       if (type === "multi-review") {

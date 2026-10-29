@@ -9,6 +9,7 @@ import {
 import { useRevealMachineProject } from "@/components/federation/useRevealMachineProject";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import {
+  FederatedActivityList,
   MergedProjectList,
   RemoteMachineSection,
 } from "@/components/federation/FederatedSidebarSections";
@@ -158,11 +159,12 @@ function SearchContent() {
   const grouping = useMachineViewStore((state) => state.grouping);
   const sort = useUIStore((state) => state.environmentSortMode);
   const [selected, setSelected] = useState<string | null>(null);
-  const opened = useRemoteWorkspaceStore((state) => state.active?.nodeId ?? null);
+  const opened = useRemoteWorkspaceStore((state) => state.active);
   return (
     <main className="max-w-sm">
       <output data-testid="selected">{selected}</output>
-      <output data-testid="opened">{opened}</output>
+      <output data-testid="opened">{opened?.nodeId}</output>
+      <output data-testid="opened-selection">{JSON.stringify(opened)}</output>
       <label>
         Sidebar view
         <select
@@ -194,7 +196,9 @@ function SearchContent() {
         }}
       />
       <aside aria-label="Machine projects">
-        {sort === "activity" ? null : grouping === "machine" ? (
+        {sort === "activity" ? (
+          <FederatedActivityList machines={machines} renderBoundRow={() => null} />
+        ) : grouping === "machine" ? (
           machines
             .filter((machine) => !machine.bound)
             .map((machine) => <RemoteMachineSection key={machine.connectionId} machine={machine} />)

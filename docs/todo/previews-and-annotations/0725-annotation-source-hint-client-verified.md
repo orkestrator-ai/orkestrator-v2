@@ -19,9 +19,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Pin the gap in a failing test**: a capture-input validation test that submits a hint with `verified: true` and expects refusal. Status: open.
-2. **Assign `verified` at the receiver**: refuse a client-declared `verified: true` and keep hints to their known fields. Status: open.
-3. **Brief and evidence-tool regression tests**: prove what the agent sees for a stored hint. Status: open.
+1. **Pin the gap in a failing test**: a capture-input validation test that submits a hint with `verified: true` and expects refusal. Status: done.
+2. **Assign `verified` at the receiver**: refuse a client-declared `verified: true` and keep hints to their known fields. Status: done.
+3. **Brief and evidence-tool regression tests**: prove what the agent sees for a stored hint. Status: done.
 
 ### 1. Pin the gap in a failing test
 
@@ -144,40 +144,89 @@ evidence sections.
     - Pros: smallest.
     - Cons: the evidence tool is the second path to the agent and stays unpinned.
 
+## Assumptions and decisions
+
+Implemented 2026-10-28 on `todo-0725-annotation-source-hint`, from `main` at
+`79f3bc97`. Every recommended option was taken; nothing in the code argued
+against one.
+
+### Task 1: where the first test goes
+
+Next to the other receiver-assigned cases in
+`packages/protocol/src/web-annotations.test.ts` ("a source hint's verification
+is never taken from a payload"). It failed before the fix (the validator
+accepted `verified: true`) and passes after. The backend path through
+`service.create` is covered separately under task 2's storage test, so the
+heavier command-level fixture was not needed.
+
+### Task 2: what happens to a client-declared `verified: true`
+
+Refused in `validateWebAnnotationCaptureInput` with "Source hint verification
+is assigned by the receiver", the same "assigned by the receiver" wording as
+`regionCrop` and `producerSource`; `false` is still accepted. All three capture
+commands and the desktop spool reach this validator, so they all refuse it;
+nothing produces hints, so no existing spool is affected.
+
+### Task 2: unknown keys inside a hint
+
+Copied away rather than refused. A new protocol helper,
+`webAnnotationSourceHintFields`
+(`packages/protocol/src/web-annotations.ts`), returns only `producer`, `path`,
+`line`, `component` and `verified`. `captureFromInput` stores hints through it
+(`apps/backend/src/core/web-annotation-service-threads.ts`), and the brief
+builds each hint entry from it instead of `...hint`
+(`apps/backend/src/core/web-annotation-brief.ts`). One helper keeps the stored
+record and the brief on the same field list. Archive copies stored evidence,
+which is already clean, so it is unchanged.
+
+### Task 2: where the check sits
+
+In `validateWebAnnotationCaptureInput`, after evidence validation, not in
+`isWebAnnotationEvidence`, so the evidence predicate still accepts a stored
+capture holding a backend-set `true` once the 0047 containment check exists.
+
+### Task 3: what the regression tests assert
+
+- `web-annotation-brief.test.ts`: a stored hint with an extra key reaches the
+  evidence envelope with `verified: false`, the "candidate location only" note
+  and only the known fields; the extra key appears nowhere in the brief.
+- `web-annotation-tools.test.ts`: `get_annotation_evidence` returns a seeded
+  capture's hint unchanged (the fake host now takes a seeded capture).
+- `web-annotation-capture-relations.test.ts` (added for task 2's storage
+  change): `service.create` stores a hint without its extra key and refuses
+  `verified: true`.
+
+The brief and storage tests fail with the backend edits reverted and pass with
+them.
+
 ## Current state
 
-- Validation accepts any boolean `verified` and unknown keys in a hint
-  (`packages/protocol/src/web-annotations-validation.ts:252-263`), and returns
-  the input unchanged (`:356`).
-- The backend stores capture evidence unchanged
-  (`apps/backend/src/core/web-annotation-service-threads.ts:415`, `:462`).
-- The brief passes every hint key through with a "candidate location only" note
-  (`apps/backend/src/core/web-annotation-brief.ts:365-370`), and
-  `get_annotation_evidence` returns the stored capture whole
-  (`apps/backend/src/core/web-annotation-tools.ts:361`).
-- The receiver already refuses `provenance`, `regionCrop`, `producerSource` and
-  `target.parentCaptureId` (`web-annotations-validation.ts:324-333`, `:482-486`).
-- The desktop page parser drops `sourceHints`
-  (`apps/desktop/electron/browser-preview-capture-parse.ts:170-189`), and no
-  code in `apps/` produces hints.
+- `validateWebAnnotationCaptureInput` refuses a hint declaring
+  `verified: true` ("Source hint verification is assigned by the receiver")
+  and accepts `false`. `isWebAnnotationEvidence` still accepts either value,
+  for stored captures.
+- The backend stores hints with only their five known fields
+  (`webAnnotationSourceHintFields`, used by `captureFromInput`).
+- The brief builds each hint entry from the same five fields plus the
+  "candidate location only" note; `get_annotation_evidence` returns the stored
+  capture whole, which now holds only known hint fields.
+- Tests pin all three: protocol validation, backend storage, the brief and the
+  evidence tool.
+- The desktop page parser still drops `sourceHints`, and no code in `apps/`
+  produces hints.
 
 ## Outstanding work
 
 ### Code
 
-1. Add a test in `packages/protocol/src/web-annotations.test.ts` that a capture
-   whose hint declares `verified: true` is refused, and that `false` is
-   accepted.
-2. Refuse `verified: true` in `validateWebAnnotationCaptureInput` with the
-   "assigned by the receiver" wording.
-3. Store hints with only `producer`, `path`, `line`, `component` and `verified`,
-   and build the brief entry from those fields instead of `...hint`.
-4. Add tests in `web-annotation-brief.test.ts` and `web-annotation-tools.test.ts`
-   for a stored hint.
+- None. Items 1–4 are done (see Assumptions and decisions).
 
 ### Qualification
 
-- None beyond the tests in Code. There is no producer to exercise live.
+- None beyond the tests. There is no producer to exercise live; 0047's
+  source-hint producer and its backend containment check are what may set
+  `verified: true`, and they remain open in
+  [0047](0047-web-annotation-extensions.md).
 
 ## Constraints and rationale
 

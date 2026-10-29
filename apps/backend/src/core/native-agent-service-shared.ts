@@ -134,8 +134,8 @@ export interface EnsureNativeAgentSessionInput {
   /**
    * Execution mode for the session, overriding what the phase implies.
    *
-   * Looped-review phases collapse several distinct steps onto `review`, and one
-   * of them (preparation) has to commit changes — so a phase-derived read-only
+   * Review workflows collapse several distinct steps onto `review`, and one of
+   * them (preparation) has to commit changes — so a phase-derived read-only
    * Codex session would make that round fail.
    */
   sessionMode?: ProviderExecutionMode;
@@ -346,9 +346,9 @@ export function isValidInteractionMetadata(input: {
   const origin = input.origin ?? "interactive-native";
   const policyMode =
     input.interactionPolicy?.mode ??
-    (origin === "build-pipeline" || origin === "looped-review" ? "unattended" : "interactive");
+    (origin === "build-pipeline" || origin === "automated-review" ? "unattended" : "interactive");
   return (
-    (origin === "build-pipeline" || origin === "looped-review") === (policyMode === "unattended")
+    (origin === "build-pipeline" || origin === "automated-review") === (policyMode === "unattended")
   );
 }
 

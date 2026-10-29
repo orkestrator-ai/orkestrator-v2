@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { chromium, type Browser } from "playwright-core";
+import { DesignProfileLedger } from "./browser-profiles.js";
 import { DesignError } from "./errors.js";
 import { DesignRenderQueue } from "./render-queue.js";
 import {
@@ -857,6 +862,60 @@ describe("DesignRenderer with real Chromium", () => {
       }
     },
     DEFAULT_DESIGN_RENDER_BUDGETS.overallMs + 10_000,
+  );
+
+  test.skipIf(!realChromium || process.platform === "win32")(
+    "a killed backend's browser profile is removed by the next startup sweep (0248)",
+    async () => {
+      // The child's TMPDIR is ours, so its profile lands where this test owns it.
+      const root = mkdtempSync(path.join(tmpdir(), "ork-design-killed-backend-"));
+      const temp = path.join(root, "tmp");
+      const ledgerDir = path.join(root, "design-browser-profiles");
+      mkdirSync(temp);
+      const child = spawn(
+        process.execPath,
+        [path.join(import.meta.dir, "fixtures/recorded-renderer.ts"), ledgerDir],
+        { env: { ...process.env, TMPDIR: temp }, stdio: ["ignore", "pipe", "inherit"] },
+      );
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      let browserPid: number | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          child.stdout!.on("data", (chunk: Buffer) => {
+            if (chunk.toString().includes("ready")) resolve();
+          });
+          child.once("exit", () => reject(new Error("the renderer fixture exited early")));
+        });
+        const [recordName] = readdirSync(ledgerDir);
+        const record = JSON.parse(readFileSync(path.join(ledgerDir, recordName!), "utf8")) as {
+          profile: string;
+          browser: { pid: number };
+        };
+        browserPid = record.browser.pid;
+        expect(path.dirname(record.profile)).toBe(temp);
+        expect(existsSync(record.profile)).toBe(true);
+
+        child.kill("SIGKILL");
+        await exited;
+        // Chromium ends once its launcher's pipe closes; nothing removes the profile.
+        await waitFor(() => !processAlive(browserPid!), 10_000);
+        expect(existsSync(record.profile)).toBe(true);
+
+        const removed = await new DesignProfileLedger(ledgerDir).sweep(0);
+        expect(removed).toEqual([record.profile]);
+        expect(readdirSync(temp).filter((name) => name.startsWith("playwright_"))).not.toContain(
+          path.basename(record.profile),
+        );
+        expect(readdirSync(ledgerDir)).toEqual([]);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await exited;
+        // The browser is this test's own descendant, named by the ledger it wrote.
+        if (browserPid && processAlive(browserPid)) process.kill(browserPid, "SIGKILL");
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    COLD_START_MS,
   );
 });
 

@@ -1,4 +1,4 @@
-import { createDiscoveryPrompt, createReviewPreparationPrompt } from "./looped-review-prompts.js";
+import { createDiscoveryPrompt, createReviewPreparationPrompt } from "./review-prompts.js";
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
   buildReviewBody,

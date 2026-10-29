@@ -24,6 +24,7 @@ import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
 import {
   flattenProjectSearchResults,
   localSearchSource,
@@ -42,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineBadge, MachineDot, machineStatusText } from "@/components/federation/MachineDot";
+import { useExpandMachineProject } from "@/components/federation/useRevealMachineProject";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import type { Environment, Project } from "@/types";
 
@@ -252,7 +254,10 @@ export function ProjectSearchBar({
   environments: Environment[];
   onSelectProject: (projectId: string) => void;
   onSelectEnvironment: (environmentId: string) => void;
-  /** Another machine's project was chosen: select and reveal it in the sidebar. */
+  /**
+   * Another machine's project, or an environment of one, was chosen: select
+   * and reveal the project in the sidebar. The search opens it itself.
+   */
   onSelectMachineProject?: (machine: MachineView, projectId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -409,15 +414,35 @@ export function ProjectSearchBar({
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
+  const expandMachineProject = useExpandMachineProject();
+
   const handleSelect = (hit: ProjectSearchHit) => {
     const other = hit.machine && !hit.machine.bound ? hit.machine : null;
     if (hit.type === "project") {
-      // Another machine's project is selected in the sidebar, under its
-      // machine, even while that machine is offline (its last-known tree).
-      if (other) onSelectMachineProject?.(other, hit.project.id);
-      else onSelectProject(hit.project.id);
+      if (other) {
+        // Another machine's project is selected in the sidebar, under its
+        // machine, even while that machine is offline (its last-known tree),
+        // and opened there as its sidebar row opens it.
+        onSelectMachineProject?.(other, hit.project.id);
+        // Read after the reveal, which can switch the sidebar's grouping.
+        const grouping =
+          useUIStore.getState().environmentSortMode === "activity"
+            ? "activity"
+            : useMachineViewStore.getState().grouping;
+        const boardTab = projectLandingBoardTab(grouping, false);
+        openMachineWorkspace({
+          connectionId: other.connectionId,
+          projectId: hit.project.id,
+          ...(boardTab ? { boardTab } : {}),
+          title: hit.project.name,
+        });
+      } else {
+        onSelectProject(hit.project.id);
+      }
     } else if (other) {
-      // Opened on its machine, as its sidebar row opens it (offline included).
+      // Make the environment visible without the project reveal's grouping
+      // change: activity view already renders environment rows directly.
+      expandMachineProject(other, hit.environment.projectId);
       openMachineWorkspace({
         connectionId: other.connectionId,
         projectId: hit.environment.projectId,

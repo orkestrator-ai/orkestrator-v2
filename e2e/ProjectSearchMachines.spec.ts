@@ -102,7 +102,9 @@ test("empty-query recents show the incomplete note until scoped to a complete ma
 });
 
 for (const mode of ["activity", "project", "repository"] as const) {
-  test(`project selection immediately reveals its row from ${mode} view`, async ({ page }) => {
+  test(`project selection opens its workspace and reveals its row from ${mode} view`, async ({
+    page,
+  }) => {
     await page.goto("/project-search-machines");
     await page.getByRole("combobox", { name: "Sidebar view", exact: true }).selectOption(mode);
     await page.getByTestId("project-search-trigger").click();
@@ -120,7 +122,17 @@ for (const mode of ["activity", "project", "repository"] as const) {
     const sidebar = page.getByRole("complementary", { name: "Machine projects" });
     const revealed = sidebar.locator('[data-revealed="true"]');
     await expect(revealed).toBeVisible();
-    await expect(revealed.locator('[aria-current="true"]')).toBeVisible();
+    await expect(revealed.locator('[aria-current="page"]')).toBeVisible();
+    await expect(page.getByTestId("opened")).toHaveText(
+      mode === "activity" ? "bk_mbp3" : "bk_mini",
+    );
+    await expect(page.getByTestId("opened-selection")).toHaveText(
+      JSON.stringify({
+        nodeId: mode === "activity" ? "bk_mbp3" : "bk_mini",
+        projectId: mode === "activity" ? "tg" : "ork-m",
+        environmentId: null,
+      }),
+    );
     await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
       "machine",
     );
@@ -139,3 +151,57 @@ for (const mode of ["activity", "project", "repository"] as const) {
     await expect(projectButton).not.toHaveAttribute("aria-current");
   });
 }
+
+test("a connected project opens and stays selected in repository view", async ({ page }) => {
+  await page.goto("/project-search-machines");
+  await page
+    .getByRole("combobox", { name: "Sidebar view", exact: true })
+    .selectOption("repository");
+  await page.getByTestId("project-search-trigger").click();
+  await page.getByRole("combobox", { name: "Search projects and environments" }).fill("telegram");
+  await page.getByRole("option", { name: "telegram-scraper, project on mbp3" }).click();
+  await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
+    "repository",
+  );
+  await expect(page.getByTitle("Open telegram-scraper on mbp3", { exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByTestId("opened-selection")).toHaveText(
+    JSON.stringify({
+      nodeId: "bk_mbp3",
+      projectId: "tg",
+      environmentId: null,
+    }),
+  );
+});
+
+test("environment selection preserves activity view and highlights the opened environment", async ({
+  page,
+}) => {
+  await page.goto("/project-search-machines");
+  await page.getByRole("combobox", { name: "Sidebar view", exact: true }).selectOption("activity");
+  await page.getByTestId("project-search-trigger").click();
+  await page
+    .getByRole("combobox", { name: "Search projects and environments" })
+    .fill("run-desktop");
+  await page
+    .getByRole("option", { name: "run-desktop-app, environment of orkestrator-v2 on mbp3" })
+    .click();
+  await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
+    "activity",
+  );
+  const sidebar = page.getByRole("complementary", { name: "Machine projects" });
+  await expect(sidebar.getByRole("button", { name: /^run-desktop-app, on mbp3/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(page.getByTestId("opened-selection")).toHaveText(
+    JSON.stringify({
+      nodeId: "bk_mbp3",
+      projectId: "ork-3",
+      environmentId: "run",
+    }),
+  );
+  await expect(sidebar.locator('[data-revealed="true"]')).toHaveCount(0);
+});

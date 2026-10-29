@@ -11,17 +11,12 @@ import {
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import {
-  LOOPED_REVIEW_WORKFLOW_VERSION,
-  type LoopedReviewWorkflow,
-} from "@orkestrator/protocol/review-workflow";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import type { BuildPipelineProvider } from "../src/core/build-pipeline-provider.js";
 import { BuildPipelineService } from "../src/core/build-pipeline-service.js";
 import { testGeneratedReviewPackage } from "../src/core/build-pipeline-test-fixtures.js";
 import { FeaturePlanningService } from "../src/core/feature-planning.js";
-import { LoopedReviewService } from "../src/core/looped-review-service.js";
 import { MultiReviewService } from "../src/core/multi-review-service.js";
 import { parseReviewPackageReference } from "../src/core/review-package.js";
 import { ManualTime, advanceKeyedWork } from "../src/core/recurring-test-support.js";
@@ -29,13 +24,13 @@ import { recurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { StorageService } from "../src/core/storage.js";
 
 /**
- * Drives the *real* feature-planning, build-pipeline, looped-review and
- * multi-review supervisors over a fixture of many completed records and a few
+ * Drives the *real* feature-planning, build-pipeline and multi-review
+ * supervisors over a fixture of many completed records and a few
  * active ones, in two modes:
  *
  * - `rollback`: what `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects. For
- *   feature planning, build pipelines and looped review that is the previous
- *   whole-store tick, stepped at its own interval (1 s / 1.5 s / 1 s). Multi
+ *   feature planning and build pipelines that is the previous whole-store
+ *   tick, stepped at its own interval (1 s / 1.5 s). Multi
  *   review's rollback is the adaptive `WorkflowDueScheduler`, driven on the
  *   same manual clock as the keyed mode (15 s reconciliation scan, per-workflow
  *   due passes).
@@ -82,17 +77,15 @@ export interface WorkflowDomainCounts {
   providerReads: number;
 }
 
-type Domain = "feature-planning" | "build-pipeline" | "looped-review" | "multi-review";
+type Domain = "feature-planning" | "build-pipeline" | "multi-review";
 const KINDS: Record<Domain, RecurringJobKind> = {
   "feature-planning": "feature-planning-tick",
   "build-pipeline": "build-supervisor-tick",
-  "looped-review": "looped-review-tick",
   "multi-review": "multi-review-tick",
 };
 const LEGACY_TICK_MS: Record<Domain, number> = {
   "feature-planning": 1_000,
   "build-pipeline": 1_500,
-  "looped-review": 1_000,
   "multi-review": 1_000,
 };
 
@@ -153,7 +146,7 @@ class BusyProvider {
 }
 
 const reviewInvoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-  if (command === "generate_looped_review_package") {
+  if (command === "generate_review_package") {
     const id = String(args.packageId);
     const sha256 = "a".repeat(64);
     return {
@@ -172,7 +165,7 @@ const reviewInvoke = async <T>(command: string, args: Record<string, unknown> = 
       limitations: [],
     } as T;
   }
-  if (command === "verify_looped_review_package") return { valid: true } as T;
+  if (command === "verify_review_package") return { valid: true } as T;
   if (command === "get_environment_uncommitted_paths") {
     return { head: "1".repeat(40), paths: [] } as T;
   }
@@ -184,7 +177,7 @@ const multiReviewInvoke = async <T>(
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<T> => {
-  if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args) as T;
+  if (command === "generate_review_package") return testGeneratedReviewPackage(args) as T;
   if (command === "get_environment_uncommitted_paths") {
     return { head: "1".repeat(40), paths: [], fingerprint: "a".repeat(64) } as T;
   }
@@ -293,53 +286,6 @@ async function seedBuildPipelines(storage: StorageService, fixture: WorkflowFixt
   }
 }
 
-async function seedLoopedReviews(storage: StorageService, fixture: WorkflowFixture) {
-  const provider = new BusyProvider("claude");
-  const seeder = new LoopedReviewService(storage, reviewInvoke, {
-    autoAdvance: false,
-    keyedScheduling: false,
-    provider: async () => provider as unknown as BuildPipelineProvider,
-  });
-  await seeder.init();
-  let template: LoopedReviewWorkflow | null = null;
-  for (let index = 0; index < fixture.activePerStore; index += 1) {
-    const environmentId = `env-review-${index}`;
-    await addEnvironment(storage, environmentId);
-    const started = await seeder.start({
-      environmentId,
-      projectId: "project-1",
-      agent: "claude",
-      model: "model",
-      targetBranch: "main",
-      allowance: 1,
-    });
-    // Dispatch the first turn, which then stays running.
-    await seeder.advanceNow(started.id);
-    template ??= (await storage.getLoopedReviewWorkflow(started.id))!
-      .snapshot as LoopedReviewWorkflow;
-  }
-  await seeder.shutdown();
-  for (let index = 0; index < fixture.completedPerStore; index += 1) {
-    const id = `completed-review-${index}`;
-    // Cancelled history carries the same retained snapshot shape as a
-    // completed one without needing a full run to produce it.
-    await storage.saveLoopedReviewWorkflow(
-      id,
-      template!.environmentId,
-      LOOPED_REVIEW_WORKFLOW_VERSION,
-      {
-        ...template!,
-        id,
-        phase: "cancelled",
-        dispatch: undefined,
-        controllerFence: undefined,
-        backendRevision: 0,
-      },
-      0,
-    );
-  }
-}
-
 async function seedMultiReviews(storage: StorageService, fixture: WorkflowFixture) {
   const provider = new BusyProvider("claude");
   const seeder = new MultiReviewService(storage, multiReviewInvoke, {
@@ -440,14 +386,6 @@ async function runDomain(
       await seedBuildPipelines(storage, fixture);
       provider = new BusyProvider("claude");
       owner = new BuildPipelineService(storage, reviewInvoke, {
-        keyedScheduling: keyed,
-        ...(keyed ? clock : { autoAdvance: false }),
-        provider: async () => provider as unknown as BuildPipelineProvider,
-      });
-    } else if (domain === "looped-review") {
-      await seedLoopedReviews(storage, fixture);
-      provider = new BusyProvider("claude");
-      owner = new LoopedReviewService(storage, reviewInvoke, {
         keyedScheduling: keyed,
         ...(keyed ? clock : { autoAdvance: false }),
         provider: async () => provider as unknown as BuildPipelineProvider,

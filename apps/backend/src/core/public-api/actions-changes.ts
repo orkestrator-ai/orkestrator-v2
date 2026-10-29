@@ -13,7 +13,7 @@ import {
   type PublicChangesHistoryEntry,
   type PublicChangesView,
 } from "@orkestrator/protocol/public-api-resources";
-import type { ChangeTrackingService } from "../change-tracking/service.js";
+import type { ChangeTrackingService } from "../change-tracking/index.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
 import {

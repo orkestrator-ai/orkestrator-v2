@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   WEB_ANNOTATION_CONFLICT,
   isWebAnnotationRequestActive,
+  type WebAnnotationCapture,
   type WebAnnotationRequest,
   type WebAnnotationResult,
 } from "@orkestrator/protocol/web-annotations";
@@ -42,6 +43,7 @@ class FakeHost implements WebAnnotationToolHost {
   revision = 0;
   hang = false;
   lastResult: WebAnnotationResult | null = null;
+  capture: WebAnnotationCapture | null = null;
 
   assign(request: WebAnnotationRequest, tabId = request.destination.tabId) {
     this.assignments.set(`${request.environmentId}\0${tabId}`, {
@@ -59,7 +61,7 @@ class FakeHost implements WebAnnotationToolHost {
     this.evidenceCalls.push(`${requestId}/${annotationId}`);
     return {
       annotation: fixtureAnnotation({ id: annotationId }),
-      capture: fixtureCapture("element", { annotationId }),
+      capture: this.capture ?? fixtureCapture("element", { annotationId }),
       entries: [fixtureEntry({ annotationId, body: "b".repeat(8_000) })],
     };
   }
@@ -202,6 +204,22 @@ describe("web annotation agent tools", () => {
       error: { code: "annotation-not-in-request" },
     });
     expect(host.reports).toEqual([]);
+  });
+
+  test("the evidence tool returns a stored source hint unchanged", async () => {
+    const host = new FakeHost();
+    host.assign(running());
+    const base = fixtureCapture("element", { annotationId: "annotation-1" });
+    const hint = { producer: "vite-dev", path: "src/settings.tsx", line: 42, verified: false };
+    host.capture = { ...base, evidence: { ...base.evidence!, sourceHints: [hint] } };
+    const handlers = register(host);
+    const result = await handlers.get("get_annotation_evidence")!({
+      requestId: "req-1",
+      annotationId: "annotation-1",
+    });
+    expect(result.structuredContent).toMatchObject({ ok: true, truncated: false });
+    const capture = result.structuredContent.capture as WebAnnotationCapture;
+    expect(capture.evidence?.sourceHints).toEqual([hint]);
   });
 
   test("a report while the turn is active is provisional and agent-reported", async () => {

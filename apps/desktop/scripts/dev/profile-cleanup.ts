@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { tryLockProfile } from "./profile-lock.js";
 
 import {
   defaultRuntimeProfileRoots,
@@ -18,6 +19,8 @@ import {
   readAndValidateSentinel,
   readProfile,
   readStatus,
+  isRemovedProfileSkeleton,
+  removeProfileSkeleton,
   removeProfileState,
   assertExternalWorktreeOwnership,
 } from "./profile-io.js";
@@ -369,6 +372,8 @@ export type PruneProfilesOptions = {
   platform?: NodeJS.Platform;
   /** See `RemoveProfileOptions.keychainRoots`. */
   keychainRoots?: RuntimeProfileRoots;
+  /** Barrier after skeleton selection, while holding the startup lock. */
+  afterSkeletonSelection?: (profileRoot: string) => void | Promise<void>;
 };
 
 async function lastUsedAt(
@@ -386,8 +391,9 @@ async function lastUsedAt(
  *
  * A profile is removed when the checkout it was created from no longer
  * exists, or, with `olderThanDays`, when it has not been started or stopped
- * within that window. Running profiles, profiles without a valid sentinel,
- * and directories whose `profile.json` does not describe them are kept.
+ * within that window. Running profiles and directories whose `profile.json`
+ * does not describe them are kept. A valid sentinel is required except for
+ * empty reset skeletons, which only the age rule can remove under a startup lock.
  */
 export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise<PruneOutcome[]> {
   const roots = options.roots ?? defaultRuntimeProfileRoots();
@@ -412,6 +418,40 @@ export async function pruneProfiles(options: PruneProfilesOptions = {}): Promise
     if (exclude.has(id)) {
       keep("requested by this run");
       continue;
+    }
+    const unlock = tryLockProfile(profileRoot);
+    if (!unlock) {
+      keep("initialization or pruning in progress");
+      continue;
+    }
+    try {
+      if (await isRemovedProfileSkeleton(profileRoot)) {
+        // What a removal keeps so the name can boot containers again (see
+        // `removeProfileState`). Only the age rule deletes it, quietly otherwise.
+        if (options.olderThanDays === undefined) continue;
+        const idleDays =
+          (now() - ((await stat(profileRoot).catch(() => null))?.mtimeMs ?? 0)) / DAY_MS;
+        if (idleDays <= options.olderThanDays) continue;
+        const reason = `emptied ${Math.floor(idleDays)} days ago`;
+        if (options.dryRun) {
+          outcomes.push({ id, action: "would-remove", reason });
+          continue;
+        }
+        try {
+          await options.afterSkeletonSelection?.(profileRoot);
+          await removeProfileSkeleton(profileRoot);
+          outcomes.push({ id, action: "removed", reason });
+        } catch (error) {
+          outcomes.push({
+            id,
+            action: "failed",
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+        continue;
+      }
+    } finally {
+      unlock();
     }
 
     let profile: RuntimeProfile;

@@ -578,19 +578,27 @@ describe("Pi adapter", () => {
 
   test("Pi: PI_CODING_AGENT_DIR relocates the user file", async () => {
     const custom = mkdtempSync(path.join(tmpdir(), "mcp-pi-dir-"));
-    await fixture.cleanup();
-    fixture = createFixture({ env: { PI_CODING_AGENT_DIR: custom } });
-    const { remove } = await crud(fixture, "pi", "pi:user");
-    const file = path.join(custom, "mcp.json");
-    expect(JSON.parse(readFileSync(file, "utf8")).mcpServers["fixture-b"].command).toBe(
-      "/opt/My Tools/server",
-    );
-    const snapshot = await fixture.service.snapshot({
-      targetId: await targetIdFor(fixture, "pi", "backend"),
-    });
-    expect(snapshot.sources.find((row) => row.sourceId === "pi:user")?.displayPath).toBe(file);
-    await remove();
-    expect(JSON.parse(readFileSync(file, "utf8")).mcpServers["fixture-b"]).toBeUndefined();
-    rmSync(custom, { recursive: true, force: true });
+    try {
+      await fixture.cleanup();
+      fixture = createFixture({ env: { PI_CODING_AGENT_DIR: custom } });
+      const { remove } = await crud(fixture, "pi", "pi:user");
+      const file = path.join(custom, "mcp.json");
+      expect(JSON.parse(readFileSync(file, "utf8")).mcpServers["fixture-b"].command).toBe(
+        "/opt/My Tools/server",
+      );
+      const snapshot = await fixture.service.snapshot({
+        targetId: await targetIdFor(fixture, "pi", "backend"),
+      });
+      expect(snapshot.sources.find((row) => row.sourceId === "pi:user")?.displayPath).toBe(file);
+      await remove();
+      expect(JSON.parse(readFileSync(file, "utf8")).mcpServers["fixture-b"]).toBeUndefined();
+    } finally {
+      // The fixture's service writes into custom; settle it first.
+      try {
+        await fixture.cleanup();
+      } finally {
+        rmSync(custom, { recursive: true, force: true });
+      }
+    }
   });
 });

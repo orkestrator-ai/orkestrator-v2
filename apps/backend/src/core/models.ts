@@ -547,28 +547,6 @@ export interface PersistedPaneLayout {
   revision: number;
 }
 
-/**
- * Versioned looped-review workflow persisted by the backend.
- *
- * The backend owns durability and compare-and-swap revisions while the web
- * application owns and runtime-validates the workflow snapshot schema. Keeping
- * the snapshot opaque here lets the workflow evolve without coupling backend
- * releases to every report-contract field.
- */
-export interface PersistedLoopedReviewWorkflow {
-  version: number;
-  id: string;
-  environmentId: string;
-  snapshot: unknown;
-  updatedAt: string;
-  revision: number;
-  controllerLease?: {
-    ownerId: string;
-    token: string;
-    expiresAt: string;
-  };
-}
-
 /** Durable envelope for a backend-owned Multi Review workflow. */
 export interface PersistedMultiReviewWorkflow {
   version: number;

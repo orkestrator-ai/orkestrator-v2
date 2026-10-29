@@ -18,17 +18,13 @@ import {
 import { TranscriptArtifactService, type TranscriptArtifactServiceOptions } from "./service.js";
 
 export function createTranscriptArtifactService(
-  storage: Pick<
-    StorageService,
-    "getMultiReviewWorkflow" | "getLoopedReviewWorkflow" | "getBuildPipeline" | "getEnvironment"
-  >,
+  storage: Pick<StorageService, "getMultiReviewWorkflow" | "getBuildPipeline" | "getEnvironment">,
   options: Omit<TranscriptArtifactServiceOptions, "workflows" | "environmentProject">,
 ): TranscriptArtifactService {
   return new TranscriptArtifactService({
     ...options,
     workflows: {
       getMultiReviewWorkflow: (id) => storage.getMultiReviewWorkflow(id),
-      getLoopedReviewWorkflow: (id) => storage.getLoopedReviewWorkflow(id),
       getBuildPipeline: (id) => storage.getBuildPipeline(id),
     },
     environmentProject: async (environmentId) =>

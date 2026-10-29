@@ -181,7 +181,9 @@ export class MultiReviewGraphEngine {
 /** What a graph pass borrows from `MultiReviewService`: its lease, save and release. */
 export interface MultiReviewGraphPassHost {
   engine(): MultiReviewGraphEngine | null;
-  loadControlled(workflowId: string): Promise<{ workflow: MultiReviewWorkflow; token: string } | null>;
+  loadControlled(
+    workflowId: string,
+  ): Promise<{ workflow: MultiReviewWorkflow; token: string } | null>;
   save(workflow: MultiReviewWorkflow, token: string): Promise<MultiReviewWorkflow>;
   release(workflow: MultiReviewWorkflow, token: string): Promise<void>;
   /**
@@ -245,10 +247,9 @@ export async function advanceMultiReviewGraph(
       await engine.launch(workflow);
     } catch (error) {
       workflow.phase = "failed";
-      workflow.error = (error instanceof Error ? error.message : "The graph run did not start").slice(
-        0,
-        4_096,
-      );
+      workflow.error = (
+        error instanceof Error ? error.message : "The graph run did not start"
+      ).slice(0, 4_096);
       workflow.graphRun = { runId, settled: true };
       console.warn(`[multi-review] Graph run ${runId} did not start for workflow ${workflow.id}`);
       await host.save(workflow, token);

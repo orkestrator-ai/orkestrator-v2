@@ -98,6 +98,7 @@ import {
 import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
+  type CodexLoginKind,
   type EngineCapabilities,
   type EngineAccountUsageWindow,
   type EngineError,
@@ -687,6 +688,15 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
 }
 
 /**
+ * The login an `account/read` answer reports, when it is an API key or a
+ * ChatGPT login: the two a refused-login notice has its own words for.
+ */
+function accountLoginKind(response: unknown): CodexLoginKind | undefined {
+  const type = objectRecord(objectRecord(response).account).type;
+  return type === "apiKey" || type === "chatgpt" ? type : undefined;
+}
+
+/**
  * `account/read` failing because the server rejected the access token, read as
  * the signed-out answer it stands for.
  *
@@ -828,6 +838,8 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  /** The login the last signed-in `account/read` answer reported. */
+  private accountLoginKind: CodexLoginKind | undefined;
   private refusedLoginFingerprint: Promise<string | undefined> | undefined;
   // One live login per app-server account, independent of any renderer or tab.
   private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
@@ -1277,6 +1289,15 @@ export class AppServerEngine implements CodexEngine {
     return this.accountSignInRequired;
   }
 
+  /**
+   * The kind of login app-server last reported signed in, or undefined before
+   * any answer. A refused turn reads it to say whether an API key or a ChatGPT
+   * login was refused; the turn's own error never says.
+   */
+  getAccountLoginKind(): CodexLoginKind | undefined {
+    return this.accountLoginKind;
+  }
+
   private invalidateAccountServing(sequence: number): void {
     this.accountServingGeneration = undefined;
     // Connection and thread queues can drain out of order. A delayed start
@@ -1338,6 +1359,11 @@ export class AppServerEngine implements CodexEngine {
     this.accountAppliedSequence = sequence;
     const wasSignInRequired = this.accountSignInRequired;
     const signedIn = this.recordAccount(response);
+    const login = accountLoginKind(response);
+    if (login && login !== this.accountLoginKind) {
+      this.accountLoginKind = login;
+      this.emit({ kind: "account.loginKind", login, engineGeneration: generation });
+    }
     if (
       signedIn &&
       (wasSignInRequired || accountChanged) &&

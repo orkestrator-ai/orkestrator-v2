@@ -40,6 +40,7 @@ import {
   isRefusedLoginError,
   nextThreadAuthNotice,
   refusedLoginNotice,
+  withRefusedLoginKind,
 } from "./sessions/auth-recovery-notice.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
@@ -785,6 +786,14 @@ export class CodexRuntimeLifecycle {
       }
       return;
     }
+    if (event.kind === "account.loginKind") {
+      // The refusal's own account read answers after the failed turn has
+      // already raised the notice; name the login it was about.
+      for (const context of this.ctx.registry.listThreads()) {
+        this.setThreadAuthNotice(context, withRefusedLoginKind(context.authNotice, event.login));
+      }
+      return;
+    }
     if (event.kind === "account.reload.requested") {
       void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
         console.warn(
@@ -1158,7 +1167,11 @@ export class CodexRuntimeLifecycle {
         else if (event.status === "failed" && isRefusedLoginError(event.error)) {
           this.setThreadAuthNotice(
             context,
-            refusedLoginNotice(context.authNotice, () => crypto.randomUUID()),
+            refusedLoginNotice(
+              context.authNotice,
+              this.ctx.options.engine.getAccountLoginKind(),
+              () => crypto.randomUUID(),
+            ),
           );
         }
         this.discardOutlivingCommandWindows(turn);

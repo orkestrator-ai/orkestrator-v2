@@ -558,7 +558,15 @@ export type EngineEvent = EngineEventMeta &
      * that notice locks the tab's composer, so it must not wait for a turn.
      */
     | { kind: "account.signedIn" }
+    /**
+     * `account/read` reported a different kind of login. A refused-login
+     * notice raised before the answer names the login it was about.
+     */
+    | { kind: "account.loginKind"; login: CodexLoginKind }
   );
+
+/** The login `account/read` reports: an API key or a ChatGPT sign-in. */
+export type CodexLoginKind = "apiKey" | "chatgpt";
 
 export type EngineEventListener = (event: EngineEvent) => void;
 

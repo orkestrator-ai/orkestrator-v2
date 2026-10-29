@@ -4,8 +4,14 @@
  * (`CODEX_HOME=<throwaway dir holding the key> mise run dev:test … --credential-source
  * codex`). One prompt; app-server retries the refused request, then fails the
  * turn with a 401. Checks the failure's reason and the sign-in banner in the
- * tab, before and after a reload. Never point it at a real login.
+ * tab, before and after a reload. With
+ * `ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME` (the profile's own
+ * `agent-credentials/codex`, never a real Codex home) it then replaces the key
+ * and checks the notice clears. Never point it at a real login.
  */
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
@@ -21,7 +27,9 @@ type Projection = {
   notices?: Array<{ kind: string; state?: string; message: string }>;
 };
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-refused-qa";
-const REFUSED_NOTICE = "Codex's login was refused. Sign in to Codex again to keep working.";
+// The profile's login is an API key, so the notice names it (`account/read`).
+const REFUSED_NOTICE =
+  "Codex's API key was refused. Replace it with codex login --with-api-key, or sign in to Codex with ChatGPT instead.";
 
 test.use({ trace: "off", screenshot: "off" });
 
@@ -106,9 +114,15 @@ test.describe("Codex turn refused for its login", () => {
         .toBe("error");
       const failed = await projection();
       expect(failed?.turn.error).toContain("401");
-      expect(failed?.notices).toContainEqual(
-        expect.objectContaining({ kind: "auth", state: "needs-auth", message: REFUSED_NOTICE }),
-      );
+      // The login kind can arrive just after the failure and reword the notice.
+      await expect
+        .poll(async () => (await projection())?.notices ?? [], {
+          timeout: 60_000,
+          intervals: [1_000],
+        })
+        .toContainEqual(
+          expect.objectContaining({ kind: "auth", state: "needs-auth", message: REFUSED_NOTICE }),
+        );
 
       const assertVisible = async () => {
         await expect(page.getByText(/401 Unauthorized/).first()).toBeVisible({ timeout: 60_000 });
@@ -120,6 +134,35 @@ test.describe("Codex turn refused for its login", () => {
       await openEnvironment(environment.name);
       await assertVisible();
       await page.screenshot({ path: test.info().outputPath("refused-after-reload.png") });
+
+      // Optional: replace the key the way `codex login --with-api-key` stores
+      // it, in the profile's own Codex home, and expect the notice to clear
+      // without a sign-in. The new key is made up too, so only the clearing is
+      // checked, not a working turn.
+      const profileCodexHome = process.env.ORKESTRATOR_AGENT_TEST_PROFILE_CODEX_HOME;
+      if (profileCodexHome) {
+        const authFile = path.join(profileCodexHome, "auth.json");
+        expect(JSON.parse(readFileSync(authFile, "utf8")).auth_mode).toBe("apikey");
+        writeFileSync(
+          authFile,
+          JSON.stringify({
+            auth_mode: "apikey",
+            OPENAI_API_KEY: `sk-proj-replaced-${randomBytes(18).toString("hex")}`,
+          }),
+          { mode: 0o600 },
+        );
+        await page.reload();
+        await openEnvironment(environment.name);
+        await expect
+          .poll(
+            async () =>
+              ((await projection())?.notices ?? []).some((notice) => notice.kind === "auth"),
+            { timeout: 120_000, intervals: [2_000] },
+          )
+          .toBe(false);
+        await expect(page.getByText(REFUSED_NOTICE)).toHaveCount(0, { timeout: 60_000 });
+        await page.screenshot({ path: test.info().outputPath("refused-after-key-replaced.png") });
+      }
     } finally {
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);

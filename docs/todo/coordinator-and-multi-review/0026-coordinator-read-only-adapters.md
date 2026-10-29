@@ -726,9 +726,9 @@ is the final tier for OpenCode and Cursor).
 
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md): the live
   suite that produces the evidence these decisions need.
-- [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md): the
-  smaller parity gaps (all closed); steer is in
-  [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md).
+- [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md):
+  steer, the one parity gap still open when todo 0028 (the smaller parity
+  gaps) was retired on 2026-10-29.
 - [`coordinator.md`](../../architecture/coordinator.md): "Provider qualification"
   and "Changing qualification"; `AGENTS.md` "Coordinator qualification" and
   "Coordinator shell allowlist".

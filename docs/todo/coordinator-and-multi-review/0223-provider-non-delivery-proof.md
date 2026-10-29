@@ -249,8 +249,8 @@ bridges.
     - Cons: needs every credential; cannot force the race on purpose, so a pass
       proves little.
 
-Split out of
-[0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md),
+Split out of todo 0112 (retired on 2026-10-29; see
+[review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery)),
 whose first item asked the fan-out to re-send a recovered `dispatching`
 request under the same id "when the provider says it never arrived". No
 provider could say that soundly, so 0112 parked such a request and failed it
@@ -539,8 +539,9 @@ the interrupted handoff. Remaining live checks stay batched with
 
 ## Related
 
-- [0112-review-fanout-dispatch-recovery.md](0112-review-fanout-dispatch-recovery.md):
-  the recovery rules this builds on.
+- [review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery):
+  the recovery rules this builds on, moved there when todo 0112 was retired
+  on 2026-10-29.
 - [#1329](https://github.com/orkestrator-ai/orkestrator-v2/pull/1329): the change
   that fixed Build Pipeline's same-id stage re-send (item 3 above). The
   separate todo that first analysed it (coordinator-and-multi-review 0723)

@@ -730,7 +730,11 @@ gap or a fresh backend leaves it unknown. A marker change moves the revision
 and the history epoch, so a cached snapshot and paged history named under
 the old marker expire. While a revert is pending the session state carries an
 info advisory saying the next prompt discards the turn and Redo restores it.
-Re-check `revert.ts` and `Session.patch` on every OpenCode bump.
+Only the interactive projection hides a reverted turn: build-pipeline and Multi
+Review transcript reads (`opencode-display-transcript.ts`) are unfiltered, as
+those sessions never offer Undo, and usage still counts the reverted turn's
+tokens, which were billed. Re-check `revert.ts` and `Session.patch` on every
+OpenCode bump.
 
 | Component                         | Purpose                                      |
 | --------------------------------- | -------------------------------------------- |
@@ -1029,6 +1033,10 @@ and clicking again restarts a fresh window.
   no deadline, so there is nothing to pause; its requests wait until they are
   answered, and aborting the turn or closing the tab rejects what is still
   pending (`rejectPendingOpenCodeRequests` in `opencode-session-close.ts`).
+  No backend timer stands in for one, by choice: the backend enforces no
+  deadline for any provider, an unattended OpenCode session never waits (its
+  policy answers at once), and an interactive card waits only while its user
+  can see it, so a timer would add pause and hold state for no fail-closed gain.
 - The HTTP bridge adapter refuses `approve-for-session` on a card that offers
   no session grant (`approveForSessionLabel`), before anything reaches the
   bridge: Pi and the ACP bridges would answer it as a denial.

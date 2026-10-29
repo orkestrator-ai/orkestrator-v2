@@ -287,9 +287,8 @@ agent is seen.
   exists.
 - Neither gets a coordinator-only workaround. Coordinators need nothing more:
   they do not opt out of `actions.steer`, so they get steer here once it
-  exists. This is the only place the gap is tracked (moved from
-  [0028-coordinator-consistency-gaps.md](../coordinator-and-multi-review/0028-coordinator-consistency-gaps.md),
-  now closed).
+  exists. This is the only place the gap is tracked (moved from todo 0028,
+  retired on 2026-10-29).
 
 ### Qualification
 
@@ -515,8 +514,8 @@ Decisions, each the option built:
 
 - [0002-session-lifecycle-consistency.md](0002-session-lifecycle-consistency.md) (steer
   history, close and cancel alignment).
-- [0013-claude-bridge-prompt-stream-state.md](../backend-structure/0013-claude-bridge-prompt-stream-state.md)
-  (the same Claude prompt files).
+- [`bridges/claude-bridge/AGENTS.md`](../../../bridges/claude-bridge/AGENTS.md#one-row-per-model-response)
+  (the same Claude prompt files; from todo 0013, retired on 2026-10-29).
 - [0004-composer-model-parameters.md](0004-composer-model-parameters.md) (mid-session
   parameter changes ride on item 1).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)

@@ -1075,7 +1075,7 @@ Made on 2026-10-25 while closing the code items, without stopping to ask.
   remote backends and environment-private configuration.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and
   [`agent-accounts.md`](../../architecture/agent-accounts.md).
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md) for older
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) for older
   bridges.
 - [`mcp-management.md`](../../architecture/mcp-management.md),
   [`control-mcp.md`](../../architecture/control-mcp.md) and

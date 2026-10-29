@@ -987,7 +987,10 @@ only delay. `launch_graph` takes no `nodeId`, and the observer skips a
 Individual reviewers finishing never wakes anyone: that is progress, and a
 seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
 consolidation, or a new stall or waiting episode has a new key and is sent
-again.
+again. Nothing is sent for elapsed time alone (no "still running after N
+hours"): every wake is an observed state change, the toolbar chip already
+shows the wait, and the 20-second waiting debounce only suppresses waits too
+short to matter.
 
 A review with auto-fix and auto-PR advances on its own, so a state it is about
 to leave is not reported. Consolidation with findings goes straight to the Fix

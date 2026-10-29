@@ -308,10 +308,8 @@ explicit `process` or `disabled` setting, or an explicit
 runs at a time; its state (`idle`, `preparing`, `ready`, `failed`, method,
 content-free reason) is reported in `capabilities().workerPreparation`.
 
-A prepared worker after an upgrade
-([0385](../todo/transcripts-and-observation/0385-stale-local-preview-worker-after-upgrade.md)).
-A packaged backend checks the locally prepared worker against the context it
-ships before using it. When the default tag is present, no published image
+After an upgrade, a packaged backend checks the locally prepared worker
+against the context it ships before using it. When the default tag is present, no published image
 was selected and `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` is unset, it hashes the
 shipped context (once per start, shared with the published-image check) and
 reads the `orkestrator.artifact-preview-worker.context` label of the image it

@@ -23,7 +23,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Investigation.** Runs of "Container live qualification" on 2026-10-26, all on `ubuntu-24.04` and `ubuntu-24.04-arm` with Engine 28.0.4:
 - **Weekly run 40304582303** on `main` `f1223e0b`: failed only "Live lifecycle (C09, C11, C12, C20)". C20 found no `~/.codex/auth.json` because the runner's uid is not 1000. 0109's relay fixes this.
 - **Run 40338400817** (0109 branch): every suite passed, C22 network included.
-- **Run 40409285999** (0109 branch head `e53ea683`, now merged): every suite passed except "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw `/codex-home/config.toml` as `node`, which is unreadable on a non-1000 host; this is a test bug, see [0058](0058-legacy-migration-root-symlink.md)'s analysis.
+- **Run 40409285999** (0109 branch head `e53ea683`, now merged): every suite passed except "C14 legacy migration with staged provider inputs" (`apps/backend/tests/container-live-replacement.test.ts:239`). Its precondition reads the raw `/codex-home/config.toml` as `node`, which is unreadable on a non-1000 host; this is a test bug, found in todo 0058's analysis (retired on 2026-10-29) and tracked in [0728](0728-container-ci-c14-assumes-uid-1000.md).
 
 So the next weekly run on `main` should fail only that C14 case. The benchmark numbers from these runs are analysed in [0022](0022-container-resource-budgets-and-performance.md)'s task analysis. They miss the Docker-calls target (26–28 against ≤ 21), and on x64 also fresh-to-ready and warm start.
 

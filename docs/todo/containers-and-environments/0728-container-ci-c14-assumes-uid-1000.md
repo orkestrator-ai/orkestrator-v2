@@ -3,7 +3,7 @@
 Checked against `main` at `863b5782` (2026-10-27). Code, test and docs work
 done 2026-10-28 on `main` at `31b9c972`; only the CI run remains.
 
-The live case [0058](0058-legacy-migration-root-symlink.md) added reads the
+The live case that todo 0058 added reads the
 staged Codex input `/codex-home/config.toml` as the container's `node` user
 before it migrates anything. The staged file is owner-only and belongs to the
 host user, so the read works only where that user is uid 1000, as on
@@ -282,14 +282,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ## Related
 
-- [0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md)
-  (the source; its task analysis proposes deleting it once this file exists)
+- [Container lifecycle](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild)
+  ("Preserving rebuild"): the legacy migration from todo 0058, this file's
+  source, retired on 2026-10-29
 - [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md) (the staged-input relay)
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
 - [Container qualification](../../development/container-qualification.md)
 
 ## Replaces
 
-Nothing; new on 2026-10-27, split from
-[0058-legacy-migration-root-symlink.md](0058-legacy-migration-root-symlink.md)'s
-task analysis.
+Nothing; new on 2026-10-27, split from todo
+0058's task analysis (retired on 2026-10-29).

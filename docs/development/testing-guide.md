@@ -578,6 +578,12 @@ mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 
+`live-session` installs the selected provider's pinned binary into the
+scenario backend's toolchain (`toolchain install --tool`, five-minute timeout)
+before `serve`, and never falls back to `PATH` or the host's copy, so every run
+uses exactly the pinned version and needs network access for the download
+(OpenCode is about 180 MB).
+
 Scenario backends, and the CLI package tests that start a packaged backend,
 run with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. That skips the boot
 host-reachability check: each backend is a new Docker owner stopped seconds

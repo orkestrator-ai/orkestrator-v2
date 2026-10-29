@@ -8,8 +8,8 @@ bridge until it restarts. And a backend can open a data directory another
 version wrote. This document sets how long each side must cope with an older
 other side (the **support window**), how compatibility code is written and
 counted, and lists every compatibility path with its owner and removal
-condition. Decided on 2026-10-24 in
-[0034-mixed-version-compatibility.md](../todo/cross-cutting/0034-mixed-version-compatibility.md).
+condition. Decided on 2026-10-24 in todo 0034 (retired on 2026-10-29; git history
+keeps it).
 
 ## The support window
 
@@ -34,6 +34,16 @@ A compatibility path that exists for peers older than version X may be removed
 once the floor is at or above X: that is, 60 days after the first Stable
 release at or above X was published. For anything older than v2.21.0 that is
 already true.
+
+Why this shape: releases ship several times a week, so a count of releases
+would last days, while hosts update on their own schedule, a remote backend
+can sit unattended and a container keeps its bridge until it restarts.
+Anchoring on a Stable release ties the floor to what the "everyone" channel
+installs. 30 days was judged too short for unattended hosts and long-lived
+containers, 90 days would keep about three months of paths; the usage counters
+are the evidence for revising the figure. One window covers every pairing
+because they all ride the same release train, and separate windows would
+multiply the conditions owners must check.
 
 ### What must work across the window
 

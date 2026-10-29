@@ -1663,7 +1663,7 @@ Recorded 2026-10-25 for the work done on branch
   for Docker Desktop.
 - [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md):
   egress policy must keep published loopback ports and relay stdio working.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md) (support
+- [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) (support
   window), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md)
   (deletion-time cleanup), [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md)
   (gated runs).

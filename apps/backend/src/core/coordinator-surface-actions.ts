@@ -11,26 +11,16 @@ import {
   formatPreviewIntentUri,
   parsePreviewUrlIntent,
 } from "@orkestrator/protocol/preview-services";
-import {
-  isLoopedReviewWorkflow,
-  type LoopedReviewAgent,
-  type StartLoopedReviewInput,
-} from "@orkestrator/protocol/review-workflow";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { isTabTeardownKind, type TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type { CommandContext } from "./commands-context.js";
-import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
+import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   coordinatorCaller,
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
-import {
-  multiReviewDefaultRows,
-  readLaunchModelCatalog,
-  savedLaunchSettings,
-} from "./coordinator-launch-defaults.js";
 import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 import { launchWorkerPr } from "./coordinator-pr.js";
 import { coordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
@@ -38,12 +28,12 @@ import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { applyRootChanges, listRootChanges } from "./root-changes.js";
-import { editWorkerTab, openLoopedReviewTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
+import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
 
 /**
  * Backend commands behind the coordinator's worker surfaces (todo 0142):
  * terminal and tmux launch, browser preview launch and navigation, tab
- * editing, looped review, the PR tab, feature-plan launch, and the request
+ * editing, the PR tab, feature-plan launch, and the request
  * to copy the checkout's uncommitted changes into a worker.
  *
  * Every command takes the authenticated `scope` the Control MCP server built
@@ -301,135 +291,6 @@ export function registerCoordinatorSurfaceActions(
     }
   });
 
-  register("start_coordinator_looped_review", async (args, context) => {
-    const caller = await coordinatorCaller(args.scope, context);
-    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
-    const service = context.loopedReviews;
-    const input = record(args.input, "the looped review input");
-    const requestId = asNonBlankString(input.requestId, "requestId");
-    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
-    const agent = input.agent as LoopedReviewAgent | undefined;
-    const model = optionalText(input.model, "model", 512);
-    const reasoningEffort = optionalText(input.reasoningEffort, "reasoningEffort", 128);
-    if ((model || reasoningEffort) && !agent)
-      throw new Error("model and reasoningEffort need agent");
-    const targetBranch = optionalText(input.targetBranch, "targetBranch", 500);
-    const reviewInstruction =
-      input.reviewInstruction === undefined
-        ? undefined
-        : typeof input.reviewInstruction === "string" && input.reviewInstruction.length <= 100_000
-          ? input.reviewInstruction
-          : (() => {
-              throw new Error("reviewInstruction must be at most 100000 characters");
-            })();
-    const allowance = input.allowance;
-    if (allowance !== undefined && (!Number.isInteger(allowance) || (allowance as number) < 1))
-      throw new Error("allowance must be a positive integer");
-    const payload = {
-      environmentId: environment.id,
-      agent,
-      model,
-      reasoningEffort,
-      targetBranch,
-      reviewInstruction,
-      allowance,
-    };
-    const result = await withCoordinatorReceipt(
-      context,
-      caller,
-      { requestId, action: "start-looped-review", payload },
-      async () => {
-        const id = `looped-coordinator-${requestKey(caller, requestId)}`;
-        const existing = await context.storage.getLoopedReviewWorkflow(id);
-        let workflowId: string;
-        let reused = false;
-        if (existing) {
-          if (!isLoopedReviewWorkflow(existing.snapshot))
-            throw new Error(
-              "The saved looped review is unreadable; repair it before retrying this requestId",
-            );
-          workflowId = existing.id;
-          reused = true;
-        } else {
-          const config = await context.storage.loadConfig();
-          // Omitted, the agent and model are the Review action's saved
-          // default, the row the Looped review dialog opens on.
-          const defaults = agent
-            ? undefined
-            : multiReviewDefaultRows(
-                savedLaunchSettings(config, caller.projectId, environment),
-                await readLaunchModelCatalog(
-                  dependencies.commands.get("get_native_agent_model_catalog"),
-                  environment.id,
-                  context,
-                ),
-              ).reviewers[0];
-          const start: StartLoopedReviewInput = {
-            environmentId: environment.id,
-            projectId: caller.projectId,
-            agent: (agent ?? defaults!.agent) as LoopedReviewAgent,
-            model: model ?? defaults?.model ?? "default",
-            ...((reasoningEffort ?? defaults?.reasoningEffort)
-              ? { reasoningEffort: reasoningEffort ?? defaults?.reasoningEffort }
-              : {}),
-            targetBranch:
-              targetBranch ?? (config.repositories[caller.projectId]?.prBaseBranch || "main"),
-            ...(reviewInstruction !== undefined
-              ? reviewInstruction.trim()
-                ? { reviewInstruction }
-                : {}
-              : config.global.reviewInstruction
-                ? { reviewInstruction: config.global.reviewInstruction }
-                : {}),
-            ...(allowance !== undefined ? { allowance: allowance as number } : {}),
-          };
-          workflowId = (await service.start(start, id)).id;
-        }
-        let ui: JsonRecord;
-        try {
-          ui = {
-            ...(await openLoopedReviewTab(context.storage, {
-              environmentId: environment.id,
-              workflowId,
-            })),
-          };
-        } catch (error) {
-          ui = {
-            status: "unavailable",
-            recovery: `The looped review is running, but its tab could not be opened: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-        return { environmentId: environment.id, workflowId, reused, ui };
-      },
-    );
-    const saved = await context.storage.getLoopedReviewWorkflow(result.workflowId as string);
-    return {
-      ...result,
-      workflow:
-        saved && isLoopedReviewWorkflow(saved.snapshot) ? loopedSummary(saved.snapshot) : null,
-    };
-  });
-
-  for (const [name, verb] of [
-    ["get_coordinator_looped_review", "get"],
-    ["cancel_coordinator_looped_review", "cancel"],
-  ] as const) {
-    register(name, async (args, context) => {
-      const caller = await coordinatorCaller(args.scope, context);
-      const workflowId = asNonBlankString(args.workflowId, "workflowId");
-      const saved = await context.storage.getLoopedReviewWorkflow(workflowId);
-      if (!saved || !isLoopedReviewWorkflow(saved.snapshot))
-        throw new Error("Looped review not found in this project");
-      await requireCoordinatorWorker(context, caller, saved.snapshot.environmentId);
-      if (verb === "get") return { workflow: loopedSummary(saved.snapshot) };
-      if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
-      const cancelled = stripLoopedReviewSnapshotSecrets(
-        await context.loopedReviews.cancel(workflowId),
-      );
-      return { workflow: loopedSummary(cancelled) };
-    });
-  }
-
   /**
    * The Create PR button for a worker: the PR tab is the only place a
    * coordinator's work becomes a pull request, after review. A build
@@ -626,32 +487,6 @@ export function registerCoordinatorSurfaceActions(
       paths: paths as string[],
     });
   });
-}
-
-/** What the coordinator needs to follow a looped review, without its sessions. */
-function loopedSummary(workflow: {
-  id: string;
-  environmentId: string;
-  phase: string;
-  error?: string;
-  rounds?: unknown;
-  pr?: unknown;
-}): JsonRecord {
-  return {
-    id: workflow.id,
-    environmentId: workflow.environmentId,
-    phase: workflow.phase,
-    ...(workflow.error ? { error: workflow.error } : {}),
-    rounds: Array.isArray(workflow.rounds) ? workflow.rounds.length : 0,
-    ...(workflow.pr && typeof workflow.pr === "object"
-      ? {
-          pr: {
-            status: (workflow.pr as JsonRecord).status,
-            ...((workflow.pr as JsonRecord).url ? { url: (workflow.pr as JsonRecord).url } : {}),
-          },
-        }
-      : {}),
-  };
 }
 
 async function nativeTurnPhase(

@@ -139,7 +139,7 @@ jittered backoff. Per kind:
 | --- | --- | --- |
 | `chart` | `validateChartSpec`, `buildChartScene`, `chartSceneToSvg`; SVG stored as renderer output | schema, bounded-render |
 | `mermaid` | Supervised Chromium job; sanitized SVG stored. Math labels (`$$…$$`) are refused before any worker starts with diagnostic `math_labels_unsupported` (see below) | schema, syntax, bounded-render |
-| `workflow-snapshot` | `workflow-collector.ts` reads Multi Review, Looped Review or Build Pipeline records at an exact revision | schema, authoritative-source |
+| `workflow-snapshot` | `workflow-collector.ts` reads Multi Review or Build Pipeline records at an exact revision | schema, authoritative-source |
 | `html-static` | Supervised Chromium job with the unchanged design runtime sanitizer; effective document and captures stored | schema, syntax, supervised-visual |
 | `html-interactive` | Deterministic preparation, then a supervised job under the executable policy with declared probes | schema, syntax, supervised-visual + every probe passed |
 

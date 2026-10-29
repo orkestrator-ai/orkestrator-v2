@@ -26,9 +26,8 @@ import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 
 import {
-  isLoopedReviewWorkflow,
+  isPersistedReviewPackage,
   isReviewPackageReference,
-  LOOPED_REVIEW_WORKFLOW_VERSION,
 } from "@orkestrator/protocol/review-workflow";
 
 import { spawnCommand } from "../src/core/shell";
@@ -320,55 +319,6 @@ export async function createCommandFixtures() {
     status: string,
   ): Record<string, unknown>[] {
     return updates.filter((update) => update.status === status);
-  }
-
-  /**
-   * The smallest workflow that carries a generated package.
-   *
-   * `generate_looped_review_package` is only ever consumed by the looped-review
-   * service, which validates the whole snapshot before it saves. A package that
-   * matches its own shape assertions but fails that guard is unpersistable, and
-   * the round dies at `package` — so the guard is what the generator's tests have
-   * to assert against, not the shape alone.
-   */
-  function loopedReviewWorkflowAround(
-    reviewPackage: Record<string, unknown>,
-    options: { round: number; targetBranch: string },
-  ): Record<string, unknown> {
-    const timestamp = "2026-08-08T00:00:00.000Z";
-    return {
-      version: LOOPED_REVIEW_WORKFLOW_VERSION,
-      controller: "backend",
-      id: "workflow-1",
-      environmentId: "env-1",
-      projectId: "project-1",
-      agent: "opencode",
-      model: "opencode-go/deepseek-v4-flash",
-      targetBranch: options.targetBranch,
-      startingAllowance: 6,
-      currentAllowance: 6,
-      currentRound: options.round,
-      currentPass: 0,
-      phase: "discovering",
-      rounds: [
-        {
-          round: options.round,
-          allowance: 6,
-          status: "reviewing",
-          passes: [],
-          startedAt: timestamp,
-          package: reviewPackage,
-        },
-      ],
-      activePool: { issues: [], coverageGaps: [] },
-      archivedPools: [],
-      sessions: [],
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      pr: { status: "pending" },
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      backendRevision: 3,
-    };
   }
 
   /**
@@ -665,7 +615,6 @@ export async function createCommandFixtures() {
         }),
         removeSessionsByEnvironment: mock(async () => undefined),
         deleteNativeAgentSessionsByEnvironment: mock(async () => undefined),
-        deleteLoopedReviewWorkflowsByEnvironment: mock(async () => undefined),
         deleteMultiReviewWorkflowsByEnvironment: mock(async () => undefined),
         deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
         deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
@@ -1584,7 +1533,6 @@ exit 0
     ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
     EnvironmentLifecycleTaskTracker,
     LOCAL_PROJECT_FOR_CREATE,
-    LOOPED_REVIEW_WORKFLOW_VERSION,
     RUNNING_CONTAINER_DOCKER_SCRIPT,
     FIXTURE_DOCKER_OWNER,
     ownedContainerInspect,
@@ -1628,13 +1576,12 @@ exit 0
     gitOutput,
     http,
     isImmutableCommitRef,
-    isLoopedReviewWorkflow,
+    isPersistedReviewPackage,
     isReviewPackageReference,
     isPaneLayoutRevisionConflict,
     isProcessRunning,
     isolateCodexBinaryLookup,
     liveDockerTest,
-    loopedReviewWorkflowAround,
     mock,
     os,
     paneLayoutRevisionConflictMessage,

@@ -1285,7 +1285,7 @@ export class NativeAgentService {
           origin: input.origin ?? "interactive-native",
           interactionPolicy:
             input.interactionPolicy ??
-            (input.origin === "build-pipeline" || input.origin === "looped-review"
+            (input.origin === "build-pipeline" || input.origin === "automated-review"
               ? UNATTENDED_AGENT_INTERACTION_POLICY
               : INTERACTIVE_AGENT_INTERACTION_POLICY),
           phase: input.phase,
@@ -1349,7 +1349,7 @@ export class NativeAgentService {
     const origin = input.origin ?? "interactive-native";
     const interactionPolicy =
       input.interactionPolicy ??
-      (origin === "build-pipeline" || origin === "looped-review"
+      (origin === "build-pipeline" || origin === "automated-review"
         ? UNATTENDED_AGENT_INTERACTION_POLICY
         : INTERACTIVE_AGENT_INTERACTION_POLICY);
     provider.registerSession?.(input.providerSessionId, {
@@ -4376,7 +4376,7 @@ export class NativeAgentService {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:
           input.interactionPolicy ??
-          (input.origin === "build-pipeline" || input.origin === "looped-review"
+          (input.origin === "build-pipeline" || input.origin === "automated-review"
             ? UNATTENDED_AGENT_INTERACTION_POLICY
             : INTERACTIVE_AGENT_INTERACTION_POLICY),
         phase: input.phase,

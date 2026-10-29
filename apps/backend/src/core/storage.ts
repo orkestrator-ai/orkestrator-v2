@@ -8,6 +8,11 @@ export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
+import {
+  reconcileRetiredLoopedReviewSessions,
+  type RetirementProvider,
+  type RetiredLoopedReviewSession,
+} from "./storage-retired-features.js";
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
@@ -62,7 +67,6 @@ import type {
   PersistedBuildPipeline,
   PersistedComposeDraft,
   PersistedFileDraft,
-  PersistedLoopedReviewWorkflow,
   PersistedMultiReviewWorkflow,
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
@@ -139,6 +143,12 @@ export class StorageService {
     this.context.startSnapshots();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
+  }
+
+  reconcileRetiredLoopedReviews(
+    providerFor: (target: RetiredLoopedReviewSession) => Promise<RetirementProvider>,
+  ): Promise<void> {
+    return reconcileRetiredLoopedReviewSessions(this.context.database, providerFor);
   }
 
   /** Closes the database connection. Later calls reopen it. */
@@ -730,74 +740,6 @@ export class StorageService {
   }
 
   // ReviewsRepository
-
-  getLoopedReviewWorkflow(workflowId: string): Promise<PersistedLoopedReviewWorkflow | null> {
-    return this.repos.reviews.getLoopedReviewWorkflow(workflowId);
-  }
-
-  listLoopedReviewWorkflows(environmentId: string): Promise<PersistedLoopedReviewWorkflow[]> {
-    return this.repos.reviews.listLoopedReviewWorkflows(environmentId);
-  }
-
-  listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
-    return this.repos.reviews.listAllLoopedReviewWorkflows();
-  }
-
-  saveLoopedReviewWorkflow(
-    workflowId: string,
-    environmentId: string,
-    version: number,
-    snapshot: unknown,
-    expectedRevision?: number,
-    controllerFence?: { ownerId: string; token: string },
-    options?: {
-      /**
-       * Rejects the write when the *stored* record has already reached this
-       * version. Evaluated inside the mutation queue so it cannot be overtaken
-       * by a concurrent backend adoption between the caller's read and its
-       * write, which a caller-side check inevitably can be.
-       */
-      rejectStoredVersionAtLeast?: number;
-    },
-  ): Promise<PersistedLoopedReviewWorkflow> {
-    return this.repos.reviews.saveLoopedReviewWorkflow(
-      workflowId,
-      environmentId,
-      version,
-      snapshot,
-      expectedRevision,
-      controllerFence,
-      options,
-    );
-  }
-
-  claimLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    leaseMs: number,
-  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
-    return this.repos.reviews.claimLoopedReviewController(workflowId, ownerId, leaseMs);
-  }
-
-  validateLoopedReviewController(
-    workflowId: string,
-    ownerId: string,
-    token: string,
-  ): Promise<boolean> {
-    return this.repos.reviews.validateLoopedReviewController(workflowId, ownerId, token);
-  }
-
-  releaseLoopedReviewController(workflowId: string, ownerId: string, token: string): Promise<void> {
-    return this.repos.reviews.releaseLoopedReviewController(workflowId, ownerId, token);
-  }
-
-  deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
-    return this.repos.reviews.deleteLoopedReviewWorkflow(workflowId);
-  }
-
-  deleteLoopedReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
-    return this.repos.reviews.deleteLoopedReviewWorkflowsByEnvironment(environmentId);
-  }
 
   getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {
     return this.repos.reviews.getMultiReviewWorkflow(workflowId);

@@ -129,14 +129,14 @@ async function setup(reviewerCount: number) {
   const controls = { failVerifications: 0 };
   const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     commands.push(command);
-    if (command === "verify_looped_review_package") {
+    if (command === "verify_review_package") {
       if (controls.failVerifications > 0) {
         controls.failVerifications -= 1;
         throw new Error("package read failed");
       }
       return { valid: true } as T;
     }
-    if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args!) as T;
+    if (command === "generate_review_package") return testGeneratedReviewPackage(args!) as T;
     if (command === "get_environment_uncommitted_paths") {
       return { head: HEAD, paths: [], fingerprint: "a".repeat(64) } as T;
     }
@@ -200,8 +200,7 @@ async function setup(reviewerCount: number) {
     createService,
     workflowId: workflow.id,
     snapshot,
-    verifications: () =>
-      commands.filter((command) => command === "verify_looped_review_package").length,
+    verifications: () => commands.filter((command) => command === "verify_review_package").length,
     cleanup: () => fs.rm(dataDir, { recursive: true, force: true }),
   };
 }

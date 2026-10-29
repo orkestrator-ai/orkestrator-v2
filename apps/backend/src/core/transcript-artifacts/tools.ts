@@ -83,7 +83,7 @@ const payloadSchema = z
       "chart: {kind, spec} where spec = {schemaVersion:1, kind:'bar'|'line'|'area'|'scatter'|'donut', title, description, sourceNotes?, ...}; " +
       "bar adds xAxis:{kind:'category',label}, yAxis:{label,unit?}, categories:[{id,label}], series:[{id,label,points:[{categoryId,value|null}]}] (one point per category); " +
       "line/area/scatter add xAxis:{kind:'number'|'utc-time',label,unit?}, yAxis, series:[{id,label,points:[{x,y|null}]}]; donut adds valueLabel, unit?, slices:[{id,label,value}]. " +
-      "workflow-snapshot: {kind, workflowId: multi-review|looped-review|build-pipeline, runId, expectedWorkflowRevision?}.",
+      "workflow-snapshot: {kind, workflowId: multi-review|build-pipeline, runId, expectedWorkflowRevision?}.",
   );
 
 const draftSchema = z

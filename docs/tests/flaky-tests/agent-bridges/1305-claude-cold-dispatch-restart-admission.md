@@ -1,6 +1,6 @@
 # Claude cold dispatch after bridge restart
 
-- **ID:** 1304
+- **ID:** 1305
 - **Status:** open
 - **Observed:** 2026-10-29
 - **Test:** `a restarted Claude bridge answers a cold dispatch from disk without registering the session`

@@ -578,6 +578,14 @@ mise run test:cli:scenarios -- --environment-type container \
   --docker-image orkestrator-v2:dev-<worktree hash>
 ```
 
+Scenario backends, and the CLI package tests that start a packaged backend,
+run with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. That skips the boot
+host-reachability check: each backend is a new Docker owner stopped seconds
+after `ready`, so its Linux probe network would belong to an owner nothing
+reaps. A later on-demand check (a container scenario on a rootless daemon, a
+workflow preflight) still runs. A scenario that needs the boot check passes
+the variable through its own `env`.
+
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and
 approval tests start their run on `ORKESTRATOR_AGENT_TEST_LIVE_CLI_AGENT`
@@ -674,8 +682,8 @@ Generate the reference before making the change; no artifact is committed
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
-  runs the real feature-planning, build-pipeline, looped-review and
-  multi-review supervisors over a temporary store, in rollback and keyed
+  runs the real feature-planning, build-pipeline and multi-review
+  supervisors over a temporary store, in rollback and keyed
   modes, on one manual clock. Rollback is what
   `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
   multi review its `WorkflowDueScheduler` (15 s reconciliation scan,

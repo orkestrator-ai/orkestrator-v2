@@ -49,7 +49,7 @@ import {
 import type { ProbeObservation } from "@orkestrator/protocol/node/workspace-change-probe";
 import type { BridgeConnection } from "./agent-provider-contract.js";
 import { asRecord, nonEmptyString, setBoundedMapEntry } from "./agent-provider-runtime.js";
-import type { EvidenceSource } from "./change-tracking/service.js";
+import type { EvidenceSource } from "./change-tracking/index.js";
 import type { OpenCodeCommandChanges } from "./opencode-command-changes.js";
 import { collectRawOpenCodeSubagentIds } from "./opencode-messages.js";
 

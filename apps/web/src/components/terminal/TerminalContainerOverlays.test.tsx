@@ -18,8 +18,6 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
-import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
-
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { type PersistedPaneLayout } from "@/types/paneLayout";
@@ -156,18 +154,6 @@ const getPaneLayoutMock = mock(
 
 const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
 
-const listLoopedReviewWorkflowsMock = mock(
-  async (_environmentId: string) =>
-    [] as Array<{
-      version: number;
-      id: string;
-      environmentId: string;
-      snapshot: LoopedReviewWorkflow;
-      updatedAt: string;
-      revision: number;
-    }>,
-);
-
 const writeContainerFileMock = mock(
   async (_containerId: string, filePath: string, _base64Data: string) => `/workspace/${filePath}`,
 );
@@ -247,7 +233,6 @@ mock.module("@/lib/backend", () => ({
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   deletePaneLayout: deletePaneLayoutMock,
-  listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
   writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
@@ -376,7 +361,6 @@ describe("TerminalContainer", () => {
       composeDraftImages: new Map(),
     });
     useNativeComposeStore.setState({ drafts: new Map() });
-    useLoopedReviewStore.setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -435,8 +419,6 @@ describe("TerminalContainer", () => {
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
     localStorage.clear();
-    listLoopedReviewWorkflowsMock.mockReset();
-    listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeInitialPromptAttachmentsMock.mockClear();

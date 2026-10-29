@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   CommandFailedError,
   commandInvocationCount,
+  observeCommandInvocations,
   runCommand,
   runCommandBuffer,
 } from "./shell.js";
@@ -207,6 +208,15 @@ describe("runCommand timeout", () => {
       );
     }
     expect(commandInvocationCount("invalid-timeout-command")).toBe(before);
+  });
+
+  posixOnly("reports each invocation's arguments to an observer until it stops", async () => {
+    const seen: string[][] = [];
+    const stop = observeCommandInvocations("sh", (args) => seen.push([...args]));
+    await runCommand("sh", ["-c", "true"], { timeoutMs: 5_000 });
+    stop();
+    await runCommand("sh", ["-c", "exit 0"], { timeoutMs: 5_000 });
+    expect(seen).toEqual([["-c", "true"]]);
   });
 
   posixOnly("does not interfere with a command that finishes in time", async () => {

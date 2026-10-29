@@ -254,7 +254,10 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
   `verified`) exists in the contract and in validation (at most four per
   capture). `compileWebAnnotationBrief` (`web-annotation-brief.ts`) renders it
   as "candidate location only; verify in the repository". Nothing produces
-  hints, and the backend never sets `verified: true`.
+  hints, and the backend never sets `verified: true`. Since
+  [0725](0725-annotation-source-hint-client-verified.md), a capture declaring
+  `verified: true` is refused, and hints are stored and briefed with their
+  known fields only.
 - iframe and shadow-root targets resolve to their host element with
   `scope: { kind: "unsupported", reason: … }`
   (`browser-preview-anchor-script.ts`). Region mode (`CaptureModePicker.tsx`)

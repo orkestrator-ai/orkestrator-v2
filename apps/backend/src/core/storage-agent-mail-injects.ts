@@ -132,7 +132,7 @@ export class AgentMailInjects {
     workerEnvironmentId: string,
     workerTabId: string,
   ): Promise<boolean> {
-    const store = await this.store.load();
+    const store = await this.store.snapshot();
     const mailbox = store.mailboxes[agentMailboxId(coordinatorEnvironmentId, coordinatorTabId)];
     return Boolean(
       mailbox?.messages.some(
@@ -491,7 +491,10 @@ export class AgentMailInjects {
     limit = 100,
     options: { includeDeferred?: boolean; includeCoalescing?: boolean } = {},
   ): Promise<PendingAgentMailInject[]> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const pending: PendingAgentMailInject[] = [];
     const now = Date.now();
@@ -551,7 +554,10 @@ export class AgentMailInjects {
   }
 
   async listInterruptedAgentMailInjects(): Promise<PendingAgentMailInject[]> {
-    const [store, config] = await Promise.all([this.store.load(), this.repos.config.loadConfig()]);
+    const [store, config] = await Promise.all([
+      this.store.snapshot(),
+      this.repos.config.loadConfig(),
+    ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const interrupted: PendingAgentMailInject[] = [];
     for (const mailbox of Object.values(store.mailboxes)) {

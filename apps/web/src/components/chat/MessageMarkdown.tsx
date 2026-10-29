@@ -172,7 +172,8 @@ export function MarkdownLink({
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const openPullRequest = usePullRequestOpener();
   const linkSource = useContext(PreviewLinkSourceContext);
-  // Only the explicit gesture opens a preview tab; a plain click is unchanged.
+  // The explicit gesture opens a preview tab. On remote desktop connections,
+  // plain clicks use the service transport, or a preview tab for unresolved ports.
   const previewable = Boolean(linkSource && href && isLoopbackUrl(href));
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {

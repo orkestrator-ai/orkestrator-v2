@@ -123,9 +123,10 @@ from port A to B** for nearby services of the same kind and scheme, next to
 
 **Agent links.** In an environment's agent tab, ⌘⇧-click (Ctrl+Shift-click) on
 a loopback link opens a preview tab with the `agent-link` intent, resolved in
-that environment like a terminal link. A plain click still opens the system
-browser. Coordinator and mail transcripts have no environment and keep the
-plain behaviour.
+that environment like a terminal link. A plain click uses the external-link
+router: on remote desktop connections a registered service opens externally,
+and an unresolved port opens a preview tab. Coordinator and mail transcripts
+have no environment and keep the plain behaviour.
 
 **Automatic host ports.** A port mapping with **Auto** (`hostPortMode: "auto"`,
 `hostPort: 0`) is published as `127.0.0.1::<port>` so Docker chooses a free
@@ -266,12 +267,14 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
   ambiguous port opens a preview tab, where the user registers or picks it.
   With preview access off, an older backend, or a failed forward, the link
   falls back to the gateway path proxy (`/__orkestrator/proxy/loopback/<port>`)
-  and a toast says why.
-- **Port.** The forward prefers the service's own application port, so
-  absolute `localhost:<port>` URLs and OAuth callbacks keep working. It binds
-  127.0.0.1 and ::1 together on one port, so `localhost` can never reach a
+  and a toast says why (including unavailable capabilities or failed resolution).
+- **Port.** On platforms with exclusive loopback binding, the forward prefers a
+  browser-safe application port, so absolute `localhost:<port>` URLs and OAuth
+  callbacks keep working. It binds 127.0.0.1 and ::1 together on one port, so
+  `localhost` can never reach a
   different local server on the other address family; if either is taken it
-  uses another free port on both.
+  uses another browser-safe free port on both. macOS/BSD always use an
+  OS-assigned port to avoid shadowing wildcard listeners through SO_REUSEADDR.
 - **Lifetime.** It closes after ten minutes with no open connection (an open
   page's HMR WebSocket keeps it alive), when its service retires, and when the
   window's transport is disposed.
@@ -391,11 +394,12 @@ to the preview path must keep these boundaries:
   external browser cannot be made to send a credential, so the forward is
   bounded instead: loopback binds only, a `Host` of `localhost`, `127.0.0.1`
   or `[::1]` on its own port (no DNS rebinding), Fetch Metadata that lets
-  another site only navigate to it (no cross-site fetches, frames, writes or
+  non-loopback sites only navigate to it (no foreign-site fetches, frames, writes or
   WebSockets; `externalForwardSiteViolation`), reserved cookies stripped, and
   an idle shutdown. That is the exposure of a dev server run on the user's
   machine. It exists only for remote connections and only while the user has
-  opened a service with it.
+  opened a service with it. Requests with a loopback Origin are allowed across
+  loopback hostnames and ports; the application still enforces its own CORS policy.
 - **The tunnel cannot choose destinations.** An attachment is bound to
   `(serviceId, backendEpoch, endpointGeneration)`. An `OPEN` frame carrying
   host or port fields is malformed. The backend re-resolves the upstream and

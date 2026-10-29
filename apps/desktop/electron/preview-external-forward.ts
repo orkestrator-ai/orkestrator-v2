@@ -52,6 +52,16 @@ const REAL_TIMERS: ExternalForwardTimers = {
 
 const DEFAULT_IDLE_MS = 10 * 60_000;
 const EPHEMERAL_ATTEMPTS = 8;
+// Fetch's bad-port list.
+// https://fetch.spec.whatwg.org/#port-blocking
+const BROWSER_RESTRICTED_PORTS = new Set([
+  0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+  995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+  6669, 6679, 6697, 10080,
+]);
+
 const LOOPBACK_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i;
 
 function header(request: IncomingMessage, name: string): string | undefined {
@@ -78,11 +88,22 @@ export function externalForwardSiteViolation(request: IncomingMessage, upgrade: 
     return site === "cross-site";
   }
   if (site === undefined) return origin !== undefined && !LOOPBACK_ORIGIN.test(origin);
-  if (site !== "cross-site") return false;
+  if (site !== "cross-site" || (origin !== undefined && LOOPBACK_ORIGIN.test(origin))) return false;
   const mode = header(request, "sec-fetch-mode")?.toLowerCase();
   const destination = header(request, "sec-fetch-dest")?.toLowerCase();
   const prefetch = /\bprefetch\b/i.test(header(request, "sec-purpose") ?? "");
   return mode !== "navigate" || destination !== "document" || prefetch;
+}
+
+/** Strict loopback authority, serialized exactly as a browser Origin header. */
+export function externalForwardOrigin(host: string | undefined, port: number): string | null {
+  if (!host || !/^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?$/i.test(host)) return null;
+  try {
+    const url = new URL(`http://${host}`);
+    return Number(url.port || 80) === port ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -94,12 +115,12 @@ export function externalForwardSiteViolation(request: IncomingMessage, upgrade: 
  *
  * Unlike the in-app ingress it carries no credential: an external browser
  * cannot be made to send one. It is bounded instead by being loopback-only,
- * accepting only a loopback `Host` (no DNS rebinding), refusing cross-site
+ * accepting only a loopback `Host` (no DNS rebinding), refusing foreign-site
  * subresources and writes, and closing once idle. That is the exposure of a
- * dev server run locally. It prefers the service's own port so absolute
- * `localhost` URLs and OAuth callbacks keep working, and binds 127.0.0.1 and
+ * dev server run locally. Where exclusive binding is supported, it prefers
+ * the service's own browser-safe port so absolute `localhost` URLs and OAuth callbacks keep working, and binds 127.0.0.1 and
  * ::1 together so `localhost` can never reach another local server on the
- * other address family.
+ * other address family. macOS/BSD always use an OS-assigned port.
  */
 export class PreviewExternalForward {
   private readonly servers: Server[] = [];
@@ -130,15 +151,24 @@ export class PreviewExternalForward {
     return this.closed;
   }
 
-  /** Bind and return the port. The service's own port is used when free on both families. */
+  /** Prefer a browser-safe service port where loopback binding is exclusive. */
   async listen(): Promise<number> {
     const preferred = this.upstream.applicationPort();
-    if (preferred > 0 && (await this.bindBoth(preferred))) return this.ready(preferred);
+    // BSD's SO_REUSEADDR permits a specific-address listener to shadow a
+    // wildcard server. An OS-assigned port avoids taking over its traffic.
+    if (
+      (process.platform === "linux" || process.platform === "win32") &&
+      preferred > 0 &&
+      !BROWSER_RESTRICTED_PORTS.has(preferred) &&
+      (await this.bindBoth(preferred))
+    )
+      return this.ready(preferred);
     for (let attempt = 0; attempt < EPHEMERAL_ATTEMPTS; attempt += 1) {
       if (this.closed) break;
       const first = await this.bind("127.0.0.1", 0);
       const port = (first.address() as AddressInfo).port;
-      if (await this.bindFamily("::1", port)) return this.ready(port);
+      if (!BROWSER_RESTRICTED_PORTS.has(port) && (await this.bindFamily("::1", port)))
+        return this.ready(port);
       await this.closeServers();
     }
     throw new Error("No free loopback port for the external preview.");
@@ -247,11 +277,7 @@ export class PreviewExternalForward {
 
   /** The origin the browser used, or null for a Host that is not this forward on loopback. */
   private publicOrigin(request: IncomingMessage): string | null {
-    const host = request.headers.host?.toLowerCase();
-    const port = this.boundPort;
-    if (host === `localhost:${port}` || host === `127.0.0.1:${port}` || host === `[::1]:${port}`)
-      return `http://${host}`;
-    return null;
+    return externalForwardOrigin(request.headers.host, this.boundPort);
   }
 
   private authorize(

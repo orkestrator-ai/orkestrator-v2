@@ -216,3 +216,18 @@ mise run test:logged -- --name preparation-catalogue-owner -- bun test --cwd bri
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+
+## External preview review fixes — 2026-10-29
+
+The required `mise run test` rerun repeated the armed-delay assertion at
+`codex-command-catalogue.test.ts:293` (50.71 ms): expected `stale`, received
+`ready`. The complete unchanged owner passed alone (exit 0, 1.3 s):
+
+```sh
+mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.cmmuTa/bridges.log.gz` in the host
+temporary directory. No catalogue implementation, assertion, timeout or skip
+changed. Preview regressions are independent of this timer race.

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { toast } from "sonner";
 import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-preview";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 
@@ -17,7 +18,7 @@ const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const BACKEND = "backend-instance-1";
 const SERVICE = "service-0000001";
 
-function capabilities(access = true, tunnel = true): PreviewCapabilities {
+function capabilities(access = true, tunnel = true, publication = false): PreviewCapabilities {
   const surface = (available: boolean) => ({ available, upstreamSchemes: ["http" as const] });
   return {
     protocolVersion: 1,
@@ -28,7 +29,7 @@ function capabilities(access = true, tunnel = true): PreviewCapabilities {
     access: access ? { available: true } : { available: false, reason: "Access is off." },
     surfaces: {
       desktopTunnel: surface(tunnel),
-      browserTopLevel: surface(false),
+      browserTopLevel: surface(publication),
       browserEmbedded: { available: false, platforms: [] },
       legacyPath: { available: true },
     },
@@ -45,8 +46,10 @@ describe("openLinkExternally", () => {
   let resolution: unknown;
   let tabRequests: TerminalBrowserTabRequest[];
   let stopListening: () => void;
+  const info = spyOn(toast, "info");
 
   beforeEach(() => {
+    info.mockClear();
     openExternal = mock(async () => undefined);
     openService = mock(async (_target: BrowserPreviewServiceTarget) => undefined);
     window.orkestrator = {
@@ -154,6 +157,49 @@ describe("openLinkExternally", () => {
     expect(openService).not.toHaveBeenCalled();
     expect(openExternal).not.toHaveBeenCalled();
   });
+
+  test("publication is available to terminal and agent links without a desktop tunnel", async () => {
+    usePreviewServiceStore.setState({ capabilities: capabilities(true, false, true) });
+    for (const origin of ["terminal", "agent"] as const) {
+      await openLinkExternally({
+        environmentId: "env-local",
+        sourceTabId: "tab-1",
+        url: "http://localhost:3000/",
+        origin,
+      });
+    }
+    expect(openService).toHaveBeenCalledTimes(2);
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  for (const failure of ["unsupported", "null", "rejected", "resolution"] as const) {
+    test(`${failure} fallback explains gateway proxy routing`, async () => {
+      usePreviewServiceStore.setState({ status: "idle", capabilities: null });
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_preview_capabilities") {
+          if (failure === "rejected") throw new Error("backend disconnected");
+          if (failure === "unsupported")
+            throw { category: "unsupported", message: "Unknown command" };
+          return failure === "resolution" ? capabilities() : null;
+        }
+        if (command === "resolve_preview_target") throw new Error("resolution failed");
+        return undefined;
+      });
+      await openLinkExternally({
+        environmentId: "env-local",
+        sourceTabId: "tab-1",
+        url: "http://localhost:3000/",
+      });
+      expect(openExternal).toHaveBeenCalledWith(
+        "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/3000",
+      );
+      expect(openService).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledWith("Opened through the gateway proxy", {
+        description: expect.any(String),
+      });
+    });
+  }
 
   test("with preview access off, the link keeps the gateway proxy", async () => {
     usePreviewServiceStore.setState({ status: "ready", capabilities: capabilities(false) });

@@ -57,9 +57,17 @@ export async function openLinkExternally({
     .getState()
     .loadCapabilities()
     .catch(() => null);
-  if (!capabilities) return backend.openInBrowser(url);
+  if (!capabilities) {
+    toast.info("Opened through the gateway proxy", {
+      description: "Preview capabilities could not be loaded. This backend may need an update.",
+    });
+    return backend.openInBrowser(url);
+  }
   const { access, surfaces } = capabilities;
-  if (!access.available || !surfaces.desktopTunnel.available) {
+  if (
+    !access.available ||
+    (!surfaces.desktopTunnel.available && !surfaces.browserTopLevel.available)
+  ) {
     toast.info("Opened through the gateway proxy", {
       description: !access.available
         ? "Turn on Settings → Browser previews → Issue new preview access for this machine to open links at localhost."
@@ -73,7 +81,10 @@ export async function openLinkExternally({
     resolution = await backend.resolvePreviewTarget({
       intent: { url: url.trim(), source: linkUrlSource(environment, origin), environmentId },
     });
-  } catch {
+  } catch (error) {
+    toast.info("Opened through the gateway proxy", {
+      description: `Could not resolve the preview service: ${failureMessage(error)}`,
+    });
     return backend.openInBrowser(url);
   }
   if (resolution.kind !== "service") {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import {
   connect as netConnect,
@@ -15,9 +15,12 @@ import {
   createPreviewHarness,
   type PreviewHarness,
 } from "../../backend/src/core/preview-test-support";
+import { upstreamRequestHeaders } from "@orkestrator/protocol/preview-header-policy";
+
 import { PreviewMetrics } from "../../backend/src/preview-metrics";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
 import {
+  externalForwardOrigin,
   externalForwardSiteViolation,
   openServiceInExternalBrowser,
   PreviewExternalForward,
@@ -89,6 +92,45 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+describe("externalForwardOrigin", () => {
+  test("default HTTP authorities are canonical for requests and Origin rewriting", () => {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      for (const authority of [host, `${host}:80`]) {
+        const publicOrigin = externalForwardOrigin(authority, 80);
+        expect(publicOrigin).toBe(`http://${host}`);
+        for (const upgrade of [false, true]) {
+          // POST and WebSocket Origin headers use the same canonical mapping.
+          const headers = upstreamRequestHeaders(
+            [["origin", `http://${host}`]],
+            {
+              publicOrigin: publicOrigin!,
+              privateAuthority: "localhost:3000",
+              privateOrigins: ["http://localhost:3000"],
+            },
+            { upgrade },
+          );
+          expect(headers).toContainEqual(["origin", "http://localhost:3000"]);
+          expect(headers.some(([name]) => name === "x-forwarded-host")).toBe(false);
+        }
+      }
+      expect(externalForwardOrigin(host, 3000)).toBeNull();
+      expect(externalForwardOrigin(`${host}:81`, 80)).toBeNull();
+    }
+    for (const host of [
+      "evil.test",
+      "localhost.evil.test",
+      "localhost@evil.test",
+      "localhost/",
+      "localhost:99999",
+      "127.1",
+      undefined,
+    ]) {
+      expect(externalForwardOrigin(host, 80)).toBeNull();
+    }
+    expect(externalForwardOrigin("LOCALHOST:3000", 3000)).toBe("http://localhost:3000");
+  });
+});
+
 describe("externalForwardSiteViolation", () => {
   test("the user's own loopback sites and direct navigations pass", () => {
     for (const site of ["same-origin", "same-site", "none"]) {
@@ -106,6 +148,24 @@ describe("externalForwardSiteViolation", () => {
     expect(
       externalForwardSiteViolation(requestWith("GET", { origin: "http://127.0.0.1:3000" }), true),
     ).toBe(false);
+  });
+
+  test("cross-site loopback GETs, HEADs and preflights follow the write allowlist", () => {
+    for (const method of ["GET", "HEAD", "OPTIONS"]) {
+      for (const origin of ["http://127.0.0.1:3000", "http://localhost:4000", "http://[::1]"]) {
+        expect(
+          externalForwardSiteViolation(
+            requestWith(method, {
+              origin,
+              "sec-fetch-site": "cross-site",
+              "sec-fetch-mode": "cors",
+              "sec-fetch-dest": "empty",
+            }),
+            false,
+          ),
+        ).toBe(false);
+      }
+    }
   });
 
   test("another site may only navigate to the forward", () => {
@@ -198,42 +258,60 @@ describe("PreviewExternalForward", () => {
     return created;
   }
 
-  test("binds the service's own port on both loopback families when it is free", async () => {
+  test("uses one port on both loopback families and prefers the application port only where exclusive", async () => {
     const port = await freePort();
-    const created = forward(upstream(port));
-    expect(await created.listen()).toBe(port);
-    expect((await get(`http://127.0.0.1:${port}/`, { host: `localhost:${port}` })).body).toBe(
-      "upstream",
-    );
-    expect((await get(`http://[::1]:${port}/`, { host: `localhost:${port}` })).body).toBe(
-      "upstream",
-    );
-    expect(seen).toEqual([
-      { origin: `http://localhost:${port}`, host: `localhost:${port}` },
-      { origin: `http://localhost:${port}`, host: `localhost:${port}` },
-    ]);
-  });
-
-  test("a local server on either family keeps its port and never sees a request", async () => {
-    const port = await freePort();
-    const decoyHits = mock(() => undefined);
-    const decoy = createServer((_request, response) => {
-      decoyHits();
-      response.end("decoy");
-    });
-    decoys.push(decoy);
-    await new Promise<void>((resolve) => decoy.listen(port, "::1", resolve));
-
     const created = forward(upstream(port));
     const bound = await created.listen();
-    expect(bound).not.toBe(port);
+    if (process.platform === "darwin" || process.platform === "freebsd")
+      expect(bound).not.toBe(port);
+    else expect(bound).toBe(port);
     expect((await get(`http://127.0.0.1:${bound}/`, { host: `localhost:${bound}` })).body).toBe(
       "upstream",
     );
     expect((await get(`http://[::1]:${bound}/`, { host: `localhost:${bound}` })).body).toBe(
       "upstream",
     );
-    expect(decoyHits).not.toHaveBeenCalled();
+    expect(seen).toEqual([
+      { origin: `http://localhost:${bound}`, host: `localhost:${bound}` },
+      { origin: `http://localhost:${bound}`, host: `localhost:${bound}` },
+    ]);
+  });
+
+  for (const address of ["127.0.0.1", "::1", "0.0.0.0", "::"]) {
+    test(`a local server on ${address} keeps its traffic and port`, async () => {
+      const port = await freePort();
+      const decoyHits = mock(() => undefined);
+      const decoy = createServer((_request, response) => {
+        decoyHits();
+        response.end("decoy");
+      });
+      decoys.push(decoy);
+      await new Promise<void>((resolve) => decoy.listen(port, address, resolve));
+
+      const created = forward(upstream(port));
+      const bound = await created.listen();
+      expect(bound).not.toBe(port);
+      expect((await get(`http://127.0.0.1:${bound}/`, { host: `localhost:${bound}` })).body).toBe(
+        "upstream",
+      );
+      expect((await get(`http://[::1]:${bound}/`, { host: `localhost:${bound}` })).body).toBe(
+        "upstream",
+      );
+      expect(decoyHits).not.toHaveBeenCalled();
+      const decoyHost = address.includes(":") ? "[::1]" : "127.0.0.1";
+      expect((await get(`http://${decoyHost}:${port}/`)).body).toBe("decoy");
+      expect(decoyHits).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  test("browser-restricted service ports select a usable HTTP port", async () => {
+    for (const preferred of [6000, 6667, 10080]) {
+      const created = forward(upstream(preferred));
+      const port = await created.listen();
+      expect(port).not.toBe(preferred);
+      const response = await fetch(`http://localhost:${port}/`);
+      expect(await response.text()).toBe("upstream");
+    }
   });
 
   test("refuses a foreign Host, cross-site reads and an unavailable service", async () => {
@@ -311,6 +389,15 @@ describe("openServiceInExternalBrowser", () => {
       await openServiceInExternalBrowser(chosen);
       expect(calls).toEqual(["forward", "open http://localhost:3000/start"]);
     }
+  });
+
+  test("a failed forward rejects without opening a URL or publishing", async () => {
+    const { calls, routes: chosen } = routes(true, false);
+    chosen.forward = async () => {
+      throw new Error("listen failed");
+    };
+    await expect(openServiceInExternalBrowser(chosen)).rejects.toThrow("listen failed");
+    expect(calls).toEqual([]);
   });
 
   test("a configured private origin is preferred, and local services keep it", async () => {
@@ -458,6 +545,88 @@ describe("PreviewTransportManager.forwardExternally (desktop tunnel end to end)"
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(manager.stats().services).toBe(1);
     expect((await get(url)).status).toBe(200);
+  });
+
+  test("concurrent starts share one listener and keep each caller's path", async () => {
+    const listen = spyOn(PreviewExternalForward.prototype, "listen");
+    try {
+      const urls = await Promise.all([
+        manager.forwardExternally(target("/one")),
+        manager.forwardExternally(target("/two")),
+      ]);
+      expect(new URL(urls[0]!).origin).toBe(new URL(urls[1]!).origin);
+      expect(urls.map((url) => new URL(url).pathname)).toEqual(["/one", "/two"]);
+      expect(listen).toHaveBeenCalledTimes(1);
+      expect((await get(new URL("/health", urls[0]!).href)).status).toBe(200);
+    } finally {
+      listen.mockRestore();
+    }
+  });
+
+  test("a listen failure releases the holder and a later click can retry", async () => {
+    const original = PreviewExternalForward.prototype.listen;
+    let failedUrl = "";
+    const listen = spyOn(PreviewExternalForward.prototype, "listen").mockImplementationOnce(
+      async function (this: PreviewExternalForward) {
+        // Fail after acquiring real listeners, exercising partial-start cleanup.
+        const port = await original.call(this);
+        failedUrl = `http://localhost:${port}/`;
+        throw new Error("listen failed");
+      },
+    );
+    const close = spyOn(PreviewExternalForward.prototype, "close");
+    try {
+      await expect(manager.forwardExternally(target())).rejects.toThrow("listen failed");
+      expect(close).toHaveBeenCalled();
+      await expect(get(failedUrl)).rejects.toThrow();
+      await until(() => manager.stats().services === 0);
+      const url = await manager.forwardExternally(target());
+      expect((await get(url)).status).toBe(200);
+      expect(manager.stats().services).toBe(1);
+    } finally {
+      listen.mockRestore();
+      close.mockRestore();
+    }
+  });
+
+  test("disposal during listener startup closes late listeners and rejects the opener", async () => {
+    const original = PreviewExternalForward.prototype.listen;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let url = "";
+    const listen = spyOn(PreviewExternalForward.prototype, "listen").mockImplementationOnce(
+      async function (this: PreviewExternalForward) {
+        const port = await original.call(this);
+        url = `http://localhost:${port}/`;
+        entered();
+        await blocked;
+        return port;
+      },
+    );
+    const opening = manager.forwardExternally(target()).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    try {
+      await started;
+      await manager.disposeAll();
+      resume();
+      expect(await opening).toMatchObject({ preview: { category: "backend-unavailable" } });
+      expect(manager.stats().services).toBe(0);
+      await expect(get(url)).rejects.toThrow();
+      await expect(manager.forwardExternally(target())).rejects.toMatchObject({
+        preview: { category: "backend-unavailable" },
+      });
+    } finally {
+      resume();
+      listen.mockRestore();
+    }
   });
 
   test("disposal closes the forward", async () => {

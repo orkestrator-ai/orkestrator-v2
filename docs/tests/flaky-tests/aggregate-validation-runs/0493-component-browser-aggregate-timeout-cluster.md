@@ -610,3 +610,32 @@ Evidence under the host temporary directory:
 `orkestrator-test-run.NFbZp8/scheduling-review-browser.log.gz` and
 `orkestrator-test-run.e92Fv0/scheduling-browser-owners.log.gz`.
 The browser aggregate remains non-green.
+
+
+## External preview review fixes — 2026-10-29
+
+The exact required rerun,
+`mise run test:logged -- --name browser -- mise run test:browser`, reported
+956 passed, 106 skipped and two failed (455.4 s). Both failures are the
+unchanged native branch-suggestion case in `e2e/AgentLaunchDialog.spec.ts`,
+at phone and desktop widths: expected `release/2.0`, received `rel`.
+All terminal-link browser regressions passed.
+
+The complete unchanged owner reproduces both failures (two passed, two failed,
+21.6 s):
+
+```sh
+mise run test:logged -- --name native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+The public-site stage was again blocked by the component failures and passed
+separately (exit 0, 11.2 s):
+
+```sh
+mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+Evidence: `orkestrator-test-run.g2Dbgd/browser.log.gz` and
+`orkestrator-test-run.aLrszZ/native-branch-owner.log.gz` in the host temporary
+directory. This is a persistent failure, not a newly classified flake. No
+native branch implementation, assertion, timeout or skip changed.

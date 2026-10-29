@@ -338,6 +338,12 @@ export function validateWebAnnotationCaptureInput(
   if (value.evidence !== null && !isWebAnnotationEvidence(value.evidence)) {
     return fail("Capture evidence is invalid");
   }
+  // Only the backend's own containment and existence check may mark a hint
+  // verified. Checked here rather than in `isWebAnnotationEvidence`, which
+  // also accepts stored captures that may hold a backend-set `true`.
+  if (value.evidence?.sourceHints?.some((hint) => hint.verified)) {
+    return fail("Source hint verification is assigned by the receiver");
+  }
   if (
     !Array.isArray(value.assetIds) ||
     value.assetIds.length > 4 ||

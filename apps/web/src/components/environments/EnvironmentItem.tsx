@@ -1,6 +1,7 @@
 import { memo, useState, useId, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
+import { PipeIcon } from "@/components/icons/PipeIcon";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
@@ -528,13 +529,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   <EnvironmentNameShimmer
                     signal={nameSignal}
                     id={environmentNameId}
-                    className={cn(
-                      "truncate font-medium leading-4",
-                      isBuildEnvironment && "text-yellow-400",
-                    )}
+                    className="truncate font-medium leading-4"
                   >
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </EnvironmentNameShimmer>
+                  {isBuildEnvironment && (
+                    <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
+                  )}
                   <EnvironmentNameSignalMarker
                     signal={nameSignal}
                     descriptionId={nameSignalDescriptionId}

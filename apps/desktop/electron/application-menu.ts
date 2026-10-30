@@ -173,7 +173,7 @@ export function createApplicationMenuTemplate(
           label: "Keyboard Shortcuts…",
           accelerator: KEYBOARD_SHORTCUTS_ACCELERATOR,
           // Main consumes native input before both page and menu dispatch,
-          // including child views and subframes. Keep the label (Ctrl+Shift+K
+          // including child views and subframes. Keep the label (Ctrl+Shift+/
           // on Windows and Linux) and the macOS menu fallback without
           // registering a second Windows/Linux delivery path.
           registerAccelerator: false,

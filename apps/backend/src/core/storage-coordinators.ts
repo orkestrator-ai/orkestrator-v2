@@ -562,9 +562,11 @@ export class CoordinatorsRepository {
         // nor reopen one that already produced its wake.
         return association;
       }
-      const release = association.nodeId
-        ? () => {}
-        : beginWorkerTabDelegation(association.resourceId, workerTabId);
+      const release = beginWorkerTabDelegation(
+        association.resourceId,
+        workerTabId,
+        association.nodeId,
+      );
       try {
         if (
           !association.nodeId &&

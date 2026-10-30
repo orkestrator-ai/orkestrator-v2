@@ -21,11 +21,18 @@ feature plans only. The remaining tasks are open. Since this file was written, `
 `nodeId`; neither was on this file's list, but `create_pr`'s relay is now the
 nearest template for task 1.
 
+Rechecked 2026-10-30 against `main` at `cd7bbe3e5`: none of tasks 1–5 had
+merged. Task 1 is done on branch
+`todo-0395-coordinator-worker-surfaces-1f17c5be4010`. Tasks 2 and 3 stay open
+as scope calls for the user; each subsection now ends with **Open for the
+user**, setting out the trade-off. Composable graphs (#1436, `3fa7d1733`) added
+a fourth association kind, `graph-run`, which task 3's context now cites.
+
 ### Tasks
 
-1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: open.
-2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open.
-3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: open.
+1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: done.
+2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open (scope call for the user).
+3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: open (scope call for the user).
 4. **Live `surfaces` scenario**: a scenario in `mise run test:agent:coordinator` that calls each tool once on a real stack. Status: open (needs a live provider).
 5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (depends on 3).
 
@@ -81,6 +88,10 @@ never resubmits it (`node-routing.ts:17-18`, `NodeOutcomeUnknownError` in
     - Pros: fewer coordinator turns.
     - Cons: breaks the node-link rule; a terminal launch without a leaf receipt could run its command twice.
 
+**Status.** Done with both recommended options; see
+[Assumptions and decisions](#assumptions-and-decisions) and
+[`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces).
+
 ### 2. Root changes into a worker on another node
 
 **Problem.** `request_root_changes` copies uncommitted checkout changes into a
@@ -113,16 +124,42 @@ for.
     - Pros: no new code; a pushed branch already reaches a remote worker.
     - Cons: the user loses the feature exactly where workers usually run.
 
+**Open for the user.** This is a scope call between the first and third
+options, so it was left open on 2026-10-30.
+
+- *A new leaf command that applies a patch sent over the node link.* The user
+  keeps the feature for remote workers, and the approval dialog and read-only
+  checkout stay as they are. The cost is new surface on both sides. One part
+  is a leaf command (for example `apply_controller_root_patch`) that only a
+  command node can call and that runs `git apply --check` and `git apply`
+  whole or not at all. The other is a size bound for the patch: the node link
+  carries at most 64 MiB per answer (`MAX_INVOKE_RESPONSE_BYTES`,
+  `nodes/node-link.ts:50`) and node file writes go in 4 MiB chunks
+  (`NODE_FILE_CHUNK_BYTES`, `nodes/node-files.ts:21`), so a large binary
+  patch needs either a cap or chunked transfer. The dialog would also need
+  to say which node the worker is on, and an older leaf would have to refuse
+  with "update that node".
+- *Refuse across nodes and ask the user to commit and push.* Nothing new to
+  build or keep in step, and a pushed branch already reaches any worker. But
+  the feature stops working on remote workers, which are where workers
+  usually run once a command node exists, and the user has to commit work
+  they meant to keep uncommitted.
+
+If the user picks the first option, the recommended option above holds. If
+they pick the second, the change is a clear refusal in
+`request_coordinator_root_changes` whenever `nodeId` names another node,
+plus a sentence in the tool description.
+
 ### 3. Status wakes for feature plans
 
 **Problem.** A coordinator that starts a feature plan is never told when it
 finishes. `list_workflows` does not show it.
 
 **Context.** `CoordinatorWorkflowAssociation.kind` is
-`"environment" | "build-pipeline" | "multi-review"`
-(`packages/protocol/src/coordinator.ts:286`). Status wakes react only to
-`multi-review` and `build-pipeline` resource changes
-(`apps/backend/src/core/coordinator-status-wakes.ts:842`).
+`"environment" | "build-pipeline" | "multi-review" | "graph-run"`
+(`packages/protocol/src/coordinator.ts:287`; `graph-run` came with #1436).
+Status wakes react to `multi-review`, `build-pipeline` and `graph-run`
+resource changes (`apps/backend/src/core/coordinator-status-wakes.ts:863`).
 
 **Investigation.** The feature-plan tool returns `NO_STATUS_WAKE`
 (`control-mcp-coordinator-surfaces.ts`), which tells the coordinator to
@@ -145,6 +182,33 @@ schedule a check with `create_schedule`. Its receipts are stored
   - **Every feature-plan progress update.**
     - Pros: progress is visible.
     - Cons: many wakes for one task; goes against "nothing mid-turn wakes the coordinator".
+
+**Open for the user.** A new association kind is a data-directory
+compatibility call, so it was left open on 2026-10-30.
+
+- *A new `feature-plan` kind.* `list_workflows`, status wakes and adoption
+  would all work as they do for other kinds. On the compatibility side, the
+  coordinator store reader keeps an association of any kind: it checks only
+  `id`, `projectId` and `coordinatorId`
+  (`apps/backend/src/core/storage-coordinators.ts:103-113`). So an older
+  backend sharing the data directory keeps the record and writes it back.
+  `graph-run` (#1436) already relies on this. What has not been checked is
+  how each older code path handles a kind it does not know, for example
+  `list_workflows` summaries and the maintenance sweep. Receipts are
+  stricter: the reader drops a receipt whose `action` it does not know
+  (`isActionReceipt`, `storage-coordinators.ts:921-933`), and its next save
+  loses it. So the feature-plan work must not add a new receipt action, or
+  it must accept that an older backend drops it.
+- *Reuse `multi-review` with a subtype.* An older backend already knows the
+  kind, but it would apply Multi Review rules (fetching the review,
+  consolidation and fix wakes) to a feature plan, which is worse than
+  ignoring it. Every current Multi Review rule would also need a subtype
+  branch.
+
+Running backends of two versions on one data directory is the case to decide
+for. If the user accepts that an older backend may list or sweep a
+`feature-plan` association it does not understand, the recommended option
+holds. Task 5 follows from whatever is chosen here.
 
 ### 4. Live `surfaces` scenario
 
@@ -201,12 +265,17 @@ works on the new kind unless it is filtered out.
 
 - The tools and their backend commands are described in
   [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces).
-- The backend surface commands are on `NODE_EXCLUDED_COMMANDS`
-  (`apps/backend/src/core/nodes/node-routing.ts:71-84`), so none of them
-  crosses a node link; `open_multi_review` refuses `reviewerId` with `nodeId`
-  (`apps/backend/src/core/control-mcp-review-actions.ts:261-262`).
-  `create_pr` and `propose_agents_md_update` are the exceptions: both take
-  `nodeId` and act on the leaf through its own commands.
+- The backend surface commands are still on `NODE_EXCLUDED_COMMANDS`
+  (`apps/backend/src/core/nodes/node-routing.ts`), so none of them crosses a
+  node link itself. Since task 1, `launch_terminal`, `open_worker_browser`,
+  `edit_worker_tab`, `create_pr`, `custom_fix_multi_review` and
+  `open_multi_review` (with or without `reviewerId`) take `nodeId`. The
+  command node keeps the receipt and calls the leaf's own controller
+  commands (`launch_controller_terminal`, `open_controller_browser`,
+  `edit_controller_worker_tab`, `create_controller_pr`, and the `reviewer`
+  and `custom-fix` surfaces of `controller_multi_review_surface`), which are
+  node-link only. `propose_agents_md_update` takes `nodeId` too.
+- `request_root_changes` still acts on this node only (task 2).
 - Feature plans have no `CoordinatorWorkflowAssociation` kind, so
   `list_workflows` does not list them and status wakes
   (`coordinator-status-wakes.ts`) never report them. Their tool results say
@@ -216,14 +285,9 @@ works on the new kind unless it is filtered out.
 
 ### Code
 
-1. **The same tools on other nodes.** `nodeId` on `launch_terminal`,
-   `open_worker_browser`, `edit_worker_tab`,
-   `custom_fix_multi_review` and `open_multi_review` with `reviewerId`,
-   relayed like `launch_coordinator_node_multi_review` (or, closer still,
-   `create_pr`), with the outcome-unknown path a lost answer needs.
-   `request_root_changes` across nodes needs the patch to travel from this
-   node's checkout to a leaf worker (or the leaf's own checkout to be the
-   source). See tasks 1 and 2.
+1. **Root changes on other nodes.** `request_root_changes` across nodes needs
+   the patch to travel from this node's checkout to a leaf worker, or a clear
+   refusal. Waiting on the user's scope call; see task 2.
 2. **Status wakes for feature plans.** An association kind, listed by
    `list_workflows`, and status-wake rules (planning reply ready, failed)
    with the same ownership, budget
@@ -234,6 +298,9 @@ works on the new kind unless it is filtered out.
 3. **Live coordinator suite scenario.** A `surfaces` scenario in
    `mise run test:agent:coordinator` that calls each tool once and checks the
    resulting tabs and the root-changes approval on a real stack. See task 4.
+   The remote variants from task 1 have component evidence only
+   (`coordinator-surfaces-remote.test.ts`, simulated node link); a
+   two-node live check is still owed.
 
 ## Constraints and rationale
 
@@ -245,6 +312,84 @@ works on the new kind unless it is filtered out.
 
 - Should a feature plan started by the coordinator be
   adoptable like other workflows (`adopt_workflow`)? See task 5.
+
+## Assumptions and decisions
+
+### Task 1: one leaf controller command per surface (2026-10-30)
+
+I took the recommended option. `launch_controller_terminal`,
+`open_controller_browser` and `edit_controller_worker_tab` are new commands
+in `commands-registry-controller-workflows.ts`. `controller_multi_review_surface`
+gained `reviewer` and `custom-fix` surfaces, and
+`coordinator_node_multi_review_surface` relays them. The leaf commands are on
+the workspace-excluded list, like `create_controller_pr`, so only an attached
+command node can call them. The command node keeps the receipt and the
+coordinator scope check. The leaf checks the project and refuses its
+checkout. The current code agreed with the analysis, so nothing in the
+recommendation needed correcting.
+
+To keep the local and leaf paths from drifting apart (the option's main con),
+the terminal, browser and tab-edit bodies moved out of
+`coordinator-surface-actions.ts` into `worker-surface-runs.ts`. The local
+`*_coordinator_*` commands and the leaf commands now call the same code. The
+local receipts' payload hashes are unchanged, so receipts written before this
+change still replay.
+
+### Task 1: a lost answer returns outcome-unknown with a retry instruction (2026-10-30)
+
+I took the recommended option. When the leaf's answer is lost, the tool
+result gives the node link's outcome-unknown text, and `withRetryAdvice`
+(in `commands-registry-coordinator-nodes.ts`) adds what to do next: retry
+with the same `requestId`, or, for `edit_worker_tab`, repeat the same edit.
+The failed run releases its receipt, so the retry runs again. It reattaches
+on the leaf because every leaf ID derives from the receipt key: the terminal
+job's request ID (`controller:<key>`), the browser tab and navigation IDs,
+and the node-link request keys. `create_pr`'s relay gets the same advice
+text.
+
+### Task 1: a custom-fix retry after its handoff is reported, not refused (2026-10-30)
+
+`MultiReviewService.customFix` replays only while its handoff is still
+pending. Once the fix has been delivered, the review is no longer `ready`, so
+the same request again would be refused, even though the first attempt
+succeeded. The leaf's `custom-fix` surface therefore checks the review first.
+If the review is past `ready`, its handoff is no longer pending and its
+`fixLaunch` is the same custom instruction (and model, when one was given),
+the leaf reports that fix and opens its Fix tab instead of starting another.
+The leaf has no coordinator receipt store to tell a retry from a new request.
+So a different `requestId` with the same instruction, sent while that fix
+runs, is also reported rather than refused. No second fix starts either way.
+
+### Task 1: the command node checks its own delegations before a remote close (2026-10-30)
+
+A delegation to a remote worker lives on the command node
+(`CoordinatorWorkflowAssociation.nodeId`), so the leaf cannot see it.
+`edit_coordinator_worker_tab` refuses a remote close itself while this
+conversation's command node has an open delegation on that tab. The leaf
+still refuses busy native tabs and its own local delegations. Remote
+delegations take no close-admission lock on the command node
+(`storage-coordinators.ts`, `openCoordinatorDelegation`), so this check is
+best effort against a delegation opened at the same moment. Local closes keep
+the lock.
+
+### Task 1: an older leaf is told to update (2026-10-30)
+
+An older leaf answers an unknown controller command with
+`Unknown command: …`, which `coordinatorNodeTarget` already turns into
+"update it, then retry". An older `controller_multi_review_surface` answers
+the new surfaces with "Expected surface root, fix or address.", and the
+command node maps that text to the same message.
+
+### Tasks 2 and 3: left open for the user (2026-10-30)
+
+The brief made both of them scope calls for the user. Each subsection ends
+with **Open for the user**, setting out the trade-off. Neither has any code
+on this branch.
+
+### Tasks 4 and 5: not started (2026-10-30)
+
+Task 4 needs real provider turns, which this work was not allowed to run.
+Task 5 depends on task 3.
 
 ## Related
 

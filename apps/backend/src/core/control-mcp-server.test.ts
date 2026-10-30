@@ -3076,14 +3076,17 @@ describe("Orkestrator control MCP server", () => {
     expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
   });
 
-  for (const [placement, reason, outcome] of [
+  // A leaf without `node-mail-steer` answers with no outcome of its own.
+  for (const [placement, reason, outcome, leafOutcome] of [
     ["pending-inject", undefined, "unsupported, queued"],
     ["stored", "inject-policy-off", "not queued"],
     ["bounced", "recipient-muted", "not queued"],
     ["inject-held", "loop-budget-exhausted", "not queued"],
     ["inject-held", "hourly-limit", "not queued"],
+    ["injected", undefined, "steered", "steered"],
+    ["pending-inject", "verifying", "verifying", "verifying"],
   ]) {
-    test(`remote deliverNow reports ${placement} ${reason ?? ""} without forwarding the flag`, async () => {
+    test(`remote deliverNow reports ${placement} ${reason ?? ""} ${leafOutcome ? "from the leaf" : "for an older leaf"}`, async () => {
       const credential = coordinatorCredential(["mail", "discovery"]);
       overrides.set("get_node_status", () => ({
         nodeId: "bk_cmd",
@@ -3112,6 +3115,9 @@ describe("Orkestrator control MCP server", () => {
         messageId: "leaf-message",
         placement,
         placementReason: reason,
+        ...(leafOutcome
+          ? { deliverNow: leafOutcome, deliverNowNote: `Leaf: ${leafOutcome}.` }
+          : {}),
       }));
       const sent = await rpc(credential.url, credential.token, "tools/call", {
         name: "send_message",
@@ -3128,12 +3134,21 @@ describe("Orkestrator control MCP server", () => {
         deliverNow: outcome,
         message: { messageId: "leaf-message", placement },
       });
-      if (reason) expect(sent.body.result?.structuredContent?.deliverNowNote).toContain(reason);
+      expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("deliverNow");
+      if (leafOutcome) {
+        expect(sent.body.result?.structuredContent?.deliverNowNote).toBe(`Leaf: ${leafOutcome}.`);
+      } else if (reason) {
+        expect(sent.body.result?.structuredContent?.deliverNowNote).toContain(reason);
+      }
+      // The command node decides whether the leaf can take it.
       const forwarded = invocations.findLast(
         ({ command }) => command === "send_coordinator_node_mail",
       );
-      expect(forwarded?.args).toMatchObject({ requestId: "remote-correction", nodeId: "bk_leaf" });
-      expect(forwarded?.args).not.toHaveProperty("deliverNow");
+      expect(forwarded?.args).toMatchObject({
+        requestId: "remote-correction",
+        nodeId: "bk_leaf",
+        deliverNow: true,
+      });
     });
   }
 

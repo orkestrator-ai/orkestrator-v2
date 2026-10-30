@@ -129,18 +129,65 @@ async function readExitedBootFailure(
   return file.ok ? parseExitedBootRecord(file.content, startedAt) : null;
 }
 
-export async function observeContainerBoot(containerId: string): Promise<BootObservation> {
+/** How often a bounded in-container wait re-reads its status file. */
+export const IN_CONTAINER_CHECK_MS = 50;
+/** The longest one probe exec waits inside the container for a final state. */
+export const PROBE_WINDOW_MS = 2_000;
+
+/**
+ * Prefix for a probe script: waits in the container, re-reading every
+ * {@link IN_CONTAINER_CHECK_MS}, until `condition` (a shell test, run each
+ * time) holds or `iterations` checks have passed. Bounded by a count, not a
+ * clock, so it is plain POSIX `sh`; a container that stops kills the exec,
+ * which ends the wait at once. A `sleep` that refuses a fraction ends the
+ * wait instead of stretching it. With 0 iterations it never waits.
+ */
+export function boundedWaitScript(iterations: number, condition: string): string {
+  const count = Math.max(0, Math.floor(iterations));
+  const pause = (IN_CONTAINER_CHECK_MS / 1_000).toFixed(2);
+  return `i=0; while [ "$i" -lt ${count} ]; do if ${condition}; then break; fi; i=$((i + 1)); sleep ${pause} 2>/dev/null || break; done; `;
+}
+
+/** The number of in-container checks that fill a window of `windowMs`. */
+export function probeIterations(windowMs: number): number {
+  return windowMs > 0 ? Math.ceil(windowMs / IN_CONTAINER_CHECK_MS) : 0;
+}
+
+/**
+ * The boot probe. With a window it first waits inside the container until
+ * the current boot (the record's `pid1Start` is PID 1's) reports `ready` or
+ * `failed`, the status directory is missing, or the window ends; then it
+ * prints what it saw exactly as a single read would. The match relies on
+ * both writers putting `pid1Start` before `phase`, and it is only a cue to
+ * stop waiting: {@link parseBootProbe} still decides what the record proves.
+ */
+export function bootProbeScript(windowMs = 0): string {
+  const settled =
+    `[ ! -d /run/orkestrator ] || case "$(head -c ${MAX_BOOT_STATUS_BYTES} ${BOOT_STATUS_PATH} 2>/dev/null | head -n 1)" in ` +
+    `*"\\"pid1Start\\":\\"$p\\""*'"phase":"ready"'*|*"\\"pid1Start\\":\\"$p\\""*'"phase":"failed"'*) true ;; *) false ;; esac`;
+  const wait =
+    windowMs > 0
+      ? `p=$(awk '{print $22}' /proc/1/stat); ${boundedWaitScript(probeIterations(windowMs), settled)}`
+      : "";
+  return `${wait}if [ ! -d /run/orkestrator ]; then echo ORKESTRATOR_NO_BOOT_DIR; elif [ -f ${BOOT_STATUS_PATH} ]; then head -c ${MAX_BOOT_STATUS_BYTES} ${BOOT_STATUS_PATH} | head -n 1; else echo ORKESTRATOR_NO_BOOT_STATUS; fi; awk '{print $22}' /proc/1/stat`;
+}
+
+/**
+ * One read of the current boot's status. With `waitMs`, the exec waits up to
+ * that long inside the container for the boot to finish or fail, so a wait
+ * sees the change within {@link IN_CONTAINER_CHECK_MS} and spends one Docker
+ * call per window rather than one per host-side poll.
+ */
+export async function observeContainerBoot(
+  containerId: string,
+  options: { waitMs?: number } = {},
+): Promise<BootObservation> {
+  const waitMs = Math.max(0, Math.min(options.waitMs ?? 0, PROBE_WINDOW_MS));
   try {
     const { stdout } = await runCommand(
       "docker",
-      [
-        "exec",
-        containerId,
-        "sh",
-        "-c",
-        `if [ ! -d /run/orkestrator ]; then echo ORKESTRATOR_NO_BOOT_DIR; elif [ -f ${BOOT_STATUS_PATH} ]; then head -c ${MAX_BOOT_STATUS_BYTES} ${BOOT_STATUS_PATH} | head -n 1; else echo ORKESTRATOR_NO_BOOT_STATUS; fi; awk '{print $22}' /proc/1/stat`,
-      ],
-      { timeoutMs: 10_000 },
+      ["exec", containerId, "sh", "-c", bootProbeScript(waitMs)],
+      { timeoutMs: 10_000 + waitMs },
     );
     const observation = parseBootProbe(stdout);
     if (observation.kind !== "legacy") return observation;
@@ -193,17 +240,27 @@ export const BOOT_WAIT_TIMEOUT_MS = 120_000;
  * Waits for the current boot to reach `ready`. Returns `null` for a legacy
  * image (no boot status), the boot id otherwise. A failed boot or a timeout is
  * a typed, retryable error; nothing proceeds on an unfinished container.
+ *
+ * Each probe waits inside the container for up to {@link PROBE_WINDOW_MS}
+ * (`windowMs`), so readiness is seen within {@link IN_CONTAINER_CHECK_MS} of
+ * the entrypoint writing it. `pollMs` is only a floor between probes that
+ * came back early without a final state, and the base of the backoff while
+ * the container cannot be reached.
  */
 export async function waitForContainerBoot(
   containerId: string,
-  options: { timeoutMs?: number; pollMs?: number; now?: () => number } = {},
+  options: { timeoutMs?: number; pollMs?: number; windowMs?: number; now?: () => number } = {},
 ): Promise<string | null> {
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeoutMs ?? BOOT_WAIT_TIMEOUT_MS);
   const pollMs = options.pollMs ?? 250;
+  const windowMs = options.windowMs ?? PROBE_WINDOW_MS;
   let unreachableStreak = 0;
   while (true) {
-    const observation = await observeContainerBoot(containerId);
+    const probedAt = now();
+    const observation = await observeContainerBoot(containerId, {
+      waitMs: Math.min(windowMs, Math.max(0, deadline - probedAt)),
+    });
     if (observation.kind === "legacy") return null;
     if (observation.kind === "current") {
       if (observation.phase === "ready") return observation.bootId;
@@ -224,9 +281,15 @@ export async function waitForContainerBoot(
       }
     }
     if (now() >= deadline) throw new ContainerInitializationError("timed-out", null);
-    await new Promise((resolve) =>
-      setTimeout(resolve, pollMs * Math.min(unreachableStreak + 1, 4)),
-    );
+    // A probe that waited out its window probes again at once. One that came
+    // back early with no final state (a capable image's missing status
+    // directory, a record the parser refused) or could not reach the
+    // container is spaced as before, so neither turns into a busy loop.
+    const pause =
+      observation.kind === "unreachable"
+        ? pollMs * Math.min(unreachableStreak + 1, 4)
+        : pollMs - (now() - probedAt);
+    if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
   }
 }
 

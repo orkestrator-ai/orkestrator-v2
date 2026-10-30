@@ -204,7 +204,10 @@ process, so the renderer records every profile it launches in
 the record once Playwright has removed the profile. At start-up the service
 removes recorded profiles whose backend and browser have both exited, that are
 over an hour old and that no live process names; an unrecorded profile is
-never touched, because other tools use the same name. Browser generations are tracked so
+never touched, because other tools use the same name. Each launch's Playwright
+`artifactsDir` is an `artifacts-<pid>-*` directory in that ledger rather than
+an unrecordable `playwright-artifacts-*` in the temporary directory, and goes
+with the record (0830). Browser generations are tracked so
 a late disconnect from an old process cannot retire a new one; a dead
 generation fails its jobs exactly once. Health distinguishes missing
 executable, launch failure, saturation, recovery and ready, and is probed on

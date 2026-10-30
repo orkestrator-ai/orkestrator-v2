@@ -9,7 +9,7 @@
  * order (inherit, default excludes, `exclude`, `set`, `include_only`), so the
  * thread excludes every credential variable and then sets the replacements:
  * an empty `GH_CONFIG_DIR` and Git configuration entries that reset the
- * credential helpers. Verified against 0.164.0 by
+ * credential helpers. Verified against 0.166.0 by
  * `app-server/live-github-credential.test.ts` (no credits).
  *
  * The inherited `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`

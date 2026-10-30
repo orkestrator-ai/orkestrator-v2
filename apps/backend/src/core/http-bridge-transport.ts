@@ -136,6 +136,7 @@ export async function readProviderActivityObservation(
     readyForInput?: unknown;
     completionPending?: unknown;
     contentRevision?: unknown;
+    turnFailed?: unknown;
   };
   // Pi bridges before recurring-processes step 07 answer a parked approval
   // as `blocked`, which is not an activity state. Rejecting it failed the
@@ -157,6 +158,9 @@ export async function readProviderActivityObservation(
   }
   if (body.contentRevision !== undefined && !isContentRevision(body.contentRevision)) {
     throw new ProviderUnavailableError(`${connection.agent} returned a malformed content revision`);
+  }
+  if (body.turnFailed !== undefined && typeof body.turnFailed !== "boolean") {
+    throw new ProviderUnavailableError(`${connection.agent} returned a malformed turn outcome`);
   }
   let asyncQuestionItemIds: string[] = [];
   if (body.asyncQuestionItemIds !== undefined) {
@@ -181,6 +185,7 @@ export async function readProviderActivityObservation(
       ? { completionPending: body.completionPending }
       : {}),
     ...(typeof body.contentRevision === "string" ? { contentRevision: body.contentRevision } : {}),
+    ...(body.turnFailed === true ? { turnFailed: true as const } : {}),
   };
 }
 

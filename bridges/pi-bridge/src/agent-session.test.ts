@@ -17,6 +17,7 @@ import {
   applyComposerPatch,
   applyComposerToSession,
   closeSession,
+  createPiSessionServices,
   createSession,
   detachSession,
   ensureSession,
@@ -712,6 +713,67 @@ describe("Pi SDK lifecycle", () => {
       expect(readOnly.getExtensions().extensions).toHaveLength(0);
       expect(readOnly.getAgentsFiles().agentsFiles).toHaveLength(0);
     } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a read-only session keeps the bridge's own extensions and their attempt tools", async () => {
+    const { closePiMcp, preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+    const project = await mkdtemp(join(tmpdir(), "pi-bridge-read-only-inline-"));
+    const agentDir = join(project, "agent");
+    await mkdir(join(project, ".pi", "extensions"), { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(project, ".pi", "extensions", "project-probe.ts"),
+      "export default function projectProbe() {}\n",
+      "utf8",
+    );
+    setPiMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "submit_review_report" }, { name: "report_finding" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    const state = newSessionState();
+    // A reviewer turn in a container that otherwise opts into project
+    // resources: `noExtensions` comes from read-only alone.
+    state.readOnly = true;
+    state.policy = {
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    };
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-capability" };
+    try {
+      await preparePiMcp(state, { agentDir, cwd: project, env: {} });
+      const services = await createPiSessionServices(state, {
+        cwd: project,
+        agentDir,
+        settingsManager: SettingsManager.inMemory(),
+      });
+      const loaded = services.resourceLoader.getExtensions();
+      // `noExtensions` filters discovered paths only. Losing an inline factory
+      // would silently drop the approval gate and the reviewer's result tools.
+      expect(loaded.errors).toEqual([]);
+      expect(loaded.extensions.map((extension) => extension.path)).toEqual([
+        "<inline:orkestrator>",
+        "<inline:orkestrator-mcp>",
+        "<inline:orkestrator-command-changes>",
+      ]);
+      const mcp = loaded.extensions.find(
+        (extension) => extension.path === "<inline:orkestrator-mcp>",
+      );
+      expect([...(mcp?.tools.keys() ?? [])]).toEqual(["submit_review_report", "report_finding"]);
+    } finally {
+      setPiMcpTransportForTests();
+      await closePiMcp(state);
       await rm(project, { recursive: true, force: true });
     }
   });

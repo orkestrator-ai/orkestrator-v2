@@ -154,7 +154,11 @@ export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protoco
  * a session a restart reopens with no tab pointing at it.
  */
 export function publicActivity(state: SessionState): JsonObject {
-  if (!state.closed) return { activity: sessionIsWorking(state) ? "working" : "idle" };
+  if (!state.closed) {
+    if (sessionIsWorking(state)) return { activity: "working" };
+    // How the latest turn ended, for the backend's turn-end bell.
+    return { activity: "idle", ...(state.status === "error" ? { turnFailed: true } : {}) };
+  }
   const working = sessionIsWorking(state) || state.dispatching || ownedWork(state).length > 0;
   return { activity: working ? "working" : "idle", closing: true };
 }

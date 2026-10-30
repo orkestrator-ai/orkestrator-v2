@@ -1512,20 +1512,22 @@ describe("EnvironmentItem transitioning state", () => {
 });
 
 describe("EnvironmentItem build pipeline naming", () => {
-  test("strips the Build: prefix and tints the name for build environments", () => {
+  test("strips the Build: prefix and marks build environments with a pipe icon", () => {
     useBuildPipelineStore.setState({ buildEnvironmentIds: new Set(["env-1"]) });
 
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 
     const name = getRowButton(container).querySelector("span span span");
     expect(name?.textContent).toBe("checkout-flow");
-    expect(name?.getAttribute("class")).toContain("text-yellow-400");
+    expect(name?.getAttribute("class")).not.toContain("text-yellow-400");
+    expect(getRowButton(container).querySelector("svg.lucide-pipe") === null).toBe(false);
   });
 
   test("leaves the name untouched for a non-build environment", () => {
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 
     expect(container.textContent).toContain("Build: checkout-flow");
+    expect(getRowButton(container).querySelector("svg.lucide-pipe")).toBeNull();
   });
 });
 

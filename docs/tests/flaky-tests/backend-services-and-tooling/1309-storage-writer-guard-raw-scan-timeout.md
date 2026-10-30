@@ -77,6 +77,15 @@ only shows up here because this host is shared and oversubscribed.
 At load average about 3.5–7 on the same host, a full `mise run test` passed on
 2026-10-29 with this test green (4 min 26 s, `orkestrator-test-run.dY5sW1`).
 
+On 2026-10-30, validating todo 0830 (branch
+`todo-0830-playwright-temp-leaks-3cee21cf7a2e`, no storage changes), the
+backend workspace group of a full `mise run test` failed on this test alone:
+`timed out after 5000ms` at 6174.56 ms, with every other workspace package at
+0 failures and the root and bridge groups passing. The load average was about
+19 just after the run. Rerun alone with
+`bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts
+--parallel=1`, the file passed in 6.3 s.
+
 ## Status
 
 The test is unchanged: no assertion, timeout or skip was changed. Raising the

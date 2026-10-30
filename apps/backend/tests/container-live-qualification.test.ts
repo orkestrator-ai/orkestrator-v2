@@ -20,6 +20,7 @@ import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { removeLabelledResources } from "./container-live-cleanup";
 import {
+  ContainerInitializationError,
   drainContainerProcesses,
   observeContainerBoot,
   waitForContainerBoot,
@@ -88,6 +89,55 @@ afterAll(async () => {
 }, 180_000);
 
 describe("C09 readiness belongs to the current boot", () => {
+  for (const action of ["stop", "restart"] as const) {
+    live(
+      `a ${action} interrupts an active windowed exec without accepting the old boot`,
+      async () => {
+        const id = await startQualificationContainer(`c09-window-${action}`);
+        const firstBoot = await waitForContainerBoot(id);
+        // Leave this running boot unfinished so the generated probe stays
+        // inside its wait until Docker terminates it with the container.
+        await docker([
+          "exec",
+          id,
+          "sh",
+          "-c",
+          'sed \'s/"phase":"ready"/"phase":"initializing"/\' /run/orkestrator/boot-status.json > /run/orkestrator/boot-status.tmp && mv /run/orkestrator/boot-status.tmp /run/orkestrator/boot-status.json',
+        ]);
+        let settled = false;
+        const probe = observeContainerBoot(id, { waitMs: 2_000 }).finally(() => {
+          settled = true;
+        });
+        try {
+          // Synchronize with Docker's live exec registry, rather than sleep
+          // and assume the probe entered the container before the action.
+          while (true) {
+            const execs = JSON.parse(await docker(["inspect", "-f", "{{json .ExecIDs}}", id])) as
+              string[] | null;
+            if (execs?.length) break;
+            expect(settled).toBe(false);
+            await Bun.sleep(10);
+          }
+          expect(settled).toBe(false);
+          await docker([action, "-t", "0", id]);
+          expect(await probe).toEqual({ kind: "unreachable" });
+          if (action === "restart") {
+            const nextBoot = await waitForContainerBoot(id);
+            expect(nextBoot).toBeTruthy();
+            expect(nextBoot).not.toBe(firstBoot);
+          } else {
+            await expect(waitForContainerBoot(id)).rejects.toBeInstanceOf(
+              ContainerInitializationError,
+            );
+          }
+        } finally {
+          await probe;
+        }
+      },
+      LIVE_TIMEOUT_MS,
+    );
+  }
+
   live(
     "a restarted container never reports a previous boot's readiness",
     async () => {

@@ -196,6 +196,14 @@ providers, at these pins:
 | Pi | SDK 1.2.0; pre-attach list on 1.4.0 | 2026-10-23: discovery, extension-before-template precedence, headless extensions, templates, literal opt-out, mid-turn refresh. 2026-10-25: templates listed before the first turn (todo 0069) |
 | Cursor | SDK 1.0.37 | 2026-10-17: still `unsupported` |
 
+The pins moved again on 2026-10-30 (Claude Agent SDK 0.3.314 / CLI 2.1.314,
+Codex 0.166.0, OpenCode 1.19.5, Grok 1.0.70 / ACP SDK 2.1.0, `@cursor/sdk`
+1.2.0; Pi unchanged at 1.4.0). Only the credential-free Codex disabled-skills
+probe was re-run then (same result as 0.164.0). The other rows above are still
+the live record at their own pins and are unproven at the new ones until a
+signed-in run repeats them; the transport and fake-model suites pass at the
+new pins.
+
 The record, including what each run did not cover (a backend restart,
 and OpenCode, Grok and Pi in the browser scenario), is in
 [0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
@@ -225,7 +233,7 @@ These are listed with a reason and never executed:
 | Claude | Init `terminal_slash_commands` (before a session's first turn, the list the same CLI version reported on an earlier turn), `/login`, `/logout` | `requires-interactive-ui` |
 | Claude | `/config`, `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`, `/theme`, `/vim` | `unqualified` |
 | Codex | Duplicate skill names | `ambiguous` |
-| Codex | Disabled skills (`[[skills.config]] enabled = false` in the user `config.toml`; 0.164.0, like 0.162.1, ignores the same entry in a project `.codex/config.toml`, trusted or not) | `disabled` |
+| Codex | Disabled skills (`[[skills.config]] enabled = false` in the user `config.toml`; 0.166.0, like 0.164.0 and 0.162.1, ignores the same entry in a project `.codex/config.toml`, trusted or not) | `disabled` |
 | Codex | Templates named after a reserved command | `reserved-name` |
 | Codex | Templates containing `` !`…` `` | `requires-shell-execution` |
 | Codex | Templates with malformed frontmatter | `unsupported` |

@@ -233,3 +233,132 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
   }
 });
+
+test("switching graphs off persists across reload and keeps an open designer usable", async ({
+  page,
+}) => {
+  const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+  const status = devJson("dev:status", profile);
+  expect(status.status).toBe("ready");
+  const login = devJson("dev:login", profile);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(login.loginUrl);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    expect(response.ok(), command).toBe(true);
+    return (await response.json()).result;
+  };
+  type Config = { global: Record<string, unknown> };
+  const original = await invoke<Config>("get_config");
+  await enableExperimentalGraphs(invoke);
+  const projects =
+    await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
+  const project = projects.find((candidate) => candidate.localPath === status.testProject)!;
+  expect(project).toBeTruthy();
+  const env = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name: "graphs-switch-off",
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  const ticket = await invoke<{ id: string }>("add_kanban_task", {
+    projectId: project.id,
+    title: "Graphs switch-off regression",
+    description: "Check the graph launch action after loading the saved configuration.",
+  });
+  const openTicketMenu = async () => {
+    await page
+      .getByRole("button", { name: new RegExp(`^${project.name}`) })
+      .first()
+      .click();
+    await page.getByRole("tab", { name: "Kanban", exact: true }).click();
+    await page.getByText("Graphs switch-off regression", { exact: true }).hover();
+    await page
+      .getByRole("button", { name: "Task actions for Graphs switch-off regression", exact: true })
+      .click();
+    return page.getByRole("menu");
+  };
+  const openExperimentalSettings = async () => {
+    await page.getByRole("button", { name: "Global settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings sections" })
+      .getByRole("button", { name: "Experimental", exact: true })
+      .click();
+    return page.getByRole("switch", { name: "Enable graphs" });
+  };
+  try {
+    await invoke("start_environment", { environmentId: env.id });
+    await page.reload();
+    // Establish the positive controls first: neither absence check can pass
+    // just because the environment or ticket failed to load.
+    const enabledMenu = await openTicketMenu();
+    await expect(enabledMenu.getByRole("menuitem", { name: "Run graph…" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await openEnvironment(page, project.name, env.name);
+    await expect(page.getByRole("button", { name: "Run graph…", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Graphs", exact: true }).click();
+    const designer = page.locator("[data-graph-designer]");
+    await designer.getByText("Build Pipeline", { exact: true }).click();
+    await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
+
+    const toggle = await openExperimentalSettings();
+    await expect(toggle).toBeChecked();
+    await toggle.click();
+    await expect
+      .poll(async () => (await invoke<Config>("get_config")).global.experimentalGraphs)
+      .toBe(false);
+    await page.getByRole("button", { name: "Close settings", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Graphs", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Run graph…", exact: true })).toHaveCount(0);
+    // The tab stays mounted and interactive immediately after disabling.
+    await designer.locator('.react-flow__node[data-id="review"]').click();
+    await expect(
+      designer
+        .locator("[data-graph-inspector]")
+        .getByRole("heading", { name: "Review", exact: true }),
+    ).toBeVisible();
+
+    // Wait for the renderer's real get_config request, not merely its default
+    // off state during startup, before checking the hidden launch controls.
+    const loaded = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/__orkestrator/invoke") &&
+        response.request().postDataJSON()?.command === "get_config",
+    );
+    await page.reload();
+    const configResponse = await loaded;
+    expect(configResponse.ok()).toBe(true);
+    expect((await configResponse.json()).result.global.experimentalGraphs).toBe(false);
+    await openEnvironment(page, project.name, env.name);
+    await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
+    await expect(page.getByRole("button", { name: "Graphs", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Run graph…", exact: true })).toHaveCount(0);
+    await designer.locator('.react-flow__node[data-id="build"]').click();
+    await expect(
+      designer
+        .locator("[data-graph-inspector]")
+        .getByRole("heading", { name: "Build", exact: true }),
+    ).toBeVisible();
+    const disabledMenu = await openTicketMenu();
+    await expect(disabledMenu.getByRole("menuitem", { name: "Run graph…" })).toHaveCount(0);
+    await expect(
+      disabledMenu.getByRole("menuitem", { name: "Open task", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(await openExperimentalSettings()).not.toBeChecked();
+  } finally {
+    const current = await invoke<Config>("get_config");
+    await invoke("update_global_config", {
+      global: {
+        ...current.global,
+        experimentalGraphs: original.global.experimentalGraphs ?? false,
+      },
+    });
+    await invoke("delete_kanban_task", { taskId: ticket.id }).catch(() => undefined);
+    await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
+  }
+});

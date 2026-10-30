@@ -221,6 +221,10 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     // Undo and redo the next connection with the keyboard.
     await connect("design|out:brief", "judge|in:+");
     const withBriefs = await draftEdgeCount();
+    // Put keyboard focus back in the designer after the portal dialog closes.
+    const connectButton = inspector.getByRole("button", { name: /Connect to/ });
+    await connectButton.focus();
+    await expect(connectButton).toBeFocused();
     await page.keyboard.press("Control+z");
     await expect.poll(draftEdgeCount).toBe(withBriefs - 1);
     await page.keyboard.press("Control+Shift+z");

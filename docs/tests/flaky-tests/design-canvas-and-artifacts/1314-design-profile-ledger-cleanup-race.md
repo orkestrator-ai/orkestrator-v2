@@ -1,6 +1,6 @@
 # Design startup profile removal precedes ledger cleanup
 
-- **ID:** 1311
+- **ID:** 1314
 - **Status:** open
 - **Test:** `design service startup > removes the recorded profile of a backend that was killed`
 - **File:** `apps/backend/src/core/design/browser-profiles.test.ts:348`

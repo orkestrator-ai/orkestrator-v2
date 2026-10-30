@@ -38,7 +38,9 @@ function bakeOff(): GraphTemplateV1 {
   template.revision = 0;
   template.nodes = template.nodes.filter((node) => node.id !== "review");
   template.edges = template.edges.filter(
-    (edge) => !["build-review", "review-describe", "review-pr"].includes(edge.id),
+    (edge) =>
+      !("node" in edge.from && edge.from.node === "review") &&
+      !("node" in edge.to && edge.to.node === "review"),
   );
   template.edges.push(
     {
@@ -131,6 +133,10 @@ test("Graphs designer starts a mock run: no provider, no pull request, would-hav
     expect(result.run.environmentId).toBeUndefined();
     expect(result.pins).toEqual({ approve: [{ outlet: "approved" }] });
     await expect(page.getByText("Mock run started")).toBeVisible();
+    // A successful launch activates the new run tab; return to the designer
+    // before asserting that its draft was saved.
+    await expect(page.locator(`[data-graph-run="${result.run.id}"]`)).toBeVisible();
+    await page.getByText(/^Graphs \d+$/).click();
     await expect(designer.locator('[data-graph-draft-state="saved"]')).toBeVisible();
     const stored = await invoke<{ template: GraphTemplateV1 }>("graph_template_get", {
       ref: { scope: "user", id: TEMPLATE_ID },

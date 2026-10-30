@@ -19,6 +19,7 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
+import { proposedBashPrefix } from "./session-manager-parked-interactions.js";
 
 const ASK_POLICY: NativeAgentExecutionPolicy = {
   id: "interactive-host",
@@ -395,7 +396,8 @@ describe("tool approvals under an ask policy", () => {
         type: "addRules",
         behavior: "allow",
         destination: "localSettings",
-        rules: [{ toolName: "Bash", ruleContent: "npm run test:*" }],
+        // The prefix form Claude Code 2.1.309 builds for a Bash suggestion.
+        rules: [{ toolName: "Bash", ruleContent: "npm run test *" }],
       },
     ];
 
@@ -461,6 +463,30 @@ describe("tool approvals under an ask policy", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
+  });
+
+  test("reads a Bash prefix from either suggestion suffix and drops other wildcards", () => {
+    const suggest = (ruleContent: string, toolName = "Bash") => [
+      {
+        type: "addRules",
+        behavior: "allow",
+        destination: "localSettings",
+        rules: [{ toolName, ruleContent }],
+      },
+    ];
+    // Claude Code 2.1.309 writes `prefix *`; older releases wrote `prefix:*`.
+    expect(proposedBashPrefix(suggest("npm run test *"))).toEqual(["npm", "run", "test"]);
+    expect(proposedBashPrefix(suggest("npm run test:*"))).toEqual(["npm", "run", "test"]);
+    // An exact-command rule has no suffix; the whole command is the hint.
+    expect(proposedBashPrefix(suggest("git status --short"))).toEqual(["git", "status", "--short"]);
+    expect(proposedBashPrefix(suggest("git * --help"))).toBeUndefined();
+    expect(proposedBashPrefix(suggest("*"))).toBeUndefined();
+    expect(proposedBashPrefix(suggest("npm run test *", "Read"))).toBeUndefined();
+    expect(
+      proposedBashPrefix([
+        { type: "addRules", behavior: "deny", rules: [{ toolName: "Bash", ruleContent: "rm *" }] },
+      ]),
+    ).toBeUndefined();
   });
 
   // One timer serves every approval kind; each must deny, never allow.

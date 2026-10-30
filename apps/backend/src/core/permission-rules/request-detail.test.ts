@@ -147,6 +147,43 @@ describe("openCodeRuleDetail", () => {
     ).toBeNull();
   });
 
+  // OpenCode 1.19.4's `ShellTool.ask` sends `metadata: { command }` and one
+  // pattern per tree-sitter `command` node (its trimmed text, with any
+  // redirect), skipping `cd`/`pushd`. These are the payloads it builds.
+  test("matches the payloads OpenCode 1.19.4 sends for a plain command only", () => {
+    const ask = (command: string, patterns: string[]) =>
+      openCodeRuleDetail({ metadata: { command } }, "bash", patterns, "/w")?.subject ?? null;
+    expect(ask("git status --short", ["git status --short"])).toEqual({
+      kind: "command",
+      command: "git status --short",
+    });
+    expect(ask("npm run test -- --watch", ["npm run test -- --watch"])).toEqual({
+      kind: "command",
+      command: "npm run test -- --watch",
+    });
+    expect(ask("cd app && npm test", ["npm test"])).toBeNull();
+    expect(ask("npm test; npm test", ["npm test"])).toBeNull();
+    expect(ask("echo $(date)", ["echo $(date)", "date"])).toBeNull();
+    expect(ask("ls | head", ["ls", "head"])).toBeNull();
+    // OpenCode trims each pattern but not the command it reports.
+    expect(ask("npm test\n", ["npm test"])).toBeNull();
+  });
+
+  test("asks for a multi-file patch, whose filepath is a joined relative list", () => {
+    expect(
+      openCodeRuleDetail(
+        { metadata: { filepath: "src/a.ts, src/b.ts" } },
+        "edit",
+        ["src/a.ts", "src/b.ts"],
+        "/w",
+      ),
+    ).toBeNull();
+    expect(
+      openCodeRuleDetail({ metadata: { filepath: "src/a.ts" } }, "edit", ["src/a.ts"], "/w")
+        ?.subject,
+    ).toEqual({ kind: "file-change", paths: ["/w/src/a.ts"] });
+  });
+
   test("reads edits and fetches", () => {
     expect(
       openCodeRuleDetail({ metadata: { filepath: "/w/a.ts" } }, "edit", ["a.ts"], "/w")?.subject,

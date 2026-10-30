@@ -1355,14 +1355,17 @@ export function identifiersOutside(
   allowed: Set<string>,
   matches: (name: string) => boolean,
   mentions: (source: string) => boolean,
+  sources: SourceFile[] = backendSources(),
 ): string[] {
   const found: string[] = [];
-  for (const full of backendSourceFiles()) {
-    const relative = path.relative(repoRoot, full);
-    if (allowed.has(relative)) continue;
-    const source = readFileSync(full, "utf8");
-    if (!mentions(source)) continue;
-    const file = parse({ file: relative, source });
+  for (const source of sources) {
+    if (allowed.has(source.file)) continue;
+    if (
+      !mentions(source.source) &&
+      !(source.source.includes("\\u") && mentions(unescaped(source.source)))
+    )
+      continue;
+    const file = parse(source);
     walk(file.program, (node) => {
       if (node.type === "Identifier" && matches(node.name)) {
         found.push(`${file.file}:${lineOf(file, node.start)} ${node.name}`);

@@ -119,14 +119,17 @@ The raw-writer block's first test builds `rawDatabaseWrites(backendSources(), â€
 Every task is done. No file named in this todo is over 2,000 lines, and no
 test was changed, added to or dropped by a split:
 
-| Before | After | Tests (expectations) before and after |
+| Before | After (current line counts) | Tests (expectations) before and after |
 | --- | --- | --- |
 | `src/core/storage.test.ts` (4,322 lines) | `storage-shared-config.test.ts` 903, `storage-setup-build.test.ts` 1,410, `storage-pane-layout.test.ts` 599, `storage-model-catalogs.test.ts` 711, `storage.test.ts` 709 | 162 (505) |
-| `tests/storage.test.ts` (2,855 lines) | `tests/storage-config.test.ts` 486, `tests/storage-records.test.ts` 905, `tests/storage-environment-activity.test.ts` 871, `tests/storage.test.ts` 554; helpers in `tests/storage-test-helpers.ts` | 74 (362) |
+| `tests/storage.test.ts` (2,855 lines) | `tests/storage-config.test.ts` 486, `tests/storage-records.test.ts` 911, `tests/storage-environment-activity.test.ts` 871, `tests/storage.test.ts` 559; helpers in `tests/storage-test-helpers.ts` | 74 (362) |
 | `src/core/storage-agent-mail.test.ts` (2,292 lines) | `storage-agent-mail.test.ts` 1,539, `storage-agent-mail-routes.test.ts` 696; fixture in `agent-mail-storage-test-support.ts` | 50 (251) |
-| `src/core/storage-writer-guards.test.ts` (2,487 lines) | analysis in `storage-writer-guards-test-support.ts` 1,700; `storage-writer-guards.test.ts` 205 (facade), `storage-writer-guards-raw.test.ts` 164 (raw writers), `storage-writer-guards-analysis.test.ts` 424 (fixtures) | 36 (155); 37 after the scan change, which adds one test |
+| `src/core/storage-writer-guards.test.ts` (2,487 lines) | analysis in `storage-writer-guards-test-support.ts` 1,793; `storage-writer-guards.test.ts` 240 (facade), `storage-writer-guards-raw.test.ts` 196 (raw writers), `storage-writer-guards-analysis.test.ts` 424 (fixtures) | 36 (155); 37 after the scan change, 39 after the review fixtures |
 
-The counts are from running each original file on its own and then the files
+The After column's line counts were refreshed with `wc -l` on 2026-10-30,
+including the review fixes below. The test and expectation counts are the
+historical split qualification, with later guard additions noted separately.
+Those counts are from running each original file on its own and then the files
 it became, with Bun 1.4.4. They differ from the Investigation of task 5,
 which counted `test(` lines rather than running the tests (and was taken
 before #1417 removed eight tests from `tests/storage.test.ts`).
@@ -165,6 +168,22 @@ failed three other unchanged owners, which also passed alone and are in the
 same case. Neither aggregate run is green.
 
 ## Assumptions and decisions
+
+### Escaped identifiers and current line counts (tasks 4 and 5)
+
+Chosen: spell both the import and the call of the raw-writer fixture's
+`writeRow` with Unicode escapes, so its caller file cannot pass the raw-text
+prefilter. Decode escapes in the `identifiersOutside` prefilter too, and
+allow explicit source fixtures there. The new fixtures cover escaped
+`StorageContext` and repository identifiers, plain identifiers, allowed-file
+exclusions, and strings and comments that must not count as identifiers.
+
+Disabling only caller-prefilter decoding makes the raw fixture fail with an
+unresolved store. Disabling only `identifiersOutside` decoding makes both
+new identifier fixtures miss the escaped reference. Each exact focused
+command passed after restoring decoding; all three guard files also passed
+together. Refresh every After-column line count from the working tree so
+the table describes the reviewed files rather than the initial split.
 
 ### The Task analysis against current `main` (all tasks)
 

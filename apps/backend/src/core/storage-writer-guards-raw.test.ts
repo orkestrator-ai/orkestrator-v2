@@ -181,7 +181,7 @@ describe("raw StorageDatabase writers outside StorageService", () => {
       {
         file: "core/engine.ts",
         source: `import { write\\u{52}ow } from "./rows.js";
-          export class Engine { run(database: Db) { writeRow(database, "kanban"); } }`,
+          export class Engine { run(database: Db) { write\\u{52}ow(database, "kanban"); } }`,
       },
       { file: "core/unrelated.ts", source: `export const banner = "\\u001b[1m";` },
     ];

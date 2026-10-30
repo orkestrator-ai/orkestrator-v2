@@ -179,6 +179,27 @@ describe("StorageService store writers", () => {
     expect(outside).toEqual([]);
   });
 
+  test.each([
+    ["StorageContext", "Storage\\u0043ontext"],
+    ["ProjectsRepository", "Projects\\u{52}epository"],
+  ])("finds escaped %s identifiers outside allowed files", (name, escaped) => {
+    expect(
+      identifiersOutside(
+        new Set(["allowed.ts"]),
+        (identifier) => identifier === name,
+        (source) => source.includes(name),
+        [
+          { file: "escaped.ts", source: `export type Hidden = ${escaped};` },
+          { file: "plain.ts", source: `export type Plain = ${name};` },
+          { file: "allowed.ts", source: `export type Allowed = ${escaped};` },
+          { file: "string.ts", source: `export const label = "${escaped}";` },
+          { file: "comment.ts", source: `// ${escaped}\nexport const value = 1;` },
+          { file: "unrelated.ts", source: `export const value = 1;` },
+        ],
+      ),
+    ).toEqual([`escaped.ts:1 ${name}`, `plain.ts:1 ${name}`]);
+  });
+
   test("only the scanned storage classes hold the StorageContext", () => {
     // A class that takes a StorageContext writes stores. The scan follows
     // every class StorageService reaches through a typed field; anything else

@@ -174,16 +174,6 @@ export interface SdkSystemMessage extends SdkMessageBase {
   subtype?: "init" | "compact_boundary" | "clear" | string;
 }
 
-/** Compact boundary system message from /compact command */
-export interface SdkCompactBoundaryMessage extends SdkSystemMessage {
-  subtype: "compact_boundary";
-  compact_metadata?: {
-    pre_tokens?: number;
-    post_tokens?: number;
-    trigger?: string;
-  };
-}
-
 /** SDK result message when query completes */
 export interface SdkResultMessage extends SdkMessageBase {
   type: "result";
@@ -236,13 +226,6 @@ export interface SdkResultMessage extends SdkMessageBase {
   result_index?: number;
   /** User sends waiting in the provider queue; absent on older producers. */
   queued_turn_count?: number;
-}
-
-/** Type guard for compact boundary message */
-export function isSdkCompactBoundaryMessage(
-  message: SdkMessageBase,
-): message is SdkCompactBoundaryMessage {
-  return message.type === "system" && message.subtype === "compact_boundary";
 }
 
 /** Type guard for result message */

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
@@ -240,7 +240,7 @@ describe("a command node's deliverNow on this leaf", () => {
     const context = {
       storage: world.storage,
       nodeCoordination: instance,
-      drainAgentMail: () => world.mail.drainInjects(),
+      drainAgentMail: mock(() => world.mail.drainInjects()),
     } as unknown as CommandContext;
     let counter = 0;
     const deliver = (body: string, extra: Record<string, unknown> = {}) =>
@@ -257,8 +257,33 @@ describe("a command node's deliverNow on this leaf", () => {
         },
         context,
       ) as Promise<Record<string, unknown>>;
-    return { world, recipient, deliver };
+    return { world, recipient, deliver, drain: context.drainAgentMail! };
   }
+
+  test("a muted recipient bounces and replays without reading the mailbox or draining", async () => {
+    const { world, recipient, deliver, drain } = await leaf({ launched: true });
+    await world.storage.updateAgentMailboxPolicy(recipient.environmentId, recipient.tabId, {
+      mutedInbound: true,
+    });
+    const read = spyOn(world.storage, "getAgentMailMessage");
+    try {
+      const input = { steer: true, requestId: "muted-replay" };
+      const result = await deliver("Correction.", input);
+      expect(result).toMatchObject({
+        placement: "bounced",
+        placementReason: "recipient-muted",
+        deliverNow: "not queued",
+        deliverNowNote: expect.stringContaining("recipient-muted"),
+      });
+      expect(await deliver("Correction.", input)).toEqual(result);
+      expect(read).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
+      expect(world.steered(recipient)).toEqual([]);
+      expect(world.received(recipient)).toEqual([]);
+    } finally {
+      read.mockRestore();
+    }
+  });
 
   test("a busy native worker gets the correction steered into its running turn", async () => {
     const { world, recipient, deliver } = await leaf({ launched: true });
@@ -286,6 +311,49 @@ describe("a command node's deliverNow on this leaf", () => {
     expect(world.steered(recipient)).toEqual([]);
     expect(world.received(recipient)).toHaveLength(1);
   });
+
+  for (const held of [false, true]) {
+    test(`node coordinator requests stay pending while ${held ? "held" : "queued"}, until injection`, async () => {
+      const { world, recipient, deliver } = await leaf({ launched: true });
+      if (held) {
+        const config = await world.storage.loadConfig();
+        await world.storage.updateGlobalConfig({
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 1 },
+        });
+        await deliver("Uses the first wake budget.");
+      }
+      const result = await deliver("Pending remote request.");
+      expect(result.placement).toBe(held ? "inject-held" : "pending-inject");
+      expect(
+        await world.storage.hasUndeliveredCoordinatorRequest(
+          recipient.environmentId,
+          recipient.tabId,
+        ),
+      ).toBe(true);
+      if (held) {
+        await world.storage.retryAgentMailInject(
+          recipient.environmentId,
+          recipient.tabId,
+          String(result.messageId),
+        );
+      }
+      await world.finishTurn(recipient);
+      expect(
+        await world.storage.getAgentMailMessage(
+          recipient.environmentId,
+          recipient.tabId,
+          String(result.messageId),
+        ),
+      ).toMatchObject({ placement: "injected" });
+      expect(
+        await world.storage.hasUndeliveredCoordinatorRequest(
+          recipient.environmentId,
+          recipient.tabId,
+        ),
+      ).toBe(false);
+    });
+  }
 
   test("a terminal worker reports unsupported and keeps the mail for turn end", async () => {
     const { world, recipient, deliver } = await leaf({ launched: true, terminal: true });

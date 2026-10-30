@@ -276,3 +276,14 @@ mise run test:logged -- --name preparation-disk-owner -- bun test ./tests/unit/d
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+
+## Remote deliverNow review repair — 2026-10-30
+
+- **Original command:** `mise run test:logged -- --name review-retry-default -- mise run test`, retrying preparation's incomplete `mise run test` on `todo-0740-deliver-now-qualification-447a36f318c3`.
+- **Worker configuration:** workspace/root/bridge/protocol reservations 6/1/2/1; Bun 1.4.4, root `--parallel=1`.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` timed out at 5038.22 ms (5000 ms limit). The subprocess status was null at line 123, also reported as an error between tests.
+- **Suite counts:** root/support 3,305 passed, one failed, one error across 3,306 tests in 161 files (149.95 s). Workspace, bridges and protocol-lockfile groups passed; the aggregate exited 1 after 233.1 s.
+- **Complete unchanged owner:** `mise run test:logged -- --name disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 4.1 s).
+- **Evidence:** aggregate `orkestrator-test-run.rrqNht/root-and-agent-support-tests.log.gz`; enclosing wrapper `orkestrator-test-run.sXKBik/review-retry-default.log.gz`, under the host temporary directory.
+- **Assessment:** recurrence of the known timing failure; isolation passed without changing the disk-report code, assertions or deadline. The aggregate remains non-green.

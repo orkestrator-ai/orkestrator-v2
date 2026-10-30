@@ -732,6 +732,7 @@ export function isApprovalKind(kind: AgentInteractionKind): boolean {
 /** What a coordinator turn's projection carries that the harness reads. */
 export interface CoordinatorTurnProjection {
   turn: { phase: string; error?: string };
+  contextUsage?: { turns?: Array<{ turnId: string }> };
   messages: CoordinatorTranscriptMessage[];
   interactions?: Array<
     Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt">

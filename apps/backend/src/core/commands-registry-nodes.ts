@@ -10,7 +10,10 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
-import { settleCoordinatorDeliverNow } from "./coordinator-deliver-now.js";
+import {
+  coordinatorDeliverNowResult,
+  settleCoordinatorDeliverNow,
+} from "./coordinator-deliver-now.js";
 import {
   parseNodeActionApproval,
   parseNodeFileScope,
@@ -250,6 +253,10 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
     const delivered = await coordination(context).deliverIncoming(args);
     if (args.steer !== true) return delivered;
+    // Bounces live in the idempotency receipt, outside the recipient mailbox.
+    if (delivered.placement !== "pending-inject") {
+      return { ...delivered, ...coordinatorDeliverNowResult(delivered) };
+    }
     // The coordinator's deliverNow, settled here as on its own node: one
     // delivery pass, then the outcome the command node reports unchanged.
     const settled = await settleCoordinatorDeliverNow(

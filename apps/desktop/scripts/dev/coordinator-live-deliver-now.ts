@@ -190,6 +190,8 @@ export interface DeliverNowScenarioInput {
   gateOpenedAt?: number;
   /** End of the window in which coordinator turns are counted as wakes. */
   wakeWindowEndedAt?: number;
+  /** First sample after the correction settled; avoids millisecond timestamp ties. */
+  wakeObservationStart?: number;
   observations: readonly DelegationObservation[];
   /** Final mail, with bodies. */
   mail: readonly DelegationMailMessage[];
@@ -314,17 +316,32 @@ export function evaluateDeliverNowScenario(input: DeliverNowScenarioInput): Coor
   const wokenAt = at(delegation?.wokenAt);
   let turnsAfterCorrection = 0;
   let previous = "idle";
-  for (const observation of input.observations) {
+  const knownTurns = new Set<string>();
+  const wakeTurns = new Set<string>();
+  for (const [index, observation] of input.observations.entries()) {
+    const beforeWake =
+      input.wakeObservationStart !== undefined
+        ? index < input.wakeObservationStart
+        : input.correctionEndedAt !== undefined && observation.at <= input.correctionEndedAt;
+    if (beforeWake) {
+      for (const id of observation.coordinatorTurnIds ?? []) knownTurns.add(id);
+    }
     if (
       input.correctionEndedAt === undefined ||
       input.wakeWindowEndedAt === undefined ||
-      observation.at <= input.correctionEndedAt ||
+      beforeWake ||
       observation.at > input.wakeWindowEndedAt
     )
       continue;
     if (previous === "idle" && observation.coordinatorPhase !== "idle") turnsAfterCorrection += 1;
+    for (const id of observation.coordinatorTurnIds ?? []) {
+      if (!knownTurns.has(id)) wakeTurns.add(id);
+    }
     previous = observation.coordinatorPhase;
   }
+  // Phase edges catch a running turn before its usage record is published;
+  // durable usage records catch entire turns completed between phase samples.
+  turnsAfterCorrection = Math.max(turnsAfterCorrection, wakeTurns.size);
   checks.push(
     check(
       "one-wake-at-turn-end",

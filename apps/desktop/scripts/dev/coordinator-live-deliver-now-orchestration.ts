@@ -74,6 +74,8 @@ export async function runDeliverNowScenario(input: {
   let correctionEndedAt: number | undefined;
   let gateOpenedAt: number | undefined;
   let wakeWindowEndedAt: number | undefined;
+  let wakeObservationStart: number | undefined;
+  let wakeObservationEnd: number | undefined;
   let terminal: DeliverNowTerminalInput | undefined;
   try {
     await coordinatorTurn(
@@ -100,6 +102,7 @@ export async function runDeliverNowScenario(input: {
       deliverNowCorrectionPrompt(probe, workerId),
     );
     correctionEndedAt = correction.endedAt;
+    wakeObservationStart = watch.observations.length;
     correctionResults = await watch.toolOutputs(
       "send_message",
       turnMessages(correction.rowsBefore),
@@ -117,22 +120,42 @@ export async function runDeliverNowScenario(input: {
       .catch(() => undefined);
     await writeFile(probe.gatePath, "go\n");
     gateOpenedAt = Date.now();
-    await watch.until("the worker's report to wake the coordinator", (observation) =>
-      observation.delegations.some(
-        (delegation) => delegation.environmentId === workerId && delegation.wokenAt !== undefined,
-      ),
+    const previousTurnIds = new Set(
+      watch.projection()?.contextUsage?.turns?.map((turn) => turn.turnId),
     );
-    // The wake turn runs and ends; a second wake would start within the window.
+    // Track the wake and its settlement together: the wokenAt read may be
+    // the only sample that catches the coordinator working.
     let woke = false;
     let idleReads = 0;
-    await watch.until("the coordinator's wake turn", (observation) => {
-      if (observation.coordinatorPhase !== "idle") woke = true;
+    await watch.until("the worker's report and the coordinator's wake turn", (observation) => {
+      if (
+        observation.coordinatorPhase !== "idle" ||
+        observation.coordinatorTurnIds?.some((id) => !previousTurnIds.has(id))
+      )
+        woke = true;
       idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-      return woke && idleReads >= 2 && observation.queueLength === 0;
+      return (
+        woke &&
+        idleReads >= 2 &&
+        observation.queueLength === 0 &&
+        observation.delegations.some(
+          (delegation) => delegation.environmentId === workerId && delegation.wokenAt !== undefined,
+        )
+      );
     });
-    await new Promise((resolve) => setTimeout(resolve, input.quietMs ?? 30_000));
+    const quietDeadline = Date.now() + (input.quietMs ?? 30_000);
     await watch.observe();
+    do {
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.min(input.pollIntervalMs ?? 2_000, Math.max(0, quietDeadline - Date.now())),
+        ),
+      );
+      await watch.observe();
+    } while (Date.now() < quietDeadline);
     wakeWindowEndedAt = Date.now();
+    wakeObservationEnd = watch.observations.length;
 
     if (deliverNowTerminalApplies(platform)) {
       terminal = { correctionResults: [], mailReads: [] };
@@ -211,7 +234,8 @@ export async function runDeliverNowScenario(input: {
       ...(correctionEndedAt !== undefined ? { correctionEndedAt } : {}),
       ...(gateOpenedAt !== undefined ? { gateOpenedAt } : {}),
       ...(wakeWindowEndedAt !== undefined ? { wakeWindowEndedAt } : {}),
-      observations: watch.observations,
+      ...(wakeObservationStart !== undefined ? { wakeObservationStart } : {}),
+      observations: watch.observations.slice(0, wakeObservationEnd),
       mail,
       workerMessages: workerMessages as CoordinatorTranscriptMessage[],
       delegations,

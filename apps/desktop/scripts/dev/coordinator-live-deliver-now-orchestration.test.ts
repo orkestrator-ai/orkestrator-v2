@@ -21,7 +21,17 @@ const tool = (toolName: string, toolOutput = ""): CoordinatorTranscriptMessage =
  * Script only the command transport: the live observer, waits and verdict run
  * unchanged. `steer` is what the scripted backend does with the correction.
  */
-function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle") {
+type WakeScript = {
+  wakeReads?: number;
+  duplicate?: "sampled" | "between-polls";
+  durable?: boolean;
+};
+
+function fixture(
+  platform: AgentPlatform,
+  steer: "steered" | "queued until idle",
+  script: WakeScript = {},
+) {
   const bodies = deliverNowBodies({
     platform,
     token,
@@ -39,6 +49,8 @@ function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle"
   const paths: Record<string, string> = {};
   let delegation: Record<string, unknown> | null = null;
   let wakeReads = 0;
+  let idleWakeReads = 0;
+  const turns: Array<{ turnId: string }> = [];
   let workerDone = false;
   const touch = (prompt: string, key: string) => {
     const match = /touch '([^']+)'/.exec(prompt);
@@ -69,7 +81,7 @@ function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle"
         body: steer === "steered" ? bodies.corrected : bodies.uncorrected,
       });
       delegation = { ...delegation, state: "completed", wokenAt: now() };
-      wakeReads = 3;
+      wakeReads = script.wakeReads ?? 3;
     }
     const held = tmuxMail[0];
     if (
@@ -112,6 +124,7 @@ function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle"
         break;
       case "dispatch_native_agent_intent": {
         const prompt = String(args.prompt);
+        turns.push({ turnId: `prompt-${turns.length}` });
         messages.push({ role: "user", content: "harness prompt" });
         if (prompt.includes("launch_environment")) {
           touch(
@@ -175,9 +188,23 @@ function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle"
       }
       case "get_native_agent_projection": {
         if (args.environmentId === "coordinator") {
-          const phase = wakeReads > 0 ? "working" : "idle";
+          let phase = wakeReads > 0 ? "working" : "idle";
           if (wakeReads > 0) wakeReads -= 1;
-          value = { turn: { phase }, messages: [...messages] };
+          else if (workerDone) {
+            if (idleWakeReads === 0) turns.push({ turnId: "report-wake" });
+            idleWakeReads += 1;
+            // The first two idle reads settle the wake. A second, short
+            // turn happens during the quiet interval and is idle by its end.
+            if (script.duplicate && idleWakeReads === 3) {
+              turns.push({ turnId: "duplicate-wake" });
+              if (script.duplicate === "sampled") phase = "working";
+            }
+          }
+          value = {
+            turn: { phase },
+            messages: [...messages],
+            ...(script.durable === false ? {} : { contextUsage: { turns: [...turns] } }),
+          };
         } else {
           value = {
             turn: { phase: workerDone ? "idle" : "working" },
@@ -209,8 +236,12 @@ function fixture(platform: AgentPlatform, steer: "steered" | "queued until idle"
   return { coordinator, summary, paths };
 }
 
-async function run(platform: AgentPlatform, steer: "steered" | "queued until idle") {
-  const { coordinator, summary, paths } = fixture(platform, steer);
+async function run(
+  platform: AgentPlatform,
+  steer: "steered" | "queued until idle",
+  script: WakeScript = {},
+) {
+  const { coordinator, summary, paths } = fixture(platform, steer, script);
   const cleanup: Array<() => Promise<unknown>> = [];
   try {
     const result = await runDeliverNowScenario({
@@ -219,7 +250,7 @@ async function run(platform: AgentPlatform, steer: "steered" | "queued until idl
       cleanup,
       token,
       pollIntervalMs: 1,
-      quietMs: 5,
+      quietMs: 25,
       steerWaitMs: 50,
     });
     return { ...result, paths };
@@ -253,3 +284,24 @@ test("a correction that only reaches the worker at idle fails the scenario", asy
     "report-reflects-correction",
   ]);
 });
+
+test("the only working sample can coincide with wokenAt", async () => {
+  const { checks } = await run("codex", "steered", { wakeReads: 1, durable: false });
+  expect(failures(checks)).toEqual([]);
+});
+
+test("a wake completed before its first phase sample is confirmed from turn history", async () => {
+  const { checks } = await run("codex", "steered", { wakeReads: 0 });
+  expect(failures(checks)).toEqual([]);
+});
+
+for (const duplicate of ["sampled", "between-polls"] as const) {
+  test(`a duplicate wake during quietMs fails even with an idle final sample (${duplicate})`, async () => {
+    const { checks, watch } = await run("codex", "steered", { duplicate });
+    expect(failures(checks).map((failure) => failure.split(":")[0])).toEqual([
+      "one-wake-at-turn-end",
+    ]);
+    expect(watch.observations.at(-1)?.coordinatorPhase).toBe("idle");
+    expect(watch.observations.at(-1)?.coordinatorTurnIds).toContain("duplicate-wake");
+  });
+}

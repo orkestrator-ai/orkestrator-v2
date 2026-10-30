@@ -8,6 +8,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
+import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 
 const worlds: MailWorld[] = [];
 afterEach(async () => {
@@ -40,6 +43,7 @@ async function setup(
   options: {
     available?: boolean;
     hasCopy?: boolean;
+    leafProjectId?: string;
     answers?: Record<string, unknown>;
     /** The leaf's hello capabilities; the default is a leaf from before node-mail-steer. */
     capabilities?: Record<string, number>;
@@ -79,7 +83,12 @@ async function setup(
             projects:
               options.hasCopy === false
                 ? []
-                : [{ ref: { projectId: "p-leaf" }, repositoryHint: "github.com/acme/site" }],
+                : [
+                    {
+                      ref: { projectId: options.leafProjectId ?? "p-leaf" },
+                      repositoryHint: "github.com/acme/site",
+                    },
+                  ],
           },
         ],
       }),
@@ -121,6 +130,7 @@ async function setup(
     run,
     routed,
     associations,
+    context,
     loseNext: (command: string) => {
       unknownOnce = command;
     },
@@ -609,4 +619,104 @@ describe("workflows on a node", () => {
       }),
     ).rejects.toThrow("Adopt this workflow");
   });
+});
+
+describe("deliverNow through a linked command and leaf handler", () => {
+  for (const joining of [false, true]) {
+    test(`steering ${joining ? "joins" : "opens"} a remote delegation and replays once`, async () => {
+      const leaf = await MailWorld.create();
+      worlds.push(leaf);
+      const worker = await leaf.addEnvironment("linked-worker", { launched: true });
+      let phase = "working";
+      const nodeCoordination = new NodeCoordination({
+        storage: leaf.storage,
+        nodes: {
+          listControllers: () => [{ controllerId: "bk_cmd", displayName: "Office desktop" }],
+          subscribe: () => () => {},
+        } as never,
+        portal: { readModel: { onNodeEvent: () => () => {} } } as never,
+        invoke: async () => undefined as never,
+        emit: () => {},
+      });
+      const commands = new Map<string, CommandHandler>();
+      registerNodeCommands((name, handler) => commands.set(name, handler));
+      const leafContext = {
+        storage: leaf.storage,
+        nodeCoordination,
+        drainAgentMail: () => leaf.mail.drainInjects(),
+      } as unknown as CommandContext;
+      const leafCall = (name: string, args: Record<string, unknown>) =>
+        commands.get(name)!(args, leafContext);
+      const { world, run, scope, routed, associations, context } = await setup({
+        leafProjectId: leaf.projectId,
+        capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+        answers: {
+          get_environment: () => leaf.storage.getEnvironment(worker.environmentId),
+          deliver_node_mail: (args: Record<string, unknown>) => leafCall("deliver_node_mail", args),
+          get_worker_request_state: (args: Record<string, unknown>) =>
+            leafCall("get_worker_request_state", args),
+          get_agent_registry: () => ({
+            entries: [{ environmentId: worker.environmentId, tabId: worker.tabId, state: phase }],
+          }),
+        },
+      });
+      const remote = new NodeCoordinatorRemote({
+        invokeOnNode: (input) => context.nodePortal!.invokeOnNode(input),
+        summaries: async () => ({ nodes: [] }) as never,
+        collectMail: async () => true,
+      });
+      world.coordinator.setRemoteAccess(remote);
+      const input = {
+        scope,
+        nodeId: "bk_leaf",
+        toEnvironmentId: worker.environmentId,
+        toTabId: worker.tabId,
+      };
+      if (joining) {
+        await run("send_coordinator_node_mail", {
+          ...input,
+          requestId: "initial",
+          body: "Initial request.",
+        });
+        expect(
+          await remote.workerState("bk_leaf", worker.environmentId, worker.tabId),
+        ).toMatchObject({ requestPending: true });
+        await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+        phase = "idle";
+        await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+        expect((await associations())[0]!.delegation?.state).toBe("running");
+        phase = "working";
+      }
+      const correction = {
+        ...input,
+        requestId: "correction",
+        body: "Use the corrected requirement.",
+        deliverNow: true,
+      };
+      const result = await run("send_coordinator_node_mail", correction);
+      expect(result).toMatchObject({
+        placement: "injected",
+        injectedVia: "steer",
+        deliverNow: "steered",
+        coordinatorDelegationOpened: true,
+      });
+      expect(result).not.toHaveProperty("placementReason");
+      expect(routed.findLast((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject(
+        { steer: true, requestId: "correction" },
+      );
+      const steered = leaf.steered(worker);
+      expect(steered.filter((text) => text.includes(correction.body))).toHaveLength(1);
+      expect(await run("send_coordinator_node_mail", correction)).toEqual(result);
+      expect(leaf.steered(worker)).toEqual(steered);
+      expect(await remote.workerState("bk_leaf", worker.environmentId, worker.tabId)).toMatchObject(
+        { requestPending: false },
+      );
+      expect(await associations()).toHaveLength(1);
+      await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+      await leaf.finishTurn(worker, { deliver: false });
+      phase = "idle";
+      await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+      expect((await associations())[0]!.delegation?.state).toBe("completed");
+    });
+  }
 });

@@ -310,6 +310,7 @@ export class NodeCoordination {
     toTabName?: string;
     placement: string;
     placementReason?: string;
+    injectedVia?: "steer";
   }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
@@ -368,6 +369,7 @@ export class NodeCoordination {
       ...(toTabName ? { toTabName } : {}),
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+      ...(message.injectedVia ? { injectedVia: message.injectedVia } : {}),
     };
   }
 

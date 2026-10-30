@@ -1905,10 +1905,13 @@ export class CodexRuntimeLifecycle {
 
         const outcome = await this.ctx.options.engine.reconcileRequest(
           context.threadId,
-          turn.requestId,
+          turn.providerRequestId ?? turn.requestId,
         );
 
         if (outcome.result === "terminal") {
+          if (outcome.turnId) turn.turnId = outcome.turnId;
+          for (const item of outcome.items ?? []) turn.onItemCompleted(item);
+          if (outcome.error) turn.onError(outcome.error);
           this.completeRecoveredTurn(turn, outcome.status ?? "completed");
           await this.runFinalization(context, turn);
           continue;

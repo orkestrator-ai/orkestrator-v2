@@ -1927,6 +1927,10 @@ describe("reconciliation", () => {
       turnId: "turn-1",
       precedingItemIds: ["before-steer"],
       followingItemIds: ["after-steer"],
+      items: [
+        { id: "before-steer", type: "agent_message", text: "working" },
+        expect.objectContaining({ id: "after-steer", type: "command_execution" }),
+      ],
     });
   });
 

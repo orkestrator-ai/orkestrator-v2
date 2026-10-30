@@ -45,6 +45,7 @@ interface PendingCapacityRetry {
   timer?: ReturnType<typeof setTimeout>;
   /** Stop arrived while `turn/start` was in flight. */
   stopAfterStart?: boolean;
+  work?: Promise<void>;
 }
 
 export type CapacityFailureDecision = { retrying: true } | { retrying: false; error?: EngineError };
@@ -103,6 +104,7 @@ export class CodexCapacityRetry {
     const delayMs = capacityRetryDelayMs(policy, attempt, this.ctx.options.capacityRetryRandom);
     const itemId = capacityRetryItemId(turn.requestId, attempt);
     turn.settleEndedAttempt();
+    turn.error = undefined;
     turn.recordRetryCard(
       itemId,
       capacityRetryWaitingText(delayMs, attempt, policy.maxAttempts),
@@ -138,8 +140,22 @@ export class CodexCapacityRetry {
   }
 
   /** A last-tab close: end the wait the way Stop does. */
-  cancelForClose(context: ThreadContext, turn: TurnAccumulator): boolean {
-    return this.stop(context, turn);
+  async cancelForClose(context: ThreadContext, turn: TurnAccumulator): Promise<boolean> {
+    const entry = this.pending.get(turn);
+    if (!entry || !this.stop(context, turn)) return false;
+    // Keep the session and engine binding addressable until start and its
+    // deferred interrupt have settled. Unsubscribe removes that binding.
+    await entry.work;
+    if (!turn.isTerminal()) {
+      await this.ctx.options.engine.waitForTurnTerminal(context.engineHandle, turn.turnId, {
+        allowRestart: true,
+      });
+      if (!turn.isTerminal()) {
+        turn.complete("interrupted");
+        await this.lifecycle.runFinalization(context, turn);
+      }
+    }
+    return true;
   }
 
   /**
@@ -204,6 +220,7 @@ export class CodexCapacityRetry {
         this.end(context, turn, "failed", entry.error, CAPACITY_RETRY_START_FAILED_TEXT);
       }
     });
+    entry.work = work;
     this.ctx.pendingFinalizations.add(work);
     void work.finally(() => this.ctx.pendingFinalizations.delete(work));
   }
@@ -234,7 +251,10 @@ export class CodexCapacityRetry {
     const previousTurnId = turn.turnId;
     // Park the continuation's notifications until `turn/start` names it:
     // against the ended turn's id they would be dropped as stale.
+    turn.providerRequestId = clientId;
     turn.turnId = unconfirmedTurnId(clientId);
+    await this.ctx.journal.markContinuation(requestId, clientId);
+    plan.attempt = entry.attempt;
 
     // The refused-cell tail reads the continuation from the rollout's end.
     const path = engine.rolloutPath(context.threadId);
@@ -247,7 +267,7 @@ export class CodexCapacityRetry {
     this.lifecycle.stateFor(context.threadId).refusedCellOffset = offset;
 
     let started: { turnId: string; engineGeneration: EngineGeneration } | undefined;
-    let reconciledStatus: EngineTurnStatus | undefined;
+    let reconciled: Awaited<ReturnType<typeof engine.reconcileRequest>> | undefined;
     try {
       started = await engine.startTurn({
         handle: context.engineHandle,
@@ -268,12 +288,11 @@ export class CodexCapacityRetry {
           .catch(() => undefined);
         if (outcome && outcome.result !== "absent" && outcome.turnId) {
           started = { turnId: outcome.turnId, engineGeneration: engine.info().generation };
-          if (outcome.result === "terminal") reconciledStatus = outcome.status ?? "completed";
+          reconciled = outcome;
         } else if (!outcome) {
           // Unknown either way: hold the overlap guard like any ambiguous
           // dispatch; the backstop restarts the child if it never settles.
           this.clear(turn, entry, CAPACITY_RETRY_START_FAILED_TEXT);
-          turn.error = entry.error;
           this.ctx.registry.setPhase(context, "recovering");
           this.lifecycle.emitStatus(context);
           this.ctx.callbacks.scheduleRecoveryBackstop(context);
@@ -300,19 +319,6 @@ export class CodexCapacityRetry {
       return;
     }
 
-    turn.turnId = started.turnId;
-    turn.engineGeneration = started.engineGeneration;
-    context.engineGeneration = started.engineGeneration;
-    plan.attempt = entry.attempt;
-    if (entry.stopAfterStart) this.clear(turn, entry, CAPACITY_RETRY_CANCELLED_TEXT);
-    else {
-      this.clear(
-        turn,
-        entry,
-        capacityRetryStartedText(entry.attempt, policy.maxAttempts),
-        "success",
-      );
-    }
     await this.ctx.journal
       .markAccepted(requestId, { threadId: context.threadId, turnId: started.turnId })
       .catch((error) =>
@@ -329,15 +335,41 @@ export class CodexCapacityRetry {
       );
       await Promise.all(ledger.map((session) => this.ctx.callbacks.persistSession(session)));
     }
+    // Installing the id and draining parked events must be synchronous: no
+    // later notification may overtake an earlier parked item or completion.
+    turn.turnId = started.turnId;
+    turn.engineGeneration = started.engineGeneration;
+    context.engineGeneration = started.engineGeneration;
+    if (entry.stopAfterStart) this.clear(turn, entry, CAPACITY_RETRY_CANCELLED_TEXT);
+    else {
+      this.clear(
+        turn,
+        entry,
+        capacityRetryStartedText(entry.attempt, policy.maxAttempts),
+        "success",
+      );
+    }
+    if (reconciled?.items) {
+      for (const item of reconciled.items) turn.onItemCompleted(item);
+    }
     this.publish(context);
     // Whatever app-server reported before its response, a fast continuation's
     // terminal event included.
     this.lifecycle.drainPendingEvents(context, started.turnId);
-    if (reconciledStatus && context.activeTurn === turn && !turn.isTerminal()) {
-      // It already ended and its terminal event was not among those parked.
-      turn.complete(reconciledStatus);
-      await this.lifecycle.runFinalization(context, turn);
-      return;
+    if (
+      reconciled?.result === "terminal" &&
+      context.activeTurn === turn &&
+      !turn.isTerminal() &&
+      !this.isPending(turn)
+    ) {
+      this.lifecycle.applyEvent(context, {
+        kind: "turn.completed",
+        threadId: context.threadId,
+        turnId: started.turnId,
+        engineGeneration: started.engineGeneration,
+        status: reconciled.status ?? "completed",
+        error: reconciled.error,
+      });
     }
     if (entry.stopAfterStart && !turn.isTerminal()) {
       // The ordinary Stop, now that there is a turn to interrupt: it waits for
@@ -362,7 +394,8 @@ export class CodexCapacityRetry {
       turn.complete("failed", error);
       turn.recordProviderFailure(error);
     } else turn.complete(status);
-    void this.lifecycle.runFinalization(context, turn);
+    const work = this.lifecycle.runFinalization(context, turn);
+    if (entry) entry.work = work;
   }
 
   private clear(

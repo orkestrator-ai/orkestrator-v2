@@ -153,6 +153,8 @@ export function unconfirmedTurnId(requestId: string): string {
 export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
+  /** Identity of the current provider attempt; requestId owns logical result credit. */
+  providerRequestId?: string;
   readonly expectsStructuredOutput: boolean;
   /** Assistant transcript row receiving newly introduced items in this turn. */
   assistantMessageId: string;

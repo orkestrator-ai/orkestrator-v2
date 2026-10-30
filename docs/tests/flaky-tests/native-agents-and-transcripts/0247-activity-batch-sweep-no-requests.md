@@ -230,3 +230,19 @@ Evidence is `orkestrator-test-run.dVAVdc/default-tests-rerun.log.gz` and the
 workspace group in `orkestrator-test-run.9oowaB/` below the host temporary
 directory. No activity-sweep implementation, test, deadline or skip changed.
 This confirms aggregate-only intermittence; its cause remains unproven.
+
+## Recurrence during the provider upgrade — 2026-10-30
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  on `upgrade-agent-providers-638712a01b8e` (agent SDK and CLI pin bumps; no
+  activity-sweep code changed).
+- **Failure:** `activity sweep over the batch route > 10 sessions cost 1 request(s) and touch nothing`
+  (17.81 ms), with the usual `ProviderUnavailableError` and
+  `ProviderUnreachableError` reconciliation logs for `env-1`.
+- **Suite counts:** backend 11,277 passed and 2 failed; the other failure was
+  `session-title-runners.test.ts`, which needs the pinned Codex binary in the
+  managed toolchain and passed with `CODEX_PROTOCOL_BINARY` set. Web 10,842
+  passed; root, bridges and the Codex protocol lockfile passed.
+- **Isolated rerun:** `mise run test:logged -- --name activity-batch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/native-agent-service-activity-batch.test.ts --parallel`
+  passed the unchanged owning file (0.4 s).
+- **Disposition:** recorded evidence only; no test changed.

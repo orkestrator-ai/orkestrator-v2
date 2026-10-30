@@ -42,3 +42,20 @@ The isolated pass confirms recurrence; the stalled operation remains unknown. No
 - **Suite counts:** Cursor package: 774 passed, 1 failed.
 
 Failing once alone on a loaded host keeps this load-sensitive; the stalled operation is still unidentified. No assertion, timeout or skip was changed.
+
+## Recurrence during the provider upgrade (2026-10-30)
+
+- **Original command:** `mise run test:logged -- --name full-suite-2 -- mise run test`
+  on `upgrade-agent-providers-638712a01b8e`, which moves `@cursor/sdk` from
+  1.0.40 to 1.2.0 and changes the bridge's compaction translation (not this
+  route).
+- **Failure:** the same case's `beforeEach`/`afterEach` hook timed out
+  (10002.31 ms), followed by `[cursor-bridge] Unexpected HTTP route failure`.
+- **Suite counts:** Cursor 812 passed, 1 failed. Every other group passed. The
+  previous aggregate on the same commits passed the bridges group, Cursor
+  included, and the package's own `test:bridge` run passed before that.
+- **Isolated rerun:** `mise run test:logged -- --name cursor-liveness-N -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel`
+  passed three times in a row (2.1–2.9 s).
+- **Disposition:** recorded evidence only; no assertion, timeout or skip changed.
+  Whether SDK 1.2.0 makes the hook slower is not established: the case passed
+  in one of the two aggregates on 1.2.0.

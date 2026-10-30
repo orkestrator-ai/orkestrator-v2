@@ -6,7 +6,7 @@ import { sessionOperationError } from "./session-manager-core.js";
 
 // Keeping a running CLI's MCP servers in step with the saved configuration.
 //
-// Pinned against CLI 2.1.309, and proved on the real CLI by
+// Pinned against CLI 2.1.314, and proved on the real CLI by
 // `session-manager-prompt-mcp-sync.live.test.ts`:
 //
 // - `setMcpServers` replaces only the servers an earlier `setMcpServers` call

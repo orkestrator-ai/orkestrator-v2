@@ -46,10 +46,11 @@ describe("requestKeyboardShortcuts", () => {
 });
 
 describe("isKeyboardShortcutsInput", () => {
+  // ⌘⇧/ as macOS reports it.
   const input = {
     type: "keyDown",
-    key: "K",
-    code: "KeyK",
+    key: "/",
+    code: "Slash",
     meta: true,
     control: false,
     shift: true,
@@ -60,6 +61,7 @@ describe("isKeyboardShortcutsInput", () => {
     expect(isKeyboardShortcutsInput(input)).toBe(true);
     expect(isKeyboardShortcutsInput({ ...input, type: "rawKeyDown" })).toBe(false);
     expect(isKeyboardShortcutsInput({ ...input, meta: false, control: true })).toBe(true);
+    expect(isKeyboardShortcutsInput({ ...input, meta: false, control: true, key: "?" })).toBe(true);
     expect(isKeyboardShortcutsInput({ ...input, type: "keyUp" })).toBe(false);
     expect(isKeyboardShortcutsInput({ ...input, shift: false })).toBe(false);
   });
@@ -79,11 +81,13 @@ describe("appShortcutForInput", () => {
   test.each([
     ["⌘", { meta: true }],
     ["Ctrl", { control: true }],
-  ])("%s+K is search and %s+Shift+K the shortcuts dialog, on any platform", (_, modifier) => {
+  ])("%s+K is search and %s+Shift+/ the shortcuts dialog, on any platform", (_, modifier) => {
     expect(appShortcutForInput({ ...input, ...modifier })).toBe("search-projects");
-    expect(appShortcutForInput({ ...input, ...modifier, key: "K", shift: true })).toBe(
-      "show-shortcuts",
-    );
+    expect(appShortcutForInput({ ...input, ...modifier, key: "K", shift: true })).toBeNull();
+    for (const key of ["/", "?"])
+      expect(appShortcutForInput({ ...input, ...modifier, key, code: "Slash", shift: true })).toBe(
+        "show-shortcuts",
+      );
     // macOS can report Ctrl+K as its control character; the key position decides.
     expect(appShortcutForInput({ ...input, ...modifier, key: "\v" })).toBe("search-projects");
     expect(appShortcutForInput({ ...input, ...modifier, type: "keyUp" })).toBeNull();

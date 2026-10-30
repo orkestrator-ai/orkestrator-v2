@@ -399,7 +399,7 @@ describe("BrowserPreviewManager", () => {
     expect(harness.focusAddressBar).toHaveBeenCalledTimes(2);
   });
 
-  test("routes Cmd+Shift+K and Ctrl+Shift+K from the native preview to the shortcuts dialog", async () => {
+  test("routes Cmd+Shift+/ and Ctrl+Shift+/ from the native preview to the shortcuts dialog", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
     const contents = harness.views[0]!.webContents;
@@ -407,8 +407,8 @@ describe("BrowserPreviewManager", () => {
       const event = { preventDefault: mock(() => undefined) };
       contents.emit("before-input-event", event, {
         type: "keyDown",
-        key: "K",
-        code: "KeyK",
+        key: "/",
+        code: "Slash",
         meta: false,
         control: false,
         alt: false,
@@ -422,9 +422,9 @@ describe("BrowserPreviewManager", () => {
     // Claimed before the page or the menu's key equivalent can see it.
     expect(press({ meta: true })).toBe(1);
     expect(press({ meta: true, type: "rawKeyDown" })).toBe(0);
-    expect(press({ control: true })).toBe(1);
-    // A layout whose K key types no Latin letter still matches.
-    expect(press({ meta: true, key: "Л" })).toBe(1);
+    expect(press({ control: true, key: "?" })).toBe(1);
+    // A layout that types no ASCII character on the Slash key still matches.
+    expect(press({ meta: true, key: "ё" })).toBe(1);
     // A held key is still claimed, but toggles only once.
     expect(press({ meta: true, isAutoRepeat: true })).toBe(1);
     expect(harness.requestPreviewShortcut.mock.calls).toEqual([

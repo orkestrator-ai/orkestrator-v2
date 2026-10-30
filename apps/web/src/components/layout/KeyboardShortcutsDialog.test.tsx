@@ -5,10 +5,11 @@ import { listen } from "@/lib/native/events";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 
+/** ⌘⇧/ reports "/" on macOS; browsers report Ctrl+Shift+/ as "?". */
 function pressShortcut(init: KeyboardEventInit = { metaKey: true }) {
   fireEvent.keyDown(window, {
-    key: "K",
-    code: "KeyK",
+    key: init.ctrlKey ? "?" : "/",
+    code: "Slash",
     shiftKey: true,
     ...init,
   });
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 describe("KeyboardShortcutsDialog", () => {
-  test("Cmd+Shift+K opens the dialog with the search focused, and toggles it closed", async () => {
+  test("Cmd+Shift+/ opens the dialog with the search focused, and toggles it closed", async () => {
     render(<KeyboardShortcutsDialog platform="mac" />);
     expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog"));
 
@@ -79,7 +80,7 @@ describe("KeyboardShortcutsDialog", () => {
       editorCalls++;
     });
     const editor = screen.getByRole("textbox", { name: "Editor" });
-    fireEvent.keyDown(editor, { key: "K", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(editor, { key: "/", code: "Slash", metaKey: true, shiftKey: true });
     await screen.findByRole("dialog");
     for (let i = 0; i < 3; i++) pressShortcut({ metaKey: true, repeat: true });
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -134,11 +135,11 @@ describe("KeyboardShortcutsDialog", () => {
     // Close Tab is ⌘W only: Windows and Linux have no key for it.
     expectDomAbsent(screen.queryByTestId("keyboard-shortcut-close-tab"));
     expect(screen.getByTestId("keyboard-shortcut-show-shortcuts").textContent).toBe(
-      "Show keyboard shortcutsCtrlShiftK",
+      "Show keyboard shortcutsCtrlShift/",
     );
     const dialog = screen.getByTestId("keyboard-shortcuts-dialog");
     // The footer's toggle hint names the Windows/Linux chord, too.
-    expect(dialog.textContent).toContain("CtrlShiftKToggle");
+    expect(dialog.textContent).toContain("CtrlShift/Toggle");
     expect(dialog.textContent).not.toMatch(/[⌘⌥]/);
   });
 
@@ -160,12 +161,13 @@ describe("KeyboardShortcutsDialog", () => {
     expect((reopened as HTMLInputElement).value).toBe("");
   });
 
-  test("opens on a layout whose K key types no Latin letter", async () => {
+  test("opens on a layout whose Slash key types no ASCII character", async () => {
     render(<KeyboardShortcutsDialog platform="mac" />);
-    // Russian ЙЦУКЕН: ⌘⇧ and the physical K key report key "Л".
-    pressShortcut({ metaKey: true, key: "Л" });
+    // A layout that types a non-ASCII character on the Slash key: the
+    // physical key position decides.
+    pressShortcut({ metaKey: true, key: "ю" });
     expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
-    pressShortcut({ metaKey: true, key: "Л" });
+    pressShortcut({ metaKey: true, key: "ю" });
     await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));
   });
 
@@ -187,14 +189,14 @@ describe("KeyboardShortcutsDialog", () => {
     composer.addEventListener("keydown", stopAtDocument);
     try {
       composer.focus();
-      fireEvent.keyDown(composer, { key: "K", code: "KeyK", metaKey: true, shiftKey: true });
+      fireEvent.keyDown(composer, { key: "/", code: "Slash", metaKey: true, shiftKey: true });
       expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
     } finally {
       document.removeEventListener("keydown", stopAtDocument, true);
     }
   });
 
-  describe("Ctrl+Shift+K and Cmd+Shift+K", () => {
+  describe("Ctrl+Shift+/ and Cmd+Shift+/", () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
     afterEach(() => {
       if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
@@ -222,7 +224,12 @@ describe("KeyboardShortcutsDialog", () => {
         for (const name of ["Composer", "Terminal input"]) {
           const surface = screen.getByRole("textbox", { name });
           surface.focus();
-          fireEvent.keyDown(surface, { key: "K", code: "KeyK", shiftKey: true, [modifier]: true });
+          fireEvent.keyDown(surface, {
+            key: modifier === "ctrlKey" ? "?" : "/",
+            code: "Slash",
+            shiftKey: true,
+            [modifier]: true,
+          });
           expect(await screen.findByTestId("keyboard-shortcuts-dialog")).toBeTruthy();
           pressShortcut({ [modifier]: true });
           await waitFor(() => expectDomAbsent(screen.queryByTestId("keyboard-shortcuts-dialog")));

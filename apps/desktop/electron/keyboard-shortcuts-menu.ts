@@ -48,7 +48,7 @@ export function appShortcutForInput(input: ShortcutInput): AppShortcutId | null 
   });
 }
 
-/** Whether a native view's `before-input-event` is ⌘⇧K / Ctrl+Shift+K. */
+/** Whether a native view's `before-input-event` is ⌘⇧/ / Ctrl+Shift+/. */
 export function isKeyboardShortcutsInput(input: ShortcutInput): boolean {
   return appShortcutForInput(input) === "show-shortcuts";
 }

@@ -4,24 +4,31 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
+2026-10-30 against `main` at `cd7bbe3e`.
 
 ### Tasks
 
 1. **Pick the next extension**: the first open question, which extension (if
-   any) to build next. Status: open.
+   any) to build next. Status: done (source hints, task 4; see Assumptions and
+   decisions).
 2. **Controlled pixel diffs**: code item 1, advisory region or pixel diffs
-   behind their own capability. Status: deferred.
-3. **Automatic after-capture**: code item 2. Status: deferred.
+   behind their own capability. Status: open (not started; still no diff code
+   on 2026-10-30).
+3. **Automatic after-capture**: code item 2. Status: open (not started).
 4. **Development source hints**: code item 3, a producer plus backend
    verification; also a small trust gap in today's hint handling. Status:
-   deferred (the gap is open now).
-5. **Open shadow roots and same-origin iframes**: code item 4. Status: deferred.
+   done (the gap closed in todo 0725, #1416; the producer, backend check and
+   `operations.sourceHints` capability landed on branch
+   `todo-0047-web-annotation-extensions`).
+5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
+   (not started; the anchor script still marks both `unsupported`).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
-   blocked (on the go or no-go decision in
-   [0046](0046-embedded-service-previews.md)).
+   open (depends on the go or no-go decision, task 1 of
+   [0046](0046-embedded-service-previews.md), still open on 2026-10-30).
 7. **Product extensions**: code item 6 (grouping, issue export, multi-user,
-   generated summaries). Status: deferred.
+   generated summaries). Status: open (not started; split out per item when
+   wanted).
 
 The Qualification bullet applies to each extension as it lands and is covered
 inside tasks 2 to 6.
@@ -135,6 +142,13 @@ submit `verified: true` and the agent sees it, albeit with the "candidate
 location only" note. The file's claim "the backend never sets `verified: true`"
 holds, but the backend does not reset a client's `true` either.
 
+Rechecked 2026-10-30: todo 0725 (#1416) closed that gap. A capture declaring
+`verified: true` is refused ("Source hint verification is assigned by the
+receiver", `packages/protocol/src/web-annotations-validation.ts`), and hints
+are stored and briefed through `webAnnotationSourceHintFields`. The
+`regionCrop`/`producerSource` pattern it follows is the same. The remaining
+work, the producer and the backend check, is what this branch builds.
+
 **Decisions.**
 
 - **Close the `verified` gap now, ahead of the feature?**
@@ -241,6 +255,91 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 `.resultTools` gate the existing surfaces. Qualify the core loop first
 ([0044-web-annotation-qualification.md](0044-web-annotation-qualification.md)).
 
+## Assumptions and decisions
+
+Recorded 2026-10-30 by the worker on branch
+`todo-0047-web-annotation-extensions`, against `main` at `cd7bbe3e`.
+
+### Task 1: build source hints next (the recommendation)
+
+Chose source hints, as recommended. Current main supports it: the contract,
+validation, brief rendering and `checkWebAnnotationWorkspacePaths` (local
+worktrees and container `/workspace`) all exist, and 0725 (#1416) already
+refuses a client-declared `verified: true`. That leaves the producer and the
+receiver-side check, both small. Pixel diffs still need an unstable-region
+mask that does not exist (only a whole-capture stable flag) and decode caps in
+the backend. "None until 0044 closes" was rejected because 0044's remaining
+runs wait on hardware and a person, and source hints do not change the core
+loop that 0044 qualifies.
+
+### Task 4: rechecked status of the trust gap
+
+The gap in this task's investigation (a client's `verified: true` reaching the
+agent) is closed on main by todo 0725 (#1416, commit `17747a12`). Not redone.
+
+### Task 4: the producer is a documented page convention read by the desktop
+
+Chose the recommended `data-orkestrator-source` attribute convention
+(`WEB_ANNOTATION_SOURCE_ATTRIBUTES` in `packages/protocol/src/web-annotations.ts`).
+The producer identifies itself with an optional
+`<meta name="orkestrator-source-producer">` (default: the attribute name) and
+its project root with an optional `<meta name="orkestrator-source-root">`
+(workspace-relative; default: the workspace root). The desktop anchor script
+(`sourceHintsFor`) walks the selected element and up to 16 ancestors and keeps
+the nearest four distinct paths. Only workspace-relative paths are accepted:
+an absolute path would reveal or need the host's worktree path, and a page
+cannot know it. React DevTools fibre data was rejected, as the analysis says,
+because it is a private internal. Only element captures carry hints; text,
+region and page captures have no single element to read.
+
+### Task 4: `verified` is set before the write, from a real workspace check
+
+`verifySourceHints` (`web-annotation-service-threads.ts`) runs after
+validation and before the write queue, on `create`, `capture_replace` and
+`result_capture`, through a new shared `WebAnnotationContext.checkWorkspacePaths`
+(moved from the result-report path, which now uses it too). It sets
+`verified: true` only for paths whose status is `exists`. A missing,
+outside-workspace (including a symlink that resolves outside) or unchecked
+path, or a failed check, leaves the hint unverified and still saves the note:
+a hint is optional evidence and should never block feedback. The check runs at
+capture time and is stored in the immutable capture, so `verified` means "the
+path existed in the workspace at capture". The brief says so and still tells
+the agent to check the code. Line and component are never confirmed, because
+the check never reads file contents.
+
+### Task 4: the capability is `operations.sourceHints`, gated on the check
+
+The backend advertises `operations.sourceHints` when authoring is on and the
+dispatch port has `checkWorkspacePaths`, so it never invites hints it cannot
+check. The renderer drops hints at commit (`withAdvertisedSourceHints` in
+`apps/web/src/lib/web-annotations/capture-commit.ts`) unless the flag is
+`true`, so an older backend never receives them. The flag is optional in the
+contract, so older clients ignore it.
+
+### Task 4: defence in depth in Electron main
+
+Main rebuilds each page-declared hint from its known fields, forces
+`verified: false`, checks `isSafeRelativePath`, and drops an invalid hint on
+its own instead of failing the whole capture (`parseSourceHints`). The page is
+untrusted and could patch the anchor kit, so main does not rely on the page's
+own filtering.
+
+### Task 4: follow-ups moved to a new todo
+
+No reference emitter ships, and the thread view does not show hints. Both, and
+a live desktop capture, are in
+[0950-source-hint-producer-plugin.md](0950-source-hint-producer-plugin.md),
+because the README rule is not to add new items to an existing file.
+
+### Tasks 2, 3, 5, 6 and 7: statuses rechecked, nothing built
+
+Rechecked on 2026-10-30: no diff code exists and `ResultReview.tsx` still
+shows two images (task 2); nothing triggers an after-capture (task 3); the
+anchor script still marks iframe and shadow-root targets `unsupported`
+(task 5); 0046's go or no-go (its task 1) is still open (task 6); none of the
+product extensions has started (task 7). Their statuses now read `open`, as
+`AGENTS.md` asks, with the reason in brackets.
+
 ## Current state
 
 - Comparison is side by side only. Capture current result
@@ -250,15 +349,16 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
   the two images. The desktop capture waits for a settle window and reports
   `stable`/`unstable` (`browser-preview-capture.ts`). Pixel diffs and overlays
   are never advertised.
-- `WebAnnotationSourceHint` (`producer`, `path`, `line`, `component`,
-  `verified`) exists in the contract and in validation (at most four per
-  capture). `compileWebAnnotationBrief` (`web-annotation-brief.ts`) renders it
-  as "candidate location only; verify in the repository". Nothing produces
-  hints, and the backend never sets `verified: true`. Since todo 0725
-  (retired on 2026-10-29; see
-  [web-page-annotations.md](../../architecture/web-page-annotations.md#capture)),
-  a capture declaring `verified: true` is refused, and hints are stored and
-  briefed with their known fields only.
+- Development source hints are built (task 4). The desktop anchor script reads
+  the documented `data-orkestrator-source` convention
+  (`WEB_ANNOTATION_SOURCE_ATTRIBUTES`) on the selected element and its
+  ancestors; Electron main rebuilds the hints with `verified: false`
+  (`parseSourceHints`); the renderer sends them only when the backend
+  advertises `operations.sourceHints`; the backend sets `verified: true` only
+  for paths `checkWebAnnotationWorkspacePaths` finds inside the workspace
+  (`verifySourceHints` in `web-annotation-service-threads.ts`). Since todo
+  0725, a client-declared `verified: true` is refused. See
+  [web-page-annotations.md](../../architecture/web-page-annotations.md#development-source-hints).
 - iframe and shadow-root targets resolve to their host element with
   `scope: { kind: "unsupported", reason: … }`
   (`browser-preview-anchor-script.ts`). Region mode (`CaptureModePicker.tsx`)
@@ -289,13 +389,9 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
    reload the user's active page. Reuse the stable-geometry window, reapply the
    user's redaction masks, and keep manual capture as the path whenever login
    or form state cannot be reproduced.
-3. Development source hints.
-   - Needs a producer that identifies itself and its project root.
-   - Before `verified: true`, the backend checks containment and existence.
-     Reuse `web-annotation-source-checks.ts`, which checks local worktrees and
-     (since todo 0043) container workspaces.
-   - Hints stay candidate locations; the agent still checks the repository.
-   - Never depend on private React (or other framework) runtime internals.
+3. Development source hints: done (task 4). Left over: no build plugin ships
+   with Orkestrator, and the thread view does not show hints; see
+   [0950](0950-source-hint-producer-plugin.md).
 4. Open shadow roots and same-origin iframes.
    - Requires explicit root paths, a navigation generation per frame, and
      coordinate transforms through each frame.
@@ -353,7 +449,8 @@ capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 
 ## Open questions
 
-- Which extension, if any, is wanted next?
+- Which extension, if any, is wanted next? Answered on 2026-10-30: source
+  hints (task 4), now built; the next pick among tasks 2, 3 and 5 is open.
 - Is non-desktop capture worth designing before embedded previews exist? If
   embedded previews are dropped, a backend-owned browser session is the only
   remaining option.

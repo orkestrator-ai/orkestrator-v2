@@ -1,7 +1,7 @@
 # Graphs designer builds the design bake-off on the canvas, compiles it clean and saves it
 
 - **ID:** 1311
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-29
 - **Test:** `Graphs designer builds the design bake-off on the canvas, compiles it clean and saves it`
 - **File:** `e2e/agent-testing/graph-designer-editing.spec.ts:223`
@@ -12,9 +12,13 @@
 - **Evidence:** `orkestrator-test-run.rkSCrN` below the host temporary directory; artifacts under `output/agent-testing/graphs-213/browser/artifacts/` (not committed).
 - **Hypothesis:** The window-level undo shortcut only acts when the key event's target is inside the designer or the document body; right after the "Connect to…" dialog closes, focus may still be in transit, so the keypress is ignored. Not confirmed; no assertion, timeout or skip changed.
 
-- **Resolution (2026-10-30):** The browser test now explicitly focuses the
-  designer's Connect button and verifies focus before sending the Undo
-  shortcut. This establishes which component should receive the keyboard
-  action after the portal dialog closes. The edge-count assertions are
-  unchanged. The owning scenario passed in the complete isolated browser
-  rerun and again in the focused graph-spec run.
+- **Recurrence (2026-10-30):** The experimental-graphs review preparation
+  repeated the same edge-count failure. Explicitly focusing the designer's
+  Connect button before Undo passed once in the complete isolated suite and
+  once in the focused graph-spec run, but the next complete isolated run
+  failed the same assertion even after `toBeFocused()` passed. Focus alone
+  therefore does not establish the cause; that attempted test change was
+  reverted. The assertions and timeout remain unchanged. Evidence:
+  `orkestrator-test-run.ukaJle/isolated-browser-final.log.gz` under the host
+  temporary directory and
+  `output/agent-testing/qa-browser-733773a3-88d/browser/artifacts/`.

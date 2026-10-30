@@ -331,8 +331,9 @@ cancelled graph action would have run a second `status`.
 `runGitWithFsmonitorFallback` uses the same check instead of its own.
 
 Left out on purpose: writes (`reset --hard`, `add`), reads that never consult
-the daemon (`rev-parse`, `show`, `log`, commit-to-commit diffs,
-index-only `diff --cached`, `hash-object`, `clean -n` and `submodule status`),
+the daemon (`rev-parse`, `show`, `log`, commit-to-commit diffs and
+index-only `diff --cached`), bounded inspection helpers (`hash-object`,
+`clean -n` and `submodule status`),
 `buildRootChangesPatch` (a path-limited diff against a scratch index on an
 explicit user action, already bounded at 120 s) and the
 `git submodule foreach` status string inside `project-git-service.ts`, which

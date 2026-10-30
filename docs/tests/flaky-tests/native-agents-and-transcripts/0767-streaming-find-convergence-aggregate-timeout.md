@@ -89,3 +89,43 @@ failure, passed separately (exit 0, 10.8 s):
 ```sh
 mise run test:logged -- --name review-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
 ```
+
+
+## Environment name signal review repair — 2026-10-30
+
+The exact preparation command was rerun after repairing the sidebar fixture's
+host-maintenance response and adding signal regressions:
+
+```sh
+mise run test:logged -- --name browser -- mise run test:browser
+```
+
+The nine-worker component suite reported 972 passed, 106 skipped and four failed
+across 1,082 cases (455.1 seconds logged). This find-convergence case failed in
+both viewports at line 371: expected `converged`, received `unresolved` after
+five seconds. The other two failures were the unchanged native branch-picker
+cases (`rel` instead of `release/2.0`). All signal and sidebar cases passed.
+Preparation had already failed these same four unrelated cases, alongside the
+now-repaired sidebar fixture failures.
+
+The complete unchanged one-worker owner rerun reported 25 passed and one failed
+(48.6 seconds logged). Desktop passed; mobile repeated the same find-convergence
+failure, so this observation does not establish a complete isolated owner pass:
+
+```sh
+mise run test:logged -- --name name-signal-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/name-signal-streaming-owner
+```
+
+Artifacts are `orkestrator-test-run.ipWxnh/browser.log.gz` and
+`orkestrator-test-run.hHADzF/name-signal-streaming-owner.log.gz` under the host
+temporary directory. No other validation was running during the owner rerun.
+The desktop difference is intermittent evidence; the persistent mobile failure
+means contention alone does not explain this observation. Cause remains
+unestablished. No transcript implementation, assertion, timeout or skip changed.
+
+The public-site suite, blocked by the chained component failure, passed
+separately (13.8 seconds logged):
+
+```sh
+mise run test:logged -- --name name-signal-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```

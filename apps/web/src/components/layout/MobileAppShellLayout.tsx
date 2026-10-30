@@ -13,8 +13,12 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { splitTitleEnvironmentName } from "@/lib/application-title";
-import { MergeReadyMarker, MergeReadyName } from "@/components/environments/MergeReadyName";
-import { PR_READY_TO_MERGE_LABEL } from "@orkestrator/protocol/pr-merge-readiness";
+import {
+  ENVIRONMENT_NAME_SIGNALS,
+  EnvironmentNameShimmer,
+  EnvironmentNameSignalMarker,
+} from "@/components/environments/EnvironmentNameShimmer";
+import type { EnvironmentNameSignal } from "@/lib/environment-name-signal";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
@@ -40,8 +44,8 @@ interface MobileAppShellLayoutProps {
   title: string;
   /** The environment the title ends with, so its name alone can shimmer. */
   titleEnvironmentName?: string | null;
-  /** That environment's pull request is ready to merge. */
-  titleReadyToMerge?: boolean;
+  /** What that environment's name shimmers for, if anything. */
+  titleNameSignal?: EnvironmentNameSignal | null;
   filesPanelOpen: boolean;
   centralPanelStyle: CSSProperties;
   actionBar: ReactNode;
@@ -67,7 +71,7 @@ export function MobileAppShellLayout({
   selectedEnvironmentId,
   title,
   titleEnvironmentName = null,
-  titleReadyToMerge = false,
+  titleNameSignal = null,
   filesPanelOpen,
   centralPanelStyle,
   actionBar,
@@ -79,10 +83,10 @@ export function MobileAppShellLayout({
   onTitleBarMouseDown,
 }: MobileAppShellLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
-  const readyTitle = titleReadyToMerge
+  const signalTitle = titleNameSignal
     ? splitTitleEnvironmentName(title, titleEnvironmentName)
     : null;
-  const mergeReadyDescriptionId = useId();
+  const nameSignalDescriptionId = useId();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
   const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });
@@ -303,14 +307,19 @@ export function MobileAppShellLayout({
                 }
               }}
               aria-label={title}
-              aria-describedby={readyTitle ? mergeReadyDescriptionId : undefined}
+              aria-describedby={signalTitle ? nameSignalDescriptionId : undefined}
               aria-expanded={titleTooltipOpen}
             >
-              {readyTitle ? (
+              {signalTitle ? (
                 <>
-                  {readyTitle.prefix}
-                  <MergeReadyName ready>{readyTitle.environmentName}</MergeReadyName>
-                  <MergeReadyMarker ready descriptionId={mergeReadyDescriptionId} />
+                  {signalTitle.prefix}
+                  <EnvironmentNameShimmer signal={titleNameSignal}>
+                    {signalTitle.environmentName}
+                  </EnvironmentNameShimmer>
+                  <EnvironmentNameSignalMarker
+                    signal={titleNameSignal}
+                    descriptionId={nameSignalDescriptionId}
+                  />
                 </>
               ) : (
                 title
@@ -354,8 +363,12 @@ export function MobileAppShellLayout({
             }}
           >
             {title}
-            {readyTitle ? (
-              <span className="block text-success">{PR_READY_TO_MERGE_LABEL}</span>
+            {signalTitle && titleNameSignal ? (
+              <span
+                className={cn("block", ENVIRONMENT_NAME_SIGNALS[titleNameSignal].textClassName)}
+              >
+                {ENVIRONMENT_NAME_SIGNALS[titleNameSignal].label}
+              </span>
             ) : null}
           </TooltipContent>
         </Tooltip>

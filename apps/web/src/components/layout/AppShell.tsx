@@ -26,7 +26,7 @@ import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
-import { useEnvironmentIdReadyToMerge } from "@/hooks/useEnvironmentReadyToMerge";
+import { useEnvironmentIdNameSignal } from "@/hooks/useEnvironmentNameSignal";
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
@@ -160,7 +160,7 @@ export function AppShell({ children }: AppShellProps) {
         null)
       : null,
   );
-  const localReadyToMerge = useEnvironmentIdReadyToMerge(selectedEnvironmentId);
+  const localNameSignal = useEnvironmentIdNameSignal(selectedEnvironmentId);
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ??
     DEFAULT_TERMINAL_APPEARANCE;
@@ -286,7 +286,9 @@ export function AppShell({ children }: AppShellProps) {
           selectedEnvironmentId={selectedEnvironmentId}
           title={windowTitle}
           titleEnvironmentName={remoteNames ? remoteNames.environmentName : activeEnvironmentName}
-          titleReadyToMerge={remoteNames ? remoteNames.readyToMerge : localReadyToMerge}
+          titleNameSignal={
+            remoteNames ? (remoteNames.readyToMerge ? "merge-ready" : null) : localNameSignal
+          }
           filesPanelOpen={filesPanelOpen}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}

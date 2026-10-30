@@ -1,3 +1,4 @@
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
@@ -284,6 +285,74 @@ describe("ProjectSearchBar", () => {
       // Unmount first so restoring the shared stores does not re-render the bar.
       cleanup();
       useEnvironmentStore.setState({ environments: initialEnvironments });
+      usePrMonitorStore.setState(initialMonitor, true);
+    }
+  });
+
+  test.each([
+    ["needs-answer", "Waiting for your answer"],
+    ["merge-conflicts", "Merge conflicts to resolve"],
+    ["merge-ready", "Ready to merge"],
+  ])("search describes %s and clears it when deletion starts", async (signal, label) => {
+    const initialEnvironments = useEnvironmentStore.getState();
+    const initialMonitor = usePrMonitorStore.getState();
+    const initialBuild = useBuildPipelineStore.getState();
+    const environment: Environment = {
+      ...localEnvironment,
+      agentActivityState: signal === "needs-answer" ? "waiting" : "idle",
+      agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: signal === "merge-conflicts",
+      prMergeability: signal === "merge-conflicts" ? "dirty" : "clean",
+    };
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment],
+        deletingEnvironments: new Set(),
+      });
+      usePrMonitorStore.setState({
+        syncStatus: "current",
+        states: new Map([
+          [
+            environment.id,
+            {
+              environmentId: environment.id,
+              mode: "normal",
+              checkInProgress: false,
+              consecutiveErrors: 0,
+              lastSuccessfulCheckAt: "2026-10-28T10:00:00Z",
+              lastCheckAt: "2026-10-28T10:00:00Z",
+              prUrl: environment.prUrl,
+              prState: "open",
+              hasMergeConflicts: signal === "merge-conflicts",
+              checkSummary: null,
+            },
+          ],
+        ]),
+      });
+      renderSearchBar({ environments: [environment] });
+      await openSearch();
+      const row = screen.getByTestId("project-search-item-env-local");
+      expect(row.querySelector(`[data-name-signal="${signal}"]`)).toBeTruthy();
+      expect(document.getElementById(row.getAttribute("aria-describedby")!)?.textContent).toBe(
+        label,
+      );
+      if (signal === "needs-answer") {
+        act(() =>
+          useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set([environment.id]) }),
+        );
+        expect(row.querySelector('[data-name-signal="merge-ready"]')).toBeTruthy();
+        act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+        expect(row.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
+      }
+      act(() => useEnvironmentStore.getState().setDeleting(environment.id, true));
+      expect(row.querySelector(".text-shimmer")).toBeNull();
+      expect(row.hasAttribute("aria-describedby")).toBe(false);
+    } finally {
+      cleanup();
+      useBuildPipelineStore.setState(initialBuild, true);
+      useEnvironmentStore.setState(initialEnvironments, true);
       usePrMonitorStore.setState(initialMonitor, true);
     }
   });

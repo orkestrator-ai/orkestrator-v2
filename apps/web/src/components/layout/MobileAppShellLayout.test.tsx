@@ -197,7 +197,7 @@ describe("MobileAppShellLayout", () => {
   test("shimmers only the environment name in the title while its PR is ready to merge", () => {
     const { rerender, props } = renderLayout({
       titleEnvironmentName: "feature-auth",
-      titleReadyToMerge: true,
+      titleNameSignal: "merge-ready" as const,
     });
     const title = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
     // Visible text is unchanged; the description beside it is `hidden`.
@@ -218,7 +218,7 @@ describe("MobileAppShellLayout", () => {
       "motion-reduce:inline-block",
     );
 
-    rerender(<MobileAppShellLayout {...props} titleReadyToMerge={false} />);
+    rerender(<MobileAppShellLayout {...props} titleNameSignal={null} />);
     const plain = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
     expect(plain.querySelector("[data-merge-ready]")).toBeNull();
     expect(plain.hasAttribute("aria-describedby")).toBe(false);
@@ -229,7 +229,7 @@ describe("MobileAppShellLayout", () => {
     renderLayout({
       title: "pgstack1",
       titleEnvironmentName: "feature-auth",
-      titleReadyToMerge: true,
+      titleNameSignal: "merge-ready" as const,
     });
     const title = screen.getByRole("button", { name: "pgstack1" });
     expect(title.querySelector("[data-merge-ready]")).toBeNull();

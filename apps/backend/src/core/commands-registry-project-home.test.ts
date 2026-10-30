@@ -8,6 +8,7 @@ import type { CommandContext } from "./commands-context.js";
 import { startEnvironmentSetupOnce } from "./commands-environment.js";
 import { projectHomeTesting } from "./project-home-environment.js";
 import { runCommand } from "./shell.js";
+import * as shell from "./shell.js";
 import type { Environment } from "./models.js";
 import {
   deleteMergedEnvironmentRemoteBranch,
@@ -417,3 +418,47 @@ test("completion discovers only a same-repository PR targeting the home base", a
     gh.restore();
   }
 });
+
+for (const read of [
+  ["write-tree"],
+  ["diff-index", "--raw", "-z", "HEAD"],
+  ["diff", "--raw", "-z"],
+  ["ls-files", "-z", "-o", "--exclude-standard"],
+]) {
+  test(`dirty checkout confirmation recovers a timed-out ${read.join(" ")}`, async () => {
+    await runCommand("git", ["branch", "other"], { cwd: checkout });
+    await writeFile(path.join(checkout, "README.md"), "changed\n");
+    await writeFile(path.join(checkout, "untracked.txt"), "new\n");
+    const service = new ProjectGitService(storage);
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    const command = spyOn(shell, "runCommand").mockImplementation(
+      async (executable, args = [], options) => {
+        const disabled = args[0] === "-c" && args[1] === "core.fsmonitor=false";
+        const inner = disabled ? args.slice(2) : args;
+        if (executable === "git" && JSON.stringify(inner) === JSON.stringify(read)) {
+          expect(options).toEqual({ cwd: checkout, timeoutMs: 10_000 });
+          calls.push(args);
+          if (!disabled) throw new shell.CommandFailedError("timeout", { timedOut: true });
+        }
+        return original(executable, args, options);
+      },
+    );
+    let confirmation;
+    try {
+      confirmation = await service.prepareSwitchBranch(projectId, "refs/heads/other");
+      expect(confirmation).toMatchObject({ trackedChanges: 1, untrackedFiles: 1 });
+      expect(calls).toEqual([read, ["-c", "core.fsmonitor=false", ...read]]);
+      expect(await readFile(path.join(checkout, "README.md"), "utf8")).toBe("changed\n");
+    } finally {
+      command.mockRestore();
+    }
+    // The recovered inspection must fingerprint the same state as a healthy read.
+    const switched = await service.switchBranch(projectId, "refs/heads/other", {
+      confirmationToken: confirmation.token,
+    });
+    expect(switched.branch).toBe("other");
+    expect(switched.trackedChanges).toBe(0);
+    expect(switched.untrackedChanges).toBe(0);
+  });
+}

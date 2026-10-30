@@ -22,7 +22,7 @@ done on the 0735 follow-up branch; see
 
 1. **Daemons already orphaned**: decide between a one-off sweep and "a reboot is the answer". Status: done (a reboot is the answer; a manual per-platform check is in git-scan-caches.md, "Daemons left by older versions").
 2. **User-level fsmonitor on Orkestrator's own reads (open question)**: whether to override a `core.fsmonitor` the user set in their own git config. Status: done (decided: no override; the timeout fallback stays the only bypass).
-3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: done (every remaining working-tree `status` read, including the new graph ones).
+3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: done (every remaining working-tree `status` read, including the new graph ones, plus checkout confirmation fingerprint reads).
 4. **Qualification: Windows process cleanup**: the fingerprint probe's bounded `taskkill /t /f` branch. Status: open (needs a Windows host or CI iteration; see the 2026-10-30 note under task 4).
 5. **Qualification: arktech-mini after upgrade**: old worktrees lose the setting, their daemons exit, git calls are fast again. Status: open (needs arktech-mini on v2.34.2-beta or later).
 6. **Qualification: per-call latency on other hosts**: internal APFS, Linux and Windows, with and without fsmonitor. Status: open (Linux measured; APFS and Windows left).
@@ -206,9 +206,15 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
   second-attempt failures, and the fallback wiring of `readWorktreeStatus`,
   `listRootChanges`, `isResumableScratchRepository` and
   `reconcileContainerDelegationBase`. Host timeout paths inject a structured
-  timeout; the Git repositories and fallback reads are real. The graph-agent
-  and graph-select reads and the coordinator's environment details call the
-  same helper but have no test of their own.
+  timeout; the Git repositories and fallback reads are real.
+- `graph-system-select.test.ts`: clean, dirty, failed and cancelled fallback
+  status reads before either merge or reset; cancellation starts no fallback.
+- `graph-branch-worktrees.test.ts`: isolated worktree refusal and certification
+  after clean, dirty or failed retries, preserving the worktree path and flags.
+- `nodes/node-files.test.ts`: each parallel status/diff read recovers independently,
+  retains its output limit, or rejects the request after an exhausted retry.
+- `commands-registry-project-home.test.ts`: all four checkout confirmation
+  fingerprint reads recover after a timeout and preserve valid confirmation.
 - `diff-stats-tracking.test.ts`: ownership wiring from tracked environments,
   including migration of an application worktree alongside a linked project home.
 - `commands-local-worktree.test.ts`: daemon-stop ordering for removal and failed
@@ -309,6 +315,8 @@ because the graphs merge had moved and added reads, so it covers:
 reads and by `build-pipeline-service-lifecycle.ts`), `graph-agent-guards.ts`,
 `graph-system-select.ts`, `root-changes.ts` `listRootChanges`,
 `nodes/node-files.ts` (status and both `diff HEAD` reads),
+`project-git-service.ts` `inspectCheckout` (the index tree snapshot, working-tree
+`diff-index`, unstaged `diff` and untracked `ls-files` reads),
 `commands-projects.ts` `isResumableScratchRepository` and
 `commands-environment.ts` `reconcileContainerDelegationBase`. The environment
 runners throw the same `CommandFailedError` with `timedOut` as host
@@ -323,11 +331,18 @@ cancelled graph action would have run a second `status`.
 `runGitWithFsmonitorFallback` uses the same check instead of its own.
 
 Left out on purpose: writes (`reset --hard`, `add`), reads that never consult
-the daemon (`rev-parse`, `show`, `log`, commit-to-commit diffs),
+the daemon (`rev-parse`, `show`, `log`, commit-to-commit diffs,
+index-only `diff --cached`, `hash-object`, `clean -n` and `submodule status`),
 `buildRootChangesPatch` (a path-limited diff against a scratch index on an
 explicit user action, already bounded at 120 s) and the
 `git submodule foreach` status string inside `project-git-service.ts`, which
-runs in a shell and would need its own `-c` inside the script.
+runs in a shell and would need its own `-c` inside the script. The remaining
+backend diff/ls-files audit deliberately excludes `findLocalRenamePair`
+(explicit rename lookup, 60 s), project-copy `gitPaths` (explicit file
+inventory, 30 s), and the fingerprint probe's streaming diff (its own
+process/capture bounds; inherits disabled fsmonitor after a status timeout).
+Change-tracking capture and scope reads already disable fsmonitor through
+`SAFE_GIT_CONFIG` or their embedded equivalent.
 
 ### Daemon tests on Linux (Automated coverage)
 

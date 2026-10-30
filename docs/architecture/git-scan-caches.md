@@ -119,6 +119,10 @@ These reads already had timeouts; on a timeout each now retries once with
 - the project home's change list (`root-changes.ts`, 30 s);
 - the coordinator's environment details (`nodes/node-files.ts`: status and the
   two diffs against `HEAD`, 20 s each);
+- the project checkout's discard confirmation fingerprint
+  (`project-git-service.ts` `inspectCheckout`: `write-tree`, working-tree
+  `diff-index`, unstaged `diff` and untracked `ls-files`, 10 s each). Retrying
+  the index tree snapshot is idempotent; it leaves checkout contents intact;
 - the cleanliness checks before a code rewind, through the environment's Git
   port (`workspace-code-rewind.ts` `readWorktreeStatus`, also used by
   `build-pipeline-service-lifecycle.ts`), a graph agent's branch worktree
@@ -128,14 +132,28 @@ These reads already had timeouts; on a timeout each now retries once with
 - the delegated container's cleanliness check (`commands-environment.ts`,
   `reconcileContainerDelegationBase`, 30 s).
 
-Only reads that scan the working tree consult the daemon: `status` and `diff`
-against the working tree. `rev-parse`, `show`, `log` and commit-to-commit
-diffs never wait on it, so they have no fallback. A cancelled read is not
+Index operations and reads that scan the working tree can consult the daemon,
+including `status`, working-tree `diff`/`diff-index` and untracked `ls-files`.
+`rev-parse`, `show`, `log`, commit-to-commit diffs and index-only
+`diff --cached` have no fallback. A cancelled read is not
 retried: `runCommand` reports cancellation as a timeout, so callers pass their
 `AbortSignal` to `retryGitWithoutFsmonitorOnTimeout`. Other failures are not
 retried. Writes (`reset --hard`, `add`) are never retried, and the root-changes
 patch build (`buildRootChangesPatch`), which diffs against a scratch index on
 an explicit user action with a 120 s bound, was left as it is.
+`inspectCheckout` also leaves `hash-object`, `clean -n` and `submodule status`
+on their existing bounded calls. Its shell-based `git submodule foreach`
+status probe is excluded: each nested Git call would need its own `-c`
+inside the script.
+
+Other deliberate exclusions from this status-read change are
+`commands-files.ts` `findLocalRenamePair` (an explicit rename lookup, bounded
+at 60 s), `nodes/node-project-copy-files.ts` `gitPaths` (explicit file-copy
+inventory, bounded at 30 s), and the fingerprint probe's streaming `diff`
+(its own process/capture bounds apply, and it inherits disabled fsmonitor
+after a status timeout). The host and container change-tracking inventory
+and scope readers already disable fsmonitor through `SAFE_GIT_CONFIG` or
+their embedded equivalent, so they need no retry.
 
 ## Tests
 

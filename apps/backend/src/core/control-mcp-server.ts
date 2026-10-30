@@ -380,8 +380,10 @@ export class ControlMcpServer {
         this.startError = null;
         return;
       }
-      await this.credentials.load(descriptorFile);
-      this.credentialsLoaded = true;
+      if (!this.credentialsLoaded) {
+        await this.credentials.load(descriptorFile);
+        this.credentialsLoaded = true;
+      }
       const server = createServer((request, response) => {
         void this.handle(request, response).catch((error: unknown) => {
           if (!response.headersSent) {

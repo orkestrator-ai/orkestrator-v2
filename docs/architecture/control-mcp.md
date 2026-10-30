@@ -108,13 +108,19 @@ starts), so none of them can hold the installed app's port
 readiness line and in `backend-instance.json` as `controlMcp: { running, url }`,
 rewritten whenever the listener starts, stops or fails to bind. A backend of
 another data directory logs a line at startup when the default data
-directory's descriptor names a live backend.
+directory's descriptor names a live backend. Linux service units preserve the
+installing shell's `XDG_CONFIG_HOME` so the service classifies the default data
+directory consistently with the installer.
 
 If another process holds the fixed port, the first bind fails, Settings → MCP
 shows "Port 34122 is in use by another process", and the backend retries with
 backoff (5 s doubling to 5 min) until the port frees or the backend stops; the
-listener then comes up without a restart. Settings does not name the process
-holding the port. An ephemeral port is never retried.
+listener then comes up without a restart. An open Settings page refreshes when
+the listener changes and after an event-stream resync, clearing the startup
+error and showing client setup when recovery succeeds. The initialized default
+credential stays the same across bind attempts and is persisted after binding.
+Settings does not name the process holding the port. An ephemeral port is never
+retried.
 
 With the full profile the default credential lists the leaf-node, review and
 PR tools alongside eight `schedule.*` direct tools; clients that defer or

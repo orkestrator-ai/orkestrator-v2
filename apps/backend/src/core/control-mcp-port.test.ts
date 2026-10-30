@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { rpc } from "./control-mcp-test-support.js";
 import { ControlMcpServer, controlMcpPortOverride } from "./control-mcp-server.js";
 
 describe("controlMcpPortOverride", () => {
@@ -81,8 +82,9 @@ describe("a fixed Control MCP port held by another process", () => {
   function create(port: number): ControlMcpServer {
     server = new ControlMcpServer(
       dataDir,
-      async () => {
-        throw new Error("not used");
+      async <T>(command: string) => {
+        if (command === "get_config") return { global: {} } as T;
+        throw new Error(`Unexpected command: ${command}`);
       },
       { port, retry: { initialDelayMs: 20, maxDelayMs: 80 } },
     );
@@ -124,6 +126,40 @@ describe("a fixed Control MCP port held by another process", () => {
     const response = await fetch(`http://127.0.0.1:${port}/mcp`, { method: "POST", body: "{}" });
     expect(response.status).toBe(401);
   });
+
+  test.each([false, true])(
+    "recovery preserves and authenticates credentials; existing=%s",
+    async (existing) => {
+      let storedToken: string | undefined;
+      if (existing) {
+        const seed = create(0);
+        await seed.start();
+        storedToken = seed.getSettings().token;
+        await seed.stop();
+      }
+      const mcp = create(held!.port);
+      let notifications = 0;
+      mcp.onStateChange(() => notifications++);
+      await expect(mcp.start()).rejects.toThrow();
+      const token = mcp.getSettings().token;
+      expect(token.length).toBeGreaterThan(20);
+      if (existing) expect(token).toBe(storedToken!);
+      await waitFor(() => notifications >= 3);
+      expect(mcp.getSettings().token).toBe(token);
+      await held!.release();
+      held = null;
+      await waitFor(() => mcp.getSettings().running);
+      expect(mcp.getSettings().token).toBe(token);
+      const { response, body } = await rpc(mcp.getInfo()!.url, token, "tools/list");
+      expect(response.status).toBe(200);
+      expect(body.result?.tools?.length).toBeGreaterThan(0);
+      // The initialized credential is also the one persisted for the next start.
+      await mcp.stop();
+      const restarted = create(0);
+      await restarted.start();
+      expect(restarted.getSettings().token).toBe(token);
+    },
+  );
 
   test("stop() cancels the retry", async () => {
     const mcp = create(held!.port);

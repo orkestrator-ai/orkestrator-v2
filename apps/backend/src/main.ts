@@ -15,11 +15,8 @@ import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejectio
 import { TailscaleServeManager } from "./tailscale-serve.js";
 import { startGatewayServices } from "./startup-services.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
-import {
-  instanceEndpoints,
-  liveInstanceIn,
-  publishInstanceDescriptor,
-} from "./instance-descriptor.js";
+import { instanceEndpoints, liveInstanceIn } from "./instance-descriptor.js";
+import { createInstanceDescriptorPublication } from "./instance-descriptor-publication.js";
 import { defaultDataDir, isDefaultDataDir } from "./data-dir.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
@@ -219,18 +216,14 @@ await previewPublication?.start().catch((error: unknown) => {
   );
 });
 
-let removeInstanceDescriptor: (() => Promise<void>) | null = null;
-// Publications are serialized, and none starts after shutdown has begun, so a
-// late Control MCP state change can never resurrect a removed descriptor.
 let instanceIdentity: { installationId: string; generation: string; startedAt: string } | null =
   null;
-let instanceDescriptorClosed = false;
-let instanceDescriptorWrites: Promise<void> = Promise.resolve();
-function publishCurrentInstanceDescriptor(): Promise<void> {
-  const write = instanceDescriptorWrites.then(async () => {
-    if (instanceDescriptorClosed || !instanceIdentity) return;
+const instancePublication = createInstanceDescriptorPublication({
+  subscribe: (listener) => backend.onControlMcpStateChange(listener),
+  snapshot: () => {
+    if (!instanceIdentity) return null;
     const controlMcp = backend.getControlMcpEndpointState();
-    removeInstanceDescriptor = await publishInstanceDescriptor({
+    return {
       ...instanceIdentity,
       pid: process.pid,
       url: info.url,
@@ -241,11 +234,14 @@ function publishCurrentInstanceDescriptor(): Promise<void> {
       dataDir: options.dataDir,
       appVersion: APP_VERSION,
       publicApiSchemaVersion: PUBLIC_API_SCHEMA_VERSION,
-    });
-  });
-  instanceDescriptorWrites = write.catch(() => undefined);
-  return write;
-}
+    };
+  },
+  onError: (error) => {
+    console.warn(
+      `[Backend] Could not republish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  },
+});
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
   stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
@@ -254,9 +250,7 @@ const stop = createBackendShutdownHandler({
     await gateway.stop();
   },
   stopBackend: async () => {
-    instanceDescriptorClosed = true;
-    await instanceDescriptorWrites;
-    await removeInstanceDescriptor?.().catch(() => undefined);
+    await instancePublication.close();
     await backend.shutdown();
   },
   warn: (message) => console.warn(message),
@@ -283,17 +277,6 @@ startReparentWatchdog({
   },
 });
 
-// The Control MCP retries a taken fixed port; republish when it binds or stops.
-// Subscribed before the first publication so a bind during it is not missed;
-// until then there is no identity and a change publishes nothing.
-backend.onControlMcpStateChange(() => {
-  void publishCurrentInstanceDescriptor().catch((error: unknown) => {
-    console.warn(
-      `[Backend] Could not republish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
-});
-
 // Publish the installed-instance descriptor that operator clients resolve
 // (`orkestrator --connection …`). It is additive to the readiness line below
 // and carries no credential; a failure to write it never blocks serving.
@@ -315,7 +298,7 @@ try {
       generation: identity.generation,
       startedAt: new Date().toISOString(),
     };
-    await publishCurrentInstanceDescriptor();
+    await instancePublication.refresh();
   }
 } catch (error) {
   console.warn(
@@ -344,7 +327,7 @@ process.stdout.write(
 );
 // The standalone launcher observes the descriptor, not stdout. A publication
 // failure must leave the update pending so its eventual rollback can fail it.
-if (!standaloneLayoutForService || removeInstanceDescriptor) {
+if (!standaloneLayoutForService || instancePublication.published) {
   backend.hostMaintenance.markReady();
   // Settle the previous process's job before the executor can observe it.
   // In particular, a stale requested job must never be dispatched again.

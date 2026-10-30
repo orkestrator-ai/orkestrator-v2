@@ -2274,7 +2274,9 @@ export class OrkestratorBackend {
     });
     // A retried bind that succeeds later must keep previews off its port too.
     this.controlMcp.onStateChange?.(() => {
-      if (!this.shuttingDown) this.reserveOwnedPreviewPorts();
+      if (this.shuttingDown) return;
+      this.reserveOwnedPreviewPorts();
+      this.context.emit("control-mcp-state-changed", {});
     });
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.

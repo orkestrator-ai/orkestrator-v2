@@ -7,6 +7,7 @@ import {
   confirmRunningServerHealth,
   isHealthyHttpResponse,
   OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+  waitForUnhealthy,
   warmOpenCodeInstance,
 } from "./commands-server-health.js";
 import {
@@ -144,5 +145,26 @@ describe("checkHttpHealth", () => {
       "<!doctype html><html></html>",
       async (port) => expect(await checkHttpHealth(port)).toBe(false),
     );
+  });
+
+  test("waitForUnhealthy returns after the first HTML response while the port stays open", async () => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      expect(request.url).toBe("/global/health");
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><html></html>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      // One attempt proves immediate success without a wall-clock assertion.
+      await expect(
+        waitForUnhealthy((server.address() as AddressInfo).port, 1),
+      ).resolves.toBeUndefined();
+      expect(requests).toBe(1);
+      expect(server.listening).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

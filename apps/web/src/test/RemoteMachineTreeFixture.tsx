@@ -125,6 +125,41 @@ function install() {
   };
   return {
     state,
+    signalState(
+      change:
+        | "waiting"
+        | "working"
+        | "stopped"
+        | "running"
+        | "deleting"
+        | "restore"
+        | "disconnect"
+        | "connect",
+    ) {
+      if (change === "disconnect" || change === "connect") {
+        node.available = change === "connect";
+        node.view.connection = {
+          state: change === "connect" ? "connected" : "unavailable",
+          epoch: 1,
+        };
+      } else {
+        node.environments = node.environments.map((environment) =>
+          environment.ref.environmentId !== "b"
+            ? environment
+            : {
+                ...environment,
+                ...(change === "waiting" || change === "working" ? { activity: change } : {}),
+                ...(change === "stopped" || change === "running"
+                  ? { status: change, environmentType: "containerized" }
+                  : {}),
+                ...(change === "deleting" || change === "restore"
+                  ? { deleting: change === "deleting" }
+                  : {}),
+              },
+        );
+      }
+      void portalStore.refresh();
+    },
     publish() {
       const ids = state.getState().owner;
       node.environments = node.environments.map((environment) => ({
@@ -174,6 +209,22 @@ export function RemoteMachineTreeFixture() {
       <button onClick={() => fixture.finish("reject")}>Reject</button>
       <button onClick={() => fixture.finish("unknown")}>Unknown</button>
       <button onClick={fixture.publish}>Publish owner</button>
+      {(
+        [
+          "waiting",
+          "working",
+          "stopped",
+          "running",
+          "deleting",
+          "restore",
+          "disconnect",
+          "connect",
+        ] as const
+      ).map((change) => (
+        <button key={change} onClick={() => fixture.signalState(change)}>
+          Signal {change}
+        </button>
+      ))}
       <output data-testid="calls">{JSON.stringify(state.calls)}</output>
       <output data-testid="pending">{state.pending.length}</output>
       <output data-testid="owner">{JSON.stringify(state.owner)}</output>

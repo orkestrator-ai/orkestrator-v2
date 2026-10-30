@@ -21,7 +21,8 @@ function install() {
   const spare = params.has("spare");
   // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
   // `p-env-2`'s is blocked, so the two can be compared side by side.
-  const mergeReady = params.has("merge-ready");
+  const signal = params.get("signal");
+  const mergeReady = params.has("merge-ready") || signal !== null;
   const readyIds = new Set(["p-env-1", "q-env-1"]);
   const prFor = (id: string) =>
     !mergeReady || (!readyIds.has(id) && id !== "p-env-2")
@@ -29,8 +30,12 @@ function install() {
       : {
           prUrl: `https://github.com/acme/source/pull/${id.length}${id.at(-1)}`,
           prState: "open" as const,
-          hasMergeConflicts: false,
-          prMergeability: readyIds.has(id) ? ("clean" as const) : ("blocked" as const),
+          hasMergeConflicts: readyIds.has(id) && signal === "merge-conflicts",
+          prMergeability: readyIds.has(id)
+            ? signal === "merge-conflicts"
+              ? ("dirty" as const)
+              : ("clean" as const)
+            : ("blocked" as const),
         };
   const storageKey = `sidebar-drag-fixture:${location.search}`;
   const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as {
@@ -62,6 +67,11 @@ function install() {
       networkAccessMode: "restricted",
       order: index,
       environmentType: "local",
+      agentActivityState:
+        readyIds.has(`${project.id}-env-${index}`) && signal === "needs-answer"
+          ? "waiting"
+          : "idle",
+      agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
     })),
   );
   const calls = createStore<{ writes: Array<{ command: string; args: unknown }> }>(() => ({
@@ -73,6 +83,26 @@ function install() {
     listen: () => () => {},
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
       switch (command) {
+        case "get_host_maintenance":
+          return {
+            revision: 1,
+            version: "2.34.4-beta",
+            updater: {
+              kind: "desktop",
+              available: false,
+              reason: "Fixture",
+              latestVersion: null,
+              updateAvailable: false,
+              checkedAt: null,
+              checkError: null,
+            },
+            checkRequest: null,
+            job: null,
+            tasks: {},
+            nextRelease: null,
+            ghChannel: "pinned",
+            updateChannel: "beta",
+          } as T;
         case "get_projects":
           return projects as T;
         case "get_environments":

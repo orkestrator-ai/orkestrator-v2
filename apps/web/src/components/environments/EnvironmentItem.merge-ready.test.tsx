@@ -1,3 +1,4 @@
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
@@ -77,6 +78,7 @@ function description(element: HTMLElement): string {
 }
 
 beforeEach(() => {
+  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
   usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
   useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
 });
@@ -208,6 +210,22 @@ describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
     expect(screen.getByTestId("merge-conflicts-indicator").classList).toContain(
       "motion-reduce:inline-block",
     );
+  });
+
+  test("pipeline-only transitions override waiting just as in title and search", () => {
+    usePrMonitorStore.getState().applySnapshot([monitorState()]);
+    usePrMonitorStore.getState().setSyncStatus("current");
+    renderItem(
+      readyEnvironment({
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+      }),
+    );
+    expect(nameElement().getAttribute("data-name-signal")).toBe("needs-answer");
+    act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["env-1"]) }));
+    expect(nameElement().getAttribute("data-name-signal")).toBe("merge-ready");
+    act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+    expect(nameElement().getAttribute("data-name-signal")).toBe("needs-answer");
   });
 
   test("a stale conflict reading does not shimmer", () => {

@@ -1,9 +1,8 @@
-import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
+import { useEnvironmentDisplayActivity } from "./useEnvironmentDisplayActivity";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
 import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import type { PrMergeState, ReadyToMergeEnvironment } from "@/lib/pr-merge-readiness";
 import { useEnvironmentStore } from "@/stores";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 
 /**
@@ -28,8 +27,7 @@ export function useEnvironmentPrMergeState(
 
 /**
  * The name signal for an environment known only by ID (the selected one, a
- * search hit). The sidebar row computes its own, because it already resolves
- * activity with the build pipeline and Docker availability folded in.
+ * search hit), using the same displayed activity and running gate as the sidebar.
  */
 export function useEnvironmentIdNameSignal(
   environmentId: string | null,
@@ -40,16 +38,14 @@ export function useEnvironmentIdNameSignal(
       : undefined,
   );
   const prMergeState = useEnvironmentPrMergeState(environmentId ?? "", environment);
-  const waitingOnUser = useAgentActivityStore(
-    (state) =>
-      environment !== undefined &&
-      // A stopped container's agent cannot be answered until it starts again.
-      (environment.environmentType === "local" || environment.status === "running") &&
-      resolveEnvironmentAgentActivity(
-        environment,
-        state.containerStates,
-        state.containerStateUpdatedAt,
-      ) === "waiting",
+  const deleting = useEnvironmentStore((state) =>
+    environmentId ? state.isDeleting(environmentId) : false,
   );
-  return environmentNameSignal({ waitingOnUser, prMergeState });
+  const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
+  return deleting
+    ? null
+    : environmentNameSignal({
+        waitingOnUser: isRunning && displayedActivityState === "waiting",
+        prMergeState,
+      });
 }

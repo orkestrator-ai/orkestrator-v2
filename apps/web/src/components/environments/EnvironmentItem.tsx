@@ -49,7 +49,7 @@ import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } f
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import { useEnvironmentDisplayActivity } from "@/hooks/useEnvironmentDisplayActivity";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { cn } from "@/lib/utils";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
@@ -239,14 +239,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  // Get Claude activity state for this environment
-  // For terminal-based Claude, state is keyed by containerId
-  // For native Claude mode, state is keyed by environmentId.
-  // Resolved inside the selector so this row only rerenders when ITS resolved
-  // state changes, not whenever any environment's activity record is touched.
-  const agentActivityState = useAgentActivityStore((s) =>
-    resolveEnvironmentAgentActivity(environment, s.containerStates, s.containerStateUpdatedAt),
-  );
+  const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
 
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
@@ -271,14 +264,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isBuildEnvironment = useBuildPipelineStore((s) =>
     s.buildEnvironmentIds.has(environment.id),
   );
-  const hasWorkingBuildPipeline = useBuildPipelineStore((s) =>
-    s.activeBuildEnvironmentIds.has(environment.id),
-  );
-  // Pipeline steps can run in sessions that do not project their activity onto
-  // the environment. The pipeline snapshot is authoritative for in-flight agent
-  // work, so it must keep the environment icon working between agent events.
-  // Setup phases and stallWarning fall back to the real agentActivityState.
-  const displayedActivityState = hasWorkingBuildPipeline ? "working" : agentActivityState;
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
   const messagingEnabled = useConfigStore(
@@ -306,8 +291,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isProjectHome = environment.projectHome === true;
   const displayName =
     isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
-  // Local environments are always considered "running" - they exist or they don't
-  const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
   const isStopping = environment.status === "stopping";
   // Not applicable to local environments. A settings change that starts a

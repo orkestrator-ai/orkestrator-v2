@@ -775,10 +775,12 @@ export function RemoteEnvironmentItem({
   // Decided here from the machine's relayed PR reading (pr-merge-readiness)
   // and its live activity. Conflicts need the same monitor health that remote
   // readiness waits on, so only the question and ready signals apply here.
-  const nameSignal = environmentNameSignal({
-    waitingOnUser: isRunning && live && environment.activity === "waiting",
-    prMergeState: isNodeEnvironmentReadyToMerge(environment, machine) ? "ready" : null,
-  });
+  const nameSignal = environment.deleting
+    ? null
+    : environmentNameSignal({
+        waitingOnUser: isRunning && live && environment.activity === "waiting",
+        prMergeState: isNodeEnvironmentReadyToMerge(environment, machine) ? "ready" : null,
+      });
   const nameSignalDescriptionId = useId();
 
   const menuItems: EnvironmentMenuItem[] = [

@@ -41,7 +41,12 @@ import {
   type FlowNodeState,
 } from "@/components/flow-graph/flow-graph-model";
 import { reviewerFlowState } from "@/components/review/multi-review-flow";
-import { pipelineStageItems, validationOutcome } from "./pipeline-stage-groups";
+import {
+  pipelineStageItems,
+  validationOutcome,
+  validationRunFromSummary,
+  type ValidationSummary,
+} from "./pipeline-stage-groups";
 
 export type PipelineFlowNodeKind =
   | "ticket"
@@ -80,9 +85,9 @@ export interface PipelineFlowNode {
   earlierAttempts?: number;
   /** The review pass the node belongs to, for opening it on its own. */
   passKey?: string;
-  /** The prepare node carries the latest validation run. */
+  /** The prepare node carries a validation run: the latest unless {@link validationRun} is set. */
   hasValidation?: boolean;
-  /** The exact retained run for a historical validation node. */
+  /** The exact retained run for a historical validation node, or an earlier pass's summary. */
   validationRun?: BuildPipeline["validationRun"];
   agent?: BuildPipelineAgent;
   model?: string;
@@ -271,6 +276,7 @@ export function pipelineSkipAction(
   // pause cancels it, and skipping then seals what it had.
   if (run && !pipeline.reviewPackage) {
     return node.hasValidation &&
+      !node.validationRun &&
       (run.status === "planned" ||
         run.status === "running" ||
         (paused && run.status === "cancelled"))
@@ -634,6 +640,65 @@ export function pipelineFlowModel(
     attemptSessions.set(id, sessions);
   }
   const emittedAttempts = new Set<string>();
+
+  // An earlier forward pass's validation follows the session that planned it:
+  // the newest session started before the run.
+  const shownRunIds = new Set(
+    [
+      pipeline.validationRun?.id,
+      ...(pipeline.rewinds ?? []).map((rewind) => rewind.validationRun?.id),
+    ].filter((id): id is string => id !== undefined),
+  );
+  const archivedByAnchor = new Map<string, ValidationSummary[]>();
+  for (const summary of pipeline.validationHistory ?? []) {
+    if (shownRunIds.has(summary.runId)) continue;
+    const started = Date.parse(summary.startedAt);
+    const anchor = pipeline.sessions.findLast(
+      (session) => Date.parse(session.startedAt) <= started,
+    );
+    if (!anchor) continue;
+    const anchored = archivedByAnchor.get(anchor.sessionKey) ?? [];
+    anchored.push(summary);
+    archivedByAnchor.set(anchor.sessionKey, anchored);
+  }
+  function archivedState(run: NonNullable<BuildPipeline["validationRun"]>): FlowNodeState {
+    const outcome = validationOutcome(run);
+    return outcome === "passed" ? "complete" : outcome === "cancelled" ? "cancelled" : "failed";
+  }
+  /** An earlier pass's checks on the live line: on its Prepare node, or one of their own. */
+  function placeArchived(summary: ValidationSummary) {
+    const run = validationRunFromSummary(summary);
+    const state = archivedState(run);
+    const error = run.status === "failed" ? run.error : undefined;
+    if (
+      lastPrepare &&
+      !lastPrepare.hasValidation &&
+      columns.at(-1)?.nodeIds.includes(lastPrepare.id)
+    ) {
+      lastPrepare.hasValidation = true;
+      lastPrepare.validationRun = run;
+      lastPrepare.state = state;
+      lastPrepare.completedAt = run.completedAt;
+      if (error) lastPrepare.error = error;
+      return;
+    }
+    closePass();
+    const node: PipelineFlowNode = {
+      id: `validation:${run.id}`,
+      kind: "prepare",
+      title: numbered(KIND_TITLES.prepare, nextOccurrence("prepare")),
+      state,
+      placeholder: false,
+      hasValidation: true,
+      validationRun: run,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      ...(error ? { error } : {}),
+    };
+    place(addColumn("prepare"), node);
+    lastPrepare = node;
+  }
+
   const supersededColumn = (kind: PipelineFlowColumnKind, label: string): PipelineFlowColumn => {
     const column: PipelineFlowColumn = {
       key: `superseded-${columns.length}`,
@@ -721,6 +786,22 @@ export function pipelineFlowModel(
       }
       reviewerColumn = undefined;
       place(supersededColumn(kind as PipelineFlowColumnKind, node.title), node);
+      for (const summary of archivedByAnchor.get(session.sessionKey) ?? []) {
+        const archived = validationRunFromSummary(summary);
+        place(supersededColumn("prepare", "Validation"), {
+          id: `validation:${archived.id}`,
+          kind: "prepare",
+          title: "Validation",
+          state: archivedState(archived),
+          placeholder: false,
+          superseded: true,
+          attemptId: id,
+          hasValidation: true,
+          validationRun: archived,
+          startedAt: archived.startedAt,
+          completedAt: archived.completedAt,
+        });
+      }
     }
     placeValidation();
   }
@@ -732,7 +813,13 @@ export function pipelineFlowModel(
     .filter((rewind) => rewind.validationRun && !attemptSessions.has(rewind.id))
     .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   let nextValidationAttempt = 0;
+  let archivedNext: ValidationSummary[] = [];
   for (const item of pipelineStageItems(pipeline)) {
+    for (const summary of archivedNext) placeArchived(summary);
+    archivedNext =
+      item.kind === "session" && !isSupersededPipelineSession(item.session)
+        ? (archivedByAnchor.get(item.session.sessionKey) ?? [])
+        : [];
     const startedAt =
       item.kind === "session" ? item.session.startedAt : pipeline.validationRun!.startedAt;
     while (
@@ -772,7 +859,11 @@ export function pipelineFlowModel(
             : outcome === "failed" || outcome === "incomplete"
               ? "failed"
               : "complete";
-      if (lastPrepare && columns.at(-1)?.nodeIds.includes(lastPrepare.id)) {
+      if (
+        lastPrepare &&
+        !lastPrepare.validationRun &&
+        columns.at(-1)?.nodeIds.includes(lastPrepare.id)
+      ) {
         lastPrepare.hasValidation = true;
         lastPrepare.state = validationState;
         lastPrepare.completedAt = run.completedAt;
@@ -944,6 +1035,7 @@ export function pipelineFlowModel(
     place(addColumn(kind as PipelineFlowColumnKind), node);
     if (kind === "prepare") lastPrepare = node;
   }
+  for (const summary of archivedNext) placeArchived(summary);
   // A validation-only restart can discard evidence before any downstream
   // session exists. It still has its own readable previous attempt.
   for (const rewind of pipeline.rewinds ?? []) {

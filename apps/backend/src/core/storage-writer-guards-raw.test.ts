@@ -167,4 +167,30 @@ describe("raw StorageDatabase writers outside StorageService", () => {
     expect(storesOverlap("family/*", "family/index")).toBe(true);
     expect(storesOverlap("public-operations/*", "family/index")).toBe(false);
   });
+
+  test("still finds writes and helper callers that only an escape spells", () => {
+    // The scan parses only files whose text can name a raw writer or a row
+    // helper; an identifier written with escapes must not slip past it.
+    const sources = [
+      {
+        file: "core/rows.ts",
+        source: `export function writeRow(database: Db, store: string) {
+          database.\\u0072ows(store).put("k", "v");
+        }`,
+      },
+      {
+        file: "core/engine.ts",
+        source: `import { write\\u{52}ow } from "./rows.js";
+          export class Engine { run(database: Db) { writeRow(database, "kanban"); } }`,
+      },
+      { file: "core/unrelated.ts", source: `export const banner = "\\u001b[1m";` },
+    ];
+    expect(rawDatabaseWrites(sources, new Set())).toEqual([
+      {
+        location: expect.stringMatching(/rows.ts:2 via core\/engine.ts:2$/),
+        call: "rows",
+        store: "kanban",
+      },
+    ]);
+  });
 });

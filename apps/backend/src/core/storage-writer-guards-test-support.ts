@@ -184,7 +184,22 @@ type Analysis = {
   violations: string[];
 };
 
+/**
+ * Trees already parsed, by file. One test file runs several scans over the
+ * same sources; each parses a file at most once. A source a test rewrote has
+ * different text and is parsed afresh.
+ */
+const parsedFiles = new Map<string, ParsedFile>();
+
 export function parse(source: SourceFile): ParsedFile {
+  const cached = parsedFiles.get(source.file);
+  if (cached?.source === source.source) return cached;
+  const parsed = parseSource(source);
+  parsedFiles.set(source.file, parsed);
+  return parsed;
+}
+
+function parseSource(source: SourceFile): ParsedFile {
   const { program, errors } = parseSync(source.file, source.source);
   // A file that does not parse must not pass by yielding a partial tree.
   if (errors.length > 0) throw new Error(`${source.file}: ${errors[0]!.message}`);
@@ -1391,20 +1406,62 @@ const RAW_WRITER_EXEMPTIONS = new Map([
 export type RawWrite = { location: string; call: string; store: string | null };
 
 /**
+ * Whether `source` can contain one of the identifiers `pattern` matches,
+ * spelled out or with escapes (`\u0072ows`). False means the file has none,
+ * so the scan need not parse it.
+ */
+function mayName(source: string, pattern: RegExp): boolean {
+  return pattern.test(source) || (source.includes("\\u") && pattern.test(unescaped(source)));
+}
+
+/** A pattern for any of the identifiers `names`, as a whole identifier. */
+function identifiers(names: Iterable<string>): RegExp {
+  const alternatives = [...names].map((name) => name.replace(/[$]/g, "\\$&")).join("|");
+  return new RegExp(`(?<![\\w$])(?:${alternatives})(?![\\w$])`);
+}
+
+/** `source` with its `\u` escapes decoded, wherever they are. */
+function unescaped(source: string): string {
+  return source.replace(/\\u(?:\{([0-9a-fA-F]+)\}|([0-9a-fA-F]{4}))/g, (escape, braced, plain) => {
+    const code = Number.parseInt(braced ?? plain, 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : escape;
+  });
+}
+
+const RAW_WRITER_NAMES = identifiers(RAW_WRITERS);
+
+/**
  * The store each raw database write names, as a pattern (`*` for a part only
  * known at run time), or `null` when the analysis cannot name it. Store names
  * are followed through `const`s, template literals and small functions such
  * as `webAnnotationStoreName`, across relative imports.
  */
 export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string>): RawWrite[] {
-  const parsed = new Map(sources.map((source) => [source.file, parse(source)]));
-  const moduleOf = (from: ParsedFile, specifier: string): ParsedFile | null => {
+  // Parsing every backend file and keeping every tree is most of the scan's
+  // cost, so a file is parsed only when it can matter: when its text can call
+  // a raw writer, or when a name being resolved leads into it.
+  const byFile = new Map(sources.map((source) => [source.file, source]));
+  const parsed = new Map<string, ParsedFile>();
+  const parsedFile = (name: string): ParsedFile | null => {
+    const source = byFile.get(name);
+    if (!source) return null;
+    let file = parsed.get(name);
+    if (!file) {
+      file = parse(source);
+      parsed.set(name, file);
+    }
+    return file;
+  };
+  const modulePath = (from: ParsedFile, specifier: string): string | null => {
     if (!specifier.startsWith(".")) return null;
-    const target = path
+    return path
       .join(path.dirname(from.file), specifier)
       .replace(/\.js$/, ".ts")
       .replace(/(?<!\.ts)$/, ".ts");
-    return parsed.get(target) ?? null;
+  };
+  const moduleOf = (from: ParsedFile, specifier: string): ParsedFile | null => {
+    const target = modulePath(from, specifier);
+    return target === null ? null : parsedFile(target);
   };
   const topLevel = (file: ParsedFile, name: string): Node | null => {
     for (const statement of (file.program as Node & { body: Node[] }).body) {
@@ -1430,7 +1487,7 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
             specifier.type === "ImportSpecifier" && specifier.imported.type === "Identifier"
               ? specifier.imported.name
               : null;
-          return source && imported ? (topLevelIn.get(source)?.(imported) ?? null) : null;
+          return source && imported ? topLevelIn(source)(imported) : null;
         }
       }
     }
@@ -1438,14 +1495,19 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
   };
   // Where a resolved declaration lives, so its own names resolve in its file.
   const ownerFile = new Map<Node, ParsedFile>();
-  const topLevelIn = new Map<ParsedFile, (name: string) => Node | null>();
-  for (const file of parsed.values()) {
-    topLevelIn.set(file, (name) => {
-      const found = topLevel(file, name);
-      if (found && !ownerFile.has(found)) ownerFile.set(found, file);
-      return found;
-    });
-  }
+  const lookups = new Map<ParsedFile, (name: string) => Node | null>();
+  const topLevelIn = (file: ParsedFile): ((name: string) => Node | null) => {
+    let lookup = lookups.get(file);
+    if (!lookup) {
+      lookup = (name) => {
+        const found = topLevel(file, name);
+        if (found && !ownerFile.has(found)) ownerFile.set(found, file);
+        return found;
+      };
+      lookups.set(file, lookup);
+    }
+    return lookup;
+  };
   const nameOf = (
     node: Node,
     file: ParsedFile,
@@ -1494,7 +1556,7 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
             }
           }
         }
-        const declared = topLevelIn.get(file)!(target.name);
+        const declared = topLevelIn(file)(target.name);
         if (!declared || isFunction(declared)) return null;
         return nameOf(declared, ownerFile.get(declared) ?? file, [], new Set(), depth + 1);
       }
@@ -1544,7 +1606,7 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
       case "CallExpression": {
         const callee = unwrap(target.callee as Node);
         if (callee.type !== "Identifier") return null;
-        const fn = topLevelIn.get(file)!(callee.name);
+        const fn = topLevelIn(file)(callee.name);
         if (!fn || !isFunction(fn)) return null;
         // An argument only picks one store of the family the function names.
         const names = returnedExpressions(fn).map((returned) =>
@@ -1562,17 +1624,22 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
 
   /** Calls of the top-level function `name` of `declaring`, in it and where it is imported. */
   const callsOf = (declaring: ParsedFile, name: string) => {
+    const callee = identifiers([name]);
     const found: Array<{
       call: CallExpression;
       ancestors: Node[];
       file: ParsedFile;
       location: string;
     }> = [];
-    for (const file of parsed.values()) {
+    for (const source of byFile.values()) {
+      // Only the declaring file and a file whose text names the function can
+      // call it.
+      if (source.file !== declaring.file && !mayName(source.source, callee)) continue;
+      const file = parsedFile(source.file)!;
       let local: string | null = file === declaring ? name : null;
       for (const statement of (file.program as Node & { body: Node[] }).body) {
         if (local || statement.type !== "ImportDeclaration") continue;
-        if (moduleOf(file, statement.source.value) !== declaring) continue;
+        if (modulePath(file, statement.source.value) !== declaring.file) continue;
         for (const specifier of statement.specifiers as Node[]) {
           if (
             specifier.type === "ImportSpecifier" &&
@@ -1644,8 +1711,10 @@ export function rawDatabaseWrites(sources: SourceFile[], skipClasses: Set<string
   };
 
   const writes: RawWrite[] = [];
-  for (const file of parsed.values()) {
-    if (RAW_WRITER_EXEMPTIONS.has(path.basename(file.file))) continue;
+  for (const source of byFile.values()) {
+    if (RAW_WRITER_EXEMPTIONS.has(path.basename(source.file))) continue;
+    if (!mayName(source.source, RAW_WRITER_NAMES)) continue;
+    const file = parsedFile(source.file)!;
     walk(file.program, (node, ancestors) => {
       if (node.type !== "CallExpression") return;
       const callee = unwrap(node.callee as Node);

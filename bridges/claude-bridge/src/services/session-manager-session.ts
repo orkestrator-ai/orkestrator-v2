@@ -22,7 +22,6 @@ import type {
   McpServerRuntimeStatus,
   PluginRuntimeStatus,
   SdkMessageBase,
-  SdkCompactBoundaryMessage,
   SdkResultMessage,
   SdkSystemMessage,
   TaskListSnapshot,
@@ -32,7 +31,7 @@ import type {
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
+import { isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";

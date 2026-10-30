@@ -72,7 +72,9 @@ for (const modifier of ["Meta", "Control"]) {
     await expect(settings).toBeVisible();
   });
 
-  test(`${modifier} shortcut wins over Monaco Delete Line`, async ({ page }) => {
+  test(`${modifier} shortcuts chord opens over Monaco and leaves Shift+K to the editor`, async ({
+    page,
+  }) => {
     await page.goto("/monaco-runtime");
     const editor = page.getByTestId("monaco-runtime-editor");
     const input = editor.getByRole("textbox", { name: "Editor content" });
@@ -91,6 +93,13 @@ for (const modifier of ["Meta", "Control"]) {
     await page.keyboard.type("x");
     await expect(value).toHaveText(`x${original}`);
     await expect(value).toContainText("const answer: number = 42;");
+
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    await expect(input).toBeFocused();
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    // Monaco binds Delete Line to Cmd+Shift+K on macOS and Ctrl+Shift+K elsewhere.
+    if (modifier === (mac ? "Meta" : "Control")) await expect(value).toHaveText("");
   });
 }
 

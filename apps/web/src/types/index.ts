@@ -603,6 +603,8 @@ export interface GlobalConfig {
   experimentalCodexRawEventLogging?: boolean;
   /** Experimental: scheduled jobs (Settings → Schedules, schedule tools and actions) */
   experimentalScheduling?: boolean;
+  /** Experimental: graphs (the action bar's Graphs and Run graph… buttons, a ticket's Run graph…) */
+  experimentalGraphs?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
   /** Number of days production application logs remain on disk */

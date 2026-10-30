@@ -1,6 +1,7 @@
 import { ensureProjectExpanded } from "./sidebar-project";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 
 /**
  * The editable Graphs designer against the real backend (item 212): build
@@ -57,6 +58,7 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     expect(response.ok(), command).toBe(true);
     return (await response.json()).result;
   };
+  await enableExperimentalGraphs(invoke);
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
   const project = projects.find((candidate) => candidate.localPath === status.testProject)!;

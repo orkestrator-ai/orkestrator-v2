@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
+import { enableExperimentalGraphs } from "./experimental-graphs";
 
 /**
  * Mock runs from the Graphs designer against the real backend (item 213):
@@ -37,7 +38,9 @@ function bakeOff(): GraphTemplateV1 {
   template.revision = 0;
   template.nodes = template.nodes.filter((node) => node.id !== "review");
   template.edges = template.edges.filter(
-    (edge) => !["build-review", "review-describe", "review-pr"].includes(edge.id),
+    (edge) =>
+      !("node" in edge.from && edge.from.node === "review") &&
+      !("node" in edge.to && edge.to.node === "review"),
   );
   template.edges.push(
     {
@@ -77,6 +80,7 @@ test("Graphs designer starts a mock run: no provider, no pull request, would-hav
     expect(response.ok(), command).toBe(true);
     return (await response.json()).result;
   };
+  await enableExperimentalGraphs(invoke);
   const projects =
     await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
   const project = projects.find((candidate) => candidate.localPath === status.testProject)!;
@@ -129,6 +133,10 @@ test("Graphs designer starts a mock run: no provider, no pull request, would-hav
     expect(result.run.environmentId).toBeUndefined();
     expect(result.pins).toEqual({ approve: [{ outlet: "approved" }] });
     await expect(page.getByText("Mock run started")).toBeVisible();
+    // A successful launch activates the new run tab; return to the designer
+    // before asserting that its draft was saved.
+    await expect(page.locator(`[data-graph-run="${result.run.id}"]`)).toBeVisible();
+    await page.getByText(/^Graphs \d+$/).click();
     await expect(designer.locator('[data-graph-draft-state="saved"]')).toBeVisible();
     const stored = await invoke<{ template: GraphTemplateV1 }>("graph_template_get", {
       ref: { scope: "user", id: TEMPLATE_ID },

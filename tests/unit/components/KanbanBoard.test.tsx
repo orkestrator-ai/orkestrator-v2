@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { useProjectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -7,6 +7,7 @@ import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useConfigStore } from "@/stores/configStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase, BuildPipeline } from "@/stores/buildPipelineStore";
 import type { Environment } from "@/types";
@@ -15,6 +16,7 @@ const loadTasksMock = mock(async () => undefined);
 const loadNotesMock = mock(async () => undefined);
 const saveNotesMock = mock(async () => undefined);
 const loadGitHubIssuesMock = mock(async () => undefined);
+const initialConfig = useConfigStore.getState().config;
 
 beforeEach(() => {
   cleanup();
@@ -48,6 +50,7 @@ beforeEach(() => {
     projectBoardNotesOpen: false,
   });
   useEnvironmentStore.setState({ environments: [] });
+  useConfigStore.setState({ config: initialConfig });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
   useGitHubIssuesStore.setState({
     snapshots: new Map([
@@ -280,5 +283,33 @@ describe("KanbanBoard environment labels", () => {
     render(<KanbanBoard projectId="project-1" />);
 
     expect(screen.queryByText("attach-images-to") === null).toBe(true);
+  });
+});
+
+describe("KanbanBoard experimental graphs", () => {
+  const openCardMenu = () => {
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Task actions/ }));
+    const menu = document.querySelector<HTMLElement>('[data-slot="dropdown-menu-content"]');
+    expect(menu).toBeTruthy();
+    return menu!;
+  };
+
+  test("a card offers no Run graph… while graphs are off", () => {
+    useKanbanStore.setState({ tasks: [makeTask()] });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(within(openCardMenu()).queryByRole("menuitem", { name: "Run graph…" })).toBeNull();
+  });
+
+  test("a card offers Run graph… once graphs are on", () => {
+    useKanbanStore.setState({ tasks: [makeTask()] });
+    useConfigStore.setState({
+      config: { ...initialConfig, global: { ...initialConfig.global, experimentalGraphs: true } },
+    });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(within(openCardMenu()).getByRole("menuitem", { name: "Run graph…" })).toBeTruthy();
   });
 });

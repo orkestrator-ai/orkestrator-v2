@@ -2824,6 +2824,49 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("saves the experimental graphs switch, off by default", async () => {
+    render(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable graphs" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalGraphs: true }),
+        undefined,
+      );
+    });
+  });
+
+  test("saves false when graphs are switched off and restores it when settings reopen", async () => {
+    useConfigStore.getState().setConfig({
+      ...useConfigStore.getState().config,
+      global: { ...useConfigStore.getState().config.global, experimentalGraphs: true },
+    });
+    const { unmount } = render(<GlobalSettings activeSection="experimental" />);
+    const toggle = screen.getByRole("switch", { name: "Enable graphs" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    await flushAutoSave();
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalGraphs: false }),
+        undefined,
+      );
+      expect(useConfigStore.getState().config.global.experimentalGraphs).toBe(false);
+    });
+    unmount();
+
+    render(<GlobalSettings activeSection="experimental" />);
+    expect(screen.getByRole("switch", { name: "Enable graphs" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+  });
+
   test("flushes a pending debounced edit when the form unmounts", async () => {
     const { unmount } = render(<GlobalSettings activeSection="general" />);
 

@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
-import { useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
+import { useConfigStore, useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
 import {
   useBuildPipelineStore,
   isActiveBuildPhase,
@@ -71,7 +71,7 @@ function DroppableColumn({
   onClickTask: (task: KanbanTask) => void;
   onAddTask?: () => void;
   onClearTaskStatus: (task: KanbanTask) => void;
-  onRunGraph: (task: KanbanTask) => void;
+  onRunGraph?: (task: KanbanTask) => void;
   buildPhaseByTaskId: Map<string, BuildPhase>;
   environmentNameByTaskId: Map<string, string>;
 }) {
@@ -202,6 +202,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   // "Run graph…" on a card: the ticket becomes the graph's input (item 214).
   const [runGraphTask, setRunGraphTask] = useState<KanbanTask | null>(null);
+  // Graphs are experimental: a card offers Run graph… only while they are on.
+  const graphsEnabled = useConfigStore((s) => s.config.global.experimentalGraphs === true);
   const environmentNames = useEnvironmentStore((s) => s.environments);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -322,7 +324,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                       column.id === "backlog" ? () => setCreateDialogOpen(true) : undefined
                     }
                     onClearTaskStatus={handleClearTaskStatus}
-                    onRunGraph={setRunGraphTask}
+                    onRunGraph={graphsEnabled ? setRunGraphTask : undefined}
                     buildPhaseByTaskId={buildPhaseByTaskId}
                     environmentNameByTaskId={environmentNameByTaskId}
                   />

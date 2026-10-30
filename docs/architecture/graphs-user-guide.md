@@ -9,6 +9,10 @@ edges that carry typed results from one step to the next. Loops repeat a part
 of the graph a bounded number of times. Graphs live in the **Graphs** tab of
 an environment.
 
+Graphs are experimental and off by default: turn them on in **Settings →
+Experimental → Graphs**. Until then the action bar's **Graphs** and **Run
+graph…** buttons and a ticket's **Run graph…** are hidden.
+
 ## Designing a graph
 
 ### Open the designer

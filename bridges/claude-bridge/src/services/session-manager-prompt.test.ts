@@ -61,6 +61,9 @@ describe("Claude startup failure diagnostics", () => {
     );
     expect(claudeStartupFailureMessage("bypass_root")).toContain("non-root user");
     expect(claudeStartupFailureMessage("provider_not_allowed")).toContain("API provider");
+    expect(claudeStartupFailureMessage("sandbox_required_unavailable")).toContain(
+      "command sandbox",
+    );
   });
 
   test("separates a retryable org-config outage from a refusal that needs sign-in", () => {

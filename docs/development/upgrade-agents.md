@@ -7,7 +7,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.309`, Anthropic SDK `1.2.0`, CLI `2.1.309` (npm `latest`, verified 2026-10-23) |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.4` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.40` (npm `latest`, verified 2026-10-23) |
@@ -613,17 +613,25 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    mise run build:claude-bridge
    bun run --cwd bridges/claude-bridge typecheck
    bun test bridges/claude-bridge/src/sdk-compatibility.test.ts
-   bun test bridges/claude-bridge/src --parallel
+   bun run --cwd bridges/claude-bridge test:bridge
    ```
 
-Last verified 2026-10-23 at Agent SDK 0.3.309 (`claudeCodeVersion` 2.1.309, so
-the SDK's CLI and the managed one are the same version) with CLI 2.1.309: the
+   Run the suite through `test:bridge`, which preloads `tests/setup-node.ts`.
+   A bare `bun test bridges/claude-bridge/src` from the root picks up the
+   root DOM preload instead, whose `AbortSignal` is not Node's: since 0.3.314
+   the SDK passes the query's signal to `events.setMaxListeners`, which throws
+   on it, so every test that starts a real SDK query fails there.
+
+Last verified 2026-10-30 at Agent SDK 0.3.314 (`claudeCodeVersion` 2.1.314, so
+the SDK's CLI and the managed one are the same version) with CLI 2.1.314: the
 compatibility test including the `canUseTool` proof, `verify:claude:mcp-live`
-against both the SDK's CLI and the managed binary, the vendored build, the
-typecheck and the full bridge suite. No new SDK message type, `system`
-subtype or hook event; `ModelInfo` still has no Ultracode flag. `TaskOutput`
-left `WAITING_TOOLS`: 2.1.309 lists it among the names it does not offer.
-`claude-host-login-refresh.ts` is still as checked against 2.1.296 (it needs a
+against both the SDK's CLI and the managed binary, `verify:claude:plugin-mcp-live`,
+the coordinator sandbox live test (macOS only), the vendored build, the
+typecheck and the full bridge suite. The only SDK union change was a new
+`SDKStartupFailureReason`, `sandbox_required_unavailable`, now mapped in
+`claudeStartupFailureMessage`. Not rerun at 2.1.314: the Linux sandbox probe
+(needs a Linux host), the billed coordinator-skills probe and
+`claude-host-login-refresh.ts` (still as checked against 2.1.296; it needs a
 container with a fake login).
 
 The compatibility test's deterministic CLI fixture does not authenticate or

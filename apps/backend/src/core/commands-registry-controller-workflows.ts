@@ -4,9 +4,11 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   isLaunchMultiReviewActionInput,
+  isMultiReviewModelSelection,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
+  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
   type MultiReviewActionResult,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
@@ -31,6 +33,17 @@ import {
 import { launchWorkerPr } from "./coordinator-pr.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
+import {
+  editWorkerTabWithTeardown,
+  launchWorkerTerminal,
+  openWorkerBrowser,
+  parseBrowserOpen,
+  parseTabEdit,
+  parseTerminalLaunch,
+  requireProjectWorker,
+  surfaceKey,
+  surfaceRecord,
+} from "./worker-surface-runs.js";
 
 /**
  * Workflow actions a command node's coordinator runs on this node.
@@ -45,6 +58,9 @@ import { openMultiReviewTab } from "./workflow-tab-actions.js";
  * The command node calls them through the node link, which only an attached
  * command node can use.
  */
+
+/** The surfaces `controller_multi_review_surface` opens; older nodes know the first three. */
+const MULTI_REVIEW_SURFACES = ["root", "fix", "address", "reviewer", "custom-fix"] as const;
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -91,6 +107,50 @@ export function registerControllerWorkflowCommands(
       if (running.get(key) === next) running.delete(key);
     }
   };
+
+  const run = async <T>(
+    context: CommandContext,
+    command: string,
+    args: Record<string, unknown>,
+  ): Promise<T> => {
+    const handler = dependencies.commands.get(command);
+    if (!handler) throw new Error(`Backend command is unavailable: ${command}`);
+    return (await handler(args, context)) as T;
+  };
+  const worker = (args: Record<string, unknown>, context: CommandContext) =>
+    requireProjectWorker(
+      context,
+      asNonBlankString(args.projectId, "projectId"),
+      args.environmentId,
+    );
+
+  /*
+   * A coordinator's worker surfaces (todo 0395). The command node holds the
+   * receipt and passes the key it derived from it, so a retry after a lost
+   * answer reattaches to the same job or tab here.
+   */
+  register("launch_controller_terminal", async (args, context) => {
+    const environment = await worker(args, context);
+    const launch = parseTerminalLaunch(surfaceRecord(args.input, "the terminal input"));
+    return launchWorkerTerminal(
+      context,
+      run,
+      environment.id,
+      launch,
+      `controller:${surfaceKey(args.key)}`,
+    );
+  });
+
+  register("open_controller_browser", async (args, context) => {
+    const environment = await worker(args, context);
+    const open = parseBrowserOpen(args, environment.id);
+    return openWorkerBrowser(context, environment.id, open, surfaceKey(args.key));
+  });
+
+  register("edit_controller_worker_tab", async (args, context) => {
+    const environment = await worker(args, context);
+    return editWorkerTabWithTeardown(context, run, environment.id, parseTabEdit(args));
+  });
 
   register("create_controller_pr", async (args, context) => {
     const targetBranch = args.targetBranch;
@@ -252,28 +312,62 @@ export function registerControllerWorkflowCommands(
     });
   });
 
-  /** Open a saved review's root or Fix tab, or address its findings. */
+  /**
+   * Open a saved review's root, Fix or reviewer tab, address its findings, or
+   * start a custom fix.
+   */
   register("controller_multi_review_surface", async (args, context) => {
     const surface = args.surface;
-    if (surface !== "root" && surface !== "fix" && surface !== "address") {
-      throw new Error("Expected surface root, fix or address.");
+    if (!(MULTI_REVIEW_SURFACES as readonly unknown[]).includes(surface)) {
+      throw new Error(`Expected surface ${MULTI_REVIEW_SURFACES.join(", ")}.`);
     }
     const id = asNonBlankString(args.workflowId, "workflowId");
     const saved = await context.storage.getMultiReviewWorkflow(id);
     if (!saved || !isMultiReviewWorkflow(saved.snapshot)) {
       throw new Error("Multi Review not found on this node");
     }
-    if (surface === "address") {
+    const review = { snapshot: saved.snapshot, revision: saved.revision };
+    if (surface === "reviewer") {
+      const reviewerId = asNonBlankString(args.reviewerId, "reviewerId");
+      return runMultiReviewSurface(context, review, "root", undefined, reviewerId);
+    }
+    if (surface === "address" || surface === "custom-fix") {
       const environment = await context.storage.getEnvironment(saved.snapshot.environmentId);
       if (isProjectHomeEnvironment(environment)) {
         throw new Error("The project checkout is not a worker environment.");
       }
     }
-    return runMultiReviewSurface(
-      context,
-      { snapshot: saved.snapshot, revision: saved.revision },
-      surface,
-    );
+    if (surface === "custom-fix") {
+      const instruction = asNonBlankString(args.instruction, "instruction").trim();
+      if (instruction.length > MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH) {
+        throw new Error("The custom fix instruction is too long");
+      }
+      const fixModel = args.fixModel;
+      if (fixModel !== undefined && !isMultiReviewModelSelection(fixModel)) {
+        throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
+      }
+      // A command node's retry after a lost answer can arrive once that fix is
+      // past its handoff, when the review is no longer ready: report the fix
+      // this instruction started instead of refusing it.
+      const launch = saved.snapshot.fixLaunch;
+      if (
+        saved.snapshot.phase !== "ready" &&
+        !saved.snapshot.addressPromptPending &&
+        launch?.kind === "custom" &&
+        launch.instruction === instruction &&
+        (fixModel === undefined ||
+          (launch.model.agent === fixModel.agent && launch.model.model === fixModel.model))
+      ) {
+        return runMultiReviewSurface(context, review, "fix");
+      }
+      return runMultiReviewSurface(context, review, "address", undefined, undefined, {
+        instruction,
+        // Omitted, the custom fix runs the review's own fix model, as the
+        // dialog's model picker starts on it.
+        fixModel: fixModel ?? saved.snapshot.fixModel,
+      });
+    }
+    return runMultiReviewSurface(context, review, surface as "root" | "fix" | "address");
   });
 
   /** The low-level start after a successful build, under a reserved ID. */

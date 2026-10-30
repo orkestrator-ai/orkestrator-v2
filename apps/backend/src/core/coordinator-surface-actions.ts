@@ -1,18 +1,6 @@
 import { createHash } from "node:crypto";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
-import {
-  COORDINATOR_TAB_EDIT_OPERATIONS,
-  COORDINATOR_TERMINAL_TAB_TYPES,
-  type CoordinatorTabEditOperation,
-  type CoordinatorTerminalTabType,
-} from "@orkestrator/protocol/coordinator-surfaces";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
-import {
-  formatPreviewIntentUri,
-  parsePreviewUrlIntent,
-} from "@orkestrator/protocol/preview-services";
-import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
-import { isTabTeardownKind, type TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -21,14 +9,27 @@ import {
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
-import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 import { launchWorkerPr } from "./coordinator-pr.js";
-import { coordinatorNodeTarget } from "./commands-registry-coordinator-nodes.js";
+import {
+  coordinatorNodeTarget,
+  RETRY_SAME_REQUEST,
+  withRetryAdvice,
+  type CoordinatorNodeTarget,
+} from "./commands-registry-coordinator-nodes.js";
 import type { Environment } from "./models.js";
-import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { applyRootChanges, listRootChanges } from "./root-changes.js";
-import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
+import {
+  editWorkerTabWithTeardown,
+  launchWorkerTerminal,
+  openWorkerBrowser,
+  optionalText,
+  parseBrowserOpen,
+  parseTabEdit,
+  parseTerminalLaunch,
+  requireProjectWorker,
+  surfaceRecord as record,
+} from "./worker-surface-runs.js";
 
 /**
  * Backend commands behind the coordinator's worker surfaces (todo 0142):
@@ -41,22 +42,14 @@ import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
  * worker environment of that project, never on the project home (the
  * checkout the coordinator may only read). Mutations that create something
  * take the caller's `requestId` through `withCoordinatorReceipt`.
+ *
+ * The terminal, browser, tab-edit and PR commands also take `nodeId` for a
+ * worker on a connected node (todo 0395): the receipt stays here, the node
+ * validates its own worker and runs the work through its `*_controller_*`
+ * command, with IDs derived from this receipt's key so a retry replays there.
  */
 
 type JsonRecord = Record<string, unknown>;
-
-function record(value: unknown, name: string): JsonRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error(`Expected ${name}`);
-  return value as JsonRecord;
-}
-
-function optionalText(value: unknown, name: string, max: number): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim() || value.length > max)
-    throw new Error(`Expected ${name} of 1-${max} characters`);
-  return value.trim();
-}
 
 /** A disposable worker of the caller's project: never the checkout itself. */
 export async function requireCoordinatorWorker(
@@ -64,15 +57,7 @@ export async function requireCoordinatorWorker(
   caller: CoordinatorCaller,
   environmentId: unknown,
 ): Promise<Environment> {
-  const id = asNonBlankString(environmentId, "environmentId");
-  const environment = await context.storage.getEnvironment(id);
-  if (!environment || environment.projectId !== caller.projectId)
-    throw new Error("Environment not found in this project");
-  if (isProjectHomeEnvironment(environment))
-    throw new Error("Coordinator credential cannot act on the project checkout");
-  if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting")
-    throw new Error("The worker environment is being deleted");
-  return environment;
+  return requireProjectWorker(context, caller.projectId, environmentId);
 }
 
 /** A stable ID per coordinator request, so a retry finds what the first attempt made. */
@@ -83,18 +68,15 @@ function requestKey(caller: CoordinatorCaller, requestId: string): string {
     .slice(0, 24);
 }
 
-/** Which `teardown_tab` kind closes a tab's resources, if it owns any. */
-function teardownKind(tab: JsonRecord): TabTeardownKind | null {
-  if (tab.type === "claude-tmux") return "claude-tmux";
-  if (tab.type === "agent-native") {
-    const data = tab.nativeAgentData as JsonRecord | undefined;
-    const kind = `${String(data?.platform)}-native`;
-    return isTabTeardownKind(kind) ? kind : null;
-  }
-  return typeof tab.type === "string" &&
-    ["plain", "root", "claude", "codex", "cursor", "grok", "opencode", "pi"].includes(tab.type)
-    ? "terminal"
-    : null;
+/** The connected node `nodeId` names; none for this node, even by its own ID. */
+async function remoteNode(
+  context: CommandContext,
+  caller: CoordinatorCaller,
+  nodeId: string | undefined,
+): Promise<CoordinatorNodeTarget | undefined> {
+  return nodeId && (await context.nodes?.status())?.nodeId !== nodeId
+    ? coordinatorNodeTarget(context, caller.projectId, nodeId)
+    : undefined;
 }
 
 export function registerCoordinatorSurfaceActions(
@@ -111,72 +93,36 @@ export function registerCoordinatorSurfaceActions(
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the terminal input");
     const requestId = asNonBlankString(input.requestId, "requestId");
-    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
-    const tabType = input.tabType ?? "plain";
-    if (!(COORDINATOR_TERMINAL_TAB_TYPES as readonly unknown[]).includes(tabType))
-      throw new Error(`tabType must be one of ${COORDINATOR_TERMINAL_TAB_TYPES.join(", ")}`);
-    const type = tabType as CoordinatorTerminalTabType;
-    const command = optionalText(input.command, "command", 100_000);
-    const prompt = optionalText(input.prompt, "prompt", 100_000);
-    const title = optionalText(input.title, "title", 200);
-    const model = optionalText(input.model, "model", 512);
-    const reasoningEffort = optionalText(input.reasoningEffort, "reasoningEffort", 128);
-    if (type === "plain" && !command) throw new Error("A plain terminal needs a command to run");
-    if (type !== "plain" && command)
-      throw new Error("command is for plain terminals; agent terminals take prompt and model");
-    if (type === "plain" && (prompt || model || reasoningEffort))
-      throw new Error("prompt, model and reasoningEffort are for agent terminals");
-    if (type === "grok" && (prompt || model || reasoningEffort))
-      throw new Error("grok terminals do not support prompt, model or reasoningEffort options");
-    const payload = {
-      environmentId: environment.id,
-      type,
-      command,
-      prompt,
-      title,
-      model,
-      reasoningEffort,
-    };
+    const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
+    const environmentId = remote
+      ? asNonBlankString(input.environmentId, "environmentId")
+      : (await requireCoordinatorWorker(context, caller, input.environmentId)).id;
+    const launch = parseTerminalLaunch(input);
+    if (remote) await remote.environment(environmentId);
     return withCoordinatorReceipt(
       context,
       caller,
-      { requestId, action: "launch-terminal", payload },
+      {
+        requestId,
+        action: "launch-terminal",
+        payload: { environmentId, ...launch, ...(remote ? { nodeId: remote.nodeId } : {}) },
+      },
       async () => {
-        let data: string | undefined;
-        if (type === "plain") data = `${command}\n`;
-        else if (type !== "claude-tmux") {
-          const line = buildTerminalAgentLaunchCommand({
-            tabType: type,
-            initialPrompt: prompt,
-            model,
-            reasoningEffort,
-          });
-          if (!line) throw new Error(`${type} does not support terminal launch`);
-          data = `${line}\n`;
-        }
-        const launched = await run<JsonRecord>(context, "launch_terminal_job", {
-          // Namespaced, so a coordinator request can never collide with the
-          // renderer's or another coordinator's job of the same name.
-          requestId: `coordinator:${requestKey(caller, requestId)}`,
-          environmentId: environment.id,
-          tabType: type,
-          ...(title ? { title } : {}),
-          ...(data !== undefined ? { data } : {}),
-          ...(type === "claude-tmux"
-            ? {
-                ...(prompt ? { initialPrompt: prompt } : {}),
-                ...(model ? { model } : {}),
-                ...(reasoningEffort ? { reasoningEffort } : {}),
-              }
-            : {}),
-          activateTab: true,
-        });
-        return {
-          environmentId: environment.id,
-          tabId: launched.tabId,
-          tabType: type,
-          status: launched.status,
-        };
+        const key = requestKey(caller, requestId);
+        if (remote)
+          return {
+            ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+              remote.call<JsonRecord>(
+                "launch_controller_terminal",
+                { projectId: remote.projectId, environmentId, input: launch, key },
+                `terminal:${caller.coordinatorId}:${requestId}`,
+              ),
+            )),
+            nodeId: remote.nodeId,
+          };
+        // Namespaced, so a coordinator request can never collide with the
+        // renderer's or another coordinator's job of the same name.
+        return launchWorkerTerminal(context, run, environmentId, launch, `coordinator:${key}`);
       },
     );
   });
@@ -185,37 +131,41 @@ export function registerCoordinatorSurfaceActions(
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the browser input");
     const requestId = asNonBlankString(input.requestId, "requestId");
-    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
-    const address = asNonBlankString(input.url, "url").trim();
-    // The same rule the browser tab applies to an agent's link: a loopback
-    // http(s) address of a service this worker runs, never the open web.
-    parsePreviewUrlIntent(address, "agent-link", environment.id);
-    const tabId = optionalText(input.tabId, "tabId", 200);
-    const title = optionalText(input.title, "title", 200);
-    const url = formatPreviewIntentUri({
-      environmentId: environment.id,
-      source: "agent-link",
-      url: address,
-    });
+    const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
+    const environmentId = remote
+      ? asNonBlankString(input.environmentId, "environmentId")
+      : (await requireCoordinatorWorker(context, caller, input.environmentId)).id;
+    const open = parseBrowserOpen(input, environmentId);
+    if (remote) await remote.environment(environmentId);
     return withCoordinatorReceipt(
       context,
       caller,
       {
         requestId,
         action: "open-browser",
-        payload: { environmentId: environment.id, address, tabId, title },
+        payload: { environmentId, ...open, ...(remote ? { nodeId: remote.nodeId } : {}) },
       },
       async () => {
         const key = requestKey(caller, requestId);
-        const ui = await openWorkerBrowserTab(context.storage, {
-          environmentId: environment.id,
-          ...(tabId ? { tabId } : {}),
-          newTabId: `browser-coordinator-${key}`,
-          url,
-          navigationRequestId: `coordinator-${key}`,
-          ...(title ? { title } : {}),
-        });
-        return { environmentId: environment.id, url: address, ui };
+        if (remote)
+          return {
+            ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+              remote.call<JsonRecord>(
+                "open_controller_browser",
+                {
+                  projectId: remote.projectId,
+                  environmentId,
+                  url: open.address,
+                  ...(open.tabId ? { tabId: open.tabId } : {}),
+                  ...(open.title ? { title: open.title } : {}),
+                  key,
+                },
+                `browser:${caller.coordinatorId}:${requestId}`,
+              ),
+            )),
+            nodeId: remote.nodeId,
+          };
+        return openWorkerBrowser(context, environmentId, open, key);
       },
     );
   });
@@ -223,72 +173,37 @@ export function registerCoordinatorSurfaceActions(
   register("edit_coordinator_worker_tab", async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the tab edit");
-    const environment = await requireCoordinatorWorker(context, caller, input.environmentId);
-    const tabId = asNonBlankString(input.tabId, "tabId");
-    const operation = input.operation;
-    if (!(COORDINATOR_TAB_EDIT_OPERATIONS as readonly unknown[]).includes(operation))
-      throw new Error(`operation must be one of ${COORDINATOR_TAB_EDIT_OPERATIONS.join(", ")}`);
-    const toPaneId = optionalText(input.toPaneId, "toPaneId", 200);
-    if (operation === "move" && !toPaneId) throw new Error("move needs toPaneId (see list_tabs)");
-    const close = async (tab: JsonRecord) => {
-      const delegations = await context.storage.coordinators.listOpenCoordinatorDelegations();
-      if (
-        delegations.some(
-          (association) =>
-            association.kind === "environment" &&
-            association.nodeId === undefined &&
-            association.resourceId === environment.id &&
-            association.delegation?.workerTabId === tabId,
-        )
+    const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
+    const environmentId = remote
+      ? asNonBlankString(input.environmentId, "environmentId")
+      : (await requireCoordinatorWorker(context, caller, input.environmentId)).id;
+    const edit = parseTabEdit(input);
+    if (!remote) return editWorkerTabWithTeardown(context, run, environmentId, edit);
+    await remote.environment(environmentId);
+    // Delegations to that node's workers are kept here, not on the node.
+    if (
+      edit.operation === "close" &&
+      (await context.storage.coordinators.listOpenCoordinatorDelegations()).some(
+        (association) =>
+          association.kind === "environment" &&
+          association.nodeId === remote.nodeId &&
+          association.resourceId === environmentId &&
+          association.delegation?.workerTabId === edit.tabId,
       )
-        throw new Error("A coordinator is waiting on this tab's report; it cannot be closed now");
-      const native = await nativeTurnPhase(
-        context,
-        environment.id,
-        { kind: "leaf", tabs: [tab] },
-        tabId,
-      );
-      if (native && native !== "idle" && native !== "error")
-        throw new Error(
-          "The agent in this tab is busy or waiting on a person; it cannot be closed now",
-        );
-      const kind = teardownKind(tab);
-      if (kind) {
-        // Retain the tab and resource identity until teardown succeeds. The
-        // teardown command journals its own intent and retains conversation history.
-        const sessionId =
-          kind === "terminal"
-            ? tab.backendTerminalSessionId
-            : kind.endsWith("-native") &&
-                !["claude-native", "codex-native", "opencode-native"].includes(kind)
-              ? (tab.nativeAgentData as JsonRecord | undefined)?.sessionId
-              : undefined;
-        await run(context, "teardown_tab", {
-          environmentId: environment.id,
-          tabId,
-          kind,
-          ...(typeof sessionId === "string" ? { sessionId } : {}),
-        });
-      }
+    )
+      throw new Error("A coordinator is waiting on this tab's report; it cannot be closed now");
+    return {
+      ...(await withRetryAdvice(
+        "Retry the same edit: it states an end state, so repeating it is harmless.",
+        () =>
+          remote.call<JsonRecord>("edit_controller_worker_tab", {
+            projectId: remote.projectId,
+            environmentId,
+            ...edit,
+          }),
+      )),
+      nodeId: remote.nodeId,
     };
-    const release = operation === "close" ? beginWorkerTabClose(environment.id, tabId) : () => {};
-    let releaseAgentAdmission: (() => void) | undefined;
-    try {
-      if (operation === "close")
-        releaseAgentAdmission = context.runtime.environments.fence.beginTabClose(environment.id);
-      const edited = await editWorkerTab(context.storage, {
-        environmentId: environment.id,
-        tabId,
-        operation: operation as CoordinatorTabEditOperation,
-        ...(toPaneId ? { toPaneId } : {}),
-        beforeClose: close,
-      });
-      const { closed: _closed, ...result } = edited;
-      return { environmentId: environment.id, ...result };
-    } finally {
-      releaseAgentAdmission?.();
-      release();
-    }
   });
 
   /**
@@ -303,11 +218,7 @@ export function registerCoordinatorSurfaceActions(
     const environmentId = asNonBlankString(input.environmentId, "environmentId");
     const targetBranch = optionalText(input.targetBranch, "targetBranch", 500);
     const nodeId = optionalText(input.nodeId, "nodeId", 200);
-    // Resolve an explicit self ID just as the other node-qualified tools do.
-    const remote =
-      nodeId && (await context.nodes?.status())?.nodeId !== nodeId
-        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
-        : undefined;
+    const remote = await remoteNode(context, caller, nodeId);
     if (remote) await remote.environment(environmentId);
     else await requireCoordinatorWorker(context, caller, environmentId);
     return withCoordinatorReceipt(
@@ -323,7 +234,9 @@ export function registerCoordinatorSurfaceActions(
         };
         if (remote)
           return {
-            ...(await remote.call<JsonRecord>("create_controller_pr", launch, launch.requestId)),
+            ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+              remote.call<JsonRecord>("create_controller_pr", launch, launch.requestId),
+            )),
             nodeId: remote.nodeId,
           };
         return launchWorkerPr(context, dependencies, launch);
@@ -487,42 +400,4 @@ export function registerCoordinatorSurfaceActions(
       paths: paths as string[],
     });
   });
-}
-
-async function nativeTurnPhase(
-  context: CommandContext,
-  environmentId: string,
-  root: unknown,
-  tabId: string,
-): Promise<string | null> {
-  const visit = (node: unknown): JsonRecord | null => {
-    if (!node || typeof node !== "object") return null;
-    const value = node as JsonRecord;
-    if (value.kind === "leaf" && Array.isArray(value.tabs))
-      return (
-        (value.tabs.find((tab) => (tab as JsonRecord)?.id === tabId) as JsonRecord | undefined) ??
-        null
-      );
-    if (value.kind === "split" && Array.isArray(value.children))
-      return value.children.map(visit).find(Boolean) ?? null;
-    return null;
-  };
-  const tab = visit(root);
-  const platform = (tab?.nativeAgentData as JsonRecord | undefined)?.platform;
-  if (tab?.type !== "agent-native") return null;
-  if (typeof platform !== "string" || !context.nativeAgents) return "unknown";
-  try {
-    const projection = await context.nativeAgents.getProjection({
-      environmentId,
-      agent: platform as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: `env-${environmentId}:${tabId}`,
-      messageLimit: 1,
-    });
-    if (!projection) return null;
-    if (projection.interactions.length > 0) return "waiting";
-    return projection.turn.phase;
-  } catch {
-    // An unreadable session is refused rather than closed under a turn.
-    return "unknown";
-  }
 }

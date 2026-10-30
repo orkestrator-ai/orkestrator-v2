@@ -417,6 +417,35 @@ test("a two-finger pinch zooms the stacked column on touch", async ({ page }) =>
   await expect(level).toHaveText("100%");
 });
 
+// Synthetic, so it pins the handler rather than proving a real trackpad or
+// iOS Safari (0029 task 5).
+test("a Safari gesture pinch zooms the graph and is kept from the page", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
+  const level = page.getByTestId("multi-review-zoom-level");
+  await expect(level).toHaveText("100%");
+  const gesture = (scale: number) =>
+    page.locator("[data-flow-viewport]").evaluate((element, scale) => {
+      const { left, top } = element.getBoundingClientRect();
+      const send = (type: string, eventScale: number) =>
+        element.dispatchEvent(
+          Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+            scale: eventScale,
+            clientX: left + 40,
+            clientY: top + 40,
+          }),
+        );
+      // Both must be cancelled, or Safari zooms the whole page instead.
+      const taken = [!send("gesturestart", 1), !send("gesturechange", scale)];
+      send("gestureend", scale);
+      return taken;
+    }, scale);
+  expect(await gesture(2)).toEqual([true, true]);
+  await expect(level).toHaveText("200%");
+  // A gesture's scale is relative to the zoom it started at.
+  expect(await gesture(0.5)).toEqual([true, true]);
+  await expect(level).toHaveText("100%");
+});
+
 test("the stacked zoom controls are full-size touch targets", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   test.skip(!isStacked(page), "The wide graph's controls are sized for a fine pointer");

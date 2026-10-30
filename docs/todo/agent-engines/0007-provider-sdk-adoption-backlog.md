@@ -164,16 +164,16 @@ pins undercut one of them is it raised below (task 1).
 
 **Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction.
 
-**Context.** Shared layer has no compaction-parameter surface yet; other providers would need the same field to avoid Pi-only UI.
+**Context.** Shared layer has no compaction-parameter surface yet; optional instructions need a shared field and a capability bit so the UI accepts them only for providers that can honour them.
 
-**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path.
+**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path.
 
 **Decisions.**
 
 - **What to adopt first?**
-  - **Custom instructions through an optional argument on the shared `compact` action, which Claude and Codex can also honour (recommended).**
-    - Pros: provider-neutral; small; useful.
-    - Cons: needs a composer affordance.
+  - **Custom instructions through an optional argument on the shared `compact` action, gated by a capability bit such as `actions.compactInstructions` (recommended).**
+    - Pros: provider-neutral; enables instructions for Claude and Pi while refusing them for Codex and OpenCode at the current pins; Grok can opt in once its `/compact` input support is verified.
+    - Cons: needs a composer affordance and capability-gated `/compact` argument policy, with changes across the protocol, command dispatch, provider compact paths and web submission path (see "Task 8: recommendation corrected, left open" under Assumptions and decisions).
   - **Abort and auto-toggle first.**
     - Pros: abort fixes a real "stuck compaction" case.
     - Cons: abort interacts with the claim and cancel logic in `http.ts:900-912`; the toggle is a Pi-only setting.
@@ -338,7 +338,9 @@ gate the `/compact` row's argument policy, so the composer refuses arguments
 where the provider would silently drop them. That touches the protocol, the
 command dispatch, five provider paths and the web submission path, too large
 for this batch. Abort and the auto-compaction toggle stay second, as
-recommended.
+recommended. Task 8's Context and Decisions now state this capability-gated
+recommendation directly, replacing the stale claim that Codex can honour the
+shared argument. Task 8 remains open.
 
 ### Tasks 10 and 11: need live Grok runs
 

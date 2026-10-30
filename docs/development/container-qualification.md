@@ -116,6 +116,47 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Bounded readiness probe on omarchy-hp, and a blocked reference-host run (2026-10-30)
+
+Todos [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md)
+and [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+task 5. Host: omarchy-hp, the reference host (Linux x86_64, 12 CPUs, Docker
+Engine 29.9.1, rootful, host uid 1000). Image
+`orkestrator-v2:qual-0870-cd7bbe3e` (`sha256:52af95deb105…`, `main`
+`cd7bbe3e`), built with `docker/build.sh`. The change is backend-only, so
+one image serves both sides.
+
+**No benchmark or live-suite numbers.** The daemon's address pools were
+full: 29 unattached probe networks leaked on 2026-10-28, before #1419's fix
+(see [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+hold all 31 default ranges. They belong to other runs and were left alone, so:
+
+- the benchmark at `cd7bbe3e`, before the change, failed its first fresh
+  start at the network create (`resource-exhausted`) after 6 s;
+- the live readiness-fault suite, with the change, failed all 9 cases the
+  same way (0 pass), two of them after their 300 s waits;
+- each run's own cleanup removed its volumes, and nothing it created was
+  left.
+
+**What was measured instead.** Containers of the image on
+`--network none`, started and removed by a run label, with the backend's
+own probe functions:
+
+| Check | Before (one exec per 250 ms poll) | After (bounded in-container wait) |
+| --- | --- | --- |
+| Full-mode `docker start` to current-boot ready, 8 alternating rounds | median 364 ms (354 to 744), 2 execs (one round 3) | median 329 ms (264 to 343), 1 exec each |
+| Restricted boot without `NET_ADMIN` (firewall fails closed), 3 starts | not run | `failed firewall-failed` in 352 to 474 ms |
+| Stale ready record (another `pid1Start`), 1 s window | — | `pending` after 1.10 s: no early stop |
+| `docker restart -t 0` 300 ms into a 2 s window | — | exec ended 264 ms after the restart began (`unreachable`) |
+| `docker stop -t 0` 300 ms into a 2 s window | — | exec ended 127 ms after the stop began; the next wait reported `container-exited` in 58 ms |
+| Gateway firewall report written 700 ms into the wait (`applied`, `failed`, `applied`) | — | seen 16 to 47 ms after the write, 1 read each |
+
+This shows the probe script runs in the image's `sh`, sees a final state
+within one 50 ms check, and that a container stopping or restarting still
+ends the wait at once. It is not the C09 qualification, and it is not the
+benchmark: a full-mode boot with no network is far shorter than a
+restricted one behind a gateway, where the old wait took 6 or 7 polls.
+
 ## Benchmarks on Linux Engine CI, and the call and start-time misses (2026-10-28)
 
 Todo [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md).
@@ -200,7 +241,8 @@ the boot's readiness step, and it is quantised:
 - The start-time misses keep their targets, and their reason is recorded
   here. Removing the quantisation is todo
   [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md).
-  The reference-host run (0729 task 5) is still to do.
+  The reference-host run (0729 task 5) is still to do: the 2026-10-30
+  attempt was blocked by exhausted address pools (above).
 
 ## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
 

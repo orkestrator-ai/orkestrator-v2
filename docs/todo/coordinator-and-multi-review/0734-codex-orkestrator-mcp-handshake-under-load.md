@@ -104,12 +104,14 @@ count. Two runs per figure where there are two:
 
 | Hogs (per logical CPU) | Load avg at bench start | 40-handshake burst, wall | 200-handshake burst, wall | 400-handshake burst, wall | Backend CPU per handshake | Sequential p50 / p90 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 30.1 | 45.9 ms | 171.1 ms | — | 1.8–2.6 ms | 1.2–1.6 / 2.1–2.5 ms |
+| 0 | 30.1 (40-burst), 239 (200-burst) | 45.9 ms | 171.1 ms | — | 1.8–2.6 ms | 1.2–1.6 / 2.1–2.5 ms |
 | 72 (4×) | 64.6, 267.7 | 235.5, 344.0 ms | 1,269, 1,481 ms | 2,984 ms | 2.4–3.4 ms | 2.3–2.5 / 3.7–8.7 ms |
 | 126 (7×) | 185.9, 381.5 | 537.5, 500.2 ms | 2,868, 2,816 ms | 4,905 ms | 2.8–3.3 ms | 2.5–2.7 / 4.6–47.8 ms |
 
-The 200-burst at no load ran right after the first 126-hog run had ended.
-Its 1-minute load average still read 239 from that run.
+The zero-hog 40-burst started at a 1-minute load average of 30.1. The
+zero-hog 200-burst ran right after the first 126-hog run had ended; its
+1-minute load average still read 239 from that run. Zero hogs means no
+synthetic busy loops were running, not that the host was idle.
 
 - *Measured.* Backend CPU per handshake stays between 1.8 and 3.4 ms
   whatever the load. Load stretches only the wall time. A burst's wall time
@@ -162,8 +164,9 @@ an idle host. Its own start-up under load does not eat into that budget.
 
 **Live qualification still to do.** The run needs billed Codex turns and is
 not done. Combine it with 0741 task 6. That task uses the same workload and
-collects the stall log, which is what separates a backend stall from host CPU
-starvation.
+collects timer-lateness logs. Those show when the backend event loop did not
+run promptly; process CPU or profiling data and host scheduling or sleep
+evidence are needed to establish why.
 
 1. On the production install, run a build that has #1381, #1387 and #1423
    (v2.34.4-beta or later). Note the backend's start time and the build
@@ -179,6 +182,10 @@ starvation.
    `while :; do date -u; uptime; sleep 60; done > load.txt`.
 4. Launch all ten reviews within one minute, and record each review's
    environment id and launch time in UTC.
+   During the run, collect timestamped backend process CPU samples or a CPU
+   profile, host scheduling evidence, and host sleep/wake records. Load
+   averages alone cannot distinguish backend CPU work from CPU starvation
+   or suspension.
 5. When every review has finished, collect the following:
    - Orkestrator log, `~/Library/Application Support/orkestrator-v2/logs/orkestrator-ai-<UTC date>.log`:
      `grep -c "could not list its tools"` (the 424 refusals),
@@ -193,8 +200,13 @@ starvation.
    `timed out handshaking … after 15s`, and every review finished its
    preparation and consolidation. **Fail:** any such line. Line it up
    against the stall lines and `load.txt` as 0741 task 6 describes. A covering
-   stall means backend work, so take the `tools/list` cache or 0741's own
-   process design. No stall means host CPU or the Codex side.
+   stall shows that the backend event loop did not run promptly, with cause
+   unresolved: backend work, host CPU starvation and suspension can all
+   delay the timer. Correlate process CPU or profiling data with host
+   scheduling and sleep/wake evidence before choosing the `tools/list`
+   cache or 0741's process design. No covering stall is inconclusive;
+   cumulative backend work can exhaust the handshake budget without one
+   covering timer delay. Record missing evidence and leave the cause open.
 7. Record the figures here, labelled measured or inferred, and set this
    task's status.
 
@@ -243,6 +255,21 @@ holds under synthetic load. 0741 keeps the decision to cache `tools/list`
 only if task 6 there shows the backend itself is slow.
 
 ## Assumptions and decisions
+
+### Task 2: separate timer delay from its cause
+
+The qualification procedure requires process CPU or profiling data and host
+scheduling or sleep evidence before selecting backend optimizations. The
+timer monitor measures lateness, which cannot establish backend CPU work,
+and no covering stall does not exclude cumulative backend work. The linked
+0741 procedure uses the same interpretation. No live diagnosis was made.
+
+### Task 2: identify each zero-hog burst's starting load
+
+The 171.1 ms result is treated as the post-126-hog 200-burst described in
+the original caveat. Its starting load average is 239; 30.1 belongs to the
+45.9 ms 40-burst. The table and caveat now identify both without implying
+that zero synthetic hogs made the host idle. No measurement was rerun.
 
 ### Task 1: mark it done without changes
 

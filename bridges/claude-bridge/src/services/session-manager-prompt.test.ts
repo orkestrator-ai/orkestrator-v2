@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
+import { readSessionActivityObservation } from "../routes/session-activity.js";
 import { holdSdkPromptOpen } from "./session-manager-persistence.js";
 import {
   createPromptStreamState,
@@ -1595,6 +1596,11 @@ describe("sendPrompt", () => {
       expect(stored.status).toBe("error");
       expect(stored.turnStartedAt).toBeUndefined();
       expect(stored.error).toBe("SDK exploded");
+      // The backend's turn-end bell reads the failure from the no-touch route.
+      expect(await readSessionActivityObservation(session.id)).toMatchObject({
+        activity: "idle",
+        turnFailed: true,
+      });
 
       const errorEvent = events.find(
         (e) => e.type === "session.error" && e.sessionId === session.id,

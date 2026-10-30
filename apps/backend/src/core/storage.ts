@@ -476,7 +476,10 @@ export class StorageService {
   recordEnvironmentSessionCompletion(
     environmentId: string,
     occurredAt: string,
-    reason: Extract<EnvironmentUnreadReason, "agent_finished" | "agent_waiting"> = "agent_finished",
+    reason: Extract<
+      EnvironmentUnreadReason,
+      "agent_finished" | "agent_failed" | "agent_waiting"
+    > = "agent_finished",
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,

@@ -12,6 +12,10 @@ const UNREAD_REASON_COPY: Record<EnvironmentUnreadReason, UnreadReasonCopy> = {
     title: "Agent finished",
     description: "The agent completed its work.",
   },
+  agent_failed: {
+    title: "Agent stopped with an error",
+    description: "The agent's turn failed before it finished. Open the tab to see the error.",
+  },
   agent_ready: {
     title: "Agent ready for input",
     description: "You can send another message while background work continues.",

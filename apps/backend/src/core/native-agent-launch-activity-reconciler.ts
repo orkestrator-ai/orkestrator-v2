@@ -45,7 +45,7 @@ import {
   type NativeAgentObservationWakeReason,
 } from "./native-agent-observation.js";
 import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
-import { PromptRejectedError } from "./agent-provider-contract.js";
+import { PromptRejectedError, TURN_STOPPED_BY_USER_MESSAGE } from "./agent-provider-contract.js";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   buildInitialPromptWithAttachmentReferences,
@@ -716,6 +716,7 @@ export class NativeAgentLaunchActivityReconciler {
             completionPending?: boolean;
             pendingInteraction?: boolean;
             contentRevision?: string;
+            readTurnFailed?: () => Promise<boolean>;
           } = {},
         ): Promise<void> => {
           if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
@@ -736,6 +737,7 @@ export class NativeAgentLaunchActivityReconciler {
               () => runtimeStillCurrent() && this.observations.accepts(ticket, session.key),
               details.completionPending,
               details.contentRevision,
+              details.readTurnFailed,
             )
           )
             completionCandidates.add(session.environmentId);
@@ -803,6 +805,7 @@ export class NativeAgentLaunchActivityReconciler {
           // Batched where the provider can, bounded-concurrent per session
           // otherwise; see `readActivityGroup` for the fallback and failure
           // rules. Answers are applied one at a time, in completion order.
+          const groupProvider = provider;
           await readActivityGroup({
             provider,
             sessions: group,
@@ -862,6 +865,10 @@ export class NativeAgentLaunchActivityReconciler {
                 pendingInteraction:
                   observedActivity === "waiting" ||
                   (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+                readTurnFailed: () =>
+                  observation?.turnFailed === true
+                    ? Promise.resolve(true)
+                    : readTurnTerminalFailure(groupProvider, session),
               });
             },
           });
@@ -1104,6 +1111,12 @@ export class NativeAgentLaunchActivityReconciler {
     stillApplicable?: () => boolean,
     completionPending?: boolean,
     contentRevision?: string,
+    /**
+     * Whether the turn this edge ends failed, asked only on a completion edge:
+     * the activity observation's `turnFailed`, or for a provider that keeps a
+     * failure off its lifecycle, a read of the turn's outcome.
+     */
+    readTurnFailed?: () => Promise<boolean>,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
@@ -1143,10 +1156,16 @@ export class NativeAgentLaunchActivityReconciler {
     // If storage fails, the provider group backs off and the next scan still
     // sees `previous === "working"`, so the durable completion is retried.
     if (durableAttentionEdge && owner === "environment") {
+      const reason =
+        state === "waiting"
+          ? "agent_waiting"
+          : (await readTurnFailed?.())
+            ? "agent_failed"
+            : "agent_finished";
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.host.now()).toISOString(),
-        state === "waiting" ? "agent_waiting" : "agent_finished",
+        reason,
       );
     }
     if (stillApplicable && !stillApplicable()) return false;
@@ -1729,5 +1748,27 @@ export class NativeAgentLaunchActivityReconciler {
       });
       throw error;
     }
+  }
+}
+
+/**
+ * The failure a provider keeps off its lifecycle: OpenCode reads idle after a
+ * failed turn and keeps the error on the request's answer; Grok's bridge
+ * journals a turn it cut short. Read only on a completion edge, from the latest
+ * dispatched request's outcome, never a session touch. The user's own stop is
+ * not a failure, and an unreadable outcome is not evidence of one: the edge is
+ * then announced as finished, as before.
+ */
+async function readTurnTerminalFailure(
+  provider: NativeAgentRuntimeProvider,
+  session: PersistedNativeAgentSession,
+): Promise<boolean> {
+  const requestId = session.dispatchedRequestIds?.at(-1);
+  if (!requestId || !provider.turnTerminalError) return false;
+  try {
+    const terminalError = await provider.turnTerminalError(session.providerSessionId, requestId);
+    return terminalError !== null && terminalError !== TURN_STOPPED_BY_USER_MESSAGE;
+  } catch {
+    return false;
   }
 }

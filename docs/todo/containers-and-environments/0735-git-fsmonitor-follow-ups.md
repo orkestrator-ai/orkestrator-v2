@@ -10,17 +10,20 @@ not prove or did not cover.
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `79f3bc97`.
-
-Nothing in this file is done yet. No commit after #1386 touches
-`git-fsmonitor.ts` or its callers.
+Analysed 2026-10-28 against `main` at `79f3bc97`. Rechecked 2026-10-30
+against `main` at `cd7bbe3e5`. No commit between the two touched
+`git-fsmonitor.ts`, so none of the tasks had already been done on `main`. The
+graphs merge (`3fa7d1733`, #1436) moved the code-rewind `status` reads into
+`workspace-code-rewind.ts` and added two new ones (task 3). Tasks 1–3 were
+done on the 0735 follow-up branch; see
+[Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
 
-1. **Daemons already orphaned**: decide between a one-off sweep and "a reboot is the answer". Status: open.
-2. **User-level fsmonitor on Orkestrator's own reads (open question)**: whether to override a `core.fsmonitor` the user set in their own git config. Status: open.
-3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: open (depends on 2).
-4. **Qualification: Windows process cleanup**: the fingerprint probe's bounded `taskkill /t /f` branch. Status: open (needs a Windows host).
+1. **Daemons already orphaned**: decide between a one-off sweep and "a reboot is the answer". Status: done (a reboot is the answer; a manual per-platform check is in git-scan-caches.md, "Daemons left by older versions").
+2. **User-level fsmonitor on Orkestrator's own reads (open question)**: whether to override a `core.fsmonitor` the user set in their own git config. Status: done (decided: no override; the timeout fallback stays the only bypass).
+3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: done (every remaining working-tree `status` read, including the new graph ones).
+4. **Qualification: Windows process cleanup**: the fingerprint probe's bounded `taskkill /t /f` branch. Status: open (needs a Windows host or CI iteration; see the 2026-10-30 note under task 4).
 5. **Qualification: arktech-mini after upgrade**: old worktrees lose the setting, their daemons exit, git calls are fast again. Status: open (needs arktech-mini on v2.34.2-beta or later).
 6. **Qualification: per-call latency on other hosts**: internal APFS, Linux and Windows, with and without fsmonitor. Status: open (Linux measured; APFS and Windows left).
 7. **Qualification: recovery from a real hung daemon**: capture timings if one recurs. Status: open (opportunistic).
@@ -29,11 +32,11 @@ Nothing in this file is done yet. No commit after #1386 touches
 
 **Problem.** A daemon whose worktree or repository was deleted before #1386 is stopped by nothing. `git fsmonitor--daemon stop` needs a path that still resolves to the daemon's repository, and that path is gone. The daemons exit only on reboot.
 
-**Context.** #1386 stops a daemon before every removal and move (`stopGitFsmonitorDaemon`, `apps/backend/src/core/git-fsmonitor.ts:35-44`; callers at `commands-environment.ts:2255` and `:2294`, `environment-cleanup.ts:280`, `environment-move.ts:384`), and no longer starts new ones, so the set of orphans can only shrink. arktech-mini had about 700 (git-scan-caches.md, "Why fsmonitor is off").
+**Context.** #1386 stops a daemon before every removal and move (`stopGitFsmonitorDaemon`, `apps/backend/src/core/git-fsmonitor.ts:35-44`; callers at `commands-environment.ts:2260` and `:2299`, `environment-cleanup.ts:280`, `environment-move.ts:384`), and no longer starts new ones, so the set of orphans can only shrink. arktech-mini had about 700 (git-scan-caches.md, "Why fsmonitor is off").
 
-**Investigation.** The file assumed only macOS was affected. It is not: git 2.56.0 on this Linux host reports `feature: fsmonitor--daemon`, and a daemon starts, reports `is watching` and stops in a fresh repository. One orphan is running here now: PID 1252400, `git fsmonitor--daemon run --detach`, started 2026-10-26 09:26 UTC by a pre-#1386 backend in the CLI `setup-failure` scenario (`packages/cli/scenarios/cases.ts:397`). Its `GIT_DIR` points into `/tmp/ork-cli-setup-failure-Co3wpB/fixtures/setupfail/.git/worktrees/…`, and `fixtures/setupfail` no longer exists. The watched path is found differently per platform:
+**Investigation.** The file assumed only macOS was affected. It is not: git 2.56.0 on this Linux host reports `feature: fsmonitor--daemon`, and a daemon starts, reports `is watching` and stops in a fresh repository. One orphan is running here now: PID 1252400, `git fsmonitor--daemon run --detach`, started 2026-10-26 09:26 UTC by a pre-#1386 backend in the CLI `setup-failure` scenario (`packages/cli/scenarios/cases.ts:397`). Its `GIT_DIR` points into `/tmp/ork-cli-setup-failure-Co3wpB/fixtures/setupfail/.git/worktrees/…`. (Corrected 2026-10-30: that path, the repository and the worktree at `/tmp/ork-cli-setup-failure-Co3wpB/worktrees/origin-setup-fails-2d2a26de53f1` all still exist, and `git fsmonitor--daemon status` there reports `is watching`. The daemon is kept alive by a leaked test directory, not by a deleted path; a `stop` in that worktree would end it.) The watched path is found differently per platform:
 - macOS: `lsof` on the daemon's IPC socket, as the file said.
-- Linux: `/proc/<pid>/environ` carries `GIT_DIR`. The socket in `/proc/net/unix` shows only the relative name `fsmonitor--daemon.ipc`, and `lsof` is not installed on this host.
+- Linux: `/proc/<pid>/environ` carries `GIT_DIR`. The socket in `/proc/net/unix` shows only the relative name `fsmonitor--daemon.ipc`, and `lsof` is not installed on this host. The daemon's working directory is the user's home, not the worktree, so `/proc/<pid>/cwd` does not help either.
 
 Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no longer exists. A daemon whose repository still exists may belong to the user and must not be touched.
 
@@ -77,7 +80,7 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
 
 **Context.** The backend has about 150 `"git"` invocations in 39 non-test files under `apps/backend/src`. Only calls that refresh the index or scan the working tree (`status`, and `diff` against the working tree) consult the daemon. `rev-parse`, `show` and commit-to-commit diffs do not.
 
-**Investigation.** The working-tree `status` reads with no fallback are: `build-pipeline-code-rewind.ts:167` and `:195`, `build-pipeline-service-lifecycle.ts:1111`, `commands-projects.ts:229`, `nodes/node-files.ts:359` and `root-changes.ts:72` (30 s, the project home's change list). The covered reads are at `commands-files.ts:986-996`, `project-git-service.ts:437`, `commands-review.ts:950`, `review-validation-worker.ts:96-102` and `review-worktree-fingerprint.ts:189-197`.
+**Investigation.** The working-tree `status` reads with no fallback are: `build-pipeline-code-rewind.ts:167` and `:195`, `build-pipeline-service-lifecycle.ts:1111`, `commands-projects.ts:229`, `nodes/node-files.ts:359` and `root-changes.ts:72` (30 s, the project home's change list). Rechecked 2026-10-30: the graphs merge moved the code-rewind reads into `workspace-code-rewind.ts` (three reads) and added `graph-agent-guards.ts` (a branch worktree's dirty check) and `graph-system-select.ts` (before moving the run's branch). `reconcileContainerDelegationBase` (`commands-environment.ts`) also reads a container worktree's status with no fallback. `nodes/node-files.ts` also runs two `diff HEAD` reads, which scan the working tree. The covered reads are at `commands-files.ts:986-996`, `project-git-service.ts:437`, `commands-review.ts:950`, `review-validation-worker.ts:96-102` and `review-worktree-fingerprint.ts:189-197`.
 
 **Decisions.**
 
@@ -98,7 +101,7 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
 
 **Context.** On POSIX the probe owns a process group (`grouped = process.platform !== "win32"`, `review-worktree-fingerprint.ts:44`). The blocking-hook regression is skipped on Windows (`review-worktree-fingerprint.test.ts:203`). CI already has one Windows job, `claude-hook-only-windows` on `windows-latest` (`.github/workflows/ci.yml:109-129`).
 
-**Investigation.** None beyond the code; this host is Linux.
+**Investigation.** None beyond the code; this host is Linux. 2026-10-30: the blocking-hook case cannot simply be un-skipped. It intercepts Git with a POSIX `sh` script named `git` placed first on `PATH`, joins `PATH` with `:`, and finds Git with `which`; Node's `spawn("git")` on Windows resolves only `git.exe`/`.cmd`, so the probe would bypass the wrapper. A Windows variant needs another way to observe the calls (for example `GIT_TRACE` to a file) and a liveness check for the hook PIDs that works there (`process.kill(pid, 0)` does). The CI job also needs the backend test preload to work on Windows, which no job exercises today.
 
 **Decisions.**
 
@@ -177,24 +180,35 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
   `cleanupFailedLocalWorktree` and a move's quiesce step stop the daemon first.
 - Diff stats, the project home's status, the review package status, the
   validation worker's drift check and the fingerprint probe retry once with
-  `-c core.fsmonitor=false` after a timeout.
+  `-c core.fsmonitor=false` after a timeout. Since the 0735 follow-up branch
+  (2026-10-30), so do the project home's change list, the coordinator's
+  environment details, the code-rewind, graph-agent and graph-select
+  cleanliness checks, the scratch-repository resume check and the delegated
+  container's cleanliness check. A cancelled read is not retried
+  (`retryGitWithoutFsmonitorOnTimeout` takes the caller's `AbortSignal`).
+- A user's own `core.fsmonitor` is not overridden (task 2).
 - The Node test preload sets `core.fsmonitor=false` in the isolated global
   config (`tests/isolate-git-config.ts:28`).
 - The builtin daemon also exists on Linux: git 2.56.0 on omarchy-hp has it
-  (2026-10-28), and one pre-#1386 orphan is running there (task 1).
+  (2026-10-28), and one pre-#1386 daemon is still running there, PID 1252400,
+  watching a leaked CLI scenario worktree (task 1). It was left running on
+  2026-10-30: it was not started by this work.
 
 ### Automated coverage
 
 - `git-fsmonitor.test.ts`: preload and scan-cache settings, worktree-only
   migration, preservation of main/shared/user config and a linked project home,
-  daemon shutdown (a real builtin daemon on macOS and Windows; the cases assume
-  Linux has none, `git-fsmonitor.test.ts:130`, `:160`, `:174` and `:308`, so
-  "stops a running daemon" is skipped on Linux even where git now supports it),
+  daemon shutdown (a real builtin daemon wherever `git version
+  --build-options` reports `feature: fsmonitor--daemon`, Linux included),
   concurrent and once-per-process migration, retries after rev-parse/config
   read/unset failures, status/diff and project-home toolbar fallback wiring,
-  non-timeout failures, cancellation and second-attempt failures. Host timeout
-  paths inject a structured timeout; the Git repositories and fallback reads
-  are real.
+  non-timeout failures, cancellation (also through the helper's `signal`) and
+  second-attempt failures, and the fallback wiring of `readWorktreeStatus`,
+  `listRootChanges`, `isResumableScratchRepository` and
+  `reconcileContainerDelegationBase`. Host timeout paths inject a structured
+  timeout; the Git repositories and fallback reads are real. The graph-agent
+  and graph-select reads and the coordinator's environment details call the
+  same helper but have no test of their own.
 - `diff-stats-tracking.test.ts`: ownership wiring from tracked environments,
   including migration of an application worktree alongside a linked project home.
 - `commands-local-worktree.test.ts`: daemon-stop ordering for removal and failed
@@ -220,21 +234,17 @@ backend directory. The earlier root-level commands matched no files because
 root `bunfig.toml` excludes backend discovery. For focused backend tests, use
 `bun test --cwd apps/backend ./src/core/<file>.test.ts --parallel=1` through
 `mise run test:logged`. On 2026-10-28 `git-fsmonitor.test.ts` passed on this
-Linux host with one skip ("stops a running daemon").
+Linux host with one skip ("stops a running daemon"). On 2026-10-30 it passed
+there with 23 tests and no skip, and no daemon started by the run survived it.
 
 ## Outstanding work
 
 ### Code
 
-- [ ] **Daemons already orphaned** (task 1). A daemon whose worktree was
-  deleted before this change is stopped by nothing: there is no path left to
-  send `stop` to. They exit on reboot. Decide whether a one-off sweep is worth
-  it (the watched path is not on the daemon's command line; on macOS `lsof` on
-  its IPC socket finds it, on Linux `/proc/<pid>/environ` gives `GIT_DIR`) or
-  record that a reboot is the answer.
-- [ ] **Other git calls have no fallback** (task 3). Only the reads listed
-  above retry. Any other git call against a worktree whose user enabled
-  fsmonitor still waits for its own timeout and then fails.
+- [x] **Daemons already orphaned** (task 1). A reboot is the answer; the
+  manual check is in git-scan-caches.md.
+- [x] **Other git calls have no fallback** (task 3). Every remaining
+  working-tree `status` read now retries.
 
 ### Qualification
 
@@ -261,16 +271,84 @@ Linux host with one skip ("stops a running daemon").
   and touches only the linked worktree's own `config.worktree`, by
   explicit path, and only the exact value Orkestrator wrote (`true`).
 
-## Open questions
-
-- Whether a user-level fsmonitor (in `~/.gitconfig`) should also be overridden
-  for Orkestrator's own reads, the way `change-tracking/capture.ts` already
-  does. Today only timeouts trigger that. Task 2.
-
 ## Needs verification
 
 - The 1.1 s penalty was measured on one host only. Task 6; on Linux there is
   no such penalty.
+
+## Assumptions and decisions
+
+Added 2026-10-30 by the worker that acted on tasks 1–3, on `main` at
+`cd7bbe3e5`.
+
+### Task 1: a reboot is the answer, with a manual check
+
+Took the recommended option. git-scan-caches.md now has "Daemons left by
+older versions" with a read-only Linux command (tested on omarchy-hp; it lists
+PID 1252400 as `present`) and the macOS `lsof` form (not run on a Mac, and the
+doc says so). No code signals processes it did not start. The command reports
+whether the repository still exists rather than only listing ones that are
+gone, because the one daemon on this host turned out to watch a worktree that
+still exists in a leaked test directory: a "gone only" filter would have hidden
+it. PID 1252400 was reported and not stopped.
+
+### Task 2: no override of a user's own fsmonitor
+
+Took the recommended option, as the delegation asked: Orkestrator leaves a
+`core.fsmonitor` in `~/.gitconfig` alone and relies on the timeout fallback.
+The code still matches the recorded design (`capture.ts` is the only reader
+that disables it unconditionally), and neither host with evidence has a global
+setting. git-scan-caches.md now says so explicitly. The open question is
+closed.
+
+### Task 3: the fallback for every remaining working-tree status read
+
+Took the recommended option. The list was rechecked against current `main`
+because the graphs merge had moved and added reads, so it covers:
+`readWorktreeStatus` (new in `workspace-code-rewind.ts`, used by its three
+reads and by `build-pipeline-service-lifecycle.ts`), `graph-agent-guards.ts`,
+`graph-system-select.ts`, `root-changes.ts` `listRootChanges`,
+`nodes/node-files.ts` (status and both `diff HEAD` reads),
+`commands-projects.ts` `isResumableScratchRepository` and
+`commands-environment.ts` `reconcileContainerDelegationBase`. The environment
+runners throw the same `CommandFailedError` with `timedOut` as host
+`runCommand`, so `retryGitWithoutFsmonitorOnTimeout` wraps them directly, as
+`commands-review.ts` already did; no separate runner-specific helper was
+needed.
+
+`retryGitWithoutFsmonitorOnTimeout` now takes an optional `AbortSignal` and
+does not retry once it has fired. `runCommand` reports a cancelled call as
+timed out, and `graph-system-select.ts` passes a run signal, so without this a
+cancelled graph action would have run a second `status`.
+`runGitWithFsmonitorFallback` uses the same check instead of its own.
+
+Left out on purpose: writes (`reset --hard`, `add`), reads that never consult
+the daemon (`rev-parse`, `show`, `log`, commit-to-commit diffs),
+`buildRootChangesPatch` (a path-limited diff against a scratch index on an
+explicit user action, already bounded at 120 s) and the
+`git submodule foreach` status string inside `project-git-service.ts`, which
+runs in a shell and would need its own `-c` inside the script.
+
+### Daemon tests on Linux (Automated coverage)
+
+`git-fsmonitor.test.ts` now decides whether the builtin daemon exists from
+`git version --build-options` (`feature: fsmonitor--daemon`) instead of
+`process.platform !== "linux"`. It is a build feature, and git 2.56.0 on Linux
+has it. The four cases that assumed otherwise now start, check and stop a
+real daemon on Linux. Each case stops the daemon it started in `finally`, and
+a process listing after the run showed only PID 1252400.
+
+### Task 4: not attempted on this branch
+
+The recommended option (a Windows CI variant of the blocking-hook case) still
+stands, but it cannot be developed or proved from a Linux host, and a CI job
+pushed without a Windows run would only show up red on the pull request. The
+investigation note under task 4 records what a Windows variant has to change.
+
+### Tasks 5–7: left open
+
+They need arktech-mini, an internal APFS volume, Windows, or a real hung
+daemon. Nothing here could produce that evidence.
 
 ## Related
 

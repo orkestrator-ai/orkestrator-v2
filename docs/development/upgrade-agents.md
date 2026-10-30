@@ -8,7 +8,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-30) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
@@ -414,10 +414,11 @@ window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
 coordinator home or container receives, built from a synthetic login against
-a local server, and reports every refresh attempt. On 0.164.0: no refresh for
-an access token more than five minutes from its `exp`, whatever
-`last_refresh` says; inside those five minutes, or after a 401, one attempt
-with the blank refresh token that fails and leaves the file untouched. A
+a local server, and reports every refresh attempt. On 0.164.0 and 0.166.0
+alike: no refresh for an access token more than five minutes from its `exp`,
+whatever `last_refresh` says; inside those five minutes a few attempts (four
+in the probe's run) and after a 401 one, each with the blank refresh token,
+each failing and leaving the file untouched. A
 change there (a refresh before the window, or a rewritten file) needs
 `restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
 
@@ -809,7 +810,7 @@ the pinned binary's parser over the production argument shape.
      bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
    ```
 
-   It expects 0.164.0's behaviour: no item for a refused `apply_patch` or
+   It expects 0.164.0's behaviour, unchanged in 0.166.0: no item for a refused `apply_patch` or
    refused command, the cell and its refusal kept in the rollout, and the
    bridge showing each refused cell as a failed `exec` row in the order it
    ran. It also pins the exception: a cell an interrupt stops (below) records
@@ -833,7 +834,7 @@ the pinned binary's parser over the production argument shape.
    Every Orkestrator turn runs in Codex's Default collaboration mode, which
    refuses `request_user_input` unless the thread turns on the
    under-development `default_mode_request_user_input` feature
-   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour: an
+   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour, unchanged in 0.166.0: an
    interactive session's call parks as a pausable question, the turn waits for
    the answer, and a `pipeline` session still gets "unavailable in Default
    mode". If the feature is renamed or removed, the first case fails: find the
@@ -861,7 +862,7 @@ the pinned binary's parser over the production argument shape.
 
    Orkestrator never offers or sends Codex's exec-policy and network-policy
    amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
-   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's
+   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's (and 0.166.0's)
    behaviour: an `untrusted` command approval carries
    `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
    empty, and the identical command asks again in the next turn. Its control
@@ -965,6 +966,23 @@ the pinned binary's parser over the production argument shape.
    - Usage no longer double-counts reasoning tokens. The bridge passes the
      counts through, so totals for comparable 0.164 turns read lower than
      0.162's; nothing compensated for the old count.
+
+   Codex 0.166.0 changed four things the bridge relies on, all handled:
+
+   - `review/start` lost detached delivery (`ReviewDelivery` is `"inline"`
+     only); `startReview` takes the generated type.
+   - Every `ThreadItem` may carry `startedAtMs` / `completedAtMs`; the
+     generated union is now an intersection, which the protocol test still
+     reads.
+   - `CodexErrorInfo` gained `modelNotFound` (0.165, never retried) and
+     `policyCapacityUnavailable`; both pass through `codexErrorInfoToCode`.
+   - Idle threads with no subscriber unload after 60 s instead of 1800 s
+     (`thread_unload_delay_secs`), so a thread the bridge has idle-detached is
+     freed a minute later and its next attach is a cold resume from the
+     rollout, which is what idle detach already assumes.
+
+   Every `features.*` the bridge depends on kept its 0.164.0 stage and
+   default (`codex features list` in a temporary `CODEX_HOME`).
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns

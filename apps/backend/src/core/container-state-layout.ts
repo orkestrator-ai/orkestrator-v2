@@ -34,7 +34,7 @@ export interface ProviderStateEntry {
  */
 export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
   claude: "2.1.314",
-  codex: "0.164.0",
+  codex: "0.166.0",
   opencode: "1.19.5",
   pi: "1.4.0",
   cursor: "1.2.0",

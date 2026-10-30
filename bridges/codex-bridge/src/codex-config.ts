@@ -89,7 +89,7 @@ export function codexNetworkDeniedConfig(
  * once the user trusts the project, or its main checkout, in Codex. Pinning
  * the thread's cwd untrusted drops that layer for this thread only, and stops
  * a writable thread from marking the project trusted in the user's
- * `config.toml`. Verified against 0.164.0 (`live-project-trust.test.ts`):
+ * `config.toml`. Verified against 0.166.0 (`live-project-trust.test.ts`):
  *
  * - The pin must be a nested table. A dotted `projects."<path>".trust_level`
  *   key, which works as a process `-c` override, is ignored in thread config.
@@ -125,7 +125,7 @@ export function codexProjectTrustConfig(
  * in Default mode" and the model falls back to asking in plain text. The
  * `default_mode_request_user_input` feature lifts that refusal, so the call
  * reaches the bridge as `item/tool/requestUserInput` and parks as a question
- * card. Verified against 0.164.0 (`live-request-user-input.test.ts`).
+ * card. Verified against 0.166.0 (`live-request-user-input.test.ts`).
  *
  * Unattended sessions (`pipeline`, which every workflow owner resolves) keep
  * the refusal: nobody would see the question, and their owner would only

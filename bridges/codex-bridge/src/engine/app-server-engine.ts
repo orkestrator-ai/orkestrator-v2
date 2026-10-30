@@ -59,6 +59,7 @@ import type {
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
 import type {
+  ReviewDelivery,
   SkillsExtraRootsSetParams,
   SkillsListParams,
   UserInput,
@@ -2101,7 +2102,8 @@ export class AppServerEngine implements CodexEngine {
       | { type: "baseBranch"; branch: string }
       | { type: "commit"; sha: string; title: string | null }
       | { type: "custom"; instructions: string },
-    delivery: "inline" | "detached" = "inline",
+    // Codex 0.166 removed detached delivery: a review always runs on `threadId`.
+    delivery: ReviewDelivery = "inline",
   ): Promise<{ reviewThreadId: string; turnId: string }> {
     const response = await this.supervisor.request<{
       reviewThreadId: string;

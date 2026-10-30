@@ -8,6 +8,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
+import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 
 const worlds: MailWorld[] = [];
 afterEach(async () => {
@@ -37,7 +40,14 @@ function review(id: string, phase: string) {
 }
 
 async function setup(
-  options: { available?: boolean; hasCopy?: boolean; answers?: Record<string, unknown> } = {},
+  options: {
+    available?: boolean;
+    hasCopy?: boolean;
+    leafProjectId?: string;
+    answers?: Record<string, unknown>;
+    /** The leaf's hello capabilities; the default is a leaf from before node-mail-steer. */
+    capabilities?: Record<string, number>;
+  } = {},
 ) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   worlds.push(world);
@@ -55,7 +65,13 @@ async function setup(
   const context = {
     storage: world.storage,
     coordinators: world.coordinator,
-    nodes: { status: async () => ({ nodeId: "bk_cmd", mode: "command" }) },
+    nodes: {
+      status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
+      link: (nodeId: string) =>
+        nodeId === "bk_leaf"
+          ? { hello: { capabilities: options.capabilities ?? { "node-attachment": 1 } } }
+          : null,
+    },
     nodePortal: {
       summaries: async () => ({
         selfId: "bk_cmd",
@@ -67,7 +83,12 @@ async function setup(
             projects:
               options.hasCopy === false
                 ? []
-                : [{ ref: { projectId: "p-leaf" }, repositoryHint: "github.com/acme/site" }],
+                : [
+                    {
+                      ref: { projectId: options.leafProjectId ?? "p-leaf" },
+                      repositoryHint: "github.com/acme/site",
+                    },
+                  ],
           },
         ],
       }),
@@ -109,6 +130,7 @@ async function setup(
     run,
     routed,
     associations,
+    context,
     loseNext: (command: string) => {
       unknownOnce = command;
     },
@@ -370,6 +392,107 @@ describe("send_coordinator_node_mail", () => {
     expect(result.toEnvironmentName).toBe("leaf-env");
     expect(result.toTabName).toBeUndefined();
   });
+
+  test("deliverNow asks a leaf that can steer, reports its outcome and opens the delegation", async () => {
+    const { run, scope, routed, associations } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          placement: "injected",
+          injectedVia: "steer",
+          deliverNow: "steered",
+          deliverNowNote: "Steered into the worker's running turn.",
+        },
+      },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "correct-1",
+      toEnvironmentId: "leaf-env",
+      body: "Stop: the requirement changed.",
+      deliverNow: true,
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject({
+      steer: true,
+    });
+    expect(result).toMatchObject({
+      placement: "injected",
+      injectedVia: "steer",
+      deliverNow: "steered",
+      deliverNowNote: "Steered into the worker's running turn.",
+      // Mail already in the running turn still asked the worker something.
+      coordinatorDelegationOpened: true,
+    });
+    expect(
+      (await associations()).filter((entry) => entry.delegation?.state === "running"),
+    ).toHaveLength(1);
+  });
+
+  test("deliverNow to an older leaf sends no steer field and claims no outcome", async () => {
+    const { run, scope, routed } = await setup({
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          placement: "pending-inject",
+        },
+      },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "correct-old",
+      toEnvironmentId: "leaf-env",
+      body: "Stop.",
+      deliverNow: true,
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).not.toHaveProperty(
+      "steer",
+    );
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(result).toMatchObject({
+      placement: "pending-inject",
+      coordinatorDelegationOpened: true,
+    });
+  });
+
+  test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {
+    const { run, scope, routed } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "routine",
+      toEnvironmentId: "leaf-env",
+      body: "Routine.",
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).not.toHaveProperty(
+      "steer",
+    );
+    expect(result).not.toHaveProperty("deliverNow");
+  });
+
+  test("a lost deliverNow answer is outcome-unknown, with no steer claimed or delegation opened", async () => {
+    const { run, scope, associations, loseNext } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+    });
+    loseNext("deliver_node_mail");
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: "lost",
+        toEnvironmentId: "leaf-env",
+        body: "Stop.",
+        deliverNow: true,
+      }),
+    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    expect(await associations()).toEqual([]);
+  });
 });
 
 describe("workflows on a node", () => {
@@ -496,4 +619,104 @@ describe("workflows on a node", () => {
       }),
     ).rejects.toThrow("Adopt this workflow");
   });
+});
+
+describe("deliverNow through a linked command and leaf handler", () => {
+  for (const joining of [false, true]) {
+    test(`steering ${joining ? "joins" : "opens"} a remote delegation and replays once`, async () => {
+      const leaf = await MailWorld.create();
+      worlds.push(leaf);
+      const worker = await leaf.addEnvironment("linked-worker", { launched: true });
+      let phase = "working";
+      const nodeCoordination = new NodeCoordination({
+        storage: leaf.storage,
+        nodes: {
+          listControllers: () => [{ controllerId: "bk_cmd", displayName: "Office desktop" }],
+          subscribe: () => () => {},
+        } as never,
+        portal: { readModel: { onNodeEvent: () => () => {} } } as never,
+        invoke: async () => undefined as never,
+        emit: () => {},
+      });
+      const commands = new Map<string, CommandHandler>();
+      registerNodeCommands((name, handler) => commands.set(name, handler));
+      const leafContext = {
+        storage: leaf.storage,
+        nodeCoordination,
+        drainAgentMail: () => leaf.mail.drainInjects(),
+      } as unknown as CommandContext;
+      const leafCall = (name: string, args: Record<string, unknown>) =>
+        commands.get(name)!(args, leafContext);
+      const { world, run, scope, routed, associations, context } = await setup({
+        leafProjectId: leaf.projectId,
+        capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+        answers: {
+          get_environment: () => leaf.storage.getEnvironment(worker.environmentId),
+          deliver_node_mail: (args: Record<string, unknown>) => leafCall("deliver_node_mail", args),
+          get_worker_request_state: (args: Record<string, unknown>) =>
+            leafCall("get_worker_request_state", args),
+          get_agent_registry: () => ({
+            entries: [{ environmentId: worker.environmentId, tabId: worker.tabId, state: phase }],
+          }),
+        },
+      });
+      const remote = new NodeCoordinatorRemote({
+        invokeOnNode: (input) => context.nodePortal!.invokeOnNode(input),
+        summaries: async () => ({ nodes: [] }) as never,
+        collectMail: async () => true,
+      });
+      world.coordinator.setRemoteAccess(remote);
+      const input = {
+        scope,
+        nodeId: "bk_leaf",
+        toEnvironmentId: worker.environmentId,
+        toTabId: worker.tabId,
+      };
+      if (joining) {
+        await run("send_coordinator_node_mail", {
+          ...input,
+          requestId: "initial",
+          body: "Initial request.",
+        });
+        expect(
+          await remote.workerState("bk_leaf", worker.environmentId, worker.tabId),
+        ).toMatchObject({ requestPending: true });
+        await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+        phase = "idle";
+        await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+        expect((await associations())[0]!.delegation?.state).toBe("running");
+        phase = "working";
+      }
+      const correction = {
+        ...input,
+        requestId: "correction",
+        body: "Use the corrected requirement.",
+        deliverNow: true,
+      };
+      const result = await run("send_coordinator_node_mail", correction);
+      expect(result).toMatchObject({
+        placement: "injected",
+        injectedVia: "steer",
+        deliverNow: "steered",
+        coordinatorDelegationOpened: true,
+      });
+      expect(result).not.toHaveProperty("placementReason");
+      expect(routed.findLast((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject(
+        { steer: true, requestId: "correction" },
+      );
+      const steered = leaf.steered(worker);
+      expect(steered.filter((text) => text.includes(correction.body))).toHaveLength(1);
+      expect(await run("send_coordinator_node_mail", correction)).toEqual(result);
+      expect(leaf.steered(worker)).toEqual(steered);
+      expect(await remote.workerState("bk_leaf", worker.environmentId, worker.tabId)).toMatchObject(
+        { requestPending: false },
+      );
+      expect(await associations()).toHaveLength(1);
+      await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+      await leaf.finishTurn(worker, { deliver: false });
+      phase = "idle";
+      await world.coordinator.settleRemoteWorker("bk_leaf", worker.environmentId);
+      expect((await associations())[0]!.delegation?.state).toBe("completed");
+    });
+  }
 });

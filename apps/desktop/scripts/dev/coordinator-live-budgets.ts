@@ -19,6 +19,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     family: step * 2 + family,
     // Waiter startup uses the turn budget; launch/review/delegation waits use five steps.
     status: turn + step * 5 + review,
+    // Native: five turns or waits and the wake; Claude's terminal case: five more.
+    "deliver-now": step * 12,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };

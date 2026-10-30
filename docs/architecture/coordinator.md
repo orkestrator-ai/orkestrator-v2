@@ -901,16 +901,29 @@ Decisions:
 
 - **Coordinator-only.** Worker `send_message` and `reply_message` have no
   `deliverNow`, and `sendAgentMail` ignores `steer` for any sender that is not
-  a coordinator: a worker steering its coordinator would bypass the
+  a coordinator (on this node, or a command node's coordinator whose mail the
+  node link delivered): a worker steering its coordinator would bypass the
   delegation hold.
 - **Never into a coordinator conversation.** Main ↔ side mail ignores the
   flag. Scheduled mail reports `queued until idle`; bounced, stored or
   budget-held mail reports `not queued`, so a side agent cannot cut into the
   main's turn with the user.
-- **Not across a node link yet.** Mail routed to another node reports
-  `unsupported, queued` only for scheduled pending mail. Stored, bounced and
-  budget-held mail reports `not queued`, with the leaf's placement and reason.
-  Live qualification and the node link are in
+- **Across a node link, through a leaf that advertises it.** For mail to a
+  worker on another node (`send_message` with `nodeId`, or a reply to mail
+  from one), `send_coordinator_node_mail` adds `steer: true` to
+  `deliver_node_mail` only when that leaf's hello advertises
+  `node-mail-steer`. The leaf marks the pending entry as a local coordinator's
+  would be, runs the same single delivery pass (`settleCoordinatorDeliverNow`),
+  and answers with its own `deliverNow`, `deliverNowNote`, post-drain
+  placement and `injectedVia`; its mutes, budgets and steer eligibility
+  decide. Mail already injected by that pass still opens or joins the
+  delegation. An older leaf would refuse the unknown field and the whole
+  message, so it is sent nothing new and the result is worked out here:
+  `unsupported, queued` for scheduled pending mail, `not queued` with the
+  leaf's placement and reason otherwise. A lost answer is the ordinary
+  outcome-unknown error with no `deliverNow` claim; retrying the same
+  `requestId` replays on the leaf. `send_node_message` has no `deliverNow`.
+  Live qualification is in
   [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
 
 `list_agents` (discovery) returns every agent tab in the project and what each

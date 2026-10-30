@@ -2,7 +2,7 @@
 
 - **ID:** 1309
 - **Status:** resolved
-- **Resolved:** 2026-10-30, by todo 0930 task 4 (`dda88f007`)
+- **Resolved:** 2026-10-30, by todo 0930 task 4 (`b64a2b224`)
 - **Observed:** 2026-10-26 to 2026-10-28 in aggregate runs on the shared Linux host;
   diagnosed 2026-10-29 on the todo 0214 follow-up branch
   (`todo-0214-storage-file-split-2054bfb3bc39`, docs only, on `main` at
@@ -92,10 +92,10 @@ only have loosened the test without making it any cheaper.
 The cause above is the fix's target: the scan parsed every backend file and
 kept every tree. Two commits on the todo 0930 branch address it:
 
-- `cbc76815f` moves the guard's analysis into
+- `eec7a3358` moves the guard's analysis into
   `storage-writer-guards-test-support.ts` and this block into
   `storage-writer-guards-raw.test.ts`, unchanged.
-- `dda88f007` makes `rawDatabaseWrites` parse a file only when its text can
+- `b64a2b224` makes `rawDatabaseWrites` parse a file only when its text can
   name a raw writer method, when a store name being resolved imports from it,
   or when it can call a row helper whose store parameter is being followed. The
   text check matches whole identifiers and decodes `\u` escapes first, so it
@@ -104,7 +104,7 @@ kept every tree. Two commits on the todo 0930 branch address it:
   tree, so the scans in one test file share them.
 
 A dump of the guard's whole analysis and of every raw write it reports is
-byte-identical before and after `dda88f007`.
+byte-identical before and after `b64a2b224`.
 
 Verification on the shared Linux host (12 cores), 2026-10-30, Bun 1.4.4:
 

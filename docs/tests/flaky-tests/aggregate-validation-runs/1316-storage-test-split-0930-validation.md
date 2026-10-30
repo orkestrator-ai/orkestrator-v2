@@ -5,7 +5,9 @@
 - **Date observed:** 2026-10-30
 - **Branch:** `todo-0930-storage-test-files-8ccf873101e6` on `main`
   `cd7bbe3e5`: first run at `dda88f007` (test splits and the writer-guard scan
-  change; docs uncommitted), second at `d5091591d` (docs only since).
+  change; docs uncommitted), second at `d5091591d` (docs only since). The
+  branch was then rebased onto `main` `f32615aff`, which touches no storage
+  code; those commits are now `b64a2b224` and `559ba28af`.
 - **Command:** `mise run test`.
 - **Duration:** about 370 s. Bridges and the Codex protocol lockfile passed.
   Workspace failed: backend 11,256 passed, 89 skipped, 1 failed (11,346 tests,

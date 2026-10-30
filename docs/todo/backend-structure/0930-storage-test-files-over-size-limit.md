@@ -2,14 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-10-29 against `main` at `79f3bc97e`. Statuses rechecked and the work done on 2026-10-30 against `main` at `cd7bbe3e5`.
+Analysed 2026-10-29 against `main` at `79f3bc97e`. Statuses rechecked and the work done on 2026-10-30 against `main` at `cd7bbe3e5`, then rebased onto `f32615aff`.
 
 ### Tasks
 
-1. **Split `apps/backend/src/core/storage.test.ts` by topic**: 4,322 lines, 22 top-level `describe` blocks. Status: done (`f034c8a26`).
-2. **Split `apps/backend/tests/storage.test.ts` by area**: 3,206 lines at analysis, 2,855 at `cd7bbe3e5`, one `describe` with 74 tests. Status: done (`9570ec160`), with a different cut from the recommended one (see **Assumptions and decisions**).
-3. **Split `storage-agent-mail.test.ts` along the agent mail collaborators**: 2,292 lines. Status: done (`dbbe87e3c`).
-4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md)). Status: done (split `cbc76815f`, scan `dda88f007`).
+1. **Split `apps/backend/src/core/storage.test.ts` by topic**: 4,322 lines, 22 top-level `describe` blocks. Status: done (`cf56ac854`).
+2. **Split `apps/backend/tests/storage.test.ts` by area**: 3,206 lines at analysis, 2,855 at `cd7bbe3e5`, one `describe` with 74 tests. Status: done (`e411067c9`), with a different cut from the recommended one (see **Assumptions and decisions**).
+3. **Split `storage-agent-mail.test.ts` along the agent mail collaborators**: 2,292 lines. Status: done (`ed8c3c901`).
+4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md)). Status: done (split `eec7a3358`, scan `b64a2b224`).
 5. **Qualification**: the same test counts before and after, then `mise run test`. Status: done (see **Current state**; the first `mise run test` failed only in two unchanged owners that passed alone, flake case [1316](../../tests/flaky-tests/aggregate-validation-runs/1316-storage-test-split-0930-validation.md)).
 
 ### 1. Split `apps/backend/src/core/storage.test.ts` by topic
@@ -153,14 +153,14 @@ The failing old runs are flake 1309 reproducing on this branch's own
 structure, which is the evidence that the new numbers are a fix rather than a
 quiet host.
 
-`mise run test` at `dda88f007` (load average 19–24) passed bridges and the
+`mise run test` at `b64a2b224` (load average 19–24) passed bridges and the
 protocol lockfile. Every storage test and the writer guard passed. It failed
 in two owners this branch does not touch:
 `apps/backend/tests/codex-subagent-cards.test.ts` (the 0310 cold-restart
 mismatch) and `tests/unit/mcp-fixture-cleanup.test.ts` (a 5 s deadline miss).
 Both passed alone; they are recorded as flake case
 [1316](../../tests/flaky-tests/aggregate-validation-runs/1316-storage-test-split-0930-validation.md).
-A second run at `d5091591d` (docs only since, load 20–33) passed root but
+A second run at `559ba28af` (docs only since, load 20–33) passed root but
 failed three other unchanged owners, which also passed alone and are in the
 same case. Neither aggregate run is green.
 

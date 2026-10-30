@@ -11,7 +11,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-30) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
@@ -1455,7 +1455,7 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.0.1`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.1.0`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
@@ -1479,6 +1479,13 @@ updates. The bridge's three imports (`acp-prompt.ts`, `acp-context.ts`,
 and every session update untyped, so moved types change nothing at runtime,
 and it builds only `http` MCP servers. Import from `/unstable` only for a
 surface the bridge really implements; never mix the v2 types into the v1 wire.
+
+2.0.1 → 2.1.0 changed no stable v1 type the bridge reads (`PROTOCOL_VERSION`
+is still `1`; `StopReason`, the session-update variants, `sessionCapabilities`
+and `promptCapabilities` are unchanged). It added `RequestError.sessionNotFound`
+(`-32002`, an agent-side helper), unstable MCP-over-ACP behind
+`./experimental/mcp-http` and `./experimental/mcp-server`, and an optional peer
+`@modelcontextprotocol/server` that only those entries import.
 
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
@@ -1508,8 +1515,8 @@ grok --help | rg -- '--always-approve'
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
-# 1.0.52 answer both; 1.0.67 was checked signed out only (`initialize` answers,
-# the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
+# 1.0.52 answer both; 1.0.67 and 1.0.70 were checked signed out only
+# (`initialize` answers, identically on both, and the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
@@ -1539,7 +1546,11 @@ default.
 Re-check these against the real binary on a bump; the fake agents in the suite
 encode them and cannot notice a change. Each bullet says what was re-verified
 against 1.0.67 signed out (`initialize`, `--help`, `strings`, the changelog);
-anything that needs a session is still as last verified against 1.0.52.
+anything that needs a session is still as last verified against 1.0.52. At
+1.0.70 the same signed-out checks found nothing changed: the `initialize`
+answer is identical, every flag and `x.ai/*` name below is still present, and
+the 1.0.68–1.0.70 changelogs touch only the TUI, dashboard, worktree copies,
+experiments and the updater.
 
 - **Images.** Since 1.0.67 `initialize` answers `promptCapabilities.image:
   true` (re-verified signed out; 1.0.52 answered `false` while reading the
@@ -1580,7 +1591,7 @@ anything that needs a session is still as last verified against 1.0.52.
   policy refusal during the attempt is never continued, so neither changes
   what the bridge sends (how a hook stop is reported over ACP is unverified).
   Project trust is still `GROK_FOLDER_TRUST=0`, re-verified by
-  `conformance-execution-policy.test.ts` against the real 1.0.67 binary
+  `conformance-execution-policy.test.ts` against the real 1.0.70 binary
   (`ORKESTRATOR_POLICY_GROK_PATH`).
 - **`session/close`.** Advertised in `sessionCapabilities` (re-verified signed
   out, with `list` and `resume`). It answers

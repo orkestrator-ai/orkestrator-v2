@@ -193,7 +193,7 @@ ENV VISUAL=nano
 ARG CLAUDE_CLI_VERSION=2.1.314
 ARG CODEX_CLI_VERSION=0.166.0
 ARG OPENCODE_CLI_VERSION=1.19.5
-ARG GROK_BUILD_VERSION=1.0.67
+ARG GROK_BUILD_VERSION=1.0.70
 ARG PI_CLI_VERSION=1.4.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
@@ -235,8 +235,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=ce33b1a29e37901f56fe59916cda7a1149e6fd377118f918e90d89f9abb52a51 ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=089a0acc2c1b570efcd791c5cd0f8aa074f6e8ab82c00ab78af0b934acdb6386 ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=3aa36883574b263088e5addffe241f55430e8daaee1a0c4934b02180007a9761 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \

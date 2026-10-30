@@ -367,7 +367,7 @@ as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
 2.1.314, Codex 0.166.0, OpenCode 1.19.5, Pi 1.4.0, `@cursor/sdk` 1.2.0, Grok
-1.0.67), by reading the pinned binaries' strings and bundled docs. A pin bump
+1.0.70), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
 

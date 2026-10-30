@@ -1599,9 +1599,11 @@ export class CodexRuntimeSessions {
     // Last tab: stop the turn before detaching. DELETE used to only
     // unsubscribe, so Codex kept editing the worktree after the UI closed.
     if (context && turn && context.bridgeSessionIds.size === 1) {
-      await this.ctx.options.engine
-        .interruptTurn(context.engineHandle, turn.turnId)
-        .catch(() => undefined);
+      if (!this.lifecycle.capacityRetry.cancelForClose(context, turn)) {
+        await this.ctx.options.engine
+          .interruptTurn(context.engineHandle, turn.turnId)
+          .catch(() => undefined);
+      }
     }
 
     this.retiredSessions.add(session);

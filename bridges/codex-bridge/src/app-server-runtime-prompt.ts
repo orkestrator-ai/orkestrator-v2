@@ -900,6 +900,12 @@ export class CodexRuntimePrompt {
         startedAt: context.turnStartedAt,
       });
       accumulator.markRunning();
+      // A capacity refusal continues this turn with the same configuration.
+      accumulator.capacityRetry = {
+        config: turnConfig,
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        attempt: 1,
+      };
       context.activeTurn = accumulator;
       context.engineGeneration = turn.engineGeneration;
       context.dispatchInFlight = false;

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import { MULTI_REVIEW_WORKFLOW_VERSION } from "@orkestrator/protocol/multi-review";
 import {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -4844,6 +4845,111 @@ describe("build pipeline commands", () => {
       },
       { nativeAgents },
     );
+  });
+
+  test("resolves a Multi Review reviewer through transient native agent inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "reviewer-session", revision: 3 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-1",
+      environmentId: "e1",
+      projectId: "proj-1",
+      targetBranch: "main",
+      reviewers: [
+        {
+          id: "reviewer-1",
+          agent: "cursor",
+          model: "composer-2",
+          status: "running",
+          sessionKey: "reviewer-session-key",
+          providerSessionId: "reviewer-session",
+        },
+        { id: "reviewer-2", agent: "codex", model: "gpt-5.6", status: "running" },
+        {
+          id: "reviewer-3",
+          agent: "claude",
+          model: "opus",
+          status: "failed",
+          error: "Provider exited",
+          providerSessionId: "unrotated-session",
+        },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "reviewing",
+      createdAt: "2026-09-08T10:00:00.000Z",
+      updatedAt: "2026-09-08T10:00:00.000Z",
+      backendRevision: 1,
+    };
+
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.saveMultiReviewWorkflow("workflow-1", "e1", 1, workflow);
+        await storage.saveMultiReviewWorkflow("malformed", "e1", 1, { id: "malformed" });
+
+        await expect(
+          invoke("get_multi_review_reviewer_projection", {
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+            refreshUsage: true,
+          }),
+        ).resolves.toEqual({ sessionId: "reviewer-session", revision: 3 });
+        expect(inspectSession).toHaveBeenLastCalledWith({
+          environmentId: "e1",
+          agent: "cursor",
+          logicalSessionKey: "reviewer-session-key",
+          providerSessionId: "reviewer-session",
+          origin: "automated-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "review",
+          refreshUsage: true,
+        });
+        await invoke("get_multi_review_reviewer_projection", {
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-3",
+        });
+        expect(inspectSession).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agent: "claude",
+            logicalSessionKey: "multi-review:workflow-1:reviewer:reviewer-3",
+            providerSessionId: "unrotated-session",
+          }),
+        );
+
+        for (const [workflowId, reviewerId, message] of [
+          ["missing", "reviewer-1", "Multi review workflow is unavailable"],
+          ["malformed", "reviewer-1", "Multi review workflow is unavailable"],
+          ["workflow-1", "unknown", "Multi review reviewer is unavailable"],
+          // Not started yet: there is no provider session to inspect.
+          ["workflow-1", "reviewer-2", "Multi review reviewer is unavailable"],
+        ] as const) {
+          await expect(
+            invoke("get_multi_review_reviewer_projection", { workflowId, reviewerId }),
+          ).rejects.toThrow(message);
+        }
+        await expect(
+          invoke("get_multi_review_reviewer_projection", {
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+            refreshUsage: "yes",
+          }),
+        ).rejects.toThrow("refreshUsage");
+        expect(inspectSession).toHaveBeenCalledTimes(2);
+      },
+      { nativeAgents },
+    );
+
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_multi_review_reviewer_projection", {
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-1",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+    });
   });
 
   test("rejects invalid build-stage projection requests before inspection", async () => {

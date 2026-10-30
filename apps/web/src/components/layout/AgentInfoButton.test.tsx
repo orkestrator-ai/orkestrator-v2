@@ -4,11 +4,16 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
+import {
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import {
   nativeAgentCapabilities,
   type NativeAgentAccountUsageWindow,
@@ -283,6 +288,46 @@ function buildTab(overrides: Partial<TabInfo> = {}): TabInfo {
   } as TabInfo;
 }
 
+function reviewerTab(overrides: Partial<TabInfo> = {}): TabInfo {
+  return {
+    id: "reviewer-tab",
+    type: "multi-review",
+    multiReviewTabData: {
+      environmentId: ENVIRONMENT_ID,
+      workflowId: "workflow-1",
+      reviewerId: "reviewer-1",
+    },
+    ...overrides,
+  } as TabInfo;
+}
+
+function multiReviewWorkflow(overrides: Partial<MultiReviewWorkflow> = {}): MultiReviewWorkflow {
+  return {
+    version: MULTI_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id: "workflow-1",
+    environmentId: ENVIRONMENT_ID,
+    projectId: "project-1",
+    targetBranch: "main",
+    reviewers: [
+      {
+        id: "reviewer-1",
+        agent: "claude",
+        model: "opus",
+        status: "running",
+        sessionKey: "reviewer-session-key",
+        providerSessionId: "reviewer-provider-session",
+      },
+    ],
+    fixModel: { agent: "codex", model: "gpt-5.6" },
+    phase: "reviewing",
+    createdAt: "2026-09-08T10:00:00.000Z",
+    updatedAt: "2026-09-08T10:00:00.000Z",
+    backendRevision: 1,
+    ...overrides,
+  } as MultiReviewWorkflow;
+}
+
 function usage(overrides: Partial<ContextUsageSnapshot> = {}): ContextUsageSnapshot {
   return {
     usedTokens: 25_000,
@@ -525,6 +570,7 @@ afterEach(() => {
     buildEnvironmentIds: new Set(),
     viewedSessionIds: new Map(),
   });
+  useMultiReviewStore.setState({ workflows: new Map() });
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
@@ -1044,6 +1090,98 @@ describe("AgentInfoButton provider resolution", () => {
         ([command]) => command === "get_build_pipeline_session_projection",
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("AgentInfoButton Multi Review reviewer tabs", () => {
+  test("reports a reviewer tab's provider session read-only", async () => {
+    useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+    nativeInvokeMock.mockImplementation((command: string) =>
+      command === "get_multi_review_reviewer_projection"
+        ? Promise.resolve(
+            nativeProjection("claude", "reviewer-provider-session", {
+              turn: { phase: "running" },
+              contextUsage: projectionUsage(usage()),
+              composer: composerState({ selectedModelId: "claude-opus-reviewer" }),
+            }),
+          )
+        : command === "get_cursor_account_usage"
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+    );
+
+    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    open();
+
+    expect(screen.getByText("Claude Native")).toBeTruthy();
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_multi_review_reviewer_projection", {
+        workflowId: "workflow-1",
+        reviewerId: "reviewer-1",
+        refreshUsage: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get("reviewer-session-key")?.sessionId,
+      ).toBe("reviewer-provider-session"),
+    );
+    expect(screen.getByText("claude-opus-reviewer")).toBeTruthy();
+    for (const action of ["Messages…", "Fork session", "Compact", "Rewind files"]) {
+      expect(screen.queryByRole("button", { name: action }) === null).toBe(true);
+    }
+    expect(screen.queryByText("Active turn") === null).toBe(true);
+    expect(
+      nativeInvokeMock.mock.calls.some(([command]) => command === "get_native_agent_projection"),
+    ).toBe(false);
+  });
+
+  test("does not reinspect an unchanged reviewer on workflow revisions", async () => {
+    const workflow = multiReviewWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    nativeInvokeMock.mockImplementation((command: string) =>
+      command === "get_multi_review_reviewer_projection"
+        ? Promise.resolve(nativeProjection("claude", "reviewer-provider-session"))
+        : command === "get_cursor_account_usage"
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+    );
+    const reviewerReads = () =>
+      nativeInvokeMock.mock.calls.filter(
+        ([command]) => command === "get_multi_review_reviewer_projection",
+      );
+
+    render(<AgentInfoButton activeTab={reviewerTab()} />);
+    open();
+    await waitFor(() => expect(reviewerReads()).toHaveLength(1));
+
+    act(() => {
+      useMultiReviewStore.getState().replaceWorkflow({
+        ...workflow,
+        backendRevision: 2,
+        reviewers: workflow.reviewers.map((entry) => ({
+          ...entry,
+          progressAt: "2026-09-08T10:05:00.000Z",
+        })),
+      });
+    });
+    await act(async () => Promise.resolve());
+
+    expect(reviewerReads()).toHaveLength(1);
+  });
+
+  test("leaves the Multi Review overview without an agent session", () => {
+    useMultiReviewStore.getState().replaceWorkflow(multiReviewWorkflow());
+    render(
+      <AgentInfoButton
+        activeTab={reviewerTab({
+          multiReviewTabData: { environmentId: ENVIRONMENT_ID, workflowId: "workflow-1" },
+        })}
+      />,
+    );
+    open();
+
+    expect(screen.getByText("Select a native agent tab.")).toBeTruthy();
   });
 });
 

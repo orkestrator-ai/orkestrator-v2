@@ -1020,6 +1020,22 @@ export async function getBuildPipelineSessionProjection<TMessage = unknown>(inpu
   );
 }
 
+/**
+ * Resolve one Multi Review reviewer's provider session through the native
+ * projection, as {@link getBuildPipelineSessionProjection} does for a stage.
+ * The backend finds the session from the persisted workflow.
+ */
+export async function getMultiReviewReviewerProjection<TMessage = unknown>(input: {
+  workflowId: string;
+  reviewerId: string;
+  refreshUsage?: boolean;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke<NativeAgentSessionProjection<TMessage> | null>(
+    "get_multi_review_reviewer_projection",
+    input,
+  );
+}
+
 export type ConditionalBuildPipeline<T> =
   | { unchanged: true; revision: number }
   | {

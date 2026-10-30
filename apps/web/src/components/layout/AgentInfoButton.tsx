@@ -31,6 +31,7 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
@@ -49,6 +50,7 @@ import {
   cancelNativeAgentSignIn,
   forkNativeAgentSession,
   getBuildPipelineSessionProjection,
+  getMultiReviewReviewerProjection,
   getNativeAgentAuthStatus,
   getNativeAgentProjection,
   openInBrowser,
@@ -77,6 +79,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
+import type { MultiReviewReviewer } from "@orkestrator/protocol/multi-review";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
@@ -138,7 +141,14 @@ interface ActiveNativeSession {
   sessionKey: string;
   providerSessionId?: string;
   buildPipelineId?: string;
+  /** A Multi Review reviewer: the workflow owns the session, as a pipeline owns a stage. */
+  multiReviewReviewer?: { workflowId: string; reviewerId: string };
 }
+
+type ReviewerSession = Pick<
+  MultiReviewReviewer,
+  "id" | "agent" | "sessionKey" | "providerSessionId"
+>;
 
 function nativeProviderLabel(provider: AgentPlatform): string {
   return provider === "opencode"
@@ -155,6 +165,7 @@ function resolveActiveNativeSession(
   sessionAgent: AgentPlatform | undefined,
   sessionKey: string | undefined,
   providerSessionId: string | undefined,
+  reviewer?: ReviewerSession,
 ): ActiveNativeSession | null {
   if (!tab) return null;
   const data = getNativeAgentData(tab);
@@ -165,6 +176,20 @@ function resolveActiveNativeSession(
       environmentId: data.environmentId,
       sessionKey: createSessionKey(data.environmentId, tab.id),
       providerSessionId: data.sessionId,
+    };
+  }
+  const review = tab.type === "multi-review" ? tab.multiReviewTabData : undefined;
+  if (review?.reviewerId && !review.pipelinePass) {
+    if (!reviewer || !AGENT_PLATFORMS.includes(reviewer.agent)) return null;
+    return {
+      provider: reviewer.agent,
+      providerLabel: nativeProviderLabel(reviewer.agent),
+      environmentId: review.environmentId,
+      // The key the backend dispatches a reviewer under when it has not rotated one.
+      sessionKey:
+        reviewer.sessionKey ?? `multi-review:${review.workflowId}:reviewer:${reviewer.id}`,
+      providerSessionId: reviewer.providerSessionId,
+      multiReviewReviewer: { workflowId: review.workflowId, reviewerId: review.reviewerId },
     };
   }
   if (tab.type !== "claude-build" || !tab.buildTabData || !pipelineId || !sessionKey) return null;
@@ -292,6 +317,34 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     buildPipeline?.sessions.find((candidate) => candidate.sdkSessionId === viewedBuildSessionId) ??
     buildPipeline?.sessions[buildPipeline.currentSessionIndex] ??
     buildPipeline?.sessions.at(-1);
+  const reviewTabData =
+    activeTab?.type === "multi-review" && !activeTab.multiReviewTabData?.pipelinePass
+      ? activeTab.multiReviewTabData
+      : undefined;
+  const reviewerRecord = useMultiReviewStore((state) =>
+    reviewTabData?.reviewerId
+      ? state.workflows
+          .get(reviewTabData.workflowId)
+          ?.reviewers.find((entry) => entry.id === reviewTabData.reviewerId)
+      : undefined,
+  );
+  // Every workflow revision replaces the record; only the session identity matters here.
+  const reviewerId = reviewerRecord?.id;
+  const reviewerAgent = reviewerRecord?.agent;
+  const reviewerSessionKey = reviewerRecord?.sessionKey;
+  const reviewerProviderSessionId = reviewerRecord?.providerSessionId;
+  const reviewer = useMemo<ReviewerSession | undefined>(
+    () =>
+      reviewerId && reviewerAgent
+        ? {
+            id: reviewerId,
+            agent: reviewerAgent,
+            sessionKey: reviewerSessionKey,
+            providerSessionId: reviewerProviderSessionId,
+          }
+        : undefined,
+    [reviewerAgent, reviewerId, reviewerProviderSessionId, reviewerSessionKey],
+  );
   const activeSession = useMemo(
     () =>
       resolveActiveNativeSession(
@@ -301,9 +354,11 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         viewedBuildSession?.agent,
         viewedBuildSession?.sessionKey,
         viewedBuildSession?.sdkSessionId,
+        reviewer,
       ),
     [
       activeTab,
+      reviewer,
       buildPipeline?.agentType,
       buildPipeline?.id,
       viewedBuildSession?.agent,
@@ -311,7 +366,10 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       viewedBuildSession?.sessionKey,
     ],
   );
-  const isBuildStage = Boolean(activeSession?.buildPipelineId);
+  // A build stage or a reviewer: its workflow drives it, so the panel only reports.
+  const isWorkflowSession = Boolean(
+    activeSession?.buildPipelineId || activeSession?.multiReviewReviewer,
+  );
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
@@ -324,7 +382,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
    * disabled is not a destination, and neither is the source itself.
    */
   const handoffDestinations =
-    activeSession && !activeSession.buildPipelineId
+    activeSession && !isWorkflowSession
       ? (Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[]).filter(
           (provider) =>
             provider !== activeSession.provider && enabledAgentPlatforms.includes(provider),
@@ -341,7 +399,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const updateNeutralControls = useCallback(
     async (update: NativeAgentControlUpdate) => {
       const session = activeSession;
-      if (!session || session.buildPipelineId) return;
+      if (!session || session.buildPipelineId || session.multiReviewReviewer) return;
       if (controlUpdateInFlightRef.current?.sessionIdentity === session.sessionKey) return;
 
       const pending = {
@@ -402,8 +460,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     neutralProjection?.capabilities ??
     (activeSession ? nativeAgentCapabilities(activeSession.provider) : undefined);
   const sessionActions = sessionCapabilities?.actions;
-  const canFork = !isBuildStage && (sessionCapabilities?.fork ?? false);
-  const canCompact = !isBuildStage && (sessionActions?.compact ?? false);
+  const canFork = !isWorkflowSession && (sessionCapabilities?.fork ?? false);
+  const canCompact = !isWorkflowSession && (sessionActions?.compact ?? false);
 
   const neutralContextUsage = neutralProjection?.contextUsage;
   const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
@@ -481,12 +539,17 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
           sessionKey: activeSession.sessionKey,
           refreshUsage: true,
         })
-      : getNativeAgentProjection({
-          environmentId: activeSession.environmentId,
-          agent: activeSession.provider,
-          logicalSessionKey: activeSession.sessionKey,
-          refreshUsage: true,
-        });
+      : activeSession.multiReviewReviewer
+        ? getMultiReviewReviewerProjection({
+            ...activeSession.multiReviewReviewer,
+            refreshUsage: true,
+          })
+        : getNativeAgentProjection({
+            environmentId: activeSession.environmentId,
+            agent: activeSession.provider,
+            logicalSessionKey: activeSession.sessionKey,
+            refreshUsage: true,
+          });
     void projection
       .then((projection) => {
         if (cancelled || !projection || projection.sessionId !== requestedSessionId) return;
@@ -976,7 +1039,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
           {activeSession ? (
             <div className="space-y-5">
               {activeTab &&
-              !activeSession.buildPipelineId &&
+              !isWorkflowSession &&
               messagingEnabled &&
               agentMailCapabilities("agent-native", activeSession.provider).canPull ? (
                 <div className="flex gap-2 border-b border-border/60 pb-4">
@@ -1020,7 +1083,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
               />
 
-              {!isBuildStage && neutralProjection?.composer?.executionProfiles?.length ? (
+              {!isWorkflowSession && neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Execution profile
@@ -1055,7 +1118,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 gates the feature — for any Claude session whose init payload
                 omitted agents.
               */}
-              {!isBuildStage && activeSession.provider === "claude" ? (
+              {!isWorkflowSession && activeSession.provider === "claude" ? (
                 <div className="space-y-1.5 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Session options
@@ -1087,7 +1150,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 </div>
               ) : null}
 
-              {!isBuildStage && (canFork || canCompact || canHandoff) ? (
+              {!isWorkflowSession && (canFork || canCompact || canHandoff) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Session actions
@@ -1168,7 +1231,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </div>
                     ) : null}
 
-                    {!isBuildStage && activeSession.provider === "claude" && currentSessionId ? (
+                    {!isWorkflowSession &&
+                    activeSession.provider === "claude" &&
+                    currentSessionId ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1237,7 +1302,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && currentSessionId && sessionActions?.undo ? (
+                    {!isWorkflowSession && currentSessionId && sessionActions?.undo ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1263,7 +1328,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && currentSessionId && sessionActions?.share ? (
+                    {!isWorkflowSession && currentSessionId && sessionActions?.share ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1327,7 +1392,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && currentSessionId && sessionActions?.redo ? (
+                    {!isWorkflowSession && currentSessionId && sessionActions?.redo ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1350,7 +1415,10 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && currentSessionId && sessionActions?.share && sessionShared ? (
+                    {!isWorkflowSession &&
+                    currentSessionId &&
+                    sessionActions?.share &&
+                    sessionShared ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1382,7 +1450,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && activeSession.provider === "codex" && currentSessionId ? (
+                    {!isWorkflowSession &&
+                    activeSession.provider === "codex" &&
+                    currentSessionId ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1408,7 +1478,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 </div>
               ) : null}
 
-              {!isBuildStage &&
+              {!isWorkflowSession &&
               neutralProjection?.capabilities.actions?.steer &&
               neutralProjection.turn.phase === "running" &&
               !neutralProjection.recoverableDispatch ? (
@@ -1479,7 +1549,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 </div>
               ) : null}
 
-              {!isBuildStage &&
+              {!isWorkflowSession &&
               activeSession.provider === "claude" &&
               currentSessionId &&
               liveClaudeTasks.some(
@@ -1760,7 +1830,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   kinds={neutralProjection?.capabilities?.interactions?.kinds}
                   providerLabel={activeSession.providerLabel}
                 />
-                {activeSession.buildPipelineId ? null : (
+                {isWorkflowSession ? null : (
                   <AgentInfoPermissionRules
                     environmentId={activeSession.environmentId}
                     agent={activeSession.provider}

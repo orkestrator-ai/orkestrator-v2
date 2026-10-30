@@ -125,6 +125,32 @@ test("PR readiness signals travel without the PR URL and drop anything unrecogni
   }
 });
 
+test("a node's PR monitor health travels only as a confirmed flag and a known permission", () => {
+  const confirmed = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    prMonitorConfirmed: true,
+    prViewerCanMerge: false,
+  })!;
+  expect(confirmed).toMatchObject({ prMonitorConfirmed: true, prViewerCanMerge: false });
+
+  // An older node (no fields), an unconfirmed reading and junk all read as
+  // unconfirmed with an unknown permission.
+  for (const raw of [
+    {},
+    { prMonitorConfirmed: false, prViewerCanMerge: null },
+    { prMonitorConfirmed: "true", prViewerCanMerge: "no" },
+  ]) {
+    const environment = toNodeEnvironmentSummary("bk_test" as never, {
+      id: "e",
+      projectId: "p",
+      ...raw,
+    })!;
+    expect(Object.keys(environment)).not.toContain("prMonitorConfirmed");
+    expect(Object.keys(environment)).not.toContain("prViewerCanMerge");
+  }
+});
+
 test("a project's icon is carried only as a bounded raster data URL", () => {
   const icon = "data:image/png;base64,iVBORw0KGgo=";
   expect(toNodeProjectSummary("bk_test" as never, { id: "p", icon }, 0)?.icon).toBe(icon);

@@ -1,4 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import {
+  PR_MONITOR_CHANGED_EVENT,
+  type PrMonitorEnvironmentState,
+} from "@orkestrator/protocol/pr-monitor";
 import type { PrMonitorEffects } from "./pr-monitor.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
@@ -155,6 +159,155 @@ test("runtime persistence maps mergeability and leaves omitted observations unto
     );
     await effects.persistPr("env-1", reading);
     expect(updateEnvironment.mock.calls.at(-1)?.[1]).not.toHaveProperty("prMergeability");
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+function monitorState(overrides: Partial<PrMonitorEnvironmentState> = {}) {
+  return {
+    environmentId: "env-1",
+    mode: "normal",
+    checkInProgress: false,
+    consecutiveErrors: 0,
+    lastCheckAt: "2026-10-30T00:00:00.000Z",
+    lastSuccessfulCheckAt: "2026-10-30T00:00:00.000Z",
+    prUrl: "https://github.com/o/r/pull/1",
+    prState: "open",
+    hasMergeConflicts: false,
+    checkSummary: null,
+    viewerCanMerge: null,
+    ...overrides,
+  } satisfies PrMonitorEnvironmentState;
+}
+
+test("relayed health vouches only for the monitor's own current reading", () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const environment = {
+    id: "env-1",
+    prUrl: "https://github.com/o/r/pull/1",
+    prState: "open" as const,
+    hasMergeConflicts: false,
+    environmentType: "local" as const,
+    status: "stopped" as const,
+  };
+  const health = (state: PrMonitorEnvironmentState | null, env = environment) =>
+    runtime.prMonitor.relayedHealth(env, new Map(state ? [[state.environmentId, state]] : []));
+  try {
+    expect(health(monitorState())).toEqual({ prMonitorConfirmed: true });
+    expect(health(monitorState({ viewerCanMerge: false }))).toEqual({
+      prMonitorConfirmed: true,
+      prViewerCanMerge: false,
+    });
+    // A failing monitor still relays what it knows about permission.
+    expect(health(monitorState({ consecutiveErrors: 2, viewerCanMerge: true }))).toEqual({
+      prViewerCanMerge: true,
+    });
+    expect(health(monitorState({ lastSuccessfulCheckAt: null }))).toEqual({});
+    expect(health(null)).toEqual({});
+    // Nothing is relayed for a different PR, not even the permission.
+    expect(
+      health(monitorState({ prUrl: "https://github.com/o/r/pull/2", viewerCanMerge: false })),
+    ).toEqual({});
+    expect(
+      health(monitorState(), { ...environment, environmentType: "containerized" as never }),
+    ).toEqual({});
+    // Reading it never starts the monitor.
+    expect(runtime.prMonitor.announcedStates().size).toBe(0);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("a change in relayed monitor inputs announces a content-free health hint", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const announceEnvironmentPrHealth = mock((_id: string, _projectId: string) => undefined);
+  const context = {
+    runtime,
+    storage: {
+      loadEnvironments: async () => [],
+      getEnvironment: async (id: string) => (id === "env-1" ? { id, projectId: "p-1" } : null),
+      announceEnvironmentPrHealth,
+    } as unknown as StorageService,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+  } as CommandContext;
+  const announce = (payload: unknown) =>
+    (runtime.prMonitor as unknown as { announce(event: string, payload: unknown): void }).announce(
+      PR_MONITOR_CHANGED_EVENT,
+      payload,
+    );
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    await runtime.prMonitor.sync(context);
+    announce({ environmentId: "env-1", state: monitorState({ lastSuccessfulCheckAt: null }) });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(1);
+    expect(announceEnvironmentPrHealth).toHaveBeenLastCalledWith("env-1", "p-1");
+
+    // First answered check: confirmation flips.
+    announce({ environmentId: "env-1", state: monitorState() });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(2);
+
+    // A new rollup or a later answered check is not a relayed change.
+    announce({
+      environmentId: "env-1",
+      state: monitorState({
+        checkSummary: { passed: 1, total: 1, pending: 0 },
+        lastSuccessfulCheckAt: "2026-10-30T00:01:00.000Z",
+      }),
+    });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(2);
+
+    // Errors flip it once, not once per error.
+    announce({ environmentId: "env-1", state: monitorState({ consecutiveErrors: 1 }) });
+    announce({ environmentId: "env-1", state: monitorState({ consecutiveErrors: 2 }) });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(3);
+
+    announce({ environmentId: "env-1", state: monitorState({ viewerCanMerge: false }) });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(4);
+
+    announce({ environmentId: "env-1", removed: true });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(5);
+
+    // A deleted environment announces its own deletion; no hint.
+    announce({ environmentId: "env-gone", state: monitorState({ environmentId: "env-gone" }) });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(5);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("a merge permission error clears the cached answer for that PR's repository", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const environment = {
+    ...createEnvironment("project", { name: "feature" }),
+    environmentType: "local" as const,
+    worktreePath: "/unused/worktree",
+    prUrl: "https://github.com/o/r/pull/1",
+  };
+  try {
+    const cache = runtime.prMonitor.viewerPermissions;
+    await cache.resolve(
+      "local-gh",
+      { host: "github.com", owner: "o", repo: "r" },
+      async () => true,
+    );
+    await cache.resolve(
+      "local-gh",
+      { host: "github.com", owner: "o", repo: "x" },
+      async () => true,
+    );
+    runtime.prMonitor.invalidateViewerPermission(environment);
+    expect(cache.size).toBe(1);
   } finally {
     runtime.shutdown();
   }

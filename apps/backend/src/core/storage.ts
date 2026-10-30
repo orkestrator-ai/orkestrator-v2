@@ -206,6 +206,11 @@ export class StorageService {
     this.context.changes.announce("native-agent-session", environmentId, undefined, scope);
   }
 
+  /** The PR monitor health relayed in node summaries changed (runtime only). */
+  announceEnvironmentPrHealth(environmentId: string, projectId: string): void {
+    this.context.changes.announce("environment-pr-health", environmentId, projectId);
+  }
+
   /** Publish a content-free hint after the artifact service commits its store. */
   announceTranscriptArtifact(conversationKey: string): void {
     this.context.changes.announce("transcript-artifact", conversationKey);

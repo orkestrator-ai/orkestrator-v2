@@ -159,13 +159,24 @@ export function registerEnvironmentCommands(
     void context.runtime.prMonitor.sync(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
-  register("get_environment_snapshots", (args, { storage }) =>
-    conditionalManifestSnapshot(args, storage, "environment", async () =>
+  register("get_environment_snapshots", async (args, { storage, runtime }) => {
+    const load = async () =>
       (await storage.getEnvironmentsByProject(asString(args.projectId, "projectId"))).map(
         toClientEnvironment,
-      ),
-    ),
-  );
+      );
+    if (args.includePrMonitorHealth !== true) {
+      return conditionalManifestSnapshot(args, storage, "environment", load);
+    }
+    // A node summary read (`NODE_SUMMARY_ENVIRONMENT_READ_ARGS`). The health is
+    // runtime monitor state that the environment manifest revision does not
+    // cover, so this form is never answered `unchanged`.
+    const environments = await load();
+    const announced = runtime.prMonitor.announcedStates();
+    return environments.map((environment) => ({
+      ...environment,
+      ...runtime.prMonitor.relayedHealth(environment, announced),
+    }));
+  });
   register("get_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;

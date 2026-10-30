@@ -2131,4 +2131,66 @@ printf '%s\\n' '{}' > "$out"
     }
     expect(updates).toHaveLength(0);
   });
+
+  test("a node summary read joins the PR monitor's health; an ordinary read does not", async () => {
+    const prUrl = "https://github.com/o/r/pull/1";
+    const environment = createEnvironment({
+      status: "running",
+      containerId: "container-existing",
+      environmentType: "containerized",
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const announced = spyOn(context.runtime.prMonitor, "announcedStates").mockReturnValue(
+      new Map([
+        [
+          environment.id,
+          {
+            environmentId: environment.id,
+            mode: "normal",
+            checkInProgress: false,
+            consecutiveErrors: 0,
+            lastCheckAt: "2026-10-30T00:00:00.000Z",
+            lastSuccessfulCheckAt: "2026-10-30T00:00:00.000Z",
+            prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+            checkSummary: null,
+            viewerCanMerge: false,
+          },
+        ],
+      ]),
+    );
+    try {
+      const plain = (await commands.get("get_environment_snapshots")?.(
+        { projectId: environment.projectId },
+        context,
+      )) as Array<Record<string, unknown>>;
+      expect(plain[0]).not.toHaveProperty("prMonitorConfirmed");
+      expect(plain[0]).not.toHaveProperty("prViewerCanMerge");
+
+      // Runtime health is outside the manifest revision, so known revisions
+      // never turn the summary form into an `unchanged` answer.
+      const summary = (await commands.get("get_environment_snapshots")?.(
+        {
+          projectId: environment.projectId,
+          includePrMonitorHealth: true,
+          knownManifestGeneration: "stale",
+          knownResourceRevision: "stale",
+        },
+        context,
+      )) as Array<Record<string, unknown>>;
+      expect(summary[0]).toMatchObject({
+        id: environment.id,
+        prMonitorConfirmed: true,
+        prViewerCanMerge: false,
+      });
+    } finally {
+      announced.mockRestore();
+    }
+  });
 });

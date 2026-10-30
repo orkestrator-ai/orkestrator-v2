@@ -40,7 +40,7 @@
       "dependencies": {
         "@modelcontextprotocol/node": "2.1.1",
         "@modelcontextprotocol/server": "2.3.1",
-        "@opencode-ai/sdk": "1.19.4",
+        "@opencode-ai/sdk": "1.19.5",
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/toolchain": "workspace:*",
         "@xterm/addon-serialize": "0.14.0",
@@ -284,9 +284,9 @@
     },
   },
   "patchedDependencies": {
-    "@opencode-ai/sdk@1.19.4": "patches/@opencode-ai%2Fsdk@1.19.4.patch",
     "@cursor/sdk@1.0.40": "patches/@cursor%2Fsdk@1.0.40.patch",
     "react-virtuoso@4.18.19": "patches/react-virtuoso@4.18.19.patch",
+    "@opencode-ai/sdk@1.19.5": "patches/@opencode-ai%2Fsdk@1.19.5.patch",
   },
   "overrides": {
     "dompurify": "3.4.17",
@@ -564,7 +564,7 @@
 
     "@noble/hashes": ["@noble/hashes@1.8.0", "", {}, "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.19.4", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-3Wuc4t8gEuWKHbX1Na9oDK6PgOveid70l4Ks5RCjRIo2RcP8FQN3NS6Mg3XWc2+WiUfpfrmvBWlh5u1zeQfDQw=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.19.5", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-+bqu8gHiwmq96T9q5G34uLNHWCInIMsrE3hytCNHj1cVaxjY0AGJyNCT1rkeeZwgPU7A5TMTNwN+0XxCO2vqDg=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.10.0", "", {}, "sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ=="],
 

@@ -192,7 +192,7 @@ ENV VISUAL=nano
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.314
 ARG CODEX_CLI_VERSION=0.164.0
-ARG OPENCODE_CLI_VERSION=1.19.4
+ARG OPENCODE_CLI_VERSION=1.19.5
 ARG GROK_BUILD_VERSION=1.0.67
 ARG PI_CLI_VERSION=1.4.0
 
@@ -210,8 +210,8 @@ ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=588310a336fa3b9df36b3f0225b26f679d453efaad0cf3d66c3651ef3ec1647a ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=fae5be262d693b7c5e562856cc473e59e741772936db0c0600ac0d5ed5bd088b ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \

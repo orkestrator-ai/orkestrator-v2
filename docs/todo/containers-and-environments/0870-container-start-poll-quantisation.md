@@ -21,8 +21,8 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 ### Tasks
 
 1. **Bound the waits inside the container**: one exec waits for the state itself, up to a bounded window, instead of one exec per 250 ms. Status: done 2026-10-30 (`container-readiness.ts`, `egress-gateway.ts`; deterministic tests, and probe timings in the real image).
-2. **Re-qualify the readiness faults**: the C09 fault cases and the gateway-cannot-apply case pass with the new wait. Status: open. The deterministic half is done. The live suite ran on omarchy-hp on 2026-10-30 and failed all 9 cases at the network create (`resource-exhausted`), before any boot: 29 leaked probe networks ([0241](0241-leaked-reach-probe-networks.md)) hold every address range.
-3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: open (depends on 2), blocked on omarchy-hp the same way.
+2. **Re-qualify the readiness faults**: the C09 fault cases and the gateway-cannot-apply case pass with the new wait. Status: done on Linux amd64, 2026-10-30. All nine live readiness cases passed in one run, plus four C09 stale-record and active-exec interruption checks. Explicit unused subnets bypassed the exhausted default pools without removing other runs' resources; fixture repairs and host prerequisites are recorded in the qualification evidence below.
+3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: open. Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
 
 ### 1. Bound the waits inside the container
 
@@ -110,21 +110,20 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 - Probe timings on omarchy-hp with `--network none` containers of the image
   are in
   [container-qualification.md](../../development/container-qualification.md#bounded-readiness-probe-on-omarchy-hp-and-a-blocked-reference-host-run-2026-10-30).
+- The subsequent real-daemon qualification, image digest, exact command and
+  host-specific network/DNS/port prerequisites are in the
+  [review follow-up](../../development/container-qualification.md#review-follow-up-on-the-same-daemon-2026-10-30).
 
 ## Outstanding work
 
 ### Qualification
 
-All three items need the 29 leaked probe networks on omarchy-hp removed
-first ([0241](0241-leaked-reach-probe-networks.md) task 5, or by hand with
-the user's approval: each `ork-*-reach-probe-net` labelled
-`orkestrator-resource-role=host-reachability-probe`, no containers, created
-2026-10-28).
+The 29 older leaked probe networks remain untouched
+([0241](0241-leaked-reach-probe-networks.md) task 5). They still block
+automatic allocation, but explicit unused subnets allowed the live fault
+qualification to complete. CI's "Container live qualification" workflow
+also runs those suites on both architectures when the PR touches its paths.
 
-- Task 2: `container-live-readiness.test.ts` with a workspace image, all
-  cases, plus `container-live-qualification.test.ts` (C09) for the stale
-  record and restart paths. CI's "Container live qualification" workflow
-  also runs them on both architectures when the PR touches its paths.
 - Task 3: the benchmark on omarchy-hp at the commit before this change and
   after it (this also closes 0729 task 5), and the next CI run's
   `freshRestricted.dockerCallBreakdown` (`boot.ready runtime exec`) and
@@ -172,7 +171,7 @@ Not offered as an option.
   would hold a dispatch, or the decision to restart a failed gateway, for
   up to 2 s, and would save no call.
 
-### Task 2: qualify in the real image without a new network
+### Task 2: qualify in the real image with isolated subnets
 
 The recommended option was the deterministic tests and then the full live
 readiness-fault suite with a workspace image.
@@ -192,6 +191,15 @@ readiness-fault suite with a workspace image.
   stale record, and a restart and a stop mid-window. That proves the
   script in the image's `sh` and the exec ending with the container. It
   does not replace C09.
+- Review follow-up completed C09 and the full nine-case live fault suite
+  against the same image using explicit unused subnets. The permission
+  fixture now pins its firewall inside the runtime, and C22 can select a
+  free, already-admitted host-service port through the server's existing
+  port preference. No host firewall rule or daemon configuration changed.
+  New shell regressions cover deadline clipping and window renewal; a
+  gateway regression covers its early-return polling floor. Two new live
+  cases wait for Docker to register the active exec before stopping or
+  restarting the container, so interruption is observed rather than assumed.
 
 ### Task 3: no new calls target
 

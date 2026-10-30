@@ -1,7 +1,7 @@
 # Container start poll quantisation (todo 0870) branch validation
 
 - **ID:** 1316
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-30
 - **Branch:** `todo-0870-container-start-polling-ad6103f1e6b0`, uncommitted
   changes on `cd7bbe3e5`.
@@ -33,3 +33,12 @@ Both are source scans with the default 5 s deadline, and neither reads the
 files the branch changes (`container-readiness.ts`, `egress-gateway.ts` and
 their tests). The failures are consistent with shared-host contention. They
 do not establish a root cause or turn the failed aggregate into a pass.
+
+## Review follow-up (2026-10-30)
+
+The exact aggregate command above was rerun after adding the readiness and
+gateway regressions. It passed all four groups in 344.9 s: workspace, root
+and agent-support, bridges, and the Codex protocol lockfile. Neither
+source-scan owner needed an assertion or deadline change. This supersedes
+the earlier failed aggregate for branch validation; it does not establish
+the cause of the earlier timeouts.

@@ -217,6 +217,20 @@ exec sh -c "$(printf '%s' "$5" | sed 's#/run/orkestrator-firewall#${dir}#g')"
     });
   }
 
+  test("early unfinished gateway responses are spaced by pollMs", async () => {
+    await withDockerScript(
+      await fakeDaemon({ gatewayRunning: true, pendingPolls: 2 }),
+      async (log) => {
+        const started = performance.now();
+        await waitForEgressGatewayFirewall(GATEWAY, { pollMs: 150, timeoutMs: 2_000 });
+        expect(performance.now() - started).toBeGreaterThanOrEqual(290);
+        const calls = (await log.read()).trim().split("\n");
+        expect(calls).toHaveLength(3);
+        expect(calls.every((line) => line.startsWith(`exec ${GATEWAY}`))).toBe(true);
+      },
+    );
+  });
+
   test("a runtime without a gateway is left to the normal start", async () => {
     await withDockerScript(await fakeDaemon({}), async (log) => {
       expect(await prepareEgressGatewayForStart("other")).toBe("none");

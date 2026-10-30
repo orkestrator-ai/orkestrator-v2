@@ -366,6 +366,62 @@ exec sh -c "$script"
     );
   });
 
+  test("a pending shell probe is clipped to the remaining overall deadline", async () => {
+    const root = await fakeBootRoot();
+    await fs.writeFile(root.statusFile, `${record({ phase: "initializing" })}\n`);
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$1" >> "$FAKE_DOCKER_LOG"
+[ "$1" = exec ] || exit 1
+exec sh -c "$(printf '%s' "$5" | sed -e 's#${path.dirname(BOOT_STATUS_PATH)}#${root.runDir}#g' -e 's#/proc/1/stat#${path.join(path.dirname(root.runDir), "stat")}#g')"
+`,
+      async (log) => {
+        const started = performance.now();
+        const failure = await waitForContainerBoot("container-1", {
+          timeoutMs: 200,
+          pollMs: 1,
+        }).catch((error) => error);
+        const elapsed = performance.now() - started;
+        expect(failure).toBeInstanceOf(ContainerInitializationError);
+        expect(failure.reason).toBe("timed-out");
+        // A one-shot fake would finish too soon; an unclipped 2 s window
+        // would finish too late. The generated wait must actually execute.
+        expect(elapsed).toBeGreaterThanOrEqual(150);
+        expect(elapsed).toBeLessThan(1_500);
+        expect((await log.read()).trim().split("\n")).toEqual(["exec"]);
+      },
+    );
+  });
+
+  test("renews an expired shell wait window and accepts readiness in the next exec", async () => {
+    const root = await fakeBootRoot();
+    await fs.writeFile(root.statusFile, `${record({ phase: "network-ready" })}\n`);
+    await withDockerScript(
+      `#!/bin/sh
+[ "$1" = exec ] || exit 1
+# Publish readiness only when the backend renews the first expired window.
+if [ -s "$FAKE_DOCKER_LOG" ]; then
+  printf '%s\\n' '${record({})}' > '${root.statusFile}.tmp'
+  mv '${root.statusFile}.tmp' '${root.statusFile}'
+fi
+printf '%s\\n' "$1" >> "$FAKE_DOCKER_LOG"
+exec sh -c "$(printf '%s' "$5" | sed -e 's#${path.dirname(BOOT_STATUS_PATH)}#${root.runDir}#g' -e 's#/proc/1/stat#${path.join(path.dirname(root.runDir), "stat")}#g')"
+`,
+      async (log) => {
+        const started = performance.now();
+        expect(
+          await waitForContainerBoot("container-1", {
+            windowMs: 200,
+            timeoutMs: 2_000,
+            pollMs: 1,
+          }),
+        ).toBe("0b0b0b0b-1111-2222-3333-444444444444");
+        expect(performance.now() - started).toBeGreaterThanOrEqual(200);
+        expect((await log.read()).trim().split("\n")).toEqual(["exec", "exec"]);
+      },
+    );
+  });
+
   test("a probe that comes back early without a final state is spaced, not repeated at once", async () => {
     await withDockerScript(
       `#!/bin/sh

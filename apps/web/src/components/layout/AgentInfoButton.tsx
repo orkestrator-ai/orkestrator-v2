@@ -30,6 +30,7 @@ import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -366,6 +367,15 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       viewedBuildSession?.sessionKey,
     ],
   );
+  const environmentContainerId = useEnvironmentStore(
+    (state) =>
+      state.environments.find((environment) => environment.id === activeSession?.environmentId)
+        ?.containerId,
+  );
+  const sessionContainerId =
+    (activeTab ? getNativeAgentData(activeTab)?.containerId : undefined) ??
+    environmentContainerId ??
+    undefined;
   // A build stage or a reviewer: its workflow drives it, so the panel only reports.
   const isWorkflowSession = Boolean(
     activeSession?.buildPipelineId || activeSession?.multiReviewReviewer,
@@ -389,9 +399,14 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
         )
       : [];
   const canHandoff = handoffDestinations.length > 0;
-  const neutralProjection = useNativeAgentProjectionStore((state) =>
-    activeSession ? state.projections.get(activeSession.sessionKey) : undefined,
-  );
+  const neutralProjection = useNativeAgentProjectionStore((state) => {
+    if (!activeSession) return undefined;
+    const projection = state.projections.get(activeSession.sessionKey);
+    // Workflow restarts can replace the provider session under the same key.
+    if (isWorkflowSession && projection?.sessionId !== activeSession.providerSessionId)
+      return undefined;
+    return projection;
+  });
   // A session that lists its MCP servers needs no separate count tile.
   const reportsMcpList = neutralProjection?.runtime?.mcp !== undefined;
   const neutralControlUpdatePending =
@@ -1723,11 +1738,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       // Claude's route is the backend-driven account login, not
                       // a bridge sign-in, so it has its own action.
                       <div className="mt-2">
-                        <ClaudeAccountSignInAction
-                          containerId={
-                            activeTab ? getNativeAgentData(activeTab)?.containerId : undefined
-                          }
-                        />
+                        <ClaudeAccountSignInAction containerId={sessionContainerId} />
                       </div>
                     ) : null}
                     {auth.signIn?.hint && auth.state !== "signed-in" ? (
@@ -1742,6 +1753,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   provider={activeSession.provider}
                   sessionKey={activeSession.sessionKey}
                   servers={neutralProjection?.runtime?.mcp}
+                  readOnly={isWorkflowSession}
                   busyAction={busyAction}
                   onAction={(server, action) =>
                     void runAction(`mcp-${server.id}-${action}`, async () => {

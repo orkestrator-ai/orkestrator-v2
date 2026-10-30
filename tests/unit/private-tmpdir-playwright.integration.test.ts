@@ -22,7 +22,7 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
   writeFileSync(
     childFile,
     `
-    import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+    import { existsSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
     import { tmpdir } from "node:os";
     import path from "node:path";
     writeFileSync(${JSON.stringify(ready)}, "ready");
@@ -33,9 +33,10 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
     }
     const directory = mkdtempSync(path.join(tmpdir(), "after-owner-"));
     writeFileSync(path.join(directory, "proof"), "created after owner exit");
-    writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ directory,
+    writeFileSync(${JSON.stringify(`${resultFile}.tmp`)}, JSON.stringify({ directory,
       privateTmpdir: process.env.${PRIVATE_TMPDIR_ENV},
       parentTmpdir: process.env.${PARENT_TMPDIR_ENV} }));
+    renameSync(${JSON.stringify(`${resultFile}.tmp`)}, ${JSON.stringify(resultFile)});
     `,
   );
   const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: root };

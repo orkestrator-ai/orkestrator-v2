@@ -17,6 +17,8 @@ import {
   fixtureDestination,
 } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { DispatchEnvironment } from "./web-annotation-contracts.js";
+import { StorageService } from "./storage.js";
+import { WebAnnotationDispatchAdapter } from "./web-annotation-dispatch.js";
 import { checkWebAnnotationWorkspacePaths } from "./web-annotation-source-checks.js";
 import { ENV_A, createHarness, type ServiceHarness } from "./web-annotation-test-support.js";
 
@@ -56,7 +58,7 @@ async function wiredHarness() {
     checked.push([...paths]);
     return checkWebAnnotationWorkspacePaths(environment, paths);
   };
-  return { checked };
+  return { checked, root };
 }
 
 const HINTS: WebAnnotationSourceHint[] = [
@@ -133,6 +135,104 @@ describe("source hint verification", () => {
     });
     const capture = await harness.service.capture(ENV_A, receipt.captureId!);
     expect(verifiedPaths(capture.evidence?.sourceHints)).toEqual(EXPECTED);
+  });
+
+  for (const mutation of ["create", "replace"] as const) {
+    for (const initiallyExists of [false, true]) {
+      test(`${mutation} replays its original receipt after a hinted file ${initiallyExists ? "disappears" : "appears"}`, async () => {
+        const { root } = await wiredHarness();
+        const path = "apps/web/src/Replay.tsx";
+        const file = join(root, path);
+        if (initiallyExists) await writeFile(file, "export {};\n");
+        const capture = hinted([{ producer: "vite-dev", path, verified: false }]);
+        const base = {
+          environmentId: ENV_A,
+          operationId: "op-replay",
+          capture,
+          body: "Replay source verification.",
+        };
+        const original = await harness.service.create({
+          ...base,
+          operationId: "op-original",
+          capture: fixtureCaptureInput("element"),
+        });
+        const replacement = {
+          ...base,
+          annotationId: original.annotationId!,
+          expectedContentRevision: original.contentRevision,
+        };
+        const submit = () =>
+          mutation === "create"
+            ? harness.service.create(base)
+            : harness.service.replaceCapture(replacement);
+        const receipt = await submit();
+        const stored = await harness.service.capture(ENV_A, receipt.captureId!);
+        expect(stored.evidence?.sourceHints).toEqual([
+          { producer: "vite-dev", path, verified: initiallyExists },
+        ]);
+        if (initiallyExists) await rm(file);
+        else await writeFile(file, "export {};\n");
+        // Establish that a fresh check really sees a different state on replay.
+        expect(
+          await checkWebAnnotationWorkspacePaths(
+            { id: ENV_A, environmentType: "local", worktreePath: root },
+            [path],
+          ),
+        ).toEqual([{ path, status: initiallyExists ? "missing" : "exists" }]);
+        expect(await submit()).toEqual(receipt);
+        expect(await harness.service.capture(ENV_A, receipt.captureId!)).toEqual(stored);
+        const current = await harness.service.get(ENV_A, receipt.annotationId!);
+        expect(current.revision).toBe(receipt.environmentRevision);
+        expect(current.annotation.currentCaptureId).toBe(receipt.captureId!);
+      });
+    }
+  }
+
+  test("non-local hints dispatch to the container checker and persist its statuses", async () => {
+    const { root } = await wiredHarness();
+    // A host worktree exists, but a non-local environment must use its container.
+    harness.host.environments.set(ENV_A, {
+      id: ENV_A,
+      environmentType: "docker",
+      worktreePath: root,
+      containerId: "source-hints-container",
+    });
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const adapter = new WebAnnotationDispatchAdapter({
+      // Path checks use the command boundary, without opening the host store.
+      storage: new StorageService(join(harness.dir, "dispatch-host")),
+      nativeAgents: null,
+      invoke: async (command, args) => {
+        calls.push({ command, args });
+        // Deliberately disagree with the host: Save exists there, Gone does not.
+        return ["missing", "exists", "outside-workspace"];
+      },
+    });
+    Object.assign(harness.dispatch, {
+      checkWorkspacePaths: adapter.checkWorkspacePaths.bind(adapter),
+    });
+    const receipt = await harness.service.create({
+      environmentId: ENV_A,
+      operationId: "op-container-hints",
+      capture: hinted(),
+      body: "Container hints.",
+    });
+    expect(calls).toEqual([
+      {
+        command: "check_container_workspace_paths",
+        args: {
+          containerId: "source-hints-container",
+          paths: HINTS.slice(0, 3).map((hint) => hint.path),
+        },
+      },
+    ]);
+    const capture = await harness.service.capture(ENV_A, receipt.captureId!);
+    expect(verifiedPaths(capture.evidence?.sourceHints)).toEqual([
+      [HINTS[0]!.path, false],
+      [HINTS[1]!.path, true],
+      [HINTS[2]!.path, false],
+      [HINTS[3]!.path, false],
+    ]);
   });
 
   test("a result capture is checked too", async () => {

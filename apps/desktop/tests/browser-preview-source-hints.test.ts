@@ -84,7 +84,7 @@ describe("development source hint producer", () => {
     expect(selectedEvidence(harness, "#save").sourceHints).toBeUndefined();
   });
 
-  test("keeps at most four hints and stops at the depth bound", () => {
+  test("keeps at most four hints", () => {
     let html = `<button id="save" data-orkestrator-source="src/F0.tsx">Save</button>`;
     for (let index = 1; index < 10; index += 1) {
       html = `<div data-orkestrator-source="src/F${index}.tsx">${html}</div>`;
@@ -96,6 +96,19 @@ describe("development source hint producer", () => {
       "src/F1.tsx",
       "src/F2.tsx",
       "src/F3.tsx",
+    ]);
+  });
+
+  test("includes depth 15 but excludes depth 16 even with fewer than four hints", () => {
+    let html = `<button id="save" data-orkestrator-source="src/Save.tsx">Save</button>`;
+    for (let depth = 1; depth <= 16; depth += 1) {
+      const hint = depth >= 15 ? ` data-orkestrator-source="src/Depth${depth}.tsx"` : "";
+      html = `<div${hint}>${html}</div>`;
+    }
+    const hints = selectedEvidence(page(html), "#save").sourceHints;
+    expect(hints).toEqual([
+      { producer: "data-orkestrator-source", path: "src/Save.tsx", verified: false },
+      { producer: "data-orkestrator-source", path: "src/Depth15.tsx", verified: false },
     ]);
   });
 

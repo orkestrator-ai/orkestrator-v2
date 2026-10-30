@@ -10,7 +10,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.40` (npm `latest`, verified 2026-10-23) |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-30) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
@@ -65,7 +65,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.40 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.2.0 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,10 +75,11 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.40 those are `W_0`,
-`x01` and `Z_0` (1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`, `Xn0`, `dE0`).
-All three live in `dist/bundled/index.js`, and the controller loop is still
-`for await (let U of N) await this.clientStream.write(U)`. Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.2.0 those are `Vm0`,
+`N71` and `Qm0` (1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`;
+1.0.36: `aE0`, `Xn0`, `dE0`). All three live in `dist/bundled/index.js`, and
+the controller loop is still
+`for await (let D of N) await this.clientStream.write(D)`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.

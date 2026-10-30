@@ -679,16 +679,22 @@ function readShellOutputText(event: unknown): string {
  */
 function applySummary(state: SessionState, summary: string, context: UpdateContext): void {
   if (!summary) return;
-  const open = openCompactionPart(state);
-  if (open) {
-    const { row, part } = open;
-    part.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+  const newest = newestCompactionPart(state);
+  const target =
+    openCompactionPart(state) ??
+    (newest && awaitingCompactionSummary.has(newest.part) ? newest : undefined);
+  if (target) {
+    const { row, part } = target;
+    const outcome = awaitingCompactionSummary.get(part) ?? { failed: false, fallback: false };
+    awaitingCompactionSummary.delete(part);
+    receivedCompactionSummary.add(part);
+    part.content = boundText(compactionContent(summary, outcome), MAX_TOOL_OUTPUT_BYTES);
     chargeTranscript(state, jsonStringContentBytes(part.content));
-    part.toolState = "success";
+    part.toolState = outcome.failed ? "failure" : "success";
     rowChanged(state, row);
     return;
   }
-  appendCompactionPart(state, summary, "success", context);
+  receivedCompactionSummary.add(appendCompactionPart(state, summary, "success", context));
 }
 
 /** Open a boundary while the summary is still being produced. */
@@ -709,6 +715,11 @@ interface CompactionOutcome {
   fallback: boolean;
 }
 
+// Completion and summary can arrive in either order. Weak keys keep this
+// live-only bookkeeping bounded by the retained transcript, including trims.
+const awaitingCompactionSummary = new WeakMap<BridgeCompactionPart, CompactionOutcome>();
+const receivedCompactionSummary = new WeakSet<BridgeCompactionPart>();
+
 export const FAILED_COMPACTION_NOTE = "Compaction failed; the conversation is unchanged";
 export const FALLBACK_COMPACTION_NOTE =
   "The model could not write a summary, so Cursor kept a trimmed copy of the transcript";
@@ -725,12 +736,14 @@ function applySummaryCompleted(
   // second boundary.
   const target = open ?? (summary ? undefined : newestCompactionPart(state));
   if (!target) {
-    appendCompactionPart(
+    const part = appendCompactionPart(
       state,
       compactionContent(summary, outcome),
       outcome.failed ? "failure" : "success",
       context,
     );
+    if (summary) receivedCompactionSummary.add(part);
+    else awaitingCompactionSummary.set(part, outcome);
     return;
   }
   const { row, part } = target;
@@ -740,11 +753,18 @@ function applySummaryCompleted(
     chargeTranscript(state, jsonStringContentBytes(part.content));
   }
   part.toolState = outcome.failed ? "failure" : "success";
+  if (summary) receivedCompactionSummary.add(part);
+  if (!summary && !receivedCompactionSummary.has(part)) {
+    awaitingCompactionSummary.set(part, outcome);
+  }
   rowChanged(state, row);
 }
 
 function compactionContent(summary: string, outcome: CompactionOutcome): string {
-  if (outcome.failed) return summary || FAILED_COMPACTION_NOTE;
+  if (outcome.failed) {
+    if (summary.startsWith(FAILED_COMPACTION_NOTE)) return summary;
+    return summary ? `${FAILED_COMPACTION_NOTE}.\n\n${summary}` : FAILED_COMPACTION_NOTE;
+  }
   if (!outcome.fallback || summary.startsWith(FALLBACK_COMPACTION_NOTE)) return summary;
   return summary ? `${FALLBACK_COMPACTION_NOTE}.\n\n${summary}` : FALLBACK_COMPACTION_NOTE;
 }
@@ -788,7 +808,7 @@ function appendCompactionPart(
   summary: string,
   toolState: "pending" | "success" | "failure",
   context: UpdateContext,
-): void {
+): BridgeCompactionPart {
   const message = currentAssistantMessage(state);
   closeTextParts(state, context.parentTaskUseId);
   const sourcePartId = `summary:${nextPartOrdinal(message)}`;
@@ -803,6 +823,7 @@ function appendCompactionPart(
   message.parts.push(part);
   chargeNewEntry(state, part);
   rowChanged(state, message);
+  return part;
 }
 
 /**

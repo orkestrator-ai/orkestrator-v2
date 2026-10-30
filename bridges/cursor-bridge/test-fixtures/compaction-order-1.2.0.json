@@ -1,0 +1,12 @@
+{
+  "sdk": "@cursor/sdk@1.2.0",
+  "observedOn": "2026-10-30",
+  "runtime": "macOS arm64, local agent.summarize()",
+  "model": "composer-2",
+  "redaction": "Only event types and outcome flags retained; summary text is synthetic in tests.",
+  "updates": [
+    { "type": "summary-started" },
+    { "type": "summary-completed", "failed": false, "fallback": false },
+    { "type": "summary" }
+  ]
+}

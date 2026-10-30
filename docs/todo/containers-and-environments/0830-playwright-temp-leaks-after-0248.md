@@ -97,9 +97,9 @@ runner starts is outside the Playwright run and was never affected.
 
 ### Task 1: qualification without billed turns
 
-The recommended option asked for one isolated qualification run per suite. The
-billed real-stack suites (live agents, the coordinator suite) could not run
-under this work's constraints. Instead
+The recommended option asked for one isolated qualification run per suite. In
+the initial implementation the billed real-stack suites (live agents, the
+coordinator suite) did not run. Instead
 `tests/unit/private-tmpdir-playwright.integration.test.ts` now loads each of
 the four newly wired configs as well as the two `test:browser` ones, in a real
 Playwright runner and worker, and checks both share one private directory that
@@ -179,15 +179,157 @@ already contained.
 
 - A green `mise run test:agent:design:isolated` on a host whose firewall lets
   containers reach the agent-tools port.
-- A full `mise run test:agent:browser:isolated` with credentials, which
-  includes the five specs that restart `dev:test` through
-  `outlivingProcessEnv()`. None of them ran live here.
-- `mise run test:agent:coordinator` (billed) and the rest of
-  `mise run test:agent:electron`; only `electron-cleanup.spec.ts` ran.
-- The preview suite's Firefox and WebKit projects; those browsers were not
-  installed on the host.
+- Green completion of the five specs that restart `dev:test` through
+  `outlivingProcessEnv()`. The review runs below attempted them live; host
+  startup and provider errors prevent claiming qualification.
+- Coordinator qualification beyond the passing Codex read-only scenario below,
+  and the rest of `mise run test:agent:electron`; the initial implementation
+  ran only `electron-cleanup.spec.ts`.
 - Any of these suites on macOS, where the private directory goes under
   `/private/tmp`.
+
+## Review coverage and retained validation (2026-10-30)
+
+Tested on Arch Linux with repository-pinned Bun 1.4.4 and Playwright 1.64.0,
+on implementation commit `f40221b13` plus this review's test-only changes,
+committed as `cc497998c` and `e26cd5100`. The latter makes detached-child
+result publication atomic, so polling cannot read a partial JSON file.
+Passing raw logs are deleted by `test:logged`; its retained `summary.json`
+files and the results below preserve exit statuses and durations.
+
+Two regressions now cover the remaining lifetime boundaries:
+
+- `tests/unit/private-tmpdir-playwright.integration.test.ts` starts a private
+  directory owner and a detached Bun child using `outlivingProcessEnv()`.
+  The child signals readiness, then waits until the test has joined the owner
+  and verified its private directory was removed. Only then may it create a
+  temporary directory and file. It must use the original parent directory and
+  inherit neither ownership marker. The test owns and stops the detached
+  process group even on assertion failure.
+- `apps/backend/src/core/design/renderer.test.ts` holds launch past the launch
+  deadline and, separately, past completed shutdown. Each late handle is
+  recorded in a real profile ledger. A close gate proves the artifacts stay
+  owned during termination; releasing it removes the profile, record and
+  artifacts without creating a browser context.
+
+### Slow owners and static checks
+
+All commands use `mise run test:logged -- --name <label> -- <command>`.
+
+| Label | Command | Result and retained summary |
+| --- | --- | --- |
+| `tmpdir-playwright-review` | `bun test ./tests/unit/private-tmpdir-playwright.integration.test.ts --parallel=1 --only-failures` | Passed, 22.2 s; `/tmp/orkestrator-test-run.CkyCnv/summary.json`. Includes all six real configs with both runner/worker cleanup outcomes and the detached-child regression. |
+| `renderer-review` | `bun test --cwd apps/backend ./src/core/design/renderer.test.ts --parallel=1 --only-failures` | Passed, 8.5 s; `/tmp/orkestrator-test-run.pmaK01/summary.json`. Chromium was present; the killed-backend artifacts regression and other real-browser cases ran. |
+| `private-tmpdir-unit-review` | `bun test ./tests/unit/private-tmpdir.test.ts --parallel=1 --only-failures` | Passed, 1.5 s; `/tmp/orkestrator-test-run.grC3Xf/summary.json`. |
+| `tmpdir-root-types-review` | `bun check -p tests/tsconfig.json` | Passed after giving the new subprocess environment its `NodeJS.ProcessEnv` annotation; the exact command was rerun, 3.0 s, `/tmp/orkestrator-test-run.2AlWEO/summary.json`. |
+| `renderer-test-types-review` | `bun check -p apps/backend/tsconfig.test.json` | Passed, 2.4 s; `/tmp/orkestrator-test-run.uJEHka/summary.json`. |
+
+Changed-file `bun fmt --check` and `bunx oxlint` passed. Preparation's passing
+default suite (`/tmp/orkestrator-test-run.oFUlzG/summary.json`), full lint and
+full typecheck were reused rather than repeated.
+
+Both slow owners were also run directly on pinned test commit `cc497998c`,
+with the same test selection and `--reporter=junit --reporter-outfile=...`.
+Labels `tmpdir-playwright-pinned` and `renderer-pinned` passed in 19.9 s and
+7.8 s respectively: 13 and 31 tests, with zero failures or skips. After the
+atomic-publication change, the TMPDIR owner passed again on `e26cd5100`
+(13 tests, zero failures or skips, 20.0 s;
+`/tmp/orkestrator-test-run.GLsuEY/summary.json`), and its typecheck and lint
+passed again. Their JUnit reports are retained under
+`output/playwright/0830-review/` as `tmpdir-playwright.xml` and `renderer.xml`
+(moved there from `output/validation/0830-review/` after the runs).
+
+### Live coordinator and alternate preview engines
+
+`mise run test:logged -- --name coordinator-live-tmpdir-review -- mise run
+test:agent:coordinator --credential-source codex --scenario read-only` passed
+in 71.8 s. The actual coordinator config ran a real Codex turn in disposable
+profile `qa-coordinator-codex-b93d2fb9`, which was stopped and reset. Retained
+summary: `/tmp/orkestrator-test-run.hDcWiJ/summary.json`; scenario verdict:
+`output/agent-testing/qa-coordinator-2026-10-30T03-15-43-451Z/summary.json`.
+
+`mise run test:logged -- --name preview-firefox-webkit-review -- bunx
+playwright test --config e2e/preview/playwright.preview.config.ts --project
+firefox --project webkit` passed in 47.8 s. Both browser binaries were first
+installed with the pinned Playwright CLI. WebKit additionally needed ICU 74,
+libxml2 and flite from the already-present pinned Playwright worker image;
+these were copied into its user-local `minibrowser-wpe/sys/lib`, without
+changing host system libraries. The exact preview command was rerun after
+each dependency repair. Retained summary:
+`/tmp/orkestrator-test-run.a7jO4r/summary.json`. Vite HMR remained opt-in.
+An intermittent Firefox IPv6 navigation failure and its complete-owner pass
+are recorded in [1316](../../tests/flaky-tests/previews-annotations-and-gateway/1316-firefox-preview-ipv6-empty-response.md).
+
+### Live restart attempts
+
+Started disposable profile `qa-tmpdir-0830-restarts` with `dev:test --fixture
+--credential-source claude --credential-source codex --agent-platforms
+claude,codex`. The focused command was:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-tmpdir-0830-restarts \
+ORKESTRATOR_AGENT_TEST_RUN_ID=qa-tmpdir-0830-restarts \
+ORKESTRATOR_AGENT_TEST_LIVE_PERMISSION_RULES=1 \
+ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 \
+ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1 \
+ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATION_DISRUPTION=1 \
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
+mise run test:logged -- --name restart-scenarios-tmpdir-review -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/permission-rules.spec.ts:109 \
+  e2e/agent-testing/graph-run-view.spec.ts:653 \
+  e2e/agent-testing/multi-review-live.spec.ts:823 \
+  e2e/agent-testing/web-annotations-approval-live.spec.ts:480 \
+  e2e/agent-testing/cold-restart-live.spec.ts --workers=1
+```
+
+Exit 1 after 83.0 s: four failed, one skipped, one serial case did not run.
+Evidence: `/tmp/orkestrator-test-run.ApBAza/summary.json` and
+`restart-scenarios-tmpdir-review.log.gz`; sanitized browser results and failure
+screenshots are under `output/agent-testing/qa-tmpdir-0830-restarts/browser/`.
+The native cold-restart, Multi Review and permission-rule cases were blocked
+by the host's "Docker containers can't reach Orkestrator" modal, before their
+restart checks. The annotation case reported "Claude ended the turn on an API
+error" before reaching approval. These are not passing qualification and no
+assertions were weakened to hide them.
+
+The graph restart needs its own opt-in. Reran it alone with
+`ORKESTRATOR_AGENT_TEST_GRAPH_RESTART=1`, profile as above, run ID
+`qa-tmpdir-0830-graph`, label `graph-restart-tmpdir-review`, and the same
+Playwright command selecting only `e2e/agent-testing/graph-run-view.spec.ts:653`.
+It restarted the profile and verified the persisted wait's identity and state,
+then failed at line 704 opening the UI: the page showed "Orkestrator couldn't
+connect". Exit 1, 48.3 s; `/tmp/orkestrator-test-run.uSfzX4/summary.json` and
+`graph-restart-tmpdir-review.log.gz`. Its restarted launcher stayed ready after
+Playwright exited; full graph UI qualification remains outstanding.
+
+The previously unrun serial cold build case was selected alone at
+`e2e/agent-testing/cold-restart-live.spec.ts:869` with the same profile,
+`ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1`, run ID
+`qa-tmpdir-0830-cold-build`, no-progress timeout 900000 ms and label
+`cold-build-restart-tmpdir-review`. It performed its crash restart. The build
+stage then went idle without the required `TRAILEND` marker in its committed
+assistant rows; subsequent verify/fix stages did produce the marker, but
+cannot satisfy the assertion about the original build session. After 430.4 s,
+sent SIGINT to this run's exact Playwright CLI to stop further billed stages.
+Exit 130, one interrupted; this is incomplete qualification, not a pass.
+Evidence: `/tmp/orkestrator-test-run.FhbDV3/summary.json` and
+`cold-build-restart-tmpdir-review.log.gz`, plus sanitized results under
+`output/agent-testing/qa-tmpdir-0830-cold-build/browser/`.
+
+After Playwright exited, inspected only the restarted launcher/backend's
+temporary-directory environment entries. Neither carried a private ownership
+marker, both still named an existing temporary directory, and Bun subprocesses
+using those entries successfully created and removed a temporary file. Thus
+the actual restarted profile also survived its Playwright owner's exit.
+Stopped and reset `qa-tmpdir-0830-restarts`; no launcher or profile state was
+deliberately retained. Browser failure artifacts and JUnit reports remain in
+the checkout's output directories.
+Both profiles' final `dev:status --json` responses were `status: "missing"`
+with empty `live` maps (only empty data directories remained). The original
+foreground `restart-profile-start-review` launcher exited 143 when the graph
+test deliberately stopped it for restart; that is an expected lifecycle exit,
+not a failed startup (`/tmp/orkestrator-test-run.VkWjQa/summary.json`).
 
 ## Related
 

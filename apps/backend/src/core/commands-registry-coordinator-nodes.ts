@@ -7,8 +7,10 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import {
   isLaunchMultiReviewActionInput,
+  isMultiReviewModelSelection,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
+  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
@@ -18,10 +20,15 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
+import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
+import {
+  actionHash,
+  requireCoordinatorConversation,
+  withCoordinatorReceipt,
+} from "./coordinator-action-scope.js";
 
 /**
  * A command node's coordinator acting on a node it controls, with the same
@@ -141,6 +148,20 @@ export async function coordinatorNodeTarget(
       return value;
     },
   };
+}
+
+export const RETRY_SAME_REQUEST =
+  "Retry with the same requestId: the node replays what the first attempt made rather than acting twice.";
+
+/** A lost answer from a node, with what the coordinator should do about it. */
+export async function withRetryAdvice<T>(advice: string, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof Error && (error as { code?: unknown }).code === "outcome-unknown")
+      throw Object.assign(new Error(`${error.message} ${advice}`), { code: "outcome-unknown" });
+    throw error;
+  }
 }
 
 /** This conversation's mailbox, where a node's reports for it are delivered. */
@@ -429,18 +450,24 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         asNonBlankString(nodeId, "nodeId"),
       );
       const worker = asNonBlankString(environmentId, "environmentId");
-      await target.environment(worker);
-      await recordOrigin(context, caller, target, worker);
-      return {
-        opened: await openNodeDelegation(
-          context,
-          caller,
-          target.nodeId,
-          worker,
-          asNonBlankString(tabId, "tabId"),
-          asNonBlankString(requestId, "requestId"),
-        ),
-      };
+      const workerTab = asNonBlankString(tabId, "tabId");
+      const release = beginWorkerTabDelegation(worker, workerTab, target.nodeId);
+      try {
+        await target.environment(worker);
+        await recordOrigin(context, caller, target, worker);
+        return {
+          opened: await openNodeDelegation(
+            context,
+            caller,
+            target.nodeId,
+            worker,
+            workerTab,
+            asNonBlankString(requestId, "requestId"),
+          ),
+        };
+      } finally {
+        release();
+      }
     },
   );
 
@@ -471,80 +498,91 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         const requestId = asNonBlankString(args.requestId, "requestId");
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-        const joining = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
-          (association) =>
-            association.coordinatorId === caller.coordinatorId &&
-            association.kind === "environment" &&
-            association.nodeId === target.nodeId &&
-            association.resourceId === toEnvironmentId &&
-            (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
-            association.requestId !== `delegation:${requestId}`,
-        );
-        if (joining) context.coordinators?.noteRemoteRequest(joining.id);
-        const delivered = await target.call<{
-          messageId?: string;
-          toTabId?: string;
-          toEnvironmentName?: string;
-          toTabName?: string;
-          placement?: string;
-          placementReason?: string;
-        }>(
-          "deliver_node_mail",
-          {
-            controllerId: target.selfId,
-            ...(await mailbox(context, caller)),
-            requestId,
-            toEnvironmentId,
-            ...(requestedTab ? { toTabId: requestedTab } : {}),
-            ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
-            body: asNonBlankString(args.body, "body"),
-          },
-          `mail:${caller.coordinatorId}:${requestId}`,
-        );
-        const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
-        const toEnvironmentName =
-          delivered?.toEnvironmentName ??
-          (typeof recipient.name === "string" ? recipient.name : undefined);
-        // As here, only mail scheduled to reach the worker asks it anything: a
-        // message the node stored or bounced opens no delegation. (Older nodes do
-        // not report the placement.)
-        const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
-        let coordinatorDelegationOpened = false;
-        if (joining && scheduled) {
-          context.coordinators?.noteRemoteRequest(joining.id);
-          coordinatorDelegationOpened = true;
-        } else if (workerTab && scheduled) {
-          coordinatorDelegationOpened = await openNodeDelegation(
-            context,
-            caller,
-            target.nodeId,
-            toEnvironmentId,
-            workerTab,
-            requestId,
-          );
-        }
-        return {
-          nodeId: target.nodeId,
-          node: target.nodeName,
-          ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
+        const release = beginWorkerTabDelegation(
           toEnvironmentId,
-          ...(workerTab ? { toTabId: workerTab } : {}),
-          // Names the recipient in the coordinator's transcript; older nodes
-          // report no tab name.
-          ...(toEnvironmentName ? { toEnvironmentName } : {}),
-          ...(delivered?.toTabName && delivered.toTabId === workerTab
-            ? { toTabName: delivered.toTabName }
-            : {}),
-          ...(delivered?.placement ? { placement: delivered.placement } : {}),
-          ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
-          coordinatorDelegationOpened,
-          // Said plainly, as for a worker here: "pending" alone reads as delivered.
-          ...(recipient.status === "stopped"
-            ? {
-                deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
-              }
-            : {}),
-        };
+          requestedTab || undefined,
+          target.nodeId,
+        );
+        try {
+          const joining = (
+            await context.storage.coordinators.listOpenCoordinatorDelegations()
+          ).find(
+            (association) =>
+              association.coordinatorId === caller.coordinatorId &&
+              association.kind === "environment" &&
+              association.nodeId === target.nodeId &&
+              association.resourceId === toEnvironmentId &&
+              (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
+              association.requestId !== `delegation:${requestId}`,
+          );
+          if (joining) context.coordinators?.noteRemoteRequest(joining.id);
+          const delivered = await target.call<{
+            messageId?: string;
+            toTabId?: string;
+            toEnvironmentName?: string;
+            toTabName?: string;
+            placement?: string;
+            placementReason?: string;
+          }>(
+            "deliver_node_mail",
+            {
+              controllerId: target.selfId,
+              ...(await mailbox(context, caller)),
+              requestId,
+              toEnvironmentId,
+              ...(requestedTab ? { toTabId: requestedTab } : {}),
+              ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
+              body: asNonBlankString(args.body, "body"),
+            },
+            `mail:${caller.coordinatorId}:${requestId}`,
+          );
+          const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
+          const toEnvironmentName =
+            delivered?.toEnvironmentName ??
+            (typeof recipient.name === "string" ? recipient.name : undefined);
+          // As here, only mail scheduled to reach the worker asks it anything: a
+          // message the node stored or bounced opens no delegation. (Older nodes do
+          // not report the placement.)
+          const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
+          let coordinatorDelegationOpened = false;
+          if (joining && scheduled) {
+            context.coordinators?.noteRemoteRequest(joining.id);
+            coordinatorDelegationOpened = true;
+          } else if (workerTab && scheduled) {
+            coordinatorDelegationOpened = await openNodeDelegation(
+              context,
+              caller,
+              target.nodeId,
+              toEnvironmentId,
+              workerTab,
+              requestId,
+            );
+          }
+          return {
+            nodeId: target.nodeId,
+            node: target.nodeName,
+            ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
+            toEnvironmentId,
+            ...(workerTab ? { toTabId: workerTab } : {}),
+            // Names the recipient in the coordinator's transcript; older nodes
+            // report no tab name.
+            ...(toEnvironmentName ? { toEnvironmentName } : {}),
+            ...(delivered?.toTabName && delivered.toTabId === workerTab
+              ? { toTabName: delivered.toTabName }
+              : {}),
+            ...(delivered?.placement ? { placement: delivered.placement } : {}),
+            ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
+            coordinatorDelegationOpened,
+            // Said plainly, as for a worker here: "pending" alone reads as delivered.
+            ...(recipient.status === "stopped"
+              ? {
+                  deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
+                }
+              : {}),
+          };
+        } finally {
+          release();
+        }
       },
     );
   });
@@ -755,68 +793,137 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     );
   });
 
-  register(
-    "coordinator_node_multi_review_surface",
-    async ({ scope, nodeId, workflowId, surface }, context) => {
-      const caller = await identity(scope, context);
-      if (surface !== "root" && surface !== "fix" && surface !== "address") {
-        throw new Error("Expected surface root, fix or address.");
-      }
-      const target = await coordinatorNodeTarget(
-        context,
-        caller.projectId,
-        asNonBlankString(nodeId, "nodeId"),
+  register("coordinator_node_multi_review_surface", async (args, context) => {
+    const caller = await identity(args.scope, context);
+    const surface = args.surface;
+    if (
+      surface !== "root" &&
+      surface !== "fix" &&
+      surface !== "address" &&
+      surface !== "reviewer" &&
+      surface !== "custom-fix"
+    ) {
+      throw new Error("Expected surface root, fix, address, reviewer or custom-fix.");
+    }
+    const reviewerId =
+      surface === "reviewer" ? asNonBlankString(args.reviewerId, "reviewerId") : undefined;
+    let customFix: { requestId: string; instruction: string; fixModel?: unknown } | undefined;
+    if (surface === "custom-fix") {
+      const instruction = asNonBlankString(args.instruction, "instruction").trim();
+      if (instruction.length > MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH)
+        throw new Error("The custom fix instruction is too long");
+      if (args.fixModel !== undefined && !isMultiReviewModelSelection(args.fixModel))
+        throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
+      customFix = {
+        requestId: asNonBlankString(args.requestId, "requestId"),
+        instruction,
+        ...(args.fixModel !== undefined ? { fixModel: args.fixModel } : {}),
+      };
+    }
+    const target = await coordinatorNodeTarget(
+      context,
+      caller.projectId,
+      asNonBlankString(args.nodeId, "nodeId"),
+    );
+    const id = asNonBlankString(args.workflowId, "workflowId");
+    const read = () => target.call<unknown>("get_multi_review_workflow", { workflowId: id });
+    const saved = await read();
+    if (
+      !record(saved) ||
+      !isMultiReviewWorkflow(saved.snapshot) ||
+      saved.snapshot.projectId !== target.projectId
+    ) {
+      throw new Error("Multi Review not found in this project on that node");
+    }
+    const associations = (
+      await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
+    ).filter(
+      (item) =>
+        item.kind === "multi-review" && item.nodeId === target.nodeId && item.resourceId === id,
+    );
+    const owned = associations.some(
+      (item) =>
+        item.coordinatorId === caller.coordinatorId &&
+        item.conversationId === caller.conversationId &&
+        !item.pending,
+    );
+    if (!owned && associations.some((item) => item.pending)) {
+      throw new Error(
+        "This workflow launch is still pending; retry launch_multi_review with its original requestId",
       );
-      const id = asNonBlankString(workflowId, "workflowId");
-      const saved = await target.call<unknown>("get_multi_review_workflow", { workflowId: id });
-      if (
-        !record(saved) ||
-        !isMultiReviewWorkflow(saved.snapshot) ||
-        saved.snapshot.projectId !== target.projectId
-      ) {
-        throw new Error("Multi Review not found in this project on that node");
-      }
-      const associations = (
-        await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
-      ).filter(
-        (item) =>
-          item.kind === "multi-review" && item.nodeId === target.nodeId && item.resourceId === id,
+    }
+    if (!owned && associations.length > 0) {
+      throw new Error(
+        "Adopt this workflow into the current coordinator conversation before opening it",
       );
-      const owned = associations.some(
-        (item) =>
-          item.coordinatorId === caller.coordinatorId &&
-          item.conversationId === caller.conversationId &&
-          !item.pending,
-      );
-      if (!owned && associations.some((item) => item.pending)) {
-        throw new Error(
-          "This workflow launch is still pending; retry launch_multi_review with its original requestId",
-        );
-      }
-      if (!owned && associations.length > 0) {
-        throw new Error(
-          "Adopt this workflow into the current coordinator conversation before opening it",
-        );
-      }
-      if (surface === "address" && !owned) {
-        // Address adopts the review so its fix outcome reaches this conversation.
-        await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
-          id: randomUUID(),
-          ...caller,
-          kind: "multi-review",
-          resourceId: id,
-          nodeId: target.nodeId,
-          requestId: `address:${target.nodeId}:${id}`,
-          createdAt: new Date().toISOString(),
+    }
+    // Addressing adopts the review so its fix outcome reaches this conversation.
+    const adopt = async () => {
+      if (owned) return;
+      await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
+        id: randomUUID(),
+        ...caller,
+        kind: "multi-review",
+        resourceId: id,
+        nodeId: target.nodeId,
+        requestId: `address:${target.nodeId}:${id}`,
+        createdAt: new Date().toISOString(),
+      });
+    };
+    const open = (extra: JsonRecord, requestKey?: string) =>
+      target
+        .call<MultiReviewActionResult>(
+          "controller_multi_review_surface",
+          { workflowId: id, surface, ...extra },
+          requestKey,
+        )
+        .catch((error: unknown) => {
+          // A node from before the reviewer and custom-fix surfaces.
+          if (
+            error instanceof Error &&
+            error.message.includes("Expected surface root, fix or address")
+          )
+            throw new Error(
+              `${target.nodeName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
+            );
+          throw error;
         });
-      }
-      return target.call<MultiReviewActionResult>(
-        "controller_multi_review_surface",
-        { workflowId: id, surface },
+    if (surface === "address") await adopt();
+    if (!customFix)
+      return open(
+        reviewerId ? { reviewerId } : {},
         surface === "address" ? `address:${caller.coordinatorId}:${id}` : undefined,
       );
-    },
-  );
+    const { requestId, ...fix } = customFix;
+    // The receipt keeps only the outcome; the workflow is read fresh, so a
+    // replay reports where the fix is now rather than where it was.
+    const outcome = await withCoordinatorReceipt(
+      context,
+      caller,
+      {
+        requestId,
+        action: "custom-fix",
+        payload: { workflowId: id, ...fix, nodeId: target.nodeId },
+      },
+      async () => {
+        await adopt();
+        const { workflow: _workflow, ...rest } = await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+          open(fix, `custom-fix:${caller.coordinatorId}:${requestId}`),
+        );
+        return rest as JsonRecord;
+      },
+    );
+    const latest = await read();
+    if (!record(latest) || !isMultiReviewWorkflow(latest.snapshot))
+      throw new Error("Multi Review not found in this project on that node");
+    return {
+      ...(outcome as unknown as Omit<MultiReviewActionResult, "workflow">),
+      workflow: {
+        ...latest.snapshot,
+        ...(typeof latest.revision === "number" ? { backendRevision: latest.revision } : {}),
+      },
+    } satisfies MultiReviewActionResult;
+  });
 
   register(
     "start_coordinator_node_multi_review",

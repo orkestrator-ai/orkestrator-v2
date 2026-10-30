@@ -1270,8 +1270,25 @@ environment of the bound project: the backend command
 (`coordinator-surface-actions.ts`) revalidates the credential's scope and
 refuses the project home, the checkout the coordinator may only read. Side
 agents have none of them (their capabilities are `discovery`, `mail` and
-`schedules`). `create_pr` accepts `nodeId` to publish on a connected node.
-The other surfaces act on this node only; their `nodeId` variants are in
+`schedules`).
+
+`launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
+`custom_fix_multi_review` and `open_multi_review` (with or without
+`reviewerId`) also take `nodeId` for a worker on a connected node. The
+receipt, and any adoption of the review, stay on the command node; the node
+that owns the worker checks its project and refuses its checkout, then runs
+the work through a controller command (`launch_controller_terminal`,
+`open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
+or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
+in `commands-registry-controller-workflows.ts`). Those are node-link only,
+never reachable with a workspace grant. Job, tab and navigation IDs on that
+node derive from the command node's receipt key. So when the node link loses
+an answer, the tool returns outcome-unknown and asks for a retry with the same
+`requestId`, and the retry reattaches to what the first attempt made; nothing
+is resent automatically. A remote custom fix that is already past its handoff
+when the retry arrives is reported, with its Fix tab, rather than refused as
+not ready. A node from before these commands answers "update that node".
+`request_root_changes` stays on this node; see
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
 
 | Tool | What it does | Retry with the same `requestId` | What the user sees and can undo |

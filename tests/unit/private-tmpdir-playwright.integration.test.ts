@@ -13,10 +13,23 @@ afterEach(() => {
 });
 
 describe("Playwright private TMPDIR wiring", () => {
-  for (const config of ["e2e/playwright.config.ts", "e2e/public-site/playwright.config.ts"]) {
+  for (const config of [
+    "e2e/playwright.config.ts",
+    "e2e/public-site/playwright.config.ts",
+    // The real-stack and preview suites (0830); the Claude warm and
+    // paused-interactions configs spread the browser one.
+    "e2e/agent-testing/playwright.browser.config.ts",
+    "e2e/agent-testing/playwright.coordinator.config.ts",
+    "e2e/agent-testing/playwright.electron.config.ts",
+    "e2e/preview/playwright.preview.config.ts",
+  ]) {
     for (const outlives of [false, true]) {
       test(`${config}: runner and worker share a directory that is ${outlives ? "retained for a live browser" : "removed on exit"}`, async () => {
-        const root = mkdtempSync(path.join(tmpdir(), "ork-pw-tmp-test-"));
+        // In the parent TMPDIR, not this process's private one: the runner's
+        // private directory nests inside `root`, and Chrome's SingletonSocket
+        // inside that, which passed Linux's 108-byte socket limit (0830).
+        const parent = process.env[PARENT_TMPDIR_ENV] || tmpdir();
+        const root = mkdtempSync(path.join(parent, "ork-pw-tmp-test-"));
         roots.push(root);
         const fixture = path.join(root, "fixture");
         mkdirSync(fixture);
@@ -34,8 +47,8 @@ describe("Playwright private TMPDIR wiring", () => {
           import { tmpdir } from "node:os";
           if (process.env.TEST_WORKER_INDEX === undefined)
             writeFileSync(${JSON.stringify(runnerFile)}, JSON.stringify({ tmp: tmpdir(), pid: process.pid }));
-          export default { ...actual, webServer: undefined, globalSetup: undefined,
-            testDir: ${JSON.stringify(fixture)}, testIgnore: [], workers: 1,
+          export default { ...actual, webServer: undefined, globalSetup: undefined, globalTeardown: undefined,
+            testDir: ${JSON.stringify(fixture)}, testMatch: "tmpdir.spec.ts", testIgnore: [], workers: 1,
             outputDir: ${JSON.stringify(path.join(root, "results"))},
             projects: [{ name: "tmpdir" }], reporter: "line" };
         `,

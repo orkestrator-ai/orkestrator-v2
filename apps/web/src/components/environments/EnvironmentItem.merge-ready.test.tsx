@@ -1,7 +1,9 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { Environment } from "@/types";
+import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { EnvironmentItem } from "./EnvironmentItem";
 
@@ -57,7 +59,8 @@ function renderItem(environment: Environment) {
 }
 
 function nameElement(): HTMLElement {
-  return screen.getByText("ship-the-feature");
+  // Within the row: an open hover card repeats the name.
+  return within(row()).getByText("ship-the-feature");
 }
 
 function row(): HTMLElement {
@@ -75,7 +78,9 @@ function description(element: HTMLElement): string {
 }
 
 beforeEach(() => {
+  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
   usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
+  useAgentActivityStore.setState({ containerStates: {}, containerStateUpdatedAt: {} });
 });
 
 afterEach(cleanup);
@@ -108,7 +113,7 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
     expect(indicator.classList).toContain("motion-reduce:inline-block");
 
     fireEvent.mouseEnter(row());
-    expect((await screen.findByTestId("environment-tooltip-ready-to-merge")).textContent).toBe(
+    expect((await screen.findByTestId("environment-tooltip-merge-ready")).textContent).toBe(
       "Ready to merge",
     );
   });
@@ -188,5 +193,90 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
     );
     expect(nameElement().classList).not.toContain("text-shimmer");
     expect(nameElement().hasAttribute("data-merge-ready")).toBe(false);
+  });
+});
+
+describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
+  test("shimmers red while a current reading shows merge conflicts", () => {
+    usePrMonitorStore.getState().applySnapshot([monitorState({ hasMergeConflicts: true })]);
+    usePrMonitorStore.getState().setSyncStatus("current");
+    renderItem(readyEnvironment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+
+    expect(nameElement().classList).toContain("text-shimmer");
+    expect(nameElement().classList).toContain("merge-conflicts-name");
+    expect(nameElement().classList).not.toContain("merge-ready-name");
+    expect(nameElement().getAttribute("data-name-signal")).toBe("merge-conflicts");
+    expect(description(row())).toBe("Merge conflicts to resolve");
+    expect(screen.getByTestId("merge-conflicts-indicator").classList).toContain(
+      "motion-reduce:inline-block",
+    );
+  });
+
+  test("pipeline-only transitions override waiting just as in title and search", () => {
+    usePrMonitorStore.getState().applySnapshot([monitorState()]);
+    usePrMonitorStore.getState().setSyncStatus("current");
+    renderItem(
+      readyEnvironment({
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+      }),
+    );
+    expect(nameElement().getAttribute("data-name-signal")).toBe("needs-answer");
+    act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["env-1"]) }));
+    expect(nameElement().getAttribute("data-name-signal")).toBe("merge-ready");
+    act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+    expect(nameElement().getAttribute("data-name-signal")).toBe("needs-answer");
+  });
+
+  test("a stale conflict reading does not shimmer", () => {
+    usePrMonitorStore.getState().applySnapshot([monitorState({ hasMergeConflicts: true })]);
+    usePrMonitorStore.getState().setSyncStatus("stale");
+    renderItem(readyEnvironment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+    expect(nameElement().classList).not.toContain("text-shimmer");
+  });
+
+  test("shimmers yellow while the agent waits for an answer, over any PR state", async () => {
+    usePrMonitorStore.getState().applySnapshot([monitorState()]);
+    usePrMonitorStore.getState().setSyncStatus("current");
+    const view = renderItem(
+      readyEnvironment({
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-10-28T10:00:00.000Z",
+      }),
+    );
+
+    expect(nameElement().classList).toContain("needs-answer-name");
+    expect(nameElement().classList).not.toContain("merge-ready-name");
+    expect(description(row())).toBe("Waiting for your answer");
+    fireEvent.mouseEnter(row());
+    expect((await screen.findByTestId("environment-tooltip-needs-answer")).textContent).toBe(
+      "Waiting for your answer",
+    );
+
+    // Once answered, the pull request's own signal returns.
+    view.rerender(
+      <EnvironmentItem
+        environment={readyEnvironment({
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-10-28T10:01:00.000Z",
+        })}
+        isSelected={false}
+        {...callbacks}
+      />,
+    );
+    expect(nameElement().classList).toContain("merge-ready-name");
+    expect(nameElement().classList).not.toContain("needs-answer-name");
+  });
+
+  test("a stopped container's waiting agent does not shimmer", () => {
+    renderItem(
+      readyEnvironment({
+        environmentType: "containerized",
+        status: "stopped",
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-10-28T10:00:00.000Z",
+      }),
+    );
+    expect(nameElement().classList).not.toContain("text-shimmer");
   });
 });

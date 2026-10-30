@@ -1,3 +1,4 @@
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -150,10 +151,16 @@ mock.module("@/stores", () => ({
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
   ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
   useEnvironmentStore: <T,>(
-    selector?: (state: { environments: Array<{ id: string; name: string }> }) => T,
+    selector?: (state: {
+      environments: Array<{ id: string; name: string }>;
+      isDeleting: (id: string) => boolean;
+    }) => T,
   ) =>
     selectState(
-      { environments: [{ id: "environment-1", name: "feature-auth", ...selectedEnvironmentPr }] },
+      {
+        environments: [{ id: "environment-1", name: "feature-auth", ...selectedEnvironmentPr }],
+        isDeleting: () => selectedEnvironmentPr.lifecycleOperation === "deleting",
+      },
       selector,
     ),
   useConfigStore: <T,>(
@@ -223,6 +230,7 @@ beforeEach(() => {
   selectedEnvironmentId = "environment-1";
   filesPanelOpen = false;
   selectedEnvironmentPr = {};
+  useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() });
   usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
   uiStore.setState({ sidebarOpen: true });
   mountSearch = false;
@@ -319,6 +327,69 @@ describe("AppShell", () => {
         .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
         .querySelector("[data-merge-ready]"),
     ).toBeNull();
+  });
+
+  test.each([
+    ["needs-answer", "Waiting for your answer"],
+    ["merge-conflicts", "Merge conflicts to resolve"],
+    ["merge-ready", "Ready to merge"],
+  ])("mobile title describes %s and clears it during deletion", async (signal, label) => {
+    selectedEnvironmentPr = {
+      environmentType: "local",
+      status: "running",
+      agentActivityState: signal === "needs-answer" ? "waiting" : "idle",
+      agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: signal === "merge-conflicts",
+      prMergeability: signal === "merge-conflicts" ? "dirty" : "clean",
+    };
+    usePrMonitorStore.setState({
+      syncStatus: "current",
+      states: new Map([
+        [
+          "environment-1",
+          {
+            environmentId: "environment-1",
+            mode: "normal",
+            checkInProgress: false,
+            consecutiveErrors: 0,
+            lastSuccessfulCheckAt: "2026-10-28T10:00:00Z",
+            lastCheckAt: "2026-10-28T10:00:00Z",
+            prUrl: selectedEnvironmentPr.prUrl as string,
+            prState: "open",
+            hasMergeConflicts: signal === "merge-conflicts",
+            checkSummary: null,
+          },
+        ],
+      ]),
+    });
+    const view = render(<AppShell>Workspace</AppShell>);
+    const title = screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true });
+    expect(title.querySelector(`[data-name-signal="${signal}"]`)).toBeTruthy();
+    expect(document.getElementById(title.getAttribute("aria-describedby")!)?.textContent).toBe(
+      label,
+    );
+    if (signal === "needs-answer") {
+      act(() =>
+        useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["environment-1"]) }),
+      );
+      expect(title.querySelector('[data-name-signal="merge-ready"]')).toBeTruthy();
+      act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set() }));
+      expect(title.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
+    }
+    fireEvent.pointerDown(title, { pointerType: "touch" });
+    fireEvent.click(title);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(label);
+    selectedEnvironmentPr = { ...selectedEnvironmentPr, lifecycleOperation: "deleting" };
+    view.rerender(<AppShell>Workspace</AppShell>);
+    expect(title.querySelector(".text-shimmer")).toBeNull();
+    const describedText = (title.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(describedText).not.toContain(label);
+    expect(screen.queryByRole("tooltip")?.textContent ?? "").not.toContain(label);
   });
 
   test("remote mobile titles stay plain for current clean summaries without monitor health", async () => {

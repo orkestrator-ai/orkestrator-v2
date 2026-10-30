@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
-import { GitMerge, Globe, House, Laptop, Network, Shield } from "lucide-react";
-import { PR_READY_TO_MERGE_LABEL } from "@orkestrator/protocol/pr-merge-readiness";
+import { Globe, House, Laptop, Network, Shield } from "lucide-react";
+import type { EnvironmentNameSignal } from "@/lib/environment-name-signal";
 import { machineDotClass } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
+import { EnvironmentNameSignalLine } from "./EnvironmentNameShimmer";
 
 /** What an environment's hover card can show; another machine's may be partial until read. */
 export interface EnvironmentTooltipDetails {
@@ -35,7 +36,7 @@ export function EnvironmentTooltipBody({
   agentSummary,
   changes,
   onCopyAddress,
-  readyToMerge = false,
+  nameSignal = null,
 }: {
   name: string;
   machine: EnvironmentTooltipMachine | null;
@@ -43,8 +44,8 @@ export function EnvironmentTooltipBody({
   agentSummary?: ReactNode;
   changes?: ReactNode;
   onCopyAddress?: () => void;
-  /** Its pull request waits only for the user to merge it. */
-  readyToMerge?: boolean;
+  /** What its name shimmers for: an agent's question, or its pull request's state. */
+  nameSignal?: EnvironmentNameSignal | null;
 }) {
   const isLocal = details.environmentType === "local";
   return (
@@ -125,15 +126,7 @@ export function EnvironmentTooltipBody({
         </p>
       )}
       {changes}
-      {readyToMerge && (
-        <p
-          className="text-xs text-success flex items-center gap-1"
-          data-testid="environment-tooltip-ready-to-merge"
-        >
-          <GitMerge className="h-3 w-3" aria-hidden="true" />
-          {PR_READY_TO_MERGE_LABEL}
-        </p>
-      )}
+      <EnvironmentNameSignalLine signal={nameSignal} />
       {details.prUrl && <p className="text-xs text-blue-400">PR: {details.prUrl}</p>}
     </div>
   );

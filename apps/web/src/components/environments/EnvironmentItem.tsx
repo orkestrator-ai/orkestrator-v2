@@ -6,7 +6,7 @@ import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tool
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "./EnvironmentTooltipBody";
-import { MergeReadyMarker, MergeReadyName } from "./MergeReadyName";
+import { EnvironmentNameShimmer, EnvironmentNameSignalMarker } from "./EnvironmentNameShimmer";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
@@ -45,19 +45,21 @@ import {
   MoreVertical,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
+import type { Environment, EnvironmentType } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
-import { parseUsableAgentActivityTime, useAgentActivityStore } from "@/stores/agentActivityStore";
+import { useEnvironmentDisplayActivity } from "@/hooks/useEnvironmentDisplayActivity";
+import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { cn } from "@/lib/utils";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
-import { useEnvironmentReadyToMerge } from "@/hooks/useEnvironmentReadyToMerge";
+import { useEnvironmentPrMergeState } from "@/hooks/useEnvironmentNameSignal";
+import { environmentNameSignal } from "@/lib/environment-name-signal";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
@@ -72,52 +74,11 @@ import {
 } from "@/lib/changes/labels";
 import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
 
+export { resolveEnvironmentAgentActivity };
+
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
-
-function activityTime(value: string | undefined): number {
-  return parseUsableAgentActivityTime(value);
-}
-
-/**
- * Selects the freshest activity observation. Runtime events keep the current
- * frontend responsive, while the persisted environment snapshot hydrates a
- * frontend that never saw those events (or was suspended while they fired).
- */
-export function resolveEnvironmentAgentActivity(
-  environment: Environment,
-  runtimeStates: Record<string, AgentActivityState>,
-  runtimeUpdatedAt: Record<string, string>,
-): AgentActivityState {
-  const runtimeKeys = [
-    environment.id,
-    ...(environment.containerId ? [environment.containerId] : []),
-  ];
-  let runtimeState: AgentActivityState | undefined;
-  let runtimeTime = Number.NEGATIVE_INFINITY;
-  for (const key of runtimeKeys) {
-    const candidate = runtimeStates[key];
-    if (!candidate) continue;
-    const candidateTime = activityTime(runtimeUpdatedAt[key]);
-    if (!Number.isFinite(candidateTime)) continue;
-    if (!runtimeState || candidateTime > runtimeTime) {
-      runtimeState = candidate;
-      runtimeTime = candidateTime;
-    }
-  }
-
-  const persistedState = environment.agentActivityState;
-  const persistedTime = activityTime(environment.agentActivityUpdatedAt);
-  if (
-    persistedState &&
-    Number.isFinite(persistedTime) &&
-    (!runtimeState || persistedTime >= runtimeTime)
-  ) {
-    return persistedState;
-  }
-  return runtimeState ?? "idle";
-}
 
 /**
  * One entry in the environment action list. The same list drives both the
@@ -279,20 +240,12 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  // Get Claude activity state for this environment
-  // For terminal-based Claude, state is keyed by containerId
-  // For native Claude mode, state is keyed by environmentId.
-  // Resolved inside the selector so this row only rerenders when ITS resolved
-  // state changes, not whenever any environment's activity record is touched.
-  const agentActivityState = useAgentActivityStore((s) =>
-    resolveEnvironmentAgentActivity(environment, s.containerStates, s.containerStateUpdatedAt),
-  );
+  const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
 
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
-  // Its pull request waits only for the user to merge it (pr-merge-readiness).
-  const readyToMerge =
-    useEnvironmentReadyToMerge(environment.id, environment) && !isEnvironmentDeleting;
+  // Its pull request is ready to merge or blocked by conflicts (pr-merge-readiness).
+  const prMergeState = useEnvironmentPrMergeState(environment.id, environment);
 
   // The badge is the backend's `environment-net` projection — the same
   // measurement the Files → Changes rows page through. Visibility, counts and
@@ -312,14 +265,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isBuildEnvironment = useBuildPipelineStore((s) =>
     s.buildEnvironmentIds.has(environment.id),
   );
-  const hasWorkingBuildPipeline = useBuildPipelineStore((s) =>
-    s.activeBuildEnvironmentIds.has(environment.id),
-  );
-  // Pipeline steps can run in sessions that do not project their activity onto
-  // the environment. The pipeline snapshot is authoritative for in-flight agent
-  // work, so it must keep the environment icon working between agent events.
-  // Setup phases and stallWarning fall back to the real agentActivityState.
-  const displayedActivityState = hasWorkingBuildPipeline ? "working" : agentActivityState;
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
   const messagingEnabled = useConfigStore(
@@ -347,13 +292,18 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isProjectHome = environment.projectHome === true;
   const displayName =
     isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
-  // Local environments are always considered "running" - they exist or they don't
-  const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
   const isStopping = environment.status === "stopping";
   // Not applicable to local environments. A settings change that starts a
   // transition reaches this row through the environment store, synchronously.
   const isTransitioning = !isLocalEnvironment && (isCreating || isStopping);
+  // Yellow while the agent waits for an answer, else red or green for the PR.
+  const nameSignal = isEnvironmentDeleting
+    ? null
+    : environmentNameSignal({
+        waitingOnUser: isRunning && displayedActivityState === "waiting",
+        prMergeState,
+      });
 
   const confirmDelete = () => {
     onDelete(environment.id);
@@ -426,7 +376,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // the trigger out of the accessibility tree and the DOM on desktop.
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const environmentNameId = useId();
-  const mergeReadyDescriptionId = useId();
+  const nameSignalDescriptionId = useId();
   const menuItems: EnvironmentMenuItem[] = [
     {
       key: "settings",
@@ -545,7 +495,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               onMouseLeave={tooltip.hide}
               onFocus={tooltip.show}
               onBlur={tooltip.hide}
-              aria-describedby={readyToMerge ? mergeReadyDescriptionId : undefined}
+              aria-describedby={nameSignal ? nameSignalDescriptionId : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
                 isSelected && !isMultiSelectMode
@@ -576,17 +526,20 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <MergeReadyName
-                    ready={readyToMerge}
+                  <EnvironmentNameShimmer
+                    signal={nameSignal}
                     id={environmentNameId}
                     className="truncate font-medium leading-4"
                   >
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
-                  </MergeReadyName>
+                  </EnvironmentNameShimmer>
                   {isBuildEnvironment && (
                     <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
                   )}
-                  <MergeReadyMarker ready={readyToMerge} descriptionId={mergeReadyDescriptionId} />
+                  <EnvironmentNameSignalMarker
+                    signal={nameSignal}
+                    descriptionId={nameSignalDescriptionId}
+                  />
                   {boundMachine &&
                     (isEnvironmentDeleting || isMultiSelectMode || isTransitioning) && (
                       <MachineDot
@@ -705,7 +658,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 : null
             }
             details={environment}
-            readyToMerge={readyToMerge}
+            nameSignal={nameSignal}
             agentSummary={
               <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
             }

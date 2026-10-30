@@ -385,7 +385,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test.each(["metaKey", "ctrlKey"])(
-    "yields %s+Shift+K to the dialog without bridge input",
+    "yields %s+Shift+/ to the dialog without bridge input",
     async (modifier) => {
       render(
         <>
@@ -396,14 +396,15 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
       const terminal = terminalInstances[0]!;
       const event = new KeyboardEvent("keydown", {
-        key: "K",
+        key: modifier === "ctrlKey" ? "?" : "/",
+        code: "Slash",
         shiftKey: true,
         [modifier]: true,
         bubbles: true,
         cancelable: true,
       });
       const handled = terminal.emitKey(event);
-      if (handled) terminal.emitData("\x0b");
+      if (handled) terminal.emitData("\x1f");
       expect(handled).toBe(false);
       expect(event.defaultPrevented).toBe(false);
       fireEvent(window, event);

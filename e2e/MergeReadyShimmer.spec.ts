@@ -14,49 +14,55 @@ function paint(name: Locator) {
   });
 }
 
-test("a ready-to-merge environment name sweeps; reduced motion holds a static highlight", async ({
-  page,
-}, testInfo) => {
-  await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "none" });
-  await page.goto("/sidebar-drag?merge-ready=1");
+for (const [signal, label] of [
+  ["merge-ready", "Ready to merge"],
+  ["needs-answer", "Waiting for your answer"],
+  ["merge-conflicts", "Merge conflicts to resolve"],
+] as const) {
+  test(`${signal} sweeps; reduced motion and forced colors retain a readable signal`, async ({
+    page,
+  }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "none" });
+    await page.goto(`/sidebar-drag?signal=${signal}`);
 
-  const ready = page.getByText("p-env-1", { exact: true });
-  const blocked = page.getByText("p-env-2", { exact: true });
-  await expect(ready).toBeVisible();
-  await expect(ready).toHaveAttribute("data-merge-ready", "true");
-  await expect(blocked).not.toHaveAttribute("data-merge-ready", "true");
+    const ready = page.getByText("p-env-1", { exact: true });
+    const blocked = page.getByText("p-env-2", { exact: true });
+    await expect(ready).toBeVisible();
+    await expect(ready).toHaveAttribute("data-name-signal", signal);
+    await expect(blocked).not.toHaveAttribute("data-merge-ready", "true");
 
-  const moving = await paint(ready);
-  expect(moving.animationName).toBe("text-shimmer");
-  expect(moving.backgroundImage).toContain("linear-gradient");
-  expect(moving.textFill).toBe("rgba(0, 0, 0, 0)");
-  // The name keeps its own colour (the row's muted text) and its truncation.
-  const resting = await paint(blocked);
-  expect(moving.color).toBe(resting.color);
-  expect(moving.textOverflow).toBe("ellipsis");
-  // The reduced-motion indicator stays out of the way while the sweep runs.
-  const row = page.getByRole("button", { name: "p-env-1", exact: true });
-  await expect(row.getByTestId("merge-ready-indicator")).toBeHidden();
-  await expect(row).toHaveAccessibleDescription("Ready to merge");
-  await page.screenshot({ path: testInfo.outputPath("merge-ready-moving.png") });
+    const moving = await paint(ready);
+    expect(moving.animationName).toBe("text-shimmer");
+    expect(moving.backgroundImage).toContain("linear-gradient");
+    expect(moving.textFill).toBe("rgba(0, 0, 0, 0)");
+    // The name keeps its own colour (the row's muted text) and its truncation.
+    const resting = await paint(blocked);
+    expect(moving.color).toBe(resting.color);
+    expect(moving.textOverflow).toBe("ellipsis");
+    // The reduced-motion indicator stays out of the way while the sweep runs.
+    const row = page.getByRole("button", { name: "p-env-1", exact: true });
+    await expect(row.getByTestId(`${signal}-indicator`)).toBeHidden();
+    await expect(row).toHaveAccessibleDescription(label);
+    await page.screenshot({ path: testInfo.outputPath(`${signal}-moving.png`) });
 
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const still = await paint(ready);
-  expect(still.animationName).toBe("none");
-  expect(still.backgroundImage).toBe("none");
-  expect(still.textFill).not.toBe("rgba(0, 0, 0, 0)");
-  // The static highlight is the band's colour, not the resting text colour.
-  expect(still.color).not.toBe(resting.color);
-  await expect(row.getByTestId("merge-ready-indicator")).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("merge-ready-reduced-motion.png") });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const still = await paint(ready);
+    expect(still.animationName).toBe("none");
+    expect(still.backgroundImage).toBe("none");
+    expect(still.textFill).not.toBe("rgba(0, 0, 0, 0)");
+    // The static highlight is the band's colour, not the resting text colour.
+    expect(still.color).not.toBe(resting.color);
+    await expect(row.getByTestId(`${signal}-indicator`)).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`${signal}-reduced-motion.png`) });
 
-  await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "active" });
-  const forced = await paint(ready);
-  expect(forced.animationName).toBe("none");
-  expect(forced.backgroundImage).toBe("none");
-  expect(forced.textFill).not.toBe("rgba(0, 0, 0, 0)");
-  await expect(row.getByTestId("merge-ready-indicator")).toBeVisible();
-});
+    await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "active" });
+    const forced = await paint(ready);
+    expect(forced.animationName).toBe("none");
+    expect(forced.backgroundImage).toBe("none");
+    expect(forced.textFill).not.toBe("rgba(0, 0, 0, 0)");
+    await expect(row.getByTestId(`${signal}-indicator`)).toBeVisible();
+  });
+}
 
 test("another machine's clean PR stays plain without leaf monitor health", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -79,4 +85,48 @@ test("another machine's clean PR stays plain without leaf monitor health", async
     "data-merge-ready",
     "true",
   );
+});
+
+test("remote waiting follows live activity, transport, container and deletion changes", async ({
+  page,
+}) => {
+  await page.goto("/remote-machine-tree");
+  const row = page.getByRole("button", { name: /^b, on Remote/ });
+  const name = row.locator("span.truncate").first();
+  const change = async (state: string) =>
+    page.getByRole("button", { name: `Signal ${state}`, exact: true }).click();
+  const waiting = async () => {
+    await expect(name).toHaveAttribute("data-name-signal", "needs-answer");
+    await expect(row).toHaveAccessibleDescription("Waiting for your answer");
+  };
+  const plain = async () => {
+    await expect(name).not.toHaveAttribute("data-name-signal");
+    await expect(name).not.toHaveClass(/text-shimmer/);
+    await expect(row).not.toHaveAttribute("aria-describedby");
+    await expect(row.getByTestId("needs-answer-indicator")).toHaveCount(0);
+  };
+  await plain();
+  await change("waiting");
+  await waiting();
+  await row.focus();
+  await expect(page.getByTestId("environment-tooltip-needs-answer")).toBeVisible();
+  await row.blur();
+  await change("working");
+  await plain();
+  await change("waiting");
+  await waiting();
+  await change("disconnect");
+  await plain();
+  await change("connect");
+  await waiting();
+  await change("stopped");
+  await plain();
+  await change("running");
+  await waiting();
+  await change("deleting");
+  await plain();
+  await row.focus();
+  await expect(page.getByTestId("environment-tooltip-needs-answer")).toHaveCount(0);
+  await change("restore");
+  await waiting();
 });

@@ -7,6 +7,10 @@ forwarding ([architecture](../../architecture/keyboard-shortcuts.md)).
 
 Analysed 2026-10-28 against `main` at `79f3bc97`.
 
+Updated 2026-10-30 for the chord change in `19e8b4ce2`: the current shortcut
+is ⌘⇧/ / Ctrl+Shift+/. Dated evidence below records the chord tested at the
+time; it does not qualify the replacement chord.
+
 The Windows/Linux menu work, its decisions and the menu-navigation fix landed
 in `f0a09962` (#1405). They are listed as done. What is left is native
 qualification: the CI workflow added for it has failed on every run, and the
@@ -20,7 +24,7 @@ and with an interactive artifact.
 ### Tasks
 
 1. **Windows/Linux menu layout**: the conventional File, Edit, View, Window and Help layout, no macOS-only roles, no Super accelerators, and Close Tab with no key. Status: done.
-2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+K stays accepted. Status: done (decided).
+2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+/ stays accepted. Status: done (decided).
 3. **Menu keyboard navigation does not toggle**: choosing View › Keyboard Shortcuts… with Enter opens the dialog; only the chord toggles it. Status: done.
 4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: open (fails on both runners today).
 5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: open.
@@ -38,11 +42,11 @@ and with an interactive artifact.
 
 ### 2. Super-key behaviour outside macOS
 
-**Problem.** The ⌘-only renderer handlers and the ⌘⇧K matcher see Super/Windows as `metaKey` outside macOS.
+**Problem.** The ⌘-only renderer handlers and the ⌘⇧/ matcher see Super/Windows as `metaKey` outside macOS.
 
-**Context.** Decided under "Super/Windows-key renderer handlers stay as they are" and "Super+Shift+K stays accepted outside macOS".
+**Context.** Decided under "Super/Windows-key renderer handlers stay as they are" and "Super+Shift+/ stays accepted outside macOS".
 
-**Investigation.** Done. The matcher accepts either modifier (`matchAppShortcut`, `packages/protocol/src/keyboard-shortcuts.ts:133`), and the menu displays `CmdOrCtrl+Shift+K` (`:9`), which reads Ctrl+Shift+K outside macOS. AltGr (Ctrl+Alt) is excluded and covered in `packages/protocol/src/keyboard-shortcuts.test.ts`.
+**Investigation.** Done. The matcher accepts either modifier (`matchAppShortcut`, `packages/protocol/src/keyboard-shortcuts.ts`), and the menu displays `CmdOrCtrl+Shift+/`, which reads Ctrl+Shift+/ outside macOS. AltGr (Ctrl+Alt) is excluded and covered in `packages/protocol/src/keyboard-shortcuts.test.ts`.
 
 **Decisions.** None; done.
 
@@ -115,7 +119,7 @@ and with an interactive artifact.
 
 **Context.** The 2026-10-27 follow-up ran on macOS, but `cua-driver` 0.34.0 had no daemon and the OS did not activate the window, so native-focus assertions were unavailable. This host is Linux. `mise run package:mac` builds and installs an unpacked app (`mise.toml:381-389`).
 
-**Investigation.** Not started. The routing it must confirm is unchanged: main consumes ⌘⇧K in `before-input-event` (`apps/desktop/electron/keyboard-shortcuts-routing.ts:85`), and the menu item keeps `registerAccelerator: false` with the macOS key equivalent as a fallback (`apps/desktop/electron/application-menu.ts:148-166`).
+**Investigation.** Not started. The routing it must confirm now consumes ⌘⇧/ in main's `before-input-event` (`apps/desktop/electron/keyboard-shortcuts-routing.ts`), using the shared matcher's typed `/` or `?` and non-ASCII `Slash`-position fallback, and the menu item keeps `registerAccelerator: false` with the macOS key equivalent as a fallback (`apps/desktop/electron/application-menu.ts:148-166`).
 
 **Decisions.**
 
@@ -277,17 +281,23 @@ Automated Electron checks use Chromium input, which exercises
 `before-input-event` but does not qualify the OS's native key-equivalent pass.
 Record these checks on packaged macOS and Linux builds:
 
-- ⌘⇧K / Ctrl+Shift+K with focus in the sidebar, composer, terminal, Monaco,
+- ⌘⇧/ / Ctrl+Shift+/ with focus in the sidebar, composer, terminal, Monaco,
   browser/service preview, interactive artifact, design frame and workspace
   realm: one press opens, an immediate separate press closes.
 - View › Keyboard Shortcuts… opens the owning realm while its preview has
   focus. Clicking again keeps the dialog and refocuses search.
 - Dismiss a preview-originated dialog with Escape, the chord and an outside
   pointer click; typing resumes in that preview. Hidden or disposed previews never regain focus.
-- With a Cyrillic input source on macOS, ⌘⇧ and the K key open the dialog.
+- With a Cyrillic input source on macOS, ⌘⇧ and the physical `Slash` key
+  open the dialog when it reports a non-ASCII character. On layouts that type
+  ASCII, the typed `/` or `?` wins even on another physical key; a different
+  ASCII character on `Slash` must not open the dialog. Record the input source,
+  physical key and typed character for each case.
+- With Monaco focused, ⌘⇧K on macOS / Ctrl+Shift+K on Linux deletes the
+  current line without opening the shortcuts dialog, and typing stays in the editor.
 - Linux only, in the in-window menu bar: View › Keyboard Shortcuts… shows
-  `Ctrl+Shift+K`. Keyboard navigation (Alt, then View, then the item) opens
-  the dialog. Repeating it keeps the dialog open. One Ctrl+Shift+K press
+  `Ctrl+Shift+/`. Keyboard navigation (Alt, then View, then the item) opens
+  the dialog. Repeating it keeps the dialog open. One Ctrl+Shift+/ press
   toggles exactly once. The bar shows File, Edit, View, Window and Help, with
   no Hide, Hide Others, Show All or Zoom item. File › Close Tab has no key, and
   Super+H does nothing in Orkestrator. File › Quit (Ctrl+Q) quits, and Help ›
@@ -309,6 +319,13 @@ an explicit browser regression test. App-owned design frames relay through a
 source-checked bridge; desktop intercepts all these surfaces in native input.
 
 ## Assumptions and decisions
+
+### Tasks 5–6: qualify the replacement chord
+
+- **Choice.** Update the open matrix and current routing notes to ⌘⇧/ /
+  Ctrl+Shift+/, including typed punctuation and the non-ASCII `Slash` fallback.
+- **Why.** `19e8b4ce2` released Shift+K back to the focused surface. Existing
+  dated runs remain historical evidence; packaged qualification stays open.
 
 ### Windows/Linux menu layout
 
@@ -355,16 +372,16 @@ source-checked bridge; desktop intercepts all these surfaces in native input.
 - **Cons.** The dialog under-reports on Linux desktops that pass Super
   through.
 
-### Super+Shift+K stays accepted outside macOS
+### Super+Shift+/ stays accepted outside macOS
 
-- **Options.** (a) Accept only Ctrl+Shift+K outside macOS. (b) Keep accepting
+- **Options.** (a) Accept only Ctrl+Shift+/ outside macOS. (b) Keep accepting
   either modifier.
 - **Choice: (b).**
 - **Why.** It matches ⌘K / Ctrl+K and the shared, serialisable matcher, and
-  needs no platform input. The documented chord is still Ctrl+Shift+K. AltGr
+  needs no platform input. The documented chord is still Ctrl+Shift+/. AltGr
   (Ctrl+Alt on Windows) stays excluded.
 - **Pros.** One matcher for the renderer, main, previews and design frames.
-- **Cons.** Super+Shift+K is an extra, unlisted way to open the dialog on
+- **Cons.** Super+Shift+/ is an extra, unlisted way to open the dialog on
   Linux.
 
 ### Native qualification stays open

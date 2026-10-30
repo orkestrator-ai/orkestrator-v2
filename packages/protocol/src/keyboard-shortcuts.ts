@@ -1,12 +1,12 @@
 /**
- * The app-level keyboard shortcuts (⌘K search, ⌘⇧K shortcuts dialog, ⌘,
+ * The app-level keyboard shortcuts (⌘K search, ⌘⇧/ shortcuts dialog, ⌘,
  * settings) and the shortcuts dialog's desktop menu event, shared by the renderer (which owns
  * the UI they open), Electron main (which owns the View menu item and the
  * native views that keys can land in instead) and the design frame runtime.
  */
 
 /** The View menu's accelerator label. */
-export const KEYBOARD_SHORTCUTS_ACCELERATOR = "CmdOrCtrl+Shift+K";
+export const KEYBOARD_SHORTCUTS_ACCELERATOR = "CmdOrCtrl+Shift+/";
 
 /**
  * The app menu's Settings… accelerator label. The menu item reaches the
@@ -74,7 +74,7 @@ export type ShortcutFocus = "terminal" | "text" | "page";
  */
 export interface AppShortcut {
   id: AppShortcutId;
-  /** The Latin letter, lower case, or the punctuation (`,`) typed with ⌘ or Ctrl. */
+  /** The Latin letter, lower case, or the punctuation (`,` `/`) typed with ⌘ or Ctrl. */
   key: string;
   shift: boolean;
   /**
@@ -101,8 +101,10 @@ export interface AppShortcut {
 
 export const APP_SHORTCUTS: readonly AppShortcut[] = [
   {
+    // ⌘⇧/ (⌘?), the shortcuts key of many apps. On some Macs ⌘⇧K and
+    // Ctrl+Shift+K never reached any app.
     id: "show-shortcuts",
-    key: "k",
+    key: "/",
     shift: true,
     owner: "document",
     fromPreviews: true,
@@ -144,9 +146,13 @@ export function appShortcut(id: AppShortcutId): AppShortcut {
  * `key` wins when it is a Latin letter, so Dvorak and other remapped Latin
  * layouts use the letter they type. A layout that types no Latin letter
  * there (Cyrillic, Greek, Hebrew…) reports its own character, so the
- * physical key position (`code`) decides instead. Punctuation (`,`) follows
- * the same rule: an ASCII character typed wins (AZERTY's `,` sits on the M
- * key), and the `Comma` key position stands in for a layout that types none.
+ * physical key position (`code`) decides instead. Punctuation (`,` `/`)
+ * follows the same rule: an ASCII character typed wins (AZERTY's `,` sits on
+ * the M key), and the `Comma` and `Slash` key positions stand in for a layout
+ * that types none. `?` counts as `/`: it is the shifted `/` wherever the
+ * two share a key (US, UK and most Latin layouts), and a shifted chord may
+ * report either (macOS reports `/` for ⌘⇧/; browsers report `?` for
+ * Ctrl+Shift+/).
  */
 export function matchAppShortcut(
   chord: ShortcutChord,
@@ -164,10 +170,13 @@ export function matchAppShortcut(
         ? code.slice(3).toLowerCase()
         : code === "Comma"
           ? ","
-          : null;
+          : code === "Slash"
+            ? "/"
+            : null;
   if (!pressed) return null;
+  const typed = pressed === "?" ? "/" : pressed;
   for (const shortcut of shortcuts) {
-    if (shortcut.key === pressed && shortcut.shift === chord.shiftKey) return shortcut.id;
+    if (shortcut.key === typed && shortcut.shift === chord.shiftKey) return shortcut.id;
   }
   return null;
 }
@@ -187,7 +196,7 @@ export function appClaimsShortcut(
   return !(focus === "text" && platform === "mac");
 }
 
-/** ⌘⇧K / Ctrl+Shift+K; either modifier is accepted, as with ⌘K. */
+/** ⌘⇧/ / Ctrl+Shift+/; either modifier is accepted, as with ⌘K. */
 export function isKeyboardShortcutsChord(chord: ShortcutChord): boolean {
   return matchAppShortcut(chord) === "show-shortcuts";
 }

@@ -80,6 +80,7 @@ export function AgentInfoMcpSection({
   sessionKey,
   servers,
   busyAction,
+  readOnly = false,
   onAction,
 }: {
   environmentId: string;
@@ -88,6 +89,8 @@ export function AgentInfoMcpSection({
   /** Undefined when the session does not report its MCP inventory. */
   servers: NativeAgentMcpServer[] | undefined;
   busyAction: string | null;
+  /** Workflow inspections have no native session mapping for runtime mutations. */
+  readOnly?: boolean;
   onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
 }) {
   useMcpRuntimeRefresh(environmentId, provider, sessionKey);
@@ -118,7 +121,7 @@ export function AgentInfoMcpSection({
     <div className="space-y-1.5">
       {servers && servers.length > 0 ? (
         <McpServersPanel
-          servers={servers}
+          servers={readOnly ? servers.map((server) => ({ ...server, actions: [] })) : servers}
           busyAction={busyAction}
           onAction={onAction}
           onManageServer={(server) => manage(server)}

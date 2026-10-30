@@ -196,8 +196,8 @@ describe("browser preview startup wiring", () => {
       { preventDefault: () => undefined },
       {
         type: "keyDown",
-        key: "K",
-        code: "KeyK",
+        key: "/",
+        code: "Slash",
         meta: true,
         control: false,
         shift: true,

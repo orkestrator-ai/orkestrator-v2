@@ -3,8 +3,10 @@ import {
   readReviewValidationOutput,
 } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
   isMultiReviewReviewerHistoryPageRequest,
+  isMultiReviewWorkflow,
   isMultiReviewStepControlInput,
   isMultiReviewReviewerTranscriptRequest,
   isMultiReviewStepTranscriptRequest,
@@ -16,6 +18,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import {
   asNonBlankString,
+  asRequiredBoolean,
   stripWorkflowRendererSecrets,
   stripWorkflowSnapshotSecrets,
 } from "./commands-helpers.js";
@@ -85,6 +88,40 @@ export function registerReviewWorkflowCommands(
         request.reviewerId,
         request.knownSourceToken,
       );
+    },
+  );
+  /*
+   * The agent-information panel for a reviewer tab. Like a build stage, the
+   * workflow owns the session's identity and lifecycle, so it is inspected
+   * transiently rather than adopted as a native-agent session.
+   */
+  register(
+    "get_multi_review_reviewer_projection",
+    async ({ workflowId, reviewerId, refreshUsage }, context) => {
+      if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+      const id = asNonBlankString(workflowId, "workflowId");
+      const reviewerKey = asNonBlankString(reviewerId, "reviewerId");
+      const shouldRefreshUsage =
+        refreshUsage === undefined ? undefined : asRequiredBoolean(refreshUsage, "refreshUsage");
+      const record = await context.storage.getMultiReviewWorkflow(id);
+      if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+        throw new Error("Multi review workflow is unavailable");
+      }
+      const workflow = record.snapshot;
+      const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerKey);
+      if (!reviewer?.providerSessionId) throw new Error("Multi review reviewer is unavailable");
+      return context.nativeAgents.inspectSession({
+        environmentId: workflow.environmentId,
+        agent: reviewer.agent,
+        // The key the supervisor dispatches a reviewer under when it has not rotated one.
+        logicalSessionKey:
+          reviewer.sessionKey ?? `multi-review:${workflow.id}:reviewer:${reviewer.id}`,
+        providerSessionId: reviewer.providerSessionId,
+        origin: "automated-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: "review",
+        refreshUsage: shouldRefreshUsage,
+      });
     },
   );
   register(

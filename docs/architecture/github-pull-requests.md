@@ -129,8 +129,25 @@ Known gaps:
 - A leaf's own monitor health is not relayed. Remote sidebar, search and title
   readiness stays off, including for a connected leaf with current summaries.
 
-The effect is the shared `.text-shimmer` utility (`apps/web/src/index.css`) with
-the `.merge-ready-name` colours. The name keeps its own colour and the band
-passes over it. Under `prefers-reduced-motion` the name holds the band's colour
-still and a small merge icon appears. Under forced colours the sweep is removed.
-The row's `aria-describedby` reads "Ready to merge", and so does its hover card.
+### Name shimmer colours
+
+The same names shimmer in one of three colours, chosen by
+`environmentNameSignal` (`apps/web/src/lib/environment-name-signal.ts`):
+
+- **Yellow** (`.needs-answer-name`): the agent is `waiting` on the user, the
+  state that also pulses the row's status marker yellow. It outranks both pull
+  request colours, because the agent stays blocked until answered. Remote
+  sidebar rows show it from the leaf's live relayed activity.
+- **Red** (`.merge-conflicts-name`): `evaluatePrMergeReadiness` reports
+  `conflicts`. Freshness is the same as for ready, except that monitor and
+  environment must both report conflicts, so a stale reading shows no red.
+  Like ready, it is off for another machine's rows.
+- **Green** (`.merge-ready-name`): ready to merge, as above.
+
+The effect is the shared `.text-shimmer` utility (`apps/web/src/index.css`)
+with each signal's colours (`EnvironmentNameShimmer`). The name keeps its own
+colour and the band passes over it. Under `prefers-reduced-motion` the name
+holds the band's colour still and a small icon appears (merge, merge conflict,
+or question). Under forced colours the sweep is removed. The row's
+`aria-describedby` reads "Ready to merge", "Merge conflicts to resolve" or
+"Waiting for your answer", and so does its hover card.

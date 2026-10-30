@@ -9,6 +9,7 @@ import {
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
+import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 import { launchWorkerPr } from "./coordinator-pr.js";
 import {
   coordinatorNodeTarget,
@@ -114,7 +115,12 @@ export function registerCoordinatorSurfaceActions(
             ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
               remote.call<JsonRecord>(
                 "launch_controller_terminal",
-                { projectId: remote.projectId, environmentId, input: launch, key },
+                {
+                  projectId: remote.projectId,
+                  environmentId,
+                  input: { ...launch, tabType: launch.type },
+                  key,
+                },
                 `terminal:${caller.coordinatorId}:${requestId}`,
               ),
             )),
@@ -180,30 +186,38 @@ export function registerCoordinatorSurfaceActions(
     const edit = parseTabEdit(input);
     if (!remote) return editWorkerTabWithTeardown(context, run, environmentId, edit);
     await remote.environment(environmentId);
-    // Delegations to that node's workers are kept here, not on the node.
-    if (
-      edit.operation === "close" &&
-      (await context.storage.coordinators.listOpenCoordinatorDelegations()).some(
-        (association) =>
-          association.kind === "environment" &&
-          association.nodeId === remote.nodeId &&
-          association.resourceId === environmentId &&
-          association.delegation?.workerTabId === edit.tabId,
+    const release =
+      edit.operation === "close"
+        ? beginWorkerTabClose(environmentId, edit.tabId, remote.nodeId)
+        : () => {};
+    try {
+      // Delegations to that node's workers are kept here, not on the node.
+      if (
+        edit.operation === "close" &&
+        (await context.storage.coordinators.listOpenCoordinatorDelegations()).some(
+          (association) =>
+            association.kind === "environment" &&
+            association.nodeId === remote.nodeId &&
+            association.resourceId === environmentId &&
+            association.delegation?.workerTabId === edit.tabId,
+        )
       )
-    )
-      throw new Error("A coordinator is waiting on this tab's report; it cannot be closed now");
-    return {
-      ...(await withRetryAdvice(
-        "Retry the same edit: it states an end state, so repeating it is harmless.",
-        () =>
-          remote.call<JsonRecord>("edit_controller_worker_tab", {
-            projectId: remote.projectId,
-            environmentId,
-            ...edit,
-          }),
-      )),
-      nodeId: remote.nodeId,
-    };
+        throw new Error("A coordinator is waiting on this tab's report; it cannot be closed now");
+      return {
+        ...(await withRetryAdvice(
+          "Retry the same edit: it states an end state, so repeating it is harmless.",
+          () =>
+            remote.call<JsonRecord>("edit_controller_worker_tab", {
+              projectId: remote.projectId,
+              environmentId,
+              ...edit,
+            }),
+        )),
+        nodeId: remote.nodeId,
+      };
+    } finally {
+      release();
+    }
   });
 
   /**

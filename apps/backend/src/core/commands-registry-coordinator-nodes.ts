@@ -20,6 +20,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
+import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -449,18 +450,24 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         asNonBlankString(nodeId, "nodeId"),
       );
       const worker = asNonBlankString(environmentId, "environmentId");
-      await target.environment(worker);
-      await recordOrigin(context, caller, target, worker);
-      return {
-        opened: await openNodeDelegation(
-          context,
-          caller,
-          target.nodeId,
-          worker,
-          asNonBlankString(tabId, "tabId"),
-          asNonBlankString(requestId, "requestId"),
-        ),
-      };
+      const workerTab = asNonBlankString(tabId, "tabId");
+      const release = beginWorkerTabDelegation(worker, workerTab, target.nodeId);
+      try {
+        await target.environment(worker);
+        await recordOrigin(context, caller, target, worker);
+        return {
+          opened: await openNodeDelegation(
+            context,
+            caller,
+            target.nodeId,
+            worker,
+            workerTab,
+            asNonBlankString(requestId, "requestId"),
+          ),
+        };
+      } finally {
+        release();
+      }
     },
   );
 
@@ -491,80 +498,91 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         const requestId = asNonBlankString(args.requestId, "requestId");
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-        const joining = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
-          (association) =>
-            association.coordinatorId === caller.coordinatorId &&
-            association.kind === "environment" &&
-            association.nodeId === target.nodeId &&
-            association.resourceId === toEnvironmentId &&
-            (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
-            association.requestId !== `delegation:${requestId}`,
-        );
-        if (joining) context.coordinators?.noteRemoteRequest(joining.id);
-        const delivered = await target.call<{
-          messageId?: string;
-          toTabId?: string;
-          toEnvironmentName?: string;
-          toTabName?: string;
-          placement?: string;
-          placementReason?: string;
-        }>(
-          "deliver_node_mail",
-          {
-            controllerId: target.selfId,
-            ...(await mailbox(context, caller)),
-            requestId,
-            toEnvironmentId,
-            ...(requestedTab ? { toTabId: requestedTab } : {}),
-            ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
-            body: asNonBlankString(args.body, "body"),
-          },
-          `mail:${caller.coordinatorId}:${requestId}`,
-        );
-        const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
-        const toEnvironmentName =
-          delivered?.toEnvironmentName ??
-          (typeof recipient.name === "string" ? recipient.name : undefined);
-        // As here, only mail scheduled to reach the worker asks it anything: a
-        // message the node stored or bounced opens no delegation. (Older nodes do
-        // not report the placement.)
-        const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
-        let coordinatorDelegationOpened = false;
-        if (joining && scheduled) {
-          context.coordinators?.noteRemoteRequest(joining.id);
-          coordinatorDelegationOpened = true;
-        } else if (workerTab && scheduled) {
-          coordinatorDelegationOpened = await openNodeDelegation(
-            context,
-            caller,
-            target.nodeId,
-            toEnvironmentId,
-            workerTab,
-            requestId,
-          );
-        }
-        return {
-          nodeId: target.nodeId,
-          node: target.nodeName,
-          ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
+        const release = beginWorkerTabDelegation(
           toEnvironmentId,
-          ...(workerTab ? { toTabId: workerTab } : {}),
-          // Names the recipient in the coordinator's transcript; older nodes
-          // report no tab name.
-          ...(toEnvironmentName ? { toEnvironmentName } : {}),
-          ...(delivered?.toTabName && delivered.toTabId === workerTab
-            ? { toTabName: delivered.toTabName }
-            : {}),
-          ...(delivered?.placement ? { placement: delivered.placement } : {}),
-          ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
-          coordinatorDelegationOpened,
-          // Said plainly, as for a worker here: "pending" alone reads as delivered.
-          ...(recipient.status === "stopped"
-            ? {
-                deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
-              }
-            : {}),
-        };
+          requestedTab || undefined,
+          target.nodeId,
+        );
+        try {
+          const joining = (
+            await context.storage.coordinators.listOpenCoordinatorDelegations()
+          ).find(
+            (association) =>
+              association.coordinatorId === caller.coordinatorId &&
+              association.kind === "environment" &&
+              association.nodeId === target.nodeId &&
+              association.resourceId === toEnvironmentId &&
+              (!requestedTab || association.delegation?.workerTabId === requestedTab) &&
+              association.requestId !== `delegation:${requestId}`,
+          );
+          if (joining) context.coordinators?.noteRemoteRequest(joining.id);
+          const delivered = await target.call<{
+            messageId?: string;
+            toTabId?: string;
+            toEnvironmentName?: string;
+            toTabName?: string;
+            placement?: string;
+            placementReason?: string;
+          }>(
+            "deliver_node_mail",
+            {
+              controllerId: target.selfId,
+              ...(await mailbox(context, caller)),
+              requestId,
+              toEnvironmentId,
+              ...(requestedTab ? { toTabId: requestedTab } : {}),
+              ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
+              body: asNonBlankString(args.body, "body"),
+            },
+            `mail:${caller.coordinatorId}:${requestId}`,
+          );
+          const workerTab = requestedTab || delivered?.toTabId || joining?.delegation?.workerTabId;
+          const toEnvironmentName =
+            delivered?.toEnvironmentName ??
+            (typeof recipient.name === "string" ? recipient.name : undefined);
+          // As here, only mail scheduled to reach the worker asks it anything: a
+          // message the node stored or bounced opens no delegation. (Older nodes do
+          // not report the placement.)
+          const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
+          let coordinatorDelegationOpened = false;
+          if (joining && scheduled) {
+            context.coordinators?.noteRemoteRequest(joining.id);
+            coordinatorDelegationOpened = true;
+          } else if (workerTab && scheduled) {
+            coordinatorDelegationOpened = await openNodeDelegation(
+              context,
+              caller,
+              target.nodeId,
+              toEnvironmentId,
+              workerTab,
+              requestId,
+            );
+          }
+          return {
+            nodeId: target.nodeId,
+            node: target.nodeName,
+            ...(delivered?.messageId ? { messageId: delivered.messageId } : {}),
+            toEnvironmentId,
+            ...(workerTab ? { toTabId: workerTab } : {}),
+            // Names the recipient in the coordinator's transcript; older nodes
+            // report no tab name.
+            ...(toEnvironmentName ? { toEnvironmentName } : {}),
+            ...(delivered?.toTabName && delivered.toTabId === workerTab
+              ? { toTabName: delivered.toTabName }
+              : {}),
+            ...(delivered?.placement ? { placement: delivered.placement } : {}),
+            ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
+            coordinatorDelegationOpened,
+            // Said plainly, as for a worker here: "pending" alone reads as delivered.
+            ...(recipient.status === "stopped"
+              ? {
+                  deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
+                }
+              : {}),
+          };
+        } finally {
+          release();
+        }
       },
     );
   });

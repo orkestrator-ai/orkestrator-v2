@@ -356,7 +356,9 @@ export function registerControllerWorkflowCommands(
         launch?.kind === "custom" &&
         launch.instruction === instruction &&
         (fixModel === undefined ||
-          (launch.model.agent === fixModel.agent && launch.model.model === fixModel.model))
+          (launch.model.agent === fixModel.agent &&
+            launch.model.model === fixModel.model &&
+            launch.model.reasoningEffort === fixModel.reasoningEffort))
       ) {
         return runMultiReviewSurface(context, review, "fix");
       }

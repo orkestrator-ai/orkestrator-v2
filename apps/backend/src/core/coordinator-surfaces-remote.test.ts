@@ -5,6 +5,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
+import { MultiReviewService } from "./multi-review-service.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { cleanReview } from "./build-pipeline-service-test-support.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -19,6 +20,9 @@ let world: MailWorld;
 let mcp: ControlMcpServer;
 let leaf: StorageService;
 let leafContext: CommandContext;
+let rootContext: CommandContext;
+let beforeLeafCommand: ((command: string) => Promise<void>) | undefined;
+let reviewService: MultiReviewService | undefined;
 let commands: Map<string, CommandHandler>;
 let scope: CoordinatorControlScope;
 let leafProjectId: string;
@@ -61,7 +65,9 @@ beforeEach(async () => {
   commands = createCommandRegistry();
   routed = [];
   loseAnswer.clear();
-  const rootContext = {
+  beforeLeafCommand = undefined;
+  reviewService = undefined;
+  rootContext = {
     storage: world.storage,
     coordinators: world.coordinator,
     nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
@@ -85,6 +91,7 @@ beforeEach(async () => {
         args: Record<string, unknown>;
       }) => {
         routed.push(command);
+        await beforeLeafCommand?.(command);
         const result = await commands.get(command)!(args, leafContext);
         if (loseAnswer.delete(command)) return { outcome: "unknown" };
         return { outcome: "ok", result };
@@ -108,6 +115,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await reviewService?.shutdown();
   await mcp.stop();
   await world.close();
 });
@@ -147,6 +155,75 @@ test("a terminal on another node runs once, across a lost answer and a replay", 
   );
   expect(routed.filter((command) => command === "launch_controller_terminal")).toHaveLength(2);
 });
+
+for (const [tabType, options, expected] of [
+  [
+    "claude",
+    { prompt: "Inspect tests", model: "sonnet", reasoningEffort: "high" },
+    {
+      data: 'claude --dangerously-skip-permissions --model "sonnet" --effort "high" "Inspect tests"\n',
+    },
+  ],
+  [
+    "claude-tmux",
+    { prompt: "Inspect tests", model: "sonnet", reasoningEffort: "high" },
+    { initialPrompt: "Inspect tests", model: "sonnet", reasoningEffort: "high" },
+  ],
+  [
+    "codex",
+    { prompt: "Inspect tests", model: "gpt-5.4", reasoningEffort: "high" },
+    {
+      data: 'codex --model "gpt-5.4" --config "model_reasoning_effort=\\"high\\"" "Inspect tests"\n',
+    },
+  ],
+  ["grok", {}, { data: "grok\n" }],
+  [
+    "opencode",
+    { prompt: "Inspect tests", model: "openai/gpt-5.4" },
+    {
+      data: 'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model "openai/gpt-5.4" --prompt "Inspect tests"\n',
+    },
+  ],
+  [
+    "pi",
+    { prompt: "Inspect tests", model: "openai/gpt-5.4", reasoningEffort: "high" },
+    { data: 'pi --provider "openai" --model "gpt-5.4" --thinking "high" "Inspect tests"\n' },
+  ],
+] as const) {
+  test(`a remote ${tabType} terminal preserves its launch options and retry identity`, async () => {
+    const launch = mock(async (_args: Record<string, unknown>) => ({
+      tabId: "agent-terminal",
+      status: "started",
+    }));
+    commands.set("launch_terminal_job", launch);
+    const input = {
+      requestId: "agent",
+      environmentId: workerId,
+      tabType,
+      title: "Inspection",
+      ...options,
+    };
+    loseAnswer.add("launch_controller_terminal");
+    expect((await tool("launch_terminal", input)).isError).toBe(true);
+    const retried = await tool("launch_terminal", input);
+    expect(retried.isError).toBe(false);
+    expect(retried.structuredContent).toMatchObject({ nodeId: "bk_leaf", tabType });
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect(launch.mock.calls[0]).toEqual(launch.mock.calls[1]);
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      environmentId: workerId,
+      tabType,
+      title: "Inspection",
+      activateTab: true,
+      ...expected,
+    });
+    if (tabType === "claude-tmux") expect(launch.mock.calls[0]![0]).not.toHaveProperty("data");
+    expect((await tool("launch_terminal", input)).structuredContent).toMatchObject({
+      replayed: true,
+    });
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+}
 
 test("a browser preview on another node opens one tab there and none here", async () => {
   const input = { requestId: "preview", environmentId: workerId, url: "http://localhost:3000/" };
@@ -219,6 +296,179 @@ test("tab edits on another node, refused while this node's coordinator waits on 
     changed: false,
   });
   expect((await leafTabs()).map((tab) => tab.id)).toEqual(["agent"]);
+});
+
+function barrier() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+async function idleRemoteTab() {
+  await leaf.savePaneLayout(
+    workerId,
+    {
+      version: PANE_LAYOUT_VERSION,
+      containerId: null,
+      activePaneId: "left",
+      root: { kind: "leaf", id: "left", tabs: [{ id: "idle", type: "file" }], activeTabId: "idle" },
+    },
+    0,
+  );
+  return world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "racing-delegation",
+    projectId: scope.projectId,
+    coordinatorId: scope.coordinatorId,
+    conversationId: scope.conversationId,
+    kind: "environment",
+    resourceId: workerId,
+    nodeId: "bk_leaf",
+    requestId: "delegation:race",
+    createdAt: new Date().toISOString(),
+  });
+}
+
+test("remote close holds delegation admission across its check and leaf RPC", async () => {
+  const association = await idleRemoteTab();
+  const entered = barrier();
+  const resume = barrier();
+  beforeLeafCommand = async (command) => {
+    if (command === "edit_controller_worker_tab") {
+      entered.release();
+      await resume.promise;
+    }
+  };
+  const closing = tool("edit_worker_tab", {
+    environmentId: workerId,
+    tabId: "idle",
+    operation: "close",
+  });
+  try {
+    await entered.promise;
+    await expect(
+      world.storage.coordinators.openCoordinatorDelegation(association.id, "idle"),
+    ).rejects.toThrow("being closed");
+    for (const explicitTab of [true, false]) {
+      await expect(
+        commands.get("send_coordinator_node_mail")!(
+          {
+            scope,
+            nodeId: "bk_leaf",
+            toEnvironmentId: workerId,
+            ...(explicitTab ? { toTabId: "idle" } : {}),
+            requestId: "during-close",
+            body: "Please inspect",
+          },
+          rootContext,
+        ),
+      ).rejects.toThrow("being closed");
+    }
+    expect(routed).not.toContain("deliver_node_mail");
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
+    expect((await leafTabs()).map((tab) => tab.id)).toEqual(["idle"]);
+  } finally {
+    resume.release();
+  }
+  expect((await closing).isError).toBe(false);
+  expect(await leafTabs()).toEqual([]);
+  expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
+});
+
+test("remote delegation reserves admission before asynchronous validation and persistence", async () => {
+  await idleRemoteTab();
+  commands.set("record_node_environment_origin", async () => ({}));
+  const entered = barrier();
+  const resume = barrier();
+  let pauseNextEnvironment = true;
+  beforeLeafCommand = async (command) => {
+    if (command === "get_environment" && pauseNextEnvironment) {
+      pauseNextEnvironment = false;
+      entered.release();
+      await resume.promise;
+    }
+  };
+  const admitting = commands.get("open_coordinator_node_delegation")!(
+    {
+      scope,
+      nodeId: "bk_leaf",
+      environmentId: workerId,
+      tabId: "idle",
+      requestId: "race",
+    },
+    rootContext,
+  );
+  try {
+    await entered.promise;
+    const refused = await tool("edit_worker_tab", {
+      environmentId: workerId,
+      tabId: "idle",
+      operation: "close",
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("work being admitted");
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
+  } finally {
+    resume.release();
+  }
+  expect(await admitting).toMatchObject({ opened: true });
+  expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
+  expect((await leafTabs()).map((tab) => tab.id)).toEqual(["idle"]);
+});
+
+for (const explicitTab of [true, false]) {
+  test(`queued remote mail fences close of an idle tab (${explicitTab ? "explicit" : "leaf-selected"} recipient)`, async () => {
+    await idleRemoteTab();
+    const entered = barrier();
+    const resume = barrier();
+    commands.set("deliver_node_mail", async () => {
+      entered.release();
+      await resume.promise;
+      return { messageId: "queued-mail", toTabId: "idle", placement: "pending-inject" };
+    });
+    const sending = commands.get("send_coordinator_node_mail")!(
+      {
+        scope,
+        nodeId: "bk_leaf",
+        toEnvironmentId: workerId,
+        ...(explicitTab ? { toTabId: "idle" } : {}),
+        requestId: "queued",
+        body: "Please inspect",
+      },
+      rootContext,
+    );
+    try {
+      await entered.promise;
+      const refused = await tool("edit_worker_tab", {
+        environmentId: workerId,
+        tabId: "idle",
+        operation: "close",
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain("work being admitted");
+      expect(routed).not.toContain("edit_controller_worker_tab");
+    } finally {
+      resume.release();
+    }
+    expect(await sending).toMatchObject({ coordinatorDelegationOpened: true });
+    expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
+    expect((await leafTabs()).map((tab) => tab.id)).toEqual(["idle"]);
+  });
+}
+
+test("failed remote close releases admission for a later delegation", async () => {
+  const association = await idleRemoteTab();
+  beforeLeafCommand = async (command) => {
+    if (command === "edit_controller_worker_tab") throw new Error("node unavailable");
+  };
+  expect(
+    (await tool("edit_worker_tab", { environmentId: workerId, tabId: "idle", operation: "close" }))
+      .isError,
+  ).toBe(true);
+  expect(
+    await world.storage.coordinators.openCoordinatorDelegation(association.id, "idle"),
+  ).toMatchObject({ delegation: { state: "running" } });
 });
 
 test("the owning node refuses another project, the checkout and a bad key", async () => {
@@ -382,4 +632,160 @@ test("a custom fix on another node starts once, adopts the review, and survives 
   expect(
     (await tool("custom_fix_multi_review", { ...input, instruction: "Something else" })).text,
   ).toContain("different payload");
+});
+
+function realReviewSupervisor() {
+  reviewService = new MultiReviewService(leaf, async <T>() => ({}) as T, {
+    autoAdvance: false,
+  });
+  leafContext.multiReviews = reviewService;
+  return reviewService;
+}
+
+test("a delivered custom fix replays only the complete explicit model selection", async () => {
+  const workflow = await readyReview();
+  const model = { agent: "codex" as const, model: "default", reasoningEffort: "low" };
+  await leaf.saveMultiReviewWorkflow(workflow.id, workerId, workflow.version, {
+    ...workflow,
+    phase: "interactive",
+    addressPromptPending: false,
+    fixModel: model,
+    fixSession: {
+      ...model,
+      sessionKey: "fix-session",
+      providerSessionId: "fix-provider",
+      requestIds: [],
+      status: "running",
+      startedAt: new Date().toISOString(),
+    },
+    fixTabId: "delivered-fix",
+    fixLaunch: { kind: "custom", instruction: "Only the tests", model },
+  });
+  realReviewSupervisor();
+  const input = {
+    requestId: "identical",
+    workflowId: workflow.id,
+    instruction: "Only the tests",
+    fixModel: model,
+  };
+  expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
+    outcome: "opened",
+    ui: { tabId: "delivered-fix" },
+  });
+  const changed = {
+    ...input,
+    requestId: "changed",
+    fixModel: { ...model, reasoningEffort: "high" },
+  };
+  const refused = await tool("custom_fix_multi_review", changed);
+  expect(refused.isError).toBe(true);
+  expect(refused.text).toContain("not ready for a custom fix");
+  // Failed receipts remain retryable errors, never a completed replay of the old Fix.
+  expect((await tool("custom_fix_multi_review", changed)).isError).toBe(true);
+  expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
+    replayed: true,
+  });
+  expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
+    fixLaunch: { model },
+    fixTabId: "delivered-fix",
+  });
+});
+
+test("a pending remote custom fix retains its handoff through a lost answer and dispatch failure", async () => {
+  const workflow = await readyReview();
+  const entered = barrier();
+  const resume = barrier();
+  const dispatch = mock(async (pending: MultiReviewWorkflow) => {
+    entered.release();
+    await resume.promise;
+    throw new Error(`dispatch unavailable for ${pending.id}`);
+  });
+  reviewService = new MultiReviewService(leaf, async <T>() => ({}) as T, {
+    autoAdvance: false,
+    addressDispatchRetryMs: 60_000,
+    dispatchAddressPrompt: dispatch,
+  });
+  leafContext.multiReviews = reviewService;
+  const input = {
+    requestId: "pending-fix",
+    workflowId: workflow.id,
+    instruction: "Only the tests",
+    fixModel: { agent: "codex", model: "default", reasoningEffort: "low" },
+  };
+  loseAnswer.add("controller_multi_review_surface");
+  const lost = await tool("custom_fix_multi_review", input);
+  expect(lost.isError).toBe(true);
+  await entered.promise;
+  const pending = (await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot as MultiReviewWorkflow;
+  try {
+    expect(pending).toMatchObject({
+      phase: "interactive",
+      addressPromptPending: true,
+      customFixModel: input.fixModel,
+    });
+    // A queued handoff can be read without waiting for its blocked dispatcher.
+    expect(
+      (await tool("get_multi_review", { workflowId: workflow.id })).structuredContent,
+    ).toMatchObject({ workflow: { addressPromptPending: true } });
+  } finally {
+    resume.release();
+  }
+  await reviewService.advanceNow(workflow.id);
+  const failed = (await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot as MultiReviewWorkflow;
+  expect(failed).toMatchObject({
+    addressPromptPending: true,
+    addressPromptAttempts: 1,
+    error: expect.stringContaining("dispatch unavailable"),
+    addressRequestId: pending.addressRequestId,
+    addressSessionKey: pending.addressSessionKey,
+    addressTabId: pending.addressTabId,
+  });
+  const retried = await tool("custom_fix_multi_review", input);
+  expect(retried.isError).toBe(false);
+  expect(retried.structuredContent).toMatchObject({
+    outcome: "pending",
+    workflow: { addressPromptPending: true },
+  });
+  await reviewService.advanceNow(workflow.id);
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  for (const [snapshot] of dispatch.mock.calls) {
+    expect(snapshot).toMatchObject({
+      addressRequestId: pending.addressRequestId,
+      addressSessionKey: pending.addressSessionKey,
+      addressTabId: pending.addressTabId,
+      customFixModel: input.fixModel,
+    });
+  }
+  expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
+    customFixModel: input.fixModel,
+    addressRequestId: pending.addressRequestId,
+  });
+  const changed = await tool("custom_fix_multi_review", {
+    ...input,
+    requestId: "different-pending-effort",
+    fixModel: { ...input.fixModel, reasoningEffort: "high" },
+  });
+  expect(changed.isError).toBe(true);
+  expect(changed.text).toContain("not ready for a custom fix");
+  expect((await leafTabs()).every((tab) => tab.type === "multi-review")).toBe(true);
+});
+
+test("a remote custom fix refused before handoff can retry the same receipt", async () => {
+  const workflow = await readyReview();
+  const service = realReviewSupervisor();
+  const realCustomFix = service.customFix.bind(service);
+  const customFix = mock(realCustomFix);
+  customFix.mockRejectedValueOnce(new Error("dispatch preflight unavailable"));
+  service.customFix = customFix;
+  const input = { requestId: "preflight", workflowId: workflow.id, instruction: "Only the tests" };
+  const refused = await tool("custom_fix_multi_review", input);
+  expect(refused.isError).toBe(true);
+  expect(refused.text).toContain("handoff could not be queued");
+  expect((await leaf.getMultiReviewWorkflow(workflow.id))!.snapshot).toMatchObject({
+    phase: "ready",
+  });
+  const retried = await tool("custom_fix_multi_review", input);
+  expect(retried.isError).toBe(false);
+  expect(retried.structuredContent).toMatchObject({ outcome: "pending" });
+  expect(customFix).toHaveBeenCalledTimes(2);
 });

@@ -857,7 +857,7 @@ describe("KanbanTaskDialog", () => {
       "**Problem:** loops.\n\n## Context\n\nSeen on mobile.\n\n## Acceptance criteria\n\n- Has a test\n- Redirects once",
     );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByLabelText("Ticket text")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Ticket text") === null).toBe(true));
     expect(updateTaskContentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
   });

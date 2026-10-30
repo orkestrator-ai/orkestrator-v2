@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
+import type { CommandContext, CommandHandler } from "../commands-context.js";
+import { registerNodeCommands } from "../commands-registry-nodes.js";
 import { NodeCoordination } from "./node-coordination.js";
 
 /**
@@ -224,6 +226,91 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
         replyToMessageId: delivered.messageId,
       }),
     ).toMatchObject({ controllerId: "bk_cmd" });
+  });
+});
+
+describe("a command node's deliverNow on this leaf", () => {
+  async function leaf(worker: { launched?: boolean; terminal?: boolean } = {}) {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const recipient = await world.addEnvironment("worker", worker);
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+    const commands = new Map<string, CommandHandler>();
+    registerNodeCommands((name, handler) => commands.set(name, handler));
+    const context = {
+      storage: world.storage,
+      nodeCoordination: instance,
+      drainAgentMail: () => world.mail.drainInjects(),
+    } as unknown as CommandContext;
+    let counter = 0;
+    const deliver = (body: string, extra: Record<string, unknown> = {}) =>
+      commands.get("deliver_node_mail")!(
+        {
+          controllerId: "bk_cmd",
+          coordinatorEnvironmentId: "coordinator:c1:conv-1",
+          coordinatorTabId: "coord-tab",
+          requestId: `remote-${(counter += 1)}`,
+          toEnvironmentId: recipient.environmentId,
+          toTabId: recipient.tabId,
+          body,
+          ...extra,
+        },
+        context,
+      ) as Promise<Record<string, unknown>>;
+    return { world, recipient, deliver };
+  }
+
+  test("a busy native worker gets the correction steered into its running turn", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+
+    const result = await deliver("Stop: the requirement changed.", { steer: true });
+
+    expect(result).toMatchObject({
+      placement: "injected",
+      injectedVia: "steer",
+      deliverNow: "steered",
+    });
+    expect(result).not.toHaveProperty("placementReason");
+    expect(world.steered(recipient)).toHaveLength(1);
+    expect(world.steered(recipient)[0]).toContain("Stop: the requirement changed.");
+    expect(world.wakes(recipient)).toBe(0);
+  });
+
+  test("an idle worker gets an ordinary delivery", async () => {
+    const { world, recipient, deliver } = await leaf();
+
+    expect(await deliver("Add the docs too.", { steer: true })).toMatchObject({
+      placement: "injected",
+      deliverNow: "delivered",
+    });
+    expect(world.steered(recipient)).toEqual([]);
+    expect(world.received(recipient)).toHaveLength(1);
+  });
+
+  test("a terminal worker reports unsupported and keeps the mail for turn end", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true, terminal: true });
+
+    expect(await deliver("Also fix the lint.", { steer: true })).toMatchObject({
+      placement: "pending-inject",
+      placementReason: "steer-unsupported",
+      deliverNow: "unsupported, queued",
+    });
+    await world.finishTurn(recipient);
+    expect(world.received(recipient)).toHaveLength(1);
+  });
+
+  test("without steer a busy worker's mail waits for its turn to end, and nothing is settled", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+
+    const result = await deliver("Routine.");
+    expect(result).toMatchObject({ placement: "pending-inject" });
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(world.steered(recipient)).toEqual([]);
+  });
+
+  test("other unknown fields are still refused", async () => {
+    const { deliver } = await leaf();
+    await expect(deliver("hi", { deliverNow: true })).rejects.toThrow("deliverNow");
   });
 });
 

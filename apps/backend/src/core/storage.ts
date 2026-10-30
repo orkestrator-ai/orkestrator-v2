@@ -1624,7 +1624,8 @@ export class StorageService {
        * The coordinator's `deliverNow`: if the message is scheduled for
        * delivery, mark its pending entry `steerRequested`, exactly as Deliver
        * now does, so a recipient mid-turn has it steered into that turn.
-       * Honoured only for a coordinator sender.
+       * Honoured only for a coordinator sender: one on this node, or a
+       * command node's coordinator whose mail its node link delivered.
        */
       steer?: boolean;
     } = {},

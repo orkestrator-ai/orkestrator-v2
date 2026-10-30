@@ -333,7 +333,8 @@ export class AgentMailRepository {
        * The coordinator's `deliverNow`: if the message is scheduled for
        * delivery, mark its pending entry `steerRequested`, exactly as Deliver
        * now does, so a recipient mid-turn has it steered into that turn.
-       * Honoured only for a coordinator sender.
+       * Honoured only for a coordinator sender: one on this node, or a
+       * command node's coordinator whose mail its node link delivered.
        */
       steer?: boolean;
     } = {},
@@ -780,7 +781,9 @@ export class AgentMailRepository {
               : {}),
             // Only the placement above decides whether it is delivered at all;
             // this only lets an admitted delivery skip the wait for idle.
-            ...(options.steer === true && sender.kind === "coordinator"
+            ...(options.steer === true &&
+            (sender.kind === "coordinator" ||
+              (sender.kind === "node" && sender.role === "coordinator"))
               ? { steerRequested: true as const }
               : {}),
           });

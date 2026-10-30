@@ -48,6 +48,8 @@ export interface DelegationMailMessage {
   replyToMessageId?: string;
   injectRequestId?: string;
   injectedAt?: string;
+  /** `"steer"` when the message was steered into a running turn. */
+  injectedVia?: string;
   coordinatorDelegationId?: string;
   notice?: {
     resource?: { kind?: string; id?: string; environmentId?: string };

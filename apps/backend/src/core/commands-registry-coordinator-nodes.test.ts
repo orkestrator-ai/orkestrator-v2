@@ -37,7 +37,13 @@ function review(id: string, phase: string) {
 }
 
 async function setup(
-  options: { available?: boolean; hasCopy?: boolean; answers?: Record<string, unknown> } = {},
+  options: {
+    available?: boolean;
+    hasCopy?: boolean;
+    answers?: Record<string, unknown>;
+    /** The leaf's hello capabilities; the default is a leaf from before node-mail-steer. */
+    capabilities?: Record<string, number>;
+  } = {},
 ) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   worlds.push(world);
@@ -55,7 +61,13 @@ async function setup(
   const context = {
     storage: world.storage,
     coordinators: world.coordinator,
-    nodes: { status: async () => ({ nodeId: "bk_cmd", mode: "command" }) },
+    nodes: {
+      status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
+      link: (nodeId: string) =>
+        nodeId === "bk_leaf"
+          ? { hello: { capabilities: options.capabilities ?? { "node-attachment": 1 } } }
+          : null,
+    },
     nodePortal: {
       summaries: async () => ({
         selfId: "bk_cmd",
@@ -369,6 +381,107 @@ describe("send_coordinator_node_mail", () => {
     });
     expect(result.toEnvironmentName).toBe("leaf-env");
     expect(result.toTabName).toBeUndefined();
+  });
+
+  test("deliverNow asks a leaf that can steer, reports its outcome and opens the delegation", async () => {
+    const { run, scope, routed, associations } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          placement: "injected",
+          injectedVia: "steer",
+          deliverNow: "steered",
+          deliverNowNote: "Steered into the worker's running turn.",
+        },
+      },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "correct-1",
+      toEnvironmentId: "leaf-env",
+      body: "Stop: the requirement changed.",
+      deliverNow: true,
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject({
+      steer: true,
+    });
+    expect(result).toMatchObject({
+      placement: "injected",
+      injectedVia: "steer",
+      deliverNow: "steered",
+      deliverNowNote: "Steered into the worker's running turn.",
+      // Mail already in the running turn still asked the worker something.
+      coordinatorDelegationOpened: true,
+    });
+    expect(
+      (await associations()).filter((entry) => entry.delegation?.state === "running"),
+    ).toHaveLength(1);
+  });
+
+  test("deliverNow to an older leaf sends no steer field and claims no outcome", async () => {
+    const { run, scope, routed } = await setup({
+      answers: {
+        deliver_node_mail: {
+          messageId: "m1",
+          toTabId: "startup-agent",
+          placement: "pending-inject",
+        },
+      },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "correct-old",
+      toEnvironmentId: "leaf-env",
+      body: "Stop.",
+      deliverNow: true,
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).not.toHaveProperty(
+      "steer",
+    );
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(result).toMatchObject({
+      placement: "pending-inject",
+      coordinatorDelegationOpened: true,
+    });
+  });
+
+  test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {
+    const { run, scope, routed } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+    });
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "routine",
+      toEnvironmentId: "leaf-env",
+      body: "Routine.",
+    });
+    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).not.toHaveProperty(
+      "steer",
+    );
+    expect(result).not.toHaveProperty("deliverNow");
+  });
+
+  test("a lost deliverNow answer is outcome-unknown, with no steer claimed or delegation opened", async () => {
+    const { run, scope, associations, loseNext } = await setup({
+      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
+    });
+    loseNext("deliver_node_mail");
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: "lost",
+        toEnvironmentId: "leaf-env",
+        body: "Stop.",
+        deliverNow: true,
+      }),
+    ).rejects.toMatchObject({ code: "outcome-unknown" });
+    expect(await associations()).toEqual([]);
   });
 });
 

@@ -833,6 +833,35 @@ describe("KanbanTaskDialog", () => {
     );
   });
 
+  test("a legacy ticket opened in the editor and saved untouched sends nothing", async () => {
+    render(
+      <KanbanTaskDialog
+        task={makeTask({
+          description: "**Problem:** loops.\n\n## Background\n\nSeen on mobile.",
+          acceptanceCriteria: "- [x] Has a test\n- Redirects once",
+        })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("ticket-tile-summary").textContent).toContain("Problem: loops.");
+    expect(screen.getByTestId("ticket-tile-context").textContent).toContain("Seen on mobile.");
+    expect(
+      screen.getAllByTestId("ticket-criterion").map((item) => item.getAttribute("data-status")),
+    ).toEqual(["passed", "unchecked"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // Ticks are results, not text, and an alias heading opens under its
+    // canonical name; saving that text untouched must not rewrite the ticket.
+    expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe(
+      "**Problem:** loops.\n\n## Context\n\nSeen on mobile.\n\n## Acceptance criteria\n\n- Has a test\n- Redirects once",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Ticket text")).toBeNull());
+    expect(updateTaskContentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
   test("edit opens one markdown editor and saves only what changed", async () => {
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 

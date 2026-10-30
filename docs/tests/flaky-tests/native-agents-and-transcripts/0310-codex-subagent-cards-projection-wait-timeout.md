@@ -73,3 +73,10 @@
 - **Owning-file rerun:** `mise run test:logged -- --name rerun-backend -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts ./tests/codex-subagent-cards.test.ts --parallel=2` passed this owner. The storage-writer guard in the same command failed, as it does on `origin/main`; see [1295](../aggregate-validation-runs/1295-keyboard-shortcuts-windows-linux-validation.md).
 - **Evidence:** `/tmp/orkestrator-test-run.HKpv4c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` on omarchy-hp. The aggregate was terminated at its deadline before finalization, so the log is uncompressed.
 - **Assessment:** intermittent recurrence. No owning source, assertion, deadline or skip changed.
+
+## Storage test splits (0930) recurrence — 2026-10-30
+
+- **Original command:** `mise run test` on `todo-0930-storage-test-files-8ccf873101e6` at `dda88f007`, Bun 1.4.4 on the shared Linux host, load average about 19–24.
+- **Failure:** expected `idle`, received `recovering` at line 170 after the cold restart (988.01 ms), the same mismatch as case 1313.
+- **Isolated rerun:** `mise run test:logged -- --name codex-subagent-alone -- bun --cwd=apps/backend test tests/codex-subagent-cards.test.ts` passed (4.0 s).
+- **Assessment:** intermittent recurrence; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1316](../aggregate-validation-runs/1316-storage-test-split-0930-validation.md).

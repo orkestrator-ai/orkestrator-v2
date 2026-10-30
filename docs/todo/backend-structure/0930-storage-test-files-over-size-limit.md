@@ -2,15 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-10-29 against `main` at `79f3bc97e`.
+Analysed 2026-10-29 against `main` at `79f3bc97e`. Statuses rechecked and the work done on 2026-10-30 against `main` at `cd7bbe3e5`.
 
 ### Tasks
 
-1. **Split `apps/backend/src/core/storage.test.ts` by topic**: 4,322 lines, 22 top-level `describe` blocks. Status: open.
-2. **Split `apps/backend/tests/storage.test.ts` by area**: 3,206 lines, one `describe` with 82 tests. Status: open.
-3. **Split `storage-agent-mail.test.ts` along the agent mail collaborators**: 2,292 lines. Status: open.
-4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md)). Status: open.
-5. **Qualification**: the same test counts before and after, then `mise run test`. Status: open (after 1 to 4).
+1. **Split `apps/backend/src/core/storage.test.ts` by topic**: 4,322 lines, 22 top-level `describe` blocks. Status: done (`f034c8a26`).
+2. **Split `apps/backend/tests/storage.test.ts` by area**: 3,206 lines at analysis, 2,855 at `cd7bbe3e5`, one `describe` with 74 tests. Status: done (`9570ec160`), with a different cut from the recommended one (see **Assumptions and decisions**).
+3. **Split `storage-agent-mail.test.ts` along the agent mail collaborators**: 2,292 lines. Status: done (`dbbe87e3c`).
+4. **Split `storage-writer-guards.test.ts` and bring its raw-writer scan within budget**: 2,481 lines; the scan test times out under host load (flake [1309](../../tests/flaky-tests/backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md)). Status: done (split `cbc76815f`, scan `dda88f007`).
+5. **Qualification**: the same test counts before and after, then `mise run test`. Status: done (see **Current state**; the first `mise run test` failed only in two unchanged owners that passed alone, flake case [1316](../../tests/flaky-tests/aggregate-validation-runs/1316-storage-test-split-0930-validation.md)).
 
 ### 1. Split `apps/backend/src/core/storage.test.ts` by topic
 
@@ -113,6 +113,182 @@ The raw-writer block's first test builds `rawDatabaseWrites(backendSources(), �
   - **Only `mise run test`.**
     - Pros: cheapest.
     - Cons: a dropped test or a changed analysis passes silently.
+
+## Current state
+
+Every task is done. No file named in this todo is over 2,000 lines, and no
+test was changed, added to or dropped by a split:
+
+| Before | After | Tests (expectations) before and after |
+| --- | --- | --- |
+| `src/core/storage.test.ts` (4,322 lines) | `storage-shared-config.test.ts` 903, `storage-setup-build.test.ts` 1,410, `storage-pane-layout.test.ts` 599, `storage-model-catalogs.test.ts` 711, `storage.test.ts` 709 | 162 (505) |
+| `tests/storage.test.ts` (2,855 lines) | `tests/storage-config.test.ts` 486, `tests/storage-records.test.ts` 905, `tests/storage-environment-activity.test.ts` 871, `tests/storage.test.ts` 554; helpers in `tests/storage-test-helpers.ts` | 74 (362) |
+| `src/core/storage-agent-mail.test.ts` (2,292 lines) | `storage-agent-mail.test.ts` 1,539, `storage-agent-mail-routes.test.ts` 696; fixture in `agent-mail-storage-test-support.ts` | 50 (251) |
+| `src/core/storage-writer-guards.test.ts` (2,487 lines) | analysis in `storage-writer-guards-test-support.ts` 1,700; `storage-writer-guards.test.ts` 205 (facade), `storage-writer-guards-raw.test.ts` 164 (raw writers), `storage-writer-guards-analysis.test.ts` 424 (fixtures) | 36 (155); 37 after the scan change, which adds one test |
+
+The counts are from running each original file on its own and then the files
+it became, with Bun 1.4.4. They differ from the Investigation of task 5,
+which counted `test(` lines rather than running the tests (and was taken
+before #1417 removed eight tests from `tests/storage.test.ts`).
+
+The writer guard's raw-writer scan now parses only the files it can need (see
+the task 4 decisions below). Its coverage is unchanged: a dump of the full
+analysis (classes, area fields, store names, store summaries, every write
+site with its paths, every raw write with its resolved store, the scanned
+files and every `StorageContext` and repository identifier in the backend)
+was taken at `cd7bbe3e5`, after the split and after the scan change. The last
+two are byte-identical; the first differs only in three line numbers of
+`storage-test-support.ts`, which task 1 gave one more import line.
+
+Times for the raw-writer scan, old and new run back to back on the shared
+Linux host:
+
+| Measurement | Old | New |
+| --- | --- | --- |
+| `rawDatabaseWrites` alone, load average about 10 | 1,814, 1,543, 1,521 ms | 549, 530, 520 ms |
+| `name the store they write` in `bun test storage --parallel=6` (65 files, 986 tests), load average 10–20 | 7,164 ms and 5,722 ms, both runs **failed** | 3,332 ms and 2,661 ms, both runs passed |
+| `name the store they write`, focused `src/core/storage tests/storage` run, `--parallel=6`, load about 6.5 | not measured | 1,264 ms |
+
+The failing old runs are flake 1309 reproducing on this branch's own
+structure, which is the evidence that the new numbers are a fix rather than a
+quiet host.
+
+`mise run test` at `dda88f007` (load average 19–24) passed bridges and the
+protocol lockfile. Every storage test and the writer guard passed. It failed
+in two owners this branch does not touch:
+`apps/backend/tests/codex-subagent-cards.test.ts` (the 0310 cold-restart
+mismatch) and `tests/unit/mcp-fixture-cleanup.test.ts` (a 5 s deadline miss).
+Both passed alone; they are recorded as flake case
+[1316](../../tests/flaky-tests/aggregate-validation-runs/1316-storage-test-split-0930-validation.md).
+
+## Assumptions and decisions
+
+### The Task analysis against current `main` (all tasks)
+
+The analysis was written against `79f3bc97e`. On 2026-10-30, at `cd7bbe3e5`,
+nothing in it had been done: all four files were still over the limit and the
+scan still parsed every backend file. One thing had moved: #1417 (looped
+review removal) cut `tests/storage.test.ts` from 3,206 to 2,855 lines and
+from 82 to 74 tests. That is still over the limit, so task 2 was still
+needed. The backend had also grown from 820 to 952 non-test source files.
+
+The delegation that started this work names the timeout flake 1304. The
+flake is 1309: 1304 is an unrelated aggregate case (agent mail read model,
+todo 0741). The backend-structure index row for this todo carried the same
+slip; it now says 1309.
+
+### Each split is a pure move, one commit each (tasks 1 to 4)
+
+Chosen: whole `describe` blocks (or, in `tests/storage.test.ts`, whole
+`test` calls) move verbatim, and the only other lines that change are imports
+and the shared helpers named below. Each split was checked by comparing the
+multiset of non-import lines before and after (the only differences are the
+helpers' `export` keywords and each new file's `afterEach`/`describe`
+wrapper) and by running the original file and its replacements for the same
+test and expectation counts. The scan change is a separate commit.
+
+### Where `withTemporaryStorage` goes (task 1)
+
+Options: a new small support module, as the recommended cut suggested; or
+`storage-test-support.ts`. Chosen: `storage-test-support.ts`, appended at its
+end. It is already the module every storage test imports for seeding and
+inspection (`AGENTS.md`, "Storage rules"), so a second support module would
+split one job across two files. Appending at the end keeps the writer
+guard's view of that file unchanged apart from the one import line it needed.
+
+### How `tests/storage.test.ts` is cut (task 2)
+
+Options: the recommended `storage-config`, `storage-records` and
+`storage-leases` files with Kanban left behind; or a cut by what the tests
+cover now. Chosen: `tests/storage-config.test.ts`,
+`tests/storage-records.test.ts`, `tests/storage-environment-activity.test.ts`,
+with Kanban, notes, feature plans and the Linear/GitHub completion tests (and
+the `sharp` mock) left in `tests/storage.test.ts`. The current code shows the
+recommended cut is wrong in one place: the lease tests are only five, and
+they belong to two different subjects (environment mutation lock recovery,
+the GitHub completion transaction lock). A leases file would take them away
+from the tests they guard. Agent activity, meanwhile, is 22 tests and about
+860 lines, the largest single subject in the file, and gets its own file.
+Every moved test keeps its `Electron StorageService` describe, so its full
+name is unchanged. The temp-dir, fixed-date and lease helpers move to
+`tests/storage-test-helpers.ts`. Only `tests/storage.test.ts` uses the
+`sharp` mock, so it is the only file that registers it.
+
+### How the agent mail file is cut (task 3)
+
+Chosen: the recommended option, moving the routes block as it is. The shared
+`fixture()` and `StoredMail` go to `agent-mail-storage-test-support.ts`. The
+name deliberately does not start with `storage`, because the writer guard
+reads every `storage*.ts` file in `src/core` as storage source.
+
+### Where the guard's analysis lives (task 4)
+
+Options: `storage-writer-guards-analysis.ts` with an exclusion, as
+recommended; a file outside `src`; or a `*-test-support.ts` name. Chosen:
+`storage-writer-guards-test-support.ts` in `src/core`, beside the tests.
+The `*test-support*` name is the repository's convention for test-only
+modules, and `.oxlintrc.json` already gives those the test lint overrides.
+It also leaves `storage-writer-guards-analysis.test.ts` free for the
+analysis-fixture tests, the block that tests the analysis itself. The module
+leaves itself out of both source lists by its own path (`import.meta.path`),
+so the guard scans exactly the files it scanned before. `storage-test-support.ts`
+stays scanned, as it was. The facade tests keep the name
+`storage-writer-guards.test.ts`, which `AGENTS.md`, `storage.md` and several
+repository comments cite.
+
+### How the scan is made cheaper (task 4)
+
+Chosen: the recommended option, with these specifics:
+
+- `rawDatabaseWrites` parses a file only when its text can name a raw writer
+  method (`RAW_WRITERS`), when a store name being resolved imports from it
+  (`moduleOf`), or when it can call a row helper whose store parameter is
+  being followed (`callsOf`). An import is matched to the declaring module by
+  resolved path, before anything is parsed.
+- The text check is exact in the direction that matters: it can keep a file
+  the old scan would have found nothing in, but never drop one the old scan
+  would have. It matches whole identifiers, and when a file contains `\u` it
+  matches again on the text with escapes decoded. Without that, a write
+  spelled `database.rows(...)` would slip past. A new fixture test,
+  `still finds writes and helper callers that only an escape spells`, pins
+  it; with the decoding removed that test fails.
+- `parse()` keeps each tree by file, so the scans in one test file parse a
+  file once. A source a test rewrote has different text and is parsed afresh.
+  Since the split, `rawDatabaseWrites` and `identifiersOutside` run in
+  different test files, so this sharing is per file: in the raw-writer file
+  the storage sources the StorageService analysis already parsed are reused,
+  and in the facade file `scannedFiles`, `identifiersOutside` and the
+  primitive-callers check share theirs.
+- Not done: building the scan in a `beforeAll` with a longer timeout (that
+  raises the budget, which `AGENTS.md` forbids), or caching it in a separate
+  process or artefact (it could go stale).
+
+One property did change. The old scan parsed every backend file, so a backend
+file with a syntax error failed this test even when it held no raw write. The
+new one parses only the files it needs. Typecheck and every test that imports
+such a file still catch it, and the guard's subject is store writes, not
+syntax, so this is not a gap in what the guard proves.
+
+What remains of the first test's cost is the StorageService analysis (about
+0.25 s on a quiet host) and parsing about 126 files. Ten `callsOf` text
+scans over all 952 files cost about 12 ms each. Further cuts there were not
+worth the extra code.
+
+### What proves the result (task 5)
+
+Chosen: the recommended option. It covers the same test counts per file
+before and after, the guard dump compared before and after the scan change,
+the guard test's time in the focused `--parallel=6` storage run, then
+`mise run test`. The old and new scans were also timed back to back in the
+same wide run, because a single new number on a shared host proves little
+(see **Current state**). The dump stays ad hoc, as in 0163 and 0214.
+
+### Flake 1309 (task 4)
+
+Marked resolved, with the evidence above. The old scan timed out in both
+loaded runs; the new one passed both, at about half the time. The case file
+records that a load far above 20 could still push the test past 5 s, which
+would reopen it rather than call for a new case.
 
 ## Constraints and rationale
 

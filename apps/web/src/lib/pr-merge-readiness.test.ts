@@ -4,6 +4,7 @@ import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import {
   isLocalEnvironmentReadyToMerge,
   isNodeEnvironmentReadyToMerge,
+  localEnvironmentPrMergeState,
   type ReadyToMergeEnvironment,
 } from "./pr-merge-readiness";
 
@@ -80,6 +81,49 @@ describe("isLocalEnvironmentReadyToMerge", () => {
 
   test("not ready without a monitor entry", () => {
     expect(isLocalEnvironmentReadyToMerge(environment(), null, "current")).toBe(false);
+  });
+});
+
+describe("localEnvironmentPrMergeState", () => {
+  const conflicted = environment({ hasMergeConflicts: true, prMergeability: "dirty" });
+
+  test("a current reading of a conflicted PR has conflicts", () => {
+    expect(localEnvironmentPrMergeState(environment(), monitor(), "current")).toBe("ready");
+    expect(
+      localEnvironmentPrMergeState(conflicted, monitor({ hasMergeConflicts: true }), "current"),
+    ).toBe("conflicts");
+  });
+
+  test.each([
+    ["the mirror is stale", {}, "stale"],
+    ["the last check failed", { consecutiveErrors: 1 }, "current"],
+    ["the monitor has not seen the conflict yet", { hasMergeConflicts: false }, "current"],
+    ["the monitor is on another PR", { prUrl: `${PR}0` }, "current"],
+  ] as const)("no conflicts signal when %s", (_label, monitorOverrides, sync) => {
+    expect(
+      localEnvironmentPrMergeState(
+        conflicted,
+        monitor({ hasMergeConflicts: true, ...monitorOverrides }),
+        sync,
+      ),
+    ).toBeNull();
+  });
+
+  test("a merged or blocked PR has neither signal", () => {
+    expect(
+      localEnvironmentPrMergeState(
+        environment({ prState: "merged" }),
+        monitor({ prState: "merged" }),
+        "current",
+      ),
+    ).toBeNull();
+    expect(
+      localEnvironmentPrMergeState(
+        environment({ prMergeability: "blocked" }),
+        monitor(),
+        "current",
+      ),
+    ).toBeNull();
   });
 });
 

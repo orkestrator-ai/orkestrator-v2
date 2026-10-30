@@ -66,7 +66,11 @@ import {
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "@/components/environments/EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
-import { MergeReadyMarker, MergeReadyName } from "@/components/environments/MergeReadyName";
+import {
+  EnvironmentNameShimmer,
+  EnvironmentNameSignalMarker,
+} from "@/components/environments/EnvironmentNameShimmer";
+import { environmentNameSignal } from "@/lib/environment-name-signal";
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
@@ -768,9 +772,14 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  // Decided here from the machine's relayed PR reading (pr-merge-readiness).
-  const readyToMerge = isNodeEnvironmentReadyToMerge(environment, machine);
-  const mergeReadyDescriptionId = useId();
+  // Decided here from the machine's relayed PR reading (pr-merge-readiness)
+  // and its live activity. Conflicts need the same monitor health that remote
+  // readiness waits on, so only the question and ready signals apply here.
+  const nameSignal = environmentNameSignal({
+    waitingOnUser: isRunning && live && environment.activity === "waiting",
+    prMergeState: isNodeEnvironmentReadyToMerge(environment, machine) ? "ready" : null,
+  });
+  const nameSignalDescriptionId = useId();
 
   const menuItems: EnvironmentMenuItem[] = [
     {
@@ -861,7 +870,7 @@ export function RemoteEnvironmentItem({
               onFocus={tooltip.show}
               onBlur={tooltip.hide}
               aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
-              aria-describedby={readyToMerge ? mergeReadyDescriptionId : undefined}
+              aria-describedby={nameSignal ? nameSignalDescriptionId : undefined}
               aria-current={shown ? "true" : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
@@ -885,10 +894,16 @@ export function RemoteEnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <MergeReadyName ready={readyToMerge} className="truncate font-medium leading-4">
+                  <EnvironmentNameShimmer
+                    signal={nameSignal}
+                    className="truncate font-medium leading-4"
+                  >
                     {environment.name}
-                  </MergeReadyName>
-                  <MergeReadyMarker ready={readyToMerge} descriptionId={mergeReadyDescriptionId} />
+                  </EnvironmentNameShimmer>
+                  <EnvironmentNameSignalMarker
+                    signal={nameSignal}
+                    descriptionId={nameSignalDescriptionId}
+                  />
                   {(environment.deleting || isTransitioning || busy) && (
                     <MachineDot
                       machineName={machine.name}
@@ -948,7 +963,7 @@ export function RemoteEnvironmentItem({
         >
           <EnvironmentTooltipBody
             name={environment.name}
-            readyToMerge={readyToMerge}
+            nameSignal={nameSignal}
             machine={{
               name: machine.name,
               colorToken: machine.colorToken,

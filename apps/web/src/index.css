@@ -554,8 +554,10 @@ body[data-orkestrator-dev-profile]::before {
  * must stay the real colour for the gradient to use it.
  *
  * Presets set the two custom properties: `.agent-thinking-shimmer` (the
- * transcript's "is thinking" status) and `.merge-ready-name` (an environment
- * whose pull request is ready to merge).
+ * transcript's "is thinking" status) and the environment name signals
+ * (`EnvironmentNameShimmer`): `.needs-answer-name` (an agent waits for the
+ * user), `.merge-conflicts-name` (its pull request has conflicts) and
+ * `.merge-ready-name` (its pull request is ready to merge).
  */
 .text-shimmer,
 .agent-thinking-shimmer {
@@ -590,12 +592,20 @@ body[data-orkestrator-dev-profile]::before {
 
 /*
  * Muted rows get a lighter band, as the thinking status does; the selected
- * row's name is already foreground, so the band is tinted towards the success
- * green rather than being an invisible foreground-on-foreground sweep. Both
+ * row's name is already foreground, so the band is tinted towards the signal's
+ * colour rather than being an invisible foreground-on-foreground sweep. All
  * stay well above the name's current contrast on the dark surfaces.
  */
 .merge-ready-name {
-  --text-shimmer-highlight: color-mix(in oklab, var(--color-success) 45%, white);
+  --text-shimmer-highlight: color-mix(in oklab, var(--color-success) 75%, white);
+}
+
+.merge-conflicts-name {
+  --text-shimmer-highlight: color-mix(in oklab, var(--color-destructive) 75%, white);
+}
+
+.needs-answer-name {
+  --text-shimmer-highlight: color-mix(in oklab, var(--color-yellow-400) 75%, white);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -607,7 +617,9 @@ body[data-orkestrator-dev-profile]::before {
   }
 
   /* The static highlight: the band's colour, held still. */
-  .merge-ready-name {
+  .merge-ready-name,
+  .merge-conflicts-name,
+  .needs-answer-name {
     color: var(--text-shimmer-highlight);
   }
 }
@@ -704,7 +716,9 @@ body[data-orkestrator-dev-profile]::before {
 @media (forced-colors: active) {
   .text-shimmer,
   .agent-thinking-shimmer,
-  .merge-ready-name {
+  .merge-ready-name,
+  .merge-conflicts-name,
+  .needs-answer-name {
     color: CanvasText;
     -webkit-text-fill-color: currentColor;
     background: none;

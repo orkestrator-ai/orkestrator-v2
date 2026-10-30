@@ -10,11 +10,13 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Pi bridge-owned MCP extension in read-only sessions**: prove with a test that the inline `orkestrator-mcp` extension still loads when `noExtensions` is set. Status: open (behaviour confirmed correct; only the test is missing).
-2. **Read-only Grok and Pi consolidation turns declare their attempt**: newly found gap; a Multi Review consolidation on Grok or Pi is read-only but sends no `workflowResultKey`, so the bridge refused its submit tool. Status: done in code 2026-10-28 by [0724](0724-multi-review-consolidation-grok-pi-result-key.md); the live check rides with task 3.
-3. **Live: read-only Grok and Pi reviewers submit their report**: qualification run in a packaged review. Status: open.
-4. **Live: `report_finding` on every provider**: one reviewer per provider, plus one container run. Status: open.
-5. **Real-device zoom, pan and error tooltip**: trackpad pinch in Electron, phone pinch, Safari gesture events. Status: open.
+Statuses re-checked 2026-10-30 against `main` at `cd7bbe3e`.
+
+1. **Pi bridge-owned MCP extension in read-only sessions**: prove with a test that the inline `orkestrator-mcp` extension still loads when `noExtensions` is set. Status: done (2026-10-30): "a read-only session keeps the bridge's own extensions and their attempt tools" in `bridges/pi-bridge/src/agent-session.test.ts`.
+2. **Read-only Grok and Pi consolidation turns declare their attempt**: newly found gap; a Multi Review consolidation on Grok or Pi is read-only but sends no `workflowResultKey`, so the bridge refused its submit tool. Status: done in code 2026-10-28 by [0724](0724-multi-review-consolidation-grok-pi-result-key.md) (#1375, `6056d472`; on `main` at `multi-review-service.ts:4144` and `build-pipeline-review-fanout.ts:1030`); the live check rides with task 3.
+3. **Live: read-only Grok and Pi reviewers submit their report**: qualification run in a packaged review. Status: open (needs billed Grok and Pi turns; steps in Assumptions and decisions).
+4. **Live: `report_finding` on every provider**: one reviewer per provider, plus one container run. Status: open (needs billed turns on six providers; steps in Assumptions and decisions). Its 0031 batching row is done (2026-10-30).
+5. **Real-device zoom, pan and error tooltip**: trackpad pinch in Electron, phone pinch, Safari gesture events. Status: open (needs a Mac trackpad, Safari and a phone). The Safari `gesture*` handler now has a synthetic guard, and the spec passed its zoom, pan and tooltip cases under Playwright WebKit (2026-10-30); three WebKit failures elsewhere in the spec went to [0860](0860-multi-review-inspector-webkit-divergences.md).
 
 ### 1. Pi bridge-owned MCP extension in read-only sessions
 
@@ -151,6 +153,148 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: one less open item.
     - Cons: Safari gesture events are a known divergence; retiring would hide it.
 
+## Assumptions and decisions
+
+Made 2026-10-30 against `main` at `cd7bbe3e`. Every recommended option was
+taken; none was contradicted by the current code.
+
+### Task 1: where the guard test lives
+
+Took the recommended option: the test sits in `agent-session.test.ts`, beside
+the one that explains why `noExtensions` is set. It builds the real
+`createPiSessionServices` for a read-only state and asserts that the loaded
+extensions are exactly `<inline:orkestrator>`, `<inline:orkestrator-mcp>` and
+`<inline:orkestrator-command-changes>`, with no load errors, and that
+`orkestrator-mcp` registered `submit_review_report` and `report_finding`. The
+option's con (it needs an MCP runtime stub) is met by the existing
+`setPiMcpTransportForTests` seam, so the test proves the tools, not just the
+extension names. The state has `projectResources: true`, so `noExtensions`
+comes from read-only alone (the case a reviewer in a project-resource
+container hits), and the fixture's `.pi/extensions/project-probe.ts` must stay
+out. Checked by mutation: dropping the `orkestrator-mcp` factory whenever
+`noExtensions` is set fails the test.
+
+### Task 1: keep or record as done
+
+Took the recommended option: the item stayed open until the test landed. It
+has now landed, so the status is done and the item is gone from Outstanding
+work. The task subsection stays as the record, since the Task analysis keeps
+one subsection per task.
+
+### Task 2: nothing to redo
+
+Already merged: 0724 (#1375, `6056d472`) sends `workflowResultKey` with
+`workflowResultTool` on every Multi Review step (`multi-review-service.ts:4144`)
+and on Build Pipeline consolidation (`build-pipeline-review-fanout.ts:1030`).
+Only its status line was updated.
+
+### Task 3: pass criterion and batching
+
+Took both recommended options: a pass is the whole chain (validate, then
+submit with the reviewer's own key, the workflow consolidates, the stored
+report lists the reviewer as a source), and the run is batched with task 4 in
+one session. Not run: it needs billed Grok and Pi turns. Steps:
+
+1. On the macOS host, in a long-lived terminal, start a disposable profile
+   with all six providers and a container fixture:
+   `mise run dev:test --profile qa-0029 --fixture --fixture-environments local,container`.
+   In another terminal, wait for `status: "ready"` in
+   `mise run dev:status --profile qa-0029 --json`, and use its `browserUrl`,
+   `testProject` and `logDir` only.
+2. First check Grok starts a session at all (open one Grok tab in the fixture
+   environment and send a one-line prompt). If `session/new` fails with
+   "Invalid params", record that and stop the Grok leg.
+3. In the fixture environment, right-click **Multi Review**, pick one reviewer
+   per provider (Claude, Codex, Cursor, Grok, OpenCode, Pi; cheapest model
+   each), set consolidation to **Grok**, and **Start**.
+4. For the Grok and Pi reviewers, record from the bridge logs under `logDir`
+   that the permission request for `submit_review_report` carried the call's
+   arguments (`rawInput`, or `tool_input` under `use_tool`) and was allowed,
+   and that `validate_workflow_result` ran before it.
+5. When the workflow reaches `ready`, open the consolidated report and check
+   both reviewers are listed as sources. Record the workflow id, commit,
+   provider pins and the outcome per reviewer.
+6. Repeat step 3 with two reviewers and consolidation on **Pi**, so 0724's
+   Pi consolidation is seen once too (Grok consolidation is step 3).
+7. `mise run dev:stop --profile qa-0029`, then
+   `mise run dev:reset --profile qa-0029` unless task 5's Electron check is
+   still to come.
+
+### Task 4: run shape, 0031 row and the stop path
+
+Took the recommended options: one six-reviewer panel (step 3 above) plus one
+single-reviewer container run; 0029 is now listed in 0031's "Several providers
+at once" row; and the stopped-reviewer "unconfirmed" row is part of the pass.
+Not run: it needs billed turns on six providers. Fake coverage already exists
+and was not extended: each bridge's auto-allow tests, the backend
+`agent-tools-report-finding.test.ts`, and the container URL derivation
+(`agent-tools.test.ts:1285`, `host.docker.internal`). Steps, in the same
+session as task 3:
+
+1. While the step 3 panel runs, keep the Multi Review tab open with the
+   Findings badge in view, and record, per reviewer, that a provisional row
+   appears before its report is accepted, and that the accepted report then
+   replaces it (the row turns confirmed or disappears).
+2. Once one reviewer has at least one provisional row, select its node, press
+   **Stop** ("Stop this reviewer") and check its rows read "unconfirmed
+   (reviewer stopped)".
+3. Start a second Multi Review in `fixture-container` with one reviewer on a
+   provider signed in inside the container (for example Codex). Check that it
+   calls `report_finding` and its rows appear. If it cannot reach the attempt
+   server, check the host firewall (UFW on Linux) before calling it a failure.
+4. Record each reviewer's evidence separately, so one provider's failure does
+   not hide another's.
+
+### Task 5: how it is run, and the automated part
+
+Took the recommended options: a manual checklist inside the 0031 macOS and
+iOS session, kept at low priority, and no new WebKit Playwright project. Two
+deterministic additions:
+
+- The Safari `gesturestart`/`gesturechange` handler had no test at all. "a
+  Safari gesture pinch zooms the graph and is kept from the page" in
+  `e2e/MultiReviewFlow.spec.ts` dispatches synthetic gesture events in both
+  layouts and checks that each is cancelled and that the zoom goes to 200% and
+  back. It pins the handler; it is not real-device evidence. Checked by
+  mutation: removing the `gesturechange` listener fails it.
+- A one-off run of the whole spec under the existing
+  `ORKESTRATOR_E2E_BROWSER=webkit` override (Playwright WebKit on macOS, not
+  Safari): 91 passed, 5 skipped, 4 failed. Every zoom, pan, fullscreen and
+  error-tooltip case passed, including Ctrl + wheel, the drag pan and the new
+  gesture test. The touch pinch failed only because WebKit has no `Touch`
+  constructor for a synthetic event. The other three failures were the
+  inspector's transcript follow after Report (both layouts) and the sticky
+  findings badge on the phone layout; they are outside this item and went to
+  [0860](0860-multi-review-inspector-webkit-divergences.md).
+
+Steps for the real-device check (no provider turns needed except for Electron):
+
+1. Serve the browser fixture on the LAN or Tailscale, from `apps/web`:
+   `bunx vite ../../e2e/fixture --config vite.config.ts --host 0.0.0.0 --port 14830 --strictPort`
+   (not 34121 or 34122). Stop it afterwards.
+2. In desktop Safari, open
+   `http://<host-ip>:14830/multi-review-flow?phase=reviewing&reviewers=32`:
+   pinch on the trackpad zooms around the pointer and the page itself does
+   not zoom; two-finger scroll pans; dragging the canvas pans; −, the level
+   (reset), + and Fullscreen work, and Escape leaves fullscreen.
+3. Open `...?phase=failed&reviewers=4`: hover and keyboard-focus Reviewer 1;
+   the tooltip shows the whole error.
+4. On an iPhone in Safari, open both URLs (the stacked layout): a two-finger
+   pinch zooms the column, one finger scrolls the page past it, and the zoom
+   buttons are reachable. Tap Reviewer 1 on the failed URL and check the error
+   is readable.
+5. In the Electron window of the task 3 profile (`electronTitle` from
+   `dev:status`), open a finished Multi Review and repeat step 2's trackpad
+   pinch and pan. Then stop and reset the profile.
+6. Record device, OS and browser versions and the result of each step.
+
+### New todo 0860
+
+The three WebKit-only inspector failures have nothing to do with zoom, pan or
+the tooltip, so they went to a new file rather than this one: [0860](0860-multi-review-inspector-webkit-divergences.md).
+
+## Current state
+
 The Multi Review tab shows the workflow as a left-to-right flow graph: review
 package, then the reviewer panel, then consolidation, then Fix. An inspector
 sits below the graph. It shows the selected node's status and actions and a
@@ -158,7 +302,6 @@ live transcript tail, and beside it the findings reviewers have reported so
 far. Every follow-up from the redesign is built. What is left is qualifying
 live findings on real providers and a few gaps found on the way.
 
-## Current state
 
 - **Shared components.** The graph, viewport, stacked layout, view store and
   inspector frame are shared with the build pipeline tab and live in
@@ -257,14 +400,6 @@ live findings on real providers and a few gaps found on the way.
 
 ## Outstanding work
 
-### Code
-
-1. **Pi: confirm the bridge-owned MCP extension loads in a read-only session.**
-   Read-only Pi sessions set `noExtensions` for project resources
-   (`projectResourceDiscoveryOptions`). The bridge registers its Orkestrator
-   tools through an inline `extensionFactories` entry, which should not be
-   affected, but no test covers it.
-
 ### Qualification
 
 - **Read-only Grok and Pi reviewers submit their report.** In a packaged review,
@@ -283,9 +418,11 @@ live findings on real providers and a few gaps found on the way.
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 - **Zoom, pan and the error tooltip on real devices.** The browser suite
   covers them in Chromium at desktop and phone sizes (`e2e/MultiReviewFlow.spec.ts`),
-  including Ctrl + wheel and a synthetic two-finger touch pinch, but not a real
-  trackpad pinch in the desktop app, a phone's own pinch, or Safari's gesture
-  events in the web client.
+  including Ctrl + wheel, a synthetic two-finger touch pinch and synthetic
+  Safari gesture events, and its zoom, pan and tooltip cases pass under
+  Playwright WebKit, but not a real trackpad pinch in the desktop app, a
+  phone's own pinch, or Safari's own gesture events in the web client. Steps
+  are in Assumptions and decisions.
 
 ### Known limits (by design)
 
@@ -323,3 +460,5 @@ live findings on real providers and a few gaps found on the way.
   reviewer overlap, which the findings column makes visible.
 - [0724-multi-review-consolidation-grok-pi-result-key.md](0724-multi-review-consolidation-grok-pi-result-key.md):
   read-only Grok and Pi consolidation sending no `workflowResultKey` (task 2), split out.
+- [0860-multi-review-inspector-webkit-divergences.md](0860-multi-review-inspector-webkit-divergences.md):
+  inspector tests that fail under Playwright WebKit, found while qualifying task 5.

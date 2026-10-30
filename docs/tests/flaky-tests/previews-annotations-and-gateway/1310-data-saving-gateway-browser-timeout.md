@@ -12,3 +12,20 @@
 - **Failure evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jirD7q/browser.log.gz`.
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=14572 mise run test:logged -- --name data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/data-saving-owner` passed both viewport cases unchanged (exit 0, 45.0 s logged).
 - **Assessment:** The aggregate failure followed by an unchanged isolated pass establishes intermittence. Timing under concurrent browser execution is a hypothesis; the root cause remains unconfirmed. No implementation, assertion, timeout, or skip changed.
+
+
+## Second-backend review fixes — 2026-10-30
+
+The exact `mise run test:logged -- --name browser -- mise run test:browser`
+rerun repeated the mobile 60 s deadline and context-close cleanup error with
+nine workers (972 passed, 106 skipped, 4 failed; 797.1 s). Evidence:
+`orkestrator-test-run.Frb08t/browser.log.gz` under the host temporary directory.
+The complete unchanged owner passed both viewports (exit 0, 32.7 s):
+
+```sh
+mise run test:logged -- --name data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1
+```
+
+This sequential rerun followed an invalid overlapping owner attempt; see
+[1316](../aggregate-validation-runs/1316-second-backend-one-host-0244-validation.md).
+No implementation, assertion, timeout or skip changed. The cause is unconfirmed.

@@ -1,19 +1,26 @@
 # Embedded service previews
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); task 1 decided against
+`cd7bbe3e` (2026-10-30).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; rechecked 2026-10-30 against
+`main` at `cd7bbe3e`.
 
 ### Tasks
 
 1. **Go or no-go on embedding**: answer the three open questions (worth it at
-   all, per-platform or uniform, iOS or web first) before any code. Status: open.
+   all, per-platform or uniform, iOS or web first) before any code. Status:
+   done 2026-10-30. Decided to defer until top-level Safari and iOS pass
+   ([0042](0042-service-preview-rollout.md) task 3, still blocked). If built:
+   per-platform, web first. See "Assumptions and decisions".
 2. **Web iframe surface**: code item 1 plus the CHIPS investigation (item 2).
-   Status: deferred (not started; waits on task 1).
+   Status: deferred (not started; on 0042 task 3 per task 1, and then on the
+   framed-entry decision below).
 3. **iOS in-app preview view**: code item 3, a dedicated `WKWebView`. Status:
-   deferred (not started; waits on task 1).
+   deferred (not started; on 0042 task 3 per task 1, and second after task
+   2).
 4. **Per-surface capabilities and advertisement**: code items 4 and 5, report
    capabilities per surface and lift the refusal per passing platform. Status:
    blocked (on tasks 2, 3 and 5).
@@ -37,9 +44,28 @@ surface: `"browser-embedded"` in `PREVIEW_SURFACES`
 `surfaces.browserEmbedded` with `platforms`
 (`packages/protocol/src/preview-services.ts:352`). The backend hard-codes it off
 with the documented reason (`apps/backend/src/core/preview-runtime.ts:326-331`)
-and refuses the surface (`apps/backend/src/core/preview-access.ts:183-187`).
+and refuses the surface (`apps/backend/src/core/preview-access.ts:179-184`).
 Settings shows the reason (`apps/web/src/components/settings/PreviewSettings.tsx:237`).
 The file's description is still accurate.
+
+Rechecked 2026-10-30 at `cd7bbe3e`. Nothing in the 125 commits since
+`863b5782` touches the embedded surface. 0042 task 3 (shipping Safari and the
+iOS handoff, top-level) is still blocked on hardware, with no Safari or iOS
+evidence-log entry, so the condition for revisiting has not been met. Since
+the analysis, code on `main` also shows that the backend refuses framing on
+purpose. The cross-service read defense
+(`crossServiceReadViolation`, `packages/protocol/src/preview-header-policy.ts:290-303`,
+applied at `apps/backend/src/preview-publication.ts:462`) refuses every
+cookie-authenticated `GET` whose `Sec-Fetch-Site` is not `same-origin` or
+`none`, unless it is a top-level document navigation. A preview iframe in the
+web client sends `Sec-Fetch-Dest: iframe` with `cross-site` or `same-site`, so
+it gets `403`. `apps/backend/src/preview-publication.test.ts:276` pins this.
+The bootstrap and session responses also carry `X-Frame-Options: DENY` and
+`frame-ancestors 'none'` (`preview-publication.ts:50-56`). The preview cookie
+is `SameSite=Lax` (`preview-publication.ts:528`), and 0042's 2026-10-23
+evidence records Firefox and WebKit omitting it on a framed cross-site entry.
+So the web iframe now needs a backend policy change as well as client work
+(see task 2).
 
 **Decisions.**
 
@@ -88,15 +114,44 @@ and use a strict `postMessage` protocol. CHIPS can at best help the
 **Investigation.** `ServiceBrowserTab` picks its mode at
 `apps/web/src/components/browser/ServiceBrowserTab.tsx:258-265`, and today the
 branch keys on `nativeBrowserPreview` (Electron presence); an embedded mode
-must not follow that pattern. The existing iframes (`ServiceBrowserTab.tsx:912`,
-`apps/web/src/components/browser/BrowserTab.tsx:801`) serve loopback and the
+must not follow that pattern. The existing iframes (`ServiceBrowserTab.tsx:907`,
+`apps/web/src/components/browser/BrowserTab.tsx:795`) serve loopback and the
 legacy route. `isGatewayBrowserPreviewSupported`
 (`apps/web/src/lib/gateway-url.ts:62`) still limits gateway-routed previews to
 desktop. Top-level opening is `openServiceExternally` and
 `submitPreviewBootstrap` (`apps/web/src/lib/preview-external.ts:15`, `:52`). No
-`Partitioned` cookie attribute is set anywhere in the backend.
+`Partitioned` cookie attribute is set anywhere in the backend (rechecked
+2026-10-30).
+
+Since the cross-service read defense landed (0054, on `main` by 2026-10-23),
+the gateway refuses any framed preview navigation from another site or
+service before it is forwarded (`preview-header-policy.ts:290-303`; test
+`preview-publication.test.ts:276`). The bootstrap and session pages are
+`frame-ancestors 'none'`. For a `GET` navigation the browser sends no `Origin`,
+and `Sec-Fetch-Site` reads `same-site` or `cross-site` for both the control
+client and a sibling service. The gateway therefore cannot tell from the
+headers whether the frame's parent is Orkestrator or another published
+service. A `Partitioned` cookie alone does not get a framed entry past this
+rule.
 
 **Decisions.**
+
+- **How does a framed entry get past the cross-service read defense?**
+  - **A one-use, attachment-scoped frame-entry grant (recommended).** The
+    control client mints a grant per frame load. The gateway admits exactly
+    one `Sec-Fetch-Dest: iframe` navigation that carries it, and adds
+    `frame-ancestors` naming the control origin to that response only.
+    Every other framed request keeps the 403.
+    - Pros: siblings still cannot frame a service with the user's cookie, so
+      the 0054 guarantee holds; it reuses the bootstrap grant machinery.
+    - Cons: every reload of the frame needs a new grant. A framed cross-site
+      return, such as OAuth back into the frame, stays refused and must fall
+      back to top-level.
+  - **Admit `iframe` destinations for sessions minted on the embedded
+    surface.**
+    - Pros: simple; reloads just work.
+    - Cons: any sibling service can then frame that service with the user's
+      session. This reopens the cross-service read hole 0054 closed.
 
 - **How does the embedded session get its transport cookie?**
   - **Bootstrap inside the iframe with a `Partitioned` transport cookie, fall
@@ -215,6 +270,11 @@ browser privacy tests.
   (`apps/web/src/components/settings/PreviewSettings.tsx`).
 - `PreviewAccessService` (`apps/backend/src/core/preview-access.ts`) refuses
   `surface: "browser-embedded"` with `unsupported`.
+- The publication gateway refuses framed preview navigations from any other
+  site or service (`crossServiceReadViolation` in
+  `packages/protocol/src/preview-header-policy.ts`). Its bootstrap and session
+  pages send `X-Frame-Options: DENY` and `frame-ancestors 'none'`
+  (`apps/backend/src/preview-publication.ts`).
 - The types already exist: `"browser-embedded"` in `PREVIEW_SURFACES`
   (`packages/protocol/src/preview-access.ts`), and
   `PreviewCapabilities.surfaces.browserEmbedded` with a `platforms` list
@@ -315,11 +375,66 @@ browser privacy tests.
 
 ## Open questions
 
+Answered 2026-10-30 in task 1 (see "Assumptions and decisions"): defer until
+0042 task 3 passes; per-platform if built; web iframe first. Reopen them at
+that point with the top-level Safari and iOS evidence in hand.
+
 - Is embedding worth the cost, given that top-level previews work? It was
   always planned as optional.
 - If only some browsers pass, is a per-platform embedded mode acceptable, or
   should the product stay top-level everywhere for consistency?
 - Should the iOS in-app view come before or after the web iframe?
+
+## Assumptions and decisions
+
+### Task 1: defer embedding until top-level Safari and iOS pass
+
+Chose the recommended **defer**. The recommendation's trigger is 0042 task 3
+(shipping Safari and the iOS handoff, top-level), which is still blocked on
+macOS Safari and iOS hardware at `cd7bbe3e`, with no entry in 0042's evidence
+log. Current code supports deferring rather than contradicting it. The gateway
+now refuses framed preview navigations on purpose
+(`preview-header-policy.ts:290-303`, test `preview-publication.test.ts:276`).
+Building the web iframe now would mean changing a freshly qualified security
+rule for an optional surface whose fallback is still unproved on Safari and
+iOS. Retiring the file was rejected: the protocol fields cost almost nothing,
+and the constraints recorded here would be lost. No code was written.
+
+### Task 1: per-platform if built
+
+Chose the recommended **per-platform, advertised on evidence**. The contract
+already carries `browserEmbedded.platforms`
+(`packages/protocol/src/preview-services.ts:352`). The 2026-10-23 evidence also
+shows engines diverging on framed cross-site entries (Chromium sends iframe
+metadata and gets `403`; Firefox and WebKit drop the `Lax` cookie and get
+`401`). A uniform rule would likely mean nobody ever gets the surface.
+
+### Task 1: web iframe first if built
+
+Chose the recommended **web iframe first**. It can be tested with the existing
+Playwright preview stack (`playwright.preview.config.ts`, Chromium, Firefox
+and WebKit projects). iOS needs a real device for every run, and no Swift
+preview code exists. This Mac's simulator did not respond on 2026-10-30
+(`xcrun simctl list devices booted` timed out after 20 s), so iOS work could
+not be started here in any case.
+
+### Task 2: add the framed-entry decision
+
+Added a decision to task 2 because its earlier recommendation (bootstrap in
+the frame with a `Partitioned` transport cookie) no longer works alone: the
+cross-service read defense refuses the framed navigation before cookies come
+into it. Recommended a one-use, attachment-scoped frame-entry grant so that
+siblings still cannot frame each other. Not implemented, since task 1
+defers.
+
+### File accuracy
+
+Updated the line citations that moved since 2026-10-27
+(`preview-access.ts:179-184`, `ServiceBrowserTab.tsx:907`,
+`BrowserTab.tsx:795`). Rechecked that no backend code sets `Partitioned`.
+Every other citation in the Task analysis and Current state still matches
+`cd7bbe3e`. No follow-up todo was created: the new finding belongs in task 2,
+and the revisit trigger is already tracked as 0042 task 3.
 
 ## Related
 

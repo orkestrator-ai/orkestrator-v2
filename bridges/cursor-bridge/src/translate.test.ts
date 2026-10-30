@@ -7,6 +7,8 @@ import type { BridgeToolPart, SessionState } from "./state.js";
 import {
   ABANDONED_COMPACTION_NOTE,
   ABANDONED_TOOL_NOTE,
+  FAILED_COMPACTION_NOTE,
+  FALLBACK_COMPACTION_NOTE,
   applyInteractionUpdate,
   applyStreamUsage,
   settleAbandonedToolParts,
@@ -859,6 +861,46 @@ describe("session-wide state", () => {
       type: "compaction",
       toolState: "success",
       content: "late",
+    });
+  });
+
+  test("a failed compaction settles its boundary as a failure", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    // Parsed by the SDK's own schema, so a release that drops the field fails here.
+    applyInteractionUpdate(
+      state,
+      InteractionUpdateSchema.parse({ type: "summary-completed", failed: true }),
+    );
+
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ toolState: "failure", content: FAILED_COMPACTION_NOTE });
+  });
+
+  test("a fallback compaction says the transcript was trimmed", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary-completed", fallback: true });
+
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "success",
+      content: FALLBACK_COMPACTION_NOTE,
+    });
+  });
+
+  test("a completion after the summary settles that boundary instead of adding one", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary", summary: "trimmed copy" });
+    applyInteractionUpdate(state, { type: "summary-completed", fallback: true });
+
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolState: "success",
+      content: `${FALLBACK_COMPACTION_NOTE}.\n\ntrimmed copy`,
     });
   });
 

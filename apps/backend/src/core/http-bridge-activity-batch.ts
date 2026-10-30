@@ -97,6 +97,7 @@ export class HttpBridgeActivityBatchReader {
           ? { completionPending: entry.completionPending }
           : {}),
         ...(entry.contentRevision !== undefined ? { contentRevision: entry.contentRevision } : {}),
+        ...(entry.turnFailed ? { turnFailed: entry.turnFailed } : {}),
       });
     }
     return entries;

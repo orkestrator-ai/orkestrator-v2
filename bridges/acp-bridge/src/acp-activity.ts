@@ -18,7 +18,10 @@ export function sessionActivityObservation(sessionId: string): JsonObject {
   const state = sessions.get(sessionId);
   if (!state) return { activity: "missing" };
   if (state.status !== "running" && state.activeSubagentToolIds.size === 0) {
-    return { activity: "idle" };
+    // How the latest turn ended, for the backend's turn-end bell. A turn the
+    // bridge cut short leaves the session idle; the backend reads that one
+    // from the dispatch journal.
+    return { activity: "idle", ...(state.status === "error" ? { turnFailed: true } : {}) };
   }
   return {
     activity: state.approvals.size > 0 || state.interactions.size > 0 ? "waiting" : "working",

@@ -9,6 +9,7 @@ import {
   toolDiffFromOpenCodeToolState,
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
+import { TURN_STOPPED_BY_USER_MESSAGE } from "./agent-provider-contract.js";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
 import { isOpenCodeToolSchemaRejection } from "./opencode-turn-recovery.js";
 
@@ -526,7 +527,7 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
   const error = asRecord(info.error);
   const name = nonEmptyString(error?.name);
   if (name === "MessageAbortedError") {
-    return { kind: "stopped", message: "Query stopped by user." };
+    return { kind: "stopped", message: TURN_STOPPED_BY_USER_MESSAGE };
   }
   const data = asRecord(error?.data);
   const detail =

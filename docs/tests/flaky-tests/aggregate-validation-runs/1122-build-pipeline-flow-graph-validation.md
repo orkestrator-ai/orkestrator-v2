@@ -100,3 +100,78 @@ real UI with fixture backend state, backend service tests and protocol tests.
 No assertion, timeout, skip or product code in any unrelated failing owner was
 changed. The aggregate failures remain visible; passing owner reruns do not
 turn a failed aggregate into a pass.
+
+## Archived validation review repair, 2026-10-30
+
+The repair is committed as `23bc3ed15`. Owning graph and inspector tests passed
+(124 tests), service validation-history tests passed (10 tests), and all 58
+PipelineFlow browser cases passed across phone and desktop widths, including
+archived checks and the read-only Tests view before and after reload (76.8 s).
+Affected web/backend/e2e type checks, changed-file lint and formatting passed.
+
+Preparation had passed full format, lint and type checks. Its failed commands
+were `mise run test` and `mise run test:browser`; their evidence remains under
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/`.
+The unrelated owner follow-ups are:
+
+| Owner | Preparation symptom | Complete isolated result | Case |
+| --- | --- | --- | --- |
+| `apps/backend/src/core/design/browser-profiles.test.ts` | Profile removed before its JSON ledger entry (265.62 ms) | Passed, 1.8 s | [1314](../design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md) |
+| `apps/backend/src/core/storage-backups.test.ts` | Descendant still alive after bounded exit wait (2484.04 ms) | Passed, 3.0 s | [1316](../backend-services-and-tooling/1316-storage-backup-descendant-exit-race.md) |
+| `tests/unit/disk-report.test.ts` | Five-second timeout, null report status (5166.47 ms) | Passed, 5.2 s | [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md) |
+| `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | First-answer settling timeout (2209.90 ms) | First isolated run: 29 passed, stale/ready assertion failed; second unchanged run: 30 passed, 1.2 s | [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md) |
+| `e2e/ToolGroupFold.spec.ts` | Mobile fold gap 57 px instead of at most 2 px | 38 passed, 100.3 s | [1012](../web-ui/1012-live-tool-fold-threshold-gap.md) |
+| `e2e/AgentLaunchDialog.spec.ts` | Native branch suggestion retained `rel` instead of `release/2.0` on both viewports | Two passed, two failed, 25.6 s | Persistent native picker behavior already recorded above |
+
+The native-picker owner command was:
+
+```sh
+mise run test:logged -- --name recorded-native-branch -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+Its compressed evidence is `orkestrator-test-run.RbCuhb/recorded-native-branch.log.gz`
+below the host temporary directory. None of these owners or their product
+implementations were changed. Passing isolated runs do not make the failed
+preparation aggregates pass.
+
+### Required full-command reruns
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` exited 1
+in 1087.9 s, including about 629 s waiting for shared-host capacity. Root and
+support passed (3,306 tests), all five bridge groups passed, and protocol
+regeneration passed. Workspace failures were confined to four unchanged cases:
+
+- Design profile ledger cleanup, [1314](../design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md), repeated at 266.79 ms.
+- Desktop bridge startup, [1202](../electron-and-desktop/1202-bridge-build-startup-aggregate-timeout.md), hit its 15-second deadline; the complete owner passed alone in 1.2 s.
+- Rich-content sibling ledger, [0626](../native-agents-and-transcripts/0626-rich-content-sibling-ledger-aggregate.md), observed zero rows instead of one; the complete owner passed alone in 1.9 s.
+- Native activity batch sweep, [0247](../native-agents-and-transcripts/0247-activity-batch-sweep-no-requests.md), recorded no requests; the complete owner passed alone in 1.0 s.
+
+Workspace totals: backend 11,271 passed / 87 skipped / two failed; web 10,845
+passed / 10 skipped / one failed; desktop 1,363 passed / 16 skipped / one failed.
+Protocol, CLI, toolchain and web-public passed. No pipeline test failed.
+Outer evidence: `orkestrator-test-run.eHjonT/repaired-unit-suite.log.gz`; group
+evidence: `orkestrator-test-run.jn7K1f/`, below the host temporary directory.
+
+`mise run test:logged -- --name repaired-browser-suite -- mise run test:browser`
+exited 1 in 764.2 s: 974 passed, 106 skipped and four failed. Both native picker
+cases failed as in the complete isolated owner; desktop Cursor steer capacity
+and Virtuoso scroll-follow also failed. All 58 PipelineFlow cases passed, and
+the e2e type check passed. The chained public-site browser step was not reached.
+Evidence: `orkestrator-test-run.CtuZX3/repaired-browser-suite.log.gz` below the
+host temporary directory. The scroll-follow case observed `false` instead of
+`auto` at line 43; Cursor saturation reported no running turn instead of
+`steer-capacity-exceeded` at line 719.
+
+The complete unchanged CloseRetention owner retained the steering failure, now
+at the missing saturated-runtime card assertion: 19 passed, 20 skipped, one
+failed, 136.3 s. No new isolated pass was established; see
+[0963](../web-ui/0963-close-retention-cursor-cases-under-load.md). Its exact owner
+command and compressed evidence are recorded there. No unrelated source,
+assertions, timeouts or skips were changed.
+
+The complete unchanged VirtuosoFollow owner passed with one worker, exit 0
+in 5.4 s (two desktop cases and two mobile skips); see
+[0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md).
+Live-provider, Docker, Electron and device qualification were not run; the
+changed pipeline behaviors were covered by unit/service tests and phone and
+desktop fixture-browser cases.

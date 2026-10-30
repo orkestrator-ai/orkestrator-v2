@@ -69,3 +69,19 @@ instead of `release/2.0`. Its log is
 `orkestrator-test-run.cjxAtt/native-picker-owner.log.gz`. The separately run
 public-site browser suite passed (10.9 s); it was blocked by the chained
 component-suite failure in the exact browser command.
+
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test:browser` again reported a 57 px mobile fold gap
+against a 2 px limit (973 passed, 106 skipped, three failed overall). Evidence:
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-05.stdout.txt`.
+The complete unchanged owner passed all 38 cases across both viewports, exit 0
+in 100.3 s:
+
+```sh
+mise run test:logged -- --name recorded-tool-fold -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+Passing output was removed; the summary remains in
+`orkestrator-test-run.YX20cU` below the host temporary directory. No folding
+implementation, assertion, timeout or skip changed; the cause is unconfirmed.

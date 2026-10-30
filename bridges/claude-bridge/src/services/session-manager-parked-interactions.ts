@@ -164,9 +164,13 @@ const MAX_PROPOSED_PREFIX_TOKENS = 16;
 const MAX_PROPOSED_PREFIX_TOKEN_LENGTH = 256;
 
 /**
- * The Bash command prefix the SDK suggests remembering (`addRules` allow
- * `Bash(npm test:*)`), as words. Only a hint for the card's preselection: the
- * backend offers nothing its own matcher would not accept.
+ * The Bash command prefix the SDK suggests remembering, as words. Only a hint
+ * for the card's preselection: the backend offers nothing its own matcher
+ * would not accept.
+ *
+ * Claude Code 2.1.309 suggests `Bash(npm test *)` for a prefix and the bare
+ * command for an exact rule; older releases used the legacy `Bash(npm test:*)`.
+ * Both suffixes are stripped, and a wildcard anywhere else drops the hint.
  */
 export function proposedBashPrefix(suggestions: unknown): string[] | undefined {
   if (!Array.isArray(suggestions)) return undefined;
@@ -185,12 +189,17 @@ export function proposedBashPrefix(suggestions: unknown): string[] | undefined {
       if (!rule || typeof rule !== "object") continue;
       const { toolName, ruleContent } = rule as { toolName?: unknown; ruleContent?: unknown };
       if (toolName !== "Bash" || typeof ruleContent !== "string") continue;
-      const prefix = ruleContent.endsWith(":*") ? ruleContent.slice(0, -2) : ruleContent;
+      const prefix = ruleContent.replace(/(?::| )\*$/, "");
       const words = prefix.trim().split(/\s+/);
       if (
         words.length === 0 ||
         words.length > MAX_PROPOSED_PREFIX_TOKENS ||
-        words.some((word) => word.length === 0 || word.length > MAX_PROPOSED_PREFIX_TOKEN_LENGTH)
+        words.some(
+          (word) =>
+            word.length === 0 ||
+            word.length > MAX_PROPOSED_PREFIX_TOKEN_LENGTH ||
+            word.includes("*"),
+        )
       ) {
         continue;
       }

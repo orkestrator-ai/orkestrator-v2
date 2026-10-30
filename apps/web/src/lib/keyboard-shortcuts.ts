@@ -1,5 +1,5 @@
 /**
- * The catalog behind the keyboard shortcuts dialog (⌘⇧K / Ctrl+Shift+K).
+ * The catalog behind the keyboard shortcuts dialog (⌘⇧/ / Ctrl+Shift+/).
  *
  * The handlers themselves live next to the surfaces that own them; this list
  * only describes them. When you add, change or remove a shortcut, update the
@@ -140,19 +140,25 @@ export const DESIGN_KEYBOARD_SHORTCUTS: readonly KeyboardShortcut[] = [
   },
 ];
 
+/** The key caps of an app-level shortcut, from `APP_SHORTCUTS`. */
+export function appShortcutKeys(id: AppShortcutId, platform: ShortcutPlatform): string[] {
+  const { key, shift } = appShortcut(id);
+  const cap = key.toUpperCase();
+  if (platform === "mac") return shift ? ["⌘", "⇧", cap] : ["⌘", cap];
+  return shift ? ["Ctrl", "Shift", cap] : ["Ctrl", cap];
+}
+
 /** The entry of an app-level shortcut, with its keys from `APP_SHORTCUTS`. */
 function appShortcutEntry(
   id: AppShortcutId,
   entry: Omit<KeyboardShortcut, "id" | "app" | "mac" | "other">,
 ): KeyboardShortcut {
-  const { key, shift } = appShortcut(id);
-  const letter = key.toUpperCase();
   return {
     id,
     app: true,
     ...entry,
-    mac: shift ? ["⌘", "⇧", letter] : ["⌘", letter],
-    other: shift ? ["Ctrl", "Shift", letter] : ["Ctrl", letter],
+    mac: appShortcutKeys(id, "mac"),
+    other: appShortcutKeys(id, "other"),
   };
 }
 
@@ -463,7 +469,7 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
   },
 ];
 
-/** Words a symbol key cap answers to, so "cmd shift k" finds ⌘⇧K. */
+/** Words a symbol key cap answers to, so "cmd shift slash" finds ⌘⇧/. */
 const KEY_ALIASES: Record<string, string> = {
   "⌘": "cmd command meta",
   "⇧": "shift",
@@ -471,6 +477,7 @@ const KEY_ALIASES: Record<string, string> = {
   "⌃": "ctrl control",
   "↵": "enter return",
   "⌫": "backspace delete",
+  "/": "slash ? question",
   Ctrl: "control",
   Esc: "escape",
 };
@@ -531,7 +538,7 @@ export function filterKeyboardShortcuts(
   return result;
 }
 
-/** ⌘⇧K on macOS, Ctrl+Shift+K elsewhere; either modifier is accepted, as with ⌘K. */
+/** ⌘⇧/ on macOS, Ctrl+Shift+/ elsewhere; either modifier is accepted, as with ⌘K. */
 export function isKeyboardShortcutsShortcut(event: KeyboardEvent): boolean {
   return isKeyboardShortcutsChord(event);
 }

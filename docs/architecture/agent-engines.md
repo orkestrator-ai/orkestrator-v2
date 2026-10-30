@@ -287,9 +287,13 @@ cadences and budgets are in [recurring-work.md](recurring-work.md).
 The bridge wraps `@anthropic-ai/claude-agent-sdk` and exposes it as a REST
 surface: `POST /session/create`, `POST /session/:id/prompt`,
 `GET /session/:id/messages`, `GET /session/:id/activity`, and an SSE stream at
-`GET /event/subscribe`. `services/session-manager.ts` is the compatibility
-surface — it is where the SDK's message union is normalized into Orkestrator's
-own `NormalizedMessage`/`NormalizedPart` model, and it is the file to review on
+`GET /event/subscribe`. `services/session-manager.ts` is only a barrel. The
+compatibility surface is spread across the files that normalize the SDK's
+message union into Orkestrator's own `NormalizedMessage`/`NormalizedPart`
+model: `services/session-manager-prompt-handlers/*` (one handler per SDK frame
+type, dispatched in `dispatch.ts`), `services/session-manager-messages.ts`,
+the SDK-facing types and dispositions in `types/index.ts`, and
+`sdk-compatibility.test.ts`, which drives the installed SDK. Review those on
 every SDK bump.
 
 Turns run through the SDK's `query()` with `includePartialMessages: true` so
@@ -1121,8 +1125,15 @@ stdio. One bridge process serves the environment and spawns one CLI child per
 session, lazily re-attaching through `ensureSessionProcess` when needed. It
 launches Grok as `agent [--model M] [--reasoning-effort E] stdio`, adding
 `--always-approve` only when the execution policy selects automatic approval.
-Grok 1.0.52 still sends `session/request_permission` over ACP before every
-edit, command, fetch and MCP call under that flag, so the bridge answers those
+That argv comes from an `AcpProviderConfig` record
+(`acp-provider-config.ts`): the backend launcher builds the Grok record and
+passes it as `ACP_PROVIDER_CONFIG`, and the bridge falls back to its built-in
+Grok record only when `ACP_PROVIDER` is unset or `grok`. The record also names
+the provider's mode map and its vendor extension, model-update and
+session-update methods, so a second ACP agent is a record plus a platform id.
+Grok 1.0.52 still sent `session/request_permission` over ACP before every
+edit, command, fetch and MCP call under that flag (not rechecked at the
+1.0.67 pin), so the bridge answers those
 with the allow option while the policy is `auto-approve`. It never does so for
 a kind the policy denies (`edit`/`delete`/`move` against a file-write denial,
 `execute` against a shell denial, `fetch` against a network denial); those
@@ -1146,14 +1157,36 @@ that list. Native Grok mail is on:
 `{canPull,canSend,canInject}=true`. A rotated tab token closes that
 session's CLI child and reloads it; it is never written into process env.
 
+`initialize` requires the SDK's `PROTOCOL_VERSION` (1 at
+`@agentclientprotocol/sdk` 2.0.1). An agent that negotiates any other version
+is terminated and the session fails with a message naming both versions; the
+bridge does not try to speak a version it was not built against. The bridge
+advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` client
+capabilities. It reads the agent's `promptCapabilities` to decide what the
+prompt route may send; `undeclaredPromptCapabilities()` can credit a provider
+known to understate one. That table is empty today: Grok 1.0.52 answered
+`image: false` while reading inline image blocks, and 1.0.67 declares
+`image: true` itself.
+
 Inbound, it handles `session/update` notifications
 (`agent_message_chunk`, `tool_call`, `tool_call_update`,
-`available_commands_update`, `model_changed`, and friends) and answers
-`session/request_permission` requests through the approval flow. Any *other*
-inbound request is refused with JSON-RPC `-32601` rather than silently
-acknowledged — acknowledging a capability the bridge does not have would be a
-lie the agent then acts on. Vendor notifications it does not model are ignored,
-which costs nothing because notifications expect no reply.
+`available_commands_update`, `model_changed`, and friends) and these requests:
+
+- `session/request_permission`, through the approval flow;
+- Grok's `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests
+  (with or without the leading `_`), parked as plan-approval and question
+  interactions and answered from the HTTP interaction endpoints;
+- the ACP client methods `fs/read_text_file`, `fs/write_text_file` and
+  `terminal/*` (`acp-client-methods.ts`). File access is confined to the
+  session workspace and bounded in size; terminals are bounded in number and
+  output, and run without blocking the stdout read loop;
+- vendor model updates sent as requests, and the record's
+  `acknowledgedExtensionMethods`, answered with `{}`.
+
+Any *other* inbound request is refused with JSON-RPC `-32601` rather than
+silently acknowledged — acknowledging a capability the bridge does not have
+would be a lie the agent then acts on. Vendor notifications it does not model
+are ignored, which costs nothing because notifications expect no reply.
 
 Agent stderr is drained but never logged: it may contain prompts or file
 contents. Vendor wire formats stay inside the adapter — `session-config.ts`
@@ -1177,7 +1210,8 @@ and the backend's retry closes it. Before terminating the child, a session
 whose agent advertised `sessionCapabilities.close` is sent ACP `session/close`
 (best effort, bounded by `ACP_CLOSE_SESSION_WAIT_MS`). The spec makes that
 cancel-and-release, not delete; the bridge never sends `session/delete`, and
-Grok CLI 1.0.52 keeps the conversation listed and loadable after it. Close
+Grok CLI 1.0.52 kept the conversation listed and loadable after it (not
+rechecked at 1.0.67). Close
 drops the bridge's own journal and usage for the session and leaves Grok's
 store untouched, so `/session/list` + `session/load` reopen the conversation.
 

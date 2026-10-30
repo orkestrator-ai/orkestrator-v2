@@ -62,9 +62,17 @@ describe("keyboard shortcut catalog", () => {
   });
 
   test("matches key names and symbols", () => {
-    expect(ids(filterKeyboardShortcuts("cmd shift k", "mac"))).toContain("show-shortcuts");
-    expect(ids(filterKeyboardShortcuts("⌘⇧k", "mac"))).toEqual(["show-shortcuts"]);
-    expect(ids(filterKeyboardShortcuts("ctrl shift k", "other"))).toContain("show-shortcuts");
+    expect(ids(filterKeyboardShortcuts("cmd shift slash", "mac"))).toContain("show-shortcuts");
+    expect(ids(filterKeyboardShortcuts("⌘⇧/", "mac"))).toEqual(["show-shortcuts"]);
+    expect(ids(filterKeyboardShortcuts("ctrl shift slash", "other"))).toContain("show-shortcuts");
+    expect(ids(filterKeyboardShortcuts("cmd k", "mac"))).toContain("search-projects");
+  });
+
+  test('"slash" and "?" find the shortcuts dialog', () => {
+    for (const platform of ["mac", "other"] as const) {
+      expect(ids(filterKeyboardShortcuts("slash", platform))).toContain("show-shortcuts");
+      expect(ids(filterKeyboardShortcuts("?", platform))).toContain("show-shortcuts");
+    }
   });
 
   test("drops groups with no matches", () => {
@@ -150,13 +158,24 @@ describe("app-level shortcuts", () => {
 });
 
 describe("isKeyboardShortcutsShortcut", () => {
-  test("accepts Cmd+Shift+K and Ctrl+Shift+K", () => {
-    expect(isKeyboardShortcutsShortcut(keydown({ key: "K", metaKey: true, shiftKey: true }))).toBe(
-      true,
-    );
-    expect(isKeyboardShortcutsShortcut(keydown({ key: "K", ctrlKey: true, shiftKey: true }))).toBe(
-      true,
-    );
+  test("accepts Cmd+Shift+/ and Ctrl+Shift+/, reported as / or ?", () => {
+    for (const key of ["/", "?"]) {
+      for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+        expect(
+          isKeyboardShortcutsShortcut(keydown({ key, code: "Slash", shiftKey: true, ...modifier })),
+        ).toBe(true);
+      }
+    }
+  });
+
+  test("no longer opens on Cmd+Shift+K or Ctrl+Shift+K", () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(
+        isKeyboardShortcutsShortcut(
+          keydown({ key: "K", code: "KeyK", shiftKey: true, ...modifier }),
+        ),
+      ).toBe(false);
+    }
   });
 
   test("the advertised toggle keys match the owning shortcut handler", () => {
@@ -177,47 +196,55 @@ describe("isKeyboardShortcutsShortcut", () => {
     }
   });
 
-  test("uses the logical K instead of a different layout's physical KeyK", () => {
+  test("uses the typed / instead of a different layout's physical Slash key", () => {
     for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      // German: Shift+7 types /, and the Slash position types -.
       expect(
         isKeyboardShortcutsShortcut(
-          keydown({ key: "T", code: "KeyK", shiftKey: true, ...modifier }),
+          keydown({ key: "-", code: "Slash", shiftKey: true, ...modifier }),
         ),
       ).toBe(false);
       expect(
         isKeyboardShortcutsShortcut(
-          keydown({ key: "K", code: "KeyV", shiftKey: true, ...modifier }),
+          keydown({ key: "/", code: "Digit7", shiftKey: true, ...modifier }),
         ),
       ).toBe(true);
     }
   });
 
-  test("falls back to the physical K key on a layout that types no Latin letter there", () => {
+  test("falls back to the physical Slash key on a layout that types no ASCII there", () => {
     expect(
       isKeyboardShortcutsShortcut(
-        keydown({ key: "Л", code: "KeyK", metaKey: true, shiftKey: true }),
+        keydown({ key: ".", code: "Slash", metaKey: true, shiftKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isKeyboardShortcutsShortcut(
+        keydown({ key: "ю", code: "Slash", metaKey: true, shiftKey: true }),
       ),
     ).toBe(true);
     expect(
       isKeyboardShortcutsShortcut(
-        keydown({ key: "Л", code: "KeyE", metaKey: true, shiftKey: true }),
+        keydown({ key: "ю", code: "Period", metaKey: true, shiftKey: true }),
       ),
     ).toBe(false);
   });
 
-  test("leaves Cmd+K and other combinations alone", () => {
-    expect(isKeyboardShortcutsShortcut(keydown({ key: "k", metaKey: true }))).toBe(false);
+  test("leaves Cmd+/ and other combinations alone", () => {
+    expect(isKeyboardShortcutsShortcut(keydown({ key: "/", code: "Slash", metaKey: true }))).toBe(
+      false,
+    );
     expect(
       isKeyboardShortcutsShortcut(
-        keydown({ key: "K", metaKey: true, ctrlKey: true, shiftKey: true }),
+        keydown({ key: "/", code: "Slash", metaKey: true, ctrlKey: true, shiftKey: true }),
       ),
     ).toBe(false);
     expect(
       isKeyboardShortcutsShortcut(
-        keydown({ key: "K", metaKey: true, shiftKey: true, altKey: true }),
+        keydown({ key: "/", code: "Slash", metaKey: true, shiftKey: true, altKey: true }),
       ),
     ).toBe(false);
-    expect(isKeyboardShortcutsShortcut(keydown({ key: "J", metaKey: true, shiftKey: true }))).toBe(
+    expect(isKeyboardShortcutsShortcut(keydown({ key: "?", code: "Slash", shiftKey: true }))).toBe(
       false,
     );
   });

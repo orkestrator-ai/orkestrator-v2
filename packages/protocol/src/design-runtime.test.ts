@@ -203,13 +203,14 @@ test("serialized design runtime forwards each app shortcut once and consumes aut
   frame.eval(
     `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()})`,
   );
+  // Ctrl+Shift+/ as browsers report it, and ⌘K on a Cyrillic layout.
+  const dialog = { key: "?", code: "Slash", ctrlKey: true, shiftKey: true };
+  const search = { key: "Л", code: "KeyK", metaKey: true, shiftKey: false };
   const press = (
-    init: { shiftKey: boolean; metaKey?: boolean; ctrlKey?: boolean },
+    init: { key: string; code: string; shiftKey: boolean; metaKey?: boolean; ctrlKey?: boolean },
     repeat: boolean,
   ) => {
     const event = new frame.KeyboardEvent("keydown", {
-      key: "Л",
-      code: "KeyK",
       ...init,
       repeat,
       bubbles: true,
@@ -218,10 +219,10 @@ test("serialized design runtime forwards each app shortcut once and consumes aut
     frame.document.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   };
-  press({ ctrlKey: true, shiftKey: true }, false);
-  press({ ctrlKey: true, shiftKey: true }, true);
-  press({ metaKey: true, shiftKey: false }, false);
-  press({ metaKey: true, shiftKey: false }, true);
+  press(dialog, false);
+  press(dialog, true);
+  press(search, false);
+  press(search, true);
   expect(frame.eval("window.__forwarded")).toEqual([
     ["orkestrator-design-shortcuts", "show-shortcuts"],
     ["orkestrator-design-shortcuts", "search-projects"],
@@ -260,7 +261,13 @@ for (const minified of [false, true]) {
         const input = frame.document.createElement(tag);
         frame.document.body.append(input);
         input.focus();
-        const press = (mods: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+        const press = (mods: {
+          ctrlKey?: boolean;
+          metaKey?: boolean;
+          shiftKey?: boolean;
+          key?: string;
+          code?: string;
+        }) => {
           const event = new frame.KeyboardEvent("keydown", {
             key: "k",
             code: "KeyK",
@@ -275,7 +282,7 @@ for (const minified of [false, true]) {
         expect(press({ ctrlKey: true })).toBe(!killLine);
         expect(frame.eval("window.__forwarded.length")).toBe(killLine ? 0 : 1);
         expect(press({ metaKey: true })).toBe(true);
-        expect(press({ ctrlKey: true, shiftKey: true })).toBe(true);
+        expect(press({ ctrlKey: true, shiftKey: true, key: "?", code: "Slash" })).toBe(true);
         expect(frame.eval("window.__forwarded.map(message => message.shortcut)")).toEqual([
           ...(!killLine ? ["search-projects"] : []),
           "search-projects",

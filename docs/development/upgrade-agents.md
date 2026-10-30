@@ -437,8 +437,11 @@ modules `packages/cli/scripts/build.ts` leaves unbundled — so the Agent SDK
 there is a real
 runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's.
 
-`bridges/claude-bridge/src/services/session-manager.ts` is the main compatibility
-surface. It uses the Agent SDK's `query()` async iterator, session lifecycle
+`bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
+compatibility surface is `services/session-manager-prompt-handlers/*` (one
+handler per SDK frame type), `services/session-manager-messages.ts`, the
+SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
+(where `query()` is called) and `sdk-compatibility.test.ts`. Together they use the Agent SDK's `query()` async iterator, session lifecycle
 helpers, supported models and agents, file rewind, background-task controls,
 partial messages, structured output, checkpoints, permission/input callbacks,
 settings, plugins, MCP configuration, and SDK message unions. It passes
@@ -518,7 +521,9 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
 
 5. Refresh and verify the four Claude artifact records using the shared binary
    procedure.
-6. Review `session-manager.ts` for option, event, and message-union changes. Pay
+6. Review the compatibility surface above (`session-manager-prompt-handlers/*`,
+   `session-manager-messages.ts`, `session-manager-prompt-launch.ts` and
+   `types/index.ts`) for option, event, and message-union changes. Pay
    particular attention to the version-pinned `canUseTool` comment in
    `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool

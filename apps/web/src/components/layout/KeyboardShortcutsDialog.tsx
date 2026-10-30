@@ -10,6 +10,7 @@ import { Keyboard, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import {
+  appShortcutKeys,
   detectShortcutPlatform,
   filterKeyboardShortcuts,
   shortcutKeys,
@@ -44,7 +45,7 @@ function KeyboardShortcutsPanel({
 }) {
   const [query, setQuery] = useState("");
   const groups = useMemo(() => filterKeyboardShortcuts(query, platform), [query, platform]);
-  const openShortcut = platform === "mac" ? ["⌘", "⇧", "K"] : ["Ctrl", "Shift", "K"];
+  const openShortcut = appShortcutKeys("show-shortcuts", platform);
 
   return (
     <>
@@ -126,7 +127,7 @@ function KeyboardShortcutsPanel({
 }
 
 /**
- * Lists application keyboard shortcuts, searchable. ⌘⇧K / Ctrl+Shift+K
+ * Lists application keyboard shortcuts, searchable. ⌘⇧/ / Ctrl+Shift+/
  * toggles it from anywhere in this document (see `app-shortcuts.ts`),
  * including its design frames; the desktop app also opens it
  * from View › Keyboard Shortcuts… and forwards the chord from native preview

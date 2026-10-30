@@ -108,3 +108,12 @@ and on a clean `dfedcd743` (origin/main) clone (22 pass). Evidence:
 `orkestrator-test-run.2rpgar/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the host temporary directory. No implementation, assertion, wait,
 timeout or skip changed.
+
+## White pipe icon main merge — 2026-10-30
+
+- **Parents:** feature `12b47b2dd5d69bf33452af39c7dcde8fcea7b70d` and main `f32615affffe1e6b9f215ac8f6c9af509bf30567`; the only original conflict was `apps/web/src/components/environments/EnvironmentItem.tsx`.
+- **Original command:** `mise run test`, workspace reservation six slots with two isolated Bun workers per package; root and bridge groups and component browser validation also ran on the shared host.
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`, `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx:711`, expected one projection read and received two (1627.19 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-command-filter-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.2 seconds logged.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.czctSA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate completion. The passing owner's bounded runner removed its raw output; only its successful exit and duration were retained.
+- **Assessment:** recurrence confirmed by the complete unchanged owner pass. Shared-host contention remains a hypothesis; no command implementation, assertion, deadline or skip changed, and the aggregate remains non-green.

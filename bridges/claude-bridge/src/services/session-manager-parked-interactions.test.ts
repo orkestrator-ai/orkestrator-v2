@@ -1,6 +1,8 @@
 import { describe, expect, jest, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { permissionRuleOffer } from "@orkestrator/protocol/permission-rules";
 
+import { claudeRuleDetail } from "../../../../apps/backend/src/core/permission-rules/request-detail.js";
 import { coordinatorProcessPolicy } from "./read-only-policy.js";
 import {
   answerQuestion,
@@ -438,6 +440,19 @@ describe("tool approvals under an ask policy", () => {
       ruleEligible: true,
       proposedCommandPrefix: ["npm", "run", "test"],
     });
+    const detail = claudeRuleDetail({ ...pending.get("req-r1") }, "command-approval");
+    expect(detail).toMatchObject({
+      subject: { kind: "command", command: "npm run test -- --watch" },
+      proposal: ["npm", "run", "test"],
+    });
+    const offer = permissionRuleOffer(detail!.subject, { proposal: detail!.proposal });
+    expect(offer.patterns).toEqual([
+      "npm run test -- --watch",
+      "npm run test --",
+      "npm run test",
+      "npm run",
+    ]);
+    expect(offer.patterns[offer.suggested]).toBe("npm run test");
     // A relative path cannot be placed in the workspace.
     expect(pending.get("req-r2")).not.toHaveProperty("ruleEligible");
     expect(pending.get("req-r3")).toMatchObject({ ruleEligible: true, mcpServer: "linear" });

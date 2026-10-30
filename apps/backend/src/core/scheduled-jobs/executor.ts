@@ -18,12 +18,14 @@ import {
 } from "@orkestrator/protocol/public-api";
 import { PUBLIC_ACTION_INPUTS } from "@orkestrator/protocol/public-api-inputs";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
-import type {
-  ScheduleAction,
-  ScheduleFire,
-  ScheduleFireOutcome,
-  ScheduleOwner,
-  ScheduledJob,
+import {
+  SCHEDULED_JOB_LIMITS,
+  scheduleAccountSwitchGrant,
+  type ScheduleAction,
+  type ScheduleFire,
+  type ScheduleFireOutcome,
+  type ScheduleOwner,
+  type ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
 import type {
   GraphLaunchOptions,
@@ -786,6 +788,10 @@ export class ScheduledJobExecutor {
     } else {
       throw new Error("Only agents and coordinators send reminders to themselves");
     }
+    const grant = scheduleAccountSwitchGrant(job.action);
+    const grantNote = grant
+      ? `\n\nThe user asked for this in their own words: "${grant.userInstruction}". This timer carries their permission to switch the active ${grant.platforms.join(" or ")} account${grant.nodeIds?.length ? ` (also on node ${grant.nodeIds.join(", ")})` : ""} without asking again, for ${SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs / 3_600_000} hours after this reminder was delivered: pass scheduleId ${job.id} to switch_provider_account.`
+      : "";
     const message = await this.runtime.storage.sendAgentMail(
       { kind: "system", projectId: destination.projectId, source: "workflow", resourceId: job.id },
       {
@@ -793,7 +799,7 @@ export class ScheduledJobExecutor {
         toEnvironmentId: destination.environmentId,
         toTabId: destination.tabId,
         subject,
-        body: `${body}\n\n(Scheduled by you: ${job.name}, schedule ${job.id}.)`,
+        body: `${body}${grantNote}\n\n(Scheduled by you: ${job.name}, schedule ${job.id}.)`,
       },
     );
     return {

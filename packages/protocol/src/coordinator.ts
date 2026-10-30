@@ -115,6 +115,15 @@ export interface CoordinatorConversation {
   mailboxIncarnationId: string;
   /** Repository context included in the newest successfully dispatched turn. */
   repositoryContextRevisionAcknowledged?: number;
+  /**
+   * What started the newest successfully dispatched turn: a prompt the user
+   * sent (`user`), or mail and backend notices such as a fired timer or a
+   * workflow status wake (`mail`). Incomplete-turn recovery leaves it as it
+   * was. A tool that may only act on the user's own instruction (a self-timer
+   * carrying permission to switch accounts) checks it.
+   */
+  lastTurnOrigin?: CoordinatorTurnOrigin;
+  lastTurnStartedAt?: string;
   bridgePort?: number;
   bridgePid?: number;
   /**
@@ -129,6 +138,8 @@ export interface CoordinatorConversation {
 }
 
 export type CoordinatorConversationRole = "main" | "side";
+
+export type CoordinatorTurnOrigin = "user" | "mail";
 
 /**
  * The address any agent in a project can mail to reach its coordinator.
@@ -349,6 +360,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "get_tab_state",
   "get_tab_transcript",
   "get_ticket",
+  "get_usage_limits",
   "launch_environment",
   "launch_feature_plan",
   "launch_graph",
@@ -363,6 +375,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "list_node_environments",
   "list_nodes",
   "list_projects",
+  "list_provider_accounts",
   "list_schedules",
   "list_tabs",
   "list_tickets",
@@ -390,6 +403,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "start_node_environment",
   "stop_environment",
   "stop_node_environment",
+  "switch_provider_account",
   "transfer_files",
   "update_ticket",
 ] as const);
@@ -424,6 +438,17 @@ export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
  */
 export const COORDINATOR_PR_RULE =
   "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
+
+/**
+ * Self-timers and provider accounts, told to every main coordinator verbatim.
+ *
+ * "Check the workers in 2 hours and switch accounts if they hit a usage
+ * limit" needs three tools in order, and a coordinator that does not know
+ * the timer can carry the user's permission would either ask the user again
+ * when it fires (nobody may be there) or switch without asking.
+ */
+export const COORDINATOR_TIMERS_AND_ACCOUNTS_RULE =
+  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch. Never switch accounts on your own initiative.';
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
@@ -623,6 +648,10 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
           (Number.isSafeInteger(item.repositoryContextRevisionAcknowledged) &&
             (item.repositoryContextRevisionAcknowledged as number) >= 0)) &&
         (item.role === undefined || item.role === "main" || item.role === "side") &&
+        (item.lastTurnOrigin === undefined ||
+          item.lastTurnOrigin === "user" ||
+          item.lastTurnOrigin === "mail") &&
+        (item.lastTurnStartedAt === undefined || typeof item.lastTurnStartedAt === "string") &&
         (item.sideOrdinal === undefined ||
           (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );

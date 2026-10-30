@@ -556,3 +556,62 @@ for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"])
     notice.mockRestore();
   });
 }
+
+test("an approved account switch keeps its account fields and runs the Settings switch", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const main = await world.main();
+  const { instance } = coordination(world, []);
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const options = (
+    instance as unknown as {
+      options: { invoke: (command: string, args: Record<string, unknown>) => Promise<unknown> };
+    }
+  ).options;
+  options.invoke = async (command, args) => {
+    calls.push({ command, args });
+    return {};
+  };
+  const notice = spyOn(world.storage, "sendAgentMail");
+  const request = await instance.createActionRequest({
+    requestId: "switch-1",
+    kind: "switch-agent-account",
+    targets: [
+      {
+        nodeId: "bk_leaf",
+        nodeName: "Leaf",
+        platform: "claude",
+        accountId: "acct-work",
+        accountLabel: "Work",
+        // Not a field this kind has: dropped.
+        secret: "never stored",
+      },
+    ],
+    requestedBy: {
+      coordinatorEnvironmentId: main.environmentId,
+      coordinatorTabId: main.tabId,
+      projectId: world.projectId,
+    },
+    reason: "Switch when the limit is hit",
+  });
+  expect(request.targets).toEqual([
+    {
+      nodeId: "bk_leaf",
+      nodeName: "Leaf",
+      platform: "claude",
+      accountId: "acct-work",
+      accountLabel: "Work",
+    },
+  ]);
+  const resolved = await instance.actions.resolve(request.requestId, "approve");
+  expect(resolved).toMatchObject({ state: "executed", result: { code: "switched" } });
+  expect(calls).toEqual([
+    { command: "set_active_agent_account", args: { platform: "claude", accountId: "acct-work" } },
+  ]);
+  expect(notice.mock.calls[0]![1]).toMatchObject({
+    toEnvironmentId: main.environmentId,
+    subject: expect.stringContaining("Switch the active Claude account on Leaf to “Work”"),
+  });
+  notice.mockRestore();
+  instance.collector.dispose();
+});

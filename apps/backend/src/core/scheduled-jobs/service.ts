@@ -24,7 +24,12 @@ import {
   type ScheduledJob,
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { requestDigest, ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
+import {
+  isReminderToSelf,
+  requestDigest,
+  ScheduleAuthorityError,
+  type ScheduledJobExecutor,
+} from "./executor.js";
 import {
   claimDueFire,
   cloneJob,
@@ -109,6 +114,28 @@ export interface ScheduledJobServiceOptions {
 
 function iso(ms: number): string {
   return new Date(ms).toISOString();
+}
+
+/**
+ * Refuses a coordinator's one-shot self-timer set too far ahead. Returns
+ * whether the schedule is a coordinator self-timer at all.
+ */
+function assertSelfTimerDelay(
+  owner: ScheduleOwner,
+  action: ScheduleAction,
+  trigger: ScheduledJob["trigger"],
+  now: number,
+): boolean {
+  if (owner.kind !== "coordinator" || !isReminderToSelf(owner, action)) return false;
+  if (
+    trigger.kind === "once" &&
+    Date.parse(trigger.at) - now > SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs
+  ) {
+    throw new ScheduleInputError(
+      `A self-timer can be set at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead`,
+    );
+  }
+  return true;
 }
 
 export class ScheduledJobService {
@@ -344,6 +371,7 @@ export class ScheduledJobService {
       if (prior) return this.replay(prior, fingerprint);
     }
     const trigger = normalizeScheduleTrigger(input, timeZone, now);
+    this.assertSelfTimerLimits(owner, action, trigger, now, ownerKey);
     await this.options.executor.validate(owner, action);
     const ownerLabel = (await this.options.ownerLabel?.(owner)) ?? defaultOwnerLabel(owner);
     const nextFireAt = nextScheduleSlot(trigger, timeZone, now);
@@ -375,6 +403,29 @@ export class ScheduledJobService {
     this.wake();
     if (!outcome.inserted) return this.replay(outcome.job, fingerprint);
     return { job: this.strip(outcome.job), replayed: false };
+  }
+
+  /**
+   * A coordinator's self-timers (reminders to itself) are bounded: a one-shot
+   * may be set at most `maxSelfTimerDelayMs` ahead, and one owner holds at
+   * most `maxPendingSelfTimers` that are still active.
+   */
+  private assertSelfTimerLimits(
+    owner: ScheduleOwner,
+    action: ScheduleAction,
+    trigger: ScheduledJob["trigger"],
+    now: number,
+    ownerKey: string,
+  ): void {
+    if (!assertSelfTimerDelay(owner, action, trigger, now)) return;
+    const pending = this.options.store
+      .list({ ownerKey })
+      .filter((job) => job.state === "active" && isReminderToSelf(job.owner, job.action)).length;
+    if (pending >= SCHEDULED_JOB_LIMITS.maxPendingSelfTimers) {
+      throw new ScheduleInputError(
+        `You already have ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending self-timers; cancel one with cancel_schedule first`,
+      );
+    }
   }
 
   private replay(
@@ -425,6 +476,7 @@ export class ScheduledJobService {
       if (action) next.action = action;
       if (retimed) {
         next.trigger = normalizeScheduleTrigger(input, next.timeZone, now);
+        assertSelfTimerDelay(next.owner, next.action, next.trigger, now);
       } else if (input.startAt !== undefined) {
         throw new ScheduleInputError("startAt goes with everySeconds");
       }

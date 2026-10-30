@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
+import { formatInstantInZone, hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import {
   describeScheduleTrigger,
+  SCHEDULED_JOB_LIMITS,
+  scheduleAccountSwitchGrant,
   type ScheduleAction,
   type ScheduledJob,
   type ScheduledJobSummary,
@@ -16,7 +18,24 @@ import type { ScheduleCreateInput } from "./service.js";
  * authenticated; the tool arguments can never name a different owner.
  */
 
+/** A self-timer's account-switch permission, as the coordinator asked for it. */
+export interface SelfTimerAuthorization {
+  platforms: Array<"claude" | "codex">;
+  nodeIds?: string[];
+  userInstruction: string;
+}
+
 export interface ScheduleToolBackend {
+  /**
+   * The reminder a self-timer sends: mail to the caller's own mailbox, with
+   * the account-switch permission checked and stamped by the backend. Only
+   * coordinators have self-timers.
+   */
+  selfTimer?(input: {
+    body: string;
+    subject?: string;
+    authorize?: SelfTimerAuthorization;
+  }): Promise<ScheduleAction>;
   create(
     input: ScheduleCreateInput,
     requestId: string,
@@ -28,7 +47,13 @@ export interface ScheduleToolBackend {
 
 export type ScheduleToolSurface = "agent" | "coordinator";
 
-const ACTION_TYPES = ["send_message", "send_prompt_to_tab", "launch_environment", "tool"] as const;
+const ACTION_TYPES = [
+  "remind_me",
+  "send_message",
+  "send_prompt_to_tab",
+  "launch_environment",
+  "tool",
+] as const;
 
 function actionSchema(surface: ScheduleToolSurface) {
   const coordinator = surface === "coordinator";
@@ -38,7 +63,7 @@ function actionSchema(surface: ScheduleToolSurface) {
         .enum(coordinator ? ACTION_TYPES : (["send_message", "tool"] as const))
         .describe(
           coordinator
-            ? "send_message: agent mail as you. send_prompt_to_tab: prompt an idle worker tab. launch_environment: launch a worker. tool: any other of your tools by name."
+            ? "remind_me: a self-timer; body arrives in this conversation as a new turn when it fires. send_message: agent mail as you. send_prompt_to_tab: prompt an idle worker tab. launch_environment: launch a worker. tool: any other of your tools by name."
             : "send_message: agent mail as you. tool: any other of your tools by name.",
         ),
       toEnvironmentId: z
@@ -65,9 +90,38 @@ function actionSchema(surface: ScheduleToolSurface) {
         .min(1)
         .max(32 * 1024)
         .optional()
-        .describe("send_message: the text delivered when the schedule fires."),
+        .describe(
+          coordinator
+            ? "remind_me and send_message: the text delivered when the schedule fires. For remind_me write the full instruction you will need then; you will not remember this turn's context."
+            : "send_message: the text delivered when the schedule fires.",
+        ),
       ...(coordinator
         ? {
+            authorizeAccountSwitch: z
+              .object({
+                platforms: z
+                  .array(z.enum(["claude", "codex"]))
+                  .min(1)
+                  .max(2)
+                  .describe("Providers whose active account the timer may switch."),
+                nodeIds: z
+                  .array(z.string().trim().min(1).max(200))
+                  .max(16)
+                  .optional()
+                  .describe(
+                    "Other machines it may switch on (from list_nodes); omit for this one.",
+                  ),
+                userInstruction: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .max(500)
+                  .describe("What the user asked, in their words."),
+              })
+              .optional()
+              .describe(
+                "remind_me only, and only when the user's own message in this turn asked you to switch accounts at that time: lets switch_provider_account act when the timer fires without a second approval. Refused in a turn started by mail or another timer.",
+              ),
             environmentId: z
               .string()
               .trim()
@@ -149,6 +203,9 @@ function required<T>(value: T | undefined, field: string, type: string): T {
 
 export function scheduleActionFromTool(action: ActionInput): ScheduleAction {
   switch (action.type) {
+    case "remind_me":
+      // Resolved by the backend, which knows the caller's own address.
+      throw new Error("remind_me is a coordinator self-timer");
     case "send_message":
       return {
         kind: "action",
@@ -190,6 +247,13 @@ export function scheduleActionFromTool(action: ActionInput): ScheduleAction {
         ...(typeof action.nodeId === "string" ? { nodeId: action.nodeId } : {}),
       };
     case "tool":
+      // A self-timer's account-switch permission is stamped only by the
+      // backend (remind_me with authorizeAccountSwitch), never passed through.
+      if (action.arguments && "grant" in action.arguments) {
+        throw new Error(
+          "arguments.grant is not allowed; use remind_me with authorizeAccountSwitch",
+        );
+      }
       return {
         kind: "action",
         action: required(action.tool, "tool", "tool"),
@@ -213,6 +277,9 @@ function scheduleView(job: ScheduledJob | ScheduledJobSummary) {
     when: describeScheduleTrigger(job.trigger, job.timeZone),
     timeZone: job.timeZone,
     nextFireAt: job.nextFireAt,
+    ...(job.nextFireAt
+      ? { nextFireLocal: formatInstantInZone(Date.parse(job.nextFireAt), job.timeZone) }
+      : {}),
     catchUpMinutes: job.catchUpMinutes,
     action: job.action.kind === "action" ? job.action.action : job.action.kind,
     lastOutcome: last
@@ -265,7 +332,7 @@ export function registerScheduleTools(
         "Have the Orkestrator backend run an action later, once or repeatedly, even after this session ends or the backend restarts. " +
         `Give exactly one of at (one-shot: "03:12" is the next 03:12, "2026-10-26T03:12", an ISO time with an offset, or "+30m"), cron (five fields, e.g. "0 9 * * 1-5") or everyMinutes. Times use timeZone (default ${zone}); DST is handled. ` +
         (surface === "coordinator"
-          ? 'To wake yourself later, send_message to "coordinator": it arrives as a reminder that starts a turn. '
+          ? `To wake yourself later (a self-timer: "in 2 hours" is at "+2h", "at 14:30" is at "14:30"), use action type remind_me: its body arrives in this conversation as a reminder that starts a new turn, and one that fires while you are mid-turn is queued until the turn ends. Absolute times are read in the user's local time zone, this machine's (${zone}), unless you pass timeZone; the result names the zone used and the local time. A self-timer is at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead and you may hold ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending. `
           : 'To wake yourself later, send_message to your own environment id: it arrives as a reminder that starts a turn. To wake your coordinator, send to "coordinator". ') +
         "The action runs as you, with your permissions at fire time; anything you could not do directly is refused. A fire missed while the backend was down runs once on return if no more than catchUpMinutes late (default 15), otherwise it is skipped. Reuse requestId when retrying. Returns scheduleId and nextFireAt; then finish your turn.",
       inputSchema: z.object({
@@ -310,16 +377,49 @@ export function registerScheduleTools(
       },
     },
     async ({ requestId, everyMinutes, action, tabId, ...timing }) => {
-      const created = await available().create(
+      const resolved = available();
+      const input = action as ActionInput;
+      if (input.authorizeAccountSwitch && input.type !== "remind_me") {
+        throw new Error("authorizeAccountSwitch goes with action type remind_me");
+      }
+      let scheduled: ScheduleAction;
+      if (input.type === "remind_me") {
+        if (!resolved.selfTimer) throw new Error("remind_me is a coordinator self-timer");
+        scheduled = await resolved.selfTimer({
+          body: required(input.body, "body", "remind_me"),
+          ...(input.subject ? { subject: input.subject } : {}),
+          ...(input.authorizeAccountSwitch
+            ? { authorize: input.authorizeAccountSwitch as SelfTimerAuthorization }
+            : {}),
+        });
+      } else {
+        scheduled = scheduleActionFromTool(input);
+      }
+      if (input.type === "remind_me" && timing.name === undefined) {
+        // The reminder's subject is "Scheduled reminder: <name>".
+        const summary = input.body!.replace(/\s+/g, " ").trim();
+        timing.name = `Self-timer: ${summary.length > 80 ? `${summary.slice(0, 79)}…` : summary}`;
+      }
+      const created = await resolved.create(
         {
           ...timing,
           ...(everyMinutes !== undefined ? { everySeconds: everyMinutes * 60 } : {}),
-          action: scheduleActionFromTool(action as ActionInput),
+          action: scheduled,
         },
         requestId,
         typeof tabId === "string" ? tabId : undefined,
       );
-      return textResult({ ...scheduleView(created.schedule), replayed: created.replayed });
+      return textResult({
+        ...scheduleView(created.schedule),
+        timeZoneUsed:
+          typeof timing.timeZone === "string"
+            ? `${created.schedule.timeZone} (as given)`
+            : `${created.schedule.timeZone} (the user's local time zone: this machine's)`,
+        ...(scheduleAccountSwitchGrant(created.schedule.action)
+          ? { carriesAccountSwitchPermission: true }
+          : {}),
+        replayed: created.replayed,
+      });
     },
   );
   server.registerTool(

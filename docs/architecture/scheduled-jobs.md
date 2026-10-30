@@ -190,6 +190,40 @@ to mute, Off, pause and the hop budget. Mail to `"coordinator"` resolves to
 whichever conversation is main when it fires and starts one if none is open,
 exactly as a worker's mail would.
 
+### Self-timers
+
+A coordinator's `remind_me` action (tool surface only) is a reminder to
+oneself with a fixed shape: `send_message` to `"coordinator"` for the main
+coordinator, or to the side agent's own runtime id, so it comes back to the
+conversation that set it, through the reminder path above. Its default name
+is `Self-timer: <body>`, so the inbox subject says what it is for.
+
+- **Limits.** Every coordinator reminder to itself counts as a self-timer,
+  whether set with `remind_me` or as `send_message` to its own address. A
+  one-shot one is at most 7 days ahead (`maxSelfTimerDelayMs`, also checked
+  when one is retimed) and one owner (the main coordinator, or one side
+  agent) holds at most 20 active ones (`maxPendingSelfTimers`), inside the
+  general 50 per owner. Agents' reminders to themselves keep the general
+  limits.
+- **Time zone.** `at: "14:30"` and `"2026-10-30T14:30"` are read in the
+  schedule's zone, by default the backend host's, which for the coordinator's
+  own machine is the user's local zone. The create result adds `timeZoneUsed`
+  ("… (as given)" or "… (the user's local time zone: this machine's)") and
+  every schedule view adds `nextFireLocal`.
+- **Busy.** A reminder is mail from a system sender, so a coordinator that is
+  mid-turn when it fires gets it when the turn ends (the mail drain holds it
+  as busy and retries); several waiting messages arrive in one turn. It never
+  steers into a running turn.
+- **Account-switch permission.** `authorizeAccountSwitch: {platforms,
+  nodeIds?, userInstruction}` stamps `input.grant`
+  (`ScheduleAccountSwitchGrant`) on the reminder. The coordinator tool backend
+  accepts it only for the main coordinator and only when the conversation's
+  `lastTurnOrigin` is `user`; a `tool` action naming `grant` is refused, so it
+  cannot be passed through. The fired reminder says what the permission
+  covers and that it lasts `selfTimerGrantWindowMs` (2 hours) after delivery;
+  `switch_provider_account` checks the timer's newest succeeded fire against
+  that window. See [agent-accounts.md](agent-accounts.md#coordinator-switching).
+
 A **launch** without `baseCommit` resolves its base when it fires: the newest
 commit of `baseBranch` (the repository's base branch by default), fetched
 through `get_project_base_branch_tip`, which now takes an optional `branch`.
@@ -417,6 +451,7 @@ Each decision lists the options, the choice and its trade-offs.
 ## Limits
 
 1 000 schedules per data directory; 50 per owner other than the operator; 20
+active self-timers per coordinator owner, each at most 7 days ahead; 20
 fires of history each; action input 64 KiB; prompt 100 000 characters;
 intervals 60 s to 366 days; catch-up 0 to 10 080 minutes; at most four fires
 executing at once per backend.
@@ -447,6 +482,12 @@ executing at once per backend.
   real Control MCP endpoint: a coordinator's "wake me at 03:12", a scheduled
   launch through its own `launch_environment`, side-agent refusal, listing
   and cancelling.
+- `apps/backend/src/core/coordinator-timers-and-accounts.test.ts`: self-timers
+  over the real Control MCP endpoint (relative and absolute times and the
+  zone reported, delivery to the main or side conversation, cancelling, a
+  restart, the delay and pending limits, a permission refused in a mail
+  turn), and the "check in 2 hours and switch accounts" scenario end to end
+  with fake accounts.
 - `apps/web/src/components/settings/SchedulesSettings.test.tsx`: the
   settings list, actions, create/edit dialog (a graph schedule with saved
   defaults or pinned roles and parameters, and its edit) and history;

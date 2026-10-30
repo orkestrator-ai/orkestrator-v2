@@ -790,3 +790,44 @@ test("validation-only history keeps the replacement reviewer panel together", as
     expect(overlapping(await boxes(page))).toBe(0);
   }
 });
+
+test("archived Prepare checks and its read-only Tests view survive reload", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=validation-history");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    const older = node(page, "Prepare");
+    await expect(older).toHaveAttribute("data-flow-state", "failed");
+    await expect(older.getByTitle("old-test: failed")).toBeVisible();
+    await expect(older.getByTitle("old-lint: passed")).toBeVisible();
+    await expect(node(page, "Prepare 2").getByTitle("test: passed")).toBeVisible();
+    await older.click();
+    const inspector = page.getByTestId("pipeline-inspector");
+    await inspector.getByRole("tab", { name: "Tests", exact: true }).click();
+    const commands = inspector.getByRole("table", { name: "Validation commands" });
+    await expect(commands.getByText("mise run old-test", { exact: true })).toBeVisible();
+    await expect(commands.getByText("mise run old-lint", { exact: true })).toBeVisible();
+    await inspector
+      .locator("summary")
+      .filter({ hasText: /^Notes$/ })
+      .click();
+    await expect(
+      inspector.getByText(
+        "An earlier pass's run: its results are kept, its command output is not.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      inspector.getByRole("button", {
+        name: /Stop command|Restart validation|Skip validation|Retry failed step/,
+      }),
+    ).toHaveCount(0);
+    expect(overlapping(await boxes(page))).toBe(0);
+    expect(
+      await page.evaluate(() =>
+        window.__pipelineCommands?.filter((entry) =>
+          /retry|restart|skip|stop|get_review_validation_output/.test(entry.command),
+        ),
+      ),
+    ).toEqual([]);
+  }
+});

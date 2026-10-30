@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   newReviewValidationRun,
+  isPersistedReviewPackage,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -17,9 +18,13 @@ import {
 import {
   cleanReview,
   pipeline,
+  mutateStored,
+  startBuilding,
   startInput,
   withService,
 } from "./build-pipeline-service-test-support.js";
+
+import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
 
 const HEAD = "c".repeat(40);
 
@@ -103,6 +108,95 @@ describe("validation history", () => {
     // Archiving the same run again replaces its entry rather than repeating it.
     archiveValidationRun(record, run(`run-${MAX_PIPELINE_VALIDATION_HISTORY + 2}`));
     expect(record.validationHistory).toHaveLength(MAX_PIPELINE_VALIDATION_HISTORY);
+  });
+
+  for (const status of ["planned", "running"] as const) {
+    test.each([true, false])(
+      `re-preparation archives ${status} validation (valid cancellation: %s)`,
+      async (valid) => {
+        const original = run("old-run", { status, completedAt: undefined });
+        original.results = original.results.map((result) => ({ ...result, durationMs: 1235 }));
+        original.results[0] = { ...original.results[0]!, status: "running", exitCode: null };
+        const cancelled = {
+          ...original,
+          status: "cancelled" as const,
+          error: "Cancellation snapshot adopted",
+          completedAt: "2026-07-29T00:02:00.000Z",
+          results: original.results.map((result) => ({
+            ...result,
+            status: "passed" as const,
+            exitCode: 0,
+          })),
+        };
+        await withService(
+          async (service, storage, _provider, invocations) => {
+            const { started } = await startBuilding(service, storage);
+            await mutateStored(storage, started.id, (snapshot) => {
+              snapshot.validationRun = original;
+            });
+            const snapshot = await service.retryReview(started.id);
+            expect(
+              invocations.filter((entry) => entry.command === "cancel_review_validation"),
+            ).toEqual([
+              {
+                command: "cancel_review_validation",
+                args: { environmentId: "env-1", run: original },
+              },
+            ]);
+            expect(snapshot.validationRun).toBeUndefined();
+            expect(snapshot.sessions.at(-1)?.label).toBe("Package Preparation Session");
+            expect(snapshot.validationHistory).toEqual([
+              summarizeValidationRun(valid ? cancelled : original, 0, false)!,
+            ]);
+            expect(snapshot.validationHistory![0]!.commands[0]!.status).toBe(
+              valid ? "passed" : "incomplete",
+            );
+            expect(isBuildPipeline(snapshot)).toBe(true);
+          },
+          { cancelValidationResult: () => (valid ? cancelled : { status: "invalid" }) },
+        );
+      },
+    );
+  }
+
+  test("accepting a new plan archives a leftover validation run", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      const leftover = run("leftover");
+      leftover.results = leftover.results.map((result) => ({ ...result, durationMs: 1235 }));
+      const reviewPackage = testGeneratedReviewPackage({
+        packageId: "old-package",
+        round: 1,
+        targetBranch: "main",
+      });
+      if (!isPersistedReviewPackage(reviewPackage)) throw new Error("Invalid fixture package");
+      provider.structured = async <T>(_sessionId: string, requestId: string) => ({
+        ok: true as const,
+        provider: "claude" as const,
+        requestId,
+        value: {
+          headRef: HEAD,
+          commands: [],
+          limitations: ["No external checks for this fixture."],
+        } as T,
+      });
+      await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.validationRun = leftover;
+        snapshot.reviewPackage = reviewPackage;
+        snapshot.skippedValidationRunId = leftover.id;
+      });
+      let snapshot = await pipeline(storage, started.id);
+      for (let pass = 0; pass < 5 && !snapshot.validationHistory?.length; pass++) {
+        await service.advanceNow(started.id);
+        snapshot = await pipeline(storage, started.id);
+      }
+      expect(snapshot.phase).toBe("building");
+      expect(snapshot.validationHistory).toEqual([summarizeValidationRun(leftover, 0, true)!]);
+      expect(snapshot.validationRun?.id).not.toBe(leftover.id);
+      expect(snapshot.validationRun?.status).toBe("planned");
+
+      expect(isBuildPipeline(snapshot)).toBe(true);
+    });
   });
 
   test("a failed verification keeps the round's validation summary for the next round", async () => {

@@ -641,8 +641,15 @@ export function pipelineFlowModel(
   }
   const emittedAttempts = new Set<string>();
 
-  // An earlier forward pass's validation follows the session that planned it:
-  // the newest session started before the run.
+  // Replacement validation belongs to the same preparation as its original
+  // run, even when superseded downstream sessions predate the replacement.
+  const replacedRuns = new Map(
+    (pipeline.rewinds ?? []).flatMap((rewind) =>
+      rewind.replacementValidationRunId && rewind.validationRun
+        ? [[rewind.replacementValidationRunId, rewind.validationRun] as const]
+        : [],
+    ),
+  );
   const shownRunIds = new Set(
     [
       pipeline.validationRun?.id,
@@ -652,7 +659,13 @@ export function pipelineFlowModel(
   const archivedByAnchor = new Map<string, ValidationSummary[]>();
   for (const summary of pipeline.validationHistory ?? []) {
     if (shownRunIds.has(summary.runId)) continue;
-    const started = Date.parse(summary.startedAt);
+    let owner = { id: summary.runId, startedAt: summary.startedAt };
+    const visited = new Set<string>();
+    while (replacedRuns.has(owner.id) && !visited.has(owner.id)) {
+      visited.add(owner.id);
+      owner = replacedRuns.get(owner.id)!;
+    }
+    const started = Date.parse(owner.startedAt);
     const anchor = pipeline.sessions.findLast(
       (session) => Date.parse(session.startedAt) <= started,
     );
@@ -1100,7 +1113,7 @@ export function pipelineFlowModel(
           (phase === "reviewing" &&
             (node.kind === "reviewer" ||
               node.kind === "consolidation" ||
-              node.hasValidation === true))) &&
+              (node.hasValidation === true && !node.validationRun)))) &&
         (!node.session || node.session.iteration === pipeline.iteration) &&
         (!pipeline.failureContext?.sessionId ||
           node.session?.sdkSessionId === pipeline.failureContext.sessionId),

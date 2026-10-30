@@ -22,6 +22,7 @@ import {
   queryGraphNode,
   renderPipelineTab,
   retryReviewerMock,
+  retryStageMock,
   restartStepMock,
   restoreBuildChatTabMocks,
   selectNode,
@@ -75,6 +76,60 @@ describe("pipeline inspector controls", () => {
       expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Skipped");
     },
   );
+
+  test("archived synthetic Prepare cannot retry the later failed Verify", async () => {
+    retryStageMock.mockClear();
+    const pipeline = build({
+      phase: "failed",
+      iteration: 1,
+      currentSessionIndex: 3,
+      failureContext: { phase: "verifying", kind: "stage-transition" },
+      error: "Verify could not start",
+      sessions: [
+        session("build", "build", 0),
+        session("review", "review", 240),
+        session("fix", "fix", 300, { iteration: 1 }),
+        session("review", "review-1", 400, { iteration: 1 }),
+      ],
+      validationHistory: [
+        {
+          runId: "archived",
+          iteration: 0,
+          status: "completed",
+          headRef: "a".repeat(40),
+          startedAt: new Date(Date.parse(CREATED) + 180_000).toISOString(),
+          completedAt: new Date(Date.parse(CREATED) + 210_000).toISOString(),
+          commands: [
+            {
+              id: "old-test",
+              command: "mise run old-test",
+              status: "failed",
+              exitCode: 1,
+              durationMs: 3000,
+            },
+          ],
+        },
+      ],
+      validationRun: validationRun({ id: "live" }),
+    });
+    renderPipelineTab(JSON.parse(JSON.stringify(pipeline)));
+    selectNode("Prepare");
+    expect(graphNode("Prepare").textContent).toContain("1 check");
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" })).toBeNull();
+    fireEvent.contextMenu(graphNode("Prepare"));
+    expect(screen.queryByRole("menuitem", { name: "Retry failed step" })).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+    expect(within(inspector()).getByText("mise run old-test")).toBeTruthy();
+    expect(within(inspector()).queryByText("mise run test")).toBeNull();
+    expect(within(inspector()).queryByRole("button", { name: /Stop|Restart|Skip/ })).toBeNull();
+    expect(retryStageMock).not.toHaveBeenCalled();
+    selectNode("Verify");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Retry failed step" }));
+    await waitFor(() => expect(retryStageMock).toHaveBeenCalledTimes(1));
+    expect(retryStageMock).toHaveBeenCalledWith(pipeline.id);
+  });
 
   test("an Address node shows the typed report Verify read", () => {
     renderPipelineTab(

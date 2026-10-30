@@ -500,7 +500,7 @@ print("public.tiff")
           if (!focusedWindow || !item?.click) {
             throw new Error("Keyboard Shortcuts… menu item is unavailable");
           }
-          if (item.accelerator !== "CmdOrCtrl+Shift+K") {
+          if (item.accelerator !== "CmdOrCtrl+Shift+/") {
             throw new Error(`Keyboard Shortcuts… shows ${String(item.accelerator)}`);
           }
           // Built MenuItem.click takes the event first; Electron forwards it
@@ -533,13 +533,15 @@ print("public.tiff")
       await expect(shortcutsDialog).toHaveCount(0);
       await clickKeyboardShortcuts(false);
       await expect(shortcutsDialog).toBeVisible();
-      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
+      await window.keyboard.press(
+        `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`,
+      );
       await expect(shortcutsDialog).toHaveCount(0);
-      // Either modifier is accepted on every platform: on macOS, Control+Shift+K
-      // as well as ⌘⇧K.
-      await window.keyboard.press("Control+Shift+K");
+      // Either modifier is accepted on every platform: on macOS, Control+Shift+/
+      // as well as ⌘⇧/.
+      await window.keyboard.press("Control+Shift+Slash");
       await expect(shortcutsDialog).toBeVisible();
-      await window.keyboard.press("Control+Shift+K");
+      await window.keyboard.press("Control+Shift+Slash");
       await expect(shortcutsDialog).toHaveCount(0);
 
       // Electron's native input path must claim one press before either the
@@ -550,7 +552,7 @@ print("public.tiff")
         globalThis.addEventListener(
           "keydown",
           (event) => {
-            if (event instanceof KeyboardEvent && event.key.toLowerCase() === "k" && event.shiftKey)
+            if (event instanceof KeyboardEvent && event.code === "Slash" && event.shiftKey)
               state.count++;
           },
           true,
@@ -562,8 +564,8 @@ print("public.tiff")
           host.focus();
           host.webContents.focus();
           const modifiers: ("meta" | "control" | "shift")[] = [modifier, "shift"];
-          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
-          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "/", modifiers });
+          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "/", modifiers });
         }, modifier);
       for (const modifier of process.platform === "darwin"
         ? (["meta", "control"] as const)

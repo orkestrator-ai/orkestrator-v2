@@ -12,7 +12,7 @@ The app-level shortcuts are:
 | Shortcut | Opens | Owner |
 | --- | --- | --- |
 | ⌘K / Ctrl+K | Search projects and environments (sidebar) | the window's shell |
-| ⌘⇧K / Ctrl+Shift+K | The keyboard shortcuts dialog | the focused app document (shell or realm) |
+| ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (shell or realm) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
 
 Either modifier is accepted on every platform, but not both, and not with Alt.
@@ -67,7 +67,7 @@ The key press reaches `requestAppShortcut` from one of these entry points:
    the platform/text-editing exception before consuming or forwarding a key
    over the source-checked frame bridge.
 3. **Desktop main, `before-input-event` on every WebContents.**
-   - ⌘⇧K (document-owned): consumed before page and menu dispatch in every app
+   - ⌘⇧/ (document-owned): consumed before page and menu dispatch in every app
      renderer, realm and artifact view, including their subframes, and
      delivered as `menu-keyboard-shortcuts` `toggle`. Browser and service
      preview views use their preview manager's hook, which matches the catalog
@@ -85,7 +85,11 @@ API documents this event as `keyDown`/`keyUp`.
 
 **Layouts:** a printable ASCII `event.key` decides, preserving Dvorak
 mappings and AZERTY's `,` on the M key. For anything else (Cyrillic, Greek, a
-control character) the physical position (`KeyK`, `Comma`) decides.
+control character) the physical position (`KeyK`, `Comma`, `Slash`) decides.
+`?` counts as `/`: it is the shifted `/` on US, UK and most Latin layouts, and
+a shifted chord may report either (macOS reports `/` for ⌘⇧/; browsers report
+`?` for Ctrl+Shift+/). On a layout where `/` itself needs Shift (German's
+Shift+7), that key with ⌘ or Ctrl opens the dialog.
 
 ## What a focused surface keeps
 
@@ -93,7 +97,7 @@ control character) the physical position (`KeyK`, `Comma`) decides.
 (`shortcutFocus`: terminal, text field, or page), whether the app takes the
 key:
 
-| Focus | ⌘K | Ctrl+K on macOS | Ctrl+K on Windows/Linux | ⌘⇧K / Ctrl+Shift+K |
+| Focus | ⌘K | Ctrl+K on macOS | Ctrl+K on Windows/Linux | ⌘⇧/ / Ctrl+Shift+/ |
 | --- | --- | --- | --- | --- |
 | Page (sidebar, buttons, panes) | search | search | search | dialog |
 | Text field (composer, inputs, contenteditable, Monaco) | search | kill-line (text field) | search | dialog |
@@ -123,12 +127,12 @@ key:
   in its command palette (F1). Uniform search wins over chords few users rely
   on in this editor. On macOS, Ctrl+K stays with Monaco, as with any text
   field.
-- **⌘K stays with pages in a browser preview; ⌘⇧K does not.** The previewed
+- **⌘K stays with pages in a browser preview; ⌘⇧/ does not.** The previewed
   page is the user's own product, and ⌘K is the web's usual command-palette
   key. Stealing it would break testing that page, as no real browser does.
-  ⌘⇧K is rare on the web and is the app's escape hatch. Click outside the
+  ⌘⇧/ is rare on the web and is the app's escape hatch. Click outside the
   preview to use ⌘K. (`AppShortcut.fromPreviews`.)
-- **⌘⇧K opens the focused realm's dialog, ⌘K the window's search.** Each app
+- **⌘⇧/ opens the focused realm's dialog, ⌘K the window's search.** Each app
   document renders its own dialog, which restores focus into that realm's
   native preview and artifact views; that path is already tested. The search
   lives in the window's sidebar; a realm has none. (`AppShortcut.owner`.)
@@ -137,11 +141,15 @@ key:
   web pages rarely bind it. Settings are window-owned like search: a realm
   forwards ⌘, to its window, whose command node owns them. A repeat while
   Settings are open leaves them on the section shown.
-- **Ctrl+Shift+K opens the dialog on macOS too.** Users coming from another
-  platform press it, and Ctrl+Shift+K edits nothing there.
+- **Ctrl+Shift+/ opens the dialog on macOS too.** Users coming from another
+  platform press it, and Ctrl+Shift+/ edits nothing there.
+- **⌘⇧/ rather than ⌘⇧K.** On some Macs ⌘⇧K and Ctrl+Shift+K were swallowed
+  before any app saw them, so the dialog was unreachable from the keyboard
+  there. ⌘? is also the help key many apps use. The macOS app menu has no Help
+  menu, so AppKit's ⌘? Help search does not compete for it.
 - **An app document's DOM router, not main, routes ⌘K there.** Main cannot
   see whether a terminal or text field has focus, so catching ⌘K in main for
-  every WebContents (the ⌘⇧K design) would take Ctrl+K from shells. Main
+  every WebContents (the ⌘⇧/ design) would take Ctrl+K from shells. Main
   catches window-owned shortcuts only where no router runs (artifact views).
   The realm-to-window hop reuses the realm message channel on both platforms,
   so desktop and browser realms share one path.
@@ -151,7 +159,7 @@ key:
 Main focuses the owning renderer and emits `menu-keyboard-shortcuts` with an
 `open` request for a menu click or `toggle` for a chord. Clicking while open
 keeps the dialog, its search text and focus. The item displays
-`CmdOrCtrl+Shift+K` with `registerAccelerator: false`; macOS retains a menu key
+`CmdOrCtrl+Shift+/` with `registerAccelerator: false`; macOS retains a menu key
 equivalent as a fallback. Native input interception prevents page/menu double
 handling. The renderer's router remains available for browser and synthetic
 input, but physical input consumed by main never reaches it.
@@ -182,10 +190,10 @@ and iOS show ⌘ caps, and everything else, Windows and Linux included, shows
 `Ctrl`, `Shift` and `Alt` caps and hides the ⌘-only rows. The catalog test
 rejects macOS symbols in any Windows/Linux key cap.
 
-The chord also accepts Super/Windows+Shift+K, because Chromium reports that key
-as `metaKey`. The dialog documents Ctrl+Shift+K because window managers and
+The chord also accepts Super/Windows+Shift+/, because Chromium reports that key
+as `metaKey`. The dialog documents Ctrl+Shift+/ because window managers and
 Windows often take Super shortcuts first. AltGr reaches Chromium on Windows as
-Ctrl+Alt, so the chord's Alt exclusion leaves AltGr+Shift+K to the focused
+Ctrl+Alt, so the chord's Alt exclusion leaves AltGr+Shift+/ to the focused
 field.
 
 `createApplicationMenuTemplate` takes `process.platform`. Electron maps the
@@ -204,7 +212,7 @@ Windows/Linux Close Tab has no key, and the catalog lists it as macOS-only.
 own. Ctrl+W is the shell's delete-word. The renderer's ⌘W fallback for the
 browser client still sees Super+W as `metaKey`. New Window, the zoom items and
 Keyboard Shortcuts… use `CmdOrCtrl` and appear as Ctrl+N, Ctrl+=, Ctrl+- and
-Ctrl+0 (all registered) and Ctrl+Shift+K and Ctrl+, (display-only). The dialog lists the
+Ctrl+0 (all registered) and Ctrl+Shift+/ and Ctrl+, (display-only). The dialog lists the
 same keys.
 
 **Workspace realms:** ownership is resolved from the actual focused
@@ -235,9 +243,10 @@ The parent document cannot intercept keys in uncooperative cross-origin
 browser/service preview iframes or artifact shells (the artifact shell is
 served from its own origin). Move focus to the host UI to use either shortcut.
 The browser test covers the preview boundary explicitly; desktop handles
-⌘⇧K there through native interception. A browser may also reserve
-Ctrl+Shift+K itself before the page sees it (Firefox uses it for the Web
-Console, Edge for Duplicate Tab); this has not been verified here.
+⌘⇧/ there through native interception. A browser may also reserve the
+chord before the page sees it: on macOS, browsers with a Help menu may keep
+⌘⇧/ (⌘?) for its search field. This has not been verified here; Ctrl+Shift+/
+is the fallback on macOS.
 
 ## Tests
 
@@ -247,7 +256,7 @@ Console, Edge for Duplicate Tab); this has not been verified here.
 - Renderer: the router from composer, terminal and contenteditable on macOS
   and Windows, desktop and browser realm forwarding, main's `app-shortcut`
   event, pending delivery; the search from the composer, a terminal and text
-  fields; the dialog with ⌘⇧K and Ctrl+Shift+K on both platforms; the design
+  fields; the dialog with ⌘⇧/ and Ctrl+Shift+/ on both platforms; the design
   frame bridge; a realm's forwarded message reaching the window; router reference
   counting and final DOM/native listener cleanup; AppShell revealing the hidden
   desktop sidebar and delivering search once, dropping closed mobile-drawer
@@ -255,7 +264,7 @@ Console, Edge for Duplicate Tab); this has not been verified here.
 - Electron main: ⌘K and non-macOS Ctrl+K from an artifact view reach the window's
   shell, macOS artifact Ctrl+K stays with the surface; preview routing follows
   `fromPreviews`; app documents, previews and unknown contents keep unclaimed
-  keys; Ctrl+Shift+K toggles like ⌘⇧K; ⌘, and Ctrl+, from an artifact view reach the
+  keys; Ctrl+Shift+/ toggles like ⌘⇧/; ⌘, and Ctrl+, from an artifact view reach the
   window's shell on macOS and Linux; a visible realm's `shortcut` message focuses its window.
 - Settings: `GlobalSettingsHost.test.tsx` (⌘,, Ctrl+, and the menu's request open
   Settings and leave an open page where it is), the menu template on all three

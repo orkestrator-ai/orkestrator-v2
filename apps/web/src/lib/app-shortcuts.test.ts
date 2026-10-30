@@ -134,7 +134,7 @@ describe("the window's key router", () => {
     ["Win32", { ctrlKey: true }],
     ["Win32", { metaKey: true }],
   ] as const)(
-    "on %s, %p+Shift+K opens the shortcuts dialog from every surface",
+    "on %s, %p+Shift+/ opens the shortcuts dialog from every surface",
     (platform, mod) => {
       setPlatform(platform);
       const dialog = handle("show-shortcuts");
@@ -142,7 +142,9 @@ describe("the window's key router", () => {
       editable.contentEditable = "true";
       const surfaces = [terminal(), mount(document.createElement("textarea")), editable];
       for (const surface of surfaces) {
-        expect(press(surface, { key: "K", shiftKey: true, ...mod })).toEqual({
+        // Browsers report the shifted Ctrl chord as ?; macOS reports ⌘⇧/ as /.
+        const key = "metaKey" in mod ? "/" : "?";
+        expect(press(surface, { key, code: "Slash", shiftKey: true, ...mod })).toEqual({
           claimed: true,
           surfaceSaw: false,
         });
@@ -230,7 +232,7 @@ describe("delivery to the owner", () => {
     happyDOM.setURL(`http://localhost/?${search.toString()}`);
   }
 
-  test("a desktop realm forwards ⌘K to its window, and keeps ⌘⇧K for its own dialog", () => {
+  test("a desktop realm forwards ⌘K to its window, and keeps ⌘⇧/ for its own dialog", () => {
     enterRealm();
     const post = mock(() => {});
     window.orkestrator = {
@@ -243,7 +245,7 @@ describe("delivery to the owner", () => {
     expect(press(composer, { key: "k", metaKey: true }).claimed).toBe(true);
     expect(post).toHaveBeenCalledWith({ type: "shortcut", shortcut: "search-projects" });
     expect(search).not.toHaveBeenCalled();
-    press(composer, { key: "K", metaKey: true, shiftKey: true });
+    press(composer, { key: "/", code: "Slash", metaKey: true, shiftKey: true });
     expect(dialog).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledTimes(1);
   });

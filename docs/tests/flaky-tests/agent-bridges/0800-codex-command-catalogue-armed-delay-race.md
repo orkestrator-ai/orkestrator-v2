@@ -65,3 +65,9 @@ No skips, assertions or timeouts were changed.
 - **Owning-file rerun:** `mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 1.3 seconds.
 - **Evidence:** `orkestrator-test-run.jMkwTI/bridges.log.gz` under the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of the existing stale/ready race; this change touches no bridge source or assertions.
+
+## Second backend on one host (0244) — 2026-10-30
+
+The aggregate repeated `expected "stale", received "ready"` (80.7 ms) under
+load average 45 to 77; the complete unchanged owner passed alone. Details in
+[1316](../aggregate-validation-runs/1316-second-backend-one-host-0244-validation.md).

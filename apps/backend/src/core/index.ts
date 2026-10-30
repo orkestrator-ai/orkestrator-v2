@@ -131,9 +131,11 @@ import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
   controlMcpPortOverride,
+  type ControlMcpEndpointState,
   type ControlMcpInfo,
   type ControlMcpSettings,
 } from "./control-mcp-server.js";
+import { isDefaultDataDir } from "../data-dir.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -336,7 +338,14 @@ export class OrkestratorBackend {
     | "stop"
   > &
     Partial<
-      Pick<ControlMcpServer, "callCoordinatorTool" | "listCoordinatorTools" | "credentialPolicy">
+      Pick<
+        ControlMcpServer,
+        | "callCoordinatorTool"
+        | "listCoordinatorTools"
+        | "credentialPolicy"
+        | "getEndpointState"
+        | "onStateChange"
+      >
     >;
 
   constructor(options: {
@@ -386,7 +395,14 @@ export class OrkestratorBackend {
       | "stop"
     > &
       Partial<
-        Pick<ControlMcpServer, "callCoordinatorTool" | "listCoordinatorTools" | "credentialPolicy">
+        Pick<
+          ControlMcpServer,
+          | "callCoordinatorTool"
+          | "listCoordinatorTools"
+          | "credentialPolicy"
+          | "getEndpointState"
+          | "onStateChange"
+        >
       >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     /** Test seam: process state owned by this backend instance. */
@@ -502,8 +518,13 @@ export class OrkestratorBackend {
     this.controlMcp =
       options.controlMcp ??
       new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed in the application; ephemeral for tests and agent-test backends.
-        port: controlMcpPortOverride(options.runtimeFlavor, process.env),
+        // Fixed for the installed app's default data directory; ephemeral for
+        // tests, agent-test backends and every other data directory.
+        port: controlMcpPortOverride(
+          options.runtimeFlavor,
+          process.env,
+          isDefaultDataDir(options.dataDir),
+        ),
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
@@ -2247,8 +2268,13 @@ export class OrkestratorBackend {
     await this.controlMcp.start().catch((error) => {
       // MCP is an optional local control surface. A port conflict should be
       // visible in Settings, but must not prevent the rest of Orkestrator from
-      // opening so the user can diagnose it.
+      // opening so the user can diagnose it. A taken fixed port is retried
+      // with backoff, so the listener may still bind later.
       console.warn("[backend] Failed to start control MCP:", error);
+    });
+    // A retried bind that succeeds later must keep previews off its port too.
+    this.controlMcp.onStateChange?.(() => {
+      if (!this.shuttingDown) this.reserveOwnedPreviewPorts();
     });
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
@@ -2446,6 +2472,15 @@ export class OrkestratorBackend {
 
   getControlMcpInfo(): ControlMcpInfo | null {
     return this.controlMcp.getInfo();
+  }
+
+  getControlMcpEndpointState(): ControlMcpEndpointState | null {
+    return this.controlMcp.getEndpointState?.() ?? null;
+  }
+
+  /** The Control MCP started, stopped, or failed to bind (it retries a taken fixed port). */
+  onControlMcpStateChange(listener: () => void): () => void {
+    return this.controlMcp.onStateChange?.(listener) ?? (() => undefined);
   }
 
   getControlMcpSettings(): ControlMcpSettings {

@@ -68,7 +68,18 @@ export type ControlMcpSettings = {
 export type ControlMcpServerOptions = {
   bindAddress?: string;
   port?: number;
+  /** Backoff for re-binding a fixed port another process holds; tests shorten it. */
+  retry?: { initialDelayMs: number; maxDelayMs: number };
 };
+
+/** What `backend-instance.json` publishes about the Control MCP. */
+export type ControlMcpEndpointState = {
+  running: boolean;
+  /** The listener when running; the fixed URL it keeps retrying otherwise. */
+  url?: string;
+};
+
+const DEFAULT_BIND_RETRY = { initialDelayMs: 5_000, maxDelayMs: 5 * 60_000 };
 
 export type CoordinatorControlConnection = {
   url: string;
@@ -93,20 +104,33 @@ function configuredControlMcpPort(): number {
 /**
  * The port a backend asks for instead of the configured one, or undefined.
  *
- * The installed app owns the fixed port. The test runner and every agent-test
- * backend (fixtures, dev profiles, qualification services, headless backends an
- * agent starts) take an ephemeral one, so none of them can hold the user's port:
- * a forgotten qualification service once kept it for hours and the desktop came
- * up without a control MCP. An explicit ORKESTRATOR_CONTROL_MCP_PORT still wins
- * outside the test runner.
+ * Only the backend of the platform default data directory (the installed app)
+ * owns the fixed port. The test runner, every agent-test backend (fixtures,
+ * dev profiles, qualification services, headless backends an agent starts) and
+ * every backend of another data directory (`mise run dev`, a second service,
+ * a hand-started `serve`) take an ephemeral one, so none of them can hold the
+ * user's port: a forgotten qualification service once kept it for hours and
+ * the desktop came up without a control MCP. An explicit
+ * ORKESTRATOR_CONTROL_MCP_PORT still wins outside the test runner.
  */
 export function controlMcpPortOverride(
   runtimeFlavor: "production" | "development" | "agent-test" | undefined,
   env: NodeJS.ProcessEnv,
+  defaultDataDir = true,
 ): 0 | undefined {
   if (env.NODE_ENV === "test") return 0;
-  if (runtimeFlavor === "agent-test" && !env.ORKESTRATOR_CONTROL_MCP_PORT?.trim()) return 0;
+  if (env.ORKESTRATOR_CONTROL_MCP_PORT?.trim()) return undefined;
+  if (runtimeFlavor === "agent-test" || !defaultDataDir) return 0;
   return undefined;
+}
+
+/** Bun and Node both report a taken port as EADDRINUSE; Bun's message names the port. */
+function isAddressInUse(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    (error as NodeJS.ErrnoException).code === "EADDRINUSE" ||
+    /\bport \d+ in use\b/i.test(error.message)
+  );
 }
 
 function bearerToken(request: IncomingMessage): string | null {
@@ -154,6 +178,12 @@ export class ControlMcpServer {
   private lifecycle: Promise<void> = Promise.resolve();
   private readonly bindAddress: string;
   private readonly port: number;
+  private readonly bindRetry: { initialDelayMs: number; maxDelayMs: number };
+  /** Set by start(), cleared by stop(): whether a lost bind should be retried. */
+  private wanted = false;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryDelayMs: number;
+  private readonly stateListeners = new Set<() => void>();
   private readonly coordinatorCredentials = new Map<
     string,
     { scope: CoordinatorControlScope; expiresAt: number }
@@ -177,6 +207,21 @@ export class ControlMcpServer {
   ) {
     this.bindAddress = options.bindAddress ?? "127.0.0.1";
     this.port = options.port ?? configuredControlMcpPort();
+    this.bindRetry = options.retry ?? DEFAULT_BIND_RETRY;
+    this.retryDelayMs = this.bindRetry.initialDelayMs;
+  }
+
+  /** Called whenever the listener starts, stops or fails to bind. */
+  onStateChange(listener: () => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  /** Null when the Control MCP is disabled. */
+  getEndpointState(): ControlMcpEndpointState | null {
+    if (process.env.ORKESTRATOR_CONTROL_MCP_DISABLED === "1") return null;
+    if (this.server && this.info) return { running: true, url: this.info.url };
+    return this.port === 0 ? { running: false } : { running: false, url: this.configuredUrl() };
   }
 
   getInfo(): ControlMcpInfo | null {
@@ -316,7 +361,18 @@ export class ControlMcpServer {
     }
   }
 
+  /**
+   * Bind the listener. A fixed port another process holds is retried with
+   * capped backoff until it frees or stop() runs; the first failure still
+   * rejects so the caller can log it.
+   */
   async start(): Promise<void> {
+    this.wanted = true;
+    this.clearRetry();
+    await this.attemptStart();
+  }
+
+  private async attemptStart(): Promise<void> {
     const start = this.lifecycle.then(async () => {
       if (this.server) return;
       const descriptorFile = path.join(this.dataDir, CONTROL_MCP_DESCRIPTOR);
@@ -369,12 +425,55 @@ export class ControlMcpServer {
     try {
       await start;
     } catch (error) {
-      this.startError = error instanceof Error ? error.message : String(error);
+      const retrying = this.wanted && this.port !== 0 && isAddressInUse(error);
+      this.startError = retrying
+        ? `Port ${this.port} is in use by another process. Orkestrator keeps retrying and starts the local MCP server once the port is free.`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      if (retrying) this.scheduleRetry();
+      this.notifyStateChange();
       throw error;
+    }
+    if (this.retryDelayMs !== this.bindRetry.initialDelayMs) {
+      console.log(`[control-mcp] Port ${this.port} is free again; listening.`);
+    }
+    this.retryDelayMs = this.bindRetry.initialDelayMs;
+    this.notifyStateChange();
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimer) return;
+    const delay = this.retryDelayMs;
+    this.retryDelayMs = Math.min(this.retryDelayMs * 2, this.bindRetry.maxDelayMs);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (!this.wanted) return;
+      // A failure reschedules itself and is already recorded in startError.
+      void this.attemptStart().catch(() => undefined);
+    }, delay);
+    this.retryTimer.unref?.();
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.retryDelayMs = this.bindRetry.initialDelayMs;
+  }
+
+  private notifyStateChange(): void {
+    for (const listener of this.stateListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[control-mcp] State listener failed:", error);
+      }
     }
   }
 
   async stop(): Promise<void> {
+    this.wanted = false;
+    this.clearRetry();
     const stop = this.lifecycle.then(async () => {
       const server = this.server;
       this.server = null;
@@ -392,7 +491,11 @@ export class ControlMcpServer {
       }
     });
     this.lifecycle = stop.catch(() => undefined);
-    await stop;
+    try {
+      await stop;
+    } finally {
+      this.notifyStateChange();
+    }
   }
 
   /** Rotate the `default` credential (the original single token). */

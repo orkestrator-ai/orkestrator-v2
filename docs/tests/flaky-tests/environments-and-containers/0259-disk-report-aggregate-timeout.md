@@ -276,3 +276,11 @@ mise run test:logged -- --name preparation-disk-owner -- bun test ./tests/unit/d
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+## Second backend on one host (0244) — 2026-10-30
+
+The aggregate repeated the five-second deadline with a null status under load
+average 45 to 77. Alone with `--parallel=1 --only-failures` the unchanged owner
+passed once (5.3 s) and timed out once (6.3 s) under the same load. Details in
+[1316](../aggregate-validation-runs/1316-second-backend-one-host-0244-validation.md).
+No implementation, assertion, deadline or skip changed.

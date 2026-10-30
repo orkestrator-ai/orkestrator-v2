@@ -94,14 +94,27 @@ all call it, so a tool a credential cannot use is never listed and never runs.
 
 The endpoint listens only on `127.0.0.1`; this design adds no public
 listener. Treat every token like a password: a `full` credential can create
-environments, launch jobs, read transcripts, and update tickets. Managed
-development profiles request an ephemeral loopback port so they can run
-alongside an installed Orkestrator instance; the selected URL is published in
-the profile's readiness and descriptor data. Any `--runtime-flavor agent-test`
-backend (test fixtures, qualification services, headless backends an agent
-starts) defaults to an ephemeral port as well unless
-`ORKESTRATOR_CONTROL_MCP_PORT` is set, so a forgotten one cannot hold the
-installed app's port.
+environments, launch jobs, read transcripts, and update tickets.
+
+Only the backend of the platform default data directory (`defaultDataDir()`,
+compared by real path, so the installed app) binds the fixed port 34122. Every
+other backend defaults to an ephemeral loopback port unless
+`ORKESTRATOR_CONTROL_MCP_PORT` is set: a second `orkestrator service install
+--data-dir <other>`, a hand-started `serve`, `mise run dev`
+(`orkestrator-v2-dev`), and any `--runtime-flavor agent-test` backend (test
+fixtures, dev profiles, qualification services, headless backends an agent
+starts), so none of them can hold the installed app's port
+(`controlMcpPortOverride`, `isDefaultDataDir`). The bound URL is in the
+readiness line and in `backend-instance.json` as `controlMcp: { running, url }`,
+rewritten whenever the listener starts, stops or fails to bind. A backend of
+another data directory logs a line at startup when the default data
+directory's descriptor names a live backend.
+
+If another process holds the fixed port, the first bind fails, Settings → MCP
+shows "Port 34122 is in use by another process", and the backend retries with
+backoff (5 s doubling to 5 min) until the port frees or the backend stops; the
+listener then comes up without a restart. Settings does not name the process
+holding the port. An ephemeral port is never retried.
 
 With the full profile the default credential lists the leaf-node, review and
 PR tools alongside eight `schedule.*` direct tools; clients that defer or

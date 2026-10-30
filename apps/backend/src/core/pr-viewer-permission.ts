@@ -7,7 +7,8 @@
  * environment. The answer changes rarely, so it is cached per credential scope
  * and repository for an hour and filled through the environment's own `gh`
  * runner: the runner Merge uses. A merge that fails with a permission error
- * clears its entry, so the next check asks again.
+ * clears its entry, so the next check asks again. Credential writes invalidate
+ * the whole affected scope before and after the write, including pending reads.
  *
  * "May merge" means push, maintain or admin in REST `permissions`, the rule
  * the pull-request viewer already uses (`loadViewerIdentity`). It does not
@@ -51,9 +52,9 @@ export function prViewerRepository(prUrl: string | null | undefined): PrViewerRe
 
 /**
  * Names the credential a target's `gh` calls use, or null when unknown. Local
- * environments share the host's single `gh` login per GitHub host; each
+ * environments share the Settings-selected host credential per GitHub host; each
  * container sources its own runtime credential, so a container is its own
- * scope (a restart gets a new container id and asks again).
+ * scope. Credential writes and in-place container syncs rotate these scopes.
  */
 export function prViewerPermissionScope(target: PrMonitorTarget): string | null {
   if (target.kind === "local") return "local-gh";
@@ -88,6 +89,13 @@ export function parsePrViewerPermission(stdout: string): boolean {
     throw new Error("GitHub did not report repository permissions");
   }
   const permissions = parsed as Record<string, unknown>;
+  if (
+    !["admin", "maintain", "push", "triage", "pull"].some(
+      (key) => typeof permissions[key] === "boolean",
+    )
+  ) {
+    throw new Error("GitHub did not report repository permissions");
+  }
   return permissions.admin === true || permissions.maintain === true || permissions.push === true;
 }
 
@@ -140,7 +148,7 @@ export class PrViewerPermissionCache {
           if (this.inFlight.get(key) === lookup) {
             this.store(key, canMerge, PR_VIEWER_PERMISSION_TTL_MS);
           }
-          return canMerge;
+          return this.inFlight.get(key) === lookup ? canMerge : null;
         },
         () => {
           if (this.inFlight.get(key) === lookup) {
@@ -163,6 +171,26 @@ export class PrViewerPermissionCache {
     this.entries.delete(key);
     // A lookup already running may have started before the permission change.
     this.inFlight.delete(key);
+  }
+
+  /** Credential rotation invalidates every repository and pending lookup in the scope. */
+  invalidateScope(scope: string): void {
+    const prefix = `${scope.toLowerCase()}\0`;
+    for (const entries of [this.entries, this.inFlight]) {
+      for (const key of entries.keys()) {
+        if (key.startsWith(prefix)) entries.delete(key);
+      }
+    }
+  }
+
+  /** Also supersedes lookups started while a credential write is in progress. */
+  async rotateScope<T>(scope: string, update: () => Promise<T>): Promise<T> {
+    this.invalidateScope(scope);
+    try {
+      return await update();
+    } finally {
+      this.invalidateScope(scope);
+    }
   }
 
   clear(): void {

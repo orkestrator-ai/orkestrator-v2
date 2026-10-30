@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import {
@@ -199,4 +201,34 @@ describe("isNodeEnvironmentReadyToMerge", () => {
       ),
     ).toBe(false);
   });
+});
+
+test("leaf check counts survive summary projection and match local readiness across rollup-only transitions", () => {
+  const live = { transport: "connected", freshness: "current" } as const;
+  for (const checkSummary of [
+    { passed: 1, total: 2, pending: 0 },
+    { passed: 2, total: 2, pending: 0 },
+    { passed: 1, total: 2, pending: 1 },
+    { passed: 2, total: 2, pending: 0 },
+    { passed: 1, total: 2, pending: 0 },
+  ]) {
+    const summary = toNodeEnvironmentSummary("bk_leaf" as BackendId, {
+      ...environment(),
+      id: "env-1",
+      projectId: "p",
+      name: "feature",
+      prMonitorConfirmed: true,
+      prCheckSummary: checkSummary,
+    });
+    const remote = {
+      ...summary,
+      ref: { backendId: "bk_leaf", environmentId: "env-1" },
+    } as FederatedEnvironment;
+    expect(nodeEnvironmentPrMergeState(remote, live)).toBe(
+      localEnvironmentPrMergeState(environment(), monitor({ checkSummary }), "current"),
+    );
+    expect(isNodeEnvironmentReadyToMerge(remote, live)).toBe(
+      checkSummary.passed === checkSummary.total,
+    );
+  }
 });

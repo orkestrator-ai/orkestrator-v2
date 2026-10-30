@@ -2159,7 +2159,7 @@ printf '%s\\n' '{}' > "$out"
             prUrl,
             prState: "open",
             hasMergeConflicts: false,
-            checkSummary: null,
+            checkSummary: { passed: 0, total: 1, pending: 1 },
             viewerCanMerge: false,
           },
         ],
@@ -2172,6 +2172,7 @@ printf '%s\\n' '{}' > "$out"
       )) as Array<Record<string, unknown>>;
       expect(plain[0]).not.toHaveProperty("prMonitorConfirmed");
       expect(plain[0]).not.toHaveProperty("prViewerCanMerge");
+      expect(plain[0]).not.toHaveProperty("prCheckSummary");
 
       // Runtime health is outside the manifest revision, so known revisions
       // never turn the summary form into an `unchanged` answer.
@@ -2188,6 +2189,7 @@ printf '%s\\n' '{}' > "$out"
         id: environment.id,
         prMonitorConfirmed: true,
         prViewerCanMerge: false,
+        prCheckSummary: { passed: 0, total: 1, pending: 1 },
       });
     } finally {
       announced.mockRestore();

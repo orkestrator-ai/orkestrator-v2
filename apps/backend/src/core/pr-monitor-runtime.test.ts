@@ -252,7 +252,7 @@ test("a change in relayed monitor inputs announces a content-free health hint", 
     await settle();
     expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(2);
 
-    // A new rollup or a later answered check is not a relayed change.
+    // A rollup change is relayed; only a later answered timestamp is quiet.
     announce({
       environmentId: "env-1",
       state: monitorState({
@@ -261,26 +261,35 @@ test("a change in relayed monitor inputs announces a content-free health hint", 
       }),
     });
     await settle();
-    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(2);
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(3);
+    announce({
+      environmentId: "env-1",
+      state: monitorState({
+        checkSummary: { passed: 1, total: 1, pending: 0 },
+        lastSuccessfulCheckAt: "2026-10-30T00:02:00.000Z",
+      }),
+    });
+    await settle();
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(3);
 
     // Errors flip it once, not once per error.
     announce({ environmentId: "env-1", state: monitorState({ consecutiveErrors: 1 }) });
     announce({ environmentId: "env-1", state: monitorState({ consecutiveErrors: 2 }) });
     await settle();
-    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(3);
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(4);
 
     announce({ environmentId: "env-1", state: monitorState({ viewerCanMerge: false }) });
     await settle();
-    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(4);
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(5);
 
     announce({ environmentId: "env-1", removed: true });
     await settle();
-    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(5);
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(6);
 
     // A deleted environment announces its own deletion; no hint.
     announce({ environmentId: "env-gone", state: monitorState({ environmentId: "env-gone" }) });
     await settle();
-    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(5);
+    expect(announceEnvironmentPrHealth).toHaveBeenCalledTimes(6);
   } finally {
     runtime.shutdown();
   }

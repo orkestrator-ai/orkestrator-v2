@@ -86,6 +86,7 @@ export function nodeEnvironmentPrMergeState(
       prState: environment.prState,
       hasMergeConflicts: environment.prHasMergeConflicts,
       mergeability: environment.prMergeability,
+      checkSummary: environment.prCheckSummary ?? null,
       viewerCanMerge: environment.prViewerCanMerge ?? null,
       fresh,
     }),

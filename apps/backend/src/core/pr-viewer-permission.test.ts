@@ -75,6 +75,8 @@ describe("parsePrViewerPermission", () => {
     expect(() => parsePrViewerPermission("null\n")).toThrow();
     expect(() => parsePrViewerPermission("")).toThrow();
     expect(() => parsePrViewerPermission("[]")).toThrow();
+    expect(() => parsePrViewerPermission("{}")).toThrow();
+    expect(() => parsePrViewerPermission('{"push":"false"}')).toThrow();
   });
 
   test("asks the exact repository on its host", () => {
@@ -196,7 +198,7 @@ describe("PrViewerPermissionCache", () => {
     await Promise.resolve();
     cache.invalidate("local-gh", REPO);
     release(true);
-    expect(await stale).toBe(true);
+    expect(await stale).toBeNull();
     expect(cache.size).toBe(0);
   });
 
@@ -208,4 +210,50 @@ describe("PrViewerPermissionCache", () => {
     await cache.resolve("container:new", REPO, async () => true);
     expect(cache.size).toBe(1);
   });
+});
+
+for (const scope of ["local-gh", "container:c1"]) {
+  test.each([true, false])(
+    `${scope} credential rotation supersedes cached and in-flight answers (%p)`,
+    async (oldPermission) => {
+      const cache = new PrViewerPermissionCache();
+      const other = { ...REPO, repo: "other" };
+      await cache.resolve(scope, REPO, async () => oldPermission);
+      let release!: (value: boolean) => void;
+      const stale = cache.resolve(
+        scope,
+        other,
+        () =>
+          new Promise<boolean>((resolve) => {
+            release = resolve;
+          }),
+      );
+      await Promise.resolve();
+      await cache.rotateScope(scope, async () => undefined);
+      let calls = 0;
+      const fresh = async () => {
+        calls += 1;
+        return !oldPermission;
+      };
+      expect(await cache.resolve(scope, REPO, fresh)).toBe(!oldPermission);
+      expect(await cache.resolve(scope, other, fresh)).toBe(!oldPermission);
+      release(oldPermission);
+      expect(await stale).toBeNull();
+      expect(await cache.resolve(scope, other, fresh)).toBe(!oldPermission);
+      expect(calls).toBe(2);
+    },
+  );
+}
+
+test("scope rotation invalidates reads started during a failed credential write and preserves other scopes", async () => {
+  const cache = new PrViewerPermissionCache();
+  await cache.resolve("container:other", REPO, async () => true);
+  await expect(
+    cache.rotateScope("local-gh", async () => {
+      expect(await cache.resolve("local-gh", REPO, async () => false)).toBe(false);
+      throw new Error("credential write failed");
+    }),
+  ).rejects.toThrow("credential write failed");
+  expect(await cache.resolve("local-gh", REPO, async () => true)).toBe(true);
+  expect(await cache.resolve("container:other", REPO, async () => false)).toBe(true);
 });

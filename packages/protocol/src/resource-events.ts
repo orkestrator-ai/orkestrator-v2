@@ -78,7 +78,7 @@ export const RESOURCE_KINDS = [
   "graph-describe",
   /**
    * The PR monitor health an environment's node summary relays
-   * (`prMonitorConfirmed`, `prViewerCanMerge`) changed without a write to the
+   * (`prMonitorConfirmed`, `prViewerCanMerge`, `prCheckSummary`) changed without a write to the
    * environment record (todo 0796). The id is the environment id, with its
    * `projectId`. Command nodes re-read that project's summaries; nothing else
    * needs to. A hint only: the summary read is authoritative.

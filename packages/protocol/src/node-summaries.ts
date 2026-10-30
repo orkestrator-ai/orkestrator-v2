@@ -25,13 +25,13 @@ import type { NodeView } from "./command-nodes.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
 import { normalizeProjectIcon } from "./project-icon.js";
-import type { PrState } from "./pr-monitor.js";
+import { isPrCheckSummary, type PrCheckSummary, type PrState } from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
 
 /**
  * Extra `get_environment_snapshots` arguments for a summary read: each
- * environment then carries `prMonitorConfirmed` and `prViewerCanMerge` from the
+ * environment then carries confirmation, viewer permission and check counts from the
  * node's runtime PR monitor. Nodes that predate it ignore the argument.
  */
 export const NODE_SUMMARY_ENVIRONMENT_READ_ARGS = { includePrMonitorHealth: true } as const;
@@ -110,6 +110,8 @@ export interface NodeEnvironmentSummary {
    * Absent when unknown or from older nodes; only `false` blocks readiness.
    */
   prViewerCanMerge?: boolean;
+  /** Bounded check counts from the leaf monitor; failing or pending checks veto readiness. */
+  prCheckSummary?: PrCheckSummary;
 }
 
 /** One node in the portal: registry view, availability and last-known summaries. */
@@ -271,6 +273,15 @@ export function toNodeEnvironmentSummary(
       ? { prHasMergeConflicts: raw.hasMergeConflicts }
       : {}),
     ...(isPrMergeability(raw.prMergeability) ? { prMergeability: raw.prMergeability } : {}),
+    ...(isPrCheckSummary(raw.prCheckSummary)
+      ? {
+          prCheckSummary: {
+            passed: raw.prCheckSummary.passed,
+            total: raw.prCheckSummary.total,
+            pending: raw.prCheckSummary.pending,
+          },
+        }
+      : {}),
     ...(raw.prMonitorConfirmed === true ? { prMonitorConfirmed: true as const } : {}),
     ...(typeof raw.prViewerCanMerge === "boolean"
       ? { prViewerCanMerge: raw.prViewerCanMerge }

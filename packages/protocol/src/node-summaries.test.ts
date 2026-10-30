@@ -1,3 +1,4 @@
+import type { BackendId } from "./federation.js";
 import { expect, test } from "bun:test";
 import {
   repositoryHint,
@@ -157,5 +158,32 @@ test("a project's icon is carried only as a bounded raster data URL", () => {
   for (const value of ["data:image/svg+xml;base64,PHN2Zz4=", "https://x/icon.png", 3, null]) {
     const project = toNodeProjectSummary("bk_test" as never, { id: "p", icon: value }, 0);
     expect(project && "icon" in project).toBe(false);
+  }
+});
+
+test("check summaries carry only validated counts", () => {
+  const raw = {
+    id: "e1",
+    projectId: "p1",
+    prCheckSummary: {
+      passed: 1,
+      total: 2,
+      pending: 1,
+      unexpected: "private data",
+    },
+  };
+  const summary = toNodeEnvironmentSummary("bk_leaf" as BackendId, raw)!;
+  expect(summary.prCheckSummary).toEqual({ passed: 1, total: 2, pending: 1 });
+  for (const prCheckSummary of [
+    {},
+    null,
+    [],
+    { passed: -1, total: 2, pending: 0 },
+    { passed: 2, total: 2, pending: 1 },
+    { passed: 1, total: Infinity, pending: 0 },
+  ]) {
+    expect(
+      toNodeEnvironmentSummary("bk_leaf" as BackendId, { ...raw, prCheckSummary })!,
+    ).not.toHaveProperty("prCheckSummary");
   }
 });

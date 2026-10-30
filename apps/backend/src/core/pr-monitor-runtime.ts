@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import {
   PR_MONITOR_CHANGED_EVENT,
   type PrMonitorEnvironmentState,
+  type PrCheckSummary,
   type PrMonitorEvent,
 } from "@orkestrator/protocol/pr-monitor";
 import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
-import { PrMonitorService } from "./pr-monitor.js";
+import { PrMonitorService, type PrMonitorServiceOptions } from "./pr-monitor.js";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
@@ -28,6 +29,7 @@ import {
 export interface RelayedPrMonitorHealth {
   prMonitorConfirmed?: true;
   prViewerCanMerge?: boolean;
+  prCheckSummary?: PrCheckSummary;
 }
 
 /**
@@ -46,6 +48,8 @@ export type PrMonitorRuntimeOptions = {
    * the environment, and `get_environments` resumes it through its own context.
    */
   scheduleMergeCleanup?: MergeCleanupScheduler;
+  /** Clock and timers for deterministic runtime integration tests. */
+  timing?: Pick<PrMonitorServiceOptions, "schedule" | "cancel" | "monotonicNow" | "random">;
 };
 
 /**
@@ -74,11 +78,11 @@ export class PrMonitorRuntime {
   /**
    * The monitor-side inputs of each environment's relayed health, as last
    * announced. A change announces `environment-pr-health` so command nodes
-   * re-read the summary; uneventful events (another error, a new rollup) do not.
+   * re-read the summary; uneventful events (another error, the same rollup) do not.
    */
   private readonly relayedInputs = new Map<string, string>();
 
-  constructor(options: PrMonitorRuntimeOptions = {}) {
+  constructor(private readonly options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
   }
 
@@ -236,6 +240,7 @@ export class PrMonitorRuntime {
       ...(isPrReadingConfirmedByMonitor(environment, state)
         ? { prMonitorConfirmed: true as const }
         : {}),
+      ...(state.checkSummary ? { prCheckSummary: { ...state.checkSummary } } : {}),
       ...(typeof state.viewerCanMerge === "boolean"
         ? { prViewerCanMerge: state.viewerCanMerge }
         : {}),
@@ -348,6 +353,7 @@ export class PrMonitorRuntime {
      */
     const admission = new WorkAdmissionPool({ name: "external-pr" });
     const service = new PrMonitorService({
+      ...this.options.timing,
       emit: (event, payload) => this.announce(event, payload),
       admission,
       cooldownScope: prMonitorCooldownScope,
@@ -417,5 +423,8 @@ function relayedInputsKey(state: PrMonitorEnvironmentState): string {
     state.prState,
     state.hasMergeConflicts,
     state.viewerCanMerge ?? null,
+    state.checkSummary?.passed ?? null,
+    state.checkSummary?.total ?? null,
+    state.checkSummary?.pending ?? null,
   ]);
 }

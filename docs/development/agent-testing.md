@@ -44,6 +44,12 @@ browser coverage. Live review and Docker tests remain opt-in and require the
 manual profile workflow below. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
 
+Use separate disposable profiles for concurrent live browser suites. A profile
+shares its fixture project, provider homes, backend state and default artifact
+destinations, so independent suites can interfere. Component-browser runs also
+share their configured web server; run an aggregate and its owning-file reruns
+sequentially.
+
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
 `--agent-platforms <list>`, `--no-agent-credentials` and

@@ -108,3 +108,10 @@ and on a clean `dfedcd743` (origin/main) clone (22 pass). Evidence:
 `orkestrator-test-run.2rpgar/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the host temporary directory. No implementation, assertion, wait,
 timeout or skip changed.
+
+## Storage test splits (0930) recurrence — 2026-10-30
+
+- **Original command:** `mise run test` on `todo-0930-storage-test-files-8ccf873101e6` at `d5091591d`, Bun 1.4.4 on the shared Linux host, load average about 20–33 (the run took 1,531 s).
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning` at 5,036.06 ms, over its 5,000 ms deadline.
+- **Isolated rerun:** `mise run test:logged -- --name agent-native-commands-alone -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed (7.0 s for the file).
+- **Assessment:** intermittent deadline miss under load; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1316](../aggregate-validation-runs/1316-storage-test-split-0930-validation.md).

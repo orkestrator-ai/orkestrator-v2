@@ -160,6 +160,9 @@ in two owners this branch does not touch:
 mismatch) and `tests/unit/mcp-fixture-cleanup.test.ts` (a 5 s deadline miss).
 Both passed alone; they are recorded as flake case
 [1316](../../tests/flaky-tests/aggregate-validation-runs/1316-storage-test-split-0930-validation.md).
+A second run at `d5091591d` (docs only since, load 20–33) passed root but
+failed three other unchanged owners, which also passed alone and are in the
+same case. Neither aggregate run is green.
 
 ## Assumptions and decisions
 

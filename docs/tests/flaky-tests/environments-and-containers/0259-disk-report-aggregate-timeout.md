@@ -276,3 +276,19 @@ mise run test:logged -- --name preparation-disk-owner -- bun test ./tests/unit/d
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+## Provider-upgrade review — 2026-10-30
+
+Preparation's `mise run test` repeated the isolated-checkout deadline at
+5043.93 ms, with a between-test error (`Expected: 0`). Evidence is
+`validation-07.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-423e9f4a-bbd6-4609-970f-0581a2493d67/`.
+The complete unchanged owner passed alone (exit 0, 3.2 s):
+
+```sh
+mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+No implementation, assertion, timeout or skip changed. The exact repository
+command was rerun through `test:logged` as `review-default-suite`; its result
+is recorded in agent-engines todo 1020.

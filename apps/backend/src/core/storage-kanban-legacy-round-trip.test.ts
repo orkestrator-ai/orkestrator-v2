@@ -156,6 +156,59 @@ describe.each(LEGACY_ROWS.map((row) => [row.title, row] as const))(
 describe("legacy ticket edits", () => {
   const row = LEGACY_ROWS[0]!;
 
+  test.each([
+    {
+      name: "a summary sections patch",
+      patch: { sections: { summary: "Updated summary" } },
+      expected: { sections: { summary: "Updated summary" } },
+    },
+    {
+      name: "a criteria sections patch",
+      patch: { sections: { acceptanceCriteria: ["Has a test", "New criterion"] } },
+      expected: {
+        sections: {
+          acceptanceCriteria: [
+            { id: "ac-1", text: "Has a test" },
+            { id: "ac-3", text: "New criterion" },
+          ],
+        },
+      },
+    },
+    {
+      name: "a kind-only update",
+      patch: { kind: "work-brief" },
+      expected: { kind: "work-brief" },
+    },
+    {
+      name: "a description-only update",
+      patch: { description: "Updated description" },
+      expected: { description: "Updated description" },
+    },
+    {
+      name: "an acceptanceCriteria-only update",
+      patch: { acceptanceCriteria: "- [x] Has a test\n- New criterion" },
+      expected: { acceptanceCriteria: "- [x] Has a test\n- New criterion" },
+    },
+  ])("$name retains a legacy hand tick dated at creation", async ({ patch, expected }) => {
+    await withLegacyRows(async ({ storage, stored, update }) => {
+      // Update the raw legacy row directly, before any read derives sections.
+      const edited = await update({ taskId: row.id, ...patch });
+      expect(edited).toMatchObject(expected);
+      expect(edited.sections!.acceptanceCriteria?.[0]).toEqual({
+        id: "ac-1",
+        text: "Has a test",
+        check: {
+          status: "passed",
+          evidence: "Ticked by hand in the ticket text.",
+          checkedAt: CREATED_AT,
+          source: "manual",
+        },
+      });
+      expect(stored(row.id)).toMatchObject(edited);
+      expect(await readRow(storage, row)).toEqual(edited);
+    });
+  });
+
   test("a hand tick keeps its creation date, and a changed criterion loses its tick", async () => {
     await withLegacyRows(async ({ storage, update }) => {
       const read = await readRow(storage, row);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +6,18 @@ import type {
   AgentAccountsSnapshot,
   AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
-import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_WORKSPACE_VERSION,
+  COORDINATOR_EXECUTION_POLICY,
+  coordinatorRuntimeId,
+  type CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
+import { NativeAgentService } from "./native-agent-service.js";
+import {
+  AmbiguousPromptDispatchError,
+  type NativeAgentRuntimeProvider,
+} from "./native-agent-provider.js";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { readProjectUsageLimits } from "./agent-usage-limits.js";
@@ -20,7 +31,7 @@ import { executeAgentAccountSwitch } from "./nodes/node-account-switch.js";
 import { NodeActionRequests, type NodeActionRequest } from "./nodes/node-action-requests.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { ScheduledJobService } from "./scheduled-jobs/service.js";
-import { StorageService } from "./storage.js";
+import { StorageService, createProject } from "./storage.js";
 
 /**
  * A coordinator's self-timers and provider-account tools over the real
@@ -818,3 +829,189 @@ test("a timer's permission can name another machine, switched through the node l
   });
   expect(switches).toEqual([{ machine: LEAF, platform: "claude", accountId: "acct-leaf" }]);
 });
+
+test.each([{ cron: "0 * * * *" }, { everyMinutes: 60 }])(
+  "recurring self-timers cannot carry account-switch permission: %j",
+  async (timing) => {
+    const result = await call("main", "create_schedule", {
+      requestId: "recurring-grant",
+      ...timing,
+      action: {
+        type: "remind_me",
+        body: "Switch if limited",
+        authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch" },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("one-shot");
+    expect(service.list({ kind: "operator" })).toHaveLength(0);
+  },
+);
+
+test.each([
+  { stale: true, windows: [{ window: "quota", usedPercent: 20 }] },
+  {
+    stale: true,
+    windows: [{ window: "quota", usedPercent: 100, resetsAt: "2020-01-01T00:00:00Z" }],
+  },
+  { status: "error" as const, windows: [] },
+  { windows: [] },
+  { windows: [{ window: "quota", resetsAt: "2020-01-01T00:00:00Z" }] },
+])("availability stays unknown without a current measured reading: %j", async (snapshot) => {
+  usage[SELF]!["acct-work"] = {
+    ...reading(20, 3600000),
+    ...snapshot,
+    windows: snapshot.windows.map((window) => ({ ...window })),
+  };
+  const result = await call("main", "list_provider_accounts", { platform: "claude" });
+  const providers = result.structuredContent!.providers as {
+    claude: { accounts: Array<Record<string, unknown>> };
+  };
+  expect(providers.claude.accounts.find((row) => row.accountId === "acct-work")).toMatchObject({
+    hasAllocationLeft: "unknown",
+    usage: { status: snapshot.status ?? "ok" },
+  });
+});
+
+test("a timer grant refuses another provider before any account change", async () => {
+  accounts[SELF]!.push({ ...account("codex-spare", "Codex spare"), platform: "codex" });
+  const timer = await call("main", "create_schedule", {
+    requestId: "claude-only",
+    at: "+1m",
+    action: {
+      type: "remind_me",
+      body: "Switch Claude",
+      authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch Claude" },
+    },
+  });
+  clock.now += 60000;
+  await fire();
+  const result = await call("main", "switch_provider_account", {
+    requestId: "wrong-platform",
+    platform: "codex",
+    accountId: "codex-spare",
+    reason: "switch",
+    scheduleId: timer.structuredContent!.scheduleId,
+  });
+  expect(result.isError).toBe(true);
+  expect(text(result)).toContain("may switch claude only");
+  expect(switches).toHaveLength(0);
+});
+
+test.each(["mail", "timer", "status-wake"])(
+  "%s dispatch revokes user authority before provider execution and through lost-ack reconciliation",
+  async (source) => {
+    await storage.addProject({ ...createProject("remote", dataDir), id: PROJECT });
+    const createdAt = new Date().toISOString();
+    await storage.coordinators.mutateCoordinatorWorkspace(PROJECT, () => ({
+      ...initialWorkspace(),
+      version: COORDINATOR_WORKSPACE_VERSION,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      createdAt,
+      updatedAt: createdAt,
+      selectedConversationId: "main-1",
+      repositoryContextRevision: 0,
+      conversations: [
+        {
+          ...initialWorkspace().conversations[0]!,
+          agent: "codex",
+          title: "Coordinator",
+          createdAt,
+          logicalSessionKey: "coordinator-coordinator-1:main-1",
+        },
+      ],
+    }));
+    const base = {
+      environmentId: coordinatorRuntimeId("coordinator-1", "main-1"),
+      logicalSessionKey: "coordinator-coordinator-1:main-1",
+      agent: "codex" as const,
+    };
+    let loseAck = false;
+    let sends = 0;
+    const refusedGrant = async () => {
+      currentWorkspace = (await storage.coordinators.getCoordinatorWorkspace(PROJECT))!;
+      const result = await call("main", "create_schedule", {
+        requestId: `grant-${source}`,
+        at: "+1h",
+        action: {
+          type: "remind_me",
+          body: "switch",
+          authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch" },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("user started");
+    };
+    const provider = {
+      agent: "codex",
+      createSession: async () => "provider-session",
+      registerSession: () => {},
+      send: async () => {
+        sends++;
+        if (loseAck) {
+          await refusedGrant();
+          throw new AmbiguousPromptDispatchError("Acknowledgement lost");
+        }
+      },
+      status: async () => "idle",
+      activity: async () => "idle",
+      messages: async () => [],
+      dispatchStatus: async () => "dispatched",
+      dispose: async () => {},
+    } as unknown as NativeAgentRuntimeProvider;
+    const native = new NativeAgentService(storage, invoke, { provider: async () => provider });
+    const mutate = storage.coordinators.mutateCoordinatorWorkspace.bind(storage.coordinators);
+    try {
+      const user = await native.dispatchPrompt({
+        ...base,
+        requestId: "user",
+        prompt: "Check later",
+      });
+      collaborators(native).launches.recordObservedActivity(user.key, {
+        providerSessionId: user.providerSessionId,
+        state: "idle",
+      });
+      loseAck = true;
+      // A delayed authority write must hold dispatch, and a failed write must
+      // prevent the non-user turn from reaching the provider at all.
+      let entered!: () => void;
+      let release!: () => void;
+      const enteredWrite = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const write = spyOn(storage.coordinators, "mutateCoordinatorWorkspace").mockImplementation(
+        async () => {
+          entered();
+          await blocked;
+          throw new Error("workspace unavailable");
+        },
+      );
+      const failed = native.dispatchMailInject({ ...base, requestId: "failed", prompt: source });
+      await enteredWrite;
+      expect(sends).toBe(1);
+      release();
+      expect(await failed).toMatchObject({ outcome: "rejected" });
+      expect(sends).toBe(1);
+      write.mockRestore();
+      // Retry with working storage. The provider accepts but loses the reply.
+      expect(
+        await native.dispatchMailInject({ ...base, requestId: "lost", prompt: source }),
+      ).toMatchObject({ outcome: "unknown" });
+      await refusedGrant();
+      // Retrying the parked mail through the user endpoint cannot promote it.
+      await expect(
+        native.dispatchPrompt({ ...base, requestId: "lost", prompt: source }),
+      ).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await refusedGrant();
+      expect(await native.reconcileMailInject({ ...base, requestId: "lost" })).toBe("dispatched");
+      await refusedGrant();
+      expect(service.list({ kind: "operator" })).toHaveLength(0);
+    } finally {
+      storage.coordinators.mutateCoordinatorWorkspace = mutate;
+      await native.shutdown();
+    }
+  },
+);

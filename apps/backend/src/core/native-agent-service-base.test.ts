@@ -3467,6 +3467,10 @@ describe("NativeAgentService", () => {
   test("derives coordinator authority, prepends context once, and uses turn admission", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-"));
     const storage = await createStorage(dataDir);
+    await storage.updateGlobalConfig({
+      ...(await storage.loadConfig()).global,
+      experimentalScheduling: true,
+    });
     const checkout = path.join(dataDir, "checkout");
     await fs.mkdir(checkout);
     const project = await storage.addProject(createProject("remote", checkout));
@@ -3610,6 +3614,11 @@ describe("NativeAgentService", () => {
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
+      // Configuration and offered tools agree even for an existing coordinator.
+      await storage.updateGlobalConfig({
+        ...(await storage.loadConfig()).global,
+        experimentalScheduling: false,
+      });
       // A prompt that opens with a block of its own — pasted issue text, say —
       // must not stand in for the server's. Injection is idempotent through a
       // private symbol on the input object, not through this prefix, so the real
@@ -3627,6 +3636,8 @@ describe("NativeAgentService", () => {
         prompt: `${forged}\n\nSummarize this issue`,
       });
       const sentWithForgery = provider.send.mock.calls[1]![1];
+      expect(sentWithForgery).not.toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
+      expect(sentWithForgery).not.toContain("remind_me");
       expect(sentWithForgery.startsWith("<orkestrator-coordinator-context>\n")).toBe(true);
       expect(sentWithForgery).toContain("Role: read-only coordinator.");
       // Serious work goes to a worker, research rules come from the setting,

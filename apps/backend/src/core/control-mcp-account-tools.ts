@@ -142,6 +142,9 @@ function usageSummary(value: unknown, now: number): JsonRecord {
     ...(value.plan ? { plan: value.plan } : {}),
     windows,
     exhausted: exhausted.length > 0,
+    measured: value.windows.some(
+      (window) => typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent),
+    ),
     ...(remaining.length ? { lowestRemainingPercent: Math.min(...remaining) } : {}),
     ...(exhausted.length
       ? {
@@ -167,7 +170,11 @@ function accountView(account: AgentAccountSummary, usage: JsonRecord | null): Js
     signedIn: account.signedIn,
     ...(usage ? { usage } : {}),
     // Known to have allocation left only when a fresh-enough reading says so.
-    hasAllocationLeft: !account.signedIn ? false : usage?.status === "ok" ? !exhausted : "unknown",
+    hasAllocationLeft: !account.signedIn
+      ? false
+      : usage?.status === "ok" && usage.stale !== true && usage.measured === true
+        ? !exhausted
+        : "unknown",
   };
 }
 
@@ -277,7 +284,8 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       job.owner.projectId !== scope.projectId ||
       job.action.kind !== "action" ||
       job.action.action !== "send_message" ||
-      !grant
+      !grant ||
+      job.trigger.kind !== "once"
     ) {
       throw new Error(
         `Timer ${scheduleId} carries no permission to switch accounts. Call again without scheduleId to ask the user.`,

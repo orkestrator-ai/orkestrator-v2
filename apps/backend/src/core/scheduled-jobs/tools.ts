@@ -120,7 +120,7 @@ function actionSchema(surface: ScheduleToolSurface) {
               })
               .optional()
               .describe(
-                "remind_me only, and only when the user's own message in this turn asked you to switch accounts at that time: lets switch_provider_account act when the timer fires without a second approval. Refused in a turn started by mail or another timer.",
+                "One-shot remind_me only, and only when the user's own message in this turn asked you to switch accounts at that time: lets switch_provider_account act when the timer fires without a second approval. Refused in a turn started by mail or another timer.",
               ),
             environmentId: z
               .string()
@@ -381,6 +381,12 @@ export function registerScheduleTools(
       const input = action as ActionInput;
       if (input.authorizeAccountSwitch && input.type !== "remind_me") {
         throw new Error("authorizeAccountSwitch goes with action type remind_me");
+      }
+      if (
+        input.authorizeAccountSwitch &&
+        (timing.cron !== undefined || everyMinutes !== undefined)
+      ) {
+        throw new Error("authorizeAccountSwitch requires a one-shot self-timer (at)");
       }
       let scheduled: ScheduleAction;
       if (input.type === "remind_me") {

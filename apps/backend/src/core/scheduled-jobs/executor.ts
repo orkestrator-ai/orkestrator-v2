@@ -41,6 +41,7 @@ import { withPublicAuthority } from "../public-api/dispatch.js";
 import { controlMcpAuthority, type PublicAuthority } from "../public-api/operation-ledger.js";
 import type { PublicActionHandler } from "../public-api/types.js";
 import type { FireResult } from "./model.js";
+import { isReminderToSelf } from "./reminders.js";
 
 /**
  * Runs a schedule's action as its owner, and checks at creation that the
@@ -149,25 +150,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
-}
-
-/** True when a mail action targets the owner's own mailbox. */
-export function isReminderToSelf(owner: ScheduleOwner, action: ScheduleAction): boolean {
-  if (action.kind !== "action" || !isMailAction(action.action)) return false;
-  const to = stringField(action.input.toEnvironmentId);
-  const toTab = stringField(action.input.toTabId);
-  if (owner.kind === "agent") {
-    return to === owner.environmentId && (toTab === undefined || toTab === owner.tabId);
-  }
-  if (owner.kind === "coordinator") {
-    if (owner.role === "main" && to === COORDINATOR_MAIL_ADDRESS) return true;
-    return to === coordinatorRuntimeId(owner.coordinatorId, owner.conversationId);
-  }
-  return false;
-}
-
-function isMailAction(name: string): boolean {
-  return name === "mail.send" || name === "send_message";
 }
 
 /** The owner tool a schedule action calls (agents and coordinators). */

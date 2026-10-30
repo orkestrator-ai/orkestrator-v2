@@ -771,3 +771,69 @@ describe("scheduler regressions", () => {
     }
   });
 });
+
+test("self-timer capacity is atomic across competing creates and all activation paths", async () => {
+  const { service, executor, storage } = await backend(await dataDir(), { now: T0 });
+  const owner: ScheduleOwner = {
+    kind: "coordinator",
+    projectId: "p",
+    coordinatorId: "c",
+    conversationId: "main",
+    role: "main",
+  };
+  const action: ScheduleAction = {
+    kind: "action",
+    action: "send_message",
+    input: { toEnvironmentId: "coordinator", body: "wake" },
+  };
+  for (let i = 0; i < SCHEDULED_JOB_LIMITS.maxPendingSelfTimers - 1; i++) {
+    await service.create(owner, { at: "+1h", action });
+  }
+  const paused = (await service.create(owner, { at: "+1h", action, paused: true })).job;
+  const completed = (await service.create(owner, { at: "+1h", action, paused: true })).job;
+  storage.scheduledJobStore().mutate(completed.id, (job) => ({
+    result: undefined,
+    value: { ...job!, state: "completed", nextFireAt: null },
+  }));
+  // Both requests pass validation before either inserts its row.
+  let entered = 0;
+  let release!: () => void;
+  let ready!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const bothEntered = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const validation = spyOn(executor, "validate").mockImplementation(async () => {
+    if (++entered === 2) ready();
+    await barrier;
+  });
+  const first = service.create(owner, { at: "+1h", action });
+  const second = service.create(owner, { at: "+1h", action });
+  await bothEntered;
+  release();
+  const results = await Promise.allSettled([first, second]);
+  validation.mockRestore();
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  const rejected = results.find((result) => result.status === "rejected");
+  expect(rejected?.status === "rejected" && String(rejected.reason)).toContain(
+    "pending self-timers",
+  );
+  expect(() => service.resume(owner, paused.id)).toThrow(/pending self-timers/);
+  await expect(service.update(owner, completed.id, { at: "+2h" })).rejects.toThrow(
+    /pending self-timers/,
+  );
+  const other = (await service.create(owner, { at: "+1h", action: MAIL })).job;
+  await expect(service.update(owner, other.id, { action })).rejects.toThrow(/pending self-timers/);
+  expect(service.get(owner, paused.id).state).toBe("paused");
+  expect(service.get(owner, completed.id).state).toBe("completed");
+  // Existing active timers remain editable at capacity.
+  const active = service.list(owner).find((job) => job.state === "active" && job.id !== other.id)!;
+  await expect(service.update(owner, active.id, { name: "renamed" })).resolves.toMatchObject({
+    name: "renamed",
+  });
+  expect(
+    service.list(owner).filter((job) => job.state === "active" && job.id !== other.id),
+  ).toHaveLength(20);
+});

@@ -217,9 +217,12 @@ is `Self-timer: <body>`, so the inbox subject says what it is for.
 - **Account-switch permission.** `authorizeAccountSwitch: {platforms,
   nodeIds?, userInstruction}` stamps `input.grant`
   (`ScheduleAccountSwitchGrant`) on the reminder. The coordinator tool backend
-  accepts it only for the main coordinator and only when the conversation's
-  `lastTurnOrigin` is `user`; a `tool` action naming `grant` is refused, so it
-  cannot be passed through. The fired reminder says what the permission
+  accepts it only for a one-shot timer from the main coordinator and only
+  when the conversation's `lastTurnOrigin` is `user`; a `tool` action naming
+  `grant` is refused, so it cannot be passed through. Turn origin is persisted
+  before provider dispatch; a failed write blocks dispatch, and an ambiguous
+  acknowledgement retains the new origin. Replaying a parked request cannot
+  promote it to a user turn. The fired reminder says what the permission
   covers and that it lasts `selfTimerGrantWindowMs` (2 hours) after delivery;
   `switch_provider_account` checks the timer's newest succeeded fire against
   that window. See [agent-accounts.md](agent-accounts.md#coordinator-switching).

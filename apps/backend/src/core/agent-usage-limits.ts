@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/agent-usage-limits";
 import {
   PLAN_USAGE_PLATFORMS,
+  stalePlanUsageSnapshot,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
@@ -73,7 +74,10 @@ function tabIdFromLogicalKey(environmentId: string, logicalSessionKey: string): 
 }
 
 function cachedPlanUsage(platform: PlanUsagePlatform): PlanUsageSnapshot | undefined {
-  return sharedPlanUsageCache.peek(platform) ?? sharedPlanUsageCache.lastOk(platform);
+  const current = sharedPlanUsageCache.peek(platform);
+  if (current) return current;
+  const last = sharedPlanUsageCache.lastOk(platform);
+  return last ? stalePlanUsageSnapshot(last, Date.now()) : undefined;
 }
 
 export async function readProjectUsageLimits(

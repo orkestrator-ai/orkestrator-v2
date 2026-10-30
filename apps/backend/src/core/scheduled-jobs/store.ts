@@ -4,6 +4,7 @@ import {
   type ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
 import type { StorageDatabase } from "../storage-database.js";
+import { isReminderToSelf } from "./reminders.js";
 import { SCHEDULED_JOBS_STORE } from "./layout.js";
 import { parseScheduledJob } from "./model.js";
 
@@ -74,6 +75,7 @@ export class ScheduledJobStore {
         }
         if (!("value" in update)) return { result: update.result };
         if (!existing) this.assertCapacity(update.value);
+        this.assertSelfTimerCapacity(update.value, existing);
         changed = !existing || existing.revision !== update.value.revision;
         return { result: update.result, value: update.value };
       });
@@ -91,6 +93,24 @@ export class ScheduledJobStore {
       .map((entry) => entry.key);
     for (const id of ids) this.mutate(id, () => ({ result: undefined, delete: true }));
     return ids;
+  }
+
+  /** Checked under the same SQLite write lock as insertion and activation. */
+  private assertSelfTimerCapacity(job: ScheduledJob, existing: ScheduledJob | null): void {
+    const pendingSelfTimer = (candidate: ScheduledJob) =>
+      candidate.state === "active" &&
+      candidate.owner.kind === "coordinator" &&
+      isReminderToSelf(candidate.owner, candidate.action);
+    if (!pendingSelfTimer(job)) return;
+    if (existing && existing.ownerKey === job.ownerKey && pendingSelfTimer(existing)) return;
+    const pending = this.list({ ownerKey: job.ownerKey }).filter(
+      (candidate) => candidate.id !== job.id && pendingSelfTimer(candidate),
+    ).length;
+    if (pending >= SCHEDULED_JOB_LIMITS.maxPendingSelfTimers) {
+      throw new ScheduledJobCapacityError(
+        `You already have ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending self-timers; cancel one with cancel_schedule first`,
+      );
+    }
   }
 
   private assertCapacity(job: ScheduledJob): void {

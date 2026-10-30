@@ -68,6 +68,7 @@ import {
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
 } from "./native-agent-service-shared.js";
+import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
 import {
   coordinatorResearchLine,
@@ -1064,7 +1065,9 @@ export class NativeAgentService {
             `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
             `${COORDINATOR_PR_RULE}\n` +
             `${COORDINATOR_AGENTS_MD_RULE}\n` +
-            `${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}\n` +
+            ((await schedulingEnabled(this.storage))
+              ? `${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}\n`
+              : "") +
             `${COORDINATOR_ASYNC_CONTRACT}\n`
           : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
@@ -3333,6 +3336,47 @@ export class NativeAgentService {
                 "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
               );
             }
+            // Persist authority before the provider can execute this request.
+            // Never restore a prior user origin on rejection or ambiguity: a
+            // lost acknowledgement can still mean the non-user turn is running.
+            // A replay of a parked request is not a new user instruction, even
+            // when retried through the ordinary prompt endpoint.
+            if (input.owner?.kind === "coordinator") {
+              const owner = input.owner;
+              const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
+              const startedAt = new Date(this.now()).toISOString();
+              await this.storage.coordinators.mutateCoordinatorWorkspace(
+                owner.projectId,
+                (workspace) => {
+                  if (
+                    !workspace ||
+                    workspace.id !== owner.coordinatorId ||
+                    !workspace.conversations.some(
+                      (conversation) =>
+                        conversation.id === conversationId && !conversation.closedAt,
+                    )
+                  ) {
+                    throw new PromptRejectedError("The coordinator conversation is unavailable");
+                  }
+                  return {
+                    ...workspace,
+                    conversations: workspace.conversations.map((conversation) =>
+                      conversation.id === conversationId
+                        ? {
+                            ...conversation,
+                            lastTurnOrigin:
+                              mailInject || recovery || durable.pendingDispatch
+                                ? ("mail" as const)
+                                : ("user" as const),
+                            lastTurnStartedAt: startedAt,
+                          }
+                        : conversation,
+                    ),
+                    updatedAt: startedAt,
+                  };
+                },
+              );
+            }
             return this.applySessionHeldDispatchModel(input, durable, provider);
           },
         );
@@ -3346,7 +3390,6 @@ export class NativeAgentService {
         ) {
           const coordinatorId = input.owner.coordinatorId;
           const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
-          const startedAt = new Date(this.now()).toISOString();
           if (conversationId) {
             await this.storage.coordinators
               .mutateCoordinatorWorkspace(input.owner.projectId, (workspace) =>
@@ -3365,15 +3408,6 @@ export class NativeAgentService {
                                     ),
                                   }
                                 : {}),
-                              // Mail, timers and status wakes are not the user's word.
-                              ...(recovery
-                                ? {}
-                                : {
-                                    lastTurnOrigin: mailInject
-                                      ? ("mail" as const)
-                                      : ("user" as const),
-                                    lastTurnStartedAt: startedAt,
-                                  }),
                             }
                           : conversation,
                       ),

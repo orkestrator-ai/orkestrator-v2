@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isReminderToSelf } from "./reminders.js";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
@@ -24,12 +25,7 @@ import {
   type ScheduledJob,
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
-import {
-  isReminderToSelf,
-  requestDigest,
-  ScheduleAuthorityError,
-  type ScheduledJobExecutor,
-} from "./executor.js";
+import { requestDigest, ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import {
   claimDueFire,
   cloneJob,
@@ -371,7 +367,7 @@ export class ScheduledJobService {
       if (prior) return this.replay(prior, fingerprint);
     }
     const trigger = normalizeScheduleTrigger(input, timeZone, now);
-    this.assertSelfTimerLimits(owner, action, trigger, now, ownerKey);
+    assertSelfTimerDelay(owner, action, trigger, now);
     await this.options.executor.validate(owner, action);
     const ownerLabel = (await this.options.ownerLabel?.(owner)) ?? defaultOwnerLabel(owner);
     const nextFireAt = nextScheduleSlot(trigger, timeZone, now);
@@ -403,29 +399,6 @@ export class ScheduledJobService {
     this.wake();
     if (!outcome.inserted) return this.replay(outcome.job, fingerprint);
     return { job: this.strip(outcome.job), replayed: false };
-  }
-
-  /**
-   * A coordinator's self-timers (reminders to itself) are bounded: a one-shot
-   * may be set at most `maxSelfTimerDelayMs` ahead, and one owner holds at
-   * most `maxPendingSelfTimers` that are still active.
-   */
-  private assertSelfTimerLimits(
-    owner: ScheduleOwner,
-    action: ScheduleAction,
-    trigger: ScheduledJob["trigger"],
-    now: number,
-    ownerKey: string,
-  ): void {
-    if (!assertSelfTimerDelay(owner, action, trigger, now)) return;
-    const pending = this.options.store
-      .list({ ownerKey })
-      .filter((job) => job.state === "active" && isReminderToSelf(job.owner, job.action)).length;
-    if (pending >= SCHEDULED_JOB_LIMITS.maxPendingSelfTimers) {
-      throw new ScheduleInputError(
-        `You already have ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending self-timers; cancel one with cancel_schedule first`,
-      );
-    }
   }
 
   private replay(

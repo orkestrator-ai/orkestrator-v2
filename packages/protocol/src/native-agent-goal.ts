@@ -92,6 +92,7 @@ export const GOAL_TOKEN_BUDGET_PLATFORMS = Object.freeze([
   "codex",
   "opencode",
   "cursor",
+  "grok",
   "pi",
 ] as const);
 

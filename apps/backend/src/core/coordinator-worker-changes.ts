@@ -14,7 +14,6 @@ import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   coordinatorNodeTarget,
-  RETRY_SAME_REQUEST,
   withRetryAdvice,
 } from "./commands-registry-coordinator-nodes.js";
 import { coordinatorCaller } from "./coordinator-action-scope.js";
@@ -556,7 +555,8 @@ export function registerCoordinatorWorkerChanges(
       const remote = await coordinatorNodeTarget(context, caller.projectId, nodeId);
       await remote.environment(environmentId);
       return {
-        ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+        // A read changes nothing, so a lost answer is simply asked again.
+        ...(await withRetryAdvice("Call get_worker_changes again; it only reads.", () =>
           remote.call<JsonRecord>("get_controller_worker_changes", {
             projectId: remote.projectId,
             environmentId,

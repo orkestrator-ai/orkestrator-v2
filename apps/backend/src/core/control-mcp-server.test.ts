@@ -802,9 +802,15 @@ describe("Orkestrator control MCP server", () => {
       "resolve_native_agent_interaction",
       "resolve_node_action_request",
     ];
-    for (const command of approvalOnly)
+    for (const command of approvalOnly) {
       await expect(checked.invoke(command, {})).rejects.toThrow("Coordinator capability denied");
+      // Wrapped for a connected node, it is refused the same way.
+      await expect(
+        checked.invoke("invoke_on_node", { nodeId: "leaf-1", command, args: {} }),
+      ).rejects.toThrow("Coordinator capability denied");
+    }
     expect(invocations.filter((entry) => approvalOnly.includes(entry.command))).toEqual([]);
+    expect(invocations.some((entry) => entry.command === "invoke_on_node")).toBe(false);
   });
 
   test("publishes the worker prompt format rule on every delegation prompt field", async () => {

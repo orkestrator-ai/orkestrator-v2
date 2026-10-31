@@ -255,7 +255,7 @@ describe("AlertDialog primitives", () => {
       "apps/web/src/components/settings/HostUpdatesPanel.tsx",
       "apps/web/src/components/settings/HostDependencySettings.tsx",
       "apps/web/src/components/settings/McpSettings.tsx",
-      "apps/web/src/components/docker/DockerStatsDialog.tsx",
+      "apps/web/src/components/docker/DockerSettings.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
       "apps/web/src/components/environments/EnvironmentRebuildSection.tsx",
       "apps/web/src/components/environments/EnvironmentRecoveryCopies.tsx",

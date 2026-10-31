@@ -188,6 +188,15 @@ also failed alone; the observations are recorded in the existing
 [validation case](../tests/flaky-tests/aggregate-validation-runs/0958-transcript-scroll-review-validation.md).
 The separate public-site browser suite passed.
 
+Later OpenCode reruns exhausted the default Big Pickle model's free allowance.
+A retained fixture confirmed `turn.phase: error` with `Free limit reached`, no
+usage and no goal reports. Its final limit probe therefore did not qualify the
+transcript-usage fallback live; that fallback has a deterministic background-tab
+regression. The earlier OpenCode loop, Plan, no-progress and budget run passed.
+The later Claude, Codex and Cursor repair runs passed, including Cursor Stop
+during startup. Claude restart recovery and the Codex coordinator goal flow also
+passed. Disposable profiles were stopped and reset after qualification.
+
 Not proven live:
 
 - A failed turn, except on OpenCode, where a real upstream 403 paused the goal. The

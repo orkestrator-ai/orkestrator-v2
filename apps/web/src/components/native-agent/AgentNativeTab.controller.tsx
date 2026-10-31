@@ -220,6 +220,11 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeAuthenticationFailureMessage, isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
+import {
+  createStartupPromptPreviewMessage,
+  INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
+  nextStartupPromptPreviewState,
+} from "./startup-prompt-preview";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
@@ -816,6 +821,41 @@ export function SharedNativeAgentController({
         !priorMessageIds.has(message.id),
     );
   }, [activeTranscriptConfirmation, normalizedMessages, projection?.sessionId]);
+  /*
+   * The opening prompt renders the moment the tab opens, not when the provider
+   * finally echoes it. Creating the session (or, for a backend-owned launch,
+   * waiting on the backend's dispatch) takes seconds, and without this the tab
+   * sat on the connecting logo and the prompt seemed to arrive late. A tab
+   * resuming a conversation is excluded: its prompt belongs after history that
+   * has not loaded yet. The submitted prompt's own bubble supersedes this one.
+   */
+  const [startupPromptState, setStartupPromptState] = useState(
+    INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
+  );
+  const startupPromptInput = {
+    source: requestedResumeSessionId
+      ? undefined
+      : backendOwnsStartupPrompt
+        ? environment?.initialPrompt
+        : initialPrompt,
+    backendOwned: backendOwnsStartupPrompt,
+    tabInitialPrompt: initialPrompt,
+    hasAuthoritativeMessages: visibleAuthoritativeMessageIds.size > 0,
+    launchFailed:
+      environment?.startupAgentSession?.status === "error" &&
+      environment.pendingAgentLaunch !== true,
+  };
+  // The clock is read in the updater, never in render; the render-time call
+  // only asks whether anything changed.
+  if (
+    nextStartupPromptPreviewState(startupPromptState, startupPromptInput, () => "") !==
+    startupPromptState
+  ) {
+    setStartupPromptState((current) =>
+      nextStartupPromptPreviewState(current, startupPromptInput, () => new Date().toISOString()),
+    );
+  }
+  const startupPromptPreview = optimisticPrompt ? null : startupPromptState.preview;
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -837,7 +877,9 @@ export function SharedNativeAgentController({
             },
           ]
         : handoff.displayMessages;
-    const base = providerBase;
+    const base = startupPromptPreview
+      ? [createStartupPromptPreviewMessage(sessionKey, startupPromptPreview), ...providerBase]
+      : providerBase;
     if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
     /*
      * A resume (or any other session replacement) rewrites the transcript while
@@ -875,6 +917,7 @@ export function SharedNativeAgentController({
     optimisticPrompt,
     projectedSessionId,
     sessionKey,
+    startupPromptPreview,
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
@@ -1362,6 +1405,10 @@ export function SharedNativeAgentController({
       </span>
     ) : turnActivity?.thinkingTokens ? (
       <AgentThinkingIndicator agentName={label} thinkingTokens={turnActivity.thinkingTokens} />
+    ) : !isTurnActive && startupPromptPreview ? (
+      <span role="status" className="agent-thinking-shimmer text-xs">
+        Starting {label}…
+      </span>
     ) : undefined;
   const turnStartedAt =
     projection?.turn.startedAt ??
@@ -2856,6 +2903,7 @@ export function SharedNativeAgentController({
         environmentId={data.environmentId}
         setupPhase={environment?.setupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
+        pendingPrompt={startupPromptPreview?.text}
       />
     );
   }
@@ -3354,6 +3402,7 @@ export function SharedNativeAgentController({
       transcriptSettled={transcriptAvailability === "current" || transcriptAvailability === "empty"}
       displayAvailable={
         Boolean(projection?.messages.length) ||
+        (connectionState !== "error" && startupPromptPreview !== null) ||
         (connectionState !== "error" &&
           (Boolean(projection) ||
             (transcriptAvailability !== undefined && transcriptAvailability !== "unavailable"))) ||
@@ -3374,7 +3423,9 @@ export function SharedNativeAgentController({
       }
       asyncQuestionResponses={projection?.asyncQuestionResponses}
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
-      isLoading={isTurnActive}
+      // The opening prompt is on screen before its turn exists; the indicator
+      // says the response is on its way rather than leaving the prompt inert.
+      isLoading={isTurnActive || startupPromptPreview !== null}
       statusLabel={phaseStatusLabel}
       elapsedSeconds={null}
       elapsedStartedAt={elapsedStartedAt}

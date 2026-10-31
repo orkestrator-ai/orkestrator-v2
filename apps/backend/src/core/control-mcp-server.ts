@@ -500,7 +500,7 @@ export class ControlMcpServer {
       const denied = new Set([
         "update_config",
         "remove_project",
-        "merge_environment",
+        "merge_environment_pr",
         "delete_environment",
         "write_file",
         "move_file",

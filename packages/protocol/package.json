@@ -159,6 +159,7 @@
     "./public-api-inputs": "./src/public-api-inputs.ts",
     "./public-api-inputs-build": "./src/public-api-inputs-build.ts",
     "./public-api-inputs-graph": "./src/public-api-inputs-graph.ts",
+    "./public-api-inputs-pr": "./src/public-api-inputs-pr.ts",
     "./public-api-resources": "./src/public-api-resources.ts",
     "./public-api-cli": "./src/public-api-cli.ts",
     "./public-api-wait": "./src/public-api-wait.ts",

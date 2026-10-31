@@ -1155,6 +1155,7 @@ export async function mergePullRequestViaGitHubApi(
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
   cwd: string,
+  expectedHeadSha?: string,
 ): Promise<MergePrResult> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
@@ -1169,7 +1170,15 @@ export async function mergePullRequestViaGitHubApi(
   }
 
   const mergeOutput = await runGh(
-    ["api", mergeEndpoint, "--method", "PUT", "-f", `merge_method=${method}`],
+    [
+      "api",
+      mergeEndpoint,
+      "--method",
+      "PUT",
+      "-f",
+      `merge_method=${method}`,
+      ...(expectedHeadSha ? ["-f", `sha=${expectedHeadSha}`] : []),
+    ],
     120_000,
   );
 
@@ -1192,6 +1201,7 @@ export async function mergePullRequestInContainer(
   containerId: string,
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
+  expectedHeadSha?: string,
 ): Promise<MergePrResult> {
   const runGh = createContainerGhRunner(containerId);
   const prUrl = (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
@@ -1200,7 +1210,14 @@ export async function mergePullRequestInContainer(
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
   await runGh(
-    ["pr", "merge", prUrl, `--${method}`, ...(deleteBranch ? ["--delete-branch"] : [])],
+    [
+      "pr",
+      "merge",
+      prUrl,
+      `--${method}`,
+      ...(deleteBranch ? ["--delete-branch"] : []),
+      ...(expectedHeadSha ? ["--match-head-commit", expectedHeadSha] : []),
+    ],
     120_000,
   );
 
@@ -1224,6 +1241,7 @@ export async function runStoredEnvironmentMerge<T>(
   deleteBranch: boolean,
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
+  expectedHeadSha?: string,
 ): Promise<T> {
   const release = environment.projectHome
     ? context.projectGit?.beginCoordinatorTurn(environment.projectId)
@@ -1235,6 +1253,7 @@ export async function runStoredEnvironmentMerge<T>(
       deleteBranch,
       context,
       onResult,
+      expectedHeadSha,
     );
   } finally {
     release?.();
@@ -1247,6 +1266,7 @@ async function runStoredEnvironmentMergeOnce<T>(
   deleteBranch: boolean,
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
+  expectedHeadSha?: string,
 ): Promise<T> {
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
@@ -1312,8 +1332,14 @@ async function runStoredEnvironmentMergeOnce<T>(
             method,
             deleteBranch,
             environment.worktreePath!,
+            expectedHeadSha,
           )
-        : await mergePullRequestInContainer(environment.containerId!, method, deleteBranch);
+        : await mergePullRequestInContainer(
+            environment.containerId!,
+            method,
+            deleteBranch,
+            expectedHeadSha,
+          );
     // A merge moved the base branch on the remote (or may have, when the
     // outcome is unknown): the next diff must not wait out a fetch cooldown to
     // see it. A still-pending merge changed nothing yet.

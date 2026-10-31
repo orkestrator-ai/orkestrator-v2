@@ -197,6 +197,14 @@ not advertise at its version before sending it.
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
+| `pr get ENV` / `pr timeline ENV` / `pr files ENV [--path P]` / `pr options ENV` | `pr.get` / `pr.timeline` / `pr.files` / `pr.options` | the environment's pull request, read live through the viewer's commands; `pr get` reports `attachment` (`stored`, `detected`, `none`, `unknown`) | read |
+| `pr list PROJECT [--filter F] [--query Q]` | `pr.list` | the viewer's pull request list | read |
+| `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |
+| `pr close ENV --yes` / `pr reopen ENV` / `pr ready ENV` / `pr draft ENV` | `pr.close` / `pr.reopen` / `pr.ready` / `pr.draft` | the viewer's state command | external |
+| `pr comment ENV` / `pr comment-edit ENV --comment-id N` (`--body` or `--body-file`) | `pr.comment` / `pr.comment.edit` | the viewer's conversation comment | external |
+| `pr review ENV --event E --yes` / `pr review-comment ENV --path P --line N --side S` | `pr.review` / `pr.review.comment` | the viewer's review and inline comment | external |
+| `pr thread-reply ENV --thread-id T` / `pr thread-resolve ENV --thread-id T [--unresolve]` / `pr file-viewed ENV --path P [--unviewed]` | `pr.thread.reply` / `pr.thread.resolve` / `pr.file.viewed` | the viewer's thread and file controls | external |
+| `pr reviewers ENV [--add L] [--remove L]` / `pr label ENV --name N [--remove]` | `pr.reviewers` / `pr.label` | the viewer's reviewers and labels | external |
 | `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
 | `attention [--follow --jsonl]` | `attention.list` | pending interactions of sessions observed waiting, the caller's settled runs, finished setups | read |
 | `ticket list/get` | `ticket.list/get` | Kanban storage | read |

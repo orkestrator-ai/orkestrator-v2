@@ -1083,6 +1083,100 @@ exit 1
     );
   });
 
+  shimTest("expectedHeadSha makes GitHub refuse a moved branch, on both merge paths", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const worktreePath = await createTempDir("ork-electron-merge-head-sha-");
+    const environment = createEnvironment({
+      id: "env-merge-head-sha",
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    await expect(
+      commands.get("merge_environment_pr")?.(
+        { environmentId: environment.id, method: "squash", expectedHeadSha: "abc" },
+        context,
+      ),
+    ).rejects.toThrow("expectedHeadSha must be a full commit SHA");
+    await withFakeGh(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+exit 1
+`,
+      async (logPath) => {
+        await commands.get("merge_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            method: "squash",
+            deleteBranch: false,
+            expectedHeadSha: sha,
+          },
+          context,
+        );
+        expect(await fs.readFile(logPath, "utf8")).toContain(
+          `api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash -f sha=${sha}`,
+        );
+      },
+    );
+
+    const container = createEnvironment({
+      id: "env-merge-head-sha-container",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-head-sha",
+      status: "running",
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const containerContext = createContext(container).context;
+    await withFakeDocker(
+      `#!/bin/sh
+${ownedContainerInspect()}
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+command="$(printf '%s\\n' "$command" | tail -n 1)"
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'OPEN'
+  exit 0
+fi
+exit 0
+`,
+      async (logs) => {
+        await commands.get("merge_environment_pr")?.(
+          {
+            environmentId: container.id,
+            method: "squash",
+            deleteBranch: false,
+            expectedHeadSha: sha,
+          },
+          containerContext,
+        );
+        expect(await fs.readFile(logs.exec, "utf8")).toContain(
+          `'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash' '--match-head-commit' '${sha}'`,
+        );
+      },
+    );
+  });
+
   shimTest(
     "persists merge cleanup intent before dispatch and completes local cleanup in the backend",
     async () => {

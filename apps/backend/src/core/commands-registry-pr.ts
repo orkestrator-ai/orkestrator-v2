@@ -226,10 +226,16 @@ export function registerPullRequestCommands(
   register(
     "merge_environment_pr",
     async (
-      { environmentId, method, deleteBranch, cleanupAfterMerge },
+      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha },
       context,
     ): Promise<MergeEnvironmentPrResult> => {
       const id = asString(environmentId, "environmentId");
+      if (
+        expectedHeadSha !== undefined &&
+        !/^[0-9a-f]{40}$/i.test(asString(expectedHeadSha, "expectedHeadSha"))
+      ) {
+        throw new Error("expectedHeadSha must be a full commit SHA");
+      }
       const environment = await context.storage.getEnvironment(id);
       if (!environment) throw new Error(`Environment not found: ${id}`);
 
@@ -325,6 +331,7 @@ export function registerPullRequestCommands(
               };
             }
           },
+          expectedHeadSha as string | undefined,
         );
       } catch (error) {
         if (cleanupRequested) {

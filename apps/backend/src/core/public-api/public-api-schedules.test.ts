@@ -340,6 +340,17 @@ describe("schedule.* public actions", () => {
       "credential-refused",
     );
     expect(refused).toMatchObject({ ok: false, error: { code: "capability-unavailable" } });
+    // Nobody can confirm a merge when a schedule fires, operator or not.
+    const merge = await harness.call(
+      "schedule.create",
+      {
+        at: "+1h",
+        action: { kind: "action", action: "pr.merge", input: { environmentId: "env-1" } },
+      },
+      { requestId: "operator-merge" },
+    );
+    expect(merge.ok).toBe(false);
+    expect(!merge.ok && merge.error.message).toContain("always needs a confirmation");
     const listedByCredential = await asCredential("schedule.list", {});
     expect(
       (listedByCredential.result.schedules as ScheduledJobSummary[]).map((job) => job.id),

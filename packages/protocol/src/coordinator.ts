@@ -289,13 +289,42 @@ export interface CoordinatorStatusNoticeRecord {
   notifiedAt: string;
 }
 
+/**
+ * A worker's pull request a coordinator follows (`pull-request` association).
+ *
+ * Written when the coordinator raises the PR (`create_pr`), runs
+ * `resolve_conflicts` on it, or when a review it launched reports the PR its
+ * auto-PR opened. Status wakes report the PR's state changes from it; a PR the
+ * user raised in the UI has no such record and wakes nobody.
+ */
+export interface CoordinatorPullRequestFollow {
+  source: "create-pr" | "resolve-conflicts" | "multi-review";
+  /** The pull request followed, once seen; another URL on the worker is a different PR. */
+  prUrl?: string;
+  /** `multi-review`: the review association whose `pr-opened` notice this follows. */
+  reviewAssociationId?: string;
+  /** The newest `resolve_conflicts` run, reported once when its tab finishes. */
+  resolve?: {
+    tabId: string;
+    requestedAt: string;
+    /** The Resolve tab was seen working, so a later idle is its turn ending. */
+    seenWorkingAt?: string;
+    /** Its turn ended; the report waits briefly for the PR monitor's refresh. */
+    finishedAt?: string;
+    notifiedAt?: string;
+  };
+}
+
 export interface CoordinatorWorkflowAssociation {
   id: string;
   coordinatorId: string;
   projectId: string;
   conversationId?: string;
-  /** `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id). */
-  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run";
+  /**
+   * `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id).
+   * `pull-request`: a worker's pull request it follows (resourceId is the environment id; see `pullRequest`).
+   */
+  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run" | "pull-request";
   resourceId: string;
   /**
    * The node that holds the resource, when it is not this one: a worker
@@ -322,6 +351,8 @@ export interface CoordinatorWorkflowAssociation {
   adoptedByConversationId?: string;
   /** Present on `environment` associations that a coordinator is waiting on. */
   delegation?: CoordinatorDelegation;
+  /** Present on `pull-request` associations. */
+  pullRequest?: CoordinatorPullRequestFollow;
 }
 
 /**
@@ -392,6 +423,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "request_project_file_update",
   "request_project_on_node",
   "request_root_changes",
+  "resolve_conflicts",
   "resume_build_pipeline",
   "send_message",
   "send_node_message",
@@ -434,10 +466,12 @@ export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
  * Coordinators otherwise ended build instructions with "prepare commit + PR",
  * so the build worker opened a pull request before any review ran. A pull
  * request comes only from a PR tab: the Multi Review's auto-PR, a build
- * pipeline's own PR step, or `create_pr` once the review is settled.
+ * pipeline's own PR step, or `create_pr` once the review is settled. The rule
+ * also says which PR changes wake the coordinator and that `resolve_conflicts`
+ * is the next step for a conflicting one.
  */
 export const COORDINATOR_PR_RULE =
-  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
+  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
 
 /**
  * Self-timers and provider accounts, told to every main coordinator verbatim.
@@ -465,6 +499,16 @@ export const COORDINATOR_ASYNC_CONTRACT =
   "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
 
 /**
+ * What `create_pr` and `resolve_conflicts` tell a coordinator about being woken.
+ *
+ * Their pull request is followed by status wakes (a `pull-request`
+ * association), so the model is told what it will hear rather than left to
+ * poll `get_environment` for `prUrl`.
+ */
+export const COORDINATOR_PR_STATUS_WAKE =
+  "This conversation will be woken with a status update when this pull request opens (with its URL), starts conflicting with its base branch, fails its checks, becomes ready to merge, or is merged or closed, and once when a Resolve tab finishes, with the refreshed state. Updates that land together arrive in one wake. Read its state with get_environment; never merge it. Do not poll.";
+
+/**
  * What a workflow-starting tool tells a coordinator about being woken.
  *
  * Carried on the result for the same reason as the delegation contract: the
@@ -472,7 +516,7 @@ export const COORDINATOR_ASYNC_CONTRACT =
  * know?", and without an answer the obvious move is to poll its status.
  */
 export const COORDINATOR_WORKFLOW_STATUS_WAKE =
-  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed, a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
+  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed (after which the pull request's own changes wake you: conflicts, failing checks, ready to merge, merged or closed), a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
 
 export interface CoordinatorRepositoryContextEvent {
   revision: number;

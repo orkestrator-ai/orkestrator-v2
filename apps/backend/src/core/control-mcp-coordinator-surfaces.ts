@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { COORDINATOR_PR_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_TAB_EDIT_OPERATIONS,
   COORDINATOR_TERMINAL_TAB_TYPES,
@@ -16,12 +17,12 @@ import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool
 
 /**
  * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
- * tmux tab, a browser preview, tab editing, the PR tab,
+ * tmux tab, a browser preview, tab editing, the PR and Resolve tabs,
  * feature-plan launch, the request to copy the checkout's uncommitted changes into a
  * worker, and the proposal to save decisions to AGENTS.md. None of them
  * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
  * authenticated scope, which revalidates it and refuses the project home.
- * The terminal, browser, tab-edit and PR tools take `nodeId` for a worker on
+ * The terminal, browser, tab-edit, PR and Resolve tools take `nodeId` for a worker on
  * a connected node (todo 0395).
  */
 
@@ -62,6 +63,7 @@ export const COORDINATOR_SURFACE_TOOL_CAPABILITIES: ReadonlyArray<readonly [stri
   // Main coordinator only: side agents' credentials lack `environments`.
   ["propose_agents_md_update", "environments"],
   ["create_pr", "multi-review"],
+  ["resolve_conflicts", "multi-review"],
   ["launch_feature_plan", "tickets"],
   ["get_feature_plan", "tickets"],
 ];
@@ -264,7 +266,38 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Raise a worker's pull request (PR tab)",
       description:
-        "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused while the worker's build pipeline still owns publication; skipped when the worker already has a pull request. Omit targetBranch to use the owning node's PR base branch. Pass nodeId for a worker on another connected node.",
+        "The Create PR button: open the worker's PR tab, whose agent commits, pushes and opens a pull request against targetBranch (default: the repository's PR base branch). It never merges. This is how a coordinator raises a pull request: call it only after the review and its fix have finished, and only when the review did not run with auto-PR. Refused while the worker's build pipeline still owns publication; skipped when the worker already has a pull request. You are woken when the pull request opens and when it later conflicts, fails its checks, becomes ready to merge, or is merged or closed. Omit targetBranch to use the owning node's PR base branch. Pass nodeId for a worker on another connected node.",
+      inputSchema: z
+        .object({
+          requestId,
+          environmentId,
+          nodeId: workerNodeId,
+          targetBranch: z.string().trim().min(1).max(500).optional(),
+        })
+        .strict(),
+      annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
+    },
+    async (input) => {
+      const result = await call("create_coordinator_pr", { input });
+      return toolResult({
+        ...result,
+        delivery: "async",
+        // A skipped request raised nothing, so nothing is followed.
+        wake:
+          result.status === "launched"
+            ? COORDINATOR_PR_STATUS_WAKE
+            : "No PR tab was opened, so this request is not followed. Read the worker's pull request state with get_environment.",
+        nextStep: "Finish your turn now. Do not poll.",
+      });
+    },
+  );
+
+  server.registerTool(
+    "resolve_conflicts",
+    {
+      title: "Resolve a worker's pull request conflicts (Resolve tab)",
+      description:
+        "The Resolve Conflicts button: open the worker's Resolve tab, whose agent merges the pull request's base branch into the worker's branch, resolves the conflicts, validates, commits and pushes. It never merges the pull request. Only for a worker whose pull request is open and conflicts with its base, or whose mergeability GitHub has not computed yet; refused when the worker has no pull request, when it is merged or closed, when GitHub reports no conflicts, or while the worker's build pipeline owns it. Omit targetBranch to use the pull request's own base branch, else the repository's PR base branch. You are woken once when the Resolve tab finishes, with the refreshed pull request state. Pass nodeId for a worker on another connected node.",
       inputSchema: z
         .object({
           requestId,
@@ -277,9 +310,9 @@ export function registerCoordinatorSurfaceTools(
     },
     async (input) =>
       toolResult({
-        ...(await call("create_coordinator_pr", { input })),
+        ...(await call("resolve_coordinator_conflicts", { input })),
         delivery: "async",
-        wake: "This conversation is not woken when the pull request opens. Finish your turn and tell the user the PR tab is running; if you need its URL, schedule a check with create_schedule and read prUrl with get_environment.",
+        wake: COORDINATOR_PR_STATUS_WAKE,
         nextStep: "Finish your turn now. Do not poll.",
       }),
   );

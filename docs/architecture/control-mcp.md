@@ -518,9 +518,18 @@ It can also drive a worker's own surfaces: open a terminal or tmux tab
 (`launch_terminal`), open or navigate a browser preview
 (`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
-fix (`custom_fix_multi_review`), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
+fix (`custom_fix_multi_review`), raise a reviewed worker's pull request
+(`create_pr`, the PR tab) and resolve its conflicts (`resolve_conflicts`, the
+Resolve tab, refused as the button is when the worker has no open,
+conflicting PR), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
-[`coordinator.md`](coordinator.md#worker-surfaces).
+[`coordinator.md`](coordinator.md#worker-surfaces). `create_pr` and
+`resolve_conflicts` have capability `multi-review`, so side agents never get
+them; neither merges. Its `get_environment` and `list_environments` rows
+also carry a worker's PR conflicts, mergeability, check counts and whether
+it is ready to merge (`prHasMergeConflicts`, `prMergeability`, `prChecks`,
+`prReadyToMerge`), from the PR monitor and never from a GitHub call made for
+the read; see [`coordinator.md`](coordinator.md#control-mcp).
 The main coordinator can propose saving durable decisions to the
 `## Orkestrator` section of the project's root `AGENTS.md`
 (`propose_agents_md_update`, capability `environments`, so never a side
@@ -551,8 +560,10 @@ message ID so restart reconciliation cannot lose or duplicate them. Besides
 completion, a coordinator is sent a status notice when work it started settles
 — a Multi Review ready to address or fixed, its automatic PR session started,
 opened or failed, a build paused on an error, a stall, a delegated tab waiting
-on input — and the tools that start a workflow
-say so in their result (`delivery: "async"`); see
+on input, a pull request it raised (or resolved, or its review's auto-PR
+opened) opening, conflicting, failing a check, becoming ready to merge,
+merging or closing, and its Resolve tab finishing — and the tools that start a workflow
+or raise or resolve a PR say so in their result (`delivery: "async"`); see
 [`coordinator.md`](coordinator.md#status-wakes).
 
 Agent launches, prompt dispatches, agent messages, ticket creation, comment

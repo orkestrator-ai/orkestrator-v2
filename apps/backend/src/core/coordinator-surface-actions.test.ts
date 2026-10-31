@@ -484,6 +484,200 @@ describe("create_coordinator_pr", () => {
       }),
     ).toMatchObject({ status: "skipped", prUrl: "https://github.com/acme/repo/pull/7" });
     expect(launch).not.toHaveBeenCalled();
+    // A skipped request raised nothing, so nothing is followed.
+    expect(await pullRequestFollows()).toEqual([]);
+  });
+
+  test("follows the pull request it raised, once per request", async () => {
+    stubPrLaunch();
+    const input = { requestId: "pr", environmentId: workerId };
+    await call("create_coordinator_pr", { input });
+    await call("create_coordinator_pr", { input });
+    expect(await pullRequestFollows()).toEqual([
+      expect.objectContaining({
+        kind: "pull-request",
+        resourceId: workerId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        requestId: "pr-follow:pr",
+        pullRequest: { source: "create-pr" },
+      }),
+    ]);
+  });
+});
+
+async function pullRequestFollows() {
+  return (await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)).filter(
+    (association) => association.kind === "pull-request",
+  );
+}
+
+describe("resolve_coordinator_conflicts", () => {
+  const prUrl = "https://github.com/acme/repo/pull/7";
+
+  function stubResolveLaunch(armed = true) {
+    const launch = mock(async (args: Record<string, unknown>) => ({
+      status: "accepted",
+      tabId: `resolve-tab:${String(args.requestId)}`,
+      completionActionArmed: armed,
+    }));
+    commands.set("launch_native_agent_job", launch as unknown as CommandHandler);
+    return launch;
+  }
+
+  test("opens the Resolve tab against the PR's own base and follows the PR", async () => {
+    const launch = stubResolveLaunch();
+    await storage.updateRepositoryConfig(scope.projectId, {
+      defaultBranch: "main",
+      prBaseBranch: "develop",
+    });
+    await storage.updateEnvironment(workerId, {
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: true,
+      prBaseBranch: "release/1",
+    });
+    const input = { requestId: "resolve", environmentId: workerId };
+    const result = await call("resolve_coordinator_conflicts", { input });
+    expect(result).toMatchObject({
+      environmentId: workerId,
+      status: "launched",
+      tabId: expect.stringMatching(/^resolve-tab:coordinator-resolve:/),
+      targetBranch: "release/1",
+      prUrl,
+    });
+    expect(result.warning).toBeUndefined();
+    expect(launch.mock.calls[0]![0]).toMatchObject({
+      environmentId: workerId,
+      title: "Resolve",
+      conversationMode: "build",
+      completionAction: "refresh-pr-after-agent-completion",
+      activateTab: false,
+      prompt: expect.stringContaining("git merge origin/release/1"),
+    });
+    expect(await call("resolve_coordinator_conflicts", { input })).toMatchObject({
+      replayed: true,
+    });
+    expect(launch).toHaveBeenCalledTimes(1);
+    const [followed] = await pullRequestFollows();
+    expect(followed).toMatchObject({
+      resourceId: workerId,
+      requestId: "pr-follow:resolve",
+      pullRequest: {
+        source: "resolve-conflicts",
+        prUrl,
+        resolve: { tabId: result.tabId, requestedAt: expect.any(String) },
+      },
+    });
+
+    // An explicit target wins; the same follow records the newer Resolve run.
+    await call("resolve_coordinator_conflicts", {
+      input: { requestId: "again", environmentId: workerId, targetBranch: "main" },
+    });
+    expect(launch.mock.calls[1]![0].prompt).toContain("git merge origin/main");
+    const follows = await pullRequestFollows();
+    expect(follows).toHaveLength(1);
+    expect(follows[0]!.pullRequest?.resolve?.tabId).toMatch(/coordinator-resolve:/);
+    expect(follows[0]!.pullRequest?.resolve?.tabId).not.toBe(result.tabId);
+  });
+
+  test("a create_pr follow is reused, and an unknown mergeability may still be resolved", async () => {
+    stubResolveLaunch(false);
+    commands.set("pr_monitor_watch", (async () => ({})) as unknown as CommandHandler);
+    await call("create_coordinator_pr", { input: { requestId: "pr", environmentId: workerId } });
+    await storage.updateEnvironment(workerId, { prUrl, prState: "open", hasMergeConflicts: null });
+    const result = await call("resolve_coordinator_conflicts", {
+      input: { requestId: "resolve", environmentId: workerId },
+    });
+    expect(result).toMatchObject({ status: "launched", targetBranch: "main" });
+    expect(result.warning).toContain("refresh was not scheduled");
+    const follows = await pullRequestFollows();
+    expect(follows).toHaveLength(1);
+    expect(follows[0]).toMatchObject({
+      requestId: "pr-follow:pr",
+      pullRequest: { source: "create-pr", prUrl, resolve: { tabId: result.tabId } },
+    });
+  });
+
+  test.each([
+    ["no pull request", {}, "has no pull request"],
+    ["a merged pull request", { prUrl, prState: "merged" }, "is merged"],
+    ["a closed pull request", { prUrl, prState: "closed" }, "is closed"],
+    [
+      "no conflicts",
+      { prUrl, prState: "open", hasMergeConflicts: false },
+      "GitHub reports no merge conflicts",
+    ],
+  ] as const)("refuses a worker with %s, as the button does", async (_name, pr, message) => {
+    const launch = stubResolveLaunch();
+    await storage.updateEnvironment(workerId, pr);
+    await expect(
+      call("resolve_coordinator_conflicts", {
+        input: { requestId: "resolve", environmentId: workerId },
+      }),
+    ).rejects.toThrow(message);
+    expect(launch).not.toHaveBeenCalled();
+    expect(await pullRequestFollows()).toEqual([]);
+  });
+
+  test("refuses the project home, a worker being deleted and a pipeline's worker", async () => {
+    const launch = stubResolveLaunch();
+    await storage.updateEnvironment(homeId, { prUrl, prState: "open", hasMergeConflicts: true });
+    await expect(
+      call("resolve_coordinator_conflicts", {
+        input: { requestId: "home", environmentId: homeId },
+      }),
+    ).rejects.toThrow("project checkout");
+    const deleting = createEnvironment(scope.projectId, {
+      name: "deleting",
+      environmentType: "local",
+    });
+    Object.assign(deleting, {
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: true,
+      deletionRequestedAt: new Date().toISOString(),
+    });
+    await storage.addEnvironment(deleting);
+    await expect(
+      call("resolve_coordinator_conflicts", {
+        input: { requestId: "deleting", environmentId: deleting.id },
+      }),
+    ).rejects.toThrow("being deleted");
+    const pipelineWorker = createEnvironment(scope.projectId, {
+      name: "pipeline-worker",
+      environmentType: "local",
+      buildPipelineId: "pipeline-1",
+    });
+    Object.assign(pipelineWorker, { prUrl, prState: "open", hasMergeConflicts: true });
+    await storage.addEnvironment(pipelineWorker);
+    await storage.saveBuildPipeline("pipeline-1", scope.projectId, pipelineWorker.id, 1, {
+      phase: "resolving-conflicts",
+    });
+    await expect(
+      call("resolve_coordinator_conflicts", {
+        input: { requestId: "pipe", environmentId: pipelineWorker.id },
+      }),
+    ).rejects.toThrow("build pipeline");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  test("releases a rejected launch so the same request can be retried", async () => {
+    await storage.updateEnvironment(workerId, { prUrl, prState: "open", hasMergeConflicts: true });
+    let attempts = 0;
+    commands.set("launch_native_agent_job", (async (args: Record<string, unknown>) => {
+      attempts += 1;
+      return attempts === 1
+        ? { status: "rejected", error: "not ready" }
+        : { status: "accepted", tabId: `resolve-tab:${String(args.requestId)}` };
+    }) as unknown as CommandHandler);
+    const input = { requestId: "retry", environmentId: workerId };
+    await expect(call("resolve_coordinator_conflicts", { input })).rejects.toThrow("not ready");
+    expect(await pullRequestFollows()).toEqual([]);
+    expect(await call("resolve_coordinator_conflicts", { input })).toMatchObject({
+      status: "launched",
+    });
+    expect(await pullRequestFollows()).toHaveLength(1);
   });
 });
 

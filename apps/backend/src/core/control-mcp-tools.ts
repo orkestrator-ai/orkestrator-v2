@@ -84,6 +84,13 @@ import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
+import {
+  coordinatorPrFields,
+  nodePrHealth,
+  prReadingFrom,
+  summaryPrHealth,
+  thisNodePrHealth,
+} from "./coordinator-pr-status.js";
 
 const MAX_PROMPT_LENGTH = 100_000;
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
@@ -421,7 +428,7 @@ function environmentListFingerprint(result: {
       environment.setupPhase ?? null,
       environment.lifecycleOperation ?? null,
       environment.agentActivityState ?? null,
-      environment.prState ?? null,
+      ...prFingerprint(environment),
     ]),
     (result.otherNodes ?? []).map((node) => [
       node.nodeId,
@@ -430,9 +437,25 @@ function environmentListFingerprint(result: {
         environment.environmentId,
         environment.status,
         environment.activity ?? null,
+        ...prFingerprint(environment),
       ]),
     ]),
   ]);
+}
+
+/** What a coordinator's environment reads say about a worker's pull request. */
+const COORDINATOR_PR_FIELDS_NOTE =
+  " A worker with a pull request also has prHasMergeConflicts, prMergeability, prChecks (passed, failed, pending and total counts) and prReadyToMerge (with prNotReadyReason when false), from the PR monitor; ready means only the user's merge is left.";
+
+/** A PR that starts conflicting, fails a check or becomes ready is a different answer. */
+function prFingerprint(environment: JsonRecord): unknown[] {
+  return [
+    environment.prState ?? null,
+    environment.prHasMergeConflicts ?? null,
+    environment.prMergeability ?? null,
+    environment.prChecks ?? null,
+    environment.prReadyToMerge ?? null,
+  ];
 }
 
 /** The worker's half of the contract: one report, at the end, then stop. */
@@ -758,7 +781,9 @@ export async function createControlMcp(
     "list_environments",
     {
       title: "List Orkestrator environments",
-      description: "List environment lifecycle and agent activity summaries.",
+      description:
+        "List environment lifecycle and agent activity summaries." +
+        (coordinatorScope ? COORDINATOR_PR_FIELDS_NOTE : ""),
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         status: z.enum(["running", "stopped", "error", "creating", "stopping"]).optional(),
@@ -809,10 +834,18 @@ export async function createControlMcp(
       const all = target
         ? await allEnvironments(target.invoke, target.projectId)
         : await allEnvironments(invoke, projectId ?? coordinatorScope?.projectId);
-      const environments = all
+      const listed = all
         .filter((environment) => !status || environment.status === status)
-        .filter((environment) => !target || environment.projectHome !== true)
-        .map((environment) => ({ ...environmentSummary(environment), ...onNodeResult(target) }));
+        .filter((environment) => !target || environment.projectHome !== true);
+      // Conflicts, mergeability, checks and readiness need the owning monitor's health.
+      const health = target
+        ? await nodePrHealth(invoke, target.nodeId)
+        : await thisNodePrHealth(invoke, projectId ?? coordinatorScope?.projectId, listed);
+      const environments = listed.map((environment) => ({
+        ...environmentSummary(environment),
+        ...coordinatorPrFields(prReadingFrom(environment, health.get(String(environment.id)))),
+        ...onNodeResult(target),
+      }));
       // A coordinator also sees where else this project runs (names and state
       // only); nodeId on any environment tool acts there.
       const otherNodes =
@@ -843,6 +876,11 @@ export async function createControlMcp(
                       status: environment.status,
                       activity: environment.activity,
                       ...(environment.branch ? { branch: environment.branch } : {}),
+                      // States and counts only: node summaries never carry the PR URL.
+                      ...(environment.prState ? { prState: environment.prState } : {}),
+                      ...coordinatorPrFields(
+                        prReadingFrom(environment, summaryPrHealth(node, environment)),
+                      ),
                     }));
                   return [
                     {
@@ -874,7 +912,9 @@ export async function createControlMcp(
     "get_environment",
     {
       title: "Get an Orkestrator environment",
-      description: "Read the authoritative lifecycle and activity state of one environment.",
+      description:
+        "Read the authoritative lifecycle and activity state of one environment." +
+        (coordinatorScope ? COORDINATOR_PR_FIELDS_NOTE : ""),
       inputSchema: z.object({
         environmentId: z.string().trim().min(1).max(200),
         nodeId: nodeIdField,
@@ -893,8 +933,15 @@ export async function createControlMcp(
         ? await target.environment(environmentId)
         : await invoke<unknown>("get_environment", { environmentId });
       if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
+      const health = target
+        ? await nodePrHealth(invoke, target.nodeId)
+        : await thisNodePrHealth(invoke, coordinatorScope?.projectId, [environment]);
       return toolResult({
-        environment: { ...environmentSummary(environment), ...onNodeResult(target) },
+        environment: {
+          ...environmentSummary(environment),
+          ...coordinatorPrFields(prReadingFrom(environment, health.get(environmentId))),
+          ...onNodeResult(target),
+        },
       });
     },
   );

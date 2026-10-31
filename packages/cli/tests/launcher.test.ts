@@ -24,6 +24,7 @@ const version = path.basename(release);
 const mode = readFileSync(path.join(packageRoot, "mode"), "utf8").trim();
 if (args[0] === "toolchain") process.exit(0);
 if (mode === "crash") process.exit(1);
+if (mode.startsWith("refuse:") && args.includes(mode.slice("refuse:".length))) process.exit(1);
 if (mode === "unready") {
   const dataDir = args[args.indexOf("--data-dir") + 1];
   const { appendFileSync } = await import("node:fs");
@@ -77,6 +78,8 @@ async function setup(options: {
   current: string;
   previous?: string;
   lastReady?: string;
+  args?: string[];
+  rollbackTarget?: { version: string; args: string[] };
 }): Promise<void> {
   const root = path.join(dataDir, "backend");
   await symlink(path.join(root, "releases", options.current), path.join(root, "current"));
@@ -90,7 +93,8 @@ async function setup(options: {
       dataDir,
       bun: process.execPath,
       bunVersion: Bun.version,
-      args: [],
+      args: options.args ?? [],
+      ...(options.rollbackTarget ? { rollbackTarget: options.rollbackTarget } : {}),
     }),
   );
   if (options.lastReady) {
@@ -138,7 +142,52 @@ describe("orkestrator-launcher", () => {
       () => readJson(path.join(dataDir, "backend-instance.json"))?.appVersion === "1.0.0",
     );
     expect(state()?.rollback).toMatchObject({ failedVersion: "2.0.0", restoredVersion: "1.0.0" });
-    await until(() => state()?.lastReadyVersion === "1.0.0");
+    // The restored release was already the last ready one, so only clearing the
+    // failure shows the launcher has seen it become ready again.
+    await until(() => state()?.bootFailure === null);
+    expect(state()?.lastReadyVersion).toBe("1.0.0");
+  }, 30_000);
+
+  test("a restored release runs with the arguments it had, not the new install's", async () => {
+    dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-"));
+    await release("1.0.0", "refuse:--new-flag");
+    await release("2.0.0", "crash");
+    await setup({
+      current: "2.0.0",
+      previous: "1.0.0",
+      lastReady: "1.0.0",
+      args: ["--new-flag"],
+      rollbackTarget: { version: "1.0.0", args: [] },
+    });
+    await until(
+      () => readJson(path.join(dataDir, "backend-instance.json"))?.appVersion === "1.0.0",
+    );
+  }, 30_000);
+
+  test("the same version reached by a self-update runs with the service's arguments", async () => {
+    dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-"));
+    await release("1.0.0", "good");
+    await release("2.0.0", "refuse:--old-flag");
+    await setup({
+      current: "2.0.0",
+      previous: "1.0.0",
+      rollbackTarget: { version: "2.0.0", args: ["--old-flag"] },
+    });
+    await until(
+      () => readJson(path.join(dataDir, "backend-instance.json"))?.appVersion === "2.0.0",
+    );
+  }, 30_000);
+
+  test("records consecutive failed boots when nothing can be rolled back to", async () => {
+    dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-"));
+    await release("2.0.0", "crash");
+    await setup({ current: "2.0.0" });
+    const failure = () =>
+      readJson(path.join(dataDir, "backend", "launcher-state.json"))?.bootFailure as
+        { version: string; exits: number; at: string } | undefined;
+    await until(() => (failure()?.exits ?? 0) >= 2);
+    expect(failure()?.version).toBe("2.0.0");
+    expect(Number.isNaN(Date.parse(failure()!.at))).toBe(false);
   }, 30_000);
 
   test("starts the new release at once after a self-update asks for a restart", async () => {

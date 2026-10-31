@@ -9,8 +9,8 @@
  *       node_modules/orkestrator/    the package, with its dependencies
  *     current  -> releases/<version>  what the launcher starts
  *     previous -> releases/<version>  what it falls back to
- *     service.json                   Bun binary and serve arguments
- *     launcher-state.json            boot attempts, rollback evidence
+ *     service.json                   Bun binary, serve arguments, rollback arguments
+ *     launcher-state.json            boot attempts, boot failures, rollback evidence
  *     restart-requested              the backend exited to be restarted
  *     launcher.js                    the launcher, copied from the release
  */
@@ -62,6 +62,11 @@ export interface StandaloneServiceConfig {
   bunVersion: string;
   /** `orkestrator serve` arguments, without `--data-dir`. */
   args: string[];
+  /**
+   * What the release this install replaced was running with. Rolling back must
+   * not hand it arguments only the newer release understands.
+   */
+  rollbackTarget?: { version: string; args: string[] };
   installedAt: string;
 }
 
@@ -73,6 +78,14 @@ export interface LauncherState {
   bootAttempts: Record<string, number>;
   /** The most recent rollback, which the restored backend reports. */
   rollback: { failedVersion: string; restoredVersion: string; at: string } | null;
+  /** Boots of one release that this launcher saw exit before readiness, in a row. */
+  bootFailure: { version: string; exits: number; at: string } | null;
+}
+
+/** A release that `service install` activated and that is not going to start. */
+export interface StandaloneStartupFailure {
+  /** The release now current in its place, after a rollback. */
+  restoredVersion: string | null;
 }
 
 function readJson(file: string): unknown {
@@ -100,8 +113,36 @@ export function readServiceConfig(layout: StandaloneLayout): StandaloneServiceCo
     bun: value.bun,
     bunVersion: typeof value.bunVersion === "string" ? value.bunVersion : "",
     args: value.args.filter((arg): arg is string => typeof arg === "string"),
+    ...(typeof value.rollbackTarget?.version === "string" &&
+    Array.isArray(value.rollbackTarget.args)
+      ? {
+          rollbackTarget: {
+            version: value.rollbackTarget.version,
+            args: value.rollbackTarget.args.filter((arg): arg is string => typeof arg === "string"),
+          },
+        }
+      : {}),
     installedAt: typeof value.installedAt === "string" ? value.installedAt : "",
   };
+}
+
+/**
+ * The `rollbackTarget` for an install of `version` over a service whose current
+ * release is `before`, read before the links move. A reinstall of the running
+ * version keeps `previous`, so it keeps that release's arguments too, unless
+ * they were this version's own, which the new arguments now replace.
+ */
+export function nextRollbackTarget(
+  layout: StandaloneLayout,
+  config: StandaloneServiceConfig | null,
+  before: string | null,
+  version: string,
+): StandaloneServiceConfig["rollbackTarget"] {
+  if (!config || !before) return undefined;
+  const target = config.rollbackTarget;
+  if (before === version) return target?.version === version ? undefined : target;
+  const restored = target?.version === before && linkedVersion(layout.previous) === before;
+  return { version: before, args: restored ? target.args : config.args };
 }
 
 export async function writeServiceConfig(
@@ -115,6 +156,7 @@ export async function writeServiceConfig(
 export function readLauncherState(layout: StandaloneLayout): LauncherState {
   const value = readJson(layout.stateFile) as Partial<LauncherState> | null;
   const rollback = value?.rollback;
+  const bootFailure = value?.bootFailure;
   return {
     version: 1,
     lastReadyVersion: typeof value?.lastReadyVersion === "string" ? value.lastReadyVersion : null,
@@ -127,7 +169,44 @@ export function readLauncherState(layout: StandaloneLayout): LauncherState {
       typeof rollback.at === "string"
         ? rollback
         : null,
+    bootFailure:
+      bootFailure &&
+      typeof bootFailure.version === "string" &&
+      typeof bootFailure.exits === "number" &&
+      typeof bootFailure.at === "string"
+        ? bootFailure
+        : null,
   };
+}
+
+/**
+ * Whether the launcher has given up on `version` since `sinceMs`. It has when
+ * it rolled that release back, or when the release has used up its boots and
+ * no rollback is coming: the launcher only rolls back a release that never
+ * reached readiness, to a different one. Otherwise, with its boots used up, the
+ * rollback record is a retry delay away and says more, so this waits for it.
+ */
+export function readStartupFailure(
+  layout: StandaloneLayout,
+  version: string,
+  sinceMs: number,
+): StandaloneStartupFailure | null {
+  const state = readLauncherState(layout);
+  const rollback = state.rollback;
+  if (rollback?.failedVersion === version && Date.parse(rollback.at) >= sinceMs) {
+    return { restoredVersion: rollback.restoredVersion };
+  }
+  const failure = state.bootFailure;
+  if (
+    failure?.version !== version ||
+    failure.exits < STANDALONE_MAX_BOOT_ATTEMPTS ||
+    Date.parse(failure.at) < sinceMs
+  ) {
+    return null;
+  }
+  const previous = linkedVersion(layout.previous);
+  const rollbackComing = previous && previous !== version && state.lastReadyVersion !== version;
+  return rollbackComing ? null : { restoredVersion: null };
 }
 
 async function writeAtomically(file: string, contents: string): Promise<void> {

@@ -3,9 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { BackendInstanceDescriptor } from "@orkestrator/protocol/backend-instance";
+import { CliError } from "../src/client/errors.js";
 import {
   awaitServiceConnection,
   currentDescriptorGeneration,
+  startupLogExcerpt,
 } from "../src/client/service-connection.js";
 
 const roots: string[] = [];
@@ -156,5 +158,75 @@ describe("service connection", () => {
     const dataDir = await dataDirectory();
     expect(await currentDescriptorGeneration(dataDir)).toBeNull();
     expect(await awaitServiceConnection(dataDir, null, instant())).toBeNull();
+  });
+
+  test("a rolled-back release publishing a new generation is not the install", async () => {
+    const dataDir = await dataDirectory();
+    await publish(dataDir, { appVersion: "2.23.0" });
+    const options = { ...instant(), expectedVersion: "2.34.4-beta" };
+    expect(await awaitServiceConnection(dataDir, "gen-1", options)).toBeNull();
+    await publish(dataDir, { appVersion: "2.34.4-beta" });
+    expect(await awaitServiceConnection(dataDir, "gen-1", options)).not.toBeNull();
+  });
+
+  test("assertStarting stops the wait, unless the release is already ready", async () => {
+    const dataDir = await dataDirectory();
+    const assertStarting = async () => {
+      throw new CliError("operation-failed", "did not start");
+    };
+    await expect(
+      awaitServiceConnection(dataDir, null, { ...instant(), assertStarting }),
+    ).rejects.toThrow("did not start");
+    await publish(dataDir);
+    expect(
+      await awaitServiceConnection(dataDir, null, { ...instant(), assertStarting }),
+    ).not.toBeNull();
+  });
+});
+
+describe("startup log excerpt", () => {
+  async function log(contents: string): Promise<string> {
+    const file = path.join(await dataDirectory(), "service.log");
+    await writeFile(file, contents);
+    return file;
+  }
+
+  test("takes the lines before the release's last exit and none from what ran next", async () => {
+    const file = await log(
+      [
+        "error: first failure",
+        "[launcher] 2026-10-30T23:29:40.000Z 2.0.0 exited (code 1, signal none)",
+        "error: Unable to configure Tailscale Serve: Access denied: serve config denied",
+        "",
+        "Bun v1.4.4 (Linux x64)",
+        "[launcher] 2026-10-30T23:29:44.000Z 2.0.0 exited (code 1, signal none)",
+        "[launcher] 2026-10-30T23:29:46.000Z starting 1.0.0",
+        "Unknown service option: --loopback-client-port",
+      ].join("\n"),
+    );
+    expect(await startupLogExcerpt(file, 0, "2.0.0")).toEqual([
+      "error: first failure",
+      "[launcher] 2026-10-30T23:29:40.000Z 2.0.0 exited (code 1, signal none)",
+      "error: Unable to configure Tailscale Serve: Access denied: serve config denied",
+      "Bun v1.4.4 (Linux x64)",
+    ]);
+  });
+
+  test("ignores what was logged before the install", async () => {
+    const earlier = "old failure\n";
+    const file = await log(`${earlier}new failure\n`);
+    expect(await startupLogExcerpt(file, earlier.length, "2.0.0")).toEqual(["new failure"]);
+  });
+
+  test("keeps only the end of a long log", async () => {
+    const lines = Array.from({ length: 50 }, (_, index) => `line ${index}`);
+    const excerpt = await startupLogExcerpt(await log(lines.join("\n")), 0, "2.0.0");
+    expect(excerpt).toHaveLength(20);
+    expect(excerpt.at(-1)).toBe("line 49");
+  });
+
+  test("an unreadable log is an empty excerpt", async () => {
+    const missing = path.join(await dataDirectory(), "absent.log");
+    expect(await startupLogExcerpt(missing, 0, "2.0.0")).toEqual([]);
   });
 });

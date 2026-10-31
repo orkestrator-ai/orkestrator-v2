@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -8,12 +8,17 @@ import {
   installRelease,
   isNewerVersion,
   linkedVersion,
+  nextRollbackTarget,
   readLauncherState,
   readReleaseManifest,
+  readServiceConfig,
+  readStartupFailure,
   releaseDirectory,
   satisfiesBunRange,
   standaloneLayout,
+  writeServiceConfig,
   type CommandRunner,
+  type StandaloneServiceConfig,
 } from "./standalone-service.js";
 
 let dataDir: string;
@@ -86,7 +91,125 @@ describe("standalone releases", () => {
       lastReadyVersion: null,
       bootAttempts: {},
       rollback: null,
+      bootFailure: null,
     });
+  });
+});
+
+describe("startup failure", () => {
+  const SINCE = Date.parse("2026-10-30T12:00:00.000Z");
+  const LATER = "2026-10-30T12:00:05.000Z";
+  const EARLIER = "2026-10-30T11:00:00.000Z";
+
+  async function state(value: Record<string, unknown>, previous?: string): Promise<void> {
+    const layout = standaloneLayout(dataDir);
+    await mkdir(layout.root, { recursive: true });
+    await writeFile(layout.stateFile, JSON.stringify({ version: 1, bootAttempts: {}, ...value }));
+    if (previous) await symlink(releaseDirectory(layout, previous), layout.previous);
+  }
+
+  const read = () => readStartupFailure(standaloneLayout(dataDir), "2.0.0", SINCE);
+  const failed = (exits: number, at = LATER) => ({ version: "2.0.0", exits, at });
+
+  test("a rollback of this release names what replaced it", async () => {
+    await state({
+      rollback: { failedVersion: "2.0.0", restoredVersion: "1.0.0", at: LATER },
+      bootFailure: failed(2),
+    });
+    expect(read()).toEqual({ restoredVersion: "1.0.0" });
+  });
+
+  test("records from before the install or for another release do not count", async () => {
+    await state({
+      rollback: { failedVersion: "2.0.0", restoredVersion: "1.0.0", at: EARLIER },
+      bootFailure: failed(5, EARLIER),
+    });
+    expect(read()).toBeNull();
+    await state({
+      rollback: { failedVersion: "3.0.0", restoredVersion: "1.0.0", at: LATER },
+      bootFailure: { version: "3.0.0", exits: 5, at: LATER },
+    });
+    expect(read()).toBeNull();
+  });
+
+  test("one exit is not a failure yet", async () => {
+    await state({ bootFailure: failed(1) });
+    expect(read()).toBeNull();
+  });
+
+  test("used-up boots with no previous release fail at once", async () => {
+    await state({ bootFailure: failed(2) });
+    expect(read()).toEqual({ restoredVersion: null });
+  });
+
+  test("used-up boots wait for the rollback that is coming", async () => {
+    await state({ bootFailure: failed(2), lastReadyVersion: "1.0.0" }, "1.0.0");
+    expect(read()).toBeNull();
+  });
+
+  test("a release that was ready before is never rolled back", async () => {
+    await state({ bootFailure: failed(2), lastReadyVersion: "2.0.0" }, "1.0.0");
+    expect(read()).toEqual({ restoredVersion: null });
+  });
+});
+
+describe("rollback target", () => {
+  const config = (
+    args: string[],
+    rollbackTarget?: { version: string; args: string[] },
+  ): StandaloneServiceConfig => ({
+    version: 1,
+    dataDir: "/data",
+    bun: "bun",
+    bunVersion: "1.4.4",
+    args,
+    ...(rollbackTarget ? { rollbackTarget } : {}),
+    installedAt: "",
+  });
+
+  test("records what the replaced release was running with", () => {
+    const layout = standaloneLayout(dataDir);
+    expect(nextRollbackTarget(layout, config(["--old"]), "1.0.0", "2.0.0")).toEqual({
+      version: "1.0.0",
+      args: ["--old"],
+    });
+  });
+
+  test("a first install has nothing to go back to", () => {
+    const layout = standaloneLayout(dataDir);
+    expect(nextRollbackTarget(layout, null, null, "2.0.0")).toBeUndefined();
+  });
+
+  test("a release restored by a rollback keeps the arguments it ran with", async () => {
+    const layout = standaloneLayout(dataDir);
+    await mkdir(layout.root, { recursive: true });
+    await symlink(releaseDirectory(layout, "1.0.0"), layout.previous);
+    const rolledBack = config(["--new"], { version: "1.0.0", args: ["--old"] });
+    expect(nextRollbackTarget(layout, rolledBack, "1.0.0", "2.0.0")).toEqual({
+      version: "1.0.0",
+      args: ["--old"],
+    });
+  });
+
+  test("a reinstall keeps the previous release's arguments but replaces its own", () => {
+    const layout = standaloneLayout(dataDir);
+    const target = { version: "1.0.0", args: ["--old"] };
+    expect(nextRollbackTarget(layout, config(["--new"], target), "2.0.0", "2.0.0")).toEqual(target);
+    expect(nextRollbackTarget(layout, config(["--new"], target), "1.0.0", "1.0.0")).toBeUndefined();
+  });
+
+  test("reading service.json keeps a valid target and drops a malformed one", async () => {
+    const layout = standaloneLayout(dataDir);
+    await writeServiceConfig(layout, config([], { version: "1.0.0", args: ["--old"] }));
+    expect(readServiceConfig(layout)?.rollbackTarget).toEqual({
+      version: "1.0.0",
+      args: ["--old"],
+    });
+    await writeFile(
+      layout.serviceFile,
+      JSON.stringify({ ...config([]), rollbackTarget: { version: 1 } }),
+    );
+    expect(readServiceConfig(layout)?.rollbackTarget).toBeUndefined();
   });
 });
 

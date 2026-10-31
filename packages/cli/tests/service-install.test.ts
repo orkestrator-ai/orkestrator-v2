@@ -1,8 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import os from "node:os";
-import { existsSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
@@ -135,6 +135,78 @@ test.each(["human", "json"])("deadline expiry reports not ready in %s output", a
       authFile: null,
     });
   else expect(result.out).toContain("not reported ready yet");
+});
+
+/** A launcher that has already given up by the time the install starts waiting. */
+function launcherGaveUp(dataDir: string, state: () => Record<string, unknown>) {
+  const manager = childProcess.spawnSync as unknown as ReturnType<typeof spyOn>;
+  manager.mockImplementation((() => {
+    const root = path.join(dataDir, "backend");
+    writeFileSync(path.join(root, "launcher-state.json"), JSON.stringify(state()));
+    writeFileSync(
+      path.join(root, "logs/service.log"),
+      [
+        "Checking pinned Orkestrator tools…",
+        "error: Unable to configure Tailscale Serve: Access denied: serve config denied",
+        "To not require root, use 'sudo tailscale set --operator=$USER' once.",
+        "[launcher] 2026-10-30T23:29:44.233Z 9.9.9 exited (code 1, signal none)",
+        "[launcher] 2026-10-30T23:29:46.000Z starting 2.23.0",
+      ].join("\n"),
+    );
+    return { status: 0, stdout: "", stderr: "", pid: 1, output: [null, "", ""], signal: null };
+  }) as unknown as typeof childProcess.spawnSync);
+}
+
+test("a release that fails to start ends the wait with what the service logged", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    lastReadyVersion: "9.9.9",
+    bootFailure: { version: "9.9.9", exits: 2, at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h"]);
+  expect(result.code).not.toBe(0);
+  expect(result.err).toContain("orkestrator@9.9.9 did not start");
+  expect(result.err).toContain("keeps retrying");
+  expect(result.err).toContain("Access denied: serve config denied");
+  expect(result.err).toContain("sudo tailscale set --operator");
+  expect(result.err).not.toContain("starting 2.23.0");
+  expect(result.err).toContain("service.log");
+  expect(result.out).not.toContain("The service is running");
+});
+
+test("a rollback names the release the service went back to", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    rollback: { failedVersion: "9.9.9", restoredVersion: "2.23.0", at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h", "--output", "json"]);
+  expect(result.code).not.toBe(0);
+  const error = JSON.parse(result.out).error;
+  expect(error.code).toBe("operation-failed");
+  expect(error.message).toContain("the service went back to 2.23.0");
+  expect(error.message).toContain("Access denied");
+});
+
+test("a reinstall records the replaced release and the arguments it ran with", async () => {
+  const f = await fixture();
+  const first = await f.run(["--skip-start", "--", "--tailscale-bin", "/old"]);
+  expect(first.code).toBe(0);
+  const releases = path.join(f.dataDir, "backend/releases");
+  await cp(path.join(releases, "9.9.9"), path.join(releases, "8.8.8"), { recursive: true });
+  await symlink(path.join(releases, "8.8.8"), path.join(f.dataDir, "backend/current.next"));
+  await rename(
+    path.join(f.dataDir, "backend/current.next"),
+    path.join(f.dataDir, "backend/current"),
+  );
+  const second = await f.run(["--skip-start", "--", "--loopback-client-port", "34125"]);
+  expect(second.code).toBe(0);
+  const config = JSON.parse(readFileSync(path.join(f.dataDir, "backend/service.json"), "utf8"));
+  expect(config.args).toEqual(["--loopback-client-port", "34125"]);
+  expect(config.rollbackTarget).toEqual({ version: "8.8.8", args: ["--tailscale-bin", "/old"] });
 });
 
 test("zero timeout skips observation and skip-start renders the load command", async () => {

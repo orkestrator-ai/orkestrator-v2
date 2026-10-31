@@ -6,6 +6,7 @@ import {
   askServeArguments,
   HOSTED_WEB_ORIGINS,
   SSH_LOOPBACK_PORT,
+  warnIfTailscaleOperatorNeeded,
   type SetupProbe,
 } from "../src/client/service-setup.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
@@ -18,7 +19,25 @@ afterEach(async () => {
 const tailscaleReady: SetupProbe = {
   hasTailscaleAddress: () => true,
   findTailscaleCli: () => "/usr/bin/tailscale",
+  tailscaleOperatorNeeded: () => null,
+  grantTailscaleOperator: () => {
+    throw new Error("unexpected grant");
+  },
 };
+
+/** Tailscale that does not let this user configure Serve yet. */
+function operatorMissing(granted = true) {
+  const grants: Array<[string, string]> = [];
+  const probe: SetupProbe = {
+    ...tailscaleReady,
+    tailscaleOperatorNeeded: () => "arkaydeus",
+    grantTailscaleOperator: (cli, user) => {
+      grants.push([cli, user]);
+      return granted;
+    },
+  };
+  return { probe, grants };
+}
 
 /** An io whose questions are answered in order; null ends the input. */
 function scripted(answers: Array<string | null>) {
@@ -70,10 +89,53 @@ describe("service setup questions", () => {
     const { io } = scripted(["1", "/opt/tailscale/bin/tailscale", "n", "n", "y"]);
     const args = await askServeArguments(io, {
       installCommand,
-      probe: { hasTailscaleAddress: () => false, findTailscaleCli: () => null },
+      probe: {
+        ...tailscaleReady,
+        hasTailscaleAddress: () => false,
+        findTailscaleCli: () => null,
+      },
     });
     expect(args).toEqual(["--tailscale-serve", "--tailscale-bin", "/opt/tailscale/bin/tailscale"]);
     expect(io.err.join("")).toContain("no Tailscale address yet");
+  });
+
+  test("offers to make this user Tailscale's operator and runs it on yes", async () => {
+    const { probe, grants } = operatorMissing();
+    const { io } = scripted(["1", "", "n", "n", "y"]);
+    const args = await askServeArguments(io, { installCommand, probe });
+    expect(args).toEqual(["--tailscale-serve"]);
+    expect(grants).toEqual([["/usr/bin/tailscale", "arkaydeus"]]);
+    expect(io.err.join("")).toContain("sudo /usr/bin/tailscale set --operator=arkaydeus");
+    expect(io.err.join("")).not.toContain("Continuing without it");
+  });
+
+  test("declining or a failed sudo says so and still continues", async () => {
+    for (const [answer, granted] of [
+      ["n", true],
+      ["y", false],
+    ] as const) {
+      const { probe, grants } = operatorMissing(granted);
+      const { io } = scripted(["1", answer, "n", "n", "y"]);
+      expect(await askServeArguments(io, { installCommand, probe })).toEqual(["--tailscale-serve"]);
+      expect(grants).toHaveLength(answer === "y" ? 1 : 0);
+      expect(io.err.join("")).toContain("Continuing without it");
+    }
+  });
+
+  test("a dry run reports the missing operator without offering to change it", async () => {
+    const { probe, grants } = operatorMissing();
+    const { io, asked } = scripted(["1", "n", "n", "y"]);
+    await askServeArguments(io, { installCommand, probe, dryRun: true });
+    expect(grants).toEqual([]);
+    expect(asked.join("")).not.toContain("sudo");
+    expect(io.err.join("")).toContain("--operator=arkaydeus");
+  });
+
+  test("the other ways to connect never look at the operator", async () => {
+    const { probe } = operatorMissing();
+    const { io } = scripted(["2", "n", "y"]);
+    await askServeArguments(io, { installCommand, probe });
+    expect(io.err.join("")).not.toContain("--operator");
   });
 
   test("re-asks an answer it does not understand", async () => {
@@ -92,6 +154,31 @@ describe("service setup questions", () => {
       await expect(
         askServeArguments(io, { installCommand, probe: tailscaleReady }),
       ).rejects.toThrow("Setup cancelled");
+    }
+  });
+});
+
+describe("scripted install operator warning", () => {
+  test("warns for --tailscale-serve and names the executable the backend will use", () => {
+    const { probe } = operatorMissing();
+    const { io } = scripted([]);
+    warnIfTailscaleOperatorNeeded(
+      io,
+      ["--tailscale-serve", "--tailscale-bin", "/opt/my tailscale"],
+      probe,
+    );
+    expect(io.err.join("")).toContain("sudo '/opt/my tailscale' set --operator=arkaydeus");
+  });
+
+  test("stays quiet without --tailscale-serve, with an operator or without a CLI", () => {
+    for (const [args, probe] of [
+      [["--host", "127.0.0.1"], operatorMissing().probe],
+      [["--tailscale-serve"], tailscaleReady],
+      [["--tailscale-serve"], { ...operatorMissing().probe, findTailscaleCli: () => null }],
+    ] as const) {
+      const { io } = scripted([]);
+      warnIfTailscaleOperatorNeeded(io, args, probe);
+      expect(io.err.join("")).toBe("");
     }
   });
 });

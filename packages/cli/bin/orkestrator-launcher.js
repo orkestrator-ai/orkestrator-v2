@@ -9,7 +9,10 @@
  * - A release that has not reached readiness (a backend-instance.json naming
  *   its process and version) gets two boots. After that the launcher points
  *   `current` back at `previous` and records the rollback, which the restored
- *   backend reports as the outcome of its update.
+ *   backend reports as the outcome of its update. A release restored this way
+ *   runs with the serve arguments it had before the install that replaced it.
+ * - Each boot that exits without reaching readiness is recorded, so
+ *   `service install` can stop waiting and report it.
  * - When the backend exits after writing `restart-requested` (its self-update
  *   just switched `current`), the launcher starts the new release at once.
  * - SIGTERM and SIGINT are forwarded; the launcher then exits with the
@@ -73,6 +76,7 @@ function readState() {
     bootAttempts:
       value.bootAttempts && typeof value.bootAttempts === "object" ? value.bootAttempts : {},
     rollback: value.rollback ?? null,
+    bootFailure: value.bootFailure ?? null,
   };
 }
 
@@ -109,8 +113,21 @@ if (!service || typeof service.bun !== "string" || !Array.isArray(service.args))
   process.exit(1);
 }
 
+/**
+ * After a rollback `current` and `previous` name the same release. Only then do
+ * the arguments recorded for it apply: the same version reached by a later
+ * self-update runs with the service's own.
+ */
+function serveArguments(version, previousVersion) {
+  const target = service.rollbackTarget;
+  return target?.version === version && previousVersion === version && Array.isArray(target.args)
+    ? target.args
+    : service.args;
+}
+
 let child = null;
 let stopping = false;
+let failedBoots = { version: null, exits: 0 };
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
     stopping = true;
@@ -172,9 +189,10 @@ while (!stopping) {
   rmSync(layout.restartMarker, { force: true });
   log(`starting ${version}`);
   let exited = false;
+  const serveArgs = serveArguments(version, path.basename(linked(layout.previous) ?? ""));
   child = spawn(
     service.bun,
-    [entry, "serve", ...service.args, "--data-dir", dataDir, "--standalone-updater", root],
+    [entry, "serve", ...serveArgs, "--data-dir", dataDir, "--standalone-updater", root],
     { stdio: "inherit", env: process.env },
   );
   const exit = new Promise((resolve) =>
@@ -188,7 +206,9 @@ while (!stopping) {
     const next = readState();
     next.lastReadyVersion = version;
     next.bootAttempts[version] = 0;
+    next.bootFailure = null;
     writeState(next);
+    failedBoots = { version: null, exits: 0 };
     log(`${version} is ready`);
   }
   if (!ready && !exited) {
@@ -212,5 +232,14 @@ while (!stopping) {
     continue;
   }
   log(`${version} exited (code ${code ?? "none"}, signal ${signal ?? "none"})`);
+  if (!ready) {
+    failedBoots = {
+      version,
+      exits: failedBoots.version === version ? failedBoots.exits + 1 : 1,
+    };
+    const next = readState();
+    next.bootFailure = { ...failedBoots, at: new Date().toISOString() };
+    writeState(next);
+  }
   await sleep(ready ? CRASH_DELAY_MS : RETRY_DELAY_MS);
 }

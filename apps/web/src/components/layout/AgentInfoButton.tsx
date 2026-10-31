@@ -717,7 +717,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     },
     [sessionAccountKey],
   );
-  const usageAccountLabel =
+  const usageAccount =
     sessionAccountKey &&
     sessionAccount?.key === sessionAccountKey &&
     sessionAccount.account?.source === "account" &&
@@ -726,7 +726,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     neutralProjection?.connection === "connected" &&
     neutralProjection.platform === accountAgent &&
     neutralProjection.environmentId === accountEnvironmentId
-      ? sessionAccount.account.account?.label
+      ? sessionAccount.account.account
       : undefined;
 
   const openForkTab = async (
@@ -1085,7 +1085,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       ? neutralRateLimits
                       : (usage?.rateLimits ?? neutralRateLimits)
                   }
-                  accountLabel={usageAccountLabel}
+                  accountLabel={usageAccount?.label}
+                  accountEmail={usageAccount?.identity.email}
                 />
               </div>
 

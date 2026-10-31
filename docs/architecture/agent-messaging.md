@@ -305,8 +305,9 @@ records `injectedVia: "steer"`.
 
 A coordinator asks for the same thing with `deliverNow: true` on
 `send_message`: `sendAgentMail({ steer: true })` sets `steerRequested` on the
-new pending entry, for coordinator senders only and only when the message is
-placed `pending-inject`. After the command's single delivery pass, an unused
+new pending entry, for coordinator senders only (including a command node's
+coordinator, through `deliver_node_mail`'s `steer` on a leaf that advertises
+`node-mail-steer`) and only when the message is placed `pending-inject`. After the command's single delivery pass, an unused
 steer request is cleared even if eligibility, paused messaging, or environment
 readiness prevented an attempt. The result carries the settled message fields;
 a completed request-ID replay reports its persisted success without redelivery.

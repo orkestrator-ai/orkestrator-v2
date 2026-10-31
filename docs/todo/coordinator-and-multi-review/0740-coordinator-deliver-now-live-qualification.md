@@ -1,52 +1,63 @@
 # Coordinator `deliverNow`: live qualification and follow-ups
 
-Checked against `main` at `7e3ceb7c` (2026-10-28).
+Checked against `main` at `cd7bbe3e` (2026-10-30).
 
 A coordinator's `send_message` takes `deliverNow: true` to have a busy worker
 receive the message as a steer into its running turn instead of at turn end.
 It reuses the Deliver now path (`steerRequested` on the pending entry), so the
 steer, its journal verification and the terminal-agent hold note are the same
-code a person's Deliver now runs. It has deterministic evidence only.
+code a person's Deliver now runs. It now reaches workers on other nodes too.
+What is left is the billed live run of the scenario built for it.
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `79f3bc97`.
+Analysed 2026-10-30 against `main` at `cd7bbe3e`.
 
-Nothing in the file is done. The feature landed in #1385 (`cc869af0`) and
-nothing has changed it since.
+Nothing in this file had merged before this pass: since #1385 (`cc869af0`)
+no commit touched the deliverNow path, the node mail commands or the live
+suite's scenario list (`git log` on `coordinator-deliver-now.ts`,
+`commands-registry-nodes.ts`, `commands-registry-coordinator-nodes.ts` and
+`coordinator-live.ts`). This pass built task 3 and the harness for tasks 1
+and 2; their live runs are still open.
 
 ### Tasks
 
-1. **Live steer into a busy native worker**: one run per steering provider (Claude, Codex, Pi, Cursor), added as a scenario of the live coordinator suite. Status: open (needs live providers).
-2. **Live terminal worker**: a tmux Claude worker reports `unsupported, queued` and gets the mail at turn end. Status: open (needs a live provider).
-3. **`deliverNow` across a node link**: carry the flag to the leaf so a remote busy worker can be steered. Status: open.
+1. **Live steer into a busy native worker**: the `deliver-now` scenario of the live coordinator suite, one run per steering provider (Claude, Codex, Pi, Cursor). Status: open (scenario built and tested with a scripted transport; needs billed live runs).
+2. **Live terminal worker**: a tmux Claude worker reports `unsupported, queued` and gets the mail at turn end, as the Claude-only second part of the same scenario. Status: open (built with task 1; needs a billed Claude run).
+3. **`deliverNow` across a node link**: carry the flag to the leaf so a remote busy worker can be steered. Status: done (this branch).
 
 ### 1. Live steer into a busy native worker
 
 **Problem.** The steer path has MailWorld evidence only. Nobody has seen a real
 provider take a coordinator's correction mid-turn.
 
-**Context.** `send_coordinator_agent_mail` turns `deliverNow` into `steer`
-(`apps/backend/src/core/commands-registry-coordinator.ts:359`) and settles the
-result after one drain pass (`:486`, `settleCoordinatorDeliverNow` in
-`apps/backend/src/core/coordinator-deliver-now.ts:80-146`). A recipient can be
-steered only if it is a native tab whose agent has the `steer` action
-(`coordinator-deliver-now.ts:114-115`). That is Claude, Codex, Pi and Cursor
-(`packages/protocol/src/native-agent.ts:1119`, `:1145`, `:1202`, `:1214`);
-Grok and OpenCode have no steer, so they report `unsupported, queued`. The
-live suite's scenarios are `read-only`, `async`, `family`, `status` and `peer`
-(`apps/desktop/scripts/dev/coordinator-live.ts:56-62`).
+**Context.** `send_coordinator_agent_mail` turns `deliverNow` into `steer` and
+settles the result after one drain pass (`settleCoordinatorDeliverNow` in
+`apps/backend/src/core/coordinator-deliver-now.ts`). A recipient can be
+steered only if it is a native tab whose agent has the `steer` action: Claude,
+Codex, Pi and Cursor (`packages/protocol/src/native-agent.ts`). Grok and
+OpenCode have no steer, so they report `unsupported, queued`. The settle step
+reports `not queued` with `environment-unready` for an environment whose setup
+has not finished, so a correction sent to a brand-new environment is not a
+steer test.
 
-**Investigation.** No live scenario sends `deliverNow`. The deterministic tests
-cover more than the file listed: steered, idle, terminal, unconfirmed steer,
-default, muted, side agent, worker sender, same-request replay, replies,
-blockers, budget holds, inject policies, unknown remote placement, and a
-worker finishing during admission or during the steer
-(`apps/backend/src/core/coordinator-deliver-now.test.ts:28-399`), plus the
-`send_message` schema and result test
-(`apps/backend/src/core/control-mcp-server.test.ts:2724`).
+**Investigation.** The scenario now exists:
+`apps/desktop/scripts/dev/coordinator-live-deliver-now.ts` (prompts and
+verdict), `coordinator-live-deliver-now-orchestration.ts` (the run, on the
+shared delegation watch), a `deliver-now` case in
+`e2e/agent-testing/coordinator-live.spec.ts`, and `deliver-now` in
+`COORDINATOR_LIVE_SCENARIOS` between `status` and `peer` (peer stays last
+because it changes the messaging defaults). The worker `touch`es a start file
+and parks on a gate file; the harness asks for the correction only once the
+start file exists and the worker reads as working, so the environment is ready
+and the turn is running, and opens the gate only after the correction is
+injected. The verdict is tested on fixtures
+(`coordinator-live-deliver-now.test.ts`) and the orchestration over a scripted
+command transport (`coordinator-live-deliver-now-orchestration.test.ts`),
+including a correction that only lands at idle, which fails. No live run has
+been made.
 
-**Decisions.**
+**Decisions.** See "Assumptions and decisions" below for what was chosen.
 
 - **Where should the run live?**
   - **A `deliver-now` scenario in `mise run test:agent:coordinator` (recommended).**
@@ -56,9 +67,9 @@ worker finishing during admission or during the steer
     - Pros: no harness code.
     - Cons: no repeatable evidence; the next change to the steer path needs another manual run.
 - **What counts as a pass?**
-  - **The worker is given a task that keeps its turn busy for at least a minute (a shell `sleep` it must wait on, then a short write-up). The correction must return `steered`, the message must show `injectedVia: "steer"` and appear in the worker's transcript before that turn ends, the worker's final report must reflect the correction, and the coordinator must be woken exactly once, at turn end (recommended).**
-    - Pros: tests the outcome, the transcript and the single wake, which are the three things the file asked for; a long, fixed wait removes the race where the turn ends before the drain.
-    - Cons: `verifying` (steer handed off, not confirmed) counts as a fail here even though it is a correct outcome, so a slow provider may need a rerun.
+  - **The worker's turn is held busy on a gate. The correction must return `steered`, the message must show `injectedVia: "steer"` and appear in the worker's transcript before that turn ends, the worker's final report must reflect the correction, and the coordinator must be woken exactly once, at turn end (recommended).**
+    - Pros: tests the outcome, the transcript and the single wake; the gate removes the race where the turn ends before the drain.
+    - Cons: `verifying` (steer handed off, not confirmed) counts as a fail even though it is a correct outcome, so a slow provider may need a rerun.
   - **Accept `steered` or `verifying`.**
     - Pros: fewer reruns.
     - Cons: `verifying` does not prove the mail reached the running turn.
@@ -73,13 +84,18 @@ worker finishing during admission or during the steer
 and still gets the mail at turn end has deterministic evidence only.
 
 **Context.** A terminal recipient is not `native`, so `canSteer` is false and
-the result is `unsupported, queued` (`coordinator-deliver-now.ts:62-67`). The
-mail service gives the message the `steer-unsupported` hold note
-(`apps/backend/src/core/agent-mail-service.ts:627`, `:762`). The deterministic
-case is `coordinator-deliver-now.test.ts:76`.
+the result is `unsupported, queued`. The mail service gives the message the
+`steer-unsupported` hold note (`apps/backend/src/core/agent-mail-service.ts`).
+The deterministic case is in `coordinator-deliver-now.test.ts`. The mail
+service's view of whether a tmux turn is busy lives only in its memory; no
+command reads it.
 
-**Investigation.** No live run. A coordinator can start the worker itself with
-`launch_terminal` and `tabType: "claude-tmux"`.
+**Investigation.** On Claude the `deliver-now` scenario has a second part: the
+coordinator calls `launch_terminal` with `tabType: "claude-tmux"` in the
+worker's environment, with a start-file-then-gate task, and corrects that tab
+once the start file exists. Because there is no presence read, the start file
+is what shows the tmux turn is running. No live run has been made; `tmux` is
+installed on this host (`/opt/homebrew/bin/tmux`).
 
 **Decisions.**
 
@@ -93,32 +109,54 @@ case is `coordinator-deliver-now.test.ts:76`.
 
 ### 3. `deliverNow` across a node link
 
-**Problem.** A coordinator on a command node cannot correct a busy worker on a
-leaf mid-turn.
+**Problem.** A coordinator on a command node could not correct a busy worker on
+a leaf mid-turn.
 
 **Context.** `send_message` with `nodeId` (or a reply to mail that came from
-another node) sends through `send_coordinator_node_mail` and, when
-`deliverNow` is set, reports `coordinatorDeliverNowResult(summary, {
-unsupported: true })` (`apps/backend/src/core/control-mcp-tools.ts:1849-1864`).
-That gives `unsupported, queued` only when the leaf placed the mail
-`pending-inject`; stored, bounced and budget-held mail reports `not queued`.
-The leaf's `deliver_node_mail` accepts a fixed set of keys and rejects any
-other (`apps/backend/src/core/commands-registry-nodes.ts:232-248`,
-`assertOnlyKeys`). Backends advertise features to each other through hello
+another node) sends through `send_coordinator_node_mail`, which calls the
+leaf's `deliver_node_mail`. That command accepts a fixed set of keys and
+rejects any other (`assertOnlyKeys`), so a new key would make an older leaf
+refuse the whole message. Backends advertise features through hello
 capabilities (`BACKEND_CAPABILITIES`,
-`packages/protocol/src/backend-profile.ts:176-189`).
+`packages/protocol/src/backend-profile.ts`). `send_node_message` has no
+`deliverNow` parameter at all (`apps/backend/src/core/control-mcp-nodes.ts`),
+so only `send_message` is affected.
 
-**Investigation.** The file named `send_node_message` too; that older tool has
-no `deliverNow` parameter at all
-(`apps/backend/src/core/control-mcp-nodes.ts:488-524`), so only `send_message`
-is affected. Adding a `steer` key to the envelope without a capability check
-would make an older leaf refuse the whole message.
+**Investigation.** Built on this branch:
+
+- A `node-mail-steer` hello capability, advertised with the other node
+  capabilities in `apps/backend/src/gateway-auth.ts`.
+- `send_coordinator_node_mail` takes `deliverNow` and adds `steer: true` to
+  `deliver_node_mail` only when the leaf's hello advertises it
+  (`CoordinatorNodeTarget.supports`). Mail the leaf's pass already injected
+  still opens or joins the delegation. The leaf's `deliverNow`,
+  `deliverNowNote` and `injectedVia` are passed through.
+- The leaf's `deliver_node_mail` accepts `steer`; `NodeCoordination.deliverIncoming`
+  passes it to `sendAgentMail`, which now honours `steer` for a `node` sender
+  whose role is `coordinator` as well as a local coordinator. The command then
+  runs `settleCoordinatorDeliverNow`, the same single delivery pass and expiry
+  as a local correction, and answers with the settled placement and outcome.
+- `send_message` forwards `deliverNow` to `send_coordinator_node_mail` and
+  reports the leaf's outcome; without one (an older leaf) it reports what it
+  did before: `unsupported, queued` for scheduled pending mail, `not queued`
+  otherwise.
+- A lost leaf answer stays the existing outcome-unknown error, with no
+  `deliverNow` claim and no delegation opened.
+
+Tests: `commands-registry-coordinator-nodes.test.ts` (capable leaf gets
+`steer` and its outcome is reported, older leaf gets no field and no claim, no
+`deliverNow` means no field, a lost answer), `nodes/node-coordination.test.ts`
+(a leaf over the real mail store: busy native worker steered, idle worker
+delivered, terminal worker `unsupported, queued` and delivered at turn end,
+no `steer` leaves the mail pending, other unknown keys still refused) and
+`control-mcp-server.test.ts` (leaf outcomes `steered` and `verifying` passed
+through, older-leaf outcomes unchanged, `deliverNow` forwarded).
 
 **Decisions.**
 
 - **How should the flag reach the leaf?**
   - **A `steer` field on `deliver_node_mail`, sent only to leaves that advertise a new hello capability (recommended).** The leaf sets `steerRequested` when it places the message `pending-inject`, runs one drain pass as the local command does, and returns the `deliverNow` outcome in its answer.
-    - Pros: an older leaf keeps working and reports `unsupported, queued` as today; the leaf applies its own mutes, budgets and steer eligibility.
+    - Pros: an older leaf keeps working and reports `unsupported, queued` as before; the leaf applies its own mutes, budgets and steer eligibility.
     - Cons: a new capability name to maintain; the command node waits for the leaf's drain pass before answering.
   - **Always send the field.**
     - Pros: simpler.
@@ -134,50 +172,146 @@ would make an older leaf refuse the whole message.
     - Pros: matches the local unconfirmed-steer wording.
     - Cons: the command node cannot check the leaf's steer journal, so nothing would ever resolve it.
 
+## Assumptions and decisions
+
+### Task 1: the run lives in the live suite
+
+Chose the recommended `deliver-now` scenario in `mise run test:agent:coordinator`.
+The suite's delegation watch, gate pattern and summaries already did most of
+the work, and the scripted-transport test pattern from the `status` scenario
+let the orchestration be tested without a provider.
+
+### Task 1: the pass criteria, and how "busy" is guaranteed
+
+Chose the recommended criteria, with a gate file in place of a fixed one-minute
+`sleep`: the worker stays in its turn until the harness opens the gate, and
+the harness opens it only once the correction is injected (or after a quarter
+of a step budget, so a correction that never lands still produces a verdict).
+That removes the timing race the `sleep` was meant to reduce rather than
+shortening it. `verifying` fails, as recommended. "Woken exactly once" is
+checked as: the delegation completed and woke the coordinator after the gate
+opened, and the coordinator started exactly one turn between the end of the
+correction turn and 30 seconds after its wake turn ended.
+
+### Task 1: wait for a running turn, not a new environment
+
+The 2026-10-28 format pass found that a correction to a brand-new environment
+returns `not queued` with `environment-unready`. That is the documented
+outcome (`deliverNow` never bypasses readiness), not a defect, so nothing in
+the product changed. The scenario sends the correction only after the worker
+has created its start file and reads as working, which implies a ready
+environment.
+
+### Task 1: provider order
+
+Chose the recommended order (Claude and Codex first, then Pi and Cursor). On
+Grok and OpenCode, which have no steer, the case is skipped with that reason
+(`deliverNowApplies`), so a full-suite run does not fail on a correct
+`unsupported, queued`; their outcome is covered by the deterministic tests.
+
+### Task 2: a Claude-only second part of the same scenario
+
+Chose the recommended option. The current code showed one gap the analysis did
+not mention: nothing reads whether a tmux turn is busy (the mail service keeps
+presence in memory only). The terminal task therefore `touch`es its own start
+file before its gate, and the harness waits for that file. If the tmux Claude
+stops on a permission prompt before `touch`, the part times out and fails
+rather than passing.
+
+### Task 3: capability-gated `steer` field
+
+Chose the recommended `steer` field behind a `node-mail-steer` hello
+capability, and the recommended outcome-unknown result for a lost answer. One
+addition the analysis did not spell out: after the leaf's delivery pass, a
+correction can already be `injected` when the command node sees it, so the
+command node now treats `injected` as scheduled when it asked for a steer.
+Otherwise a steered correction to a remote worker would open no delegation and
+the coordinator would never be woken by that turn's end. A late-opened remote
+delegation still settles, because remote settlement reads the worker's idle
+state and pending mail after the grace period, not a turn-end event.
+
+### Task 3: `send_node_message`
+
+Left without `deliverNow`, as the analysis found: it is the older generic node
+tool, and the coordinator's `send_message` with `nodeId` is the path that
+carries coordinator delegations.
+
 ## Current state
 
 - Described in
   [`coordinator.md`, "Course corrections with deliverNow"](../../architecture/coordinator.md#course-corrections-with-delivernow)
-  and
+  (now including the node link) and
   [`agent-messaging.md`](../../architecture/agent-messaging.md)
-  ("Releasing one message" and "Deliver now into a running turn", `agent-messaging.md:271-277`).
+  ("Deliver now into a running turn").
 - `send_coordinator_agent_mail` passes `steer` to `sendAgentMail`, waits for
   one drain pass and reports `deliverNow` (`coordinator-deliver-now.ts`).
-- Tests: `coordinator-deliver-now.test.ts` (MailWorld: steered, idle, terminal,
-  unconfirmed steer, default, muted, side agent, worker sender, replay,
-  replies, blockers, budgets, inject policies, remote placement, and
-  completion races) and the `send_message` schema/result test in
-  `control-mcp-server.test.ts`.
+- `send_coordinator_node_mail` passes `steer` to a leaf advertising
+  `node-mail-steer`; the leaf's `deliver_node_mail` settles it the same way.
+- The live suite has a `deliver-now` scenario
+  ([`agent-testing.md`, "Live coordinator suite"](../../development/agent-testing.md#live-coordinator-suite));
+  it has not been run live.
+- Tests: `coordinator-deliver-now.test.ts` (MailWorld),
+  `commands-registry-coordinator-nodes.test.ts`, `nodes/node-coordination.test.ts`,
+  `control-mcp-server.test.ts`, `coordinator-live-deliver-now.test.ts` and
+  `coordinator-live-deliver-now-orchestration.test.ts`.
 
 ## Outstanding work
 
-### Qualification
+### Qualification (billed provider turns)
 
-1. **Live steer from a coordinator into a busy worker.** One run per steering
-   provider (Claude, Codex, Pi, Cursor): delegate a long task, then send a
-   `deliverNow` correction mid-turn; check the result says `steered`, the
-   worker's transcript shows the mail inside the running turn, and the
-   coordinator is woken once, when that turn ends. Add it as a scenario of
-   the opt-in coordinator live suite (0024). See task 1.
-2. **Live terminal worker.** A tmux Claude worker: the result says
-   `unsupported, queued` and the mail arrives at turn end. See task 2.
+Run from a shell signed in to the provider, outside any Orkestrator data
+directory in use. Each command starts and resets its own disposable
+`dev:test --fixture` profile. The summary is written to
+`output/agent-testing/<run>/coordinator/<platform>-deliver-now.json`.
 
-### Code
+1. **Claude** (tasks 1 and 2; needs `tmux` on `PATH`):
 
-3. **Across a node link.** `deliverNow` on mail to a worker on another node
-   (`send_message` with `nodeId`, through `send_coordinator_node_mail`) is
-   reported as `unsupported, queued` and delivered at idle. Carrying the flag
-   needs a field on the node mail envelope and the leaf to set
-   `steerRequested`. See task 3.
+   ```bash
+   mise run test:logged -- --name coordinator-deliver-now-claude -- \
+     mise run test:agent:coordinator --credential-source claude --scenario deliver-now
+   ```
+
+2. **Codex** (task 1):
+
+   ```bash
+   mise run test:logged -- --name coordinator-deliver-now-codex -- \
+     mise run test:agent:coordinator --credential-source codex --scenario deliver-now
+   ```
+
+3. **Pi and Cursor** (task 1), after 1 and 2 pass:
+
+   ```bash
+   mise run test:logged -- --name coordinator-deliver-now-pi-cursor -- \
+     mise run test:agent:coordinator --credential-source pi --credential-source cursor --scenario deliver-now
+   ```
+
+A run qualifies when the summary's verdict is `passed`. Record each run's date,
+provider version and verdict here, and mark tasks 1 and 2 done when all four
+providers have passed. A `correction-steered` failure whose detail says
+`verifying` is a slow handoff: rerun once before treating it as a product
+failure. A `terminal-*` failure with `the terminal worker to start its gated
+step` in `finished` means the tmux Claude never ran its first command (most
+likely a permission prompt in the pane); check the pane before filing it.
+
+### Not covered by a live run
+
+`deliverNow` across a node link has deterministic evidence only. A live check
+needs a command node and a leaf both on this branch, a worker on the leaf
+parked on a gate, and a coordinator on the command node sending it a
+`deliverNow` correction with `nodeId`; the result should say `steered`. No
+harness exists for two live nodes, so this stays a manual check.
 
 ## Constraints and rationale
 
 - Coordinator-only: worker `send_message` and `reply_message` have no
   `deliverNow`, and `sendAgentMail` ignores `steer` for any sender that is not
-  a coordinator. A worker interrupting its coordinator mid-turn would undo the
+  a coordinator (local, or a command node's coordinator through the node
+  link). A worker interrupting its coordinator mid-turn would undo the
   delegation hold.
 - Coordinator conversations (main ↔ side) are never steered, so a side agent
   cannot cut into the main's turn with the user.
+- `steer` is sent only to a leaf advertising `node-mail-steer`: an older leaf
+  rejects unknown `deliver_node_mail` fields and would refuse the message.
 
 ## Related
 

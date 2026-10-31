@@ -12,7 +12,7 @@ import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from "./prompt.js";
 import { applySessionEvent } from "./translate.js";
-import { publicContextUsage, publicSteerDispatch } from "./public.js";
+import { publicActivity, publicContextUsage, publicSteerDispatch } from "./public.js";
 import type { SessionState } from "./state.js";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
@@ -395,6 +395,8 @@ describe("dispatchPrompt", () => {
     expect(order).toEqual(["deny", "abort"]);
     expect(state.status).toBe("error");
     expect(state.cancelTurn).toBeUndefined();
+    // The backend's turn-end bell reads the failure from the no-touch route.
+    expect(publicActivity(state)).toEqual({ activity: "idle", turnFailed: true });
   });
 
   test("leaves a superseded turn's outcome to the turn that replaced it", async () => {

@@ -71,7 +71,7 @@ import {
   EnvironmentNameSignalMarker,
 } from "@/components/environments/EnvironmentNameShimmer";
 import { environmentNameSignal } from "@/lib/environment-name-signal";
-import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
+import { nodeEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
@@ -772,14 +772,13 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  // Decided here from the machine's relayed PR reading (pr-merge-readiness)
-  // and its live activity. Conflicts need the same monitor health that remote
-  // readiness waits on, so only the question and ready signals apply here.
+  // Decided here from the machine's relayed PR reading and monitor health
+  // (pr-merge-readiness) and its live activity.
   const nameSignal = environment.deleting
     ? null
     : environmentNameSignal({
         waitingOnUser: isRunning && live && environment.activity === "waiting",
-        prMergeState: isNodeEnvironmentReadyToMerge(environment, machine) ? "ready" : null,
+        prMergeState: nodeEnvironmentPrMergeState(environment, machine),
       });
   const nameSignalDescriptionId = useId();
 

@@ -2433,16 +2433,16 @@ describe("thread operations behind the new session routes", () => {
     });
   });
 
-  test("startReview forwards each target shape and the requested delivery", async () => {
+  test("startReview forwards each target shape, always inline", async () => {
     const h = harness({
       "review/start": () => ({ reviewThreadId: "review-1", turn: { id: "turn-r" } }),
     });
     await h.engine.start();
 
-    await h.engine.startReview("t1", { type: "baseBranch", branch: "main" }, "detached");
+    await h.engine.startReview("t1", { type: "baseBranch", branch: "main" });
     expect(h.child().requests.at(-1)?.params).toMatchObject({
       target: { type: "baseBranch", branch: "main" },
-      delivery: "detached",
+      delivery: "inline",
     });
 
     await h.engine.startReview("t1", { type: "commit", sha: "abc123", title: null });

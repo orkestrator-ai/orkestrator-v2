@@ -475,6 +475,37 @@ export class WebAnnotationThreads {
     });
   }
 
+  /**
+   * Mark each development source hint whose path the backend found inside the
+   * environment workspace (`exists`) as verified. Runs before the write queue.
+   * Validation has already refused a client-declared `verified: true`, so a
+   * missing, outside or unchecked path stays an unverified candidate. Only
+   * the path is checked: the line and component are never read or confirmed.
+   */
+  async verifySourceHints(
+    environmentId: string,
+    capture: WebAnnotationCaptureInput,
+  ): Promise<WebAnnotationCaptureInput> {
+    const evidence = capture.evidence;
+    const hints = evidence?.sourceHints;
+    if (!evidence || !hints?.length) return capture;
+    const checks = await this.ctx.checkWorkspacePaths(
+      environmentId,
+      hints.map((hint) => hint.path),
+    );
+    if (!checks) return capture;
+    const existing = new Set(
+      checks.filter((check) => check.status === "exists").map((check) => check.path),
+    );
+    return {
+      ...capture,
+      evidence: {
+        ...evidence,
+        sourceHints: hints.map((hint) => ({ ...hint, verified: existing.has(hint.path) })),
+      },
+    };
+  }
+
   validateCapture(value: unknown): WebAnnotationCaptureInput {
     const result = validateWebAnnotationCaptureInput(value);
     if (!result.ok) throw new WebAnnotationServiceError(result.error);
@@ -847,6 +878,7 @@ export class WebAnnotationThreads {
     if (input.draftId !== undefined && !isWebAnnotationId(input.draftId)) {
       throw new WebAnnotationServiceError("draftId is invalid");
     }
+    const checked = await this.verifySourceHints(input.environmentId, capture);
     return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
@@ -855,7 +887,7 @@ export class WebAnnotationThreads {
       (tx) => {
         this.assertAnnotationCapacity(tx.manifest);
         const annotationId = newId("annotation");
-        const record = this.captureFromInput(tx, annotationId, 1, capture);
+        const record = this.captureFromInput(tx, annotationId, 1, checked);
         const annotation: WebAnnotation = {
           id: annotationId,
           environmentId: input.environmentId,
@@ -1034,8 +1066,9 @@ export class WebAnnotationThreads {
   }
 
   async replaceCapture(input: WebAnnotationCommandArgs["web_annotation_capture_replace"]) {
-    const capture = this.validateCapture(input.capture);
+    const validated = this.validateCapture(input.capture);
     const body = input.body === undefined ? null : this.validateBody(input.body);
+    const capture = await this.verifySourceHints(input.environmentId, validated);
     return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,

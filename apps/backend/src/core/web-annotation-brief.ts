@@ -367,7 +367,9 @@ function sectionValues(
           ? {
               sourceHints: evidence.sourceHints.map((hint) => ({
                 ...webAnnotationSourceHintFields(hint),
-                note: "candidate location only; verify in the repository",
+                note: hint.verified
+                  ? "candidate location only; the path existed in the workspace at capture, verify the code in the repository"
+                  : "candidate location only; verify in the repository",
               })),
             }
           : {}),

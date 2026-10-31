@@ -44,6 +44,12 @@ browser coverage. Live review and Docker tests remain opt-in and require the
 manual profile workflow below. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
 
+Use separate disposable profiles for concurrent live browser suites. A profile
+shares its fixture project, provider homes, backend state and default artifact
+destinations, so independent suites can interfere. Component-browser runs also
+share their configured web server; run an aggregate and its owning-file reruns
+sequentially.
+
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
 `--agent-platforms <list>`, `--no-agent-credentials` and
@@ -1152,9 +1158,10 @@ session writes.
 The live coordinator suite checks that a real provider keeps the coordinator's
 read-only boundary (`read-only`), that delegation never waits inside a turn
 (`async`), that worker mail flows with nobody's help (`family`), that the
-status wakes of work the coordinator started reach it (`status`), and that
-peer mail between two ordinary environments wakes each side with **Wake
-peers** on (`peer`). Every scenario with mail also checks how each mail
+status wakes of work the coordinator started reach it (`status`), that a
+`deliverNow` correction is steered into a busy worker's running turn
+(`deliver-now`), and that peer mail between two ordinary environments wakes
+each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
 ```bash
@@ -1376,8 +1383,35 @@ the user started never wakes a coordinator), budgets, restart recovery, and
 build pipeline notices, which reach a coordinator through the same notice and
 carrier as a Multi Review's.
 
-Mail tiles are judged on every scenario with mail (`async`, `family`, `status`
-and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+The `deliver-now` case (todo 0740) gives the coordinator three prompts and
+waits at most twelve step budgets. The coordinator launches one worker on the
+platform whose task is: `touch` a start file, wait on a gate file with the
+same shell loop as `async`, then send `"coordinator"` the report body a
+coordinator message told it to use, or a fixed "uncorrected" body if none
+did. Once the start file exists and the worker reads as working, a second
+prompt asks the coordinator for one `send_message` to that worker with
+`deliverNow: true` and a body naming the corrected report. The harness opens
+the gate only after the correction is injected (or after a quarter of a step
+budget), then waits for the coordinator's wake turn and watches 30 more
+seconds for a second one. It passes when the one `send_message` result says
+`deliverNow: "steered"` (`verifying` fails: it does not prove the turn read
+the mail); the correction is `injected` with `injectedVia: "steer"` before
+the gate opened; the worker never read idle between first working and the
+gate; the correction appears as a user row in the worker's transcript; the
+worker sent exactly the corrected report and no uncorrected one; and the
+delegation completed and woke the coordinator after the gate, with exactly
+one coordinator turn after the correction turn. On Claude a third prompt has
+the coordinator `launch_terminal` a `claude-tmux` tab in the same environment
+with the same start-and-gate task, and a fourth sends that tab a `deliverNow`
+correction once its start file exists. That part passes when the result says
+`unsupported, queued`, the tab's mailbox shows the correction pending with
+the `steer-unsupported` hold note before its gate opens, and it is injected
+(not by a steer) after the gate. The prompts and verdict are in
+`coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
+runs the orchestration over a scripted command transport.
+
+Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
+`deliver-now` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the renderer's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

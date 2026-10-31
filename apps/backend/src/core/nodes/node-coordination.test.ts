@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
+import type { CommandContext, CommandHandler } from "../commands-context.js";
+import { registerNodeCommands } from "../commands-registry-nodes.js";
 import { NodeCoordination } from "./node-coordination.js";
 
 /**
@@ -224,6 +226,159 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
         replyToMessageId: delivered.messageId,
       }),
     ).toMatchObject({ controllerId: "bk_cmd" });
+  });
+});
+
+describe("a command node's deliverNow on this leaf", () => {
+  async function leaf(worker: { launched?: boolean; terminal?: boolean } = {}) {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const recipient = await world.addEnvironment("worker", worker);
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+    const commands = new Map<string, CommandHandler>();
+    registerNodeCommands((name, handler) => commands.set(name, handler));
+    const context = {
+      storage: world.storage,
+      nodeCoordination: instance,
+      drainAgentMail: mock(() => world.mail.drainInjects()),
+    } as unknown as CommandContext;
+    let counter = 0;
+    const deliver = (body: string, extra: Record<string, unknown> = {}) =>
+      commands.get("deliver_node_mail")!(
+        {
+          controllerId: "bk_cmd",
+          coordinatorEnvironmentId: "coordinator:c1:conv-1",
+          coordinatorTabId: "coord-tab",
+          requestId: `remote-${(counter += 1)}`,
+          toEnvironmentId: recipient.environmentId,
+          toTabId: recipient.tabId,
+          body,
+          ...extra,
+        },
+        context,
+      ) as Promise<Record<string, unknown>>;
+    return { world, recipient, deliver, drain: context.drainAgentMail! };
+  }
+
+  test("a muted recipient bounces and replays without reading the mailbox or draining", async () => {
+    const { world, recipient, deliver, drain } = await leaf({ launched: true });
+    await world.storage.updateAgentMailboxPolicy(recipient.environmentId, recipient.tabId, {
+      mutedInbound: true,
+    });
+    const read = spyOn(world.storage, "getAgentMailMessage");
+    try {
+      const input = { steer: true, requestId: "muted-replay" };
+      const result = await deliver("Correction.", input);
+      expect(result).toMatchObject({
+        placement: "bounced",
+        placementReason: "recipient-muted",
+        deliverNow: "not queued",
+        deliverNowNote: expect.stringContaining("recipient-muted"),
+      });
+      expect(await deliver("Correction.", input)).toEqual(result);
+      expect(read).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
+      expect(world.steered(recipient)).toEqual([]);
+      expect(world.received(recipient)).toEqual([]);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test("a busy native worker gets the correction steered into its running turn", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+
+    const result = await deliver("Stop: the requirement changed.", { steer: true });
+
+    expect(result).toMatchObject({
+      placement: "injected",
+      injectedVia: "steer",
+      deliverNow: "steered",
+    });
+    expect(result).not.toHaveProperty("placementReason");
+    expect(world.steered(recipient)).toHaveLength(1);
+    expect(world.steered(recipient)[0]).toContain("Stop: the requirement changed.");
+    expect(world.wakes(recipient)).toBe(0);
+  });
+
+  test("an idle worker gets an ordinary delivery", async () => {
+    const { world, recipient, deliver } = await leaf();
+
+    expect(await deliver("Add the docs too.", { steer: true })).toMatchObject({
+      placement: "injected",
+      deliverNow: "delivered",
+    });
+    expect(world.steered(recipient)).toEqual([]);
+    expect(world.received(recipient)).toHaveLength(1);
+  });
+
+  for (const held of [false, true]) {
+    test(`node coordinator requests stay pending while ${held ? "held" : "queued"}, until injection`, async () => {
+      const { world, recipient, deliver } = await leaf({ launched: true });
+      if (held) {
+        const config = await world.storage.loadConfig();
+        await world.storage.updateGlobalConfig({
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 1 },
+        });
+        await deliver("Uses the first wake budget.");
+      }
+      const result = await deliver("Pending remote request.");
+      expect(result.placement).toBe(held ? "inject-held" : "pending-inject");
+      expect(
+        await world.storage.hasUndeliveredCoordinatorRequest(
+          recipient.environmentId,
+          recipient.tabId,
+        ),
+      ).toBe(true);
+      if (held) {
+        await world.storage.retryAgentMailInject(
+          recipient.environmentId,
+          recipient.tabId,
+          String(result.messageId),
+        );
+      }
+      await world.finishTurn(recipient);
+      expect(
+        await world.storage.getAgentMailMessage(
+          recipient.environmentId,
+          recipient.tabId,
+          String(result.messageId),
+        ),
+      ).toMatchObject({ placement: "injected" });
+      expect(
+        await world.storage.hasUndeliveredCoordinatorRequest(
+          recipient.environmentId,
+          recipient.tabId,
+        ),
+      ).toBe(false);
+    });
+  }
+
+  test("a terminal worker reports unsupported and keeps the mail for turn end", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true, terminal: true });
+
+    expect(await deliver("Also fix the lint.", { steer: true })).toMatchObject({
+      placement: "pending-inject",
+      placementReason: "steer-unsupported",
+      deliverNow: "unsupported, queued",
+    });
+    await world.finishTurn(recipient);
+    expect(world.received(recipient)).toHaveLength(1);
+  });
+
+  test("without steer a busy worker's mail waits for its turn to end, and nothing is settled", async () => {
+    const { world, recipient, deliver } = await leaf({ launched: true });
+
+    const result = await deliver("Routine.");
+    expect(result).toMatchObject({ placement: "pending-inject" });
+    expect(result).not.toHaveProperty("deliverNow");
+    expect(world.steered(recipient)).toEqual([]);
+  });
+
+  test("other unknown fields are still refused", async () => {
+    const { deliver } = await leaf();
+    await expect(deliver("hi", { deliverNow: true })).rejects.toThrow("deliverNow");
   });
 });
 
@@ -556,3 +711,62 @@ for (const scenario of ["selected", "fallback", "remote", "multiple", "failed"])
     notice.mockRestore();
   });
 }
+
+test("an approved account switch keeps its account fields and runs the Settings switch", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const main = await world.main();
+  const { instance } = coordination(world, []);
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const options = (
+    instance as unknown as {
+      options: { invoke: (command: string, args: Record<string, unknown>) => Promise<unknown> };
+    }
+  ).options;
+  options.invoke = async (command, args) => {
+    calls.push({ command, args });
+    return {};
+  };
+  const notice = spyOn(world.storage, "sendAgentMail");
+  const request = await instance.createActionRequest({
+    requestId: "switch-1",
+    kind: "switch-agent-account",
+    targets: [
+      {
+        nodeId: "bk_leaf",
+        nodeName: "Leaf",
+        platform: "claude",
+        accountId: "acct-work",
+        accountLabel: "Work",
+        // Not a field this kind has: dropped.
+        secret: "never stored",
+      },
+    ],
+    requestedBy: {
+      coordinatorEnvironmentId: main.environmentId,
+      coordinatorTabId: main.tabId,
+      projectId: world.projectId,
+    },
+    reason: "Switch when the limit is hit",
+  });
+  expect(request.targets).toEqual([
+    {
+      nodeId: "bk_leaf",
+      nodeName: "Leaf",
+      platform: "claude",
+      accountId: "acct-work",
+      accountLabel: "Work",
+    },
+  ]);
+  const resolved = await instance.actions.resolve(request.requestId, "approve");
+  expect(resolved).toMatchObject({ state: "executed", result: { code: "switched" } });
+  expect(calls).toEqual([
+    { command: "set_active_agent_account", args: { platform: "claude", accountId: "acct-work" } },
+  ]);
+  expect(notice.mock.calls[0]![1]).toMatchObject({
+    toEnvironmentId: main.environmentId,
+    subject: expect.stringContaining("Switch the active Claude account on Leaf to “Work”"),
+  });
+  notice.mockRestore();
+  instance.collector.dispose();
+});

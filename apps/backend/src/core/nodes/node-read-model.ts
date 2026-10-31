@@ -10,6 +10,7 @@ import {
   MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,
   MAX_SUMMARY_PROJECTS,
   NODE_SUMMARY_CHANGED_EVENT,
+  NODE_SUMMARY_ENVIRONMENT_READ_ARGS,
   toNodeEnvironmentSummary,
   toNodeProjectSummary,
   type NodeEnvironmentSummary,
@@ -145,6 +146,8 @@ export class NodeReadModel {
       now?: () => number;
       /** Test seam; production uses {@link SUMMARY_RECONCILE_MS}. */
       reconcileMs?: number;
+      /** Test seam for the per-node environment refresh debounce (250 ms). */
+      refreshDebounceMs?: number;
     },
   ) {}
 
@@ -248,7 +251,14 @@ export class NodeReadModel {
   noteLocalEvent(event: string, payload: unknown): void {
     if (event === RESOURCE_CHANGED_EVENT) {
       const resource = (payload as { resource?: unknown } | null)?.resource;
-      if (resource !== "project" && resource !== "environment" && resource !== "config") return;
+      if (
+        resource !== "project" &&
+        resource !== "environment" &&
+        resource !== "environment-pr-health" &&
+        resource !== "config"
+      ) {
+        return;
+      }
     } else if (event !== BACKEND_PROFILE_CHANGED_EVENT) {
       return;
     }
@@ -447,7 +457,7 @@ export class NodeReadModel {
     // Repository config owns defaultBranch without advancing the project manifest.
     if (change.resource === "project" || change.resource === "config") {
       void this.requestHydrate(nodeId);
-    } else if (change.resource === "environment") {
+    } else if (change.resource === "environment" || change.resource === "environment-pr-health") {
       const projectId =
         typeof change.projectId === "string"
           ? change.projectId
@@ -475,7 +485,7 @@ export class NodeReadModel {
       const projectIds = [...state.dirtyProjects];
       state.dirtyProjects.clear();
       void this.refreshProjects(state.nodeId, projectIds);
-    }, REFRESH_DEBOUNCE_MS);
+    }, this.options.refreshDebounceMs ?? REFRESH_DEBOUNCE_MS);
     state.refreshTimer.unref?.();
   }
 
@@ -579,7 +589,10 @@ export class NodeReadModel {
       while (next < projectIds.length) {
         const projectId = projectIds[next++]!;
         try {
-          const raw = await invoke<unknown>("get_environment_snapshots", { projectId });
+          const raw = await invoke<unknown>("get_environment_snapshots", {
+            projectId,
+            ...NODE_SUMMARY_ENVIRONMENT_READ_ARGS,
+          });
           const list = Array.isArray(raw) ? raw : [];
           const environments = list
             .flatMap((entry, index) => {

@@ -186,6 +186,51 @@ esac
     });
   }
 
+  for (const outcome of ["applied", "failed"] as const) {
+    test(`the gateway's ${outcome} report is seen within one bounded read`, async () => {
+      const dir = await tempDir("ork-egress-report-");
+      cleanup.push(dir);
+      const report = path.join(dir, "firewall.json");
+      await fs.writeFile(report, '{"mode":"restricted"}\n');
+      // Written aside and renamed, as init-firewall.sh does.
+      setTimeout(() => {
+        void fs
+          .writeFile(`${report}.tmp`, `{"mode":"restricted","state":"${outcome}"}\n`)
+          .then(() => fs.rename(`${report}.tmp`, report));
+      }, 300);
+      // The fake gateway runs the read it is handed against a host directory.
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$1" >> "$FAKE_DOCKER_LOG"
+[ "$1" = exec ] || exit 0
+exec sh -c "$(printf '%s' "$5" | sed 's#/run/orkestrator-firewall#${dir}#g')"
+`,
+        async (log) => {
+          const started = performance.now();
+          const waited = waitForEgressGatewayFirewall(GATEWAY);
+          if (outcome === "applied") await waited;
+          else await expect(waited).rejects.toThrow("could not apply its network policy");
+          expect(performance.now() - started).toBeLessThan(1_500);
+          expect((await log.read()).trim().split("\n")).toEqual(["exec"]);
+        },
+      );
+    });
+  }
+
+  test("early unfinished gateway responses are spaced by pollMs", async () => {
+    await withDockerScript(
+      await fakeDaemon({ gatewayRunning: true, pendingPolls: 2 }),
+      async (log) => {
+        const started = performance.now();
+        await waitForEgressGatewayFirewall(GATEWAY, { pollMs: 150, timeoutMs: 2_000 });
+        expect(performance.now() - started).toBeGreaterThanOrEqual(290);
+        const calls = (await log.read()).trim().split("\n");
+        expect(calls).toHaveLength(3);
+        expect(calls.every((line) => line.startsWith(`exec ${GATEWAY}`))).toBe(true);
+      },
+    );
+  });
+
   test("a runtime without a gateway is left to the normal start", async () => {
     await withDockerScript(await fakeDaemon({}), async (log) => {
       expect(await prepareEgressGatewayForStart("other")).toBe("none");

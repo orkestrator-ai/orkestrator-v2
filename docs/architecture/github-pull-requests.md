@@ -105,14 +105,20 @@ Ready means all of:
   required reviews, required checks and an up-to-date base. `unstable` (a
   non-required check failing or still running) is not ready.
 - If the monitor has a check rollup, nothing in it is failing or pending.
+- The credential Orkestrator merges with is not known to lack push, maintain
+  or admin on the repository (`viewerCanMerge`, below). An unknown permission
+  does not block.
 - The reading is fresh. For this machine: the PR monitor mirror is `current`,
   the backend has answered a check for this exact PR since polling last started
   or resumed (the first answered check is announced once for this), the latest
   check did not fail, both monitor and environment report no conflicts, and the
-  environment can be polled (local, or a running container). For
-  another machine: readiness is suppressed until summaries relay the leaf's
-  current monitor confirmation and error state. Transport freshness alone
-  cannot establish PR-reading freshness.
+  environment can be polled (local, or a running container). The monitor half
+  of that is `isPrReadingConfirmedByMonitor`. For another machine: the machine
+  is connected, its summaries are `current`, and the summary carries
+  `prMonitorConfirmed`, which the leaf computes with the same
+  `isPrReadingConfirmedByMonitor` against its own monitor. Transport freshness
+  alone cannot establish PR-reading freshness, so a leaf that predates the
+  field never shimmers on a command node.
 
 The PR monitor already asks `gh` for `mergeStateStatus,isDraft` in its normal
 lookup, so readiness costs no extra GitHub request. It persists the result as
@@ -121,13 +127,42 @@ clears it whenever `prUrl` changes. Node summaries relay `prState`,
 `prHasMergeConflicts` and `prMergeability`, never the PR URL, so a command node
 can display a leaf's last persisted PR state.
 
-Known gaps:
+### Merge permission
 
-- The viewer's permission to merge is not checked. The `gh` lookup does not
-  return it, and a repository query on every poll would double the cost.
-  Orkestrator merges with the same credential the monitor reads with.
-- A leaf's own monitor health is not relayed. Remote sidebar, search and title
-  readiness stays off, including for a connected leaf with current summaries.
+The `gh pr view/list --json` lookup has no viewer permission field, so the
+monitor asks `gh api --hostname github.com repos/{owner}/{repo} --jq
+.permissions` through the environment's own runner (host `gh` in the worktree,
+or `gh` inside the container), the credential Merge uses. "May merge" is push,
+maintain or admin, as in `loadViewerIdentity`. `PrViewerPermissionCache`
+(`apps/backend/src/core/pr-viewer-permission.ts`) keeps one answer per
+credential scope (the host login, or one container) and repository for an hour,
+so an open PR costs at most one extra request per repository per hour. A failed
+lookup is unknown and is retried after ten minutes. A merge that fails with a
+permission-shaped error (`HTTP 403`, "does not have the correct permissions")
+clears that entry, so the next check asks again. The answer is runtime monitor
+state (`viewerCanMerge` on the monitor entry), not persisted.
+
+Push access does not prove a ruleset lets this user merge, and a revoked
+permission keeps the shimmer for up to an hour.
+
+### Relayed monitor health
+
+`get_environment_snapshots` with `includePrMonitorHealth: true`
+(`NODE_SUMMARY_ENVIRONMENT_READ_ARGS`, sent by the command node's summary
+reads) adds `prMonitorConfirmed` and `prViewerCanMerge` to each environment
+from the node's announced monitor state. That form is never answered
+`unchanged`, because the environment manifest revision does not cover runtime
+state. When the monitor-side inputs change (first answered check, a failing
+check, recovery, a different PR, conflicts, permission, removal) the node
+announces a content-free `environment-pr-health` resource change for the
+environment and its project; the command node re-reads that project's
+summaries. Inputs on the environment record announce themselves when written.
+Reconnects and the 60 s summary reconcile cover a missed hint. The PR URL
+never leaves the node.
+
+With confirmation relayed, another machine's rows show both the green ready
+and the red conflicts signal in the remote sidebar; search and the mobile
+title show ready.
 
 ### Name shimmer colours
 
@@ -141,7 +176,7 @@ The same names shimmer in one of three colours, chosen by
 - **Red** (`.merge-conflicts-name`): `evaluatePrMergeReadiness` reports
   `conflicts`. Freshness is the same as for ready, except that monitor and
   environment must both report conflicts, so a stale reading shows no red.
-  Like ready, it is off for another machine's rows.
+  Another machine's rows show it once the leaf confirms the reading.
 - **Green** (`.merge-ready-name`): ready to merge, as above.
 
 The effect is the shared `.text-shimmer` utility (`apps/web/src/index.css`)

@@ -48,6 +48,8 @@ export interface DelegationMailMessage {
   replyToMessageId?: string;
   injectRequestId?: string;
   injectedAt?: string;
+  /** `"steer"` when the message was steered into a running turn. */
+  injectedVia?: string;
   coordinatorDelegationId?: string;
   notice?: {
     resource?: { kind?: string; id?: string; environmentId?: string };
@@ -84,6 +86,8 @@ export interface DelegationWorker {
 export interface DelegationObservation {
   at: number;
   coordinatorPhase: string;
+  /** Durable transcript turn identities, including turns completed between polls. */
+  coordinatorTurnIds?: string[];
   /** Prompts waiting in the coordinator's queue. */
   queueLength: number;
   /** Each launched worker's turn phase, by environment id. */

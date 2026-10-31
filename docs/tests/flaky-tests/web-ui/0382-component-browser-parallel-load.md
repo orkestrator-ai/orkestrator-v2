@@ -194,3 +194,126 @@ Credentialed provider scenarios, dedicated Electron, Docker, CLI scenario and iO
 
 
 The complete component run finished with 744 passed, 102 skipped and 12 failed (978.1 s). Its desktop `e2e/VirtuosoFollow.spec.ts:57` case also missed `auto` (received `false`); the complete unchanged owner passed with one worker in 5.0 s: `ORKESTRATOR_E2E_PORT=62460 mise run test:logged -- --name codex-auth-owner-virtuosofollow -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/codex-auth-owner-virtuosofollow`. KeyboardShortcuts, PaneBreakpoint and CloseRetention owners were not wholly green; their failures remain explicit in 0995 and are not treated as new isolated passes.
+
+
+## Failed-turn attention review repair — 2026-10-30
+
+The completion-reconciler implementation is `90fc74138`; no renderer or browser spec changed. Preparation had already failed both native branch-selection cases in `AgentLaunchDialog.spec.ts`. The first rerun refused another checkout's fixture server on port 1422; that server was left alone. The isolated-port rerun was:
+
+```sh
+ORKESTRATOR_E2E_PORT=15427 ORKESTRATOR_PUBLIC_E2E_PORT=15428 mise run test:logged -- --name failed-turn-browser-suite -- mise run test:browser
+```
+
+It finished with 965 passed, 106 skipped and 11 failed (exit 1, 1036.5 s, nine workers). The failures covered both AgentLaunchDialog branch-selection cases, both mobile AgentUsage cases, mobile DesignCanvas, both mobile EnvironmentSettingsDrawer cases, the mobile assigned-composer Meta+I shortcut, a mobile ToolGroupFold reduced-motion released-reader case, desktop TranscriptPaging before prose, and desktop VirtuosoFollow small-wheel release. The public-site portion of the chained command was not reached.
+
+Every failed owner was then run unchanged sequentially with one worker:
+
+```sh
+ORKESTRATOR_E2E_PORT=15427 mise run test:logged -- --name failed-turn-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/AgentUsage.spec.ts e2e/DesignCanvas.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts e2e/KeyboardShortcuts.spec.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7 s). All cases in AgentUsage, DesignCanvas, EnvironmentSettingsDrawer, KeyboardShortcuts, TranscriptPaging and VirtuosoFollow passed, confirming their aggregate failures were intermittent. Both AgentLaunchDialog native selection cases still returned `rel` instead of `release/2.0`; these remain unresolved, not newly classified flakes. The original ToolGroupFold released-reader case passed, but that owner failed its separate mobile waiting-group overflow-follow case (the existing 0747 record); the complete owner was not green.
+
+Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
+
+## Hidden flow graph review — 2026-10-31
+
+The requested hidden-selection centering and scroll-race fixes passed their
+focused unit tests, scoped lint, web/e2e typechecks, repository formatting, and
+the complete MultiReviewFlow/GraphRunFlow browser owners in both Chromium and
+WebKit (two workers). The fixes are in commit `13100a29e`.
+
+The required exact recorded browser rerun was:
+
+```sh
+mise run test:logged -- --name browser -- mise run test:browser
+```
+
+It reported 989 passed, 106 skipped and 11 failed (exit 1, 1166.0 s,
+nine workers). Failures were both native branch-selection cases; mobile
+DataSavingGateway; desktop DesignCanvas, DiffBase reload, GitHubCliSetup,
+GlobalSettings, GlobalStyles message actions, TranscriptPaging reviewer paging
+before prose, and both VirtuosoFollow cases. The MultiReviewFlow and
+GraphRunFlow cases passed.
+The chained public-site suite was not reached.
+
+All nine complete unchanged owning specs were then run sequentially:
+
+```sh
+mise run test:logged -- --name recorded-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/DataSavingGateway.spec.ts e2e/DesignCanvas.spec.ts e2e/DiffBase.spec.ts e2e/GitHubCliSetup.spec.ts e2e/GlobalSettings.spec.ts e2e/GlobalStyles.spec.ts e2e/TranscriptPaging.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+The sequential run reported 57 passed, nine skipped and four failed
+(exit 1, 414.8 s). The complete DataSavingGateway, DesignCanvas, DiffBase,
+GitHubCliSetup, GlobalSettings, GlobalStyles and TranscriptPaging owners were
+green unchanged. Both native branch cases still received `rel` instead of
+`release/2.0`; both desktop VirtuosoFollow cases still received `false`
+instead of `auto`. Those two owners were not green, and these results alone
+do not classify their failures as intermittent.
+
+Owner evidence: `orkestrator-test-run.0Fo1AI/recorded-browser-owners.log.gz`.
+No implementation, assertion, timeout or skip in these owners changed.
+
+Aggregate evidence: `orkestrator-test-run.lvKDJR/browser.log.gz` below the host
+temporary directory. The exact default-suite rerun also retained the existing
+backend timing failures in [0491](../backend-services-and-tooling/0491-standalone-ready-sigkill-escalation-aggregate.md)
+and [1314](../design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md);
+both complete unchanged backend owners passed with one worker.
+
+The complete VirtuosoFollow owner was also run by itself and retained both
+desktop failures (exit 1, two skipped, 32.6 s):
+
+```sh
+mise run test:logged -- --name recorded-virtuoso-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+Evidence: `orkestrator-test-run.oWOYrZ/recorded-virtuoso-owner.log.gz` below
+the host temporary directory. This is a failed owning-file rerun, not a new
+flake confirmation; the prior follow history remains in
+[0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md).
+No cause was established. The broad browser command remains non-green.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=18237 ORKESTRATOR_PUBLIC_E2E_PORT=18238 mise run test:logged -- --name browser -- mise run test:browser`, implementation commit `d639571b2`, nine Playwright workers alongside other validation on the shared host.
+- **Aggregate result:** 982 passed, 108 skipped, 14 failed; exit 1 in 1388.6 seconds logged. The component failure short-circuited the public-site command. All new layout measurement cases passed.
+- **Settings failures:** both mobile drawer-opening cases in `e2e/EnvironmentSettingsDrawer.spec.ts` failed to find `Projects and environments` at the five-second visibility deadline, before opening Settings. `Claude background limit persists across reload and clears when reset to default` in `e2e/GlobalSettings.spec.ts` exceeded the 30-second test deadline during its final `page.reload()`.
+- **Complete owning-file confirmation:** the following one-worker run passed (exit 0, 44.7 seconds logged), including all cases in both affected owners and the two layout specs. The drawer and GlobalSettings spec sources were unchanged by this review; the GlobalSettings fixture gained only the Debug/Platforms responses and section selector needed by the new layout coverage. Passing raw output was removed by the bounded logger.
+
+```sh
+ORKESTRATOR_E2E_PORT=18237 mise run test:logged -- --name settings-review-final-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/EnvironmentSettingsDrawer.spec.ts e2e/GlobalSettings.spec.ts e2e/FullscreenSettingsLayout.spec.ts e2e/SettingsPageLayout.spec.ts --workers=1
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.DCiIXp/browser.log.gz`.
+- **Assessment:** the drawer and settings reload failures are intermittent in this observation. Host contention is a hypothesis, not an established cause; no assertion, timeout or skip was changed. The full browser command remains failed.
+
+Other aggregate failures were the two native branch suggestion cases, mobile DataSavingGateway, both DesignCanvas cases, two mobile KeyboardShortcuts composer-focus cases, mobile SetupRecovery, mobile ToolGroupFold threshold folding, desktop GlobalStyles message actions and desktop VirtuosoFollow. Those complete owners were not rerun in this review; this observation does not classify them as new flakes or claim they are green. Their original failures remain in the aggregate artifact.
+
+## Claude sign-in replay review — 2026-10-31
+
+The eight-worker rerun of `mise run test:logged -- --name browser -- mise run test:browser`
+failed the mobile `e2e/NativeAttachments.spec.ts:6` case, `attachments retain names
+until decoded, wrap, and survive remount and reload`. After reload the loading
+image still showed `loading.png`; the case exceeded its 30 s deadline at line 75.
+The complete unchanged owner passed both viewport cases with one worker (82.0 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=14492 mise run test:logged -- --name recovery-attachments-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/playwright/recovery-attachments
+```
+
+The broad component run completed with 809 passed, 106 skipped and 177 failed
+(25.8 minutes, exit 1); the chained public-site suite was not reached. Its evidence
+is `/tmp/orkestrator-test-run.utMrMj/browser.log.gz`. This confirms an intermittent
+attachment-owner failure; it does not classify the broad run's other failures as
+flakes. A separate
+one-worker `NativeHeldSend.spec.ts` rerun failed before fixture controls appeared,
+including a Vite dynamic-import fetch failure; that owner remains non-green
+(`/tmp/orkestrator-test-run.i7n9E6/recovery-held-send-browser.log.gz`). No assertion,
+timeout, or implementation in either browser owner changed.
+
+The final stable-source rerun of `mise run test:logged -- --name recovery-default -- mise run test`
+passed all four default-tier groups (681.2 s including an approximately 414 s
+admission wait). The complete controller owner, the eight-file focused renderer
+and store check, web typechecking, affected-file lint, and repository formatting
+also passed. No source, assertion, timeout, or skip changed after those focused
+checks; the subsequent changes only recorded this evidence.

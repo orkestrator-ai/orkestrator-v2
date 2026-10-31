@@ -16,6 +16,14 @@ import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import { readCheckoutBranch, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
+import {
+  parsePrViewerPermission,
+  PR_VIEWER_PERMISSION_TIMEOUT_MS,
+  prViewerPermissionArgs,
+  prViewerPermissionScope,
+  prViewerRepository,
+  type PrViewerPermissionCache,
+} from "./pr-viewer-permission.js";
 
 export type StoredKanbanTask = Awaited<ReturnType<KanbanStorage["getKanbanTasks"]>>[number];
 
@@ -121,7 +129,7 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--json",
     target.projectHome
       ? "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
   ];
   return {
     args,
@@ -162,12 +170,26 @@ export function parsePrMonitorDetectionResponse(
   request: PrMonitorDetectionRequest,
   stdout: string,
 ): PrDetectionResult | null {
-  if (request.homeBase) {
-    const parsed = JSON.parse(stdout);
-    const matches = (entry: Record<string, unknown>) =>
-      entry.headRefName === request.branch &&
-      entry.baseRefName === request.homeBase &&
-      entry.isCrossRepository === false;
+  if (request.homeBase || !request.knownPrUrl) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error(
+        request.knownPrUrl
+          ? "Failed to parse gh pr view output"
+          : "Failed to parse gh pr list output",
+      );
+    }
+    if (!request.knownPrUrl && !Array.isArray(parsed))
+      throw new Error("Failed to parse gh pr list output");
+    const matches = (entry: unknown) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      (entry as Record<string, unknown>).isCrossRepository === false &&
+      (!request.homeBase ||
+        ((entry as Record<string, unknown>).headRefName === request.branch &&
+          (entry as Record<string, unknown>).baseRefName === request.homeBase));
     if (request.knownPrUrl) {
       if (!matches(parsed)) return null;
     } else {
@@ -238,6 +260,27 @@ export function prMonitorCooldownScope(target: PrMonitorTarget): string | null {
   }
 }
 
+/**
+ * Adds the cached merge permission to an open PR's detection, asking GitHub
+ * through the same runner only when the cache has no current answer. Never
+ * fails the detection: a lookup error leaves the permission unknown.
+ */
+async function withViewerPermission<T extends PrDetectionResult>(
+  detection: T,
+  target: PrMonitorTarget,
+  cache: PrViewerPermissionCache | undefined,
+  runGh: (args: string[]) => Promise<string>,
+): Promise<T & Pick<PrDetection, "viewerCanMerge">> {
+  if (!cache || detection.state !== "open") return detection;
+  const repository = prViewerRepository(detection.url);
+  const scope = prViewerPermissionScope(target);
+  if (!repository || !scope) return { ...detection, viewerCanMerge: null };
+  const viewerCanMerge = await cache.resolve(scope, repository, async () =>
+    parsePrViewerPermission(await runGh(prViewerPermissionArgs(repository))),
+  );
+  return { ...detection, viewerCanMerge };
+}
+
 /** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
@@ -246,8 +289,12 @@ export async function detectEnvironmentPullRequest(
     /**
      * Rereads a project home's durable record first, so a lookup follows the
      * home's current checkout rather than the target captured when it was queued.
+     * Also supplies the selected GitHub credential for local `gh` runs;
+     * omitting storage uses the host login.
      */
     storage?: StorageService;
+    /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */
+    viewerPermissions?: PrViewerPermissionCache;
   } = {},
 ): Promise<PrDetection | null> {
   if (target.projectHome) {
@@ -275,15 +322,28 @@ export async function detectEnvironmentPullRequest(
     const { stdout } = await runCommand(gitHubCli(), request.args, {
       cwd: target.worktreePath,
       timeoutMs: PR_DETECTION_TIMEOUT_MS,
-      env: await gitHubCliEnv(),
+      env: await gitHubCliEnv(options.storage),
     });
-    const detection = parsePrMonitorDetectionResponse(request, stdout);
-    if (!detection) return null;
+    const worktreePath = target.worktreePath;
+    const parsed = parsePrMonitorDetectionResponse(request, stdout);
+    if (!parsed) return null;
+    const detection = await withViewerPermission(
+      parsed,
+      target,
+      options.viewerPermissions,
+      async (args) =>
+        (
+          await runCommand(gitHubCli(), args, {
+            cwd: worktreePath,
+            timeoutMs: PR_VIEWER_PERMISSION_TIMEOUT_MS,
+            env: await gitHubCliEnv(options.storage),
+          })
+        ).stdout,
+    );
     if (detection.state !== "open" || options.includeCheckSummary !== true) {
       return { ...detection, checkSummaryStatus: "skipped" };
     }
     const checkRequest = getPrMonitorCheckRequest(detection.url);
-    const worktreePath = target.worktreePath;
     try {
       recurringWorkMetrics.requested("pr-check-rollup");
       const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
@@ -292,7 +352,7 @@ export async function detectEnvironmentPullRequest(
             await runCommand(gitHubCli(), checkRequest.args, {
               cwd: worktreePath,
               timeoutMs: 10_000,
-              env: await gitHubCliEnv(),
+              env: await gitHubCliEnv(options.storage),
             })
           ).stdout,
         ),
@@ -314,13 +374,20 @@ export async function detectEnvironmentPullRequest(
     withContainerRuntimeCredential(request.shellCommand),
     PR_DETECTION_TIMEOUT_MS,
   );
-  const detection = parsePrMonitorDetectionResponse(request, output);
-  if (!detection) return null;
+  const containerId = target.containerId;
+  const parsed = parsePrMonitorDetectionResponse(request, output);
+  if (!parsed) return null;
+  const detection = await withViewerPermission(parsed, target, options.viewerPermissions, (args) =>
+    dockerExec(
+      containerId,
+      withContainerRuntimeCredential(["gh", ...args].map(quoteShell).join(" ")),
+      PR_VIEWER_PERMISSION_TIMEOUT_MS,
+    ),
+  );
   if (detection.state !== "open" || options.includeCheckSummary !== true) {
     return { ...detection, checkSummaryStatus: "skipped" };
   }
   const checkRequest = getPrMonitorCheckRequest(detection.url);
-  const containerId = target.containerId;
   try {
     recurringWorkMetrics.requested("pr-check-rollup");
     const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>

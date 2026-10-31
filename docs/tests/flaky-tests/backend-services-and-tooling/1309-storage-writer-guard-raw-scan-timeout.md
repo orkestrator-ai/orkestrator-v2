@@ -1,14 +1,17 @@
 # Storage writer guard's backend-wide raw-writer scan times out under host load
 
 - **ID:** 1309
-- **Status:** open
+- **Status:** resolved
+- **Resolved:** 2026-10-30, by todo 0930 task 4 (`b64a2b224`)
 - **Observed:** 2026-10-26 to 2026-10-28 in aggregate runs on the shared Linux host;
   diagnosed 2026-10-29 on the todo 0214 follow-up branch
   (`todo-0214-storage-file-split-2054bfb3bc39`, docs only, on `main` at
   `79f3bc97e`).
 - **Test:** `raw StorageDatabase writers outside StorageService > name the store they write`
-  (`apps/backend/src/core/storage-writer-guards.test.ts:1904`)
-- **File:** `apps/backend/src/core/storage-writer-guards.test.ts`
+  (`apps/backend/src/core/storage-writer-guards.test.ts:1904` until todo 0930;
+  now `apps/backend/src/core/storage-writer-guards-raw.test.ts:15`)
+- **File:** `apps/backend/src/core/storage-writer-guards-raw.test.ts` (the scan
+  itself is `rawDatabaseWrites` in `storage-writer-guards-test-support.ts`)
 
 ## Symptom
 
@@ -77,10 +80,52 @@ only shows up here because this host is shared and oversubscribed.
 At load average about 3.5–7 on the same host, a full `mise run test` passed on
 2026-10-29 with this test green (4 min 26 s, `orkestrator-test-run.dY5sW1`).
 
+On 2026-10-30, validating todo 0830 (branch
+`todo-0830-playwright-temp-leaks-3cee21cf7a2e`, no storage changes), the
+backend workspace group of a full `mise run test` failed on this test alone:
+`timed out after 5000ms` at 6174.56 ms, with every other workspace package at
+0 failures and the root and bridge groups passing. The load average was about
+19 just after the run. Rerun alone with
+`bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts
+--parallel=1`, the file passed in 6.3 s.
+
 ## Status
 
-The test is unchanged: no assertion, timeout or skip was changed. Raising the
-budget would only loosen the test without making it any cheaper. The fix belongs
-in the test design: parse the backend once per file, share the trees, and parse
-files lazily when an import needs them. It is tracked as task 4 of
-[0930](../../../todo/backend-structure/0930-storage-test-files-over-size-limit.md).
+Resolved by todo
+[0930](../../../todo/backend-structure/0930-storage-test-files-over-size-limit.md)
+task 4. No assertion, timeout or skip was changed: raising the budget would
+only have loosened the test without making it any cheaper.
+
+## Fix
+
+The cause above is the fix's target: the scan parsed every backend file and
+kept every tree. Two commits on the todo 0930 branch address it:
+
+- `eec7a3358` moves the guard's analysis into
+  `storage-writer-guards-test-support.ts` and this block into
+  `storage-writer-guards-raw.test.ts`, unchanged.
+- `b64a2b224` makes `rawDatabaseWrites` parse a file only when its text can
+  name a raw writer method, when a store name being resolved imports from it,
+  or when it can call a row helper whose store parameter is being followed. The
+  text check matches whole identifiers and decodes `\u` escapes first, so it
+  can only keep extra files, never drop one the old scan would have found a
+  write in. A fixture test pins the escaped cases. `parse()` also keeps each
+  tree, so the scans in one test file share them.
+
+A dump of the guard's whole analysis and of every raw write it reports is
+byte-identical before and after `b64a2b224`.
+
+Verification on the shared Linux host (12 cores), 2026-10-30, Bun 1.4.4:
+
+| Run | Old scan | New scan |
+| --- | --- | --- |
+| `rawDatabaseWrites` alone, back to back, load about 10 | 1,814, 1,543, 1,521 ms | 549, 530, 520 ms |
+| `bun --cwd=apps/backend test storage --parallel=6` (65 files, 986 tests), alternating old and new, load 10–20 | 7,164 ms and 5,722 ms: the test timed out and both runs failed | 3,332 ms and 2,661 ms: both runs passed |
+| Focused `src/core/storage tests/storage` run, `--parallel=6` (60 files, 915 tests), load about 6.5 | not run | 1,264 ms |
+
+So under the same load the old scan reproduced this flake and the new one
+passed with about a third of its budget left. The test still does
+CPU-bound work, about 0.8 s on a quiet host, most of it the StorageService
+analysis and the roughly 126 files the scan needs. A run at the loads of
+cases 1010 or 1200 (40 to 190) could still push it past 5 s. A recurrence
+there reopens this case.

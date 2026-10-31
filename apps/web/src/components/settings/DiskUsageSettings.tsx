@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Container,
   FolderOpen,
-  HardDrive,
   Laptop,
   Loader2,
   RefreshCw,
@@ -27,6 +26,11 @@ import type {
 import { pickHostPath } from "@/lib/host-path-picker";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { cn } from "@/lib/utils";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
 
 /** Environments measured at once; the backend also bounds its `du` walks. */
 const MEASURE_CONCURRENCY = 3;
@@ -160,7 +164,7 @@ function WorktreeLocations() {
   const override = locations.environments.startupOverride;
 
   return (
-    <div className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">
+    <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
       <LocationRow
         label="New environment worktrees"
         description={
@@ -405,16 +409,13 @@ function EnvironmentUsage() {
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-medium">Environments</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {environments === null
-              ? "Loading environments…"
-              : measuring
-                ? `Measured ${measured} of ${environments.length} · ${formatDiskBytes(total)} so far`
-                : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${environments.length} environment${environments.length === 1 ? "" : "s"}, including dev worktrees`}
-          </p>
-        </div>
+        <SettingsSectionHeader title="Environments">
+          {environments === null
+            ? "Loading environments…"
+            : measuring
+              ? `Measured ${measured} of ${environments.length} · ${formatDiskBytes(total)} so far`
+              : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${environments.length} environment${environments.length === 1 ? "" : "s"}, including dev worktrees`}
+        </SettingsSectionHeader>
         <Button
           variant="outline"
           size="sm"
@@ -444,7 +445,7 @@ function EnvironmentUsage() {
             <span className="truncate">{project.name}</span>
             <span className="tabular-nums">{formatDiskBytes(project.bytes)}</span>
           </div>
-          <ul className="divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/40">
+          <ul className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800 overflow-hidden")}>
             {project.items.map((environment) => (
               <EnvironmentUsageRow
                 key={environment.environmentId}
@@ -472,26 +473,16 @@ function EnvironmentUsage() {
 
 export function DiskUsageSettings() {
   return (
-    <div className="mx-auto max-w-3xl space-y-8 pb-8">
-      <div>
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-400/10 text-sky-400">
-            <HardDrive className="h-4 w-4" aria-hidden="true" />
-          </div>
-          <h2 className="text-xl font-semibold">Disk usage</h2>
-        </div>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Space used by each environment&apos;s worktree or container, and by the dev worktrees of
-          development profiles started from it.
-        </p>
-      </div>
-
+    <SettingsPageLayout
+      title="Disk usage"
+      description="Space used by each environment's worktree or container, and by the dev worktrees of development profiles started from it."
+    >
       <div className="space-y-3">
-        <h3 className="text-sm font-medium">Default locations</h3>
+        <SettingsSectionHeader title="Default locations" />
         <WorktreeLocations />
       </div>
 
       <EnvironmentUsage />
-    </div>
+    </SettingsPageLayout>
   );
 }

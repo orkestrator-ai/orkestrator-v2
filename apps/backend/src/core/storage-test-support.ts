@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
 import { databaseStoreForPath, openBackendDatabase } from "./storage-stores.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
-import type { StorageService } from "./storage.js";
+import { StorageService } from "./storage.js";
 
 /**
  * Test helpers for the backend database. Stores are named by the data-dir
@@ -185,4 +186,18 @@ export function storageInternals(storage: StorageService): {
 /** The open database of a running `StorageService`. */
 export function storageDatabase(storage: StorageService): StorageDatabase {
   return storageInternals(storage).context.database;
+}
+
+/** Runs `run` against an initialised `StorageService` in a fresh data dir, then removes it. */
+export async function withTemporaryStorage<T>(
+  run: (storage: StorageService, dataDir: string) => Promise<T>,
+): Promise<T> {
+  const dataDir = await fs.promises.mkdtemp(path.join(tmpdir(), "orkestrator-backend-storage-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  try {
+    return await run(storage, dataDir);
+  } finally {
+    await fs.promises.rm(dataDir, { recursive: true, force: true });
+  }
 }

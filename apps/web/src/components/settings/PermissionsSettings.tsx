@@ -30,6 +30,12 @@ import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /**
  * Settings → Permissions: the "always allow" rules Orkestrator keeps and
@@ -162,20 +168,10 @@ export function PermissionsSettings() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 pb-8">
-      <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-400">
-          Agent approvals
-        </p>
-        <h2 className="mt-2 text-xl font-semibold">Permissions</h2>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Rules saved with “Approve and remember” on an approval card. Orkestrator answers a
-          matching request with a one-time approval, so a rule you remove stops applying at the very
-          next request. Rules never apply to coordinators, pipelines, reviews, plan mode or anything
-          an agent's policy denies, and they are kept on this machine only.
-        </p>
-      </div>
-
+    <SettingsPageLayout
+      title="Permissions"
+      description="Rules saved with “Approve and remember” on an approval card. Orkestrator answers a matching request with a one-time approval, so a rule you remove stops applying at the very next request. Rules never apply to coordinators, pipelines, reviews, plan mode or anything an agent's policy denies, and they are kept on this machine only."
+    >
       <div className="flex flex-wrap gap-2">
         <Select value={provider} onValueChange={setProvider}>
           <SelectTrigger className="h-8 w-40" aria-label="Filter by agent">
@@ -239,7 +235,7 @@ export function PermissionsSettings() {
               Remove all
             </Button>
           </div>
-          <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">
+          <ul className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
             {projectRules.map((rule) => {
               const expired = rule.expiresAt !== undefined && rule.expiresAt <= readAt;
               return (
@@ -248,7 +244,7 @@ export function PermissionsSettings() {
                   className="flex flex-wrap items-center gap-3 p-3"
                   data-testid="permission-rule-row"
                 >
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-[1_1_16rem]">
                     <code className="break-all font-mono text-xs">{rule.pattern}</code>
                     <p className="text-xs text-muted-foreground">
                       {describePermissionRule(rule)} · {providerLabel(rule.provider)} ·{" "}
@@ -284,15 +280,12 @@ export function PermissionsSettings() {
         </section>
       ))}
 
-      <section aria-label="Rules outside Orkestrator" className="space-y-3 pt-4">
-        <div>
-          <h3 className="text-sm font-medium">Rules outside Orkestrator</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Rules the agents keep in their own files: Codex <code>rules/*.rules</code> (including
-            any saved by older Orkestrator versions) and Claude <code>permissions.allow</code>.
-            Orkestrator does not change these; edit them in the agent.
-          </p>
-        </div>
+      <section aria-label="Rules outside Orkestrator" className="space-y-3">
+        <SettingsSectionHeader title="Rules outside Orkestrator">
+          Rules the agents keep in their own files: Codex <code>rules/*.rules</code> (including any
+          saved by older Orkestrator versions) and Claude <code>permissions.allow</code>.
+          Orkestrator does not change these; edit them in the agent.
+        </SettingsSectionHeader>
         {external === null ? (
           <div className="flex justify-center py-4" role="status" aria-label="Loading rule files">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -304,7 +297,7 @@ export function PermissionsSettings() {
             {external.map((file) => (
               <li
                 key={`${file.provider}:${file.environmentId ?? ""}:${file.path}`}
-                className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3"
+                className={cn(SETTINGS_CARD_CLASS, "p-3")}
                 data-testid="external-rule-file"
               >
                 <div className="flex items-center gap-2 text-xs">
@@ -366,6 +359,6 @@ export function PermissionsSettings() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </SettingsPageLayout>
   );
 }

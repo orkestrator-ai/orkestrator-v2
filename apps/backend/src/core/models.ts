@@ -239,6 +239,8 @@ export interface StartupAgentSessionSnapshot {
  * Content-free cause of an environment's unread badge.
  *
  * - `agent_finished`: an agent turn ended.
+ * - `agent_failed`: an agent turn ended with the provider's terminal error
+ *   (a refused login, a provider error, a restart mid-turn), not an answer.
  * - `agent_ready`: no longer recorded; rows written before the readiness bell
  *   was retired may still carry it (the composer was free while background
  *   work continued).
@@ -249,6 +251,7 @@ export interface StartupAgentSessionSnapshot {
  */
 export type EnvironmentUnreadReason =
   | "agent_finished"
+  | "agent_failed"
   | "agent_ready"
   | "agent_waiting"
   | "agent_question"
@@ -718,6 +721,12 @@ export interface PersistedNativeAgentSession {
    * makes. Lets observers settle a turn as failed without reading transcripts.
    */
   turnOutcomes?: PersistedNativeAgentTurnOutcome[];
+  /** Last applied activity for a request; settled roots may still own background work. */
+  activityTurn?: {
+    providerSessionId: string;
+    requestId?: string;
+    state: "active" | "settled";
+  };
   /**
    * Bounded request ids whose turn was still active when a stop was requested.
    * A provider reports a stopped turn as idle, so this is the only durable

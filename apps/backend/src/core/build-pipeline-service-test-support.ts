@@ -210,6 +210,7 @@ export async function withService(
     toolMode?: boolean;
     workflowResultsWithoutTools?: boolean;
     completeEmptyValidation?: boolean;
+    cancelValidationResult?: (run: NonNullable<BuildPipeline["validationRun"]>) => unknown;
     /** Defaults to a local worktree environment. */
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
@@ -303,7 +304,11 @@ export async function withService(
     if (command === "verify_review_package") return { valid: true } as T;
     if (command === "cancel_review_validation") {
       const run = args.run as NonNullable<BuildPipeline["validationRun"]>;
-      return { ...run, status: "cancelled" } as T;
+      return (
+        options.cancelValidationResult
+          ? options.cancelValidationResult(run)
+          : { ...run, status: "cancelled" }
+      ) as T;
     }
     if (command === "start_review_validation" || command === "status_review_validation") {
       const run = args.run as NonNullable<BuildPipeline["validationRun"]>;

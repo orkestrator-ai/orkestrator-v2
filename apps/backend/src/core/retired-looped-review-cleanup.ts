@@ -1,10 +1,12 @@
 import { createBuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { PlanUsageState } from "./plan-usage-cache.js";
 import type { StorageService } from "./storage.js";
 
 /** Reconnect to the surviving runtime, without creating or dispatching a turn. */
 export async function cleanupRetiredLoopedReviews(
   storage: Pick<StorageService, "getEnvironment" | "reconcileRetiredLoopedReviews">,
   invoke: <T>(command: string, args: Record<string, unknown>) => Promise<T>,
+  planUsage?: PlanUsageState,
 ): Promise<void> {
   await storage.reconcileRetiredLoopedReviews(async (target) => {
     const environment = await storage.getEnvironment(target.environmentId);
@@ -19,11 +21,14 @@ export async function cleanupRetiredLoopedReviews(
     );
     const port = local ? connection.port : connection.hostPort;
     if (!connection.authToken || !port) throw new Error("Review bridge is unavailable");
-    return createBuildPipelineProvider({
-      agent: target.agent,
-      baseUrl: `http://127.0.0.1:${port}`,
-      authToken: connection.authToken,
-      ...(local ? { directory: environment.worktreePath } : {}),
-    });
+    return createBuildPipelineProvider(
+      {
+        agent: target.agent,
+        baseUrl: `http://127.0.0.1:${port}`,
+        authToken: connection.authToken,
+        ...(local ? { directory: environment.worktreePath } : {}),
+      },
+      { planUsage },
+    );
   });
 }

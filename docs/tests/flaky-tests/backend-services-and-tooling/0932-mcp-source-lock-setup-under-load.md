@@ -63,3 +63,29 @@ The exact failed aggregate command was rerun after the media fixes and passed
 ```sh
 mise run test:logged -- --name review-repair-tests -- mise run test
 ```
+
+
+## Failed-turn attention review repair — 2026-10-30
+
+At implementation `90fc74138`, `mise run test:logged -- --name failed-turn-default-suite -- mise run test` finished with exit 1 in 1564.1 s, including approximately 1138 s queued for host capacity. Root, bridges and protocol passed; the workspace's only reported failures were the same two unchanged source-store cases: undefined `lockFile` at line 191 (55.19 ms), followed by `ENOENT` at line 231 (292.48 ms).
+
+The complete unchanged owner passed alone (exit 0, 0.9 s):
+
+```sh
+mise run test:logged -- --name failed-turn-mcp-store-owner -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.oROs6h/failed-turn-default-suite.log.gz` and the inner `orkestrator-test-run.O6Rkzg/` directory beneath the host temporary directory. The full aggregate remains failed; an isolated owner pass is not a repair. No source-store implementation, assertion, timeout or skip changed.
+
+## Machine-load review recurrence — 2026-10-31
+
+`mise run test` on the coordinator machine-load branch, on a host at about 99%
+CPU with a `dev:test` profile running, repeated both cases: the missing
+`lockFile` at 23.92 ms and the next case's `ENOENT` at 348.59 ms. The complete
+unchanged owner passed alone (15 pass, 0.97 s):
+
+```sh
+bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+No source-store code, assertion, timeout or skip changed.

@@ -363,6 +363,7 @@ export function PipelineFlowView({
       });
     } else if (
       canRetryStage &&
+      !node.validationRun &&
       node.state === "failed" &&
       !node.reviewer &&
       (!node.session || node.session === currentSession || node.kind === "consolidation")

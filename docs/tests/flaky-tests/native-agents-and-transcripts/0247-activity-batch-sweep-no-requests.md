@@ -230,3 +230,44 @@ Evidence is `orkestrator-test-run.dVAVdc/default-tests-rerun.log.gz` and the
 workspace group in `orkestrator-test-run.9oowaB/` below the host temporary
 directory. No activity-sweep implementation, test, deadline or skip changed.
 This confirms aggregate-only intermittence; its cause remains unproven.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated
+this unchanged owner failure. The 100-session sweep recorded no requests instead of batches of 64 and 36 (205.03 ms); backend totals were 11,271 passed, 87 skipped and two failed.
+The complete unchanged owner then passed alone with exit 0 in 1.0 s:
+
+```sh
+mise run test:logged -- --name recorded-activity-batch -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Passing output was removed by the runner.
+No owner implementation, assertion, timeout or skip changed; the cause remains
+unconfirmed.
+
+## Recurrence during the provider upgrade — 2026-10-30
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  on `upgrade-agent-providers-638712a01b8e` (agent SDK and CLI pin bumps; no
+  activity-sweep code changed).
+- **Failure:** `activity sweep over the batch route > 10 sessions cost 1 request(s) and touch nothing`
+  (17.81 ms), with the usual `ProviderUnavailableError` and
+  `ProviderUnreachableError` reconciliation logs for `env-1`.
+- **Suite counts:** backend 11,277 passed and 2 failed; the other failure was
+  `session-title-runners.test.ts`, which needs the pinned Codex binary in the
+  managed toolchain and passed with `CODEX_PROTOCOL_BINARY` set. Web 10,842
+  passed; root, bridges and the Codex protocol lockfile passed.
+- **Isolated rerun:** `mise run test:logged -- --name activity-batch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/native-agent-service-activity-batch.test.ts --parallel`
+  passed the unchanged owning file (0.4 s).
+- **Disposition:** recorded evidence only; no test changed.
+
+## Provider parity main merge recurrence — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests -- mise run test` on `agent-provider-parity-b3e549e90812-r1`, merging main at `751b971623` (2026-10-31).
+- **Worker configuration:** workspace/root/bridges/protocol reservations 6/1/2/1; backend 4x parallel, root 1x parallel; Bun 1.4.4. The run waited about 182 seconds for the host scheduler.
+- **Aggregate result:** exit 1; backend 11,883 passed, 103 skipped and four failed across 11,990 tests in 812 files (266.84 s); root/support 3,320 passed, one failed and one error across 3,321 tests in 162 files (350.27 s). Web, desktop, public web, CLI, protocol, toolchain, bridges and protocol-lockfile checks passed. The aggregate took 710.6 s including the queue.
+- **Failure:** `activity sweep over the batch route > 1 sessions cost 1 request(s) and touch nothing` expected `[1]` and received `[]` (241.39 ms), alongside reconciliation errors.
+- **Unchanged owner rerun:** `mise run test:logged -- --name merge-activity-batch-owner -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0 (1.2 s).
+- **Evidence:** `orkestrator-test-run.LzSOdM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz` under the host temporary directory.
+- **Assessment:** unchanged owner passed in isolation; no implementation, assertion, deadline or skip changed. Timing or host contention remains a hypothesis. The aggregate remains non-green.

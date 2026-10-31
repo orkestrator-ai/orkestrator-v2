@@ -19,7 +19,6 @@ import {
   readAgentAccountUsage,
   removeAgentAccount,
   renameAgentAccount,
-  resetAgentAccountLoginForTests,
   setActiveAgentAccount,
   startAgentAccountLogin,
 } from "./agent-accounts.js";
@@ -28,7 +27,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { SpawnLike } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
-import { contextUsageWithPlanUsage, sharedPlanUsageCache } from "./plan-usage-cache.js";
+import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { StorageService } from "./storage.js";
 
 let root: string;
@@ -121,7 +120,7 @@ function fakeClaudeLogin(identity?: string): SpawnLike {
 
 async function settledLogin() {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const progress = agentAccountLoginProgress();
+    const progress = agentAccountLoginProgress(context);
     if (progress.state !== "pending") return progress;
     await Bun.sleep(5);
   }
@@ -175,7 +174,6 @@ beforeEach(async () => {
     runtime: new BackendRuntime({ emit: () => undefined }),
     emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
   } as unknown as CommandContext;
-  resetAgentAccountLoginForTests();
 });
 
 /** A restarted backend: a fresh runtime, so the last-usage store reads the file again. */
@@ -185,9 +183,7 @@ function reloadBackend(): void {
 }
 
 afterEach(async () => {
-  sharedPlanUsageCache.clear();
-  cancelAgentAccountLogin();
-  resetAgentAccountLoginForTests();
+  cancelAgentAccountLogin(context);
   context.runtime.shutdown();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
@@ -296,7 +292,7 @@ describe("agent accounts", () => {
     const starting = startAgentAccountLogin(context, "claude", { spawnImpl, executable: "claude" });
     for (let n = 0; n < 100 && !child; n += 1) await Bun.sleep(1);
     expect(child).toBeDefined();
-    cancelAgentAccountLogin();
+    cancelAgentAccountLogin(context);
     child!.stdout!.emit(
       "data",
       Buffer.from("visit: https://claude.com/cai/oauth/authorize?state=test\n"),
@@ -385,7 +381,7 @@ describe("agent accounts", () => {
       const progress = await settledLogin();
       expect(progress.state).toBe("succeeded");
       await setActiveAgentAccount(context, "claude", progress.accountId!);
-      cancelAgentAccountLogin();
+      cancelAgentAccountLogin(context);
       return progress.accountId!;
     }
 
@@ -403,7 +399,7 @@ describe("agent accounts", () => {
           return fakeClaudeLogin("claude-one")(cmd, args, options);
         },
       });
-      expect(agentAccountLoginProgress().mode).toBe("reauthenticate");
+      expect(agentAccountLoginProgress(context).mode).toBe("reauthenticate");
       const progress = await settledLogin();
 
       expect(command).toEqual(["claude", "auth", "login"]);
@@ -433,7 +429,6 @@ describe("agent accounts", () => {
           spawnImpl: fakeClaudeLogin(identity),
         });
         expect((await settledLogin()).state).toBe("succeeded");
-        resetAgentAccountLoginForTests();
         reloadBackend();
         const failure: PlanUsageSnapshot = {
           platform: "claude",
@@ -723,8 +718,8 @@ describe("agent accounts", () => {
         path.join(temporary, ".claude.json"),
         '{"oauthAccount":{"accountUuid":"cancelled"}}',
       );
-      const operationId = agentAccountLoginProgress().operationId;
-      expect(cancelAgentAccountLogin(operationId).state).toBe("idle");
+      const operationId = agentAccountLoginProgress(context).operationId;
+      expect(cancelAgentAccountLogin(context, operationId).state).toBe("idle");
       Object.assign(child, { exitCode: 0 });
       child.emit("exit", 0, null);
       for (
@@ -755,8 +750,8 @@ describe("agent accounts", () => {
         executable: "claude",
         spawnImpl: fakeClaudeLogin("original"),
       });
-      const pending = agentAccountLoginProgress();
-      expect(cancelAgentAccountLogin(old.operationId)).toEqual(pending);
+      const pending = agentAccountLoginProgress(context);
+      expect(cancelAgentAccountLogin(context, old.operationId)).toEqual(pending);
       expect((await settledLogin()).state).toBe("succeeded");
     });
 
@@ -900,9 +895,9 @@ describe("agent accounts", () => {
             child.emit("exit", 1, null);
           }
           const home = await cleanupStarted.promise;
-          expect(agentAccountLoginProgress()).toMatchObject({ state: "pending" });
-          expect(agentAccountLoginProgress().completedAt).toBeUndefined();
-          expect(agentAccountLoginProgress().error).toBeUndefined();
+          expect(agentAccountLoginProgress(context)).toMatchObject({ state: "pending" });
+          expect(agentAccountLoginProgress(context).completedAt).toBeUndefined();
+          expect(agentAccountLoginProgress(context).error).toBeUndefined();
           expect((await fs.stat(home)).isDirectory()).toBe(true);
 
           releaseCleanup.resolve();
@@ -931,7 +926,7 @@ describe("agent accounts", () => {
             expect(startupError).toBeInstanceOf(Error);
             expect((startupError as Error).message).toBe(failed.error!);
           }
-          expect(agentAccountLoginProgress()).toEqual(failed);
+          expect(agentAccountLoginProgress(context)).toEqual(failed);
         } finally {
           releaseCleanup.resolve();
           await started;
@@ -1058,13 +1053,13 @@ describe("agent accounts", () => {
       throw new Error("the active account is not read here");
     }) as unknown as PlanUsageReader;
 
-    sharedPlanUsageCache.store("codex", reading(12), 60_000);
+    context.runtime.accounts.planUsage.cache.store("codex", reading(12), 60_000);
     await setActiveAgentAccount(context, "codex", accountId!);
     const host = await readAgentAccountUsage(context, "codex", "default", { reader });
     expect(host).toMatchObject({ status: "ok", stale: true, windows: [{ usedPercent: 12 }] });
     expect(host.message).toContain("Sign in to Codex");
 
-    sharedPlanUsageCache.store("codex", reading(34), 60_000);
+    context.runtime.accounts.planUsage.cache.store("codex", reading(34), 60_000);
     await setActiveAgentAccount(context, "codex", "default");
     const added = await readAgentAccountUsage(context, "codex", accountId!, { reader });
     expect(added).toMatchObject({ stale: true, windows: [{ usedPercent: 34 }] });
@@ -1078,7 +1073,7 @@ describe("agent accounts", () => {
   test("switches stay serialized while the outgoing usage write is paused", async () => {
     const b = (await addCodexAccount("b@example.com", "b")).accountId!;
     const c = (await addCodexAccount("c@example.com", "c")).accountId!;
-    sharedPlanUsageCache.store("codex", usageReading("codex", 91), 60_000);
+    context.runtime.accounts.planUsage.cache.store("codex", usageReading("codex", 91), 60_000);
     const writing = deferred<void>();
     const release = deferred<void>();
     const original = fs.writeFile.bind(fs);
@@ -1090,7 +1085,7 @@ describe("agent accounts", () => {
       return original(file, data, options);
     });
     const reader = (async () =>
-      sharedPlanUsageCache.peek("codex") ?? {
+      context.runtime.accounts.planUsage.cache.peek("codex") ?? {
         platform: "codex",
         status: "unavailable",
         windows: [],
@@ -1099,13 +1094,14 @@ describe("agent accounts", () => {
     try {
       const first = setActiveAgentAccount(context, "codex", b);
       await writing.promise;
-      expect(sharedPlanUsageCache.lastOk("codex")).toBeUndefined();
+      expect(context.runtime.accounts.planUsage.cache.lastOk("codex")).toBeUndefined();
       contextUsageWithPlanUsage(
+        context.runtime.accounts.planUsage,
         "codex",
         { usedTokens: 1, account: [{ window: "primary", usedPercent: 92 }] },
         "default",
       );
-      expect(sharedPlanUsageCache.peek("codex")).toBeUndefined();
+      expect(context.runtime.accounts.planUsage.cache.peek("codex")).toBeUndefined();
       const read = readAgentAccountUsage(context, "codex", b, { reader }).catch(
         (error: unknown) => {
           expect(error).toMatchObject({ message: expect.stringContaining("account changed") });
@@ -1119,17 +1115,21 @@ describe("agent accounts", () => {
       expect((await context.storage.agentAccounts.loadAgentAccounts()).active.codex).toBe(c);
       expect((await readAgentAccountUsage(context, "codex", c, { reader })).windows).toEqual([]);
       contextUsageWithPlanUsage(
+        context.runtime.accounts.planUsage,
         "codex",
         { usedTokens: 1, account: [{ window: "primary", usedPercent: 93 }] },
         b,
       );
-      expect(sharedPlanUsageCache.peek("codex")).toBeUndefined();
+      expect(context.runtime.accounts.planUsage.cache.peek("codex")).toBeUndefined();
       contextUsageWithPlanUsage(
+        context.runtime.accounts.planUsage,
         "codex",
         { usedTokens: 1, account: [{ window: "primary", usedPercent: 3 }] },
         c,
       );
-      expect(sharedPlanUsageCache.peek("codex")?.windows[0]?.usedPercent).toBe(3);
+      expect(context.runtime.accounts.planUsage.cache.peek("codex")?.windows[0]?.usedPercent).toBe(
+        3,
+      );
       const saved = JSON.parse(
         await fs.readFile(
           path.join(context.storage.agentAccounts.agentAccountsDirectory(), "last-usage.json"),

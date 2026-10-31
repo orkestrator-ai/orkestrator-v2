@@ -92,6 +92,12 @@ ${args}
   }
   const name = `orkestrator-backend${tag}.service`;
   const configHome = options.env.XDG_CONFIG_HOME ?? path.join(home, ".config");
+  // systemd does not inherit the installing shell's environment. Keep the
+  // backend's default-directory classification consistent with the installer.
+  const xdgEnvironment =
+    options.env.XDG_CONFIG_HOME === undefined
+      ? ""
+      : `Environment=${systemdWord(`XDG_CONFIG_HOME=${options.env.XDG_CONFIG_HOME}`)}\n`;
   return {
     manager: "systemd",
     name,
@@ -105,7 +111,7 @@ Type=simple
 ExecStart=${[options.bun, options.launcher, options.dataDir].map(systemdWord).join(" ")}
 Environment=${systemdWord(`PATH=${pathValue}`)}
 Environment=NODE_ENV=production
-Restart=always
+${xdgEnvironment}Restart=always
 RestartSec=10
 StandardOutput=append:${options.logFile}
 StandardError=append:${options.logFile}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -10,6 +10,9 @@ import {
   TailscaleServeManager,
   type TailscaleCommandRunner,
 } from "./tailscale-serve.js";
+
+import { startGatewayServices } from "./startup-services.js";
+import { createStandaloneServeOwnershipStore } from "./standalone-serve-ownership.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -851,9 +854,144 @@ describe("standalone Tailscale Serve start", () => {
   test("rejects a non-loopback browser listener before touching Serve", async () => {
     const start = mock(async () => "https://unused.example/");
 
-    expect(() => startStandaloneTailscaleServe({ start }, "http://0.0.0.0:34121/", 443)).toThrow(
-      "requires the backend browser listener",
-    );
+    await expect(
+      startStandaloneTailscaleServe({ start }, "http://0.0.0.0:34121/", 443),
+    ).rejects.toThrow("requires the backend browser listener");
     expect(start).not.toHaveBeenCalled();
+  });
+});
+
+async function legacyServeDirectory(targetPort = 34121) {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-legacy-serve-"));
+  temporaryDirectories.push(dataDir);
+  await writeFile(
+    path.join(dataDir, "backend-instance.json"),
+    JSON.stringify({
+      version: 1,
+      type: "orkestrator-backend-instance",
+      installationId: "legacy",
+      generation: "before-update",
+      pid: 123,
+      startedAt: new Date().toISOString(),
+      dataDir,
+      authFile: path.join(dataDir, "gateway-auth.json"),
+      appVersion: "2.34.0",
+      publicApiSchemaVersion: 1,
+      url: `http://127.0.0.1:${targetPort}/`,
+      browserUrl: "https://workstation.example.ts.net:8443/",
+    }),
+  );
+  return dataDir;
+}
+
+describe("standalone Serve crash recovery", () => {
+  test("an old no-port service migrates its stale root and survives further crashes and reinstall", async () => {
+    const dataDir = await legacyServeDirectory();
+    const tailscale = createFakeTailscale({
+      8443: {
+        "/": "http://127.0.0.1:34121",
+        "/other": "http://127.0.0.1:9000",
+      },
+    });
+    for (const target of [45000, 45001, 45001, 45002]) {
+      // Each new manager models SIGKILL: no teardown, the daemon retains its root.
+      const manager = new TailscaleServeManager("tailscale", tailscale.run);
+      const result = await startGatewayServices({
+        createGateway: () => ({
+          start: async () => ({
+            bindAddress: "127.0.0.1",
+            port: target,
+            url: `http://127.0.0.1:${target}/`,
+            browserUrl: `http://127.0.0.1:${target}/`,
+            token: "fixture",
+            authFile: path.join(dataDir, "gateway-auth.json"),
+          }),
+          stop: async () => {},
+        }),
+        reservePorts: () => {},
+        loadWebClientEnabled: async () => false,
+        shutdownBackend: async () => {},
+        managedWebClient: null,
+        tailscaleServe: true,
+        tailscaleServePort: 8443,
+        standaloneServeOwnership: createStandaloneServeOwnershipStore(dataDir),
+        createTailscaleServe: () => manager,
+        logger: { info() {}, error() {} },
+      });
+      expect(result.info.browserUrl).toStartWith("https://workstation.example.ts.net");
+      expect(
+        JSON.parse(await readFile(path.join(dataDir, "standalone-serve.json"), "utf8")),
+      ).toEqual({ version: 1, targetPort: target, httpsPort: 8443 });
+      expect(tailscale.handlerPaths(8443)).toEqual(["/", "/other"]);
+    }
+  });
+
+  test.each([false, true])("a foreign root is preserved; Funnel=%s", async (funnel) => {
+    const dataDir = await legacyServeDirectory(45000);
+    const tailscale = createFakeTailscale({
+      8443: { "/": `http://127.0.0.1:${funnel ? 45000 : 49999}` },
+    });
+    const run: TailscaleCommandRunner = async (command, args) => {
+      const result = await tailscale.run(command, args);
+      if (funnel && args.at(-1) === "--json") {
+        const status = JSON.parse(result.stdout);
+        status.AllowFunnel = { "workstation.example.ts.net:8443": true };
+        return { stdout: JSON.stringify(status), stderr: "" };
+      }
+      return result;
+    };
+    await expect(
+      startStandaloneTailscaleServe(
+        new TailscaleServeManager("tailscale", run),
+        "http://127.0.0.1:45001/",
+        8443,
+        createStandaloneServeOwnershipStore(dataDir),
+      ),
+    ).rejects.toBeInstanceOf(TailscaleServeConflictError);
+    expect(tailscale.calls.every((args) => args[1] === "status")).toBe(true);
+    expect(await createStandaloneServeOwnershipStore(dataDir).load()).toEqual({
+      version: 1,
+      targetPort: 45000,
+      httpsPort: 8443,
+    });
+  });
+
+  test("ownership is durable before publication, including an interrupted URL lookup", async () => {
+    const dataDir = await legacyServeDirectory();
+    const tailscale = createFakeTailscale();
+    const store = createStandaloneServeOwnershipStore(dataDir);
+    const run: TailscaleCommandRunner = async (command, args) => {
+      if (args.includes("--bg")) {
+        expect(await store.load()).toEqual({ version: 1, targetPort: 45000, httpsPort: 8443 });
+      }
+      const result = await tailscale.run(command, args);
+      if (args.includes("--bg")) throw new Error("crashed after publishing");
+      return result;
+    };
+    await expect(
+      startStandaloneTailscaleServe(
+        new TailscaleServeManager("tailscale", run),
+        "http://127.0.0.1:45000/",
+        8443,
+        store,
+      ),
+    ).rejects.toThrow("crashed after publishing");
+    await expect(
+      startStandaloneTailscaleServe(
+        new TailscaleServeManager("tailscale", tailscale.run),
+        "http://127.0.0.1:45001/",
+        8443,
+        store,
+      ),
+    ).resolves.toBeTruthy();
+  });
+
+  test("an unrelated descriptor cannot authorize replacing a root", async () => {
+    const dataDir = await legacyServeDirectory();
+    const file = path.join(dataDir, "backend-instance.json");
+    const descriptor = JSON.parse(await readFile(file, "utf8"));
+    descriptor.dataDir = path.join(dataDir, "other");
+    await writeFile(file, JSON.stringify(descriptor));
+    expect(await createStandaloneServeOwnershipStore(dataDir).load()).toBeNull();
   });
 });

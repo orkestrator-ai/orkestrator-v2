@@ -93,3 +93,42 @@ same window. Consistent with the real-timer ordering race recorded above, now
 also seen in isolation on a heavily loaded host. Evidence:
 `orkestrator-test-run.2rpgar/` under the host temporary directory. No
 implementation, assertion, timeout or skip changed.
+
+## Capacity retry review — 2026-10-30
+
+Preparation's `mise run test` failed when the first signal assertion already included SIGKILL (94.27 ms).
+The backend reported 2 failures in the default aggregate with its normal
+concurrent groups. Evidence is `validation-05.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-197e8c94-de90-4cb9-9a1d-f52dd1d193c4/`.
+
+Both unchanged owners passed together with one isolated worker (exit 0, 3.3 s):
+
+```sh
+mise run test:logged -- --name preparation-backend-failures -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures
+```
+
+Consistent with the previously recorded real-timer scheduling sensitivity;
+no product code, assertions, timeouts, or skips in these owners changed.
+
+The exact default-suite command subsequently passed (exit 0, 160.5 s):
+`mise run test:logged -- --name capacity-review-default-tests -- mise run test`.
+
+
+## Hidden flow graph review — 2026-10-31
+
+The required exact `mise run test` rerun repeated this assertion after 86.20 ms.
+The first signal assertion already included `SIGKILL` alongside `SIGTERM` at line 90.
+The web package passed all 10,876 tests; the backend had two failures,
+including the other timing case recorded in this review.
+
+Both complete unchanged owners then passed with one file worker
+(exit 0, 2.4 s):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.Od2gTp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, timeout or
+skip in either owner changed. This repeats the existing intermittent symptom;
+no new cause was established.

@@ -35,6 +35,7 @@ import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/nat
 import { INHERIT } from "./InheritedValue";
 import type { ReviewLens, ReviewLensPreset } from "@orkestrator/protocol/review-lens";
 import { ReviewLensField, useReviewLensPresets } from "@/components/review/ReviewLensField";
+import { SettingsSectionHeader } from "../SettingsPageLayout";
 
 interface MultiReviewDefaultsEditorProps {
   tier: AgentSettingsTier;
@@ -348,16 +349,14 @@ export function MultiReviewDefaultsEditor({
   return (
     <section className="space-y-4" aria-labelledby="multi-review-defaults-heading">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 id="multi-review-defaults-heading" className="text-sm font-medium text-foreground">
-            Multi Review defaults
-          </h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Choose how many independent reviewers a Multi Review click, feature build, or ticket
-            build starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are
-            shared with the Defaults page.
-          </p>
-        </div>
+        <SettingsSectionHeader
+          title="Multi Review defaults"
+          headingId="multi-review-defaults-heading"
+        >
+          Choose how many independent reviewers a Multi Review click, feature build, or ticket build
+          starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with
+          the Defaults page.
+        </SettingsSectionHeader>
         <div
           className="flex w-fit items-center rounded-lg border border-zinc-800 bg-zinc-950/60 p-1"
           role="group"

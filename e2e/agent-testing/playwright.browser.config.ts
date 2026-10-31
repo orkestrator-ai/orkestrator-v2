@@ -1,5 +1,15 @@
 import { defineConfig } from "@playwright/test";
 import path from "node:path";
+import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
+
+// Workers inherit a private TMPDIR, so the browser profiles of a worker that is
+// killed land where a later run can remove them (0248, 0830). Workers load this
+// file too and reuse the runner's directory.
+//
+// The profile under test was started outside this run and keeps the shared
+// one; a spec that restarts it passes `outlivingProcessEnv()`. The Claude warm
+// and paused-interactions configs import this one and so share it.
+process.once("exit", enterPrivateTestTmpdir());
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";

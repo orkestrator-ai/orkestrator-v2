@@ -199,6 +199,21 @@ export const PERMISSION_SPLASH_HTML = `<!doctype html>
 </body>
 </html>`;
 
+export const DIALOG_HOST_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${PRODUCT_NAME}</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; min-height: 100vh; background: #111113; }
+  </style>
+</head>
+<body></body>
+</html>`;
+
 async function createBootstrapHtmlWindow(options: {
   BrowserWindowCtor: BrowserWindowConstructor;
   dirname: string;
@@ -259,6 +274,19 @@ export async function createMacOsPermissionSplashWindow(options: {
     ...options,
     title: `${PRODUCT_NAME} — macOS file access`,
     html: PERMISSION_SPLASH_HTML,
+  });
+}
+
+/** Parents a native dialog when no window is open; see native-dialogs.ts. */
+export async function createDialogHostWindow(options: {
+  BrowserWindowCtor: BrowserWindowConstructor;
+  dirname: string;
+  platform?: NodeJS.Platform;
+}): Promise<BrowserWindowType> {
+  return createBootstrapHtmlWindow({
+    ...options,
+    title: PRODUCT_NAME,
+    html: DIALOG_HOST_HTML,
   });
 }
 

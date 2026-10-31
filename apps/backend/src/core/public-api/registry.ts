@@ -13,6 +13,7 @@ import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { MAIL_HANDLERS } from "./actions-mail.js";
 import { NODE_HANDLERS } from "./actions-nodes.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
+import { PULL_REQUEST_HANDLERS } from "./actions-pull-requests.js";
 import { REVIEW_HANDLERS } from "./actions-reviews.js";
 import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
 import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
@@ -47,6 +48,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
     ...REVIEW_HANDLERS,
+    ...PULL_REQUEST_HANDLERS,
     ...BUILD_HANDLERS,
     ...GRAPH_HANDLERS,
     ...ATTENTION_HANDLERS,

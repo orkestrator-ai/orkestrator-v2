@@ -282,6 +282,44 @@ export interface BuildPipelineCodeRewindPreview {
 }
 
 /**
+ * What an older forward pass's validation run keeps once a later pass
+ * replaced {@link BuildPipeline.validationRun}: enough for its Prepare node's
+ * chips and a read-only Tests view. Output is not kept; its files belong to
+ * the environment and may not outlive the run.
+ */
+export interface PipelineValidationSummary {
+  /** The run's own id (`ReviewValidationRun.id`). */
+  runId: string;
+  /** The round the run validated. */
+  iteration: number;
+  /** A run archived while planned or running was stopped, so it reads `cancelled`. */
+  status: "completed" | "cancelled" | "failed";
+  /** The commit the plan was discovered at. */
+  headRef: string;
+  startedAt: string;
+  completedAt?: string;
+  /** Bounded to {@link MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH}. */
+  error?: string;
+  /** Set when the user skipped the run. */
+  skipped?: boolean;
+  commands: PipelineValidationCommandSummary[];
+}
+
+export interface PipelineValidationCommandSummary {
+  id: string;
+  /** Bounded to {@link MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH}. */
+  command: string;
+  status: ReviewValidationRun["results"][number]["status"];
+  exitCode: number | null;
+  durationMs: number;
+}
+
+/** The newest replaced validation runs a record keeps; older summaries are dropped. */
+export const MAX_PIPELINE_VALIDATION_HISTORY = 20;
+/** The longest command line or error a validation summary copies. */
+export const MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH = 1_000;
+
+/**
  * One round's accepted consolidated review report, kept so restarting that
  * round's Address can rerun alone after a later round replaced
  * {@link BuildPipeline.structuredReview}.
@@ -1279,6 +1317,12 @@ export interface BuildPipeline {
    * while its session is the newest live review session of its round.
    */
   roundReviewReports?: PipelineRoundReviewReport[];
+  /**
+   * Validation runs earlier forward passes replaced, oldest first, at most
+   * {@link MAX_PIPELINE_VALIDATION_HISTORY}. A run a rewind invalidated is
+   * kept on its rewind instead ({@link PipelineRewind.validationRun}).
+   */
+  validationHistory?: PipelineValidationSummary[];
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1328,6 +1372,27 @@ export interface StartBuildPipelineInput {
 
 export function isActiveBuildPhase(phase: BuildPhase): boolean {
   return phase !== "paused" && phase !== "complete" && phase !== "failed";
+}
+
+const SETUP_BUILD_PHASES = new Set<BuildPhase>([
+  "creating-environment",
+  "starting-environment",
+  "waiting-for-setup",
+]);
+
+/**
+ * True while a pipeline's agents are in flight: an active phase past setup
+ * with no stall warning. The sidebar paints the environment as working then,
+ * on every client and every machine that shows it.
+ */
+export function isWorkingBuildPipeline(
+  pipeline: Pick<BuildPipeline, "phase" | "stallWarning">,
+): boolean {
+  return (
+    isActiveBuildPhase(pipeline.phase) &&
+    !SETUP_BUILD_PHASES.has(pipeline.phase) &&
+    pipeline.stallWarning === undefined
+  );
 }
 
 const BUILD_PHASES = new Set<BuildPhase>([
@@ -1950,6 +2015,54 @@ function isPipelineCodeRewind(value: unknown): value is PipelineCodeRewind {
   );
 }
 
+const VALIDATION_RESULT_STATUSES = new Set<string>([
+  "pending",
+  "queued",
+  "running",
+  "passed",
+  "failed",
+  "skipped",
+  "incomplete",
+]);
+
+function isBoundedSummaryText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH;
+}
+
+function isPipelineValidationCommandSummary(
+  value: unknown,
+): value is PipelineValidationCommandSummary {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= 64 &&
+    isBoundedSummaryText(value.command) &&
+    VALIDATION_RESULT_STATUSES.has(value.status as string) &&
+    (value.exitCode === null || Number.isSafeInteger(value.exitCode)) &&
+    isNonNegativeInteger(value.durationMs)
+  );
+}
+
+function isPipelineValidationSummary(value: unknown): value is PipelineValidationSummary {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.runId) &&
+    value.runId.length <= 200 &&
+    /^[a-zA-Z0-9_-]+$/.test(value.runId) &&
+    isNonNegativeInteger(value.iteration) &&
+    (value.status === "completed" || value.status === "cancelled" || value.status === "failed") &&
+    typeof value.headRef === "string" &&
+    value.headRef.length <= 64 &&
+    isIsoDate(value.startedAt) &&
+    (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
+    (value.error === undefined || isBoundedSummaryText(value.error)) &&
+    (value.skipped === undefined || typeof value.skipped === "boolean") &&
+    Array.isArray(value.commands) &&
+    value.commands.length <= 32 &&
+    value.commands.every(isPipelineValidationCommandSummary)
+  );
+}
+
 function isPipelineRoundReviewReport(value: unknown): value is PipelineRoundReviewReport {
   return (
     isRecord(value) &&
@@ -2057,6 +2170,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       (!Array.isArray(value.roundReviewReports) ||
         value.roundReviewReports.length > MAX_PIPELINE_ROUND_REVIEW_REPORTS ||
         !value.roundReviewReports.every(isPipelineRoundReviewReport))) ||
+    (value.validationHistory !== undefined &&
+      (!Array.isArray(value.validationHistory) ||
+        value.validationHistory.length > MAX_PIPELINE_VALIDATION_HISTORY ||
+        !value.validationHistory.every(isPipelineValidationSummary))) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

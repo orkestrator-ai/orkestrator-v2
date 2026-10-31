@@ -32,6 +32,7 @@ import {
 import { graphRunWorkspaceHold, selectGraphAdmissions } from "./graph-run-scheduling.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import type { Environment } from "./models.js";
+import { CommandFailedError } from "./shell.js";
 
 const RUN = "run-403";
 const BASE = "b".repeat(40);
@@ -118,7 +119,7 @@ describe("the container path", () => {
     const worktrees = new GraphBranchWorktrees({
       storage: { getEnvironment: async () => environment },
       fence,
-      createRunner: (env, held) => createEnvironmentCommandRunner(env, held, execute),
+      createRunner: (env, held) => createEnvironmentCommandRunner(env, held, undefined, execute),
       now: () => new Date("2026-10-29T12:00:00.000Z"),
     });
     return {
@@ -208,7 +209,10 @@ describe("the container path", () => {
       },
     };
     const createRunner = (env: Environment) =>
-      createEnvironmentCommandRunner(env, fence, (async (command: string, args: string[]) => {
+      createEnvironmentCommandRunner(env, fence, undefined, (async (
+        command: string,
+        args: string[],
+      ) => {
         world.commands.push([command, ...args]);
         return { stdout: "", stderr: "" };
       }) as never);
@@ -355,7 +359,10 @@ describe("namespaced node ids (item 402)", () => {
 });
 
 describe("the worktree guard", () => {
-  async function guarded(change: (repo: FakeBranchRepo, path: string) => void) {
+  async function guarded(
+    change: (repo: FakeBranchRepo, path: string) => void,
+    runGit = (repo: FakeBranchRepo, id: string, args: string[]) => repo.git(id, args),
+  ) {
     const main = new FakeGraphRepo(BASE);
     const repo = new FakeBranchRepo(main);
     const environment = graphEnvironmentFixture({ worktreePath: "/root" }) as Environment;
@@ -369,7 +376,7 @@ describe("the worktree guard", () => {
       );
     const guards = new GraphAgentGuards({
       probe: main.probe,
-      git: repo.git,
+      git: (id, args) => runGit(repo, id, args),
       lsRemote: main.lsRemote,
     });
     const node = plan().nodes.find((entry) => entry.id === "implement")!;
@@ -388,8 +395,51 @@ describe("the worktree guard", () => {
         results: error.results,
         message: error.message,
       }));
-    return { refusal, certified };
+    return { refusal, certified, repo, worktree };
   }
+
+  test.each(["clean", "dirty", "failed"] as const)(
+    "a timed-out isolated status retries in the same worktree and certifies %s",
+    async (outcome) => {
+      const statusCalls: string[][] = [];
+      const { refusal, certified, repo, worktree } = await guarded(
+        () => undefined,
+        async (repo, id, args) => {
+          if (!args.includes("status")) return repo.git(id, args);
+          statusCalls.push(args);
+          if (args[2] === "status") throw new CommandFailedError("timeout", { timedOut: true });
+          if (outcome === "failed")
+            throw new CommandFailedError("retry failed", { timedOut: true });
+          return outcome === "dirty" ? "?? notes.txt\n" : "";
+        },
+      );
+      const initial = ["-C", worktree.path, "status", "--porcelain", "--untracked-files=all"];
+      const fallback = ["-C", worktree.path, "-c", "core.fsmonitor=false", ...initial.slice(2)];
+      // Both submit-time refusal and consumption-time certification read the worktree.
+      expect(statusCalls).toEqual([initial, fallback, initial, fallback]);
+      expect(repo.worktrees.has(worktree.path)).toBe(true);
+      if (outcome === "dirty") {
+        expect(refusal).toMatchObject({ code: "worktree_changed", nextAction: "correct" });
+        expect(refusal?.message).toContain(worktree.path);
+        expect(refusal?.message).toContain("notes.txt");
+      } else {
+        expect(refusal).toBeNull();
+      }
+      expect(certified.ok).toBe(outcome === "clean");
+      expect(certified.results).toContainEqual(
+        expect.objectContaining({
+          guard: "worktree",
+          outcome:
+            outcome === "clean" ? "passed" : outcome === "dirty" ? "violated" : "unavailable",
+          ...(outcome === "dirty" ? { paths: ["notes.txt"] } : {}),
+        }),
+      );
+      if (outcome === "failed") {
+        expect(certified.message).toContain(worktree.path);
+        expect(certified.message).toContain("retry failed");
+      }
+    },
+  );
 
   test("a committed branch passes every guard", async () => {
     const { refusal, certified } = await guarded(() => undefined);

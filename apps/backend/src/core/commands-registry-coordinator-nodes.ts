@@ -14,6 +14,8 @@ import {
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
+import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
+import { isBackendId } from "@orkestrator/protocol/federation";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
@@ -69,6 +71,8 @@ export interface CoordinatorNodeTarget {
   /** This project's copy on that node, matched by repository identity. */
   projectId: string;
   call<T>(command: string, args?: JsonRecord, requestKey?: string): Promise<T>;
+  /** Whether that node's hello advertises the capability (`BACKEND_CAPABILITIES`). */
+  supports(capability: string): boolean;
   /** One of this project's worker environments there, or an error naming why not. */
   environment(environmentId: string): Promise<JsonRecord>;
 }
@@ -137,6 +141,8 @@ export async function coordinatorNodeTarget(
     nodeName: node.view.displayName,
     projectId: project.ref.projectId,
     call,
+    supports: (capability: string) =>
+      isBackendId(nodeId) && hasBackendCapability(context.nodes?.link(nodeId)?.hello, capability),
     environment: async (environmentId: string) => {
       const value = await call<unknown>("get_environment", { environmentId });
       if (!record(value) || value.projectId !== project.ref.projectId) {
@@ -496,6 +502,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           asNonBlankString(args.nodeId, "nodeId"),
         );
         const requestId = asNonBlankString(args.requestId, "requestId");
+        // deliverNow reaches the worker only through a leaf that knows `steer`;
+        // an older one would refuse the whole message over the unknown field.
+        const steer =
+          args.deliverNow === true && target.supports(BACKEND_CAPABILITIES.nodeMailSteer);
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
         const release = beginWorkerTabDelegation(
@@ -523,6 +533,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             toTabName?: string;
             placement?: string;
             placementReason?: string;
+            injectedVia?: string;
+            deliverNow?: string;
+            deliverNowNote?: string;
           }>(
             "deliver_node_mail",
             {
@@ -533,6 +546,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ...(requestedTab ? { toTabId: requestedTab } : {}),
               ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
               body: asNonBlankString(args.body, "body"),
+              ...(steer ? { steer: true } : {}),
             },
             `mail:${caller.coordinatorId}:${requestId}`,
           );
@@ -541,9 +555,13 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             delivered?.toEnvironmentName ??
             (typeof recipient.name === "string" ? recipient.name : undefined);
           // As here, only mail scheduled to reach the worker asks it anything: a
-          // message the node stored or bounced opens no delegation. (Older nodes do
-          // not report the placement.)
-          const scheduled = !delivered?.placement || delivered.placement === "pending-inject";
+          // message the node stored or bounced opens no delegation. A steered or
+          // delivered deliverNow was scheduled too. (Older nodes do not report
+          // the placement.)
+          const scheduled =
+            !delivered?.placement ||
+            delivered.placement === "pending-inject" ||
+            (steer && delivered.placement === "injected");
           let coordinatorDelegationOpened = false;
           if (joining && scheduled) {
             context.coordinators?.noteRemoteRequest(joining.id);
@@ -572,6 +590,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               : {}),
             ...(delivered?.placement ? { placement: delivered.placement } : {}),
             ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
+            ...(delivered?.injectedVia ? { injectedVia: delivered.injectedVia } : {}),
+            // The leaf's own outcome; absent when it was not asked to steer.
+            ...(steer && delivered?.deliverNow
+              ? { deliverNow: delivered.deliverNow, deliverNowNote: delivered.deliverNowNote }
+              : {}),
             coordinatorDelegationOpened,
             // Said plainly, as for a worker here: "pending" alone reads as delivered.
             ...(recipient.status === "stopped"

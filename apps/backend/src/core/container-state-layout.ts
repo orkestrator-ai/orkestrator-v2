@@ -33,12 +33,12 @@ export interface ProviderStateEntry {
  * (docs/development/upgrade-agents.md, "Re-trace preserved provider state").
  */
 export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
-  claude: "2.1.309",
-  codex: "0.164.0",
-  opencode: "1.19.4",
+  claude: "2.1.314",
+  codex: "0.166.0",
+  opencode: "1.19.5",
   pi: "1.4.0",
   cursor: "1.2.0",
-  grok: "1.0.67",
+  grok: "1.0.70",
 };
 
 /** Codex runtime databases on persistent storage (`CODEX_SQLITE_HOME`). */

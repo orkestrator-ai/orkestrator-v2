@@ -2,6 +2,8 @@ import { Gauge } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useUIStore } from "@/stores/uiStore";
+import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /**
  * This client's data-saving preference. It is stored on this device only and
@@ -13,16 +15,10 @@ export function DataSavingSetting() {
   const setDataSaving = useUIStore((state) => state.setDataSaving);
   return (
     <div className="space-y-3" data-testid="data-saving-setting">
-      <div>
-        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <Gauge className="h-4 w-4" />
-          Data saving
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          For a metered or slow connection. Applies to this device only.
-        </p>
-      </div>
-      <div className="flex items-center justify-between gap-6 rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+      <SettingsSectionHeader icon={<Gauge className="h-4 w-4" />} title="Data saving">
+        For a metered or slow connection. Applies to this device only.
+      </SettingsSectionHeader>
+      <div className={cn(SETTINGS_CARD_CLASS, "flex items-center justify-between gap-6 p-4")}>
         <div className="min-w-0 space-y-1">
           <Label htmlFor="data-saving" className="text-sm font-medium">
             Refresh less often in the background

@@ -1194,8 +1194,9 @@ group and the caller: an operator's choice is honoured, and an aggregate run
 with a private `TMPDIR` can be inspected afterwards for leftovers. Before
 2026-10-26 Turbo dropped it and those groups fell back to `/tmp`.
 
-Every Bun test process, and the runner of the `test:browser` Playwright suites,
-then moves to a private `TMPDIR` of its own, `ork-test-tmp-<pid>-<random>`
+Every Bun test process, and the runner of every Playwright suite
+(`test:browser`, the real-stack `e2e/agent-testing` configs and
+`test:preview:browser`), then moves to a private `TMPDIR` of its own, `ork-test-tmp-<pid>-<random>`
 (`tests/private-tmpdir.ts`, loaded by `tests/isolate-tmpdir.ts` after the
 other isolation preloads). It is made in the process's temporary directory,
 except on macOS, where it goes under `/private/tmp`: inside the 49-character
@@ -1209,7 +1210,13 @@ remove. The preload removes its directory when its `afterAll` runs unless a
 live process still names it; a killed process's directory is removed by the
 next test process once the owner has exited and the directory is an hour old
 (0248). A test that needs the shared temporary directory reads
-`ORKESTRATOR_TEST_PARENT_TMPDIR`. For a leak hunt like 0247's, set
+`ORKESTRATOR_TEST_PARENT_TMPDIR`. A process a test starts to outlive it, such
+as the `dev:test` launcher a real-stack spec restarts, gets
+`outlivingProcessEnv()` from the same module: the private directory is removed
+when the runner exits, and only a command line, never an environment, keeps it
+(0830). Linux limits a Unix socket path to 108 bytes and Chromium puts its
+`SingletonSocket` in `TMPDIR`, so a test that launches full Chrome under a
+temporary directory of its own keeps that directory's names short. For a leak hunt like 0247's, set
 `ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
 for inspection.
 

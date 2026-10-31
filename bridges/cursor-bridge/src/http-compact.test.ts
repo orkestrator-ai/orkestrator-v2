@@ -244,7 +244,10 @@ describe("POST /session/:id/compact", () => {
       expect((await compact(state)).status).toBe(202);
       await waitFor(() => state.status === "idle");
       expect(compactionParts(state)).toMatchObject([
-        { toolState: "failure", content: result ?? FAILED_COMPACTION_NOTE },
+        {
+          toolState: "failure",
+          content: result ? `${FAILED_COMPACTION_NOTE}.\n\n${result}` : FAILED_COMPACTION_NOTE,
+        },
       ]);
       expect(state.error).toBeUndefined();
     },

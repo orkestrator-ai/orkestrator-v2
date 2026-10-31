@@ -243,7 +243,8 @@ export interface NodeActionRequestView {
     | "update-project-files"
     | "reveal-env-value"
     | "apply-root-changes"
-    | "update-agents-md";
+    | "update-agents-md"
+    | "switch-agent-account";
   targets: Array<{
     nodeId: string;
     nodeName: string;
@@ -255,6 +256,10 @@ export interface NodeActionRequestView {
     gitRemote?: string;
     files?: string[];
     keys?: string[];
+    /** `switch-agent-account`: the provider and the login to make active. */
+    platform?: string;
+    accountId?: string;
+    accountLabel?: string;
   }>;
   reason?: string;
   /** The coordinator that asked; its project is the one a copy request copies. */

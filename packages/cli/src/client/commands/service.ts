@@ -1,17 +1,25 @@
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
+import type { StandaloneStartupFailure } from "@orkestrator/protocol/node/standalone-service";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
-import { defaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
+import { defaultDataDir, isDefaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../../../apps/backend/src/fixed-ports.js";
 import { CliError } from "../errors.js";
 import { keyValues } from "../format.js";
 import {
   awaitServiceConnection,
   currentDescriptorGeneration,
+  startupLogExcerpt,
   type ServiceConnection,
 } from "../service-connection.js";
-import { askServeArguments } from "../service-setup.js";
+import { askServeArguments, warnIfTailscaleOperatorNeeded } from "../service-setup.js";
 import { serviceManagerCommands, serviceUnit } from "../service-units.js";
 import type { CommandContext, CommandSpec, ParsedCommand } from "../spec.js";
 import { stringOption } from "./common.js";
@@ -86,6 +94,65 @@ function unitFor(context: CommandContext, dataDir: string, bun: string) {
   });
 }
 
+async function startupFailedError(
+  version: string,
+  failure: StandaloneStartupFailure,
+  logFile: string,
+  logOffset: number,
+): Promise<CliError> {
+  const excerpt = await startupLogExcerpt(logFile, logOffset, version);
+  return new CliError(
+    "operation-failed",
+    [
+      failure.restoredVersion
+        ? `orkestrator@${version} did not start, so the service went back to ${failure.restoredVersion}.`
+        : `orkestrator@${version} did not start, and the service keeps retrying it.`,
+      ...(excerpt.length > 0 ? ["", ...excerpt, ""] : []),
+      `Fix the cause, then run this command again. Full log: ${logFile}`,
+    ].join("\n"),
+    { retryable: true },
+  );
+}
+
+/** A free loopback port to keep across restarts; the OS may offer a fixed one on Linux. */
+export async function freeServicePort(allocate = probeServicePort): Promise<string> {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const port = await allocate();
+    if (validServicePort(String(port))) return String(port);
+  }
+  throw new Error("Unable to allocate an unreserved service port");
+}
+
+function validServicePort(value: string | undefined): string | undefined {
+  const port = Number(value);
+  return value !== undefined &&
+    String(port) === value &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port <= 65535 &&
+    port !== DEFAULT_GATEWAY_PORT &&
+    port !== DEFAULT_CONTROL_MCP_PORT
+    ? value
+    : undefined;
+}
+
+async function probeServicePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      probe.close(() => resolve(typeof address === "object" && address ? address.port : 0));
+    });
+  });
+}
+
+/** The `--port` value in serve arguments, if any. */
+function portArgument(args: readonly string[] | undefined): string | undefined {
+  const index = args?.indexOf("--port") ?? -1;
+  return index >= 0 ? args?.[index + 1] : undefined;
+}
+
 function runManager(argv: string[], allowFailure = false): { ok: boolean; output: string } {
   const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 60_000 });
   const ok = result.status === 0;
@@ -113,10 +180,19 @@ export const serviceCommands: CommandSpec[] = [
       "With none, in a terminal, it asks how clients will connect (Tailscale Serve, the",
       "tailnet address or SSH) and prints the equivalent command; --yes skips the questions.",
       "The Bun running this command is the Bun the service uses; reinstall to change it.",
+      "",
+      "Only the default data directory's backend uses the fixed gateway port. With another",
+      "--data-dir and no `--port`, the backend takes a free port that changes on each start,",
+      "so pass `-- --port PORT` for a stable address. --tailscale-serve gets a free port",
+      "chosen once, here, with strict binding so it cannot move to a fallback port.",
       "On Linux, run `loginctl enable-linger $USER` so the service runs without a login.",
       "",
       "Once the service is running, the address it serves and its gateway token are printed.",
       "The token is shown only in this terminal: never in --output json or the service log.",
+      "If the release cannot start, the command fails with what the service logged.",
+      "",
+      "On Linux, --tailscale-serve needs `sudo tailscale set --operator=$USER` once; the",
+      "questions offer to run it, and a scripted install warns when it is missing.",
     ].join("\n"),
     positionals: [],
     options: [
@@ -179,15 +255,45 @@ export const serviceCommands: CommandSpec[] = [
       if (readyWaitMs > PUBLIC_API_LIMITS.waitMaxMs) {
         throw new CliError("invalid-input", "--timeout may be at most 24h");
       }
-      const serveArgs = interactive
+      const secondBackend = !isDefaultDataDir(dataDir, process.platform, context.io.env);
+      const requestedArgs = interactive
         ? await askServeArguments(context.io, {
             installCommand: installCommandLine(parsed),
             signal: context.signal,
+            dryRun: parsed.options["dry-run"] === true,
+            secondBackend,
           })
         : parsed.rest;
+      if (!interactive) warnIfTailscaleOperatorNeeded(context.io, requestedArgs);
       const bun = process.execPath;
       const bunVersion = typeof Bun === "undefined" ? "" : Bun.version;
       const { service, layout, unit } = await unitFor(context, dataDir, bun);
+      // Keep the chosen Serve target stable. Strict binding prevents a startup
+      // race from moving it to an unrecorded fallback. Durable backend ownership
+      // separately recovers older units and an intentional port change.
+      const pinsPort =
+        secondBackend &&
+        requestedArgs.includes("--tailscale-serve") &&
+        !requestedArgs.includes("--port");
+      const serveArgs =
+        pinsPort && parsed.options["dry-run"] !== true
+          ? [
+              ...requestedArgs,
+              "--port",
+              validServicePort(portArgument(service.readServiceConfig(layout)?.args)) ??
+                (await freeServicePort()),
+              "--strict-gateway-port",
+            ]
+          : requestedArgs;
+      const portNote = pinsPort
+        ? [
+            "This is not the default data directory, so its gateway keeps a free port chosen at install instead of the fixed one.",
+          ]
+        : secondBackend && !requestedArgs.includes("--port")
+          ? [
+              "This is not the default data directory, so its gateway takes a free port that changes on each start. For a stable address, reinstall with `-- --port PORT`.",
+            ]
+          : [];
       const summary = {
         dataDir,
         version,
@@ -209,6 +315,7 @@ export const serviceCommands: CommandSpec[] = [
               ["unit", `${unit.manager} ${unit.name} → ${unit.file}`],
               ["serve arguments", serveArgs.join(" ") || "(none)"],
             ]),
+            ...portNote,
             "",
             "Dry run: nothing was installed.",
           ],
@@ -227,13 +334,22 @@ export const serviceCommands: CommandSpec[] = [
         );
       }
       await service.installLauncher(layout, releaseDir);
+      const rollbackTarget = service.nextRollbackTarget(
+        layout,
+        service.readServiceConfig(layout),
+        service.linkedVersion(layout.current),
+        version,
+      );
       await service.activateRelease(layout, version);
+      const installGeneration = randomUUID();
       await service.writeServiceConfig(layout, {
+        installGeneration,
         version: 1,
         dataDir,
         bun,
         bunVersion,
         args: serveArgs,
+        ...(rollbackTarget ? { rollbackTarget } : {}),
         installedAt: new Date().toISOString(),
       });
       await mkdir(layout.logs, { recursive: true });
@@ -246,6 +362,13 @@ export const serviceCommands: CommandSpec[] = [
         // A backend already serving this data directory (a reinstall) is
         // replaced; only a new generation's descriptor describes this install.
         const previousGeneration = await currentDescriptorGeneration(dataDir);
+        // The generation excludes failures written by the old launcher while
+        // manager commands run; the timestamp also excludes earlier logs.
+        const loadedAt = Date.now();
+        const logOffset = await stat(logFile).then(
+          (file) => file.size,
+          () => 0,
+        );
         const commands = serviceManagerCommands(unit);
         commands.load.forEach((argv, index) =>
           // Unloading an absent launchd job fails; that first step is best effort.
@@ -256,6 +379,16 @@ export const serviceCommands: CommandSpec[] = [
           connection = await awaitServiceConnection(dataDir, previousGeneration, {
             timeoutMs: readyWaitMs,
             signal: context.signal,
+            expectedVersion: version,
+            assertStarting: async () => {
+              const failure = service.readStartupFailure(
+                layout,
+                version,
+                loadedAt,
+                installGeneration,
+              );
+              if (failure) throw await startupFailedError(version, failure, logFile, logOffset);
+            },
           });
         }
       }
@@ -267,6 +400,7 @@ export const serviceCommands: CommandSpec[] = [
           started,
           ready: connection !== null,
           browserUrl: connection?.browserUrl ?? null,
+          clientUrls: connection?.clientUrls ?? [],
           authFile: connection?.authFile ?? null,
           ...(connection?.credentialError ? { credentialError: connection.credentialError } : {}),
           ...summary,
@@ -286,6 +420,9 @@ export const serviceCommands: CommandSpec[] = [
                 "",
                 ...keyValues([
                   ["address", connection.browserUrl ?? "(no browser listener; see the log)"],
+                  ...(connection.clientUrls.length > 0
+                    ? [["local listeners", connection.clientUrls.join(", ")] as [string, string]]
+                    : []),
                   ["auth file", connection.authFile],
                   ...(context.io.stdoutIsTty &&
                   context.global.output === "human" &&
@@ -305,6 +442,7 @@ export const serviceCommands: CommandSpec[] = [
                   `The backend has not reported ready yet. Follow ${logFile}; its address and token file are logged there.`,
                 ]
               : []),
+          ...portNote,
           ...(unit.manager === "systemd"
             ? ["Run `loginctl enable-linger $USER` so it keeps running after you log out."]
             : []),
@@ -360,15 +498,17 @@ export const serviceCommands: CommandSpec[] = [
       const state = service.readLauncherState(layout);
       const installed = existsSync(unit.file);
       const running = installed ? runManager(serviceManagerCommands(unit).status, true).ok : false;
+      const current = service.linkedVersion(layout.current);
+      const previous = service.linkedVersion(layout.previous);
       const result = {
         dataDir,
         installed,
         running,
         unit: { manager: unit.manager, name: unit.name, file: unit.file },
-        current: service.linkedVersion(layout.current),
-        previous: service.linkedVersion(layout.previous),
+        current,
+        previous,
         bun: config?.bun ?? null,
-        args: config?.args ?? [],
+        args: service.effectiveServiceArguments(config, current, previous),
         lastReadyVersion: state.lastReadyVersion,
         rollback: state.rollback,
       };

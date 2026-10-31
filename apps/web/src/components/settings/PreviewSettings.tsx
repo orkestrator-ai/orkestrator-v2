@@ -26,6 +26,7 @@ import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 type Publication = backend.PreviewSettingsShape["publication"];
 
@@ -222,10 +223,10 @@ export function PreviewSettings() {
   const detail = diagnostics?.publication;
 
   return (
-    <div className="max-w-2xl space-y-8">
+    <>
       {loadFailure}
       <section className="space-y-3">
-        <h2 className="text-base font-semibold">Service previews</h2>
+        <SettingsSectionHeader title="Service previews" />
         <ul className="space-y-2">
           <Availability label="Desktop tunnel" capability={capabilities?.surfaces.desktopTunnel} />
           <Availability
@@ -320,7 +321,7 @@ export function PreviewSettings() {
           void save({ publication });
         }}
       >
-        <h2 className="text-base font-semibold">Private preview origins</h2>
+        <SettingsSectionHeader title="Private preview origins" />
         <p className="text-xs text-muted-foreground">
           Lets normal browsers (and the web and iOS clients) open services at{" "}
           <code>https://s-…​.&lt;domain&gt;</code>. You provide wildcard DNS for the domain on your
@@ -420,7 +421,7 @@ export function PreviewSettings() {
 
       {diagnostics && (
         <section className="space-y-2">
-          <h2 className="text-base font-semibold">Diagnostics</h2>
+          <SettingsSectionHeader title="Diagnostics" />
           <p className="text-xs text-muted-foreground">
             Counts and failure categories only. No addresses, paths, headers, or page content are
             recorded.
@@ -454,6 +455,6 @@ export function PreviewSettings() {
           </dl>
         </section>
       )}
-    </div>
+    </>
   );
 }

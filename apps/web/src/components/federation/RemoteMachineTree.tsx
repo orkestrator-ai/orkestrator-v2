@@ -71,11 +71,12 @@ import {
   EnvironmentNameSignalMarker,
 } from "@/components/environments/EnvironmentNameShimmer";
 import { environmentNameSignal } from "@/lib/environment-name-signal";
-import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
+import { nodeEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
@@ -271,6 +272,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     sidebarFolderKey(machine.backendId, projectFolderKey(name));
   const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
   const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
+  const sortingStrategy = projectTreeSortingStrategy(tree, sortableIds);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -356,7 +358,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+      <SortableContext items={sortableIds} strategy={sortingStrategy}>
         {tree.map((entry) => {
           if (entry.kind === "project") return renderProject(entry.project);
           const folderActions = sortable
@@ -772,14 +774,13 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  // Decided here from the machine's relayed PR reading (pr-merge-readiness)
-  // and its live activity. Conflicts need the same monitor health that remote
-  // readiness waits on, so only the question and ready signals apply here.
+  // Decided here from the machine's relayed PR reading and monitor health
+  // (pr-merge-readiness) and its live activity.
   const nameSignal = environment.deleting
     ? null
     : environmentNameSignal({
         waitingOnUser: isRunning && live && environment.activity === "waiting",
-        prMergeState: isNodeEnvironmentReadyToMerge(environment, machine) ? "ready" : null,
+        prMergeState: nodeEnvironmentPrMergeState(environment, machine),
       });
   const nameSignalDescriptionId = useId();
 

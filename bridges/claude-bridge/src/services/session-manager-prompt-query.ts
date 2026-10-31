@@ -544,7 +544,7 @@ export function claudeQueryOptions(
     // would have to render model-written HTML. Explicit, so an SDK whose
     // default changes cannot start sending a format the card does not expect.
     toolConfig: { askUserQuestion: { previewFormat: "markdown" } },
-    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.309: although the
+    // Pinned against @anthropic-ai/claude-agent-sdk 0.3.314: although the
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live
     // contract probe confirmed it still reaches this callback and the SDK

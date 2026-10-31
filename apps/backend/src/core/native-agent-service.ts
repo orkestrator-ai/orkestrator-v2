@@ -68,6 +68,7 @@ import {
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
 } from "./native-agent-service-shared.js";
+import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
 import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
 import {
   coordinatorResearchLine,
@@ -76,6 +77,7 @@ import {
 import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
@@ -477,6 +479,15 @@ export class NativeAgentService {
     await this.launches.settleStoppedSessions(environmentId, sessions);
   }
 
+  /**
+   * The backend is about to stop this environment's bridges on purpose, so a
+   * sweep that finds one gone must not report its turn as failed
+   * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
+   */
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
+  }
+
   /** Whether the session's last turn was cut off by its runtime stopping. */
   sessionStoppedMidTurn(
     environmentId: string,
@@ -542,6 +553,7 @@ export class NativeAgentService {
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: options.planUsage,
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -551,7 +563,9 @@ export class NativeAgentService {
       isStopped: () => this.stopped,
       assertAcceptingWork: () => this.assertAcceptingWork(),
       observeProvider: (input) => this.observeProvider(input),
-      dispatchPrompt: (input, prepare) => this.dispatchPromptInternal(input, prepare),
+      // A recovery continues a turn something else started; it keeps that origin.
+      dispatchPrompt: (input, prepare) =>
+        this.dispatchPromptInternal(input, prepare, false, false, true),
       observedActivity: (key) => this.launches.observedActivity(key),
     });
     // Optional because narrow test doubles of the storage omit the store.
@@ -1061,6 +1075,9 @@ export class NativeAgentService {
             `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
             `${COORDINATOR_PR_RULE}\n` +
             `${COORDINATOR_AGENTS_MD_RULE}\n` +
+            ((await schedulingEnabled(this.storage))
+              ? `${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}\n`
+              : "") +
             `${COORDINATOR_ASYNC_CONTRACT}\n`
           : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
@@ -3007,11 +3024,12 @@ export class NativeAgentService {
     ) => Promise<PromptDispatchPreparation>,
     persistAmbiguousDispatch = false,
     mailInject = false,
+    recovery = false,
   ): Promise<PersistedNativeAgentSession> {
     const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
     try {
       return await this.promptQueues.withSessionMutationFence(input, () =>
-        this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject),
+        this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject, recovery),
       );
     } finally {
       releaseAgentWork();
@@ -3028,6 +3046,7 @@ export class NativeAgentService {
       | undefined,
     persistAmbiguousDispatch: boolean,
     mailInject: boolean,
+    recovery = false,
   ): Promise<PersistedNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     const coordinatorContextRevision =
@@ -3327,6 +3346,47 @@ export class NativeAgentService {
                 "The session is no longer in Plan mode, so this read-only prompt was not sent. Switch the session back to Plan and retry, or cancel it.",
               );
             }
+            // Persist authority before the provider can execute this request.
+            // Never restore a prior user origin on rejection or ambiguity: a
+            // lost acknowledgement can still mean the non-user turn is running.
+            // A replay of a parked request is not a new user instruction, even
+            // when retried through the ordinary prompt endpoint.
+            if (input.owner?.kind === "coordinator") {
+              const owner = input.owner;
+              const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
+              const startedAt = new Date(this.now()).toISOString();
+              await this.storage.coordinators.mutateCoordinatorWorkspace(
+                owner.projectId,
+                (workspace) => {
+                  if (
+                    !workspace ||
+                    workspace.id !== owner.coordinatorId ||
+                    !workspace.conversations.some(
+                      (conversation) =>
+                        conversation.id === conversationId && !conversation.closedAt,
+                    )
+                  ) {
+                    throw new PromptRejectedError("The coordinator conversation is unavailable");
+                  }
+                  return {
+                    ...workspace,
+                    conversations: workspace.conversations.map((conversation) =>
+                      conversation.id === conversationId
+                        ? {
+                            ...conversation,
+                            lastTurnOrigin:
+                              mailInject || recovery || durable.pendingDispatch
+                                ? ("mail" as const)
+                                : ("user" as const),
+                            lastTurnStartedAt: startedAt,
+                          }
+                        : conversation,
+                    ),
+                    updatedAt: startedAt,
+                  };
+                },
+              );
+            }
             return this.applySessionHeldDispatchModel(input, durable, provider);
           },
         );
@@ -3336,7 +3396,7 @@ export class NativeAgentService {
         if (
           result.dispatched &&
           input.owner?.kind === "coordinator" &&
-          Number.isSafeInteger(coordinatorContextRevision)
+          (Number.isSafeInteger(coordinatorContextRevision) || !recovery)
         ) {
           const coordinatorId = input.owner.coordinatorId;
           const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
@@ -3350,10 +3410,14 @@ export class NativeAgentService {
                         conversation.id === conversationId
                           ? {
                               ...conversation,
-                              repositoryContextRevisionAcknowledged: Math.max(
-                                conversation.repositoryContextRevisionAcknowledged ?? 0,
-                                coordinatorContextRevision,
-                              ),
+                              ...(Number.isSafeInteger(coordinatorContextRevision)
+                                ? {
+                                    repositoryContextRevisionAcknowledged: Math.max(
+                                      conversation.repositoryContextRevisionAcknowledged ?? 0,
+                                      coordinatorContextRevision,
+                                    ),
+                                  }
+                                : {}),
                             }
                           : conversation,
                       ),
@@ -3652,6 +3716,7 @@ export class NativeAgentService {
         provider = createNativeAgentProvider(connection, {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: this.options.planUsage,
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -3693,7 +3758,9 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, {});
+            provider = createNativeAgentProvider(connection, {
+              planUsage: this.options.planUsage,
+            });
             this.providerRegistry.cache(key, provider, identity);
           }
         }

@@ -1738,6 +1738,7 @@ export async function stopEnvironmentOnce(
   if (environment.containerId) {
     const containerId = environment.containerId;
     await assertDockerContainerOwned(containerId, context);
+    await context.nativeAgents?.runtimeStopRequested(environment.id);
     const outcome = await runContainerOperation(
       context,
       environment.id,

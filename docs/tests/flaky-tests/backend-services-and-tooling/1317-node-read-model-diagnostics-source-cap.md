@@ -1,6 +1,6 @@
 # Named summary due job counts a scheduler the full diagnostics registry dropped (apps/backend/src/core/nodes/node-read-model.test.ts)
 
-- **ID:** 1316
+- **ID:** 1317
 - **Status:** open
 - **Date observed:** 2026-10-30
 - **Test:** `named summary due job reconciles missed events and stops with the model` (`apps/backend/src/core/nodes/node-read-model.test.ts:86`)

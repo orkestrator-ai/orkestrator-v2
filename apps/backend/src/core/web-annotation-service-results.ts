@@ -17,7 +17,6 @@ import {
   type WebAnnotationComparisonDifference,
   type WebAnnotationComparisonMetadata,
   type WebAnnotationEntry,
-  type WebAnnotationFileCheck,
   type WebAnnotationFollowUpCandidates,
   type WebAnnotationGetResult,
   type WebAnnotationRequest,
@@ -300,12 +299,13 @@ export class WebAnnotationResults {
     input: WebAnnotationResultCaptureInput,
   ): Promise<{ result: WebAnnotationResult; captureId: string }> {
     this.ctx.assertOperationId(input.operationId);
-    const capture = this.threads.validateCapture(input.capture);
+    const validated = this.threads.validateCapture(input.capture);
     const metadataResult = validateWebAnnotationResultCaptureMetadata(
       input as unknown as Record<string, unknown>,
     );
     if (!metadataResult.ok) throw new WebAnnotationServiceError(metadataResult.error);
     const metadata = metadataResult.value;
+    const capture = await this.threads.verifySourceHints(input.environmentId, validated);
     const store = await this.ctx.env(input.environmentId);
     // Receipts written before annotation/metadata fields existed keep hashing
     // the same way, so a replay across an upgrade is still recognized.
@@ -597,29 +597,6 @@ export class WebAnnotationResults {
     return { annotation: this.threads.project(store, annotation), capture, entries };
   }
 
-  /** Workspace containment/existence of reported files (outside the write queue). */
-  private async fileChecks(
-    environmentId: string,
-    files: readonly string[],
-  ): Promise<WebAnnotationFileCheck[] | undefined> {
-    const check = this.ctx.options.dispatch?.checkWorkspacePaths;
-    if (files.length === 0 || !check) return undefined;
-    const environment = await this.ctx.hostEnvironment(environmentId).catch(() => null);
-    if (!environment) return undefined;
-    return check
-      .call(
-        this.ctx.options.dispatch,
-        {
-          id: environment.id,
-          environmentType: environment.environmentType,
-          ...(environment.worktreePath ? { worktreePath: environment.worktreePath } : {}),
-          ...(environment.containerId ? { containerId: environment.containerId } : {}),
-        },
-        files,
-      )
-      .catch(() => undefined);
-  }
-
   async reportToolResult(
     scope: WebAnnotationToolScope,
     report: WebAnnotationResultReportInput,
@@ -628,7 +605,7 @@ export class WebAnnotationResults {
     if (!validated.ok) throw new WebAnnotationServiceError(validated.error);
     const input = validated.value;
     const store = await this.ctx.env(scope.environmentId);
-    const fileChecks = await this.fileChecks(scope.environmentId, input.files);
+    const fileChecks = await this.ctx.checkWorkspacePaths(scope.environmentId, input.files);
     const committed = await store.mutate((tx) => {
       const request = tx.manifest.requests[input.requestId];
       if (!request || !scope.tabId || request.destination.tabId !== scope.tabId) {

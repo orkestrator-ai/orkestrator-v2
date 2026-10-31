@@ -268,3 +268,20 @@ The exact failed aggregate command was rerun after the media fixes and passed
 ```sh
 mise run test:logged -- --name review-repair-tests -- mise run test
 ```
+
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test` repeated the first-answer settling timeout at
+2209.90 ms (Codex: 2,265 passed, 52 skipped and one failed). Evidence:
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-04.stdout.txt`. The first complete isolated run instead
+failed the two-pre-plugin-answer stale/ready assertion at 75.14 ms (29 passed,
+one failed); a second unchanged run passed all 30 tests in 1.2 s:
+
+```sh
+mise run test:logged -- --name recorded-codex-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+The failing isolated log is `orkestrator-test-run.jy1RfG/recorded-codex-catalogue.log.gz`
+below the host temporary directory; the passing summary is in
+`orkestrator-test-run.ngehxI`. This confirms intermittent behavior, without
+establishing its cause. No bridge source, assertion or timeout changed.

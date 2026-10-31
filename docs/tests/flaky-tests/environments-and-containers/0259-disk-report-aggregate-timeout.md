@@ -282,8 +282,24 @@ No implementation, assertion, deadline or skip changed in this owner.
 The aggregate repeated the five-second deadline with a null status under load
 average 45 to 77. Alone with `--parallel=1 --only-failures` the unchanged owner
 passed once (5.3 s) and timed out once (6.3 s) under the same load. Details in
-[1319](../aggregate-validation-runs/1319-second-backend-one-host-0244-validation.md).
+[1320](../aggregate-validation-runs/1320-second-backend-one-host-0244-validation.md).
 No implementation, assertion, deadline or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test` repeated the five-second timeout (5166.47 ms),
+with `report.status` null instead of zero and an error between tests. Root
+totals were 3,305 passed and one failed across 161 files (396.40 s). Evidence:
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-04.stdout.txt`. The unchanged complete owner passed with exit 0
+in 5.2 s:
+
+```sh
+mise run test:logged -- --name recorded-disk-report -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+The runner retained its summary in `orkestrator-test-run.8iIhnm` below the host
+temporary directory and removed passing output. Host contention remains an
+unconfirmed hypothesis; no owner implementation, assertion or timeout changed.
 
 ## Remote deliverNow review repair — 2026-10-30
 

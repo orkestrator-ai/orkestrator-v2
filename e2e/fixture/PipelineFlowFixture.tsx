@@ -291,8 +291,58 @@ function validationRewind(reviewing: boolean): BuildPipeline {
   return pipeline;
 }
 
+function validationHistory(): BuildPipeline {
+  const run = validationRun({
+    id: "current-validation",
+    status: "running",
+    startedAt: at(520),
+    completedAt: undefined,
+  });
+  return base({
+    phase: "fixing",
+    iteration: 1,
+    currentSessionIndex: 5,
+    sessions: [
+      stage("build", "build", 0, 50),
+      stage("fix", "prep-0", 60, 50, { label: "Package Preparation Session" }),
+      stage("review", "review", 200, 50),
+      stage("verify", "verify", 300, 50),
+      stage("fix", "fix", 400, 50, { iteration: 1 }),
+      stage("fix", "prep-1", 460, 50, { iteration: 1, label: "Package Preparation Session" }),
+    ],
+    validationRun: run,
+    validationHistory: [
+      {
+        runId: "archived-validation",
+        iteration: 0,
+        headRef: "b".repeat(40),
+        status: "completed",
+        startedAt: at(110),
+        completedAt: at(140),
+        commands: [
+          {
+            id: "old-test",
+            command: "mise run old-test",
+            status: "failed",
+            exitCode: 1,
+            durationMs: 20_000,
+          },
+          {
+            id: "old-lint",
+            command: "mise run old-lint",
+            status: "passed",
+            exitCode: 0,
+            durationMs: 5000,
+          },
+        ],
+      },
+    ],
+  });
+}
+
 function scenario(): BuildPipeline {
   const name = new URLSearchParams(window.location.search).get("scenario");
+  if (name === "validation-history") return validationHistory();
   if (name === "nested-rewinds") return nestedRewinds();
   if (name === "validation-rewind") return validationRewind(false);
   if (name === "review-after-validation-rewind") return validationRewind(true);

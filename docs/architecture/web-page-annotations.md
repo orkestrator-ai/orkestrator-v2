@@ -83,6 +83,33 @@ a hint declaring `verified: true` is refused: only a backend containment check
 may verify a location, and even a verified hint stays a candidate location
 inside the untrusted evidence.
 
+### Development source hints
+
+A project opts in from a development build plugin by emitting the documented
+convention in `WEB_ANNOTATION_SOURCE_ATTRIBUTES`: `data-orkestrator-source`
+(`path`, `path:line` or `path:line:column`) and optionally
+`data-orkestrator-component` on elements, plus optional
+`<meta name="orkestrator-source-root" content="apps/web">` (the project's
+directory in the workspace) and
+`<meta name="orkestrator-source-producer" content="…">` (the tool's name). An
+element capture walks from the selected element through at most 16 ancestors
+and keeps the nearest four distinct paths. Absolute paths, `..`, `.`,
+backslashes, drive letters and control characters are dropped, and an escaping
+root drops every hint rather than guessing. Framework runtime internals (React
+fibres and the like) are never read.
+
+Electron main rebuilds each hint from its known fields with `verified: false`
+and drops an invalid hint on its own (`parseSourceHints`). The renderer sends
+hints only to a backend that advertises `operations.sourceHints`, which it
+does while authoring is on and a workspace path check is wired. Before the
+write, the backend runs `checkWebAnnotationWorkspacePaths` (the local worktree
+from the host, or `/workspace` inside the container) and sets `verified: true`
+on the hints whose path `exists`. A missing, outside-workspace or unchecked
+path, or a failed check, stays unverified, and the note is still saved. Only
+the path is checked; the line and component are never read. The brief says
+that a verified path existed at capture and that the agent still checks the
+code.
+
 Page identity comes from the real view URL in main, never from the page:
 `{kind: "port"}` for loopback or gateway previews, `{kind: "service"}` for
 registered services, and a route sanitized by `sanitizeWebAnnotationUrl`.
@@ -545,7 +572,7 @@ and copies them as JSON; counts reset when the backend or app restarts.
 
 | Client | Behavior |
 | --- | --- |
-| Desktop + current backend | Capture, author, discuss, request, review, compare. |
+| Desktop + current backend | Capture, author, discuss, request, review, compare; development source hints when the page emits them. |
 | Desktop + older backend | Capabilities unavailable; no annotation writes. |
 | Web / iOS + current backend | List, reply, discuss, request and review; capture shown as unavailable. |
 | Backend disconnected | Cached content with connection status; unsaved text retained. |
@@ -591,6 +618,11 @@ What has actually been exercised on a real stack (details and dates in
   provider's own terminal UI is not seen (the recorded control is used), which
   errs towards advisory and refusing.
 - The crop relation is checked by image size, not by pixels.
+- Source hints appear only on element captures of pages that emit the
+  `data-orkestrator-source` convention; Orkestrator ships no build plugin, and
+  the thread view does not show hints (agents see them in the brief and in
+  `get_annotation_evidence`). A verified hint proves only that the path
+  existed in the workspace at capture, not that the element came from it.
 - The capture `producer` is client-declared and labelled as such; nothing
   attests it. Every client uses the same gateway token, so a desktop
   signature would prove only that the caller holds it. Provenance is still

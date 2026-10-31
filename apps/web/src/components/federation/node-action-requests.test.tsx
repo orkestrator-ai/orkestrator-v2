@@ -318,3 +318,46 @@ for (const outcome of ["rejected", "failed", "error"])
       (screen.getByRole("button", { name: "Apply 1 file" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
+
+test("an account switch names the machine, the provider and the account, and says what it bills", async () => {
+  const resolved: Array<Record<string, unknown>> = [];
+  let pending = [
+    {
+      requestId: "req-switch",
+      kind: "switch-agent-account",
+      targets: [
+        {
+          nodeId: "bk_self",
+          nodeName: "this machine",
+          platform: "claude",
+          accountId: "acct-work",
+          accountLabel: "Work (work@example.com)",
+        },
+      ],
+      reason: "Switch to an account with usage left when the limit is hit.",
+      state: "pending",
+    },
+  ];
+  invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+    if (command === "list_node_action_requests") return pending;
+    if (command === "resolve_node_action_request") {
+      resolved.push(args);
+      pending = [];
+      return { ...args, state: "executed", result: { code: "switched", message: "Switched." } };
+    }
+    return undefined;
+  });
+  render(
+    <FederationProvider>
+      <NodeActionRequestsDialog />
+    </FederationProvider>,
+  );
+  const dialog = await screen.findByTestId("node-action-request");
+  expect(dialog.textContent).toContain(
+    "Switch the active Claude account on this machine to “Work (work@example.com)”?",
+  );
+  expect(dialog.textContent).toContain("billed to");
+  expect(dialog.textContent).toContain("Switch to an account with usage left");
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  await waitFor(() => expect(resolved).toEqual([{ requestId: "req-switch", decision: "approve" }]));
+});

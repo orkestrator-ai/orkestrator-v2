@@ -128,3 +128,19 @@ mise run test:logged -- --name transcript-follow-owner -- bunx playwright test -
 
 This repeats the existing intermittent re-engagement symptom. The cause is
 unconfirmed; no implementation, assertion, timeout or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-browser-suite -- mise run test:browser`
+repeated the desktop follow-decision failure at line 43 (`false` instead of
+`auto`, five-second deadline). Full component totals were 974 passed, 106
+skipped and four failed (764.2 s). The complete unchanged owner passed with
+exit 0 in 5.4 s (two desktop cases, two mobile skips):
+
+```sh
+mise run test:logged -- --name recorded-virtuoso-follow -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+Aggregate evidence is `orkestrator-test-run.CtuZX3/repaired-browser-suite.log.gz`
+below the host temporary directory. Passing owner output was removed. No
+owner implementation, assertion, timeout or skip changed; no cause was established.

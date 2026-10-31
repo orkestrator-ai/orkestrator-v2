@@ -26,6 +26,13 @@ export function browserPreviewAnchorKit() {
   const ATTRIBUTE_VALUE_CHARS = 300;
   const MAX_EVIDENCE_ATTRIBUTES = 24;
   const MAX_SENSITIVE_RECTS = 32;
+  // `WEB_ANNOTATION_SOURCE_ATTRIBUTES` in the protocol (this kit cannot import).
+  const SOURCE_ATTRIBUTE = "data-orkestrator-source";
+  const SOURCE_COMPONENT_ATTRIBUTE = "data-orkestrator-component";
+  const SOURCE_ROOT_META = "orkestrator-source-root";
+  const SOURCE_PRODUCER_META = "orkestrator-source-producer";
+  const MAX_SOURCE_HINTS = 4;
+  const SOURCE_HINT_DEPTH = 16;
   const SKIP_TAGS = new Set([
     "SCRIPT",
     "STYLE",
@@ -918,6 +925,67 @@ export function browserPreviewAnchorKit() {
     return styles;
   };
 
+  /** Workspace-relative path segments, or null for anything that could escape or mislead. */
+  const sourceSegments = (value: string): string[] | null => {
+    if (value.length > 1_000 || /[\\:\u0000-\u001f\u007f]/.test(value)) return null;
+    const segments = value.split("/");
+    return segments.every((segment) => segment && segment !== "." && segment !== "..")
+      ? segments
+      : null;
+  };
+
+  const metaContent = (name: string): string | null => {
+    const meta = document.querySelector(`meta[name="${name}"]`);
+    return meta ? (meta.getAttribute("content") ?? "").trim() : null;
+  };
+
+  /**
+   * Development source hints from the documented `data-orkestrator-source`
+   * convention, nearest element first. Never reads framework internals. The
+   * page declares these, so they are candidates: `verified` is always false
+   * here and only the backend's workspace check may set it.
+   */
+  const sourceHintsFor = (element: Element) => {
+    const rootValue = metaContent(SOURCE_ROOT_META)?.replace(/^\.\/+|\/+$/g, "") ?? "";
+    const root = rootValue === "" || rootValue === "." ? [] : sourceSegments(rootValue);
+    if (!root) return [];
+    const declared = metaContent(SOURCE_PRODUCER_META) ?? "";
+    const producer = /^[\x21-\x7e][\x20-\x7e]{0,99}$/.test(declared)
+      ? declared.trim()
+      : SOURCE_ATTRIBUTE;
+    const hints: Array<{
+      producer: string;
+      path: string;
+      line?: number;
+      component?: string;
+      verified: false;
+    }> = [];
+    let current: Element | null = element;
+    for (let depth = 0; current && depth < SOURCE_HINT_DEPTH; depth += 1) {
+      const raw = current.getAttribute(SOURCE_ATTRIBUTE);
+      const match = raw ? /^(.+?)(?::(\d{1,7}))?(?::\d{1,7})?$/.exec(raw.trim()) : null;
+      const segments = match ? sourceSegments(match[1]!.replace(/^\.\//, "")) : null;
+      const path = segments ? [...root, ...segments].join("/") : "";
+      if (path && path.length <= 1_000 && !hints.some((hint) => hint.path === path)) {
+        const line = match![2] ? Number(match![2]) : 0;
+        const component = (current.getAttribute(SOURCE_COMPONENT_ATTRIBUTE) ?? "")
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .trim()
+          .slice(0, 200);
+        hints.push({
+          producer,
+          path,
+          ...(line > 0 ? { line } : {}),
+          ...(component ? { component } : {}),
+          verified: false,
+        });
+        if (hints.length >= MAX_SOURCE_HINTS) break;
+      }
+      current = current.parentElement;
+    }
+    return hints;
+  };
+
   const newCounters = (): Counters => ({
     attributesRemoved: 0,
     valuesMasked: 0,
@@ -940,9 +1008,10 @@ export function browserPreviewAnchorKit() {
       hierarchy: anchor.ancestors,
       html: sanitizedHtml(element, counters, createBudget(3_000, 25)),
     };
+    const sourceHints = sourceHintsFor(element);
     return {
       target: { kind: "element", label: labelFor(anchor), anchor, rect: rectOf(element) },
-      evidence,
+      evidence: sourceHints.length > 0 ? { ...evidence, sourceHints } : evidence,
       redaction: counters,
     };
   };

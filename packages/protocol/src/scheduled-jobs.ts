@@ -51,7 +51,70 @@ export const SCHEDULED_JOB_LIMITS = Object.freeze({
   fireHeartbeatMs: 20_000,
   /** Stale-claim interruptions of one fire before it is failed as interrupted. */
   maxFireAttempts: 3,
+  /** How far ahead a coordinator's one-shot self-timer may be set. */
+  maxSelfTimerDelayMs: 7 * 24 * 60 * 60_000,
+  /** Active self-timers one coordinator owner (main, or one side agent) may hold. */
+  maxPendingSelfTimers: 20,
+  /**
+   * How long after a self-timer fires the account-switch permission it
+   * carries can be used. Covers a coordinator that was busy when it fired and
+   * read the reminder late.
+   */
+  selfTimerGrantWindowMs: 2 * 60 * 60_000,
+  /** The user's instruction a self-timer carries, in characters. */
+  userInstructionMaxChars: 500,
 });
+
+/**
+ * Permission a coordinator's self-timer carries to switch the active account
+ * of a provider without asking the user again, stored in the reminder's mail
+ * input (`input.grant`). Only accepted at creation in a turn the user started
+ * (`grantedIn: "user-turn"`), so mail, a workflow notice or another timer can
+ * never mint one. It is good for {@link SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs}
+ * after each fire of the timer that carries it.
+ */
+export interface ScheduleAccountSwitchGrant {
+  kind: "switch-agent-account";
+  platforms: Array<"claude" | "codex">;
+  /** Machines the switch may act on; absent means the coordinator's own machine only. */
+  nodeIds?: string[];
+  /** What the user asked, in their words (bounded). */
+  userInstruction: string;
+  grantedIn: "user-turn";
+  grantedAt: string;
+}
+
+/** The account-switch permission a schedule action carries, when it is well formed. */
+export function scheduleAccountSwitchGrant(
+  action: ScheduleAction,
+): ScheduleAccountSwitchGrant | null {
+  if (action.kind !== "action") return null;
+  const grant = action.input.grant;
+  if (!grant || typeof grant !== "object" || Array.isArray(grant)) return null;
+  const value = grant as Record<string, unknown>;
+  if (
+    value.kind !== "switch-agent-account" ||
+    value.grantedIn !== "user-turn" ||
+    typeof value.grantedAt !== "string" ||
+    typeof value.userInstruction !== "string" ||
+    !Array.isArray(value.platforms) ||
+    value.platforms.length === 0 ||
+    !value.platforms.every((platform) => platform === "claude" || platform === "codex") ||
+    (value.nodeIds !== undefined &&
+      (!Array.isArray(value.nodeIds) ||
+        !value.nodeIds.every((nodeId) => typeof nodeId === "string" && nodeId.length > 0)))
+  ) {
+    return null;
+  }
+  return {
+    kind: "switch-agent-account",
+    platforms: [...new Set(value.platforms as Array<"claude" | "codex">)],
+    ...(value.nodeIds ? { nodeIds: [...(value.nodeIds as string[])] } : {}),
+    userInstruction: value.userInstruction.slice(0, SCHEDULED_JOB_LIMITS.userInstructionMaxChars),
+    grantedIn: "user-turn",
+    grantedAt: value.grantedAt,
+  };
+}
 
 export type ScheduleTrigger =
   | { kind: "once"; at: string }

@@ -142,7 +142,7 @@ describe("selection-only capture runtime", () => {
 
   test("text mode captures an exact quote with bounded context and never touches the clipboard", () => {
     const harness = page(
-      `<p id="pricing">Plans start at $120 billed annually per seat for small teams.</p>`,
+      `<p id="pricing" data-orkestrator-source="src/Pricing.tsx:12">Plans start at $120 billed annually per seat for small teams.</p>`,
     );
     let clipboardWrites = 0;
     Object.defineProperty(harness.window.navigator, "clipboard", {
@@ -175,6 +175,7 @@ describe("selection-only capture runtime", () => {
     expect(status.status).toBe("selected");
     const target = status.selection.target;
     expect(target.kind).toBe("text-range");
+    expect(status.selection.evidence?.sourceHints).toBeUndefined();
     expect(target.quote.exact).toBe("billed annually");
     expect(target.quote.prefix.endsWith("$120")).toBe(true);
     expect(target.quote.suffix.startsWith("per seat")).toBe(true);
@@ -201,7 +202,9 @@ describe("selection-only capture runtime", () => {
   });
 
   test("region mode draws over an inspector-owned overlay and confirms with Enter", () => {
-    const harness = page(`<canvas width="400" height="300"></canvas>`);
+    const harness = page(
+      `<canvas data-orkestrator-source="src/Chart.tsx:8" width="400" height="300"></canvas>`,
+    );
     let pagePointerDowns = 0;
     harness.document.querySelector("canvas")!.addEventListener("pointerdown", () => {
       pagePointerDowns += 1;
@@ -246,7 +249,7 @@ describe("selection-only capture runtime", () => {
   });
 
   test("page mode selects immediately without page evidence", () => {
-    const harness = page(`<main>Dashboard</main>`);
+    const harness = page(`<main data-orkestrator-source="src/Dashboard.tsx:4">Dashboard</main>`);
     harness.document.title = "Dashboard";
     const initial = harness.start("page");
     expect(initial.status).toBe("selected");

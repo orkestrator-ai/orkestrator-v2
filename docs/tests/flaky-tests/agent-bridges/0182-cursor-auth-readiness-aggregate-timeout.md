@@ -290,3 +290,27 @@ Evidence: host temporary directory `orkestrator-test-run.RKStpZ/bridges.log.gz`
 and outer `orkestrator-test-run.ryekIw/shortcuts-unit-suite.log.gz`. The aggregate
 failure followed by an isolated pass matches earlier recurrences; the cause
 remains unconfirmed. No Cursor implementation, assertion, deadline or skip changed.
+
+
+## Coordinator timers/account review — 2026-10-30
+
+Preparation at `574bb14b3` repeated readiness hook timeouts in `reports an
+authenticated credential as ready` and `an attached agent is ready without
+reading credentials` during `mise run test`. The same owner also returned no
+`content-encoding` in its gzip assertion after an unexpected route failure.
+The complete unchanged HTTP owner passed alone (exit 0, 2.1 s):
+
+```sh
+mise run test:logged -- --name recorded-cursor-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is in
+`.orkestrator/review-artifacts/review-validation-af449b96-aec4-419e-90d3-165bd324e649/validation-05.stdout.txt`.
+No Cursor implementation, assertion, deadline or skip changed. The isolated
+pass supports an aggregate-only recurrence; its cause remains unconfirmed.
+
+The exact default-suite rerun subsequently passed (exit 0, 170.0 s):
+
+```sh
+mise run test:logged -- --name review-repaired-default -- mise run test
+```

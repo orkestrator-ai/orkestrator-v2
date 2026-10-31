@@ -58,3 +58,18 @@ Aggregate evidence: `orkestrator-test-run.2mai8S/workspace-web-backend-desktop-w
 and `orkestrator-test-run.LbkZa8/summary.json` under the host temporary
 directory. No rich-content implementation or test changed. The cause remains
 unconfirmed.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated
+this unchanged owner failure. The sibling ledger had length zero instead of one at line 187 (165.55 ms); web totals were 10,845 passed, 10 skipped and one failed.
+The complete unchanged owner then passed alone with exit 0 in 1.9 s:
+
+```sh
+mise run test:logged -- --name recorded-rich-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures
+```
+
+Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Passing output was removed by the runner.
+No owner implementation, assertion, timeout or skip changed; the cause remains
+unconfirmed.

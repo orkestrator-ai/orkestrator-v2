@@ -90,6 +90,8 @@ export class WebAnnotationStoreOperations {
         resolve: writable && mode !== "disabled",
         recover: readable && dispatchWired,
         archive: authoring,
+        // Hints are only worth sending when the backend can check their paths.
+        sourceHints: authoring && Boolean(this.ctx.options.dispatch?.checkWorkspacePaths),
       },
       targets: authoring ? [...WEB_ANNOTATION_SUBMITTABLE_TARGET_KINDS] : [],
       maxRequestAnnotations: dispatch ? WEB_ANNOTATION_LIMITS.briefAnnotations : 0,

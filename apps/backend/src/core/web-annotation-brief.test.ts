@@ -577,6 +577,31 @@ describe("compileWebAnnotationBrief", () => {
     ]);
   });
 
+  test("a backend-verified hint is still a candidate the agent must check", () => {
+    const base = fixtureCapture("element", { id: "capture-annotation-1" });
+    const capture = fixtureCapture("element", {
+      id: "capture-annotation-1",
+      evidence: {
+        ...base.evidence!,
+        sourceHints: [
+          { producer: "data-orkestrator-source", path: "src/settings.tsx", verified: true },
+        ],
+      },
+    });
+    const brief = compileWebAnnotationBrief(
+      input({ annotations: [item("annotation-1", { capture })] }),
+    );
+    const hierarchy = envelope(brief.body).annotations[0]?.hierarchy as Record<string, unknown>;
+    expect(hierarchy.sourceHints).toEqual([
+      {
+        producer: "data-orkestrator-source",
+        path: "src/settings.tsx",
+        verified: true,
+        note: "candidate location only; the path existed in the workspace at capture, verify the code in the repository",
+      },
+    ]);
+  });
+
   test("a slash-leading user comment cannot become a slash command", () => {
     const brief = compileWebAnnotationBrief(
       input({

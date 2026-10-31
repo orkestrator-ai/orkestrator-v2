@@ -396,7 +396,13 @@ capability `schedules`, granted to the main and side roles; see
 [scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, run saved graphs, and use durable mailbox
-read/send/ack operations.
+read/send/ack operations. A self-timer is `create_schedule` with action type
+`remind_me`. The main coordinator also finds usage-limited workers
+(`get_usage_limits`, capability `environments`) and lists and switches
+provider accounts (`list_provider_accounts`, `switch_provider_account`,
+capability `accounts`, main role only); a switch is a user-approved request
+unless a self-timer carries the user's permission (see
+[agent-accounts.md](agent-accounts.md#coordinator-switching)).
 
 **Saved graphs** (item 214, capability `graphs`, main role only;
 `control-mcp-graph-tools.ts`, commands in `coordinator-graph-actions.ts`):

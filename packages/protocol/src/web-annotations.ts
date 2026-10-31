@@ -308,6 +308,28 @@ export interface WebAnnotationSourceHint {
   verified: boolean;
 }
 
+/**
+ * The documented page convention a development build plugin opts into so the
+ * desktop capture can name source locations without reading framework
+ * internals. The page is untrusted: every value is bounded and the backend
+ * still checks the path before marking a hint verified.
+ *
+ * - `path` on an element: `relative/path.ext`, `relative/path.ext:line` or
+ *   `relative/path.ext:line:column`, relative to the source root.
+ * - `component` on the same element: an optional component name.
+ * - `root` meta (`<meta name=… content=…>`): the producing project's
+ *   directory relative to the environment workspace, for example `apps/web`;
+ *   absent means the workspace root.
+ * - `producer` meta: the producing tool's name; absent means the `path`
+ *   attribute's name.
+ */
+export const WEB_ANNOTATION_SOURCE_ATTRIBUTES = Object.freeze({
+  path: "data-orkestrator-source",
+  component: "data-orkestrator-component",
+  root: "orkestrator-source-root",
+  producer: "orkestrator-source-producer",
+} as const);
+
 /** The hint's known fields only, so a producer cannot carry extra keys to storage or the agent. */
 export function webAnnotationSourceHintFields(
   hint: WebAnnotationSourceHint,
@@ -1088,6 +1110,12 @@ export interface WebAnnotationCapabilities {
     recover?: boolean;
     /** `web_annotation_archive` (archive + continuation). Absent: unsupported. */
     archive?: boolean;
+    /**
+     * Development source hints (`WEB_ANNOTATION_SOURCE_ATTRIBUTES`): the
+     * backend checks each hint's workspace containment and existence and sets
+     * `verified` itself. Absent or false: clients send no hints.
+     */
+    sourceHints?: boolean;
   };
   /** Capture target kinds a client may submit (never `legacy-unresolved`). */
   targets: WebAnnotationTargetKind[];

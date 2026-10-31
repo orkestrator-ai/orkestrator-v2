@@ -407,8 +407,7 @@ export function registerPullRequestCommands(
   /**
    * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
    * flag is durable; turning it on also asks the monitor for a fresh reading
-   * and evaluates the current one, so a PR that is already ready merges now
-   * rather than on its next change.
+   * before acting, so a cached pre-request reading cannot authorize a merge.
    */
   register("set_environment_auto_merge", async (args, context) => {
     assertOnlyKeys(args, ["environmentId", "enabled"], "arguments");
@@ -420,8 +419,9 @@ export function registerPullRequestCommands(
       await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {
         console.warn(`[pr-auto-merge] Could not refresh the PR of ${id}:`, conciseError(error));
       });
-      void context.prAutoMerge?.evaluate(id);
+      // Only the post-request monitor reading authorizes the first action.
     }
+    if (!enabled) void context.prAutoMerge?.evaluate(id);
     return toClientEnvironment(updated);
   });
   /**

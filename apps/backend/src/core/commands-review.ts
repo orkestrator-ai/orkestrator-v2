@@ -51,6 +51,7 @@ import {
 } from "./review-package.js";
 
 export type PrDetectionResult = {
+  headSha?: string | null;
   baseBranch?: string;
   url: string;
   state: PrState;
@@ -73,6 +74,7 @@ export type MergeEnvironmentPrResult = MergePrResult & {
 };
 
 export type GhPrListEntry = {
+  headRefOid?: unknown;
   baseRefName?: unknown;
   url?: unknown;
   state?: unknown;
@@ -1470,6 +1472,14 @@ export function buildPrDetectionCandidate(
     rank: prStateRank(state),
     updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
     result: {
+      ...(entry.headRefOid !== undefined
+        ? {
+            headSha:
+              typeof entry.headRefOid === "string" && /^[a-f0-9]{40}$/i.test(entry.headRefOid)
+                ? entry.headRefOid
+                : null,
+          }
+        : {}),
       url: entry.url,
       ...(typeof entry.baseRefName === "string" ? { baseBranch: entry.baseRefName } : {}),
       state,

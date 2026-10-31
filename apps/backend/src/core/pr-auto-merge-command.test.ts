@@ -20,7 +20,11 @@ async function withStorage(run: (storage: StorageService, dir: string) => Promis
 
 test("storage keeps auto-merge across a restart and records off as an explicit false", async () => {
   await withStorage(async (storage, dir) => {
-    const environment = await storage.addEnvironment(createEnvironment("project"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
     expect(environment.autoMerge).toBeUndefined();
     await storage.updateEnvironment(environment.id, { autoMerge: true });
     const reopened = new StorageService(dir);
@@ -38,9 +42,13 @@ test("storage keeps auto-merge across a restart and records off as an explicit f
   });
 });
 
-test("set_environment_auto_merge persists the flag and evaluates only when turned on", async () => {
+test("set_environment_auto_merge persists the flag and waits for the requested monitor reading", async () => {
   await withStorage(async (storage) => {
-    const environment = await storage.addEnvironment(createEnvironment("project"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
     const requestRefresh = mock(async () => undefined);
     const evaluate = mock(async () => undefined);
     const context = {
@@ -58,7 +66,7 @@ test("set_environment_auto_merge persists the flag and evaluates only when turne
     expect(enabled.autoMerge).toBe(true);
     expect((await storage.getEnvironment(environment.id))?.autoMerge).toBe(true);
     expect(requestRefresh).toHaveBeenCalledTimes(1);
-    expect(evaluate).toHaveBeenCalledWith(environment.id);
+    expect(evaluate).not.toHaveBeenCalled();
 
     const disabled = (await command!(
       { environmentId: environment.id, enabled: false },
@@ -66,7 +74,7 @@ test("set_environment_auto_merge persists the flag and evaluates only when turne
     )) as { autoMerge?: boolean };
     expect(disabled.autoMerge).toBe(false);
     expect(requestRefresh).toHaveBeenCalledTimes(1);
-    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledWith(environment.id);
 
     await expect(command!({ environmentId: environment.id }, context)).rejects.toThrow();
     await expect(
@@ -77,7 +85,11 @@ test("set_environment_auto_merge persists the flag and evaluates only when turne
 
 test("a monitor refresh failure does not undo turning auto-merge on", async () => {
   await withStorage(async (storage) => {
-    const environment = await storage.addEnvironment(createEnvironment("project"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
     const warn = mock(() => undefined);
     const originalWarn = console.warn;
     console.warn = warn;
@@ -104,3 +116,30 @@ test("a monitor refresh failure does not undo turning auto-merge on", async () =
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+for (const update of [
+  { prState: "merged" },
+  { prState: "closed" },
+  { prUrl: "https://github.com/o/r/pull/2", prState: "open" },
+  { branch: "main", prUrl: null, prState: null },
+]) {
+  test(`PR authorization is cleared durably on ${JSON.stringify(update)}`, async () => {
+    await withStorage(async (storage) => {
+      const env = await storage.addEnvironment({
+        ...createEnvironment("project"),
+        prUrl: "https://github.com/o/r/pull/1",
+        prState: "open",
+      });
+      await storage.updateEnvironment(env.id, { autoMerge: true });
+      expect((await storage.getEnvironment(env.id))?.autoMergePrUrl).toBe(env.prUrl);
+      const updated = await storage.updateEnvironment(env.id, update);
+      expect(updated.autoMerge).toBe(false);
+      expect(updated.autoMergePrUrl).toBeNull();
+      await storage.updateEnvironment(env.id, {
+        prUrl: "https://github.com/o/r/pull/3",
+        prState: "open",
+      });
+      expect((await storage.getEnvironment(env.id))?.autoMerge).toBe(false);
+    });
+  });
+}

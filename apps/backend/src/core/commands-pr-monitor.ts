@@ -106,8 +106,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
       target.prUrl,
       "--json",
       target.projectHome
-        ? "url,state,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
-        : "url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+        ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
+        : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
     ];
     return {
       args,
@@ -128,8 +128,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "30",
     "--json",
     target.projectHome
-      ? "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+      ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
+      : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
   ];
   return {
     args,
@@ -146,14 +146,14 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
  * permission must never stop merge/close detection or linked-task updates.
  */
 export function getPrMonitorCheckRequest(prUrl: string): PrMonitorCheckRequest {
-  const args = ["pr", "view", prUrl, "--json", "statusCheckRollup"];
+  const args = ["pr", "view", prUrl, "--json", "statusCheckRollup,headRefOid"];
   return {
     args,
-    shellCommand: `gh pr view ${quoteShell(prUrl)} --json statusCheckRollup`,
+    shellCommand: `gh pr view ${quoteShell(prUrl)} --json statusCheckRollup,headRefOid`,
   };
 }
 
-export function parsePrMonitorCheckResponse(stdout: string) {
+export function parsePrMonitorCheckResponse(stdout: string, expectedHeadSha?: string | null) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout.trim());
@@ -162,6 +162,9 @@ export function parsePrMonitorCheckResponse(stdout: string) {
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Failed to parse gh PR check output");
+  }
+  if (expectedHeadSha && (parsed as Record<string, unknown>).headRefOid !== expectedHeadSha) {
+    throw new Error("PR head changed while reading checks");
   }
   return parsePrCheckSummary((parsed as Record<string, unknown>).statusCheckRollup);
 }
@@ -353,6 +356,7 @@ export async function detectEnvironmentPullRequest(
               env: await gitHubCliEnv(),
             })
           ).stdout,
+          detection.headSha,
         ),
       );
       return {
@@ -395,6 +399,7 @@ export async function detectEnvironmentPullRequest(
           withContainerRuntimeCredential(checkRequest.shellCommand),
           10_000,
         ),
+        detection.headSha,
       ),
     );
     return {

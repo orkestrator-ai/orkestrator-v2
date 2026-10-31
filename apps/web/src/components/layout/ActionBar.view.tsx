@@ -1241,6 +1241,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <PullRequestCheckStatusAnnouncement checkSummary={checkSummary} />
                   )}
 
+                  {!isPRFinished && selectedEnvironment?.autoMergeError && (
+                    <span
+                      role="status"
+                      className="max-w-64 truncate text-xs text-destructive"
+                      title={selectedEnvironment.autoMergeError}
+                    >
+                      Auto-merge: {selectedEnvironment.autoMergeError}
+                    </span>
+                  )}
                   {!isPRFinished && (
                     <ToolbarTooltipTrigger
                       tooltip={

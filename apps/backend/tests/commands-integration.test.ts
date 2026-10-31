@@ -850,18 +850,20 @@ exit 1
             const log = readFileSync(logPath, "utf8");
             return (
               log.includes(
-                "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+                "pr view https://github.com/acme/repo/pull/42 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
               ) &&
-              log.includes("pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup")
+              log.includes(
+                "pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup,headRefOid",
+              )
             );
           }, "resumed PR monitor check");
 
           const ghCommands = (await fs.readFile(logPath, "utf8")).trim().split("\n");
           expect(ghCommands).toContain(
-            "pr view https://github.com/acme/repo/pull/42 --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+            "pr view https://github.com/acme/repo/pull/42 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
           );
           expect(ghCommands).toContain(
-            "pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup",
+            "pr view https://github.com/acme/repo/pull/42 --json statusCheckRollup,headRefOid",
           );
           const snapshot = (await commands.get("get_pr_monitor_state")?.({}, context)) as {
             entries: Array<{ environmentId: string; consecutiveErrors: number }>;

@@ -3,6 +3,7 @@ import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/pro
 import {
   decideAutoMerge,
   PR_AUTO_MERGE_RETRY_BASE_MS,
+  PR_AUTO_MERGE_RETRY_MAX_MS,
   PrAutoMergeController,
 } from "./pr-auto-merge.js";
 import type { Environment } from "./models.js";
@@ -17,11 +18,14 @@ function environment(overrides: Partial<Environment> = {}): Environment {
     environmentType: "local",
     worktreePath: "/tmp/feature",
     status: "running",
+    setupPhase: "ready",
     prUrl: PR_URL,
     prState: "open",
     hasMergeConflicts: false,
     prMergeability: "clean",
     autoMerge: true,
+    autoMergePrUrl: PR_URL,
+    autoMergeEnabledAt: new Date(Date.now() - 1000).toISOString(),
     ...overrides,
   };
 }
@@ -35,11 +39,14 @@ function monitor(
     mode: "normal",
     checkInProgress: false,
     consecutiveErrors: 0,
-    lastCheckAt: "2026-10-31T00:00:00.000Z",
-    lastSuccessfulCheckAt: "2026-10-31T00:00:00.000Z",
+    lastCheckAt: new Date().toISOString(),
+    lastSuccessfulCheckAt: new Date().toISOString(),
+    lastSuccessfulCheckStartedAt: new Date().toISOString(),
+    headSha: "a".repeat(40),
     prUrl: env.prUrl,
     prState: env.prState,
     hasMergeConflicts: env.hasMergeConflicts,
+    mergeability: env.prMergeability,
     checkSummary: null,
     viewerCanMerge: true,
     ...overrides,
@@ -111,13 +118,24 @@ function harness(initial: Environment) {
   const invocations: Array<{ command: string; args: Record<string, unknown> }> = [];
   const timers: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
   let failNext: Error | null = null;
-  const controller = new PrAutoMergeController({
-    storage: {
-      getEnvironment: async (id) => (id === stored.id ? stored : null),
-      loadConfig: async () =>
-        ({ global: { enabledAgentPlatforms: ["claude"] }, repositories: {} }) as never,
-      getRepositoryConfig: async () => ({ prBaseBranch: "develop" }) as never,
+  let nextStatus: string | null = null;
+  const storage = {
+    getEnvironment: async (id: string) => (id === stored.id ? stored : null),
+    loadEnvironments: async () => [stored],
+    updateEnvironment: async (
+      _id: string,
+      updates: Record<string, unknown>,
+      predicate?: (env: Environment) => boolean | Promise<boolean>,
+    ) => {
+      if (!predicate || (await predicate(stored))) stored = { ...stored, ...updates };
+      return stored;
     },
+    loadConfig: async () =>
+      ({ global: { enabledAgentPlatforms: ["claude"] }, repositories: {} }) as never,
+    getRepositoryConfig: async () => ({ prBaseBranch: "develop" }) as never,
+  };
+  const controller = new PrAutoMergeController({
+    storage,
     invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
       invocations.push({ command, args });
       if (failNext) {
@@ -125,7 +143,9 @@ function harness(initial: Environment) {
         failNext = null;
         throw error;
       }
-      return (command === "launch_native_agent_job" ? { status: "accepted" } : {}) as T;
+      const status = nextStatus ?? "accepted";
+      nextStatus = null;
+      return (command === "launch_native_agent_job" ? { status, error: "agent refused" } : {}) as T;
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -144,12 +164,22 @@ function harness(initial: Environment) {
   });
   return {
     controller,
+    storage,
+    get stored() {
+      return stored;
+    },
+    setMonitor(state: PrMonitorEnvironmentState | null) {
+      monitorState = state;
+    },
     invocations,
     timers,
     listeners,
     set(next: Environment) {
       stored = next;
       monitorState = monitor(next);
+    },
+    nextStatus(status: string) {
+      nextStatus = status;
     },
     failNextInvoke(error: Error) {
       failNext = error;
@@ -175,6 +205,8 @@ describe("PrAutoMergeController", () => {
           method: "squash",
           deleteBranch: true,
           cleanupAfterMerge: false,
+          expectedHeadSha: "a".repeat(40),
+          expectedPrUrl: PR_URL,
         },
       },
     ]);
@@ -233,3 +265,132 @@ describe("PrAutoMergeController", () => {
     expect(h.invocations).toHaveLength(1);
   });
 });
+
+for (const change of ["disable", "dispose", "replace", "manual"] as const) {
+  test(`Resolve preparation is fenced by ${change}`, async () => {
+    const h = harness(environment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    h.storage.getRepositoryConfig = async () => {
+      entered();
+      await gate;
+      return {} as never;
+    };
+    const running = h.controller.evaluate("env-1");
+    await started;
+    if (change === "dispose") h.controller.dispose();
+    else
+      h.set({
+        ...h.stored,
+        ...(change === "disable"
+          ? { autoMerge: false }
+          : change === "replace"
+            ? { prUrl: PR_URL + "1" }
+            : { prRecheckAfterAgentCompletionArmedAt: "manual" }),
+      });
+    release();
+    await running;
+    expect(h.invocations).toHaveLength(0);
+    expect(h.timers).toHaveLength(0);
+  });
+}
+
+test("stopped and unprepared Resolve environments wait without retries, then run when ready", async () => {
+  const h = harness(
+    environment({ status: "stopped", hasMergeConflicts: true, prMergeability: "dirty" }),
+  );
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(0);
+  expect(h.timers).toHaveLength(0);
+  h.set({ ...h.stored, status: "running", setupPhase: "pending" });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(0);
+  h.set({ ...h.stored, setupPhase: "ready" });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+});
+
+test("cached, old, unbound, and different-head readings cannot authorize a merge", async () => {
+  const h = harness(environment());
+  h.setMonitor(
+    monitor(h.stored, { lastSuccessfulCheckStartedAt: new Date(Date.now() - 2000).toISOString() }),
+  );
+  await h.controller.evaluate("env-1");
+  h.setMonitor(monitor(h.stored, { headSha: null }));
+  await h.controller.evaluate("env-1");
+  h.setMonitor(
+    monitor(h.stored, {
+      lastSuccessfulCheckStartedAt: new Date(Date.now() - 120000).toISOString(),
+    }),
+  );
+  await h.controller.evaluate("env-1");
+  h.set({ ...h.stored, prUrl: PR_URL + "1" });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(0);
+});
+
+test("success holds a pending merge, and armed Resolve stays held after its timer", async () => {
+  const h = harness(environment());
+  await h.controller.evaluate("env-1");
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+  h.timers.at(-1)!.callback();
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(2);
+  const r = harness(environment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+  await r.controller.evaluate("env-1");
+  r.set({ ...r.stored, prRecheckAfterAgentCompletionArmedAt: "owned" });
+  r.timers.at(-1)!.callback();
+  await r.controller.evaluate("env-1");
+  expect(r.invocations).toHaveLength(1);
+});
+
+test("failure backoff reaches its ceiling, exposes an error, and recovery clears it", async () => {
+  const h = harness(environment());
+  h.failNextInvoke(new Error("refused"));
+  await h.controller.evaluate("env-1");
+  for (let attempt = 0; attempt < 7; attempt++) {
+    expect(h.timers.at(-1)!.delayMs).toBe(
+      Math.min(PR_AUTO_MERGE_RETRY_BASE_MS * 2 ** attempt, PR_AUTO_MERGE_RETRY_MAX_MS),
+    );
+    expect(h.stored.autoMergeError).toBe("refused");
+    if (attempt < 6) h.failNextInvoke(new Error("refused"));
+    h.timers.at(-1)!.callback();
+    await h.controller.evaluate("env-1");
+    // Drain the coalesced pass before firing another timer.
+    await h.controller.evaluate("env-1");
+  }
+  expect(h.stored.autoMergeError).toBeNull();
+});
+
+for (const reason of ["disabled", "terminal", "removed"] as const) {
+  test(`${reason} cancels retries`, async () => {
+    const h = harness(environment());
+    h.controller.start();
+    await h.controller.evaluate("env-1");
+    if (reason === "removed") {
+      for (const listener of h.listeners) listener({ environmentId: "env-1", removed: true });
+    } else {
+      h.set({
+        ...h.stored,
+        ...(reason === "disabled" ? { autoMerge: false } : { prState: "closed" }),
+      });
+      await h.controller.evaluate("env-1");
+    }
+    expect(h.timers[0]!.cancelled).toBe(true);
+  });
+}
+
+for (const status of ["rejected", "unknown"]) {
+  test(`Resolve ${status} status is visible and does not count as a successful launch`, async () => {
+    const h = harness(environment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+    h.nextStatus(status);
+    await h.controller.evaluate("env-1");
+    expect(h.stored.autoMergeError).toContain(
+      status === "rejected" ? "agent refused" : "unconfirmed",
+    );
+    expect(h.timers[0]!.delayMs).toBe(PR_AUTO_MERGE_RETRY_BASE_MS);
+  });
+}

@@ -6202,7 +6202,7 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
     expect(discovery.shellCommand).not.toContain("statusCheckRollup");
@@ -6222,10 +6222,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
     );
     expect(
       parsePrMonitorDetectionResponse(
@@ -6248,10 +6248,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "statusCheckRollup",
+      "statusCheckRollup,headRefOid",
     ]);
     expect(checks.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json statusCheckRollup",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json statusCheckRollup,headRefOid",
     );
     expect(
       parsePrMonitorCheckResponse(

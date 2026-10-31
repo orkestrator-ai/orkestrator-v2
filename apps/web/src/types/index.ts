@@ -141,6 +141,13 @@ export interface Environment {
    * Resolve when it conflicts. Absent from older backends; means off.
    */
   autoMerge?: boolean;
+  /** PR-specific authorization and freshness fence. */
+  autoMergePrUrl?: string | null;
+  autoMergeEnabledAt?: string | null;
+  /** Last automatic attempt failure, cleared after recovery. */
+  autoMergeError?: string | null;
+  /** Recoverable Resolve identity, retained across pre-dispatch failures. */
+  autoMergeResolveRequestId?: string;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;

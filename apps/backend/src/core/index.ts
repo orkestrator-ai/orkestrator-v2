@@ -1274,6 +1274,7 @@ export class OrkestratorBackend {
     this.prAutoMerge = new PrAutoMergeController({
       storage,
       invoke: invokeCommand,
+      resumeMonitoring: () => context.runtime.prMonitor.sync(context),
       subscribe: (listener) => context.runtime.prMonitor.onEvent(listener),
       monitorState: (environmentId) =>
         context.runtime.prMonitor.announcedStates().get(environmentId) ?? null,
@@ -2293,7 +2294,7 @@ export class OrkestratorBackend {
     // lease, the Control MCP (coordinator schedules) and the agent tools.
     this.scheduledJobs.start();
     // Acts on PR monitor readings for environments whose auto-merge is on.
-    this.prAutoMerge.start();
+    await this.prAutoMerge.resume();
     // Agent shell commands waiting on the user (sign-in links, codes, ENTER).
     this.agentHumanPrompts.start();
     this.reserveOwnedPreviewPorts();

@@ -55,9 +55,23 @@ export function decideAutoMerge(
   monitor: PrMonitorEnvironmentState | null,
 ): PrAutoMergeDecision {
   if (environment.autoMerge !== true) return { kind: "wait", reason: "disabled" };
+  if (environment.prState !== "open") return { kind: "wait", reason: "not-open" };
+  if (environment.autoMergePrUrl !== environment.prUrl) return { kind: "wait", reason: "disabled" };
+  const checkedAt = Date.parse(monitor?.lastSuccessfulCheckStartedAt ?? "");
+  const enabledAt = Date.parse(environment.autoMergeEnabledAt ?? "");
+  if (
+    !Number.isFinite(checkedAt) ||
+    !Number.isFinite(enabledAt) ||
+    checkedAt <= enabledAt ||
+    Date.now() - checkedAt > PR_AUTO_MERGE_RETRY_BASE_MS
+  ) {
+    return { kind: "wait", reason: "stale" };
+  }
   if (environment.deletionRequestedAt || environment.lifecycleOperation) {
     return { kind: "wait", reason: "busy" };
   }
+  if ((monitor?.mergeability ?? null) !== (environment.prMergeability ?? null))
+    return { kind: "wait", reason: "stale" };
   const readiness = evaluatePrMergeReadiness({
     prState: environment.prState,
     hasMergeConflicts: environment.hasMergeConflicts,
@@ -66,19 +80,40 @@ export function decideAutoMerge(
     viewerCanMerge: monitor?.viewerCanMerge ?? null,
     fresh: isPrReadingConfirmedByMonitor(environment, monitor),
   });
-  if (readiness.ready) return { kind: "merge" };
+  if (readiness.ready)
+    return monitor?.headSha && /^[a-f0-9]{40}$/i.test(monitor.headSha)
+      ? { kind: "merge" }
+      : { kind: "wait", reason: "stale" };
   if (readiness.reason !== "conflicts") return { kind: "wait", reason: readiness.reason };
   // Only an explicit conflict reading arms the Resolve token below; a `dirty`
   // merge state alone would launch Resolve again on every attempt.
   if (environment.hasMergeConflicts !== true) return { kind: "wait", reason: "conflicts" };
+  if (
+    environment.status !== "running" ||
+    !(
+      environment.setupPhase === "ready" ||
+      environment.setupScriptsComplete ||
+      environment.setupOverride
+    )
+  ) {
+    return { kind: "wait", reason: "busy" };
+  }
   return environment.prRecheckAfterAgentCompletionArmedAt
     ? { kind: "wait", reason: "resolve-pending" }
     : { kind: "resolve" };
 }
 
 export interface PrAutoMergeOptions {
-  storage: Pick<StorageService, "getEnvironment" | "loadConfig" | "getRepositoryConfig">;
+  storage: Pick<
+    StorageService,
+    | "getEnvironment"
+    | "loadConfig"
+    | "getRepositoryConfig"
+    | "loadEnvironments"
+    | "updateEnvironment"
+  >;
   invoke: CommandInvoker;
+  resumeMonitoring?: () => Promise<void>;
   /** In-process PR monitor events; returns an unsubscribe function. */
   subscribe: (listener: (event: PrMonitorEvent) => void) => () => void;
   /** The monitor's announced state for one environment, or null. */
@@ -131,6 +166,34 @@ export class PrAutoMergeController {
     });
   }
 
+  /** Resume persisted intent without a renderer request. Subscribe before hydration. */
+  async resume(): Promise<void> {
+    this.start();
+    const environments = await this.options.storage.loadEnvironments();
+    if (this.closed || !environments.some((environment) => environment.autoMerge)) return;
+    for (const environment of environments) {
+      if (environment.autoMerge && !environment.autoMergePrUrl) {
+        await this.options.storage.updateEnvironment(
+          environment.id,
+          { autoMerge: true },
+          (current) =>
+            current.autoMerge === true &&
+            !current.autoMergePrUrl &&
+            current.prUrl === environment.prUrl,
+        );
+      }
+    }
+    if (this.closed) return;
+    await this.options.resumeMonitoring?.();
+    for (const environment of environments) {
+      if (environment.autoMerge) await this.evaluate(environment.id);
+    }
+  }
+
+  isActive(): boolean {
+    return !this.closed;
+  }
+
   /**
    * Re-evaluates one environment now. Serialised per environment: a request
    * that arrives while one runs is folded into a single follow-up pass.
@@ -175,10 +238,16 @@ export class PrAutoMergeController {
     const retry = this.retries.get(environmentId);
     if (retry?.waiting && retry.key === key) return;
     try {
-      if (decision.kind === "merge") await this.merge(environment);
-      else await this.launchResolve(environment);
+      const attempted =
+        decision.kind === "merge"
+          ? await this.merge(environment)
+          : await this.launchResolve(environment);
+      if (!attempted || this.closed) return;
+      await this.recordError(environment, null);
       this.holdAttempt(environmentId, key, false);
     } catch (error) {
+      if (this.closed) return;
+      await this.recordError(environment, error instanceof Error ? error.message : String(error));
       this.holdAttempt(environmentId, key, true);
       this.warn(
         decision.kind === "merge"
@@ -189,30 +258,62 @@ export class PrAutoMergeController {
     }
   }
 
-  /** The Merge PR button's own command and arguments, without cleanup. */
-  private async merge(environment: Environment): Promise<void> {
+  /** Revalidate the decision after asynchronous preparation. */
+  private async authorized(environment: Environment, kind: "merge" | "resolve"): Promise<boolean> {
+    const current = await this.options.storage.getEnvironment(environment.id);
+    return (
+      !this.closed &&
+      !!current &&
+      current.prUrl === environment.prUrl &&
+      current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
+      decideAutoMerge(current, this.options.monitorState(current.id)).kind === kind
+    );
+  }
+
+  private async recordError(environment: Environment, error: string | null): Promise<void> {
+    await this.options.storage.updateEnvironment(
+      environment.id,
+      { autoMergeError: error },
+      (current) =>
+        current.autoMerge === true &&
+        current.prUrl === environment.prUrl &&
+        current.autoMergeEnabledAt === environment.autoMergeEnabledAt,
+    );
+  }
+
+  /** The Merge PR button's command, pinned to the observed PR and head. */
+  private async merge(environment: Environment): Promise<boolean> {
+    if (!(await this.authorized(environment, "merge"))) return false;
+    const reading = this.options.monitorState(environment.id);
+    if (!reading?.headSha) return false;
     await this.options.invoke("merge_environment_pr", {
       environmentId: environment.id,
       method: "squash",
       deleteBranch: true,
       cleanupAfterMerge: false,
+      expectedHeadSha: reading.headSha,
+      expectedPrUrl: environment.prUrl,
     });
+    return true;
   }
 
   /** The Resolve button's launch, in the background and without taking focus. */
-  private async launchResolve(environment: Environment): Promise<void> {
+  private async launchResolve(environment: Environment): Promise<boolean> {
     const action = await resolveEnvironmentActionDefault(
       this.options.storage,
       environment,
       "resolve",
     );
     const repository = await this.options.storage.getRepositoryConfig(environment.projectId);
+    if (!(await this.authorized(environment, "resolve"))) return false;
     const targetBranch = environment.prBaseBranch || repository.prBaseBranch?.trim() || "main";
     const result = await this.options.invoke<{ status?: unknown; error?: unknown }>(
       "launch_native_agent_job",
       {
         requestId: `auto-merge-resolve-${randomUUID()}`,
         environmentId: environment.id,
+        autoMergePrUrl: environment.prUrl,
+        autoMergeEnabledAt: environment.autoMergeEnabledAt,
         agent: action.agent,
         prompt: createResolveConflictsPrompt(targetBranch),
         title: PR_AUTO_MERGE_RESOLVE_TAB_TITLE,
@@ -224,6 +325,9 @@ export class PrAutoMergeController {
         ...(typeof action.fastMode === "boolean" ? { fastMode: action.fastMode } : {}),
       },
     );
+    if (result?.status === "skipped") return false;
+    if (result?.status === "unknown")
+      throw new Error("Resolve dispatch is unconfirmed; check the Resolve tab before retrying");
     if (result?.status === "rejected") {
       throw new Error(
         typeof result.error === "string" && result.error
@@ -231,10 +335,12 @@ export class PrAutoMergeController {
           : "The conflict-resolution agent rejected the prompt",
       );
     }
+    return true;
   }
 
   /** Holds this attempt off until a timer re-evaluates, backing off on failure. */
   private holdAttempt(environmentId: string, key: string, failed: boolean): void {
+    if (this.closed) return;
     const previous = this.retries.get(environmentId);
     if (previous) this.cancel(previous.timer);
     const failures = failed ? (previous?.key === key ? previous.failures : 0) + 1 : 0;

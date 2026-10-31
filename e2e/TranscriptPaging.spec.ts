@@ -410,3 +410,36 @@ for (const view of ["native", "reviewer"]) {
     });
   }
 }
+
+test("native: history pages in without a click, opening with a page and paging near the top", async ({
+  page,
+}) => {
+  // 300 source rows: a 100-row live tail and 200 earlier rows served 20 at a time.
+  await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20");
+  const list = page.locator("[data-transcript-scroller]");
+  await expect(list).toBeVisible();
+  // One page is fetched above the live window before anyone scrolls, and no
+  // more while the reader stays at the bottom.
+  const requests = () =>
+    page.evaluate(
+      () => (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests,
+    );
+  await expect.poll(requests).toEqual(["before-200"]);
+  await page.waitForTimeout(500);
+  expect(await requests()).toEqual(["before-200"]);
+
+  // Reading towards the top keeps paging, down to the first row.
+  await list.hover();
+  await expect
+    .poll(
+      async () => {
+        await page.mouse.wheel(0, -4000);
+        return list.getByText("Reached stop 0.", { exact: true }).count();
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(1);
+  await expect(
+    page.getByRole("button", { name: "Load earlier messages", exact: true }),
+  ).toHaveCount(0);
+});

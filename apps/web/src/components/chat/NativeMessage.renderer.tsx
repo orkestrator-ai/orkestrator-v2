@@ -1,5 +1,5 @@
 import { PermissionRuleNote } from "./PermissionRuleNote";
-import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { RichMessageContext, useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
@@ -9,14 +9,12 @@ import { MailToolPart } from "./MailToolPart";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { PlanToolPart } from "./PlanToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
-import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
   MessageExpansionScopeContext,
   ToolDetailLoaderContext,
-  cachedToolDetails,
-  cacheToolDetails,
   getToolExpansionKey,
+  useToolDetails,
 } from "./NativeMessage.shared";
 import {
   EditToolPart,
@@ -57,42 +55,16 @@ export function DeferredToolMessagePart({
   eagerImagePreview: boolean;
   suppressImageReadPreview?: boolean;
 }) {
-  const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
   const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
   const [isOpen] = useMessagePartExpansion(expansionKey);
   // A mail call is drawn as its message, and a read's message is in the result.
   const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
-  const detailRef = part.detailRef!;
-  const [loaded, setLoaded] = useState<{
-    ref: string;
-    details?: NativeAgentToolDetails;
-    error?: string;
-  } | null>(null);
-  const details =
-    cachedToolDetails(detailRef) ?? (loaded?.ref === detailRef ? loaded.details : undefined);
-  const loadError = loaded?.ref === detailRef ? (loaded.error ?? null) : null;
-
-  useEffect(() => {
-    if ((!isOpen && !eagerDetails) || details || loadError || !loadToolDetails) return;
-    let cancelled = false;
-    void loadToolDetails(detailRef)
-      .then((loaded) => {
-        if (cancelled) return;
-        cacheToolDetails(loaded);
-        setLoaded({ ref: detailRef, details: loaded });
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setLoaded({
-          ref: detailRef,
-          error: error instanceof Error ? error.message : "Tool details are unavailable",
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detailRef, details, eagerDetails, isOpen, loadError, loadToolDetails]);
+  const wanted = isOpen || eagerDetails;
+  const { details, error: loadError } = useToolDetails(part.detailRef, wanted);
+  // The whole input, when the projection sent large values as previews.
+  const { details: argsDetails } = useToolDetails(part.toolArgsDetailRef, wanted);
+  const outputPending = part.detailRef !== undefined && !details;
 
   /*
    * The collapsed row shows the part's own metadata and nothing else. Earlier
@@ -104,10 +76,13 @@ export function DeferredToolMessagePart({
   const materialized: Extract<NativeMessagePart, { type: "tool-invocation" }> = {
     ...part,
     detailRef: undefined,
+    toolArgsDetailRef: undefined,
+    // Until the input arrives the preview stands in; a failed read keeps it.
+    ...(argsDetails?.toolArgs ? { toolArgs: argsDetails.toolArgs } : {}),
     ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
     ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
-    ...(!details && loadError ? { toolError: loadError } : {}),
-    ...(!details && !loadError && isOpen ? { toolOutput: "Loading tool details…" } : {}),
+    ...(outputPending && loadError ? { toolError: loadError } : {}),
+    ...(outputPending && !loadError && isOpen ? { toolOutput: "Loading tool details…" } : {}),
     ...(part.toolDiff || details?.toolDiff
       ? {
           toolDiff: {
@@ -123,7 +98,7 @@ export function DeferredToolMessagePart({
   return (
     <MessagePart
       part={materialized}
-      deferredDetails={!details}
+      deferredDetails={outputPending}
       partKey={partKey}
       showTextCopy={showTextCopy}
       truncateUserPrompt={truncateUserPrompt}
@@ -255,7 +230,11 @@ function MessagePartContent({
     part.type === "tool-invocation" ? part.toolUseId : undefined,
     part.sourceMessageId,
   );
-  if (part.type === "tool-invocation" && part.detailRef && loadToolDetails) {
+  if (
+    part.type === "tool-invocation" &&
+    (part.detailRef || part.toolArgsDetailRef) &&
+    loadToolDetails
+  ) {
     return (
       <DeferredToolMessagePart
         part={part}
@@ -278,7 +257,13 @@ function MessagePartContent({
     case "thinking":
       // Thinking parts are typically rendered directly in NativeMessage with isComplete
       // If rendered through MessagePart, assume complete (collapsed by default)
-      return <ThinkingPart content={part.content} expansionKey={partKey} />;
+      return (
+        <ThinkingPart
+          content={part.content}
+          contentDetailRef={part.contentDetailRef}
+          expansionKey={partKey}
+        />
+      );
     case "text":
       return (
         <TextPart

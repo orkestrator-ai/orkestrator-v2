@@ -106,6 +106,14 @@ export interface NativeBasePart {
   detailRef?: string;
   /** Opaque session-scoped reference for an exact provider-reported image path. */
   imageDetailRef?: string;
+  /**
+   * Opaque reference for a settled tool call's whole input. While it is set,
+   * large values in `toolArgs` (file contents, replacement strings) are
+   * previews cut from that input.
+   */
+  toolArgsDetailRef?: string;
+  /** Opaque reference for finished reasoning; while set, `content` is a preview of it. */
+  contentDetailRef?: string;
   /** Original attachment name when the readable path uses a staged/generated name. */
   filename?: string;
   /** Provider timestamp for when this individual message part first arrived. */

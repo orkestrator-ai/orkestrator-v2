@@ -201,6 +201,10 @@ import {
   visibleProjectionNotices,
   withProviderContextWindow,
 } from "./native-agent-projection-helpers.js";
+import {
+  deferredThinkingPreview,
+  deferredToolArgsPreview,
+} from "./native-agent-deferred-display.js";
 
 export {
   attachProgressToToolRows,
@@ -928,6 +932,8 @@ export class NativeAgentTranscriptProjection {
     partPath: string,
     /** Set when `raw` is a provider summary whose details resolve remotely. */
     remote?: { providerSessionId: string },
+    /** A later part of the same row follows this one, so it stopped streaming. */
+    settled = false,
   ): unknown {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
     const part = raw as Record<string, unknown>;
@@ -937,6 +943,31 @@ export class NativeAgentTranscriptProjection {
     delete projected.detail;
     const redactedArgs = redactArtifactGrant(part);
     if (redactedArgs) projected.toolArgs = redactedArgs;
+    // Large input values and finished reasoning travel as previews; the whole
+    // value is fetched when the row is expanded (native-agent-deferred-display.ts).
+    // The detail holds the redacted input, never the grant.
+    const argsPreview = deferredToolArgsPreview(part, projected.toolArgs);
+    if (argsPreview) {
+      projected.toolArgsDetailRef = this.cacheToolDetails(
+        sessionKey,
+        messageId,
+        `${partPath}/args`,
+        {
+          toolArgs: projected.toolArgs as Record<string, unknown>,
+        },
+      );
+      projected.toolArgs = argsPreview;
+    }
+    const thinkingPreview = deferredThinkingPreview(part, settled);
+    if (thinkingPreview !== undefined) {
+      projected.contentDetailRef = this.cacheToolDetails(
+        sessionKey,
+        messageId,
+        `${partPath}/thinking`,
+        { thinking: part.content as string },
+      );
+      projected.content = thinkingPreview;
+    }
     const summaryDetail = remote ? bridgePartDetail(part.detail) : undefined;
     if (summaryDetail && remote) {
       projected.detailRef = this.cacheRemoteToolDetails(sessionKey, messageId, partPath, {
@@ -1090,7 +1121,14 @@ export class NativeAgentTranscriptProjection {
     try {
       const projectedParts = attachProgressToToolRows(
         row.parts.map((part, index) =>
-          this.projectionPart(context.sessionKey, row.id, part, String(index), remote),
+          this.projectionPart(
+            context.sessionKey,
+            row.id,
+            part,
+            String(index),
+            remote,
+            index < row.parts.length - 1,
+          ),
         ),
       );
       const projectedMessage: ProjectedTranscriptMessage = {

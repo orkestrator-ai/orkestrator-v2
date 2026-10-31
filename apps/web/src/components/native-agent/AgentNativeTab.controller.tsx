@@ -101,6 +101,7 @@ import {
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
+import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
@@ -519,6 +520,7 @@ export function SharedNativeAgentController({
     refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
+    canLoadEarlierAutomatically,
   } = useNativeAgentSession<NativeMessage>({
     platform,
     environmentId: data.environmentId,
@@ -1109,6 +1111,30 @@ export function SharedNativeAgentController({
   // Load earlier messages keeps the reader on the row they were reading.
   const loadEarlierPlace = useHeldTranscriptPlace();
   useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
+  const loadEarlierAutomatically = useCallback(
+    async (scroller: HTMLElement | null) => {
+      loadEarlierPlace.hold(scroller, scrollProps.controller);
+      setLoadingEarlier(true);
+      try {
+        await loadEarlierMessages({ automatic: true });
+      } finally {
+        setLoadingEarlier(false);
+      }
+    },
+    [loadEarlierMessages, loadEarlierPlace, scrollProps.controller],
+  );
+  // Opens with a history page above the live window, and pages on as the
+  // reader nears the top, without the button.
+  const autoLoadEarlierSentinel = useAutoLoadEarlier({
+    sessionKey,
+    isActive,
+    settled: hasCompletedRead && transcriptAvailability === "current",
+    canLoadEarlier: canLoadEarlierHistory,
+    headId: projection?.messages[0]?.id,
+    loading: loadingEarlier,
+    available: canLoadEarlierAutomatically,
+    load: loadEarlierAutomatically,
+  });
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -3709,7 +3735,7 @@ export function SharedNativeAgentController({
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
         showBytesNotice || showLoadEarlier || showOmittedNotice ? (
-          <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+          <div className="relative mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             {showBytesNotice ? (
               <span>
                 Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
@@ -3721,6 +3747,14 @@ export function SharedNativeAgentController({
                 Earlier messages in this conversation are not available here. The conversation
                 itself is kept.
               </span>
+            ) : null}
+            {showLoadEarlier ? (
+              // Out of flow, so it adds no gap to the header's layout.
+              <div
+                ref={autoLoadEarlierSentinel}
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-px"
+              />
             ) : null}
             {showLoadEarlier ? (
               <Button

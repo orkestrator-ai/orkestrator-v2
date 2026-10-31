@@ -127,6 +127,16 @@ larger once projected than the bridge measured it. Before 0232 such a view
 had no cursor, and **Load earlier messages** minted a joined one, a whole
 transcript read (the `o` efficiency workload measures both).
 
+**Automatic paging.** The native tab pages without a click
+(`useAutoLoadEarlier`): once when it opens on a transcript with earlier
+history, so it shows the live window plus one page (up to 200 rows and
+1 MiB), and again whenever the transcript's head comes within 800 px of the
+viewport. It pages only from a direct cursor
+(`canLoadEarlierAutomatically`), so a joined mint or joined page, each a
+whole-transcript read, still needs the button. A page that leaves the head
+where it was (superseded by a poll, or failed) is retried once; after a second
+it stops until the head moves some other way.
+
 If an OpenCode view retains only a failed message's inline error row after
 dropping its oversized main row, no kept row can name a whole-message cursor.
 That view uses joined `sync-v1` paging instead; naming a cursor before the
@@ -186,6 +196,34 @@ smaller than the message it replaces. A patch keeps, appends to, or replaces
 each part; anything that does not line up (a missing message, an index out of
 range, a part digest or length that differs) rejects the whole delta and the
 client falls back to a snapshot. Other clients keep whole-message deltas.
+
+### Deferred display bodies
+
+The projection moves every tool output, error and diff body behind a
+`detailRef` (`projectionPart`). It also sends two other bulky values as
+previews, with the whole value behind its own reference
+(`native-agent-deferred-display.ts`):
+
+- **Tool input.** In a settled call (`success` or `failure`), a top-level
+  file-contents or replacement-string field (`content`, `contents`,
+  `old_string`, `new_string` and their camel-case and `oldText`/`newText`
+  forms, `new_source`, `file_text`) over `NATIVE_DEFERRED_DISPLAY_MIN_BYTES`
+  (1 KiB) becomes its first 200 characters and `…`, and the part carries
+  `toolArgsDetailRef`. The detail holds the input after the artifact grant
+  is redacted. Fields a collapsed row or card draws (`command`, `file_path`,
+  `prompt`, `description`, mail `body`, `plan`, todo lists) stay whole, as do
+  a running call's input and a plan-file write's contents, which the plan
+  approval card reads.
+- **Reasoning.** A thinking part over 1 KiB that another part of the same
+  row follows (so it has stopped streaming) becomes its first 400 characters
+  and `…`, and the part carries `contentDetailRef`.
+
+The renderer fetches both through `get_native_agent_tool_details` when the row
+is expanded (`useToolDetails`), as it does outputs. Measured on recorded
+Claude sessions (2026-10-31) this cut projected bytes by 6 to 20%; it matters
+most for sessions that write or edit large files, whose rows would otherwise
+fill a byte-bounded page first. A renderer from before this change shows the
+previews and cannot expand them; the `…` marks each cut.
 
 ### Terminal rows
 

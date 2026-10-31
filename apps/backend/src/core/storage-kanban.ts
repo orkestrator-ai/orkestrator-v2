@@ -367,7 +367,9 @@ export class KanbanRepository {
       };
       Object.assign(task, plain);
       if (hasTicketContentUpdate(contentUpdate)) {
-        Object.assign(task, applyTicketContentUpdate(task, contentUpdate));
+        // Normalized as a read would, so a legacy hand tick an edit keeps
+        // stays dated at the ticket's creation rather than at this save.
+        Object.assign(task, applyTicketContentUpdate(normalizeKanbanTask(task), contentUpdate));
       }
       if (updates.status && updates.status !== oldStatus) {
         task.order =

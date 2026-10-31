@@ -97,7 +97,8 @@ read these.
 - **Legacy rows** (no sections) are migrated on read: sections are derived from
   the text, and nothing is written back until the ticket next changes. A legacy
   `- [x]` becomes a manual pass dated at the ticket's creation, so repeated
-  reads return the same row.
+  reads return the same row, and an edit that keeps the criterion keeps that
+  date.
 - `sectionsBasis` is a fingerprint of the mirrors the sections were written
   with. If an older writer changes a mirror, the fingerprint no longer matches
   and the sections are rebuilt from the text, keeping the results of criteria

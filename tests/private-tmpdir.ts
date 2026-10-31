@@ -96,6 +96,26 @@ export function enterPrivateTestTmpdir(root = privateTmpdirRoot()): () => void {
   };
 }
 
+/**
+ * The environment for a process that outlives this one, such as the `dev:test`
+ * launcher a real-stack spec restarts: its temporary files go back to the
+ * parent temporary directory. This process removes its private directory on
+ * exit, and only a live process's command line keeps it, never its
+ * environment, so a profile started inside it would lose its TMPDIR (0830).
+ */
+export function outlivingProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const outliving = { ...env };
+  const directory = outliving[PRIVATE_TMPDIR_ENV];
+  const parent = outliving[PARENT_TMPDIR_ENV];
+  delete outliving[PRIVATE_TMPDIR_ENV];
+  delete outliving[PARENT_TMPDIR_ENV];
+  if (directory && outliving.TMPDIR === directory) {
+    if (parent) outliving.TMPDIR = parent;
+    else delete outliving.TMPDIR;
+  }
+  return outliving;
+}
+
 function removePrivateTmpdir(directory: string): void {
   if (process.env[KEEP_PRIVATE_TMPDIR_ENV] === "1") return;
   try {

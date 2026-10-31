@@ -225,7 +225,18 @@ start, so a record or marker from an earlier boot can never release work.
   error. Account startup may invalidate the Codex marker with a pre-readiness
   `docker exec`; this is deliberately best-effort, with failures caught and
   logged so they cannot preempt the readiness result.
-- A boot that fails closed usually exits before the next poll. Once the
+- The wait is not a host-side poll. Each `docker exec` waits inside the
+  container for up to 2 s, re-reading the record every 50 ms, and returns as
+  soon as the current boot (its `pid1Start` is PID 1's) reports `ready` or
+  `failed`; the backend then parses what it printed exactly as it would a
+  single read. A boot is seen within about 50 ms of the record, and a wait
+  costs one Docker call per 2 s window rather than one per 250 ms. A probe
+  that comes back early with no final state is spaced 250 ms apart, and an
+  unreachable container backs off as before. The rechecks before dispatch
+  stay single reads. (Todo
+  [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md).)
+- A boot that fails closed usually exits within the probe's window, which
+  ends the exec. Once the
   container has stopped, the backend reads its final boot record with
   `docker cp` (which needs no running process) and reports that record's code
   (`firewall-missing`, `firewall-failed`, …). PID 1 is gone, so the record
@@ -366,8 +377,8 @@ be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
-2.1.309, Codex 0.164.0, OpenCode 1.19.4, Pi 1.4.0, `@cursor/sdk` 1.0.40, Grok
-1.0.67), by reading the pinned binaries' strings and bundled docs. A pin bump
+2.1.314, Codex 0.166.0, OpenCode 1.19.5, Pi 1.4.0, `@cursor/sdk` 1.2.0, Grok
+1.0.70), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
 
@@ -963,8 +974,10 @@ and the Network section says whether a root terminal can change the rules.
 - **Start.** `prepareEgressGatewayForStart` (in
   `startContainerWithAgentAccounts` and before a rebuild candidate's start)
   starts a stopped gateway and waits until its firewall reports `applied`;
-  the tmpfs `/run` means an earlier boot's report cannot be read. Each poll
-  is one `docker exec`; the gateway is inspected only when that exec fails,
+  the tmpfs `/run` means an earlier boot's report cannot be read. Each read
+  is one `docker exec` that waits inside the gateway, up to 2 s and checking
+  every 50 ms, for the report to say `applied` or `failed`; the gateway is
+  inspected only when that exec fails,
   and a running gateway's `applied` report is not read twice. A `failed`
   report, a gateway that stops, or 180 s without a report refuses the start
   (`not-ready`), and a missing gateway is `needs-attention` (rebuild). Docker

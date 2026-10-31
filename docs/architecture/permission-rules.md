@@ -129,13 +129,27 @@ A bridge that predates the marker keeps asking.
 | Claude | `Bash` with an untruncated command; file tools with an absolute path; `mcp__<server>__<tool>` with its `mcpServer`; `WebFetch` (by URL host) | truncated values, relative paths, other tools |
 | Pi | `bash` with a command; `edit`/`write` with a path (resolved against its working directory) | `powershell`, custom tools |
 | Grok (ACP) | a command sent as one string, a file change with every path, and only with an explicit `allow_once` option | an argv array, truncated detail, no `allow_once` |
-| OpenCode | `bash` only from the full `metadata.command` when it is the single pattern; `edit`/`write` by `metadata.filepath` or a single pattern; `webfetch` by URL | compound commands, anything else |
+| OpenCode | `bash` only from the full `metadata.command` when it is the single pattern; `edit`/`write` by `metadata.filepath` or a single pattern; `webfetch` by URL | compound commands, a multi-file patch, anything else |
 | Cursor | none (the SDK bridge raises no approvals) | |
+
+OpenCode 1.19.4 (`ShellTool.ask`, read from the pinned binary) sends one
+`bash` pattern per tree-sitter `command` node: the node's trimmed text, with
+its redirect, skipping `cd`/`pushd`/`popd`. So a plain single command
+(`git status --short`, `npm run test -- --watch`) arrives with its one
+pattern equal to `metadata.command` and is eligible. A command behind
+`cd … &&`, a list, a pipe, a command substitution, a repeated command or one
+with surrounding whitespace has a different or second pattern and asks. A
+multi-file patch sends `metadata.filepath` as the relative paths joined by
+`", "` and several patterns, so it always asks; a single-file patch resolves
+its one pattern against the session directory.
 
 The Codex and Claude bridges also forward the provider's own suggestion
 (Codex `proposedExecpolicyAmendment`, Claude's `canUseTool` `addRules` for
 `Bash`) as `proposedCommandPrefix`. It only preselects one of the offered
-patterns. It is never sent back, and no answer carries an amendment.
+patterns. It is never sent back, and no answer carries an amendment. Claude
+Code 2.1.309 suggests a prefix as `Bash(npm test *)` and an exact command
+without a suffix; the bridge also accepts the legacy `npm test:*` and drops
+any other wildcard.
 
 ## Creating, listing and removing
 
@@ -172,14 +186,20 @@ patterns. It is never sent back, and no answer carries an amendment.
   - the enforcer (automatic answers, removal taking effect at once,
     at-most-once, store failure, policy precedence, approve-and-remember);
   - the payload readers and adapters;
-  - the activity sweep with no tab mounted;
+  - the activity sweep with no tab mounted, a rule scoped to another
+    environment, and a session left waiting on an unmatched request;
   - the external files.
 - `public-api-permission-rules.test.ts`.
 - Bridge tests: `approvals.test.ts` (Codex), `interactions.test.ts` (Pi),
   `acp-permission-detail.test.ts`, `session-manager-parked-interactions.test.ts`
   (Claude).
 - Web: `NativeAgentInteractionCard.test.tsx`, `PermissionsSettings.test.tsx`,
-  `permission-rule-rows.test.ts`.
+  `permission-rule-rows.test.ts`, `usePermissionRuleSession.test.tsx` (the
+  notes read by a tab mounted on return).
 - Live, no credits: `bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts`
   ("an Orkestrator rule answers the identical command…").
-- Browser: `e2e/agent-testing/permission-rules.spec.ts`.
+- Browser:
+  - `e2e/agent-testing/permission-rules.spec.ts` (Settings → Permissions on a
+    `dev:test` profile);
+  - `e2e/RememberRulePanel.spec.ts` (the "Approve and remember…" panel on
+    Codex cards built by the real Codex reader, at phone and desktop widths).

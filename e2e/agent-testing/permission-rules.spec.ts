@@ -8,6 +8,7 @@ import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
+import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 /**
  * Settings → Permissions against the real backend (todo 0723): a rule the
@@ -330,7 +331,12 @@ test("approval card remembers, auto-applies in the background, survives restart 
         "--agent-platforms",
         "claude",
       ],
-      { cwd: repositoryRoot, detached: true, stdio: ["ignore", log, log] },
+      {
+        cwd: repositoryRoot,
+        detached: true,
+        env: outlivingProcessEnv(),
+        stdio: ["ignore", log, log],
+      },
     );
     closeSync(log);
     launcher.unref();

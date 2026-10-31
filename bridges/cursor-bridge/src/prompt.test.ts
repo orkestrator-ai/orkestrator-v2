@@ -18,7 +18,7 @@ import {
   type FollowableRun,
 } from "./prompt.js";
 import { newSessionState } from "./agent-session.js";
-import { publicContextUsage } from "./public.js";
+import { publicActivity, publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
 import {
   ABANDONED_COMPACTION_NOTE,
@@ -168,6 +168,8 @@ describe("a turn that outlives its budget", () => {
     expect(state.status).toBe("error");
     expect(state.error).toContain("did not stop");
     expect(sessionIsWorking(state)).toBe(false);
+    // The backend's turn-end bell reads the failure from the no-touch route.
+    expect(publicActivity(state)).toEqual({ activity: "idle", turnFailed: true });
   });
 
   test("waits for the stream to drain before settling a timed-out turn", async () => {

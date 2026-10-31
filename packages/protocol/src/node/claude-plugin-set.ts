@@ -8,8 +8,9 @@
  * reads, so the editor can never list a different set from the one a session
  * loads. Nothing here touches the filesystem.
  *
- * The enablement and MCP rules mirror the pinned Claude CLI (2.1.309, read
- * from the binary on 2026-10-25). Every plugin the bridge passes in the SDK's
+ * The enablement and MCP rules mirror the pinned Claude CLI (read from the
+ * 2.1.309 binary on 2026-10-25; `verify:claude:plugin-mcp-live` re-proved
+ * them on 2.1.314 on 2026-10-30). Every plugin the bridge passes in the SDK's
  * `plugins` option joins the session as a `--plugin-dir` plugin, whose id is
  * `<name>@inline`, so the bridge passes a Claude Code install only when Claude
  * Code's own settings enable it ({@link enabledInstalledPlugins}); see

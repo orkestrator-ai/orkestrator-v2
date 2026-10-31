@@ -192,7 +192,9 @@ export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protoco
  */
 export function publicActivity(state: SessionState): JsonObject {
   if (sessionIsBlocked(state)) return { activity: "waiting" };
-  return { activity: sessionIsWorking(state) ? "working" : "idle" };
+  if (sessionIsWorking(state)) return { activity: "working" };
+  // How the latest turn ended, for the backend's turn-end bell.
+  return { activity: "idle", ...(state.status === "error" ? { turnFailed: true } : {}) };
 }
 
 /**

@@ -190,10 +190,10 @@ ENV VISUAL=nano
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.309
-ARG CODEX_CLI_VERSION=0.164.0
-ARG OPENCODE_CLI_VERSION=1.19.4
-ARG GROK_BUILD_VERSION=1.0.67
+ARG CLAUDE_CLI_VERSION=2.1.314
+ARG CODEX_CLI_VERSION=0.166.0
+ARG OPENCODE_CLI_VERSION=1.19.5
+ARG GROK_BUILD_VERSION=1.0.70
 ARG PI_CLI_VERSION=1.4.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
@@ -210,8 +210,8 @@ ENV DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
 # Retry transient release-host failures with bounded attempts and timeouts.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce ;; \
-    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f ;; \
+    amd64) OPENCODE_ARCH=x64; OPENCODE_SHA=588310a336fa3b9df36b3f0225b26f679d453efaad0cf3d66c3651ef3ec1647a ;; \
+    arm64) OPENCODE_ARCH=arm64; OPENCODE_SHA=fae5be262d693b7c5e562856cc473e59e741772936db0c0600ac0d5ed5bd088b ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   mkdir -p /home/node/.opencode/bin && \
@@ -235,8 +235,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=ce33b1a29e37901f56fe59916cda7a1149e6fd377118f918e90d89f9abb52a51 ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=089a0acc2c1b570efcd791c5cd0f8aa074f6e8ab82c00ab78af0b934acdb6386 ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=3aa36883574b263088e5addffe241f55430e8daaee1a0c4934b02180007a9761 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \

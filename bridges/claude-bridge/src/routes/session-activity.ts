@@ -32,6 +32,7 @@ export async function readSessionActivityObservation(sessionId: string): Promise
   readyForInput?: true;
   completionPending?: boolean;
   contentRevision?: string;
+  turnFailed?: true;
 }> {
   const activity = await getSessionActivity(sessionId);
   const resident = peekSession(sessionId);
@@ -43,6 +44,10 @@ export async function readSessionActivityObservation(sessionId: string): Promise
     // must remain blue and pulsing. Only an explicitly settled root turn can
     // announce completion while a detached shell keeps the session working.
     ...(resident?.status === "idle" ? { readyForInput: true as const, completionPending } : {}),
+    // The backend reads this on the turn-end edge so the bell says the turn
+    // failed rather than that the agent finished. A stop the user asked for
+    // settles to idle, so it never sets this.
+    ...(resident?.status === "error" ? { turnFailed: true as const } : {}),
     ...(activity === "missing" ? {} : contentRevisionField(resident)),
   };
 }

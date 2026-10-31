@@ -21,6 +21,8 @@ import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool
  * worker, and the proposal to save decisions to AGENTS.md. None of them
  * reaches the project checkout; the last two only ask the user. Each calls one `*_coordinator_*` backend command with the
  * authenticated scope, which revalidates it and refuses the project home.
+ * The terminal, browser, tab-edit and PR tools take `nodeId` for a worker on
+ * a connected node (todo 0395).
  */
 
 const requestId = z
@@ -30,6 +32,13 @@ const requestId = z
   .max(256)
   .describe("Stable key for this action; reuse it only to retry the same call.");
 const environmentId = z.string().trim().min(1).max(200);
+const workerNodeId = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe("The worker's nodeId from list_nodes; omit for this node.");
 
 const WRITE = {
   readOnlyHint: false,
@@ -77,7 +86,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Open a terminal or tmux tab in a worker",
       description:
-        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults.",
+        "Open a terminal tab in a worker environment of this project and run one command in it (tabType plain), or start an agent CLI there (claude, codex, grok, opencode, pi, or claude-tmux for Claude under tmux) with an optional prompt (grok supports a bare launch only; prompt, model and reasoningEffort are refused). The tab opens selected in the worker's active pane, as a terminal the user opened would. Never the project checkout. Read its output later with get_tab_transcript. Omit model and reasoningEffort to use the CLI's own defaults. Pass nodeId for a worker on another connected node; if its answer is lost, retry with the same requestId, which reattaches to the same terminal there.",
       inputSchema: z
         .object({
           requestId,
@@ -98,6 +107,7 @@ export function registerCoordinatorSurfaceTools(
           model: z.string().trim().min(1).max(512).optional(),
           reasoningEffort: z.string().trim().min(1).max(128).optional(),
           title: z.string().trim().min(1).max(200).optional(),
+          nodeId: workerNodeId,
         })
         .strict(),
       annotations: { ...WRITE, destructiveHint: true, openWorldHint: true },
@@ -110,7 +120,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Open or navigate a worker's browser preview",
       description:
-        "Open a browser tab in a worker environment at a loopback address of a service that worker runs (http://localhost:3000/path), or navigate the existing browser tab tabId there. The address resolves to the worker's own service, local or container. Only http(s) loopback addresses; this is not a way to browse the web. Works while the worker is not on screen.",
+        "Open a browser tab in a worker environment at a loopback address of a service that worker runs (http://localhost:3000/path), or navigate the existing browser tab tabId there. The address resolves to the worker's own service, local or container. Only http(s) loopback addresses; this is not a way to browse the web. Works while the worker is not on screen. Pass nodeId for a worker on another connected node.",
       inputSchema: z
         .object({
           requestId,
@@ -124,6 +134,7 @@ export function registerCoordinatorSurfaceTools(
             .optional()
             .describe("An existing browser tab (list_tabs) to navigate instead of opening one."),
           title: z.string().trim().min(1).max(200).optional(),
+          nodeId: workerNodeId,
         })
         .strict(),
       annotations: WRITE,
@@ -136,13 +147,14 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Focus, close or move a worker's tab",
       description:
-        "Edit a worker environment's tabs: focus selects a tab, move puts it in another pane (pane IDs from list_tabs), close closes it. Closing a tab never deletes its conversation; it is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report; a terminal tab closes with whatever it is running. Closing a tab that is already gone succeeds. Open tabs with launch_job, launch_terminal, open_worker_browser and open_multi_review.",
+        "Edit a worker environment's tabs: focus selects a tab, move puts it in another pane (pane IDs from list_tabs), close closes it. Closing a tab never deletes its conversation; it is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report; a terminal tab closes with whatever it is running. Closing a tab that is already gone succeeds. Open tabs with launch_job, launch_terminal, open_worker_browser and open_multi_review. Pass nodeId for a worker on another connected node (list_tabs with the same nodeId gives its pane and tab IDs).",
       inputSchema: z
         .object({
           environmentId,
           tabId: z.string().trim().min(1).max(200),
           operation: z.enum(COORDINATOR_TAB_EDIT_OPERATIONS),
           toPaneId: z.string().trim().min(1).max(200).optional(),
+          nodeId: workerNodeId,
         })
         .strict(),
       annotations: { ...WRITE, destructiveHint: true },
@@ -257,13 +269,7 @@ export function registerCoordinatorSurfaceTools(
         .object({
           requestId,
           environmentId,
-          nodeId: z
-            .string()
-            .trim()
-            .min(1)
-            .max(200)
-            .optional()
-            .describe("The worker's nodeId from list_nodes; omit for this node."),
+          nodeId: workerNodeId,
           targetBranch: z.string().trim().min(1).max(500).optional(),
         })
         .strict(),

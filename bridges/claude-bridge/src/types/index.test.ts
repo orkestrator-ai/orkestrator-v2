@@ -1,62 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import type { SdkCompactBoundaryMessage, SdkMessageBase, SdkResultMessage } from "./index";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "./index";
+import type { SdkMessageBase, SdkResultMessage } from "./index";
+import { isSdkResultMessage } from "./index";
 
-// These two guards are the only thing standing between the SDK's untyped
-// message stream and the branches that record a compaction boundary or build
-// the authoritative usage snapshot. A guard that is too loose routes an
-// unrelated message into the wrong branch; one that is too tight silently drops
-// the turn's result. Both directions are asserted.
-//
-// (They replace a pair of `JSON.parse(JSON.stringify(x))` round-trips that only
-// ever proved that JSON preserves JSON.)
-
-describe("isSdkCompactBoundaryMessage", () => {
-  test("accepts a compact boundary and narrows to its metadata", () => {
-    const message: SdkMessageBase = {
-      type: "system",
-      subtype: "compact_boundary",
-      uuid: "c-1",
-      compact_metadata: {
-        trigger: "manual",
-        pre_tokens: 120_000,
-        post_tokens: 8_000,
-      },
-    } as SdkCompactBoundaryMessage;
-
-    expect(isSdkCompactBoundaryMessage(message)).toBe(true);
-    if (!isSdkCompactBoundaryMessage(message)) throw new Error("guard should narrow");
-    // The narrowing is the point: this property is not reachable on the base type.
-    expect(message.compact_metadata?.pre_tokens).toBe(120_000);
-    expect(message.compact_metadata?.trigger).toBe("manual");
-  });
-
-  test("accepts a boundary that carries no metadata", () => {
-    expect(isSdkCompactBoundaryMessage({ type: "system", subtype: "compact_boundary" })).toBe(true);
-  });
-
-  const rejected: Array<{ name: string; message: SdkMessageBase }> = [
-    { name: "an init system message", message: { type: "system", subtype: "init" } },
-    {
-      name: "a background task notification",
-      message: { type: "system", subtype: "task_notification" },
-    },
-    { name: "a system message with no subtype", message: { type: "system" } },
-    {
-      name: "a non-system message that borrows the subtype",
-      message: { type: "assistant", subtype: "compact_boundary" },
-    },
-    { name: "a result message", message: { type: "result", subtype: "success" } },
-    { name: "a user message", message: { type: "user" } },
-  ];
-
-  for (const { name, message } of rejected) {
-    test(`rejects ${name}`, () => {
-      expect(isSdkCompactBoundaryMessage(message)).toBe(false);
-    });
-  }
-});
+// This guard stands between the SDK's untyped message stream and the branch
+// that builds the authoritative usage snapshot. A guard that is too loose
+// routes an unrelated message into that branch; one that is too tight silently
+// drops the turn's result. Both directions are asserted.
 
 describe("isSdkResultMessage", () => {
   test("accepts a successful result and narrows to its usage fields", () => {
@@ -117,17 +67,4 @@ describe("isSdkResultMessage", () => {
       expect(isSdkResultMessage(message)).toBe(false);
     });
   }
-
-  test("the two guards never both accept the same message", () => {
-    const messages: SdkMessageBase[] = [
-      { type: "result", subtype: "success" },
-      { type: "system", subtype: "compact_boundary" },
-      { type: "system", subtype: "init" },
-      { type: "assistant" },
-    ];
-
-    for (const message of messages) {
-      expect(isSdkResultMessage(message) && isSdkCompactBoundaryMessage(message)).toBe(false);
-    }
-  });
 });

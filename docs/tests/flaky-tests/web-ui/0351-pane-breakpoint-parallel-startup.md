@@ -122,3 +122,18 @@ these cases. This confirms an intermittent anchor mismatch; it does not establis
 a startup failure or a root cause. No assertion, deadline, skip or owning code
 changed. Commands, suite counts, durations and evidence are recorded in
 [0747's account usage review](0747-tool-group-overflow-follow.md#account-usage-sorting-review--2026-10-29).
+
+## Provider-upgrade review — 2026-10-30
+
+The exact `mise run test:browser` rerun repeated the mobile pane-tree
+`moveBefore` one-row anchor mismatch (`Transcript message 36.` expected,
+message 35 received). Aggregate: 981 passed, 106 skipped, five failed,
+8.4 min. Evidence: `orkestrator-test-run.x5T4jf/review-browser-suite.log.gz`
+under the host temporary directory. The complete unchanged owner passed
+alone with one worker (23.2 s):
+
+```sh
+mise run test:logged -- --name review-browser-pane-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --workers=1
+```
+
+No source, assertion, timeout or skip changed; the root cause is not established.

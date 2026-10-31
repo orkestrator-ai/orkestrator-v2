@@ -45,7 +45,11 @@ import {
   type NativeAgentObservationWakeReason,
 } from "./native-agent-observation.js";
 import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
-import { PromptRejectedError } from "./agent-provider-contract.js";
+import {
+  PromptRejectedError,
+  ProviderUnavailableError,
+  TURN_STOPPED_BY_USER_MESSAGE,
+} from "./agent-provider-contract.js";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   buildInitialPromptWithAttachmentReferences,
@@ -645,6 +649,7 @@ export class NativeAgentLaunchActivityReconciler {
       Record<string, { state: AgentActivityState; updatedAt: string }>
     >();
     const completionCandidates = new Set<string>();
+    const attentionRecordedEnvironments = new Set<string>();
     // A stale stopped snapshot must not publish an idle environment aggregate either.
     const failedEnvironments = new Set(staleStoppedEnvironments);
     const groups = new Map<string, PersistedNativeAgentSession[]>();
@@ -708,6 +713,7 @@ export class NativeAgentLaunchActivityReconciler {
           group.map((session) => session.key),
         );
         let settledIdle = true;
+        let outcomeReadFailed = false;
         const applyObservation = async (
           session: PersistedNativeAgentSession,
           activity: AgentActivityState,
@@ -716,6 +722,7 @@ export class NativeAgentLaunchActivityReconciler {
             completionPending?: boolean;
             pendingInteraction?: boolean;
             contentRevision?: string;
+            readTurnFailed?: () => Promise<boolean>;
           } = {},
         ): Promise<void> => {
           if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
@@ -725,20 +732,20 @@ export class NativeAgentLaunchActivityReconciler {
             }
             return;
           }
-          if (
-            await this.recordActivity(
-              activityByEnvironment,
-              session,
-              activity,
-              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-              sessionOwner,
-              details.readyForInput,
-              () => runtimeStillCurrent() && this.observations.accepts(ticket, session.key),
-              details.completionPending,
-              details.contentRevision,
-            )
-          )
-            completionCandidates.add(session.environmentId);
+          const recorded = await this.recordActivity(
+            activityByEnvironment,
+            session,
+            activity,
+            Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+            sessionOwner,
+            details.readyForInput,
+            () => runtimeStillCurrent() && this.observations.accepts(ticket, session.key),
+            details.completionPending,
+            details.contentRevision,
+            details.readTurnFailed,
+          );
+          if (recorded.completed) completionCandidates.add(session.environmentId);
+          if (recorded.attentionRecorded) attentionRecordedEnvironments.add(session.environmentId);
           if (!runtimeStillCurrent() || !this.observations.accepts(ticket, session.key)) {
             settledIdle = false;
             if (!this.contributeRetained(activityByEnvironment, session, sessionOwner)) {
@@ -803,6 +810,7 @@ export class NativeAgentLaunchActivityReconciler {
           // Batched where the provider can, bounded-concurrent per session
           // otherwise; see `readActivityGroup` for the fallback and failure
           // rules. Answers are applied one at a time, in completion order.
+          const groupProvider = provider;
           await readActivityGroup({
             provider,
             sessions: group,
@@ -862,6 +870,15 @@ export class NativeAgentLaunchActivityReconciler {
                 pendingInteraction:
                   observedActivity === "waiting" ||
                   (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
+                readTurnFailed: async () => {
+                  if (observation?.turnFailed === true) return true;
+                  try {
+                    return await readTurnTerminalFailure(groupProvider, session);
+                  } catch (error) {
+                    outcomeReadFailed = true;
+                    throw error;
+                  }
+                },
               });
             },
           });
@@ -882,8 +899,10 @@ export class NativeAgentLaunchActivityReconciler {
         } catch (error) {
           failedEnvironments.add(first.environmentId);
           this.observations.noteGroupFailed(groupKey);
-          this.backOffActivityGroup(groupKey);
-          if (provider) {
+          this.backOffActivityGroup(groupKey, error);
+          // An unsettled outcome is not a failed activity connection. Keep the
+          // provider that owns its pending dispatch evidence for the retry.
+          if (provider && !outcomeReadFailed) {
             this.providerRegistry.evict(first, provider);
           }
           console.warn(
@@ -951,7 +970,8 @@ export class NativeAgentLaunchActivityReconciler {
           false,
           {
             completionAttention:
-              !hasRegisteredSessions || environmentsWithUnknownSessions.has(environment.id),
+              !attentionRecordedEnvironments.has(environment.id) &&
+              (!hasRegisteredSessions || environmentsWithUnknownSessions.has(environment.id)),
           },
         )
         .catch((error) => {
@@ -1104,7 +1124,13 @@ export class NativeAgentLaunchActivityReconciler {
     stillApplicable?: () => boolean,
     completionPending?: boolean,
     contentRevision?: string,
-  ): Promise<boolean> {
+    /**
+     * Whether the turn this edge ends failed, asked only on a completion edge:
+     * the activity observation's `turnFailed`, or for a provider that keeps a
+     * failure off its lifecycle, a read of the turn's outcome.
+     */
+    readTurnFailed?: () => Promise<boolean>,
+  ): Promise<{ completed: boolean; attentionRecorded: boolean }> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
       observed?.providerSessionId === session.providerSessionId ? observed : undefined;
@@ -1143,13 +1169,22 @@ export class NativeAgentLaunchActivityReconciler {
     // If storage fails, the provider group backs off and the next scan still
     // sees `previous === "working"`, so the durable completion is retried.
     if (durableAttentionEdge && owner === "environment") {
+      const reason =
+        state === "waiting"
+          ? "agent_waiting"
+          : (await readTurnFailed?.())
+            ? "agent_failed"
+            : "agent_finished";
+      if (stillApplicable && !stillApplicable())
+        return { completed: false, attentionRecorded: false };
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.host.now()).toISOString(),
-        state === "waiting" ? "agent_waiting" : "agent_finished",
+        reason,
       );
     }
-    if (stillApplicable && !stillApplicable()) return false;
+    if (stillApplicable && !stillApplicable())
+      return { completed: false, attentionRecorded: false };
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
@@ -1215,7 +1250,10 @@ export class NativeAgentLaunchActivityReconciler {
       };
       activityByEnvironment.set(session.environmentId, sources);
     }
-    return completed && owner === "environment";
+    return {
+      completed: completed && owner === "environment",
+      attentionRecorded: durableAttentionEdge && owner === "environment",
+    };
   }
 
   /** Deliver pending completion notifications with the same bound as status IO. */
@@ -1255,14 +1293,15 @@ export class NativeAgentLaunchActivityReconciler {
    * emitting a warning. Mirrors the prompt queue's backoff so the two paths
    * degrade the same way.
    */
-  private backOffActivityGroup(groupKey: string): void {
+  private backOffActivityGroup(groupKey: string, error: unknown): void {
     const attempts = (this.activityAttempts.get(groupKey) ?? 0) + 1;
     this.activityAttempts.set(groupKey, attempts);
     const backoff = Math.min(
       ACTIVITY_RETRY_CEILING_MS,
       ACTIVITY_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 8),
     );
-    this.activityRetryAt.set(groupKey, this.host.now() + backoff);
+    const retryAfterMs = error instanceof ProviderUnavailableError ? (error.retryAfterMs ?? 0) : 0;
+    this.activityRetryAt.set(groupKey, this.host.now() + Math.max(backoff, retryAfterMs));
   }
 
   async reconcileInitialLaunch(environmentId: string): Promise<void> {
@@ -1730,4 +1769,22 @@ export class NativeAgentLaunchActivityReconciler {
       throw error;
     }
   }
+}
+
+/**
+ * The failure a provider keeps off its lifecycle: OpenCode reads idle after a
+ * failed turn and keeps the error on the request's answer; Grok's bridge
+ * journals a turn it cut short. Read only on a completion edge, from the latest
+ * dispatched request's outcome, never a session touch. The user's own stop is
+ * not a failure. An unavailable outcome must reject so the group retries
+ * without consuming its completion edge.
+ */
+async function readTurnTerminalFailure(
+  provider: NativeAgentRuntimeProvider,
+  session: PersistedNativeAgentSession,
+): Promise<boolean> {
+  const requestId = session.dispatchedRequestIds?.at(-1);
+  if (!requestId || !provider.turnTerminalError) return false;
+  const terminalError = await provider.turnTerminalError(session.providerSessionId, requestId);
+  return terminalError !== null && terminalError !== TURN_STOPPED_BY_USER_MESSAGE;
 }

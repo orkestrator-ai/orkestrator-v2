@@ -65,6 +65,8 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "Claude could not load the policy limits and managed settings your organization requires. Check connectivity and any proxy, then retry.";
     case "org_config_refused":
       return "Anthropic refused your organization's required Claude settings for this sign-in. Sign in to Claude again; if that does not help, ask an administrator to allow Claude Code for this account.";
+    case "sandbox_required_unavailable":
+      return "Claude requires a working command sandbox, and it cannot run here (for example, bubblewrap is missing or the platform is unsupported). Make the sandbox available or have the requirement changed, then retry.";
   }
 }
 

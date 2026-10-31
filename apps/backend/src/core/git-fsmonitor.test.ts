@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { reconcileContainerDelegationBase } from "./commands-environment.js";
 import { enableGitScanCaches, getLocalGitStatusDetailed } from "./commands-files.js";
+import {
+  SCRATCH_COMMIT_AUTHOR,
+  SCRATCH_COMMIT_EMAIL,
+  SCRATCH_COMMIT_SUBJECT,
+  isResumableScratchRepository,
+} from "./commands-projects.js";
 import {
   GIT_FSMONITOR_DISABLED_ARGS,
   removeLegacyWorktreeFsmonitor,
@@ -15,8 +22,19 @@ import { CommandFailedError, runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import { StorageService, createProject } from "./storage.js";
 import { ProjectGitService } from "./project-git-service.js";
+import { listRootChanges } from "./root-changes.js";
+import { readWorktreeStatus } from "./workspace-code-rewind.js";
 
 const tempDirectories: string[] = [];
+
+/**
+ * Whether this git ships the builtin daemon. It is a build feature, not a
+ * platform one: macOS and Windows have had it since 2.36, and Linux builds
+ * have it too (git 2.56.0 on Linux reports it).
+ */
+const daemonSupported = (
+  await runCommand("git", ["version", "--build-options"], { timeoutMs: 10_000 })
+).stdout.includes("feature: fsmonitor--daemon");
 
 afterEach(async () => {
   mock.restore();
@@ -127,7 +145,6 @@ describe("git fsmonitor", () => {
     const { project, worktree } = await createRepositoryWithWorktree();
     await git(worktree, ["config", "extensions.worktreeConfig", "true"]);
     await git(worktree, ["config", "--worktree", "core.fsmonitor", "true"]);
-    const daemonSupported = process.platform !== "linux";
     if (daemonSupported) await git(worktree, ["fsmonitor--daemon", "start"]);
     const original = shell.runCommand;
     const calls: string[][] = [];
@@ -157,7 +174,7 @@ describe("git fsmonitor", () => {
     const { worktree } = await createRepositoryWithWorktree();
     await git(worktree, ["config", "extensions.worktreeConfig", "true"]);
     await git(worktree, ["config", "--worktree", "core.fsmonitor", "true"]);
-    if (process.platform !== "linux") await git(worktree, ["fsmonitor--daemon", "start"]);
+    if (daemonSupported) await git(worktree, ["fsmonitor--daemon", "start"]);
     const original = shell.runCommand;
     const calls: string[][] = [];
     spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
@@ -171,7 +188,7 @@ describe("git fsmonitor", () => {
       await removeLegacyWorktreeFsmonitor(worktree, true);
       expect(calls.filter((args) => args.includes("rev-parse"))).toHaveLength(1);
       expect(calls.filter((args) => args.includes("stop"))).toHaveLength(1);
-      if (process.platform !== "linux") {
+      if (daemonSupported) {
         await expect(git(worktree, ["fsmonitor--daemon", "status"])).rejects.toThrow();
       }
     } finally {
@@ -304,8 +321,7 @@ describe("git fsmonitor", () => {
     ]);
   });
 
-  // Git ships the builtin daemon on macOS and Windows only.
-  test.skipIf(process.platform === "linux")("stops a running daemon", async () => {
+  test.skipIf(!daemonSupported)("stops a running daemon", async () => {
     const { worktree } = await createRepositoryWithWorktree();
     await git(worktree, ["fsmonitor--daemon", "start"]);
     try {
@@ -344,5 +360,126 @@ describe("git fsmonitor", () => {
       }),
     ).rejects.toBe(failure);
     expect(calls).toHaveLength(1);
+  });
+
+  test("an aborted read is not retried, even when it reports a timeout", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const calls: string[][] = [];
+    await expect(
+      retryGitWithoutFsmonitorOnTimeout(
+        ["status"],
+        async (args) => {
+          calls.push(args);
+          controller.abort(reason);
+          throw new CommandFailedError("cancelled", { timedOut: true });
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(reason);
+    expect(calls).toEqual([["status"]]);
+  });
+});
+
+describe("working-tree status reads retry without fsmonitor after a timeout", () => {
+  const timeoutOnce = () => {
+    let timedOut = false;
+    return (args: readonly string[]) => {
+      if (args.includes("status") && !args.includes("core.fsmonitor=false") && !timedOut) {
+        timedOut = true;
+        throw new CommandFailedError("hung fsmonitor", { timedOut: true });
+      }
+    };
+  };
+
+  test("code rewind's environment status read", async () => {
+    const calls: string[][] = [];
+    const failFirst = timeoutOnce();
+    const status = await readWorktreeStatus(async (environmentId, args) => {
+      expect(environmentId).toBe("env-1");
+      calls.push(args);
+      failFirst(args);
+      return " M file.txt\n";
+    }, "env-1");
+    expect(status).toBe(" M file.txt\n");
+    expect(calls).toEqual([
+      ["status", "--porcelain", "--untracked-files=all"],
+      [...GIT_FSMONITOR_DISABLED_ARGS, "status", "--porcelain", "--untracked-files=all"],
+    ]);
+  });
+
+  test("the project home's change list", async () => {
+    const { project } = await createRepositoryWithWorktree();
+    await fs.writeFile(path.join(project, "new.txt"), "new\n");
+    const original = shell.runCommand;
+    const failFirst = timeoutOnce();
+    const reads: string[][] = [];
+    spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+      if (args.includes("status")) reads.push(args);
+      failFirst(args);
+      return original(command, args, options);
+    });
+    const listing = await listRootChanges(project);
+    expect(listing.files).toMatchObject([{ path: "new.txt" }]);
+    expect(reads).toHaveLength(2);
+    expect(reads[1]).toEqual([...GIT_FSMONITOR_DISABLED_ARGS, ...reads[0]!]);
+  });
+
+  test("the scratch-repository resume check", async () => {
+    const calls: string[][] = [];
+    const failFirst = timeoutOnce();
+    const stdout: Record<string, string> = {
+      "rev-list": "1",
+      "symbolic-ref": "main",
+      remote: "",
+      status: "",
+      log: [SCRATCH_COMMIT_AUTHOR, SCRATCH_COMMIT_EMAIL, SCRATCH_COMMIT_SUBJECT].join("\n"),
+    };
+    const resumable = await isResumableScratchRepository(
+      "/scratch",
+      async (_command, args = []) => {
+        calls.push(args);
+        failFirst(args);
+        const key = Object.keys(stdout).find((name) => args.includes(name));
+        return { stdout: key ? stdout[key]! : "", stderr: "" };
+      },
+    );
+    expect(resumable).toBe(true);
+    expect(calls).toContainEqual([
+      "-C",
+      "/scratch",
+      ...GIT_FSMONITOR_DISABLED_ARGS,
+      "status",
+      "--porcelain",
+    ]);
+  });
+
+  test("the delegated container's cleanliness check", async () => {
+    const calls: string[][] = [];
+    const failFirst = timeoutOnce();
+    await expect(
+      reconcileContainerDelegationBase(
+        { branch: "delegated", delegationBaseCommit: "abc123" },
+        "container-1",
+        async (_command, args) => {
+          calls.push(args);
+          failFirst(args);
+          return { stdout: args.includes("status") ? " M file.txt" : "other", stderr: "" };
+        },
+      ),
+    ).rejects.toThrow("worker checkout has changes");
+    expect(calls.filter((args) => args.includes("status"))).toEqual([
+      ["exec", "container-1", "git", "-C", "/workspace", "status", "--porcelain"],
+      [
+        "exec",
+        "container-1",
+        "git",
+        "-C",
+        "/workspace",
+        ...GIT_FSMONITOR_DISABLED_ARGS,
+        "status",
+        "--porcelain",
+      ],
+    ]);
   });
 });

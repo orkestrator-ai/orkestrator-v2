@@ -1454,6 +1454,75 @@ async function pressControl(locator: ReturnType<Page["locator"]>, key = "Enter")
   await s().window.keyboard.press(key);
 }
 
+test("development source hints survive native spool and renderer capability gating into verified stored evidence", async () => {
+  await showRendererPreview();
+  try {
+    const capabilities = await invoke<{ operations: { sourceHints?: boolean } }>(C.capabilities, {
+      environmentId: s().environmentId,
+    });
+    expect(capabilities.operations.sourceHints).toBe(true);
+    const before = new Set((await listAnnotations()).items.map((item) => item.id));
+    await pressControl(s().window.getByRole("button", { name: /^Annotations, / }));
+    await pressControl(s().window.getByRole("button", { name: "Add note", exact: true }));
+    await expect(s().window.getByRole("button", { name: "Cancel selection" })).toBeVisible();
+    const rect = await settledRect(`[data-testid="${TEST_IDS.saveSettings}"]`);
+    await trustedClick(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    const status = await awaitCaptureEnd(UI_TAB_ID);
+    if (status.status !== "captured") throw new Error(`Capture failed: ${JSON.stringify(status)}`);
+    const descriptor = status.pending;
+    const candidates = [
+      {
+        producer: "annotation-fixture",
+        path: "annotation-app/page.ts",
+        line: 120,
+        component: "SettingsSave",
+        verified: false,
+      },
+      {
+        producer: "annotation-fixture",
+        path: "annotation-app/MissingSettings.tsx",
+        line: 4,
+        component: "Settings",
+        verified: false,
+      },
+    ];
+    const pending = await readPending(descriptor.captureId);
+    expect(pending.capture.evidence?.sourceHints).toEqual(candidates);
+    // Save through the real renderer: commitPendingCapture consults its capability cache,
+    // stages the native image, invokes the backend command, and acknowledges the spool.
+    const body = "Source hint live path: align Save.";
+    const editor = s().window.locator(`${NOTES_PANEL} textarea`).first();
+    await expect(editor).toBeVisible();
+    await editor.fill(body);
+    await pressControl(s().window.getByRole("button", { name: "Save note", exact: true }));
+    await expect
+      .poll(async () =>
+        (await listAnnotations()).items.find(
+          (item) => !before.has(item.id) && item.latestIntent === body,
+        ),
+      )
+      .toBeTruthy();
+    const created = (await listAnnotations()).items.find(
+      (item) => !before.has(item.id) && item.latestIntent === body,
+    )!;
+    const { annotation } = await getAnnotation(created.id);
+    const stored = await captureRecord(annotation.currentCaptureId);
+    expect(stored.evidence?.sourceHints).toEqual([
+      { ...candidates[0]!, verified: true },
+      candidates[1]!,
+    ]);
+    await expect.poll(() => preview("readPendingCapture", descriptor.captureId)).toBeNull();
+    // Disk-backed evidence remains available after the renderer loses its cache.
+    await s().window.reload();
+    await waitForApi(s().window);
+    expect((await captureRecord(annotation.currentCaptureId)).evidence?.sourceHints).toEqual(
+      stored.evidence?.sourceHints,
+    );
+  } finally {
+    await restoreDirectPreview();
+  }
+});
+
 test("the real Notes column shrinks the native view, overlays hide it, and the narrow switch swaps surfaces", async () => {
   const testInfo = test.info();
   testInfo.setTimeout(180_000);

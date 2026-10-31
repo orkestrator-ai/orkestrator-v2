@@ -953,6 +953,41 @@ rules and project boundaries apply unchanged. Main schedules follow the next
 main conversation; a side agent's schedules end with it. See
 [scheduled-jobs.md](scheduled-jobs.md).
 
+### Self-timers and provider accounts
+
+`create_schedule` with action type `remind_me` is a **self-timer**: its body
+comes back to the conversation that set it (the main coordinator's address,
+or the side agent's own runtime id) as a reminder that starts a new turn, and
+one that fires mid-turn waits, like mail, until the turn ends. `at: "+2h"`
+and `at: "14:30"` are both accepted; absolute times are read in this
+machine's local zone (the user's) unless `timeZone` is given, and the result
+names the zone (`timeZoneUsed`) and the local time (`nextFireLocal`).
+
+For "check in 2 hours and switch accounts if the workers hit a usage limit"
+the main coordinator has three tools (capability `accounts`, plus
+`get_usage_limits` under `environments`; side agents get none):
+
+- `get_usage_limits` lists the agent tabs whose newest recorded turn failed
+  with a provider usage limit, and the active accounts' cached quota windows.
+  It reads storage and caches only.
+- `list_provider_accounts` lists the Claude and Codex logins on this machine
+  or another (`nodeId`), the active one per provider, and each one's plan
+  usage with `hasAllocationLeft`.
+- `switch_provider_account` changes the active login through
+  `set_active_agent_account`, the Settings switch, machine-wide. Without
+  permission it creates a `switch-agent-account` request the user approves
+  in the same dialog as `request_environment_deletion`. With the `scheduleId`
+  of a self-timer that carries the user's permission it switches at once.
+
+A self-timer carries that permission only when the main coordinator sets it
+with `authorizeAccountSwitch` in a turn the user started with their own
+message: the backend records each conversation's `lastTurnOrigin` (`user` or
+`mail`) at dispatch, and mail, status wakes and fired timers count as `mail`.
+The permission names the providers and any other machines, holds the user's
+words, and lasts two hours after the timer fires.
+[agent-accounts.md](agent-accounts.md#coordinator-switching) and
+[scheduled-jobs.md](scheduled-jobs.md#self-timers) have the details.
+
 ## Status wakes
 
 Besides the delegation wake, a coordinator is woken when other work it started

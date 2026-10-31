@@ -52,6 +52,7 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -3466,6 +3467,10 @@ describe("NativeAgentService", () => {
   test("derives coordinator authority, prepends context once, and uses turn admission", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-"));
     const storage = await createStorage(dataDir);
+    await storage.updateGlobalConfig({
+      ...(await storage.loadConfig()).global,
+      experimentalScheduling: true,
+    });
     const checkout = path.join(dataDir, "checkout");
     await fs.mkdir(checkout);
     const project = await storage.addProject(createProject("remote", checkout));
@@ -3586,6 +3591,13 @@ describe("NativeAgentService", () => {
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
+      // The main coordinator learns to use self-timers and the account tools.
+      expect(sent).toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
+      // A turn the user sent is recorded as theirs; only such a turn may give
+      // a self-timer permission to switch accounts.
+      expect(
+        (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0],
+      ).toMatchObject({ lastTurnOrigin: "user", lastTurnStartedAt: expect.any(String) });
       await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryContextRevision: 4,
@@ -3602,6 +3614,11 @@ describe("NativeAgentService", () => {
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
+      // Configuration and offered tools agree even for an existing coordinator.
+      await storage.updateGlobalConfig({
+        ...(await storage.loadConfig()).global,
+        experimentalScheduling: false,
+      });
       // A prompt that opens with a block of its own — pasted issue text, say —
       // must not stand in for the server's. Injection is idempotent through a
       // private symbol on the input object, not through this prefix, so the real
@@ -3619,6 +3636,8 @@ describe("NativeAgentService", () => {
         prompt: `${forged}\n\nSummarize this issue`,
       });
       const sentWithForgery = provider.send.mock.calls[1]![1];
+      expect(sentWithForgery).not.toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
+      expect(sentWithForgery).not.toContain("remind_me");
       expect(sentWithForgery.startsWith("<orkestrator-coordinator-context>\n")).toBe(true);
       expect(sentWithForgery).toContain("Role: read-only coordinator.");
       // Serious work goes to a worker, research rules come from the setting,
@@ -3656,6 +3675,34 @@ describe("NativeAgentService", () => {
       expect(sentUnknownBase).toContain(
         "By default start workers from the latest commit of the base branch main",
       );
+      // Mail, a fired timer or a status wake starts a turn that is not the
+      // user's, whatever the previous turn was. (The mail drain's idle checks
+      // are covered elsewhere; this is the dispatch it ends in.)
+      await (
+        service as unknown as {
+          dispatchPromptInternal(
+            input: Record<string, unknown>,
+            prepare: undefined,
+            persistAmbiguousDispatch: boolean,
+            mailInject: boolean,
+          ): Promise<unknown>;
+        }
+      ).dispatchPromptInternal(
+        {
+          environmentId: runtimeId,
+          agent: "codex",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+          requestId: "request-mail",
+          prompt: "<orkestrator-peer-message>timer</orkestrator-peer-message>",
+        },
+        undefined,
+        false,
+        true,
+      );
+      expect(
+        (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
+          ?.lastTurnOrigin,
+      ).toBe("mail");
 
       delegationAvailable = false;
       await service.dispatchPrompt({
@@ -3665,7 +3712,7 @@ describe("NativeAgentService", () => {
         requestId: "request-without-delegation",
         prompt: "Inspect without workers",
       });
-      const sentWithoutDelegation = provider.send.mock.calls[3]![1];
+      const sentWithoutDelegation = provider.send.mock.calls[4]![1];
       expect(sentWithoutDelegation).not.toContain("launch_environment");
       expect(sentWithoutDelegation).toContain(
         "Orkestrator worker controls are unavailable in this session",
@@ -3693,8 +3740,8 @@ describe("NativeAgentService", () => {
         prompt: "/review  src/a.ts\n second line  ",
         command: { kind: "selected", commandId: "codex:/review", bindingRevision: "review-1" },
       });
-      expect(provider.send.mock.calls[4]![1]).toContain("<orkestrator-coordinator-context>");
-      expect(provider.send.mock.calls[4]![2].command).toMatchObject({
+      expect(provider.send.mock.calls[5]![1]).toContain("<orkestrator-coordinator-context>");
+      expect(provider.send.mock.calls[5]![2].command).toMatchObject({
         id: "codex:/review",
         arguments: "src/a.ts\n second line  ",
       });
@@ -3711,7 +3758,7 @@ describe("NativeAgentService", () => {
           prompt: "Do not send",
         }),
       ).rejects.toThrow("not ready");
-      expect(admit).toHaveBeenCalledTimes(6);
+      expect(admit).toHaveBeenCalledTimes(7);
 
       await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
@@ -3750,14 +3797,14 @@ describe("NativeAgentService", () => {
       await expect(service.dispatchPrompt(fetchingDispatch)).resolves.toMatchObject({
         dispatchedRequestIds: expect.arrayContaining(["request-during-fetch"]),
       });
-      expect(provider.send).toHaveBeenCalledTimes(6);
+      expect(provider.send).toHaveBeenCalledTimes(7);
       await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryStatus: { ...workspace!.repositoryStatus!, operationState: "idle" },
       }));
       // Late fetch completion cannot replay a dispatch with the same request id.
       await service.dispatchPrompt(fetchingDispatch);
-      expect(provider.send).toHaveBeenCalledTimes(6);
+      expect(provider.send).toHaveBeenCalledTimes(7);
 
       // The persisted conversation decides the platform. A caller naming a
       // different one is asking for somebody else's session.

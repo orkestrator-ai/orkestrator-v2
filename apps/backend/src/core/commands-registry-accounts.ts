@@ -27,6 +27,7 @@ import {
 } from "./agent-accounts.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
+import { readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
@@ -132,6 +133,17 @@ export function registerAgentAccountCommands(
       context,
       asAccountPlatform(args.platform),
       asNonBlankString(args.accountId, "accountId"),
+    );
+  });
+  /**
+   * Which of a project's agent tabs stopped on a provider usage limit, and the
+   * active accounts' cached quota windows. Cheap: storage and caches only.
+   */
+  register("get_project_usage_limits", async (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return readProjectUsageLimits(
+      { storage: context.storage },
+      asNonBlankString(args.projectId, "projectId"),
     );
   });
   register("get_agent_account_usage", async (args, context) => {

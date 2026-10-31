@@ -5,7 +5,9 @@
  * and environments and serves it to clients (`get_node_summaries`). These
  * are the bounded projections of a node's ordinary summary reads
  * (`get_projects`, `get_environment_snapshots`): names, status and activity
- * only, never transcripts, prompts, paths or credentials. The search fields
+ * only, never transcripts, prompts, paths or credentials. Summary reads ask
+ * for {@link NODE_SUMMARY_ENVIRONMENT_READ_ARGS}, which adds the node's PR
+ * monitor health to each environment. The search fields
  * (`pathName`, `worktreeName`, `defaultBranch`, `createdAt`) carry what the
  * project search matches on: a directory's last segment, never its path.
  */
@@ -23,9 +25,16 @@ import type { NodeView } from "./command-nodes.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
 import { normalizeProjectIcon } from "./project-icon.js";
-import type { PrState } from "./pr-monitor.js";
+import { isPrCheckSummary, type PrCheckSummary, type PrState } from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
+
+/**
+ * Extra `get_environment_snapshots` arguments for a summary read: each
+ * environment then carries confirmation, viewer permission and check counts from the
+ * node's runtime PR monitor. Nodes that predate it ignore the argument.
+ */
+export const NODE_SUMMARY_ENVIRONMENT_READ_ARGS = { includePrMonitorHealth: true } as const;
 
 export const MAX_SUMMARY_PROJECTS = 500;
 export const MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT = 500;
@@ -88,6 +97,21 @@ export interface NodeEnvironmentSummary {
   prState?: PrState;
   prHasMergeConflicts?: boolean;
   prMergeability?: GitHubPullRequestMergeability;
+  /**
+   * The node's own monitor vouches for that reading
+   * (`isPrReadingConfirmedByMonitor`): it answered a check for this PR in its
+   * current lifetime and the latest check did not fail. Present only as `true`
+   * from nodes asked with `includePrMonitorHealth`; absent means unconfirmed,
+   * including from nodes that predate it.
+   */
+  prMonitorConfirmed?: true;
+  /**
+   * The node's cached merge permission for the credential it merges with.
+   * Absent when unknown or from older nodes; only `false` blocks readiness.
+   */
+  prViewerCanMerge?: boolean;
+  /** Bounded check counts from the leaf monitor; failing or pending checks veto readiness. */
+  prCheckSummary?: PrCheckSummary;
 }
 
 /** One node in the portal: registry view, availability and last-known summaries. */
@@ -249,5 +273,18 @@ export function toNodeEnvironmentSummary(
       ? { prHasMergeConflicts: raw.hasMergeConflicts }
       : {}),
     ...(isPrMergeability(raw.prMergeability) ? { prMergeability: raw.prMergeability } : {}),
+    ...(isPrCheckSummary(raw.prCheckSummary)
+      ? {
+          prCheckSummary: {
+            passed: raw.prCheckSummary.passed,
+            total: raw.prCheckSummary.total,
+            pending: raw.prCheckSummary.pending,
+          },
+        }
+      : {}),
+    ...(raw.prMonitorConfirmed === true ? { prMonitorConfirmed: true as const } : {}),
+    ...(typeof raw.prViewerCanMerge === "boolean"
+      ? { prViewerCanMerge: raw.prViewerCanMerge }
+      : {}),
   };
 }

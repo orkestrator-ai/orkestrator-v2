@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, symlink, mkdir, readdir } from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { NodeFileTransfer } from "./node-file-transfer.js";
 import { NodeFiles, parseEnv, seedFilesDir, type NodeFileScope } from "./node-files.js";
+
+import * as shell from "../shell.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -188,6 +190,85 @@ describe("FL-06 fingerprints and .env handling", () => {
       { path: "certs/dev.pem", exists: false },
     ]);
   });
+});
+
+describe("environmentDetails fsmonitor fallback", () => {
+  const reads = [
+    ["status", "--porcelain=v1"],
+    ["diff", "HEAD", "--stat"],
+    ["diff", "HEAD"],
+  ];
+  const recovered = [" M src/app.ts\n", " src/app.ts | 2 +-\n", "+export const a = 2;\n"];
+
+  for (const [index, args] of reads.entries()) {
+    for (const oversized of [false, true]) {
+      test(`recovers ${args.join(" ")} independently${oversized ? " with truncation" : ""}`, async () => {
+        const a = await node("diff-fallback");
+        const calls: string[][] = [];
+        const output = recovered.map((text) => (oversized ? text.repeat(10_000) : text));
+        const command = spyOn(shell, "runCommand").mockImplementation(
+          async (executable, argv = [], options) => {
+            expect(executable).toBe("git");
+            expect(options).toEqual({ timeoutMs: 20_000 });
+            calls.push(argv);
+            const disabled = argv[0] === "-c";
+            const inner = disabled ? argv.slice(2) : argv;
+            expect(inner.slice(0, 2)).toEqual(["-C", a.checkout]);
+            const read = reads.findIndex(
+              (read) => JSON.stringify(read) === JSON.stringify(inner.slice(2)),
+            );
+            expect(read).toBeGreaterThanOrEqual(0);
+            if (read === index && !disabled)
+              throw new shell.CommandFailedError("timeout", { timedOut: true });
+            return { stdout: output[read]!, stderr: "" };
+          },
+        );
+        try {
+          const details = await a.files.environmentDetails({
+            environmentId: "e1",
+            include: ["diff"],
+          });
+          expect(details.diff).toEqual({
+            status: output[0]!.slice(0, 16 * 1024),
+            stat: output[1]!.slice(0, 16 * 1024),
+            patch: output[2]!.slice(0, 64 * 1024),
+            truncated: oversized,
+          });
+          expect(calls).toHaveLength(4);
+          expect(calls.filter((call) => call[0] === "-c")).toEqual([
+            ["-c", "core.fsmonitor=false", "-C", a.checkout, ...args],
+          ]);
+        } finally {
+          command.mockRestore();
+        }
+      });
+    }
+
+    test(`rejects when ${args.join(" ")} exhausts its retry`, async () => {
+      const a = await node("diff-failed");
+      const calls: string[][] = [];
+      const exhausted = new shell.CommandFailedError("retry failed", { timedOut: true });
+      const command = spyOn(shell, "runCommand").mockImplementation(
+        async (_executable, argv = []) => {
+          calls.push(argv);
+          const inner = argv[0] === "-c" ? argv.slice(2) : argv;
+          if (JSON.stringify(inner.slice(2)) === JSON.stringify(args)) throw exhausted;
+          return { stdout: "", stderr: "" };
+        },
+      );
+      try {
+        await expect(
+          a.files.environmentDetails({ environmentId: "e1", include: ["diff"] }),
+        ).rejects.toBe(exhausted);
+        expect(calls).toHaveLength(4);
+        expect(calls.filter((call) => call[0] === "-c")).toEqual([
+          ["-c", "core.fsmonitor=false", "-C", a.checkout, ...args],
+        ]);
+      } finally {
+        command.mockRestore();
+      }
+    });
+  }
 });
 
 describe("CO-06 interrogating an environment's diff, files and tests", () => {

@@ -90,6 +90,34 @@ describe("duplicate classification", () => {
     expect(journal().classify("req-1")).toEqual({ duplicate: false, action: "dispatch" });
   });
 
+  test("an unconfirmed continuation keeps its provider identity across a journal reload", async () => {
+    const { codexHome } = journalHome("ork-journal-continuation-");
+    const first = new DispatchJournal({ codexHome, cwd: "/workspace" });
+    await first.markPrepared({ requestId: "req-1", bridgeSessionId: "s1", threadId: "t1" });
+    await first.markAccepted("req-1", { threadId: "t1", turnId: "turn-1" });
+    await first.markContinuation("req-1", "req-1:capacity-retry:2");
+
+    // A process can die after the write lands, before turn/start names turn-2.
+    const restored = new DispatchJournal({ codexHome, cwd: "/workspace" });
+    await restored.load();
+    expect(restored.get("req-1")).toMatchObject({
+      providerRequestId: "req-1:capacity-retry:2",
+      state: "accepted",
+      turnId: "turn-1",
+    });
+    await restored.markAccepted("req-1", { threadId: "t1", turnId: "turn-2" });
+    await restored.markTerminal("req-1", "completed");
+    expect(readJournalFile(codexHome).records).toContainEqual(
+      expect.objectContaining({
+        requestId: "req-1",
+        providerRequestId: "req-1:capacity-retry:2",
+        turnId: "turn-2",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(restored.get("req-1:capacity-retry:2")).toBeUndefined();
+  });
+
   test("a duplicate of a running request attaches to the existing turn", async () => {
     const store = journal();
     await store.markPrepared({ requestId: "req-1", bridgeSessionId: "s1", threadId: "t1" });

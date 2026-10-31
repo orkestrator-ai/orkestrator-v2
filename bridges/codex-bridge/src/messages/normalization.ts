@@ -421,6 +421,8 @@ export async function itemToParts(
           ...(item.severity ? { severity: item.severity } : {}),
         },
       ];
+    case "retry":
+      return [{ type: "retry", content: item.text, toolState: item.state }];
     default: {
       // A generic card rather than silence. `item` is `never` here, so an item
       // kind added upstream fails this file's typecheck first; this branch is

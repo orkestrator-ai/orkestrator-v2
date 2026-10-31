@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+
+const listenMock = listen as unknown as ReturnType<typeof mock>;
 
 type Credential = {
   id: string;
@@ -82,7 +86,11 @@ beforeEach(() => {
   settingsFailure = null;
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  listenMock.mockReset();
+  listenMock.mockImplementation(() => Promise.resolve(() => undefined));
+});
 
 describe("McpSettings", () => {
   test("lists credentials and copies complete setup for each client", async () => {
@@ -233,6 +241,30 @@ describe("McpSettings", () => {
     expect(screen.getByText("Address already in use")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Copy setup" }) === null).toBe(true);
   });
+
+  test.each(["control-mcp-state-changed", NATIVE_EVENT_STREAM_CONNECTED_EVENT])(
+    "refreshes the mounted page after recovery via %s",
+    async (event) => {
+      const callbacks = new Map<string, () => void>();
+      const signals: AbortSignal[] = [];
+      listenMock.mockImplementation(async (name, callback, options) => {
+        callbacks.set(name, callback);
+        signals.push(options.signal);
+        return () => undefined;
+      });
+      settingsResponse = { ...healthySettings, running: false, error: "Port is occupied" };
+      const view = render(<McpSettings />);
+      await screen.findByText("Port is occupied");
+      expect(screen.queryByRole("button", { name: "Copy setup" })).toBeNull();
+      settingsResponse = healthySettings;
+      await act(async () => callbacks.get(event)!());
+      await screen.findByText("Listening locally");
+      expect(screen.queryByText("Port is occupied")).toBeNull();
+      expect(screen.getAllByRole("button", { name: "Copy setup" })).toHaveLength(3);
+      view.unmount();
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    },
+  );
 
   test("recovers from a settings load failure through Try again", async () => {
     settingsFailure = new Error("Backend unavailable");

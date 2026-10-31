@@ -74,6 +74,7 @@ import { hydrateMessagesFromPersistedSession } from "./history/rollout.js";
 import { legacyCommandChange, type CodexEvidenceSource } from "./change-evidence.js";
 
 import { isMissingRolloutError } from "./app-server/errors.js";
+import { CodexCapacityRetry } from "./app-server-runtime-capacity-retry.js";
 
 import {
   isNativeAgentExecutionPolicy,
@@ -91,7 +92,12 @@ export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js"
 export { patchCommandChangePart } from "./app-server-runtime-rows.js";
 
 export class CodexRuntimeLifecycle {
-  constructor(private readonly ctx: CodexRuntimeContext) {}
+  /** Continues turns the model refused for capacity. */
+  readonly capacityRetry: CodexCapacityRetry;
+
+  constructor(private readonly ctx: CodexRuntimeContext) {
+    this.capacityRetry = new CodexCapacityRetry(ctx, this);
+  }
 
   /**
    * Starts the child and loads the dispatch journal.
@@ -181,6 +187,8 @@ export class CodexRuntimeLifecycle {
     for (const timer of this.ctx.recoveryBackstops.values()) clearTimeout(timer);
     this.ctx.recoveryBackstops.clear();
     this.ctx.commandCatalogue.dispose();
+    // No continuation may start once stopping; their turns end now.
+    this.capacityRetry.dispose();
     // Nothing will report terminal after this, so release the drain rather than
     // holding shutdown for its full deadline.
     this.ctx.callbacks.notifyThreadActivity();
@@ -1169,13 +1177,26 @@ export class CodexRuntimeLifecycle {
           );
         }
         this.discardOutlivingCommandWindows(turn);
+        // A capacity refusal is continued rather than ended: the turn stays
+        // running, its rows open, and nothing reports an error a retry may
+        // clear. Once retries run out the error says so.
+        let failure = event.error;
+        if (event.status === "failed") {
+          const decision = this.capacityRetry.onTurnFailed(context, turn, event.error);
+          if (decision.retrying) {
+            this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), "failed");
+            this.takeRefusedCellTail(threadId, turn)?.close();
+            return;
+          }
+          if (decision.error) failure = decision.error;
+        }
         if (turn.stoppedByShutdown && event.status === "interrupted")
           this.completeRecoveredTurn(turn, event.status);
         else {
-          turn.complete(event.status, event.error);
+          turn.complete(event.status, failure);
           // A refused model fails the turn before anything streams; without
           // this it read as idle with an empty reply.
-          if (event.status === "failed" && event.error) turn.recordProviderFailure(event.error);
+          if (event.status === "failed" && failure) turn.recordProviderFailure(failure);
         }
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
@@ -1884,10 +1905,13 @@ export class CodexRuntimeLifecycle {
 
         const outcome = await this.ctx.options.engine.reconcileRequest(
           context.threadId,
-          turn.requestId,
+          turn.providerRequestId ?? turn.requestId,
         );
 
         if (outcome.result === "terminal") {
+          if (outcome.turnId) turn.turnId = outcome.turnId;
+          for (const item of outcome.items ?? []) turn.onItemCompleted(item);
+          if (outcome.error) turn.onError(outcome.error);
           this.completeRecoveredTurn(turn, outcome.status ?? "completed");
           await this.runFinalization(context, turn);
           continue;
@@ -1960,6 +1984,7 @@ export class CodexRuntimeLifecycle {
   }
 
   async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
+    this.capacityRetry.discard(turn);
     const state = this.stateFor(context.threadId);
     const structuredResult = turn.expectsStructuredOutput
       ? parseCodexStructuredOutput(turn)

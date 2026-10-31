@@ -264,11 +264,11 @@ export class ProjectGitService {
   ): Promise<CheckoutInspection> {
     const [indexTree, trackedDiff, unstagedDiff, untrackedList, cleanPreview, submoduleStatus] =
       await Promise.all([
-        runCommand("git", ["write-tree"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
+        runGitWithFsmonitorFallback(["write-tree"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
           stdout: "",
         })),
         status.headCommit
-          ? runCommand("git", ["diff-index", "--raw", "-z", "HEAD"], {
+          ? runGitWithFsmonitorFallback(["diff-index", "--raw", "-z", "HEAD"], {
               cwd: root,
               timeoutMs: 10_000,
             }).catch(() => ({ stdout: "" }))
@@ -276,10 +276,13 @@ export class ProjectGitService {
               cwd: root,
               timeoutMs: 10_000,
             }).catch(() => ({ stdout: "" })),
-        runCommand("git", ["diff", "--raw", "-z"], { cwd: root, timeoutMs: 10_000 }).catch(() => ({
+        runGitWithFsmonitorFallback(["diff", "--raw", "-z"], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }).catch(() => ({
           stdout: "",
         })),
-        runCommand("git", ["ls-files", "-z", "-o", "--exclude-standard"], {
+        runGitWithFsmonitorFallback(["ls-files", "-z", "-o", "--exclude-standard"], {
           cwd: root,
           timeoutMs: 10_000,
         }),

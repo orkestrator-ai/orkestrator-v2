@@ -6,11 +6,15 @@ This file records the design decisions and what still needs live evidence.
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `79f3bc97`.
+Analysed 2026-10-28 against `main` at `79f3bc97`; statuses re-checked
+2026-10-30 against `main` at `cd7bbe3e`.
 
 The build items (schema and tools, the tiled view, checkable criteria in
 Verify) are done and listed with their evidence. What is left is live
-evidence, split here into its four parts.
+evidence, split here into its four parts. None of tasks 4 to 7 had been run by
+2026-10-30: none of the 39 commits since `79f3bc97` touches the ticket schema,
+storage or dialog, or records live evidence here. Task 6 is now done (see
+below); tasks 4, 5 and 7 need billed provider turns.
 
 ### Tasks
 
@@ -19,7 +23,7 @@ evidence, split here into its four parts.
 3. **Checkable criteria in Verify**: Verify receives the criteria, records a status and evidence for each, the views show the ticks. Status: done.
 4. **Live Verify on each provider**: a real Build pipeline from a structured ticket whose Verify judges each criterion and whose ticks reach the board. Status: open (needs live providers).
 5. **Provider-enforced verdict schema**: each provider's structured output accepts the new verdict schema. Status: open (checked by the runs in 4).
-6. **Legacy ticket round trip in the app**: a legacy ticket opens unchanged, a title-only save leaves it alone, a section edit keeps unchanged ticks. Status: open.
+6. **Legacy ticket round trip in the app**: a legacy ticket opens unchanged, a title-only save leaves it alone, a section edit keeps unchanged ticks. Status: done (2026-10-30, hand-made legacy rows; one fix, see below).
 7. **Coordinator work brief through Control MCP**: a coordinator creates a work brief with `sections` on a real stack. Status: open (needs a live provider).
 
 ### 1. Schema, storage and tools
@@ -141,12 +145,47 @@ components, not in the app with real old tickets.
 **Context.** Decisions 2 and 3 below; "Mirrors and migration" in
 [tickets.md](../../architecture/tickets.md).
 
-**Investigation.** Not run.
+**Investigation.** Run 2026-10-30 with hand-made legacy rows (see
+Assumptions and decisions), in two ways.
+
+- *In the app.* A disposable `dev:test` profile (`--fixture
+  --no-agent-credentials`), three legacy rows written into the profile's
+  Kanban store (bold lead-ins and `Label:` lines with a `- [x]` and a nested
+  bullet; `## Background`/`## Done when` aliases with criteria in both fields;
+  CRLF line endings), then driven through the ticket dialog with Playwright.
+  Opening each ticket and saving the editor untouched left the store
+  byte-identical. A title-only save changed only `title`; `description` and
+  `acceptanceCriteria` stayed byte-identical and no `sections` were written.
+  A section edit (a line added to the summary) kept every criterion's id and
+  tick, and a fresh page load showed the same ticks. The profile was stopped
+  and reset afterwards.
+- *Repeatably.* `apps/backend/src/core/storage-kanban-legacy-round-trip.test.ts`
+  runs seven legacy shapes (the three above plus criteria only in the
+  description, code fences and `###` subheadings with numbered criteria,
+  paragraph criteria, and custom, repeated and delivery headings) through
+  `update_kanban_task` with the payloads the dialog sends. A dialog test
+  (`tests/unit/components/KanbanTaskDialog.test.tsx`, "a legacy ticket opened
+  in the editor and saved untouched sends nothing") covers the client side.
+
+Found and fixed: a section edit kept a legacy hand tick (`- [x]`) as passed but
+re-dated it to the save. Reads date it at the ticket's creation
+(`normalizeKanbanTask`), but `updateKanbanTask` derived the legacy sections
+without that date, so the kept result changed its `checkedAt`. The update now
+normalizes the row as a read does first
+(`apps/backend/src/core/storage-kanban.ts`, `updateKanbanTask`). Without the
+fix six of the new section-edit cases fail.
+
+Seen and left as designed: the editor shows an alias heading under its
+canonical name, criteria without their `[x]` (ticks are results, not text) and
+paragraph criteria as bullets; saving that text untouched sends nothing, and
+any real edit saves the canonical form (decisions 3 and 4 below). The board
+card preview shows the summary as plain text, so `**Problem:**` appears with
+its asterisks there; the dialog renders it.
 
 **Decisions.**
 
 - **Which tickets?**
-  - **A copy of real tickets written before #1388, loaded into a disposable `dev:test` profile (recommended).** Pass when the text opens unchanged, a title-only save leaves `description` and `acceptanceCriteria` byte for byte, and a section edit keeps the ticks of criteria whose text did not change.
+  - **A copy of real tickets written before #1388, loaded into a disposable `dev:test` profile (recommended; not taken, see Assumptions and decisions).** Pass when the text opens unchanged, a title-only save leaves `description` and `acceptanceCriteria` byte for byte, and a section edit keeps the ticks of criteria whose text did not change.
     - Pros: real formatting (bold lead-ins, `Label:` lines, `- [x]` items) that hand-made tickets miss.
     - Cons: copies user data into a test profile, which must be reset afterwards.
   - **Hand-made legacy rows.**
@@ -180,21 +219,21 @@ components, not in the app with real old tickets.
   JSON with a lossless markdown round trip and two text mirrors; a tiled view
   in the ticket dialog and the pipeline Ticket node; acceptance criteria that
   Verify marks passed, failed or not checked with evidence.
-- Evidence is unit, service and browser-fixture tests only.
+- Evidence for Verify and the coordinator tools is unit, service and
+  browser-fixture tests only. The legacy round trip (task 6) was run in the app
+  on 2026-10-30 with hand-made rows.
 
 ## Outstanding work
 
 ### Qualification
 
-Live evidence (tasks 4 to 7):
+Live evidence (tasks 4, 5 and 7):
 
 - Run a real Build pipeline from a structured ticket on Claude and Codex (then
   the other providers) and check that Verify returns one entry per criterion,
   marks unverifiable criteria `not-checked`, and that the ticks reach the board.
 - Check that provider-enforced structured output accepts the new verdict schema
   on every provider (arrays of objects with an `enum`).
-- Edit a legacy ticket in the app: the text opens unchanged, a title-only save
-  leaves the text alone, and a section edit keeps unchanged criteria's ticks.
 - A coordinator creating a work brief with `sections` through Control MCP on a
   real stack.
 
@@ -339,6 +378,49 @@ JSON and shown as tiles; editing stays text; criteria are checkable by Verify.
   `max-w-3xl`, set through `--modal-max-width`) so tiles can sit side by side;
   create mode stays narrow and keeps its description and criteria fields
   (they take markdown with `##` sections).
+
+## Assumptions and decisions
+
+### Task 6: hand-made legacy rows, not a copy of real tickets
+
+The recommended option was a copy of real pre-#1388 tickets. The coordinator
+asked for hand-made rows only and for no reading or copying of the user's
+data directory, so that was not taken. To make up for the shapes a tester
+might miss, the rows cover each legacy form the parser treats differently:
+bold lead-ins and `Label:` lines, alias headings, criteria in the description
+and in both fields, CRLF, code fences, `###` subheadings, numbered, nested and
+paragraph criteria, `[x]`/`[X]`/`[ ]` markers, unknown and repeated headings,
+and an unknown delivery policy. A real ticket in a shape outside that list is
+still untested.
+
+### Task 6: "opens unchanged" means the stored text and an untouched save
+
+The editor shows the canonical markdown, not the stored text verbatim (an alias
+heading is renamed, ticks are not shown, paragraph criteria become bullets).
+That is decisions 3 to 5 below. The pass condition taken was: reading and
+opening never writes the row; the tiles show all of the text; the editor text
+parses back to the same sections; and saving it untouched sends nothing.
+
+### Task 6: fix the re-dated hand tick in storage, not in the protocol helper
+
+`updateKanbanTask` now passes the row through `normalizeKanbanTask` before
+`applyTicketContentUpdate`, as `recordKanbanCriteriaChecks` already did. Giving
+`applyTicketContentUpdate` the creation date instead would also date a box
+ticked *in this edit* at creation, which is wrong. The new test checks both.
+
+### Task 6: in-app run and repeatable test, not a new real-stack spec
+
+The in-app run gives the live evidence once; the backend and dialog tests keep
+it from regressing in the default suite. A Playwright spec under
+`e2e/agent-testing/` would need a way to seed legacy rows into a running
+profile and would only run on demand, for a path the default suite now covers
+end to end below the browser.
+
+### Tasks 4, 5 and 7: left open
+
+All three need billed provider turns (a Build pipeline's Verify, and a
+coordinator turn), which this worker was told not to make. Their analyses and
+recommended options stand unchanged.
 
 ## Related
 

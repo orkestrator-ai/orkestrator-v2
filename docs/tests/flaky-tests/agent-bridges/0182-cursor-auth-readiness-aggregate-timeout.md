@@ -290,3 +290,46 @@ Evidence: host temporary directory `orkestrator-test-run.RKStpZ/bridges.log.gz`
 and outer `orkestrator-test-run.ryekIw/shortcuts-unit-suite.log.gz`. The aggregate
 failure followed by an isolated pass matches earlier recurrences; the cause
 remains unconfirmed. No Cursor implementation, assertion, deadline or skip changed.
+
+## Coordinator timers/account review — 2026-10-30
+
+Preparation at `574bb14b3` repeated readiness hook timeouts in `reports an
+authenticated credential as ready` and `an attached agent is ready without
+reading credentials` during `mise run test`. The same owner also returned no
+`content-encoding` in its gzip assertion after an unexpected route failure.
+The complete unchanged HTTP owner passed alone (exit 0, 2.1 s):
+
+```sh
+mise run test:logged -- --name recorded-cursor-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is in
+`.orkestrator/review-artifacts/review-validation-af449b96-aec4-419e-90d3-165bd324e649/validation-05.stdout.txt`.
+No Cursor implementation, assertion, deadline or skip changed. The isolated
+pass supports an aggregate-only recurrence; its cause remains unconfirmed.
+
+The exact default-suite rerun subsequently passed (exit 0, 170.0 s):
+
+```sh
+mise run test:logged -- --name review-repaired-default -- mise run test
+```
+
+## PR management review validation — 2026-10-31
+
+Preparation's `mise run test` (Bun 1.4.4, workspace/root/bridges/protocol
+reservations 6/1/2/1; one worker per bridge) timed out
+`authentication > reports an authenticated credential as ready` in
+`bridges/cursor-bridge/src/http.test.ts` after 10002.93 ms. Cursor reported
+819 passed, one failed across 47 files. Evidence is the preparation record
+`.orkestrator/review-artifacts/review-validation-b8ce4ce2-fbd0-4906-a651-a9f5ad5079fd/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone, exit 0, in 1.7 seconds:
+
+```sh
+mise run test:logged -- --name cursor-auth-owner -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+The exact aggregate rerun's bridge group also passed (46.2 seconds). Its
+remaining failures were the existing duplicate flake case IDs and the missing
+pinned Codex binary. The readiness timeout remains intermittent with no
+confirmed root cause; no assertion, deadline, skip or Cursor code changed.

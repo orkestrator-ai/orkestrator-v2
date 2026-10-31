@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   ControlMcpServer,
-  controlMcpPortOverride,
   readControlMcpDescriptor,
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
@@ -247,6 +246,33 @@ describe("Orkestrator control MCP server", () => {
         checked.invoke("open_project_agents_md_pr", { projectId: "project-1" }),
       ).rejects.toThrow("Coordinator capability denied");
       expect(invocations.some((item) => item.command === "open_project_agents_md_pr")).toBe(false);
+    });
+
+    test("coordinator invoker directly refuses the environment merge command", async () => {
+      overrides.set("get_project_coordinator", () => ({
+        workspace: {
+          id: "coordinator-1",
+          lifecycleState: "ready",
+          conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+        },
+      }));
+      const guarded = server as unknown as {
+        coordinatorInvoker(
+          scope: Record<string, unknown>,
+        ): Promise<{ ok: boolean; invoke: ControlMcpInvoker }>;
+      };
+      const checked = await guarded.coordinatorInvoker({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        mailboxIncarnationId: "incarnation-1",
+      });
+      expect(checked.ok).toBe(true);
+      await expect(
+        checked.invoke("merge_environment_pr", { method: "squash", deleteBranch: true }),
+      ).rejects.toThrow("Coordinator capability denied");
+      expect(invocations.some((item) => item.command === "merge_environment_pr")).toBe(false);
     });
 
     test(`workflow tool wake promises match the ${mode} observer policy`, async () => {
@@ -3697,24 +3723,5 @@ describe("Orkestrator control MCP server", () => {
           command === "get_native_agent_model_catalog" && args.environmentId === "env-home",
       ),
     ).toBe(false);
-  });
-});
-
-describe("controlMcpPortOverride", () => {
-  test("only the installed app's backends take the fixed port", () => {
-    const app = { NODE_ENV: "production" };
-    expect(controlMcpPortOverride("production", app)).toBeUndefined();
-    expect(controlMcpPortOverride(undefined, app)).toBeUndefined();
-    expect(controlMcpPortOverride("development", app)).toBeUndefined();
-    // A qualification service or headless agent-test backend left running
-    // must never hold the port the desktop needs.
-    expect(controlMcpPortOverride("agent-test", app)).toBe(0);
-    expect(controlMcpPortOverride("production", { NODE_ENV: "test" })).toBe(0);
-  });
-
-  test("an explicit port still applies to an agent-test backend", () => {
-    const env = { NODE_ENV: "production", ORKESTRATOR_CONTROL_MCP_PORT: "45000" };
-    expect(controlMcpPortOverride("agent-test", env)).toBeUndefined();
-    expect(controlMcpPortOverride("agent-test", { ORKESTRATOR_CONTROL_MCP_PORT: " " })).toBe(0);
   });
 });

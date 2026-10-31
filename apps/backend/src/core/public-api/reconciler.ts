@@ -196,6 +196,19 @@ for (const action of [
   "session.interaction.hold",
   "run.discard",
   "run.cancel",
+  "pr.close",
+  "pr.reopen",
+  "pr.ready",
+  "pr.draft",
+  "pr.comment",
+  "pr.comment.edit",
+  "pr.review",
+  "pr.review.comment",
+  "pr.thread.reply",
+  "pr.thread.resolve",
+  "pr.file.viewed",
+  "pr.reviewers",
+  "pr.label",
 ] as const) {
   registerReconciler(action, reconcileGenericInFlight);
 }

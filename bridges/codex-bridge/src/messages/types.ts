@@ -32,6 +32,7 @@ export interface NormalizedPart {
     | "compaction"
     | "image"
     | "status"
+    | "retry"
     | "progress"
     | "async-question";
   content: string;

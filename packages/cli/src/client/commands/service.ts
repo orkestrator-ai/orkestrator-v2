@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { StandaloneStartupFailure } from "@orkestrator/protocol/node/standalone-service";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { defaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
 import { CliError } from "../errors.js";
@@ -9,9 +11,10 @@ import { keyValues } from "../format.js";
 import {
   awaitServiceConnection,
   currentDescriptorGeneration,
+  startupLogExcerpt,
   type ServiceConnection,
 } from "../service-connection.js";
-import { askServeArguments } from "../service-setup.js";
+import { askServeArguments, warnIfTailscaleOperatorNeeded } from "../service-setup.js";
 import { serviceManagerCommands, serviceUnit } from "../service-units.js";
 import type { CommandContext, CommandSpec, ParsedCommand } from "../spec.js";
 import { stringOption } from "./common.js";
@@ -86,6 +89,26 @@ function unitFor(context: CommandContext, dataDir: string, bun: string) {
   });
 }
 
+async function startupFailedError(
+  version: string,
+  failure: StandaloneStartupFailure,
+  logFile: string,
+  logOffset: number,
+): Promise<CliError> {
+  const excerpt = await startupLogExcerpt(logFile, logOffset, version);
+  return new CliError(
+    "operation-failed",
+    [
+      failure.restoredVersion
+        ? `orkestrator@${version} did not start, so the service went back to ${failure.restoredVersion}.`
+        : `orkestrator@${version} did not start, and the service keeps retrying it.`,
+      ...(excerpt.length > 0 ? ["", ...excerpt, ""] : []),
+      `Fix the cause, then run this command again. Full log: ${logFile}`,
+    ].join("\n"),
+    { retryable: true },
+  );
+}
+
 function runManager(argv: string[], allowFailure = false): { ok: boolean; output: string } {
   const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 60_000 });
   const ok = result.status === 0;
@@ -117,6 +140,10 @@ export const serviceCommands: CommandSpec[] = [
       "",
       "Once the service is running, the address it serves and its gateway token are printed.",
       "The token is shown only in this terminal: never in --output json or the service log.",
+      "If the release cannot start, the command fails with what the service logged.",
+      "",
+      "On Linux, --tailscale-serve needs `sudo tailscale set --operator=$USER` once; the",
+      "questions offer to run it, and a scripted install warns when it is missing.",
     ].join("\n"),
     positionals: [],
     options: [
@@ -183,8 +210,10 @@ export const serviceCommands: CommandSpec[] = [
         ? await askServeArguments(context.io, {
             installCommand: installCommandLine(parsed),
             signal: context.signal,
+            dryRun: parsed.options["dry-run"] === true,
           })
         : parsed.rest;
+      if (!interactive) warnIfTailscaleOperatorNeeded(context.io, serveArgs);
       const bun = process.execPath;
       const bunVersion = typeof Bun === "undefined" ? "" : Bun.version;
       const { service, layout, unit } = await unitFor(context, dataDir, bun);
@@ -227,13 +256,22 @@ export const serviceCommands: CommandSpec[] = [
         );
       }
       await service.installLauncher(layout, releaseDir);
+      const rollbackTarget = service.nextRollbackTarget(
+        layout,
+        service.readServiceConfig(layout),
+        service.linkedVersion(layout.current),
+        version,
+      );
       await service.activateRelease(layout, version);
+      const installGeneration = randomUUID();
       await service.writeServiceConfig(layout, {
+        installGeneration,
         version: 1,
         dataDir,
         bun,
         bunVersion,
         args: serveArgs,
+        ...(rollbackTarget ? { rollbackTarget } : {}),
         installedAt: new Date().toISOString(),
       });
       await mkdir(layout.logs, { recursive: true });
@@ -246,6 +284,13 @@ export const serviceCommands: CommandSpec[] = [
         // A backend already serving this data directory (a reinstall) is
         // replaced; only a new generation's descriptor describes this install.
         const previousGeneration = await currentDescriptorGeneration(dataDir);
+        // The generation excludes failures written by the old launcher while
+        // manager commands run; the timestamp also excludes earlier logs.
+        const loadedAt = Date.now();
+        const logOffset = await stat(logFile).then(
+          (file) => file.size,
+          () => 0,
+        );
         const commands = serviceManagerCommands(unit);
         commands.load.forEach((argv, index) =>
           // Unloading an absent launchd job fails; that first step is best effort.
@@ -256,6 +301,16 @@ export const serviceCommands: CommandSpec[] = [
           connection = await awaitServiceConnection(dataDir, previousGeneration, {
             timeoutMs: readyWaitMs,
             signal: context.signal,
+            expectedVersion: version,
+            assertStarting: async () => {
+              const failure = service.readStartupFailure(
+                layout,
+                version,
+                loadedAt,
+                installGeneration,
+              );
+              if (failure) throw await startupFailedError(version, failure, logFile, logOffset);
+            },
           });
         }
       }
@@ -360,15 +415,17 @@ export const serviceCommands: CommandSpec[] = [
       const state = service.readLauncherState(layout);
       const installed = existsSync(unit.file);
       const running = installed ? runManager(serviceManagerCommands(unit).status, true).ok : false;
+      const current = service.linkedVersion(layout.current);
+      const previous = service.linkedVersion(layout.previous);
       const result = {
         dataDir,
         installed,
         running,
         unit: { manager: unit.manager, name: unit.name, file: unit.file },
-        current: service.linkedVersion(layout.current),
-        previous: service.linkedVersion(layout.previous),
+        current,
+        previous,
         bun: config?.bun ?? null,
-        args: config?.args ?? [],
+        args: service.effectiveServiceArguments(config, current, previous),
         lastReadyVersion: state.lastReadyVersion,
         rollback: state.rollback,
       };

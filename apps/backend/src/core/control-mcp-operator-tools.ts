@@ -73,9 +73,10 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     open_multi_review_fix: ["review.open"],
     address_multi_review: ["review.address"],
     cancel_multi_review: ["review.cancel"],
-    // The action bar's PR and Resolve buttons.
+    // The action bar's PR, Resolve and Merge buttons.
     create_pr: ["pr.create"],
     resolve_conflicts: ["pr.resolve"],
+    merge_pr: ["pr.merge"],
   });
 
 /** A node refusal of a legacy tool, worded with its public error code. */

@@ -84,11 +84,14 @@ function harness(
     logError: (message) => errors.push(message),
     now: () => clock,
   });
-  const answer = async (response = 0) => {
-    pending.shift()!({ response, checkboxChecked: false });
+  const answer = async (response = 0, index = 0) => {
+    pending.splice(index, 1)[0]!({ response, checkboxChecked: false });
     await Bun.sleep(0);
   };
   return {
+    setCurrent: (window: FakeWindow | null) => {
+      input.current = window;
+    },
     dialog,
     dialogs,
     logs,
@@ -173,6 +176,56 @@ describe("native dialogs", () => {
     expect(run.host.closed).toBe(true);
   });
 
+  for (const route of ["current", "explicit"] as const) {
+    test.each([0, 1])(
+      `a reused ${route} host stays open when dialog %i finishes first`,
+      async (firstToFinish) => {
+        const run = harness();
+        const first = run.dialogs.showMessageBox("a", OPTIONS);
+        await Bun.sleep(0);
+        run.setCurrent(run.host);
+        const second = run.dialogs.showMessageBox(
+          "b",
+          OPTIONS,
+          route === "explicit" ? run.host : undefined,
+        );
+        await Bun.sleep(0);
+        expect(run.calls.map((call) => call.parent)).toEqual(["host", "host"]);
+        expect(run.createHostWindow).toHaveBeenCalledTimes(1);
+        expect(run.logs[1]).toBe("[Dialog] b opening (parent: host)");
+        const shown = [first, second];
+        await run.answer(0, firstToFinish);
+        await shown[firstToFinish];
+        expect(run.host.closed).toBe(false);
+        await run.answer();
+        await shown[1 - firstToFinish];
+        expect(run.host.closed).toBe(true);
+      },
+    );
+  }
+
+  test("replaces a retiring host still returned by the current-window lookup", async () => {
+    const oldHost = fakeWindow("old-host");
+    const newHost = fakeWindow("new-host");
+    const hosts = [oldHost, newHost];
+    const run = harness({ createHostWindow: async () => hosts.shift()! });
+    const first = run.dialogs.showMessageBox("a", OPTIONS);
+    await Bun.sleep(0);
+    await run.answer();
+    await first;
+    expect(oldHost.closed).toBe(true);
+    // Electron can still list a closing window until it is destroyed.
+    run.setCurrent(oldHost);
+    const second = run.dialogs.showMessageBox("b", OPTIONS);
+    await Bun.sleep(0);
+    expect(run.calls.map((call) => call.parent)).toEqual(["old-host", "new-host"]);
+    expect(run.createHostWindow).toHaveBeenCalledTimes(2);
+    expect(newHost.closed).toBe(false);
+    await run.answer();
+    await second;
+    expect(newHost.closed).toBe(true);
+  });
+
   test("on macOS refuses as cancelled rather than going windowless when no host opens", async () => {
     const run = harness({
       createHostWindow: () => Promise.reject(new Error("no display")),
@@ -244,18 +297,25 @@ describe("native dialogs", () => {
     expect(run.calls).toEqual([]);
   });
 
-  test("install turns the blocking error box into a sheet", async () => {
-    const run = harness({ current: fakeWindow("current") });
-    run.dialogs.install();
-    run.dialog.showErrorBox("Title", "secret content");
-    await Bun.sleep(0);
-    expect(run.errorBox).not.toHaveBeenCalled();
-    expect(run.calls[0]).toMatchObject({
-      parent: "current",
-      options: { type: "error", message: "Title", detail: "secret content" },
-    });
-    expect(run.logs).toEqual(["[Dialog] error-box opening (parent: visible)"]);
-  });
+  test.each(["darwin", "linux", "win32"] as const)(
+    "install routes error boxes through an asynchronous message box on %s",
+    async (platform) => {
+      const run = harness({ platform, current: fakeWindow("current") });
+      run.dialogs.install();
+      run.dialog.showErrorBox("Title", "secret content");
+      await Bun.sleep(0);
+      expect(run.errorBox).not.toHaveBeenCalled();
+      expect(run.calls[0]).toMatchObject({
+        parent: platform === "darwin" ? "current" : null,
+        options: { type: "error", message: "Title", detail: "secret content" },
+      });
+      expect(run.logs).toEqual([
+        `[Dialog] error-box opening (parent: ${platform === "darwin" ? "visible" : "none"})`,
+      ]);
+      expect(run.createHostWindow).not.toHaveBeenCalled();
+      await run.answer();
+    },
+  );
 
   describe("describeStall", () => {
     test("names a dialog still open", () => {

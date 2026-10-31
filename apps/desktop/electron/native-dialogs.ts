@@ -87,9 +87,16 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
 
   const records: DialogRecord[] = [];
   let host: { window: Promise<Window>; users: number } | null = null;
+  const hostWindows = new WeakSet<Window>();
 
   const acquireHost = (): Promise<Window> => {
-    host ??= { window: createHostWindow(), users: 0 };
+    host ??= {
+      window: createHostWindow().then((created) => {
+        hostWindows.add(created);
+        return created;
+      }),
+      users: 0,
+    };
     host.users += 1;
     return host.window;
   };
@@ -153,7 +160,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
     if (platform !== "darwin")
       return open(source, dialogOptions, requested, parentState(requested));
     const parent = requested ?? usable(currentWindow());
-    if (parent) return open(source, dialogOptions, parent, parentState(parent));
+    // The host also appears in Electron's window list and may be supplied by
+    // the caller. Every dialog using it must hold a lease until it settles.
+    // A retiring host also goes through acquisition, which creates a new one.
+    if (parent && !hostWindows.has(parent))
+      return open(source, dialogOptions, parent, parentState(parent));
     try {
       return await open(source, dialogOptions, await acquireHost(), "host");
     } catch (error) {

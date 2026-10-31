@@ -142,6 +142,8 @@ import {
 import { relaunchApplication } from "./relaunch.js";
 import { showRestartPrompt } from "./restart-prompt.js";
 import { createNativeDialogs, installUncaughtExceptionDialog } from "./native-dialogs.js";
+import { createDialogAttention } from "./dialog-attention.js";
+import { createStartupFailureReporter } from "./startup-failure.js";
 import {
   applyWindowTitle,
   focusWindowById,
@@ -344,25 +346,13 @@ function currentDialogWindow(): BrowserWindow | null {
     null
   );
 }
-// Held so a click can still restore the window after the dialog's caller moved on.
-const dialogNotifications = new Set<Notification>();
-function requestDialogAttention(window: BrowserWindow, message: string): void {
-  // Nobody is at an agent-test profile, and the desktop it shares is the user's.
-  if (window.isFocused() || runtimeFlavor === "agent-test") return;
-  if (process.platform === "darwin") app.dock?.bounce("informational");
-  if (!Notification.isSupported()) return;
-  const notification = new Notification({ title: productName, body: message });
-  dialogNotifications.add(notification);
-  notification.once("close", () => dialogNotifications.delete(notification));
-  notification.once("click", () => {
-    dialogNotifications.delete(notification);
-    if (window.isDestroyed()) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-  });
-  notification.show();
-}
+const requestDialogAttention = createDialogAttention({
+  platform: process.platform,
+  agentTest: runtimeFlavor === "agent-test",
+  productName,
+  dock: () => app.dock,
+  Notification,
+});
 const nativeDialogs = createNativeDialogs<BrowserWindow>({
   dialog,
   platform: process.platform,
@@ -1620,18 +1610,11 @@ if (isPrimaryInstance) {
           runtimeFlavor !== "agent-test" &&
           recoverRemoteBackendFailure(app.getPath("userData"), relaunchingApp),
         error,
-        report: async (failure) => {
-          console.error("[Desktop] Startup failed:", failure);
-          // Nobody answers in an agent-test profile; its launcher reads the log.
-          if (runtimeFlavor === "agent-test") return;
-          await nativeDialogs.showMessageBox("startup-failure", {
-            type: "error",
-            title: `${productName} failed to start`,
-            message: `${productName} failed to start`,
-            detail: failure instanceof Error ? failure.message : String(failure),
-            buttons: ["OK"],
-          });
-        },
+        report: createStartupFailureReporter({
+          agentTest: runtimeFlavor === "agent-test",
+          productName,
+          dialogs: nativeDialogs,
+        }),
         quit: () => app.quit(),
       });
     });

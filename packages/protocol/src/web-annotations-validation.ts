@@ -27,6 +27,7 @@ import {
   type WebAnnotationRect,
   type WebAnnotationRedactionSummary,
   type WebAnnotationRequestState,
+  type WebAnnotationSourceHint,
   type WebAnnotationTarget,
   type WebAnnotationTargetKind,
   type WebAnnotationTextQuote,
@@ -252,15 +253,18 @@ export function isWebAnnotationEvidence(value: unknown): value is WebAnnotationP
     (value.sourceHints === undefined ||
       (Array.isArray(value.sourceHints) &&
         value.sourceHints.length <= 4 &&
-        value.sourceHints.every(
-          (hint) =>
-            isRecord(hint) &&
-            isBoundedString(hint.producer, 100) &&
-            isBoundedString(hint.path, 1_000) &&
-            (hint.line === undefined || isNonNegativeInteger(hint.line, 10_000_000)) &&
-            (hint.component === undefined || isBoundedString(hint.component, 200)) &&
-            typeof hint.verified === "boolean",
-        )))
+        value.sourceHints.every(isWebAnnotationSourceHint)))
+  );
+}
+
+export function isWebAnnotationSourceHint(value: unknown): value is WebAnnotationSourceHint {
+  return (
+    isRecord(value) &&
+    isBoundedString(value.producer, 100) &&
+    isBoundedString(value.path, 1_000) &&
+    (value.line === undefined || isNonNegativeInteger(value.line, 10_000_000)) &&
+    (value.component === undefined || isBoundedString(value.component, 200)) &&
+    typeof value.verified === "boolean"
   );
 }
 

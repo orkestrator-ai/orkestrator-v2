@@ -17,6 +17,7 @@ import {
   nextGoalState,
   parseGoalCarrier,
   parseGoalCommandArguments,
+  parseVerifierFlag,
   renderGoalCarrier,
   sessionGoal,
   type GoalEvent,
@@ -958,6 +959,54 @@ describe("structured goal input", () => {
       maxIterations: 50,
       tokenBudget: 9,
     });
+  });
+});
+
+describe("a verifier on structured input", () => {
+  test("parses the flag's form, splitting at the first colon", () => {
+    expect(parseVerifierFlag("codex")).toEqual({ agent: "codex" });
+    expect(parseVerifierFlag("opencode:vendor/model:tag")).toEqual({
+      agent: "opencode",
+      model: "vendor/model:tag",
+    });
+    expect(parseVerifierFlag("nobody")).toHaveProperty("error");
+    expect(parseVerifierFlag("codex:")).toHaveProperty("error");
+  });
+
+  test("goes onto the command, and a bad one is an error", () => {
+    expect(goalSetCommand({ objective: "x", verifier: { agent: "codex", model: "o3" } })).toEqual({
+      kind: "set",
+      objective: "x",
+      verifier: { agent: "codex", model: "o3" },
+      maxIterations: NATIVE_AGENT_GOAL_LIMITS.maxIterationsDefault,
+    });
+    expect(goalSetCommand({ objective: "x" })).not.toHaveProperty("verifier");
+    for (const verifier of [
+      { agent: "nobody" },
+      { agent: "codex", model: "" },
+      { agent: "codex", model: "x".repeat(NATIVE_AGENT_GOAL_LIMITS.verifierModelMaxChars + 1) },
+    ]) {
+      expect(goalSetCommand({ objective: "x", verifier: verifier as never }).kind).toBe("error");
+    }
+  });
+
+  test("a model reads which verifier is set, and its summary only in the frame", () => {
+    const framed = goalForModel({
+      goalId: "g1",
+      objective: "x",
+      status: "complete",
+      statusReason: "verdict-passed",
+      verifier: { agent: "codex" },
+      iterations: 1,
+      maxIterations: 5,
+      noProgressStreak: 0,
+      lastVerdict: { passed: true, summary: "verdict text", agent: "codex", at: "t" },
+      setAt: "t",
+      updatedAt: "t",
+    });
+    expect(framed.verifier).toEqual({ agent: "codex" });
+    expect(framed.lastVerdict).toEqual({ passed: true });
+    expect(framed.evidence).toContain("verdict text");
   });
 });
 

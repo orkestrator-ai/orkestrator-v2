@@ -196,6 +196,38 @@ describe("session goal set", () => {
     expect(gateway.requests).toHaveLength(before);
   });
 
+  test("--verifier sends an agent, and a model split at its first colon", async () => {
+    const { box, sent } = await fixture();
+    await box.run([...SET, "--verifier", "codex", "--json"]);
+    expect(sent("session.goal.set")[0]!.body.args.input).toMatchObject({
+      verifier: { agent: "codex" },
+    });
+    await box.run([...SET, "--verifier", "opencode:vendor/model:tag", "--json"]);
+    expect(sent("session.goal.set")[1]!.body.args.input).toMatchObject({
+      verifier: { agent: "opencode", model: "vendor/model:tag" },
+    });
+    await box.run([...SET, "--json"]);
+    expect(sent("session.goal.set")[2]!.body.args.input).not.toHaveProperty("verifier");
+  });
+
+  test("a malformed --verifier is refused before any request", async () => {
+    const { box, gateway } = await fixture();
+    const before = gateway.requests.length;
+    for (const value of ["nobody", "nobody:model", "codex:", ""]) {
+      const run = await box.run([...SET, "--verifier", value, "--json"]);
+      expect(run.code).toBe(PUBLIC_EXIT.invalidInput);
+    }
+    expect(gateway.requests).toHaveLength(before);
+  });
+
+  test("a verifier's name shows with the goal", async () => {
+    const { box } = await fixture([
+      read({ goal: view("active", { verifier: { agent: "codex", model: "o3" } }) }),
+    ]);
+    const run = await box.run(["session", "goal", "get", "session-id"]);
+    expect(run.out).toContain("codex:o3");
+  });
+
   test("--output id prints the goal ID", async () => {
     const { box } = await fixture();
     const run = await box.run([...SET, "--output", "id"]);

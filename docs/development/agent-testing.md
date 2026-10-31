@@ -1173,7 +1173,8 @@ read-only boundary (`read-only`), that delegation never waits inside a turn
 (`async`), that worker mail flows with nobody's help (`family`), that the
 status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
-(`deliver-now`), and that peer mail between two ordinary environments wakes
+(`deliver-now`), that a worker's goal runs to a passing check and wakes the
+coordinator once (`goal`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -1423,8 +1424,35 @@ the `steer-unsupported` hold note before its gate opens, and it is injected
 `coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
 runs the orchestration over a scripted command transport.
 
+The `goal` case (`plans/goals/403`) proves a coordinator can give a worker a goal
+and react to its end. It runs only where the platform's `actions.goal` capability
+is on, so other platforms record a skip, gives the coordinator two prompts and
+waits at most six step budgets:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario goal
+```
+
+The coordinator launches one worker whose task is a one-word reply, and that
+launch's own wake passes first. A second prompt has it call `set_worker_goal` once
+on that tab with `maxIterations: 3`, the check `test -f goal-<token>-two` and an
+objective that takes two turns: the first creates `goal-<token>-one` and ends
+without `report_goal`, and the second creates the file the check needs and reports
+`done`. Two turns on purpose: with one there would be no iteration to wake on. The
+prompt also tells it to call `get_worker_goal` once when woken. The harness then
+reads the goal on each poll until it stops and the wake settles, and watches 30 more
+seconds for a second wake. It passes when the set result names the goal with
+`wakeOwed: true`; the goal ends `complete` with reason `check-passed`, a passing
+`lastCheck` and two or three iterations; the goal's delegation closes and wakes the
+coordinator only after the goal's `endedAt`; exactly one coordinator turn follows
+the set turn; the notice names the outcome and `get_worker_goal`, unless a report
+the worker mailed was the wake; and `get_worker_goal` returned `complete`. The
+prompts and verdict are in `coordinator-live-goal.ts`;
+`coordinator-live-goal-orchestration.test.ts` runs the orchestration over a scripted
+command transport.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the renderer's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

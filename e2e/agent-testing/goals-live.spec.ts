@@ -222,6 +222,8 @@ test.describe(`goal loop: ${platform}`, () => {
       scenarios[name] = {
         status: goal.status,
         reason: goal.statusReason,
+        // Bounded by the record, and only a provider's own error text here.
+        ...(goal.statusReason === "turn-failed" ? { detail: goal.statusDetail } : {}),
         iterations: goal.iterations,
         tokensUsed: goal.tokensUsed,
         ...extra,

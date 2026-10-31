@@ -189,7 +189,7 @@ not advertise at its version before sending it.
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
 | `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
-| `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider |
+| `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--verifier AGENT[:MODEL]] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider |
 | `session goal get SESSION [--check-output] [--wait]` | `session.goal.get` | the session record; starts nothing | read (content) |
 | `session goal pause\|clear SESSION` | `session.goal.pause/clear` | the goal service on the session record; starts no bridge | metadata |
 | `session goal resume SESSION [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.resume` | the goal service, through the live session | provider |
@@ -613,7 +613,12 @@ confirms `set` and `resume`.
   `maxIterations` and `tokenBudget` as fields, so an objective that mentions
   `--budget 5` is just an objective. `maxIterations` defaults to 20, is resolved
   at admission and recorded, and may be at most 100. `check` is one line, as it
-  is in `/goal`. Without a check, a done report ends the goal as `claimed`.
+  is in `/goal`. `--verifier AGENT[:MODEL]` (`verifier: {agent, model?}`) has a
+  fresh read-only session judge the work on a done report; with a check, the check
+  runs first and both must pass. With neither, a done report ends the goal as
+  `claimed`. A verifier the backend cannot run, or an agent it refuses, fails the
+  admitted operation (`conflict`, exit 8) with the reason, and a malformed `--verifier`
+  is refused by the client (exit 2).
 - **Refused before admission,** with nothing recorded: no capability
   (`capability-unavailable`, exit 8, as for a provider that has not qualified or
   a budget on one that reports no usage), bad bounds (`invalid-input`, exit 2), a

@@ -1248,6 +1248,26 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             description:
               "One-line shell command run in the workspace when the agent reports done; exit 0 completes the goal. Omitted: a done report ends the goal as claimed (unverified).",
           },
+          verifier: {
+            type: "object",
+            description:
+              "A fresh read-only session that judges the work when the agent reports done; its passing verdict completes the goal. With check, the check runs first and both must pass.",
+            properties: {
+              agent: {
+                type: "string",
+                enum: AGENT_PLATFORMS,
+                description: "The agent that runs the verifier session.",
+              },
+              model: {
+                type: "string",
+                minLength: 1,
+                maxLength: NATIVE_AGENT_GOAL_LIMITS.verifierModelMaxChars,
+                description: "Model ID. Omitted: the agent's default.",
+              },
+            },
+            required: ["agent"],
+            additionalProperties: false,
+          },
           maxIterations: goalMaxIterations,
           tokenBudget: goalTokenBudget,
         },
@@ -1259,6 +1279,11 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           objective: "Make the test suite pass.",
           check: "bun test",
           maxIterations: 10,
+        },
+        {
+          sessionId: EXAMPLE_SESSION_ID,
+          objective: "Write the migration guide.",
+          verifier: { agent: "codex", model: "o3" },
         },
       ],
     },

@@ -1430,7 +1430,9 @@ delegation settles from its node's turn state, which does not know about goals, 
 the coordinator would be woken between iterations. A person's `/goal` on a remote
 worker the coordinator delegated to has that problem today.
 
-A live coordinator run has not been done: see `plans/goals/403`.
+A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
+it has passed is recorded in `plans/goals/403`.
 
 ## Saved graphs
 
@@ -1635,7 +1637,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
-  test:agent:coordinator` runs five scenarios per platform in a disposable
+  test:agent:coordinator` runs its scenarios per platform in a disposable
   profile. `read-only` attempts every class of mutation and checks that the
   checkout digest is unchanged and that read and discovery tools still answer.
   `async` launches real workers and checks the async launch result, that a
@@ -1647,7 +1649,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (with `address_multi_review` in between), and that a delegated worker held
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
-  coordinator involved. Every scenario with mail also runs the renderer's
+  coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
+  passing check, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in

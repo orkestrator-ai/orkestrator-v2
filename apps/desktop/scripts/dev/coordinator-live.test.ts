@@ -1164,6 +1164,7 @@ describe("suite verdict", () => {
       family: summary("passed", undefined, "family"),
       status: summary("passed", undefined, "status"),
       "deliver-now": summary("passed", undefined, "deliver-now"),
+      goal: summary("passed", undefined, "goal"),
       peer: summary("passed", undefined, "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: passed }))).toMatchObject({
@@ -1203,12 +1204,13 @@ describe("suite verdict", () => {
       family: summary("skipped", "no credential", "family"),
       status: summary("skipped", "no credential", "status"),
       "deliver-now": summary("skipped", "no credential", "deliver-now"),
+      goal: summary("skipped", "no credential", "goal"),
       peer: summary("skipped", "no credential", "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
       verdict: "skipped",
       reason:
-        "read-only: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; peer: no credential",
+        "read-only: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; goal: no credential; peer: no credential",
     });
   });
 

@@ -1,4 +1,7 @@
-import { NATIVE_AGENT_GOAL_LIMITS } from "@orkestrator/protocol/native-agent-goal";
+import {
+  NATIVE_AGENT_GOAL_LIMITS,
+  parseVerifierFlag,
+} from "@orkestrator/protocol/native-agent-goal";
 import type { NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type {
@@ -95,6 +98,12 @@ function goalLines(read: PublicSessionGoal): string[] {
       goal.tokenBudget !== undefined ? `${goal.tokensUsed ?? 0}/${goal.tokenBudget}` : undefined,
     ],
     ["check", goal.check],
+    [
+      "verifier",
+      goal.verifier
+        ? `${goal.verifier.agent}${goal.verifier.model ? `:${goal.verifier.model}` : ""}`
+        : undefined,
+    ],
     ["last check", goal.lastCheck ? (goal.lastCheck.passed ? "passed" : "failed") : undefined],
     ["objective", goal.objective],
   ]);
@@ -282,7 +291,7 @@ export const sessionGoalCommands: CommandSpec[] = [
     action: "session.goal.set",
     summary: "Give a session a goal: the backend sends turns until a check proves it or it stops.",
     description:
-      "Pass the objective with --objective, --objective-file or --objective-stdin. Without --check, a done report ends the goal as claimed: nothing verified it, and --wait exits 10. A session holds one goal, and a running goal is refused (exit 8) until it is cleared. A goal never changes the permission mode, so an approval still parks a turn (--wait exits 6).",
+      "Pass the objective with --objective, --objective-file or --objective-stdin. Without --check or --verifier, a done report ends the goal as claimed: nothing verified it, and --wait exits 10. A session holds one goal, and a running goal is refused (exit 8) until it is cleared. A goal never changes the permission mode, so an approval still parks a turn (--wait exits 6).",
     positionals: [{ name: "session", required: true }],
     options: [
       {
@@ -300,6 +309,13 @@ export const sessionGoalCommands: CommandSpec[] = [
         description:
           "One-line shell command run in the workspace on a done report; exit 0 completes the goal.",
       },
+      {
+        name: "verifier",
+        kind: "string",
+        valueName: "AGENT[:MODEL]",
+        description:
+          "A fresh read-only session on that agent judges the work on a done report; with --check, both must pass.",
+      },
       ...LIMIT_OPTIONS,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
@@ -312,6 +328,9 @@ export const sessionGoalCommands: CommandSpec[] = [
     async run(context, parsed) {
       const options = parsed.options;
       validateWaitOptions(options);
+      const verifier =
+        options.verifier === undefined ? undefined : parseVerifierFlag(String(options.verifier));
+      if (verifier && "error" in verifier) throw new CliError("invalid-input", verifier.error);
       const objective = await readTextSource(context.io, {
         file: options["objective-file"],
         stdin: options["objective-stdin"],
@@ -329,6 +348,7 @@ export const sessionGoalCommands: CommandSpec[] = [
         sessionId: parsed.positionals.session,
         objective,
         ...(options.check !== undefined ? { check: options.check } : {}),
+        ...(verifier ? { verifier } : {}),
         ...limitsInput(options),
       });
     },

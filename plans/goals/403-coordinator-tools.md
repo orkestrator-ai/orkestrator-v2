@@ -41,8 +41,12 @@ A coordinator can give a worker a goal and be woken when it ends.
 
 - 2026-10-31: **Live run not done.** A live coordinator run is opt-in and costs money, so
   it was not run, and "Done when" stays unticked. Everything below is proved with a
-  scripted provider. `set_worker_goal` should be added as a scenario in
-  `mise run test:agent:coordinator`, which has none for goals yet.
+  scripted provider.
+- 2026-10-31: The `goal` scenario of `mise run test:agent:coordinator` is what proves
+  "Done when": `mise run test:agent:coordinator --credential-source claude --scenario goal`.
+  It has only been run over a scripted transport, so the box stays unticked until a live
+  run passes. Its objective takes two turns, because a one-turn goal has no iteration to
+  wake on, so the verdict requires two or three iterations.
 - 2026-10-31: Tools are `set_worker_goal`, `get_worker_goal`, `pause_worker_goal` and
   `clear_worker_goal` (`control-mcp-coordinator-goals.ts`), over
   `*_coordinator_worker_goal` commands (`coordinator-goal-actions.ts`). `maxIterations` is
@@ -70,3 +74,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-31 · plan · Created from the plan. · Not started.
 - 2026-10-31 · Claude (worktree c4666baa82d9) · Added the tools, the wake fix, framing, docs and tests. · Live coordinator run still open, and remote workers need a follow-up.
+- 2026-10-31 · Claude (worktree c4666baa82d9) · Added the `goal` live scenario with scripted tests; not run live. · Run it on Claude and Codex, then tick "Done when".

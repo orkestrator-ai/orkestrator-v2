@@ -10,9 +10,11 @@ import {
   sessionGoal,
   type GoalCommand,
   type NativeAgentGoal,
+  type NativeAgentGoalVerifier,
   type NativeAgentGoalView,
 } from "@orkestrator/protocol/native-agent-goal";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
+import { publicActionNestedKeys } from "@orkestrator/protocol/public-api-inputs";
 import {
   decodePublicSessionId,
   nativeTabLogicalSessionKey,
@@ -27,6 +29,7 @@ import { PublicActionError } from "./errors.js";
 import {
   invalid,
   onlyActionKeys,
+  onlyKeys,
   optionalBoolean,
   optionalInteger,
   sessionTarget,
@@ -144,6 +147,17 @@ function mutationResult(
   return { sessionId, goal: goal ? goalStatusSummary(goal) : null };
 }
 
+function parseVerifierInput(value: unknown): NativeAgentGoalVerifier | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalid("verifier must be an object");
+  }
+  const fields = value as Record<string, unknown>;
+  onlyKeys(fields, publicActionNestedKeys("session.goal.set", "verifier"));
+  // `goalSetCommand` judges the values; this only keeps the shape it takes.
+  return fields as unknown as NativeAgentGoalVerifier;
+}
+
 interface SetInput extends SessionTarget {
   command: Extract<GoalCommand, { kind: "set" }>;
 }
@@ -160,9 +174,11 @@ const goalSet: MutationActionHandler<SetInput> = {
     }
     const maxIterations = optionalInteger(input, "maxIterations", 1, Number.MAX_SAFE_INTEGER);
     const tokenBudget = optionalInteger(input, "tokenBudget", 1, Number.MAX_SAFE_INTEGER);
+    const verifier = parseVerifierInput(input.verifier);
     const command = goalSetCommand({
       objective: input.objective,
       ...(input.check !== undefined ? { check: input.check } : {}),
+      ...(verifier ? { verifier } : {}),
       ...(maxIterations !== undefined ? { maxIterations } : {}),
       ...(tokenBudget !== undefined ? { tokenBudget } : {}),
     });
@@ -178,6 +194,8 @@ const goalSet: MutationActionHandler<SetInput> = {
         check: set.check ?? null,
         maxIterations: maxIterations ?? null,
         tokenBudget: tokenBudget ?? null,
+        // Absent when unset, so earlier fingerprints still match.
+        ...(verifier ? { verifier } : {}),
       },
     };
   },

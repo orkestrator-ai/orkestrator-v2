@@ -832,7 +832,7 @@ function maxIterationsProblem(value: number): string | undefined {
 }
 
 /** `<agent>[:model]`. The first colon splits, because a model name may hold another. */
-function parseVerifierFlag(text: string): NativeAgentGoalVerifier | { error: string } {
+export function parseVerifierFlag(text: string): NativeAgentGoalVerifier | { error: string } {
   const colon = text.indexOf(":");
   const agent = colon < 0 ? text : text.slice(0, colon);
   const model = colon < 0 ? undefined : text.slice(colon + 1);
@@ -1036,6 +1036,7 @@ function goalLimitsProblem(fields: {
 export function goalSetCommand(fields: {
   objective: string;
   check?: string;
+  verifier?: NativeAgentGoalVerifier;
   maxIterations?: number;
   tokenBudget?: number;
 }): GoalCommand {
@@ -1060,12 +1061,19 @@ export function goalSetCommand(fields: {
       message: `The check command can be at most ${NATIVE_AGENT_GOAL_LIMITS.checkMaxBytes} bytes.`,
     };
   }
+  if (fields.verifier !== undefined && !isGoalVerifier(fields.verifier)) {
+    return {
+      kind: "error",
+      message: `The verifier must name an agent, and a model of 1 to ${NATIVE_AGENT_GOAL_LIMITS.verifierModelMaxChars} characters if any.`,
+    };
+  }
   const problem = goalLimitsProblem(fields);
   if (problem) return { kind: "error", message: problem };
   return {
     kind: "set",
     objective,
     ...(check ? { check } : {}),
+    ...(fields.verifier ? { verifier: fields.verifier } : {}),
     maxIterations: fields.maxIterations ?? NATIVE_AGENT_GOAL_LIMITS.maxIterationsDefault,
     ...(fields.tokenBudget !== undefined ? { tokenBudget: fields.tokenBudget } : {}),
   };
@@ -1158,6 +1166,7 @@ export function goalForModel(goal: NativeAgentGoalView, extra: { checkOutput?: s
     meaning: GOAL_STATUS_MEANING[goal.status],
     objective: goal.objective,
     ...(goal.check ? { check: goal.check } : {}),
+    ...(goal.verifier ? { verifier: goal.verifier } : {}),
     ...(goal.lastCheck
       ? {
           lastCheck: {

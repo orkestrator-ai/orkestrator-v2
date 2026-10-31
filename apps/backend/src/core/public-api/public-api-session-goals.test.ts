@@ -335,6 +335,73 @@ describe("session.goal.set", () => {
   });
 });
 
+describe("session.goal.set with a verifier", () => {
+  /** The verifier host is backend wiring (`index.ts`), absent from the test service. */
+  function withVerifierHost(service: { goals: unknown }, problem?: string) {
+    Object.assign((service.goals as { host: object }).host, {
+      verifier: { problem: async () => problem, stopRun: async () => undefined },
+    });
+  }
+
+  test("is stored on the goal, read back, and kept out of the receipt", async () => {
+    const { set, stored, service, harness, sessionId } = await goalSetup();
+    withVerifierHost(service);
+    const verifier = { agent: "codex", model: "model-name-out-of-receipt" };
+    const response = await set({ verifier }, "set-verifier");
+    expect(response.ok).toBe(true);
+    await service.goals.settled();
+    expect((await stored()).goal?.verifier).toEqual(verifier as never);
+    expect(JSON.stringify(response.receipt)).not.toContain("model-name-out-of-receipt");
+    const read = await harness.call<PublicSessionGoal>("session.goal.get", { sessionId });
+    expect(read.ok && read.result.goal?.verifier).toEqual(verifier as never);
+  });
+
+  test("is part of the request's identity", async () => {
+    const { set, service } = await goalSetup();
+    withVerifierHost(service);
+    await set({ verifier: { agent: "codex" } }, "set-verifier-key");
+    expect(failure(await set({ verifier: { agent: "claude" } }, "set-verifier-key"))).toBe(
+      "request-conflict",
+    );
+    expect(failure(await set({}, "set-verifier-key"))).toBe("request-conflict");
+  });
+
+  test("a malformed verifier is refused before admission", async () => {
+    const { set, stored, service } = await goalSetup();
+    withVerifierHost(service);
+    const inputs = [
+      "codex",
+      { model: "o3" },
+      { agent: "nobody" },
+      { agent: "codex", model: "" },
+      { agent: "codex", model: "x".repeat(NATIVE_AGENT_GOAL_LIMITS.verifierModelMaxChars + 1) },
+      { agent: "codex", other: true },
+    ];
+    for (const [index, verifier] of inputs.entries()) {
+      const refused = await set({ verifier }, `set-bad-verifier-${index}`);
+      expect(failure(refused)).toBe("invalid-input");
+      expect(refused.receipt).toBeUndefined();
+    }
+    expect((await stored()).goal).toBeUndefined();
+  });
+
+  test("a verifier the backend refuses fails the operation with its reason", async () => {
+    const { set, stored, service } = await goalSetup();
+    withVerifierHost(service, "That agent is not enabled.");
+    const refused = await set({ verifier: { agent: "codex" } }, "set-verifier-refused");
+    expect(failure(refused)).toBe("conflict");
+    expect(refused.ok ? "" : refused.error.message).toContain("not enabled");
+    expect(refused.receipt?.state).toBe("failed");
+    expect((await stored()).goal).toBeUndefined();
+  });
+
+  test("a backend with no verifier host says so", async () => {
+    const { set } = await goalSetup();
+    const refused = await set({ verifier: { agent: "codex" } }, "set-no-host");
+    expect(refused.ok ? "" : refused.error.message).toContain("cannot run verifiers");
+  });
+});
+
 describe("session.goal.get", () => {
   test("reads the record: no provider call, no private field", async () => {
     const { set, harness, sessionId, forceGoal, stub } = await goalSetup();
@@ -520,6 +587,9 @@ describe("the contract", () => {
     expect(set.maxIterations!.maximum).toBe(NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit);
     expect(set.objective!.maxLength).toBe(NATIVE_AGENT_GOAL_LIMITS.objectiveMaxChars);
     expect(set.check!.maxLength).toBe(NATIVE_AGENT_GOAL_LIMITS.checkMaxBytes);
+    expect(set.verifier!.properties!.model!.maxLength).toBe(
+      NATIVE_AGENT_GOAL_LIMITS.verifierModelMaxChars,
+    );
     expect(
       PUBLIC_ACTION_INPUTS["session.goal.resume"].input.properties.maxIterations!.maximum,
     ).toBe(NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit);

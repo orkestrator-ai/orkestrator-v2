@@ -21,9 +21,7 @@
 export const COMPATIBILITY_PATH_IDS = [
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
   "slash-catalogue.outdated-bridge",
-  /** A bridge without `POST /session/:id/close` was closed through its legacy DELETE. */
-  "bridge-close.legacy-delete",
-  /** A bridge without the close route and with a destructive DELETE got the restart notice. */
+  /** A bridge without `POST /session/:id/close` got the restart notice. */
   "bridge-close.upgrade-required",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",

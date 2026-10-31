@@ -1702,6 +1702,16 @@ export async function deleteEnvironment(
         recursive: true,
         force: true,
       });
+      // A coordinator following this worker's pull request still hears the
+      // merge Merge and Cleanup just recorded, once the record is gone.
+      const last = await storage.getEnvironment(environmentId).catch(() => null);
+      if (last)
+        await context.coordinators?.statusWakes.captureFinalPullRequest(last).catch((error) => {
+          console.warn(
+            `[backend] Could not keep the final PR state for ${environmentId}:`,
+            error instanceof Error ? error.message : "unknown",
+          );
+        });
       await storage.removeEnvironment(environmentId);
       // Bridges were stopped above, so nothing is writing bridge state now.
       if (cleanup) await runEnvironmentCleanupStep(cleanup, "state-dirs", context);

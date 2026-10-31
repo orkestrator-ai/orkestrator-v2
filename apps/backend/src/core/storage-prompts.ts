@@ -1,3 +1,4 @@
+import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { nativeAgentJobReceiptIsActive } from "./models.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import * as shared from "./storage-shared.js";
@@ -418,6 +419,19 @@ export class PromptsRepository {
         return { status: "consumed" as const, queue: previous ?? null };
       }
 
+      if (isRecord(message.origin) && message.origin.kind === "goal") {
+        const goal = session ? sessionGoal(session) : undefined;
+        if (
+          !goal ||
+          goal.status !== "active" ||
+          goal.goalId !== message.origin.goalId ||
+          goal.iterations !== Number(message.origin.iteration) + 1 ||
+          goal.providerSessionId !== session?.providerSessionId
+        ) {
+          return { status: "consumed" as const, queue: previous ?? null };
+        }
+      }
+
       // Recovery receipts above remain authoritative even when new publication
       // is no longer allowed (for example, a read-only session left Plan).
       if (!allowNewMessage) throw new Error(PROMPT_QUEUE_NEW_PUBLICATION_REFUSED);
@@ -808,9 +822,14 @@ export class PromptsRepository {
       }
       // Only an explicit retirement permits a fresh dispatch identity. Keep the
       // stable row id, and leave the error latched until the user retries.
-      const failedMessage = options?.requestIdRetired
-        ? { ...inFlight.message, requestId: randomUUID() }
-        : inFlight.message;
+      // Goal identity belongs to the iteration. Only goal resume may mint its
+      // next identity; a generic queue retry must not escape the goal fence.
+      const goalCarrier =
+        isRecord(inFlight.message.origin) && inFlight.message.origin.kind === "goal";
+      const failedMessage =
+        options?.requestIdRetired && !goalCarrier
+          ? { ...inFlight.message, requestId: randomUUID() }
+          : inFlight.message;
       const saved: PersistedPromptQueue = {
         ...withoutInFlight,
         messages: [failedMessage, ...previous.messages],

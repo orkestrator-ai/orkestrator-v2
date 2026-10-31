@@ -1527,7 +1527,7 @@ describe("EnvironmentItem build pipeline naming", () => {
     const { container } = renderItem(makeEnvironment({ name: "Build: checkout-flow" }));
 
     expect(container.textContent).toContain("Build: checkout-flow");
-    expect(getRowButton(container).querySelector("svg.lucide-pipe")).toBeNull();
+    expect(getRowButton(container).querySelector("svg.lucide-pipe") === null).toBe(true);
   });
 });
 

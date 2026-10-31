@@ -30,6 +30,9 @@ test("controller PR publication is node-link only, never workspace-grant access"
   expect(isNodeExcludedCommand("create_controller_pr")).toBe(false);
   expect(isWorkspaceExcludedCommand("create_controller_pr")).toBe(true);
   expect(isNodeExcludedCommand("create_coordinator_pr")).toBe(true);
+  expect(isNodeExcludedCommand("resolve_controller_conflicts")).toBe(false);
+  expect(isWorkspaceExcludedCommand("resolve_controller_conflicts")).toBe(true);
+  expect(isNodeExcludedCommand("resolve_coordinator_conflicts")).toBe(true);
 });
 
 test("controller worker surfaces are node-link only, never workspace-grant access", () => {
@@ -41,4 +44,21 @@ test("controller worker surfaces are node-link only, never workspace-grant acces
     expect(isNodeExcludedCommand(command)).toBe(false);
     expect(isWorkspaceExcludedCommand(command)).toBe(true);
   }
+});
+
+test("worker turn controls are node-link only on the leaf and never leave the command node", () => {
+  for (const command of [
+    "stop_controller_worker_turn",
+    "list_controller_worker_commands",
+    "run_controller_worker_command",
+  ]) {
+    expect(isNodeExcludedCommand(command)).toBe(false);
+    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+  }
+  for (const command of [
+    "stop_coordinator_worker_turn",
+    "list_coordinator_worker_commands",
+    "run_coordinator_worker_command",
+  ])
+    expect(isNodeExcludedCommand(command)).toBe(true);
 });

@@ -29,7 +29,8 @@ import {
   HardDrive,
   ChartArea,
 } from "lucide-react";
-import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
+import { DockerSettings } from "@/components/docker";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
@@ -103,6 +104,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
   { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
+  { id: "docker", label: "Docker", icon: <DockerIcon className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
@@ -299,6 +301,8 @@ export function SettingsPage({
                 <SchedulesSettings />
               ) : activeSection === "permissions" ? (
                 <PermissionsSettings />
+              ) : activeSection === "docker" ? (
+                <DockerSettings />
               ) : isLoading && !initialLoadDone ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

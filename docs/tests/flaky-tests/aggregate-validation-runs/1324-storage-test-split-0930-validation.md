@@ -69,3 +69,74 @@ deadline or skip changes. The node-coordination mismatch reads as a race: the
 inject completed before the test read the placement. That is a hypothesis, not
 confirmed. The branch changes no production code, and every storage test and
 the writer guard passed in both runs. Neither run is a green aggregate.
+
+
+## Goal review repair recurrence — 2026-10-31
+
+The unrelated node-coordination owner again failed an injection-placement
+assertion in the full `mise run test` run: `a command node's deliverNow on this
+leaf > node coordinator requests stay pending while held, until injection`,
+line 348 (315.91 ms). The complete unchanged owner passed alone in 2.4 s:
+
+```sh
+mise run test:logged -- --name goal-node-owner -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.Zau4wx/review-tests.log.gz` in the host temporary
+directory. This establishes a recurrence that passes alone, not a cause or fix.
+No assertion, timeout, skip or node-coordination implementation changed.
+
+## Main merge recurrence — 2026-10-31
+
+`mise run test:logged -- --name merge-default-tests -- mise run test`
+repeated `MCP fixture cleanup contract > every test importing createFixture from MCP test-support awaits or returns cleanup` in
+`tests/unit/mcp-fixture-cleanup.test.ts`: the 5,000 ms deadline expired at 5500.02 ms. The
+workspace group reserved six slots (two isolated workers for web), root one
+slot, and bridges two; focused merge checks also ran on the shared Linux host.
+
+The complete unchanged owner passed alone (exit zero, 2.0 s):
+
+```sh
+mise run test:logged -- --name merge-mcp-cleanup-owner -- bun test ./tests/unit/mcp-fixture-cleanup.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.L6nmbv/root-and-agent-support-tests.log.gz`
+and `/tmp/orkestrator-test-run.v7lAtX/`. Passing focused output was removed
+by the logger. This confirms a recurrence; shared-host contention remains a
+hypothesis. No owner assertion, deadline, skip or implementation changed, and
+the isolated pass does not make the aggregate green.
+
+The original root group completed with 3,355 passed, one skipped and two
+failed across 165 files (226.97 s). The other failure was a new flake-case
+number collision between the merged branches, repaired by renumbering the
+diff-base case to 1537; the flake-index owner then passed.
+
+## Main merge final-run node-mail recurrence — 2026-10-31
+
+`mise run test:logged -- --name merge-default-tests-final -- mise run test`
+repeated `a command node's deliverNow on this leaf > node coordinator requests
+stay pending while held, until injection` in
+`apps/backend/src/core/nodes/node-coordination.test.ts:348` (105.53 ms): after
+`finishTurn`, the mail still had `placement: "pending-inject"` instead of
+`"injected"`. Workspace reserved six slots (four isolated backend workers),
+root one and bridges two on the shared Linux host. The run queued for 120.5 s.
+
+The complete unchanged owner passed alone (exit zero, 3.6 s):
+
+```sh
+mise run test:logged -- --name merge-node-coordination-owner -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.jslhMa/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `/tmp/orkestrator-test-run.ks5Kqd/`. The logger removed passing owner output.
+This is the same held-mail assertion recorded in the goal-review recurrence
+above. Scheduling pressure is a hypothesis, not a confirmed cause. No
+node-coordination implementation, assertion, timeout or skip changed; the
+aggregate remains non-green.
+
+The final aggregate completed in 432.4 s including its 120.5 s wait.
+Backend reported 12,374 passed, 107 skipped and two failed across 837 files
+(159.29 s); the other failure was the previously tracked standalone-ready
+signal assertion (0491), whose complete unchanged owner passed alone in
+0.5 s. Web passed all 11,114 tests, and every other workspace package passed.
+Root and agent-support, bridges and the protocol lockfile groups passed too.

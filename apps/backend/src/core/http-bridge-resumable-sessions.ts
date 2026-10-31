@@ -7,13 +7,20 @@ import { assertOkWithErrorDetail, boundedJson, bridgeFetch } from "./http-bridge
 /**
  * A bridge's resumable sessions (`GET /session/list`), bounded and validated
  * entry by entry: a malformed entry is dropped, a malformed list fails.
+ * Archived conversations come back only when asked for.
  */
 export async function readBridgeResumableSessions(
   agent: HttpBridgeAgent,
   connection: BridgeConnection,
   fetchImpl: typeof fetch,
+  options: { includeArchived?: boolean } = {},
 ): Promise<NativeAgentResumeEntry[]> {
-  const response = await bridgeFetch(connection, "/session/list", {}, fetchImpl);
+  const response = await bridgeFetch(
+    connection,
+    options.includeArchived ? "/session/list?includeArchived=1" : "/session/list",
+    {},
+    fetchImpl,
+  );
   // The ACP bridge answers 410 with the reason the agent cannot list its own
   // history. Dropping that body would reduce a specific, actionable message
   // to a bare status code in front of the user.
@@ -26,10 +33,17 @@ export async function readBridgeResumableSessions(
   if (!payload || !Array.isArray(payload.sessions)) {
     throw new ProviderUnavailableError(`${agent} returned a malformed session list`);
   }
-  return payload.sessions.slice(0, 512).flatMap((candidate) => {
+  let liveCount = 0;
+  let archivedCount = 0;
+  return payload.sessions.flatMap((candidate) => {
     const session = asRecord(candidate);
     const id = nonEmptyString(session?.id);
     if (!id) return [];
+    // Independent quotas keep archived conversations discoverable when the
+    // live list fills its cap. The decoded body is already byte bounded.
+    if (session?.archived === true) {
+      if (archivedCount++ >= 512) return [];
+    } else if (liveCount++ >= 512) return [];
     const createdAt = nonEmptyString(session?.createdAt);
     const updatedAt = nonEmptyString(session?.updatedAt) ?? nonEmptyString(session?.lastActivity);
     const status =
@@ -56,6 +70,7 @@ export async function readBridgeResumableSessions(
             : {}),
         ...(parentId ? { parentId: parentId.slice(0, 512) } : {}),
         ...(branchLabel ? { branchLabel: branchLabel.slice(0, 256) } : {}),
+        ...(session?.archived === true ? { archived: true } : {}),
       },
     ];
   });

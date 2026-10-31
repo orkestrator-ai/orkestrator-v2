@@ -258,7 +258,7 @@ changing host system libraries. The exact preview command was rerun after
 each dependency repair. Retained summary:
 `/tmp/orkestrator-test-run.a7jO4r/summary.json`. Vite HMR remained opt-in.
 An intermittent Firefox IPv6 navigation failure and its complete-owner pass
-are recorded in [1319](../../tests/flaky-tests/previews-annotations-and-gateway/1319-firefox-preview-ipv6-empty-response.md).
+are recorded in [1411](../../tests/flaky-tests/previews-annotations-and-gateway/1411-firefox-preview-ipv6-empty-response.md).
 
 ### Live restart attempts
 

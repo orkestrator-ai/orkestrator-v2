@@ -1,3 +1,4 @@
+import { goalContinuationRequestId } from "@orkestrator/protocol/native-agent-goal";
 import type {
   BuildPipelineAgent,
   NativeAgentSessionActionOutcome,
@@ -677,7 +678,15 @@ export class NativeAgentPromptQueueDispatcher {
       return;
     }
     if (status === "blocked") return;
-    if (status !== "idle") {
+    // A goal's turn may run past a terminal error. The loop only sends one after
+    // a failed turn if a person resumed the goal, which is the same decision as
+    // sending a message, and it cannot burn a queue: another failure pauses it.
+    const goalTurn =
+      status === "error" &&
+      typeof head === "object" &&
+      head !== null &&
+      (head as { origin?: { kind?: unknown } }).origin?.kind === "goal";
+    if (status !== "idle" && !goalTurn) {
       await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
         /*
          * A terminal turn error is sticky until the next turn runs, and the
@@ -705,6 +714,28 @@ export class NativeAgentPromptQueueDispatcher {
     if (!nonBlank(message.text)) {
       await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
       return;
+    }
+
+    const origin = message.origin as
+      { kind?: unknown; goalId?: unknown; iteration?: unknown } | undefined;
+    if (origin?.kind === "goal") {
+      const valid =
+        nonBlank(origin.goalId) &&
+        typeof origin.iteration === "number" &&
+        Number.isInteger(origin.iteration) &&
+        origin.iteration >= 0;
+      const canonical = valid
+        ? goalContinuationRequestId(origin.goalId as string, origin.iteration as number)
+        : undefined;
+      if (!canonical || message.id !== canonical || reservation.requestId !== canonical) {
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          reservation.requestId,
+          "That goal continuation's delivery identity was retired. Resume the goal to send a new iteration.",
+        );
+        this.clearQueueBackoff(queueKey);
+        return;
+      }
     }
 
     // Queued attachments were staged by the renderer, so they already carry

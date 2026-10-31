@@ -69,3 +69,66 @@ streaming/folding/paging, launch-dialog and data-saving tests. These broad
 browser failures were not individually requalified or classified as new flakes;
 the targeted green results do not certify the full browser suite. No unrelated
 assertion, timeout, skip, or production code was changed to hide them.
+
+## Coordinator recovery review recurrence — 2026-10-31
+
+`mise run test:logged -- --name repaired-full-suite -- mise run test:full`
+repeated `root-change approval handles over-limit and still permits rejection`
+in `apps/web/src/components/federation/node-action-requests.test.tsx`: the
+5,000 ms deadline expired at 7052.91 ms. Workspace reserved four slots with
+two isolated workers per package; root reserved one and bridges two. Browser
+and Electron reruns also ran on the shared Linux host.
+
+The complete unchanged owner passed alone:
+`mise run test:logged -- --name isolated-node-actions-existing -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`
+(exit zero, 8.2 s; passing output removed by the runner). The same owner also
+timed out in preparation before these backend fixes. Evidence is retained in
+`/tmp/orkestrator-test-run.eeYqDS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed after completion). This confirms a recurrence without establishing
+its cause; no owner assertion, deadline or skip changed. The aggregate also
+reported the existing projection-read failure (0722), the unchanged ACP
+child-limit assertion and existing DOM-diagnostic guard violations. Its root
+group finished with 3,650 passed, one skipped and one failed. None of those
+results makes the aggregate green.
+
+The post-storage-repair exact `mise run test:full` rerun completed in 913.8 s
+including 204.5 s queued. The web group passed in full (10,963 passed, 10
+skipped, zero failed), so the root-change approval owner also passed in this
+aggregate. Existing root, ACP and preview/rendering failures keep the command
+non-green. Evidence: `/tmp/orkestrator-test-run.UVuLi8/` and
+`/tmp/orkestrator-test-run.sFiOj2/`.
+
+## Root-change approval: session history review — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`;
+  web used two isolated Bun workers alongside component-browser validation.
+- **Failure:** `root-change approval handles over-limit and still permits rejection` timed out at 5,125.50 ms. Web totals were 10,879 passed, ten skipped and two failed
+  across 720 files. The other web owner also passed separately.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-node-request-owner -- sh -c 'cd apps/web && bun test ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures'` passed, exit 0, in 7.3 seconds.
+- **Evidence:** `orkestrator-test-run.oNZxqS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory. No implementation, assertion or deadline changed.
+
+## Main merge recurrence — 2026-10-31
+
+`mise run test:logged -- --name merge-default-tests -- mise run test`
+repeated `root-change approval handles over-limit and still permits rejection` in
+`apps/web/src/components/federation/node-action-requests.test.tsx`: the 5,000 ms deadline expired at 6159.97 ms. The
+workspace group reserved six slots (two isolated workers for web), root one
+slot, and bridges two; focused merge checks also ran on the shared Linux host.
+
+The complete unchanged owner passed alone (exit zero, 4.3 s):
+
+```sh
+mise run test:logged -- --name merge-node-action-owner -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.L6nmbv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `/tmp/orkestrator-test-run.v7lAtX/`. Passing focused output was removed
+by the logger. This confirms a recurrence; shared-host contention remains a
+hypothesis. No owner assertion, deadline, skip or implementation changed, and
+the isolated pass does not make the aggregate green.
+
+The original aggregate completed in 351.4 s. Web reported 11,111 passed,
+ten skipped and three failed across 733 files (343.48 s); the other two
+failures were settings guard references to a removed component, repaired
+without changing its layout assertions. The backend passed all 12,376 tests.

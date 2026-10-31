@@ -39,6 +39,7 @@ describe("provider adapters", () => {
       command: "/opt/My Tools/server",
       args: ["--flag", "second"],
       env: { API_KEY: SENTINEL },
+      enabled: true,
     });
     expect(parsed.profiles.p.model).toBe("x");
     expect(entry(snapshot, "codex:user", "existing").preservedFields).toEqual(["env_vars"]);
@@ -58,6 +59,100 @@ describe("provider adapters", () => {
     text = fixture.read("home/.codex/config.toml");
     expect((Bun.TOML.parse(text) as any).mcp_servers["fixture-b"]).toBeUndefined();
     expect(text).toContain("[profiles.p]");
+  });
+
+  for (const partial of [false, true]) {
+    test(`Codex: enabling an inherited disabled ${partial ? "partial" : "command"} override persists true`, async () => {
+      fixture.write(
+        "home/.codex/config.toml",
+        '[mcp_servers.inherited]\ncommand = "lower"\nenabled = false\n',
+      );
+      fixture.write(
+        "worktree/.codex/config.toml",
+        partial
+          ? '[mcp_servers.inherited]\nargs = ["project"]\n'
+          : '[mcp_servers.inherited]\ncommand = "higher"\n',
+      );
+      fixture.write(
+        "home/.codex/config.toml",
+        fixture.read("home/.codex/config.toml") +
+          `\n[projects.${JSON.stringify(fixture.worktree)}]\ntrust_level = "trusted"\n`,
+      );
+      const targetId = await targetIdFor(fixture, "codex", "environment");
+      let snapshot = await fixture.service.snapshot({ targetId });
+      const row = entry(snapshot, "codex:project", "inherited");
+      expect(row).toMatchObject({ status: "disabled", enabled: false });
+      expect(row.actions.setEnabled.supported).toBe(true);
+      const editable = await fixture.service.getDefinition({ targetId, entryId: row.entryId });
+      expect(editable.enabled).toBe(false);
+      expect(editable.readOnlyReason).toBeUndefined();
+      await fixture.service.mutate(
+        mutation(targetId, {
+          kind: "set-enabled",
+          entryId: row.entryId,
+          expectedRevision: revision(snapshot, "codex:project")!,
+          enabled: true,
+        }),
+      );
+      const saved = Bun.TOML.parse(fixture.read("worktree/.codex/config.toml")) as any;
+      expect(saved.mcp_servers.inherited.enabled).toBe(true);
+      snapshot = await fixture.service.snapshot({ targetId });
+      expect(entry(snapshot, "codex:project", "inherited")).toMatchObject({
+        status: "effective",
+        enabled: true,
+      });
+    });
+  }
+
+  test("Codex: partial toggles preserve inheritance and edits cannot copy user secrets to a project", async () => {
+    fixture.write(
+      "home/.codex/config.toml",
+      `[mcp_servers.inherited]\ncommand = "lower"\nenv = { API_KEY = "${SENTINEL}" }\n\n[projects.${JSON.stringify(fixture.worktree)}]\ntrust_level = "trusted"\n`,
+    );
+    fixture.write("worktree/.codex/config.toml", '[mcp_servers.inherited]\nargs = ["project"]\n');
+    const targetId = await targetIdFor(fixture, "codex", "environment");
+    let snapshot = await fixture.service.snapshot({ targetId });
+    const entryId = entry(snapshot, "codex:project", "inherited").entryId;
+    await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "set-enabled",
+        entryId,
+        expectedRevision: revision(snapshot, "codex:project")!,
+        enabled: false,
+      }),
+    );
+    expect(
+      (Bun.TOML.parse(fixture.read("worktree/.codex/config.toml")) as any).mcp_servers.inherited,
+    ).toEqual({ args: ["project"], enabled: false });
+    snapshot = await fixture.service.snapshot({ targetId });
+    const before = fixture.read("worktree/.codex/config.toml");
+    await expect(
+      fixture.service.mutate(
+        mutation(targetId, {
+          kind: "update",
+          entryId,
+          expectedRevision: revision(snapshot, "codex:project")!,
+          patch: { args: [{ kind: "set", value: "edited" }] },
+        }),
+      ),
+    ).rejects.toThrow("Project files are shared");
+    expect(fixture.read("worktree/.codex/config.toml")).toBe(before);
+    // Replacing the inherited secret with a reference permits the edit.
+    await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "update",
+        entryId,
+        expectedRevision: revision(snapshot, "codex:project")!,
+        patch: {
+          args: [{ kind: "set", value: "edited" }],
+          env: [{ key: "API_KEY", edit: { kind: "set", value: "${API_KEY}" } }],
+        },
+      }),
+    );
+    expect(fixture.read("worktree/.codex/config.toml")).not.toContain(SENTINEL);
+    expect(
+      entry(await fixture.service.snapshot({ targetId }), "codex:project", "inherited").status,
+    ).toBe("disabled");
   });
 
   test("Codex: the bearer variable must be a plain name and never Orkestrator's own token", async () => {

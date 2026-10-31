@@ -134,7 +134,9 @@ describe("rewinding the code to a step", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Drop 3 commits and restart" }));
     await waitFor(() => expect(rewindCodeMock).toHaveBeenCalledWith("pipeline-1", "build", HEAD));
-    await waitFor(() => expect(screen.queryByTestId("pipeline-code-rewind-dialog")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByTestId("pipeline-code-rewind-dialog") === null).toBe(true),
+    );
   });
 
   test("a blocked preview explains why and cannot be confirmed", async () => {

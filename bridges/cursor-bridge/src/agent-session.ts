@@ -161,7 +161,7 @@ export async function createSession(
  */
 export async function ensureAgent(
   state: SessionState,
-  options: { atTurnStart?: boolean } = {},
+  options: { atTurnStart?: boolean; requireCurrentModel?: boolean } = {},
 ): Promise<SDKAgent> {
   // A closing session attaches nothing. Checked here rather than at each
   // route so no future caller can forget it.
@@ -211,6 +211,16 @@ export async function ensureAgent(
       retireMcpObservations(state);
       await detachAgent(state);
     }
+  }
+  // summarize() has no model override and SDKAgent.model is read-only. Resume
+  // the same saved conversation with the current selection before compaction.
+  if (
+    options.requireCurrentModel &&
+    state.agent &&
+    JSON.stringify(state.agent.model) !== JSON.stringify(modelSelection(state.composer))
+  ) {
+    markConfigResumePending(state, true);
+    await detachAgent(state);
   }
   assertSessionOpen(state);
   if (state.agent) return state.agent;
@@ -574,7 +584,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         if (error instanceof SessionClosedError) throw error;
         if (state.configResumePending) {
           throw new Error(
-            "Cursor could not reopen this conversation with the updated MCP configuration. The conversation was kept; retry, or start a new session to use the new servers.",
+            "Cursor could not reopen this conversation with the updated configuration. The conversation was kept; retry with the current settings.",
             { cause: error },
           );
         }
@@ -857,11 +867,13 @@ async function withoutUnusedWarmUps(items: SDKAgentInfo[]): Promise<SDKAgentInfo
  *
  * Scoped to `cwd` so the picker offers this environment's own history rather
  * than every agent the user has ever run on this machine. Archived agents
- * (`SDKAgentInfo.archived`, set when Cursor archived one) are left out: the
- * SDK refuses a follow-up run on them until they are unarchived, which is
- * cloud-only in the pinned SDK, so offering one would only fail.
+ * (`SDKAgentInfo.archived`, set here or in Cursor) are left out unless asked
+ * for: the SDK refuses a follow-up run on one until it is unarchived, so the
+ * picker has to restore it first.
  */
-export async function listResumableSessions(): Promise<JsonObject[]> {
+export async function listResumableSessions(
+  options: { includeArchived?: boolean } = {},
+): Promise<JsonObject[]> {
   const { apiKey } = await resolveCredential();
   if (!apiKey) return [];
   const items: SDKAgentInfo[] = [];
@@ -880,8 +892,10 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
   } while (cursor && items.length < 2_000);
 
   const offered = await withoutUnusedWarmUps(
-    items.slice(0, 2_000).filter((item) => item.archived !== true),
+    items.slice(0, 2_000).filter((item) => options.includeArchived || item.archived !== true),
   );
+  // After every live row: the backend caps the list it reads.
+  offered.sort((a, b) => Number(a.archived === true) - Number(b.archived === true));
   return offered.map((item) => ({
     // This is the bridge wire shape, not the normalized service shape. The
     // shared backend provider reads `id` here and turns it into `sessionId` for
@@ -892,7 +906,46 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
     ...(item.lastModified ? { updatedAt: new Date(item.lastModified).toISOString() } : {}),
     status: item.status === "running" ? "running" : item.status === "error" ? "error" : "idle",
     ...(item.summary?.trim() ? { detail: item.summary.trim().slice(0, 200) } : {}),
+    ...(item.archived === true ? { archived: true } : {}),
   }));
+}
+
+/**
+ * Takes an agent out of the resume list, or puts it back. Its conversation
+ * stays in the store: archive is never `Agent.delete`. An agent a tab here still
+ * holds is refused, because its next run would then fail. A cloud agent id is
+ * refused too: this bridge lists only local agents, and the SDK would route that
+ * id to the Cursor API.
+ */
+export async function setResumableAgentArchived(
+  agentId: string,
+  archived: boolean,
+): Promise<"archived" | "unarchived" | "in-use" | "failed"> {
+  if (agentId.startsWith("bc-")) return "failed";
+  if (
+    agentArchiveOperations.has(agentId) ||
+    sessionResumesByAgentId.has(agentId) ||
+    (archived && [...sessions.values()].some((state) => state.agentId === agentId))
+  ) {
+    return "in-use";
+  }
+  // Reserve synchronously: adoption and other archive mutations refuse while
+  // the SDK call is in flight, before either side can change the agent.
+  agentArchiveOperations.add(agentId);
+  try {
+    const api = cursorAgentApi();
+    const options = { cwd: workingDirectory };
+    await (archived ? api.archive(agentId, options) : api.unarchive(agentId, options));
+  } catch (error) {
+    console.warn(
+      `[cursor-bridge] Agent.${archived ? "archive" : "unarchive"} failed:`,
+      error instanceof Error ? error.message : error,
+    );
+    return "failed";
+  } finally {
+    agentArchiveOperations.delete(agentId);
+  }
+  return archived ? "archived" : "unarchived";
 }
 
 /**
@@ -935,6 +988,11 @@ export async function resumeSession(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
   agentMcp?: AgentMcpConnection,
 ): Promise<SessionState> {
+  if (agentArchiveOperations.has(agentId)) {
+    throw new SessionConflictError(
+      "This Cursor conversation is being archived or restored; retry once it completes",
+    );
+  }
   const requestedPolicyKey = resumePolicyKey(policy);
   const requestedMcpKey = mcpConnectionKey(agentMcp);
   const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
@@ -1001,6 +1059,8 @@ export async function resumeSession(
     }
   }
 }
+
+const agentArchiveOperations = new Set<string>();
 
 const sessionResumesByAgentId = new Map<
   string,

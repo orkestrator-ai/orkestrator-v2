@@ -15,7 +15,6 @@ function settingsSources(): string[] {
       .filter((file) => file.endsWith(".tsx") && !file.includes(".test."))
       .map((file) => path.join(import.meta.dirname, file)),
     path.join(COMPONENTS_DIR, "environments/EnvironmentSettingsDialog.tsx"),
-    path.join(COMPONENTS_DIR, "docker/DockerStatsDialog.tsx"),
   ];
   const sources = new Set<string>();
   while (pending.length) {

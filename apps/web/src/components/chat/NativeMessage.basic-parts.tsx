@@ -53,6 +53,7 @@ import {
   markdownComponents,
   TASK_LIST_SYNTAX_PATTERN,
   stringToolArg,
+  useToolDetails,
 } from "./NativeMessage.shared";
 
 /**
@@ -75,12 +76,24 @@ function truncateThinkingPreview(content: string): string {
   return content.slice(0, safeEnd);
 }
 
-export function ThinkingPart({ content, expansionKey }: { content: string; expansionKey: string }) {
-  const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
+export function ThinkingPart({
+  content: inlineContent,
+  contentDetailRef,
+  expansionKey,
+}: {
+  content: string;
+  /** Set when `content` is a preview of finished reasoning fetched on expand. */
+  contentDetailRef?: string;
+  expansionKey: string;
+}) {
   // Backed by the shared store using the stable key supplied by MessagePart,
   // so an expanded block survives the virtualized list unmounting it while
   // off-screen.
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+  // The preview stands in until the whole reasoning arrives, and if it cannot.
+  const { details } = useToolDetails(contentDetailRef, isOpen);
+  const content = details?.thinking ?? inlineContent;
+  const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
     () =>

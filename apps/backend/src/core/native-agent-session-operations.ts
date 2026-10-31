@@ -235,7 +235,7 @@ export class NativeAgentSessionOperations {
   }
 
   async listProjectionResumableSessions(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { includeArchived?: boolean },
   ): Promise<NativeAgentResumeEntry[]> {
     this.host.assertProjectionInput(input);
     if (!nativeCapabilities(input.agent).resume) return [];
@@ -256,7 +256,11 @@ export class NativeAgentSessionOperations {
     );
     const current = await this.host.storage.getNativeAgentSession(sessionKey);
     const [entries, currentState] = await Promise.all([
-      provider.listResumableSessions(),
+      provider.listResumableSessions(
+        input.includeArchived && nativeCapabilities(input.agent).actions?.archive
+          ? { includeArchived: true }
+          : undefined,
+      ),
       current?.providerSessionId && provider.sessionStateSnapshot
         ? provider.sessionStateSnapshot(current.providerSessionId).catch(() => undefined)
         : Promise.resolve(undefined),
@@ -268,10 +272,17 @@ export class NativeAgentSessionOperations {
       const parsed = raw ? Date.parse(raw) : Number.NaN;
       return Number.isNaN(parsed) ? 0 : parsed;
     };
+    let liveCount = 0;
+    let archivedCount = 0;
     return entries
       .filter((entry) => entry.sessionId !== currentResumableSessionId)
-      .sort((left, right) => activityAt(right) - activityAt(left))
-      .slice(0, 512);
+      .sort(
+        // Each category has its own quota, with archived rows shown last.
+        (left, right) =>
+          Number(left.archived === true) - Number(right.archived === true) ||
+          activityAt(right) - activityAt(left),
+      )
+      .filter((entry) => (entry.archived === true ? archivedCount++ < 512 : liveCount++ < 512));
   }
 
   async resumeProjectionSession(

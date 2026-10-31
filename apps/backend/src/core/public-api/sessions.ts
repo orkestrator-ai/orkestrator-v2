@@ -44,7 +44,7 @@ export interface ResolvedSession {
  * native-agent service already uses, with its one conversation as its one tab.
  */
 async function coordinatorSession(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   runtimeId: string,
 ): Promise<{ environment: Environment; tab: NativeTabInfo }> {
   const storage = context.command.storage;
@@ -80,7 +80,7 @@ export function isCoordinatorSession(session: Pick<ResolvedSession, "environment
 }
 
 export async function resolveSession(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   target: { sessionId: string; environmentId: string; tabId: string },
 ): Promise<ResolvedSession> {
   const storage = context.command.storage;
@@ -116,7 +116,7 @@ export async function resolveSession(
 }
 
 export function sessionActivity(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   session: {
     environmentId: string;
     agent: AgentPlatform;

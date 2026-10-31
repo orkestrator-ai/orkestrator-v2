@@ -235,3 +235,20 @@ describe("settings schema", () => {
     }
   });
 });
+
+test("goal set and resume declare their check process and filesystem effects", () => {
+  for (const action of ["session.goal.set", "session.goal.resume"] as const) {
+    expect(PUBLIC_ACTIONS[action].effects).toEqual(["provider-session", "filesystem", "process"]);
+  }
+});
+
+test("session stop and goal pause and clear declare check and verifier cancellation effects", () => {
+  for (const action of ["session.stop", "session.goal.pause", "session.goal.clear"] as const) {
+    expect(PUBLIC_ACTIONS[action].effects).toEqual([
+      "metadata",
+      "provider-session",
+      "filesystem",
+      "process",
+    ]);
+  }
+});

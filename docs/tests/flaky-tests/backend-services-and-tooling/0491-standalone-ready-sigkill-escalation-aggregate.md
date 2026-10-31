@@ -132,3 +132,16 @@ Aggregate evidence: `orkestrator-test-run.Od2gTp/workspace-web-backend-desktop-w
 below the host temporary directory. No implementation, assertion, timeout or
 skip in either owner changed. This repeats the existing intermittent symptom;
 no new cause was established.
+
+## Main merge recurrence — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests-final -- mise run test`.
+- **Workers:** workspace reserved six slots, four isolated backend workers; root one slot and bridges two. Shared Linux host; 120.5 s queued, 432.4 s overall.
+- **Failure:** `waitForStandaloneBackendReady > escalates SIGTERM to SIGKILL after the grace period`, `apps/backend/tests/standalone-ready.test.ts:90`, at 74.71 ms. The first signal assertion received both `SIGTERM` and `SIGKILL`, rather than only `SIGTERM`.
+- **Counts:** backend 12,374 passed, 107 skipped, two failed across 837 files (159.29 s). The other failure was the tracked node-coordination held-mail assertion (1324). All other workspace packages and the other three aggregate groups passed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-standalone-ready-owner -- bun test --cwd apps/backend ./tests/standalone-ready.test.ts --parallel=1 --only-failures` passed (exit zero, 0.5 s). Passing raw output was removed by the logger.
+- **Evidence:** `/tmp/orkestrator-test-run.jslhMa/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.ks5Kqd/`.
+
+This repeats the early escalation assertion already tracked here. Host scheduling
+pressure remains a hypothesis; no implementation, assertion, timeout or skip
+changed. The isolated pass does not make the aggregate green.

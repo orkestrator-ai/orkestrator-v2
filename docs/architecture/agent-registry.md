@@ -29,6 +29,12 @@ handle ([control-mcp.md](control-mcp.md#coordinator-conversations)).
 environment, or the coordinator, is not running) or `unknown` (never observed).
 Each snapshot also carries per-environment counts.
 
+A native tab with a goal also has `goal`: its status, reason, iterations, limit
+and whether it has a check, and never its text. `state` is about the current
+turn, so a tab between a goal's iterations reads `idle` while `goal.running` says
+it will continue. Read from the session record, so a snapshot still never waits
+on a provider.
+
 ## Who reads it
 
 - `get_agent_registry({ projectId?, environmentId? })` — backend command.

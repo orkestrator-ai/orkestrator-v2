@@ -214,7 +214,9 @@ const recoverMultiReviewFixSessionMock = mock(
       backendRevision: 2,
     }) as never,
 );
-const listNativeAgentResumableSessionsMock = mock(async () => []);
+const listNativeAgentResumableSessionsMock = mock(
+  async (_input: Parameters<typeof realBackend.listNativeAgentResumableSessions>[0]) => [],
+);
 const setNativeAgentResumableSessionArchivedMock = mock(
   async (_input: Parameters<typeof realBackend.setNativeAgentResumableSessionArchived>[0]) => ({
     archived: true,
@@ -4216,6 +4218,7 @@ describe("AgentNativeTab", () => {
               branchLabel: "Alternative branch",
             },
             { sessionId: "unnamed-fork", title: "Unnamed fork", parentId: "base" },
+            { sessionId: "archived-session", title: "Archived request", archived: true },
           ] as never,
       );
       seedUnassignedResumeTab("tab-lineage");
@@ -4229,7 +4232,14 @@ describe("AgentNativeTab", () => {
       const picker = await screen.findByRole("dialog", { name: "Resume Session" });
       expect(await within(picker).findByText("Alternative branch")).toBeTruthy();
       expect(within(picker).getByText("Fork of base")).toBeTruthy();
+      const listInput = listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0];
+      expect(listInput).toMatchObject({ agent: archive ? "codex" : "grok" });
+      if (!archive) expect(listInput).not.toHaveProperty("includeArchived");
+      expect(within(picker).queryByText("Archived request") === null).toBe(true);
       if (archive) {
+        expect(listInput).toMatchObject({ includeArchived: true });
+        fireEvent.click(within(picker).getByLabelText("Show archived (1)"));
+        expect(await within(picker).findByText("Archived request")).toBeTruthy();
         fireEvent.click(within(picker).getAllByRole("button", { name: /Remove.*list/ })[0]!);
         await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
         expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
@@ -13017,7 +13027,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />);
       const input = await screen.findByRole("textbox");
       const head = await screen.findByRole("button", { name: "Steer queued prompt 1 of 3: First" });
-      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ }) === null).toBe(
+        true,
+      );
       act(() => input.focus());
       fireEvent.keyDown(input, { key: "ArrowUp" });
       expect(document.activeElement).toBe(head);
@@ -13098,7 +13110,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
       );
       const strip = within(await screen.findByTestId("compose-queue-strip"));
-      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
       for (const name of ["Edit queued prompt 1 of 1", "Remove queued prompt 1 of 1"]) {
         expect(Boolean(strip.queryByRole("button", { name }))).toBe(gate !== "annotation");
       }

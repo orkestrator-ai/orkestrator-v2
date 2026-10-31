@@ -1,3 +1,4 @@
+import type { CapacityRetryPolicy } from "@orkestrator/protocol/capacity-retry";
 import type {
   AgentPartInput,
   FilePartInput,
@@ -47,6 +48,7 @@ import {
 import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
@@ -78,6 +80,8 @@ export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
   openCodeClientFactory?: typeof createOpencodeClient;
   openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
+  /** Test seam over the shared capacity backoff; unset fields keep the defaults. */
+  openCodeCapacityRetryPolicy?: Partial<CapacityRetryPolicy>;
   /** First reconnect delay of the event monitor; repeated failures back off from it. */
   monitorRetryMs?: number;
   /** Upper bound of the monitor's reconnect backoff. */
@@ -309,7 +313,7 @@ const OPENCODE_COORDINATOR_TOOL_PERMISSIONS = Object.freeze(
  * `<server>_<tool>` naming.
  */
 const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
-  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
     (name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`,
   ),
 );

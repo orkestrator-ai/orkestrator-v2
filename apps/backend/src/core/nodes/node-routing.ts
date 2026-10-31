@@ -74,11 +74,27 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "open_coordinator_browser",
   "edit_coordinator_worker_tab",
   "create_coordinator_pr",
+  "resolve_coordinator_conflicts",
   "launch_coordinator_feature_plan",
   "get_coordinator_feature_plan",
   "custom_fix_coordinator_multi_review_action",
   "request_coordinator_root_changes",
   "apply_project_root_changes",
+  "fork_coordinator_worker",
+  "get_coordinator_worker_changes",
+  // A proposed answer to a worker's question, and the step only the user's
+  // approval runs; a worker on another node is answered through
+  // `answer_controller_worker_question` instead.
+  "request_coordinator_worker_answer",
+  "answer_project_worker_question",
+  "stop_coordinator_worker_turn",
+  "list_coordinator_worker_commands",
+  "run_coordinator_worker_command",
+  // A coordinator's goals on its own workers: this node holds the ownership.
+  "set_coordinator_worker_goal",
+  "get_coordinator_worker_goal",
+  "pause_coordinator_worker_goal",
+  "clear_coordinator_worker_goal",
   // An AGENTS.md proposal and its review belong to the coordinator's command
   // node; the read and the pull request run on the node owning the copy.
   "request_coordinator_agents_md_update",
@@ -122,13 +138,20 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "create_controller_environment",
       "start_controller_build_pipeline",
       "create_controller_pr",
+      "resolve_controller_conflicts",
       "launch_controller_terminal",
       "open_controller_browser",
       "edit_controller_worker_tab",
+      "stop_controller_worker_turn",
+      "list_controller_worker_commands",
+      "run_controller_worker_command",
       "launch_controller_multi_review",
       "controller_multi_review_surface",
       "start_controller_multi_review",
+      "answer_controller_worker_question",
       "get_worker_request_state",
+      "fork_controller_environment",
+      "get_controller_worker_changes",
     ].includes(command)
   );
 }

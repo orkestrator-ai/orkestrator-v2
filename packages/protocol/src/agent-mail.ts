@@ -378,6 +378,8 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
   "multi-review",
   "build-pipeline",
   "graph-run",
+  /** A worker's pull request a coordinator follows; `id` is the environment id. */
+  "pull-request",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 

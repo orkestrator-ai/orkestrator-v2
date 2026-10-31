@@ -672,6 +672,28 @@ export class ProjectsRepository {
     });
   }
 
+  /** Bounded terminal PR tombstones survive deletion and missed node events. */
+  async getFinalEnvironmentPr(environmentId: string): Promise<{
+    id: string;
+    projectId: string;
+    name: string;
+    prUrl: string;
+    prState: "merged" | "closed";
+    finalPrState: true;
+  } | null> {
+    const rows = await this.context.loadJson<
+      Array<{
+        id: string;
+        projectId: string;
+        name: string;
+        prUrl: string;
+        prState: "merged" | "closed";
+        finalPrState: true;
+      }>
+    >(this.files.environmentFinalPrFile(), () => []);
+    return rows.find((row) => row.id === environmentId) ?? null;
+  }
+
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -684,6 +706,22 @@ export class ProjectsRepository {
         // not-found contract.
         await this.scrubEnvironmentBackups(environmentId, true);
         throw new Error(`Environment not found: ${environmentId}`);
+      }
+      if (removed?.prUrl && (removed.prState === "merged" || removed.prState === "closed")) {
+        const file = this.files.environmentFinalPrFile();
+        const rows = await this.context.loadJson<Array<Record<string, unknown>>>(file, () => []);
+        const final = {
+          id: removed.id,
+          projectId: removed.projectId,
+          name: removed.name,
+          prUrl: removed.prUrl,
+          prState: removed.prState,
+          finalPrState: true,
+        };
+        await this.context.saveSensitiveJson(file, [
+          ...rows.filter((row) => row.id !== removed.id).slice(-999),
+          final,
+        ]);
       }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
@@ -725,6 +763,8 @@ export class ProjectsRepository {
         }
       }
 
+      const previousPrUrl = environment.prUrl;
+      const previousBranch = environment.branch;
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if (
@@ -971,6 +1011,38 @@ export class ProjectsRepository {
       if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
         environment.setupOverride = updates.setupOverride;
       }
+      if ("autoMerge" in updates) {
+        // Off is an explicit `false`, like lifecycleError's `null`: renderers
+        // merge snapshots field-by-field, so a dropped key would leave it on.
+        environment.autoMerge =
+          updates.autoMerge === true && !!environment.prUrl && environment.prState === "open";
+        environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
+        environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
+        environment.autoMergeError = null;
+      }
+      if ("autoMergeError" in updates) {
+        environment.autoMergeError =
+          typeof updates.autoMergeError === "string" ? updates.autoMergeError.slice(0, 2000) : null;
+      }
+      if (
+        environment.autoMerge &&
+        (environment.prUrl !== previousPrUrl ||
+          environment.branch !== previousBranch ||
+          environment.prState !== "open" ||
+          (environment.autoMergePrUrl != null && environment.autoMergePrUrl !== environment.prUrl))
+      ) {
+        environment.autoMerge = false;
+        environment.autoMergePrUrl = null;
+        environment.autoMergeEnabledAt = null;
+        environment.autoMergeError = null;
+      }
+      if (
+        !environment.autoMerge ||
+        environment.hasMergeConflicts === false ||
+        environment.prUrl !== previousPrUrl
+      ) {
+        environment.autoMergeResolveRequestId = undefined;
+      }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
         if (intents === undefined || intents === null) {
@@ -1181,6 +1253,12 @@ export class ProjectsRepository {
    */
   async armPrRecheckAfterAgentCompletion(
     environmentId: string,
+    claim?: {
+      onlyIfUnarmed?: boolean;
+      autoMergePrUrl?: string;
+      autoMergeEnabledAt?: string;
+      requestId?: string;
+    },
   ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -1193,6 +1271,28 @@ export class ProjectsRepository {
       )
         return { environment, armedAt: null };
 
+      if (claim?.onlyIfUnarmed && environment.prRecheckAfterAgentCompletionArmedAt)
+        return { environment, armedAt: null };
+      if (
+        claim?.autoMergePrUrl &&
+        (environment.autoMerge !== true ||
+          environment.autoMergePrUrl !== claim.autoMergePrUrl ||
+          (claim.autoMergeEnabledAt !== undefined &&
+            environment.autoMergeEnabledAt !== claim.autoMergeEnabledAt) ||
+          environment.prUrl !== claim.autoMergePrUrl ||
+          environment.hasMergeConflicts !== true ||
+          environment.deletionRequestedAt ||
+          environment.lifecycleOperation ||
+          environment.status !== "running" ||
+          !(
+            environment.setupPhase === "ready" ||
+            environment.setupScriptsComplete ||
+            environment.setupOverride
+          ))
+      )
+        return { environment, armedAt: null };
+      if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
+        environment.autoMergeResolveRequestId = claim.requestId;
       const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;
       const now = Date.now();
       const previous = environment.prRecheckAfterAgentCompletionArmedAt

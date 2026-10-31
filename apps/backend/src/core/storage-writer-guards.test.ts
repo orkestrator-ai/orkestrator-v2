@@ -36,6 +36,10 @@ describe("StorageService store writers", () => {
       leases: ["environmentsFile"],
     });
     expect(stores.get("environmentsFile")!.paths).toBeGreaterThan(10);
+    expect(stores.get("environmentFinalPrFile")).toMatchObject({
+      kind: "whole",
+      leases: ["environmentsFile"],
+    });
     expect(stores.get("projectRemovalFencesFile")).toMatchObject({
       kind: "whole",
       leases: ["environmentsFile"],

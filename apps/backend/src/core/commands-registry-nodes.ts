@@ -293,10 +293,9 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
     return {
       backgroundWorkPending: activity.backgroundWorkPending,
-      requestPending: await context.storage.hasUndeliveredCoordinatorRequest(
-        args.environmentId,
-        args.tabId,
-      ),
+      requestPending:
+        activity.requestPending === true ||
+        (await context.storage.hasUndeliveredCoordinatorRequest(args.environmentId, args.tabId)),
     };
   });
 
@@ -342,7 +341,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("create_node_action_request", async (args, context) => {
     assertOnlyKeys(
       args,
-      ["requestId", "kind", "targets", "requestedBy", "reason", "agentsMd"],
+      ["requestId", "kind", "targets", "requestedBy", "reason", "agentsMd", "workerQuestion"],
       "arguments",
     );
     return coordination(context).createActionRequest(args);

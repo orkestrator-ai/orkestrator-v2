@@ -16,6 +16,7 @@
  * that just happened, which no persisted record captures.
  */
 
+import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import {
   hasValidOptionalViewStamp,
   type ViewGeneration,
@@ -112,10 +113,14 @@ export interface PrMonitorEnvironmentState {
    * the first. Unlike `lastCheckAt` it does not move on a failed or
    * rate-limited attempt, so a client can tell "checked" from "fresh".
    * Optional: absent from backends before lifecycle-aware monitoring. Like
-   * `lastCheckAt` it is carried by the next announced event, not announced on
-   * its own.
+   * `lastCheckAt` it accompanies the announced observation.
    */
   lastSuccessfulCheckAt?: string | null;
+  /** Head whose readiness was observed; absent on older backends. */
+  headSha?: string | null;
+  mergeability?: GitHubPullRequestMergeability | null;
+  /** Start of the answered observation, used to fence pre-opt-in readings. */
+  lastSuccessfulCheckStartedAt?: string | null;
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;

@@ -28,6 +28,7 @@ export const INHERITED_GLOBAL_SETTING_KEYS = [
   "openCodeModelProviders",
   "codexMaxConcurrentThreads",
   "claudeBackgroundCommandLimitHours",
+  "sessionTitleGeneration",
   "terminalAppearance",
   "terminalScrollback",
   "agentMessaging",

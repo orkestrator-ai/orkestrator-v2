@@ -344,6 +344,9 @@ function isStreamCollapsibleTextPart(
 ): boolean {
   if (previous.type !== next.type) return false;
   if (previous.type !== "text" && previous.type !== "thinking") return false;
+  // Previews can match even when their deferred bodies differ. A preview
+  // must also stay distinct from inline content with the same prefix.
+  if (previous.contentDetailRef !== next.contentDetailRef) return false;
 
   const previousContent = previous.content.trim();
   const nextContent = next.content.trim();

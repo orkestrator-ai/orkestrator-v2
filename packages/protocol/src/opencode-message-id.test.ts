@@ -17,6 +17,23 @@ function timePrefix(messageId: string): string {
 }
 
 describe("OpenCode caller-owned message IDs", () => {
+  test("reserves continuation IDs across stale history and later requests", () => {
+    const coordinator = new OpenCodeMessageIdCoordinator();
+    const first = coordinator.resolve("session", [], "request", 1);
+    const history = [entry({ id: first, role: "user" })];
+    const continued = coordinator.next("session", history, "request", 1);
+    expect(continued > first).toBe(true);
+    expect(coordinator.resolve("session", history, "request", 1)).toBe(continued);
+    const another = coordinator.resolve("session", history, "another", 1);
+    expect(another > continued).toBe(true);
+    const next = coordinator.next("session", history, "request", 1);
+    expect(next > another).toBe(true);
+    expect(next.endsWith(openCodeRequestMarker("request"))).toBe(true);
+    expect(coordinator.resolve("session", [entry({ id: next, role: "user" })], "request", 1)).toBe(
+      next,
+    );
+  });
+
   test("publishes the contract through the package subpath", async () => {
     const exported = await import("@orkestrator/protocol/opencode-message-id");
     expect(exported.openCodeRequestMarker).toBe(openCodeRequestMarker);

@@ -28,6 +28,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "schedules",
   "permissions",
   "sounds",
+  "docker",
   "container",
   "experimental",
   "debug",

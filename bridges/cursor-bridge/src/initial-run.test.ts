@@ -41,6 +41,7 @@ const { newSessionState, ensureAgent, detachAgent, listResumableSessions, useCur
   await import("./agent-session.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { setCursorMcpTransportForTests } = await import("./mcp.js");
+const { useCursorModelsForTests } = await import("./models.js");
 platform = await sdk.createAgentPlatform({
   localStore: store,
   workspaceRef: root,
@@ -59,9 +60,14 @@ platform.acquireLocalExecutor = async (options) => {
 let replacedStore: sdk.LocalAgentStore;
 let restoreAgent: () => void;
 let restoreRuntime: () => void;
+let restoreModels: () => void;
 
 beforeAll(() => {
   restoreAgent = useCursorAgentForTests(testAgent);
+  // The bridge's own catalogue read, not just the platform's model selection:
+  // with CURSOR_API_KEY set it otherwise asked Cursor's API for the model list,
+  // and a slow network timed these attaches out (as in flake 0182).
+  restoreModels = useCursorModelsForTests({ list: async () => [] } as never);
   restoreRuntime = useCursorSdkRuntimeForTests({
     configureStore: (configuredStore) =>
       sdk.Cursor.configure({ local: { store: configuredStore } }),
@@ -95,6 +101,7 @@ afterAll(async () => {
   restoreRuntime();
   useCursorLocalAgentStoreForTests(replacedStore);
   restoreAgent();
+  restoreModels();
   if (previousStateDir === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
   else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;

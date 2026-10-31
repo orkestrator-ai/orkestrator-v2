@@ -919,7 +919,9 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined>;
-  listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
+  listResumableSessions?(options?: {
+    includeArchived?: boolean;
+  }): Promise<NativeAgentResumeEntry[]>;
   /**
    * Take a resume-list conversation out of the list, or put it back. Keeps the
    * provider's history: implementations must never delete a conversation.

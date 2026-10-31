@@ -13,6 +13,7 @@ import {
   type NativeAgentNotice,
   type NativeAgentRetiredDispatch,
 } from "@orkestrator/protocol/native-agent";
+import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
@@ -60,6 +61,9 @@ export function firstUserMessageOf(
   for (const candidate of messages) {
     const message = candidate as { role?: unknown; content?: unknown };
     if (message.role !== "user" || typeof message.content !== "string") continue;
+    // A goal turn is the loop's text, never the user's words, even when it is
+    // the first row of a new tab.
+    if (isGoalCarrierContent(message.content)) continue;
     if (sessionTitleSourceText(message.content)) {
       return { firstUserMessage: message.content, reachesStart };
     }

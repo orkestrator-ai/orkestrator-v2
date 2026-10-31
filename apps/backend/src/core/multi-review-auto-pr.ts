@@ -1,13 +1,7 @@
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
-import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
-import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
-import {
-  resolveActionDefaults,
-  resolveDefaultAgent,
-  type AgentSettingsTiers,
-} from "@orkestrator/protocol/agent-settings";
+import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { createPRPrompt } from "@orkestrator/protocol/pr-prompt";
+import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import type { StorageService } from "./storage.js";
 
@@ -146,6 +140,65 @@ export function supersedePendingAutoPr(workflow: MultiReviewWorkflow): void {
   if (workflow.autoPrLaunch?.state === "pending") delete workflow.autoPrLaunch;
 }
 
+/** Pane title of the Resolve tab, matching the action bar's Resolve Conflicts launch. */
+export const RESOLVE_CONFLICTS_TAB_TITLE = "Resolve";
+
+export type ResolveConflictsLaunchOutcome =
+  | { kind: "launched"; tabId: string; refreshArmed: boolean }
+  | { kind: "rejected"; message: string }
+  | { kind: "retry"; message: string };
+
+/**
+ * The backend twin of the action bar's Resolve Conflicts click: the same
+ * prompt, `Resolve` tab title and `resolve` action default, launched through
+ * the durable native-agent job with the button's completion action, so the
+ * PR monitor rechecks the pull request when the agent finishes. The request
+ * id is stable, so a retry after a lost acknowledgement joins the same job.
+ */
+export async function launchResolveConflictsAgent(
+  invoke: CommandInvoker,
+  storage: Pick<StorageService, "getEnvironment" | "loadConfig">,
+  input: { environmentId: string; targetBranch: string; requestId: string },
+): Promise<ResolveConflictsLaunchOutcome> {
+  const environment = await storage.getEnvironment(input.environmentId);
+  if (!environment) return { kind: "rejected", message: "Environment no longer exists" };
+  const action = await resolveEnvironmentActionDefault(storage, environment, "resolve");
+  let result: {
+    tabId?: unknown;
+    status?: unknown;
+    error?: unknown;
+    completionActionArmed?: unknown;
+  };
+  try {
+    result = await invoke("launch_native_agent_job", {
+      requestId: input.requestId,
+      environmentId: input.environmentId,
+      agent: action.agent,
+      prompt: createResolveConflictsPrompt(input.targetBranch),
+      title: RESOLVE_CONFLICTS_TAB_TITLE,
+      conversationMode: "build",
+      completionAction: "refresh-pr-after-agent-completion",
+      // A coordinator's launch never takes the user's focus.
+      activateTab: false,
+      ...(action.model ? { modelId: action.model } : {}),
+      ...(action.reasoningEffort ? { reasoningId: action.reasoningEffort } : {}),
+      ...(typeof action.fastMode === "boolean" ? { fastMode: action.fastMode } : {}),
+    });
+  } catch (error) {
+    return { kind: "retry", message: error instanceof Error ? error.message : String(error) };
+  }
+  const tabId = typeof result.tabId === "string" ? result.tabId : undefined;
+  const error = typeof result.error === "string" ? result.error : undefined;
+  if (result.status === "rejected")
+    return { kind: "rejected", message: error || "The agent rejected the conflict resolution" };
+  if (result.status !== "accepted" || !tabId)
+    return {
+      kind: "retry",
+      message: error || "The conflict-resolution agent did not acknowledge the launch",
+    };
+  return { kind: "launched", tabId, refreshArmed: result.completionActionArmed !== false };
+}
+
 export type AutoPrLaunchOutcome =
   | { kind: "pending" }
   | { kind: "launched"; tabId: string }
@@ -208,20 +261,7 @@ export async function launchPrAgent(
     };
   if (environment.prUrl) return { kind: "skipped", message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE };
 
-  const config = await storage.loadConfig();
-  const tiers: AgentSettingsTiers = {
-    environment: environment.agentSettings,
-    repository: config.repositories?.[environment.projectId]?.agentSettings,
-    global: config.global.agentSettings,
-  };
-  const enabled = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
-  const configuredFallback = resolveDefaultAgent(tiers);
-  const action = resolveActionDefault(resolveActionDefaults(tiers), "pr", {
-    fallbackAgent: enabled.includes(configuredFallback)
-      ? configuredFallback
-      : (enabled[0] ?? configuredFallback),
-    enabledAgents: enabled,
-  });
+  const action = await resolveEnvironmentActionDefault(storage, environment, "pr");
 
   // Settings reads can await; authorize at the final publication boundary.
   const admission = await beforeLaunch?.();

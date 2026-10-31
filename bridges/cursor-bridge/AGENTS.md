@@ -92,6 +92,18 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   moment the handle exists; answering it as `cancelled` would tell the user a
   turn stopped while it carried on.
 
+## Compaction
+
+`POST /session/:id/compact` runs `agent.summarize()` as a turn: it holds the
+session busy, a cancel stops it and a close waits for it. It answers 202 as soon
+as the run starts, because a summary can outlast any request budget, and the
+boundary on the transcript carries the outcome. The SDK takes no `onDelta` here,
+so `dispatchCompaction` opens the boundary and `finishTurn` settles it from the
+run's terminal result, not `onDelta`, and never backfills that result as prose.
+A `summary` message with `status: "error"` fails the boundary while the run
+still finishes, and leaves the conversation as it was. `summarize()` rejects
+before any run exists, so unlike a failed `send` that rejection is not ambiguous.
+
 ## One row per model step
 
 The translator (`src/translate.ts`) writes each model step to a row of its
@@ -138,3 +150,10 @@ environment as permanently busy. The same applies across a restart: the live
 child registry is deliberately not persisted, so a card restored at `active`
 would spin forever with nothing left that could settle it, and `loadPersistedState`
 closes those out on the way in.
+
+## Goals
+
+Orkestrator's goal loop runs in the backend (`plans/goals.md`). Cursor's model is
+offered its own `CreateGoal` and `UpdateGoal`, and `@cursor/sdk` 1.2.0 has no option to
+turn them off, so this path stays open. The carrier tells the agent to use no other
+goal tool. Re-check on each SDK upgrade.

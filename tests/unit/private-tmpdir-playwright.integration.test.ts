@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { chromium } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -96,7 +97,19 @@ test("a detached child creates temporary files after its private-TMPDIR owner ex
   }
 }, 20_000);
 
-describe("Playwright private TMPDIR wiring", () => {
+// CI's test job installs no Playwright browsers (the runner image has Google
+// Chrome), so the spec launches whichever Chromium is present, in the order the
+// design renderer's resolver tries them. The check is about TMPDIR, not a build.
+const CHROMIUM = [
+  chromium.executablePath(),
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+].find((candidate) => existsSync(candidate));
+
+describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
   for (const config of [
     "e2e/playwright.config.ts",
     "e2e/public-site/playwright.config.ts",
@@ -155,7 +168,7 @@ describe("Playwright private TMPDIR wiring", () => {
             mkdirSync(profile);
             let pid;
             if (${outlives}) {
-              const child = spawn(chromium.executablePath(), ["--headless", "--no-sandbox",
+              const child = spawn(${JSON.stringify(CHROMIUM)}, ["--headless", "--no-sandbox",
                 "--disable-gpu", "--no-startup-window", "--remote-debugging-port=0", "--user-data-dir=" + profile],
                 { stdio: "ignore", detached: true });
               pid = child.pid;
@@ -166,7 +179,7 @@ describe("Playwright private TMPDIR wiring", () => {
                 catch { return false; }
               }).toBe(true);
             } else {
-              const browser = await chromium.launch();
+              const browser = await chromium.launch({ executablePath: ${JSON.stringify(CHROMIUM)} });
               await browser.close();
             }
             writeFileSync(${JSON.stringify(workerFile)}, JSON.stringify({ tmp: tmpdir(), pid }));

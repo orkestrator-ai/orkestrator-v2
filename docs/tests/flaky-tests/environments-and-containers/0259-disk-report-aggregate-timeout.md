@@ -327,6 +327,31 @@ No implementation, assertion, timeout or skip changed. The exact repository
 command was rerun through `test:logged` as `review-default-suite`; its result
 is recorded in agent-engines todo 1020.
 
+## Session history review fixes — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`;
+  the root group used one isolated Bun worker alongside workspace, bridge and
+  component-browser validation.
+- **Failure:** the isolated-checkout report case exceeded five seconds
+  (5,031.34 ms). Evidence: `orkestrator-test-run.oNZxqS/root-and-agent-support-tests.log`
+  under the host temporary directory, compressed at aggregate finalization.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  also timed out at 5,074.09 ms: nine passed, one failed and one between-test
+  error (`report.status` was `null`), 7.4 seconds overall. Failure artifact:
+  `orkestrator-test-run.kYmOyu` under the host temporary directory.
+- **Assessment:** this run has no isolated pass, so it is not newly classified
+  as flaky. Earlier confirmed observations remain unchanged. No disk-report
+  implementation, assertion or deadline was changed for the session-history work.
+
+The exact corrected default-suite retry on 2026-10-31 repeated this same case at
+5,049.40 ms: root 3,310 passed, one failed and one between-test error in 474.28 s.
+The earlier complete owner remained non-green, so no new isolated pass is claimed.
+The retry first queued for 1,296.6 s, passed bridges and the protocol check, then
+hit its 1,800-second wrapper deadline while workspace tests were unfinished.
+Evidence: `orkestrator-test-run.J36lvj/review-full-suite-retry.log.gz` and
+`orkestrator-test-run.NyF4PB/root-and-agent-support-tests.log` in the host temporary
+directory. No disk-report code, assertion or deadline was changed.
+
 ## Coordinator public-session review recurrence — 2026-10-31
 
 - **Original command:** `mise run test` during review preparation, with the aggregate runner's default worker allocation. Root/support reported 3,308 passes, two failures across 3,310 tests in 161 files.
@@ -335,3 +360,21 @@ is recorded in agent-engines todo 1020.
 - **Evidence:** `.orkestrator/review-artifacts/review-validation-286a5434-af1f-4def-9d5c-99886a528e83/validation-04.stdout.txt`; isolated failing registration evidence: `orkestrator-test-run.8afWcx`. No disk-report implementation, deadline, skip or assertion changed.
 
 - **Exact aggregate rerun:** `mise run test` passed all four default-tier groups after these review fixes and pinned-toolchain preparation (754.0 s including 574.5 s waiting for the shared-host lease). Workspace, root/support, bridges and Codex protocol lockfile checks all passed; no failing owner was skipped or weakened.
+
+## Provider parity main merge recurrence — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests -- mise run test` on `agent-provider-parity-b3e549e90812-r1`, merging main at `751b971623` (2026-10-31).
+- **Worker configuration:** workspace/root/bridges/protocol reservations 6/1/2/1; backend 4x parallel, root 1x parallel; Bun 1.4.4. The run waited about 182 seconds for the host scheduler.
+- **Aggregate result:** exit 1; backend 11,883 passed, 103 skipped and four failed across 11,990 tests in 812 files (266.84 s); root/support 3,320 passed, one failed and one error across 3,321 tests in 162 files (350.27 s). Web, desktop, public web, CLI, protocol, toolchain, bridges and protocol-lockfile checks passed. The aggregate took 710.6 s including the queue.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded its 5,000 ms deadline at 5,050.93 ms; `report.status` was null, also reported as an error between tests.
+- **Unchanged owner rerun:** `mise run test:logged -- --name merge-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed, exit 0 (5.1 s).
+- **Evidence:** `orkestrator-test-run.LzSOdM/root-and-agent-support-tests.log.gz` and enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz` under the host temporary directory.
+- **Assessment:** unchanged owner passed in isolation; no implementation, assertion, deadline or skip changed. Timing or host contention remains a hypothesis. The aggregate remains non-green.
+
+## Session-title branch main merge — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests -- mise run test`, merging `34ae91067af9afec5bbc9ec4897044d1dd0f73f7` into `85cc8b0302fa19a9dbf7e3146aa729b2f021bfd4`. Root/support used one worker while workspace and bridge groups ran concurrently.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded its 5,000 ms deadline at 5,058.29 ms. `report.status` was null, also producing an error between tests. Root/support finished with 3,320 passes, one failure and one error across 3,321 tests in 162 files (336.80 s).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed, exit 0 (3.5 s logged).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.ThcXMS/root-and-agent-support-tests.log.gz`; enclosing aggregate: `orkestrator-test-run.YCy8ks/merge-default-tests.log.gz` under the same temporary directory. Workspace, bridges and protocol-lockfile groups passed; the root/support group was the sole failing group (452.3 s logged).
+- **Assessment:** the unchanged owner passed in isolation. Host contention is a hypothesis; no implementation, assertion, deadline or skip changed. The aggregate root/support result remains non-green.

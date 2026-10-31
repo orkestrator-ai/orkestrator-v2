@@ -20,6 +20,7 @@ import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { useFederation } from "./FederationProvider";
 import { RootChangesApprovalDialog } from "./RootChangesApprovalDialog";
 import { AgentsMdApprovalDialog } from "./AgentsMdApprovalDialog";
+import { WorkerQuestionApprovalDialog } from "./WorkerQuestionApprovalDialog";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
 
@@ -36,7 +37,9 @@ function targetLabel(request: NodeActionRequestView): string {
               ? `the ## Orkestrator section of AGENTS.md on ${target.nodeName}`
               : request.kind === "switch-agent-account"
                 ? `the active ${target.platform === "codex" ? "Codex" : "Claude"} account on ${target.nodeName} to “${target.accountLabel ?? target.accountId}”`
-                : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
+                : request.kind === "answer-worker-question"
+                  ? `the question “${target.environmentName ?? target.environmentId}” is waiting on`
+                  : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
 }
@@ -49,6 +52,7 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "apply-root-changes": "Apply",
   "update-agents-md": "Update",
   "switch-agent-account": "Switch",
+  "answer-worker-question": "Answer",
 };
 
 /**
@@ -56,7 +60,7 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
  * environment, create a project on a node, push project files, show a
  * secret value, copy the checkout's uncommitted changes into a worker, save
  * decisions to the project's AGENTS.md through a pull request, switch the
- * active provider account on a machine).
+ * active provider account on a machine, answer a question a worker waits on).
  * Nothing happens until the user approves here; the dialog names every node
  * and environment involved.
  */
@@ -107,6 +111,11 @@ export function NodeActionRequestsDialog() {
   // The user reviews the section diff and may edit the entries in their own dialog.
   if (request.kind === "update-agents-md")
     return <AgentsMdApprovalDialog key={request.requestId} request={request} onSettled={refresh} />;
+  // The user reviews, may edit, and confirms the coordinator's proposed answer.
+  if (request.kind === "answer-worker-question")
+    return (
+      <WorkerQuestionApprovalDialog key={request.requestId} request={request} onSettled={refresh} />
+    );
   const label = targetLabel(request);
   const reviewCopy =
     request.kind === "create-project" && request.requestedBy && portalState.selfId

@@ -5,6 +5,7 @@ import {
   type WebAnnotationCapture,
   type WebAnnotationPageIdentity,
   type WebAnnotationServiceIdentity,
+  type WebAnnotationSourceHint,
   type WebAnnotationSummary,
   type WebAnnotationTargetKind,
 } from "@orkestrator/protocol/web-annotations";
@@ -144,6 +145,19 @@ export function captureProducerLabel(
           ? "After-capture for review"
           : "Imported from a legacy chat draft";
   return declared ? `${label} (reported by the client, not verified)` : label;
+}
+
+export function sourceHintLocation(hint: Pick<WebAnnotationSourceHint, "path" | "line">): string {
+  return hint.line === undefined ? hint.path : `${hint.path}:${hint.line}`;
+}
+
+/**
+ * What the backend's path check established. Never says the element came from
+ * the file: only the path is checked. Unverified covers a missing path, one
+ * outside the workspace, and a check that did not run or failed.
+ */
+export function sourceHintStatus(hint: Pick<WebAnnotationSourceHint, "verified">): string {
+  return hint.verified ? "path found in workspace at capture" : "path not confirmed";
 }
 
 /** Target precision explanation shown next to a capture. */

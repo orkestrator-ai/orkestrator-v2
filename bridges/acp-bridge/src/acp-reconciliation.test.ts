@@ -287,14 +287,14 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
   });
 
-  test("fails visibly after three resource-exhausted retries", async () => {
+  test("fails visibly after four resource-exhausted retries", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "resource-retry-exhausted.log");
     const { base, headers } = await spawnBridge({
       env: {
         ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
         FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
       },
     });
     const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
@@ -321,13 +321,13 @@ describe("ACP bridge", () => {
       (value) => value.status === "error",
     );
 
-    expect(session.error).toBe("cursor remained in a retriable provider error after 3 retries");
+    expect(session.error).toBe("cursor remained in a retriable provider error after 4 retries");
     expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(session.messages.at(-1)?.content).toContain(
       "Error: RetriableError: [resource_exhausted] Error",
     );
-    // Initial dispatch plus exactly three retries.
-    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+    // Initial dispatch plus exactly four retries.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(5);
   });
 
   test("retries a flattened unavailable PING timeout with exponential backoff", async () => {
@@ -460,14 +460,14 @@ describe("ACP bridge", () => {
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 
-  test("fails visibly after three unavailable retries", async () => {
+  test("fails visibly after four unavailable retries", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "unavailable-retry-exhausted.log");
     const { base, headers } = await spawnBridge({
       env: {
         ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
         FAKE_ACP_COUNTER_FILE: counterFile,
-        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "5",
         FAKE_ACP_RETRIABLE_CODE: "unavailable",
         FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
       },
@@ -496,13 +496,13 @@ describe("ACP bridge", () => {
       (value) => value.status === "error",
     );
 
-    expect(session.error).toBe("cursor remained in a retriable provider error after 3 retries");
+    expect(session.error).toBe("cursor remained in a retriable provider error after 4 retries");
     expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(session.messages.at(-1)?.content).toContain(
       "Error: RetriableError: [unavailable] PING timed out",
     );
-    // Initial dispatch plus exactly three retries.
-    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+    // Initial dispatch plus exactly four retries.
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(5);
   });
 
   test("cancels a resource-exhausted turn while it is in backoff", async () => {
@@ -546,6 +546,186 @@ describe("ACP bridge", () => {
     await Bun.sleep(100);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
   });
+
+  test.each(["cancel", "close"])(
+    "%s ends a long backoff at once and settles its card",
+    async (action) => {
+      const directory = await temporaryDirectory();
+      const stateDirectory = await temporaryDirectory();
+      const counterFile = resolve(directory, "resource-retry-long-wait.log");
+      const { base, headers } = await spawnBridge({
+        stateDirectory,
+        env: {
+          // Without the wake the turn would sit out half a minute at the least.
+          ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "60000",
+          FAKE_ACP_COUNTER_FILE: counterFile,
+          FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "4",
+        },
+      });
+      const created = (await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json())) as { id: string };
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: stop me", requestId: "retry-long-1" }),
+      });
+      type View = {
+        status: string;
+        error?: string;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      };
+      const read = () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then(
+          (response) => response.json() as Promise<View>,
+        );
+      const cards = (view: View) =>
+        view.messages.flatMap((message) => message.parts).filter((part) => part.type === "retry");
+      const waiting = await waitFor(read, (view) => cards(view).length === 1);
+      expect(cards(waiting)[0]).toMatchObject({ toolState: "pending" });
+      expect(String(cards(waiting)[0]!.content)).toMatch(/retrying in \d+ s \(attempt 2 of 5\)$/);
+      expect(waiting.status).toBe("running");
+
+      // A blocked final state write retains the closing mapping long enough to
+      // inspect the settled card. Removing it below completes the same close.
+      const stateFile = resolve(stateDirectory, "state.json");
+      if (action === "close") {
+        await fs.rm(stateFile, { force: true });
+        await fs.mkdir(stateFile);
+        await fs.writeFile(resolve(stateFile, "occupied"), "");
+      }
+      const ended = await nativeFetch(`${base}/session/${created.id}/${action}`, {
+        method: "POST",
+        headers,
+      });
+      expect(ended.status).toBe(action === "close" ? 503 : 202);
+      const stopped = await waitFor(read, (view) => cards(view)[0]?.toolState === "failure");
+      expect(cards(stopped)[0]).toMatchObject({
+        toolState: "failure",
+        content: "Provider temporarily unavailable, automatic retry cancelled",
+      });
+      expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+      if (action === "close") {
+        await fs.rm(stateFile, { recursive: true, force: true });
+        const closed = await nativeFetch(`${base}/session/${created.id}/close`, {
+          method: "POST",
+          headers,
+        });
+        expect(await closed.json()).toMatchObject({ closed: true, retained: true });
+      }
+    },
+  );
+
+  test("Grok overload JSON-RPC sentence continues the same turn", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "grok-overload.log");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+        FAKE_ACP_COUNTER_FILE: counterFile,
+        FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+        FAKE_ACP_RETRIABLE_MESSAGE:
+          "Grok is temporarily overloaded. Please try again in a moment. (HTTP 503)",
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTEDRPC: recover", requestId: "grok-overload" }),
+    });
+    const session = await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (view) => view.status === "idle",
+    );
+    expect(
+      session.messages.flatMap((row) => row.parts).filter((part) => part.type === "retry"),
+    ).toMatchObject([{ toolState: "success" }]);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(2);
+  });
+
+  test("shows a retried attempt as a settled card", async () => {
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+        FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1",
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "RESOURCEEXHAUSTED: recover", requestId: "retry-card-1" }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{
+          status: string;
+          messages: Array<{ parts: Array<Record<string, unknown>> }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+    expect(
+      session.messages.flatMap((message) => message.parts).filter((part) => part.type === "retry"),
+    ).toMatchObject([
+      {
+        toolState: "success",
+        content: "Provider temporarily unavailable, retried automatically (attempt 2 of 5)",
+      },
+    ]);
+  });
+
+  test.each(["RPC", "flattened"])(
+    "never retries a %s resource-exhausted usage limit and reports failure",
+    async (transport) => {
+      const directory = await temporaryDirectory();
+      const counterFile = resolve(directory, "resource-retry-usage-limit.log");
+      const { base, headers } = await spawnBridge({
+        env: {
+          ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+          FAKE_ACP_COUNTER_FILE: counterFile,
+          ...(transport === "RPC"
+            ? { FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }
+            : { FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "1" }),
+          FAKE_ACP_RETRIABLE_DETAIL: "You've hit your usage limit",
+        },
+      });
+      const created = (await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json())) as { id: string };
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: transport === "RPC" ? "RESOURCEEXHAUSTEDRPC: stop" : "RESOURCEEXHAUSTED: stop",
+          requestId: "retry-limit-1",
+        }),
+      });
+      const session = await waitFor(
+        async () =>
+          nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+            response.json(),
+          ) as Promise<{ status: string; error?: string }>,
+        (value) => value.status === "error",
+      );
+      expect(session.error).toContain("usage limit");
+      expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(1);
+    },
+  );
 
   test("recovers a structured turn without replaying the interrupted attempt's output", async () => {
     const directory = await temporaryDirectory();

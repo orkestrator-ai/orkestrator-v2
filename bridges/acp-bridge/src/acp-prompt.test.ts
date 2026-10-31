@@ -1,6 +1,7 @@
 import { describe, expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Must precede every bridge import below: `acp-prompt.js` pulls in
 // `acp-context.js`, which resolves `ACP_PROVIDER` at module scope and throws
@@ -18,12 +19,56 @@ import { formatAcpRpcError } from "./acp-errors.js";
 import {
   FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
   RETRIABLE_PROVIDER_ERROR,
+  flattenedRetriableProviderTail,
   requestPromptWithRetriableProviderRetries,
   retriableProviderError,
   structuredPromptInstruction,
   turnTerminalError,
 } from "./acp-prompt.js";
 import { PROMPT_TIMEOUT_MS, type AcpProcess, type SessionState } from "./acp-context.js";
+
+describe("retriableProviderError and limits", () => {
+  test.each([
+    "RetriableError: [resource_exhausted] Error",
+    "RetriableError: [unavailable] PING timed out",
+    "Grok is temporarily overloaded. Please try again in a moment. (HTTP 503)",
+    "Model is temporarily overloaded. Try again in a moment.",
+  ])("retries %s", (message) => {
+    expect(retriableProviderError(new Error(message))).toBe(true);
+  });
+
+  test.each([
+    "RetriableError: [resource_exhausted] You've hit your usage limit",
+    "RetriableError: [resource_exhausted] API rate limit reached",
+    "RetriableError: [resource_exhausted] Quota exceeded",
+    "RetriableError: [unavailable] Please log in again",
+    "subscription:free-usage-exhausted",
+    "Rate limited",
+  ])("never retries %s", (message) => {
+    expect(retriableProviderError(new Error(message))).toBe(false);
+  });
+
+  test("a flattened tail naming a limit stays in the transcript", () => {
+    const part = {
+      type: "text" as const,
+      content: "Answer.\n\nError: RetriableError: [resource_exhausted] usage limit reached",
+      sourcePartId: "part",
+      sourceMessageId: "message",
+    };
+    const state = {
+      messages: [{ id: "message", role: "assistant", content: part.content, parts: [part] }],
+    } as unknown as SessionState;
+    expect(flattenedRetriableProviderTail(state)).toBeNull();
+  });
+
+  test("the overload sentence in assistant text proves nothing", () => {
+    expect(
+      RETRIABLE_PROVIDER_ERROR.test(
+        "Grok is temporarily overloaded. Please try again in a moment.",
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("turnTerminalError", () => {
   test("an expired request fails the turn whatever the agent then answered", () => {
@@ -1506,6 +1551,64 @@ describe("ACP bridge", () => {
     expect(user?.parts.map((part) => part.sourcePartId)).toEqual([
       `${messageId}:1`,
       `${messageId}:2`,
+    ]);
+  });
+
+  test("sends a text file as an embedded resource to an agent that advertises embeddedContext", async () => {
+    // Grok advertises `promptCapabilities.embeddedContext`, so its capability
+    // row offers file attachments; this is the path those sends take.
+    const workspace = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(workspace, "notes.txt"), "line one\nline two\n");
+    await fs.writeFile(resolve(workspace, "blob.bin"), Buffer.from([0x41, 0x00, 0x42]));
+    const { base, headers } = await spawnBridge({
+      env: {
+        CWD: workspace,
+        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+        FAKE_ACP_EMBEDDED_CONTEXT: "true",
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    const send = (requestId: string, path: string) =>
+      nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:summarise it",
+          requestId,
+          attachments: [{ type: "file", path, filename: path }],
+        }),
+      });
+
+    const binary = await send("file-binary-1", "blob.bin");
+    expect(binary.status).toBe(400);
+
+    const dispatched = await send("file-text-1", "notes.txt");
+    expect(dispatched.status).toBe(202);
+    await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+
+    const lines = (await fs.readFile(blocksFile, "utf8")).trim().split("\n");
+    // The refused binary never reached the agent.
+    expect(lines).toHaveLength(1);
+    const blocks = JSON.parse(lines[0]!) as Array<Record<string, unknown>>;
+    expect(blocks).toEqual([
+      { type: "text", text: "DIRECT:summarise it" },
+      {
+        type: "resource",
+        resource: {
+          uri: pathToFileURL(resolve(workspace, "notes.txt")).href,
+          mimeType: "text/plain",
+          text: "line one\nline two\n",
+        },
+      },
     ]);
   });
 

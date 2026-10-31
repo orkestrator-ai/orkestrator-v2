@@ -115,15 +115,19 @@ describe("pipeline inspector controls", () => {
     renderPipelineTab(JSON.parse(JSON.stringify(pipeline)));
     selectNode("Prepare");
     expect(graphNode("Prepare").textContent).toContain("1 check");
-    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" })).toBeNull();
+    expect(within(inspector()).queryByRole("button", { name: "Retry failed step" }) === null).toBe(
+      true,
+    );
     fireEvent.contextMenu(graphNode("Prepare"));
-    expect(screen.queryByRole("menuitem", { name: "Retry failed step" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Retry failed step" }) === null).toBe(true);
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape" });
     });
     expect(within(inspector()).getByText("mise run old-test")).toBeTruthy();
-    expect(within(inspector()).queryByText("mise run test")).toBeNull();
-    expect(within(inspector()).queryByRole("button", { name: /Stop|Restart|Skip/ })).toBeNull();
+    expect(within(inspector()).queryByText("mise run test") === null).toBe(true);
+    expect(within(inspector()).queryByRole("button", { name: /Stop|Restart|Skip/ }) === null).toBe(
+      true,
+    );
     expect(retryStageMock).not.toHaveBeenCalled();
     selectNode("Verify");
     fireEvent.click(within(inspector()).getByRole("button", { name: "Retry failed step" }));

@@ -1,4 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { openCodeAgentFor } from "./opencode-provider-helpers.js";
+import { bridgePromptBody } from "./http-bridge-prompt-body.js";
+import { PromptRejectedError } from "./agent-provider-contract.js";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +19,7 @@ import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent
 import { StorageService } from "./storage.js";
 import { launchInternals, queueInternals } from "./native-agent-service-test-collaborators.js";
 import {
+  claudeConnection,
   openCodeActivityProvider,
   openCodeFake,
   waitUntil,
@@ -973,3 +979,98 @@ test.each([false, true])(
     });
   },
 );
+
+test.each(AGENT_PLATFORMS)(
+  "%s goal continuations retain Plan through real queue dispatch",
+  async (agent) => {
+    const stub = providerStub(agent);
+    await withService(stub.provider, async ({ service, storage }) => {
+      const identity = { environmentId: "env-1", agent, logicalSessionKey };
+      const session = await service.ensureSession(identity);
+      const plan =
+        agent === "opencode" ? { executionProfileId: "plan" } : { mode: "plan" as const };
+      await storage.updateNativeAgentSessionControls(session.key, session.providerSessionId, plan);
+      await service.runGoalCommand({ ...identity, text: "Keep planning --max-iterations 3" });
+      for (let turn = 1; turn <= 3; turn++) {
+        await service.goals.settled();
+        await service.drainPromptQueueForSession({ agent, logicalSessionKey });
+        await waitForCondition(() => stub.send.mock.calls.length === turn);
+        const options = stub.send.mock.calls[turn - 1]![2];
+        if (agent === "opencode") {
+          expect(options.executionAgent).toBe("plan");
+          expect(openCodeAgentFor(undefined, options, "build")).toBe("plan");
+        } else expect(options.mode).toBe("plan");
+        if (agent === "claude")
+          expect(
+            bridgePromptBody("claude", claudeConnection, "goal", options, []).permissionMode,
+          ).toBe("plan");
+        expect((await storage.getNativeAgentSession(session.key))?.controls).toMatchObject(plan);
+        await storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+          requestId: options.requestId!,
+          outcome: "completed",
+          observedAt: new Date().toISOString(),
+        });
+        markIdle(service, agent, session.providerSessionId);
+        service.goals.noteTurnEnded(session.key);
+      }
+      await service.goals.settled();
+      expect(sessionGoal((await storage.getNativeAgentSession(session.key))!)?.status).toBe(
+        "limited",
+      );
+      expect(stub.send).toHaveBeenCalledTimes(3);
+    });
+  },
+);
+
+test("a rejected goal carrier pauses with one failure ring and releases turn-end work", async () => {
+  const stub = providerStub("codex");
+  stub.send.mockImplementation(async () => {
+    throw new PromptRejectedError("carrier refused");
+  });
+  await withService(stub.provider, async ({ service, storage }) => {
+    const identity = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.ensureSession(identity);
+    const attention = spyOn(storage, "recordEnvironmentSessionCompletion");
+    await service.runGoalCommand({ ...identity, text: "Keep planning" });
+    await service.goals.settled();
+    await service.drainPromptQueueForSession({ agent: "codex", logicalSessionKey });
+    await waitForCondition(async () =>
+      Boolean((await storage.getPromptQueue(`codex\0${logicalSessionKey}`))?.dispatchError),
+    );
+    service.goals.noteTurnEnded(session.key);
+    await service.goals.settled();
+    const stopped = await storage.getEnvironment("env-1");
+    expect(stopped).toMatchObject({ hasUnreadWork: true, unreadReason: "agent_failed" });
+    expect(sessionGoal((await storage.getNativeAgentSession(session.key))!)).toMatchObject({
+      status: "paused",
+      statusReason: "continuation-failed",
+      statusDetail: "carrier refused",
+    });
+    expect(service.goals.holdsTurnEnd(session.key)).toBe(false);
+    expect(attention).toHaveBeenCalledTimes(1);
+    service.goals.noteTurnEnded(session.key);
+    await service.goals.settled();
+    expect(attention).toHaveBeenCalledTimes(1);
+    attention.mockRestore();
+  });
+});
+
+test("an explicit mode takes precedence over an inherited primary profile", async () => {
+  const stub = providerStub("opencode");
+  await withService(stub.provider, async ({ service, storage }) => {
+    const identity = { environmentId: "env-1", agent: "opencode" as const, logicalSessionKey };
+    const session = await service.ensureSession(identity);
+    await storage.updateNativeAgentSessionControls(session.key, session.providerSessionId, {
+      executionProfileId: "build",
+    });
+    await service.dispatchPrompt({
+      ...identity,
+      requestId: "explicit-plan",
+      prompt: "Plan only",
+      mode: "plan",
+    });
+    const options = stub.send.mock.calls[0]![2];
+    expect(options.executionAgent).toBeUndefined();
+    expect(openCodeAgentFor(undefined, options, "build")).toBe("plan");
+  });
+});

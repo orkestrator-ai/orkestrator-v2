@@ -734,6 +734,37 @@ describe("GitHub credential source config migration", () => {
   });
 });
 
+describe("session title generation config storage", () => {
+  test("is absent by default and rejects an unknown policy on save", async () => {
+    expect(defaultConfig().global.sessionTitleGeneration).toBeUndefined();
+    await withTemporaryStorage(async (storage) => {
+      const config = defaultConfig();
+      await storage.saveConfig(config);
+      await storage.updateGlobalConfig({ ...config.global, sessionTitleGeneration: "off" });
+      expect((await storage.loadConfig()).global.sessionTitleGeneration).toBe("off");
+      await expect(
+        storage.updateGlobalConfig({
+          ...config.global,
+          sessionTitleGeneration: "everywhere" as never,
+        }),
+      ).rejects.toThrow("sessionTitleGeneration must be");
+    });
+  });
+
+  test("disables generation for an unknown persisted policy", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const persisted = structuredClone(defaultConfig()) as unknown as Record<string, unknown>;
+      (persisted.global as Record<string, unknown>).sessionTitleGeneration = "everywhere";
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        `${JSON.stringify(persisted)}\n`,
+        "utf8",
+      );
+      expect((await storage.loadConfig()).global.sessionTitleGeneration).toBe("off");
+    });
+  });
+});
+
 describe("Claude background command limit config storage", () => {
   const limitError = "claudeBackgroundCommandLimitHours must be an integer between 2 and 168.";
 

@@ -21,6 +21,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     status: turn + step * 5 + review,
     // Native: five turns or waits and the wake; Claude's terminal case: five more.
     "deliver-now": step * 12,
+    // Launch, its wake, the set turn, then the goal's turns and wake (three steps).
+    goal: step * 6,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };

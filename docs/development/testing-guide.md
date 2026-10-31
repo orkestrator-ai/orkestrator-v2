@@ -515,6 +515,20 @@ fixtures. Run it alone with
 Record results in the evidence log of
 [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
 
+### Opt-in annotation checks
+
+A real desktop capture into a container environment is skipped unless its
+variable is set. It uses this worktree's development image, creates its own
+container environment on the spec's disposable profile and deletes it.
+
+```bash
+mise run docker:build:dev --profile <p>
+ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1 \
+  mise run test:logged -- --name electron-source-hints -- bunx playwright test \
+  --config e2e/agent-testing/playwright.electron.config.ts \
+  web-annotations-electron.spec.ts -g "source hints"
+```
+
 ### Opt-in design checks
 
 Design export from a real running container (the shipped helper over

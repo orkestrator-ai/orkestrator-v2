@@ -248,7 +248,8 @@ export function extractNativePlanContent(messages: readonly NativeMessage[]): st
     for (const part of [...parts].reverse()) {
       if (part.type === "tool-invocation" && part.toolName?.toLowerCase() === "write") {
         const path = part.toolArgs?.file_path;
-        const content = part.toolArgs?.content;
+        // A deferred input carries only a preview of the file, never the plan.
+        const content = part.toolArgsDetailRef ? undefined : part.toolArgs?.content;
         if (typeof path === "string" && isPlanMarkdownPath(path) && typeof content === "string") {
           return content;
         }

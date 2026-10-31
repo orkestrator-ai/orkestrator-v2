@@ -7,6 +7,7 @@
  * opaque and stable: a public session ID survives provider resumes because it
  * is derived from the environment and tab, never from the provider's own ID.
  */
+import type { NativeAgentGoalSummary, NativeAgentGoalView } from "./native-agent-goal.js";
 import type { AgentPlatform } from "./agent-platforms.js";
 import type { ChangeFileRow, ChangeHistoryEntry, ChangeProjection } from "./change-resources.js";
 import type {
@@ -208,8 +209,33 @@ export interface PublicSessionSummary {
     status: "reconciling" | "action-required";
   } | null;
   pendingInteractionCount: number | null;
+  /** Status and counts of the session's goal. Absent: no goal. */
+  goal?: NativeAgentGoalSummary;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+/** `session.goal.get`: one session's goal, read from its record. */
+export interface PublicSessionGoal {
+  sessionId: string;
+  agent: AgentPlatform;
+  activity: PublicSessionActivity;
+  pendingInteractionCount: number | null;
+  goal: NativeAgentGoalView | null;
+  /** One plain line about `goal`, including its status detail. */
+  description: string | null;
+  /** Goals this session no longer holds, cleared or replaced, oldest first. */
+  history: NativeAgentGoalView[];
+  /** With `includeCheckOutput`: untrusted command output, tail only. */
+  checkOutput?: string;
+}
+
+/** What a `session.goal.*` mutation stores and returns. Content-free. */
+export interface PublicGoalMutationResult {
+  sessionId: string;
+  goal: NativeAgentGoalSummary | null;
+  /** `session.goal.clear`: whether there was a goal to remove. */
+  cleared?: boolean;
 }
 
 // ---------------------------------------------------------------------------

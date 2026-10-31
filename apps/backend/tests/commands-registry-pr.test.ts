@@ -76,7 +76,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog.trim()).toBe(
-          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+          "pr list --head feature/pr --state all --limit 30 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
       },
     );
@@ -111,7 +111,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
         });
 
         expect((await fs.readFile(logPath, "utf8")).trim()).toBe(
-          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+          "pr list --head feature/check-permission --state all --limit 30 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
       },
     );
@@ -315,7 +315,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
         expect(execLog).not.toContain("statusCheckRollup");
         expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
@@ -368,7 +368,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
         expect(execLog).not.toContain("statusCheckRollup");
       },
@@ -1285,6 +1285,20 @@ exit 1
         ...task,
         comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
       }));
+      // A coordinator following this PR keeps its merged state before the record goes.
+      const captured: Array<{ prState: unknown; present: boolean }> = [];
+      Object.assign(context, {
+        coordinators: {
+          statusWakes: {
+            captureFinalPullRequest: mock(async (final: Environment) => {
+              captured.push({
+                prState: final.prState,
+                present: Boolean(await context.storage.getEnvironment(final.id)),
+              });
+            }),
+          },
+        },
+      });
 
       await withFakeGh(
         `#!/bin/sh
@@ -1337,6 +1351,8 @@ exit 1
               hasMergeConflicts: false,
             }),
           );
+          expect(captured).toEqual([{ prState: "merged", present: true }]);
+          expect(await context.storage.getEnvironment(environment.id)).toBeNull();
           expect(context.storage.kanban.updateKanbanTask).toHaveBeenCalledWith(task.id, {
             status: "review",
           });

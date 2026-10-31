@@ -96,7 +96,9 @@ element capture walks from the selected element through at most 16 ancestors
 and keeps the nearest four distinct paths. Absolute paths, `..`, `.`,
 backslashes, drive letters and control characters are dropped, and an escaping
 root drops every hint rather than guessing. Framework runtime internals (React
-fibres and the like) are never read.
+fibres and the like) are never read. No package ships for this:
+[source-hint-emitter.md](../development/source-hint-emitter.md) has a tested
+Babel plugin for projects to copy.
 
 Electron main rebuilds each hint from its known fields with `verified: false`
 and drops an invalid hint on its own (`parseSourceHints`). The renderer sends
@@ -108,7 +110,8 @@ on the hints whose path `exists`. A missing, outside-workspace or unchecked
 path, or a failed check, stays unverified, and the note is still saved. Only
 the path is checked; the line and component are never read. The brief says
 that a verified path existed at capture and that the agent still checks the
-code.
+code. The thread lists the same hints as "Source candidates", marking each
+"path found in workspace at capture" or "path not confirmed".
 
 Page identity comes from the real view URL in main, never from the page:
 `{kind: "port"}` for loopback or gateway previews, `{kind: "service"}` for
@@ -619,10 +622,10 @@ What has actually been exercised on a real stack (details and dates in
   errs towards advisory and refusing.
 - The crop relation is checked by image size, not by pixels.
 - Source hints appear only on element captures of pages that emit the
-  `data-orkestrator-source` convention; Orkestrator ships no build plugin, and
-  the thread view does not show hints (agents see them in the brief and in
-  `get_annotation_evidence`). A verified hint proves only that the path
-  existed in the workspace at capture, not that the element came from it.
+  `data-orkestrator-source` convention; Orkestrator ships no build plugin, only
+  a [documented one to copy](../development/source-hint-emitter.md). A verified
+  hint proves only that the path existed in the workspace at capture, not that
+  the element came from it.
 - The capture `producer` is client-declared and labelled as such; nothing
   attests it. Every client uses the same gateway token, so a desktop
   signature would prove only that the caller holds it. Provenance is still

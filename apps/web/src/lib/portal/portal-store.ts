@@ -13,6 +13,8 @@
 
 import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agents-md-orkestrator";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
+import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
+import type { WorkerQuestionRelay } from "@orkestrator/protocol/worker-question-relay";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   isNodeReadCommand,
@@ -244,7 +246,8 @@ export interface NodeActionRequestView {
     | "reveal-env-value"
     | "apply-root-changes"
     | "update-agents-md"
-    | "switch-agent-account";
+    | "switch-agent-account"
+    | "answer-worker-question";
   targets: Array<{
     nodeId: string;
     nodeName: string;
@@ -266,6 +269,8 @@ export interface NodeActionRequestView {
   requestedBy?: { projectId: string };
   /** `update-agents-md`: the proposed changes to the ## Orkestrator section. */
   agentsMd?: { changes: AgentsMdChange[] };
+  /** `answer-worker-question`: the worker's question and the coordinator's proposed answer. */
+  workerQuestion?: WorkerQuestionRelay;
   state: string;
   /** `url`: the pull request an `update-agents-md` approval opened. */
   result?: { code: string; message: string; url?: string };
@@ -283,14 +288,15 @@ export async function resolveNodeActionRequest(
   requestId: string,
   decision: "approve" | "reject",
   /**
-   * A copy request's final location and files, or an AGENTS.md request's
-   * entries, as the user settled them.
+   * A copy request's final location and files, an AGENTS.md request's
+   * entries, or a worker question's answers, as the user settled them.
    */
   approval?: {
     location?: string;
     paths?: string[];
     rememberFiles?: boolean;
     changes?: AgentsMdChange[];
+    answers?: AgentInteractionQuestionAnswer[];
   },
 ): Promise<NodeActionRequestView> {
   return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {

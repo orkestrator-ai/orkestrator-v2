@@ -163,3 +163,13 @@ the host temporary directory. No follow implementation, assertion, timeout
 or skip changed. This run does not establish intermittence or a cause.
 Full outcomes and the seven browser owners that passed sequentially are in
 [0382](../web-ui/0382-component-browser-parallel-load.md).
+
+
+## History-loading main merge — 2026-10-31
+
+History-loading main merge on 2026-10-31 repeated desktop small-wheel false/auto; the complete unchanged follow owner passed in the one-worker five-owner rerun (1600).
+
+Exact commands, eight-worker aggregate counts, sequential one-worker results,
+failure details and retained evidence are in
+[1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
+No owning implementation, assertion, timeout or skip changed between runs.

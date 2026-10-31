@@ -566,8 +566,9 @@ agents, models, defaults and base branch tip), `list_environments`,
 `send_prompt_to_tab`, `send_message`, `start_environment`,
 `stop_environment`, `get_repository_context`, the build pipeline tools,
 the Multi Review tools (custom fix and reviewer tabs included) and the worker
-surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab` and
-`create_pr` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
+surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab`,
+`create_pr`, `resolve_conflicts`, `get_worker_changes`, `fork_worker`,
+`stop_worker_turn`, `list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
 the project's environments on the other nodes. The older `*_node_*` tools
 remain and use the same paths.
 
@@ -591,9 +592,14 @@ remain and use the same paths.
   and the worker's report wakes the coordinator or is held while the
   coordinator waits on that worker. A remote delegation closes when the
   node shows the worker's turn has ended, or its environment failed,
-  stopped or disappeared; build pipelines and Multi Reviews on a node send
-  status wakes whose suggested calls carry the `nodeId`. The node's relayed
-  `resource-changed` events make this prompt; the maintenance sweep covers
+  stopped or disappeared; build pipelines, Multi Reviews and pull requests
+  the coordinator follows on a node send status wakes whose suggested calls
+  carry the `nodeId`. A followed pull request is read from the node's
+  `get_environment` and the PR monitor health its summaries relay (check
+  counts, merge permission, `prMonitorConfirmed`), so "ready to merge" on a
+  node needs its summaries to be current. The node's relayed
+  `resource-changed` events (`environment` and `environment-pr-health`
+  included) make this prompt; the maintenance sweep covers
   missed events, and an unreachable node changes nothing
   (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
 
@@ -625,7 +631,12 @@ remain and use the same paths.
   review stay on the command node, and with `nodeId` the section is read and
   the pull request opened on the leaf that owns that copy
   (`read_project_agents_md_section`, `open_project_agents_md_pr`, routed); see
-  [coordinator.md](coordinator.md#saving-decisions-to-agentsmd).
+  [coordinator.md](coordinator.md#saving-decisions-to-agentsmd). So does
+  `answer_worker_question` (kind `answer-worker-question`): the request stays
+  on the command node, and with `nodeId` the question is read from the leaf's
+  worker tab and the approved answer sent through
+  `answer_controller_worker_question`, a node-link-only command; see
+  [coordinator.md](coordinator.md#worker-surfaces).
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

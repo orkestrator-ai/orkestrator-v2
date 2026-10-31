@@ -11,6 +11,7 @@ export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
+import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -377,6 +378,10 @@ export class StorageService {
     return this.repos.projects.addEnvironment(environment);
   }
 
+  getFinalEnvironmentPr(environmentId: string) {
+    return this.repos.projects.getFinalEnvironmentPr(environmentId);
+  }
+
   removeEnvironment(environmentId: string): Promise<void> {
     return this.repos.projects.removeEnvironment(environmentId);
   }
@@ -420,8 +425,14 @@ export class StorageService {
 
   armPrRecheckAfterAgentCompletion(
     environmentId: string,
+    claim?: {
+      onlyIfUnarmed?: boolean;
+      autoMergePrUrl?: string;
+      autoMergeEnabledAt?: string;
+      requestId?: string;
+    },
   ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
-    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId);
+    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId, claim);
   }
 
   disarmPrRecheckAfterAgentCompletion(
@@ -936,6 +947,16 @@ export class StorageService {
       },
   ): Promise<PersistedNativeAgentSession> {
     return this.repos.nativeAgentSessions.adoptNativeAgentSession(input);
+  }
+
+  updateNativeAgentGoal(
+    key: string,
+    update: (
+      goal: NativeAgentGoal | undefined,
+      session: PersistedNativeAgentSession,
+    ) => NativeAgentGoal | null | undefined,
+  ): Promise<PersistedNativeAgentSession | undefined> {
+    return this.repos.nativeAgentSessions.updateNativeAgentGoal(key, update);
   }
 
   updateNativeAgentSessionControls(

@@ -8,6 +8,12 @@ interface NativeComposeDockProps {
   /** Hidden while centered — for affordances that only make sense in a scrolled transcript. */
   topAccessory?: ReactNode;
   /**
+   * Always visible, in both centered and docked layouts: the goal pill. A goal
+   * can be running before a tab has any rows, which is when the composer is
+   * centered. Shares the top accessory's row, so it costs no extra height there.
+   */
+  statusAccessory?: ReactNode;
+  /**
    * Always visible, in both centered and docked layouts.
    *
    * For a connection-level status the user has to see whatever the transcript
@@ -35,11 +41,13 @@ export function NativeComposeDock({
   children,
   actions,
   topAccessory,
+  statusAccessory,
   notice,
   pinnedContent,
   title = "Ready to build!",
   rootRef,
 }: NativeComposeDockProps) {
+  const visibleTopAccessory = centered ? null : topAccessory;
   return (
     <div
       ref={rootRef}
@@ -80,9 +88,16 @@ export function NativeComposeDock({
           </div>
         ) : null}
 
-        {topAccessory && !centered ? (
-          <div className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] justify-end sm:w-[min(calc(100%_-_2rem),56rem)]">
-            {topAccessory}
+        {statusAccessory || visibleTopAccessory ? (
+          <div
+            data-testid="compose-dock-top-row"
+            className={cn(
+              "pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] min-w-0 items-center gap-2 sm:w-[min(calc(100%_-_2rem),56rem)]",
+              statusAccessory ? "justify-between" : "justify-end",
+            )}
+          >
+            {statusAccessory ? <div className="flex min-w-0">{statusAccessory}</div> : null}
+            {visibleTopAccessory}
           </div>
         ) : null}
 

@@ -225,10 +225,24 @@ export async function assertForkCommitUsable(
   );
 }
 
+export interface ForkEnvironmentOptions {
+  /** A base resolved earlier; resolved from the source's checkout when omitted. */
+  base?: EnvironmentForkBase;
+  /**
+   * Whether the fork keeps the source's build pipeline ID (the sidebar fork
+   * does). A coordinator's fork does not: deleting an environment deletes its
+   * linked pipeline, and the supervisor finds a pipeline's environment by it.
+   */
+  keepBuildPipeline?: boolean;
+  /** Last edits to the new record, after its branch and base are set, before it is saved. */
+  prepare?: (environment: Environment, base: EnvironmentForkBase) => void | Promise<void>;
+}
+
 export async function forkEnvironmentRecord(
   source: Environment,
   environmentType: EnvironmentType,
   context: CommandContext,
+  options: ForkEnvironmentOptions = {},
 ): Promise<ClientEnvironment> {
   const { storage } = context;
   const project = await storage.getProject(source.projectId);
@@ -237,7 +251,7 @@ export async function forkEnvironmentRecord(
     throw new Error("Project has no local path - cannot create a local worktree");
   }
 
-  const base = await resolveEnvironmentForkBase(source, project);
+  const base = options.base ?? (await resolveEnvironmentForkBase(source, project));
   await assertForkCommitUsable(project, base.commit, environmentType);
 
   const repoConfig = await storage.getRepositoryConfig(project.id);
@@ -250,7 +264,7 @@ export async function forkEnvironmentRecord(
     name: uniqueName,
     environmentType,
     entryPort: source.entryPort ?? repoConfig.entryPort,
-    buildPipelineId: source.buildPipelineId,
+    buildPipelineId: options.keepBuildPipeline === false ? undefined : source.buildPipelineId,
     networkAccessMode: resolveForkNetworkAccessMode(source, environmentType),
     portMappings: source.portMappings?.map((mapping) => ({ ...mapping })),
   });
@@ -265,6 +279,7 @@ export async function forkEnvironmentRecord(
   });
   env.delegationBaseBranch = base.branch;
   env.delegationBaseCommit = base.commit;
+  await options.prepare?.(env, base);
   await storage.patchRepositoryConfig(project.id, {
     lastEnvironmentType: env.environmentType,
   });

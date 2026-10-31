@@ -13,6 +13,44 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  test.each(["success", "failure", "pending"])(
+    "restores a %s retry-only row with its identity",
+    async (toolState) => {
+      process.env.ACP_PROVIDER ??= "grok";
+      const { normalizeBridgeMessage } = await import("./acp-persistence.js");
+      const createdAt = "2026-10-31T00:00:00.000Z";
+      const restored = normalizeBridgeMessage({
+        id: "retry-row",
+        role: "assistant",
+        content: "",
+        createdAt,
+        parts: [
+          {
+            type: "retry",
+            content: "Provider retry",
+            toolState,
+            sourcePartId: "retry-card",
+            sourceMessageId: "retry-row",
+            createdAt,
+          },
+        ],
+      });
+      expect(restored?.parts).toEqual([
+        {
+          type: "retry",
+          content:
+            toolState === "pending"
+              ? "Provider temporarily unavailable, automatic retry interrupted by restart"
+              : "Provider retry",
+          toolState: toolState === "pending" ? "failure" : toolState,
+          sourcePartId: "retry-card",
+          sourceMessageId: "retry-row",
+          createdAt,
+        },
+      ]);
+    },
+  );
+
   test("preserves restrictive execution policy across a bridge restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const argsFile = resolve(await temporaryDirectory(), "args.log");

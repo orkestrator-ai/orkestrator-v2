@@ -343,6 +343,19 @@ export interface Environment {
    * unrelated concurrent turn cannot consume it.
    */
   prRecheckAfterAgentCompletionArmedAt?: string;
+  /**
+   * The user asked the backend to merge this environment's open pull request
+   * as soon as GitHub reports it ready, and to launch Resolve when it
+   * conflicts (`pr-auto-merge.ts`). Absent means off.
+   */
+  autoMerge?: boolean;
+  /** PR-specific authorization and freshness fence. */
+  autoMergePrUrl?: string | null;
+  autoMergeEnabledAt?: string | null;
+  /** Last automatic attempt failure, cleared after recovery. */
+  autoMergeError?: string | null;
+  /** Recoverable Resolve identity, retained across pre-dispatch failures. */
+  autoMergeResolveRequestId?: string;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
@@ -731,6 +744,14 @@ export interface PersistedNativeAgentSession {
     state: "active" | "settled";
   };
   /**
+   * The session's goal (`plans/goals.md`). Read through `sessionGoal`: like
+   * `retiredDispatch`, a malformed value reads as absent rather than making the
+   * session unreadable.
+   */
+  goal?: import("@orkestrator/protocol/native-agent-goal").NativeAgentGoal;
+  /** The last few ended goals, without their check output. */
+  goalHistory?: import("@orkestrator/protocol/native-agent-goal").NativeAgentGoal[];
+  /**
    * Bounded request ids whose turn was still active when a stop was requested.
    * A provider reports a stopped turn as idle, so this is the only durable
    * evidence that the turn did not finish on its own.
@@ -1114,6 +1135,8 @@ export interface AppConfig {
      * running, in hours. Absent means the Claude CLI's own 2-hour ceiling.
      */
     claudeBackgroundCommandLimitHours?: number;
+    /** Which agent logins may write session titles. Absent is `any-signed-in`. */
+    sessionTitleGeneration?: import("@orkestrator/protocol/session-title-generation").SessionTitleGenerationPolicy;
     terminalAppearance: {
       fontFamily: string;
       fontSize: number;

@@ -106,6 +106,14 @@ export interface NativeBasePart {
   detailRef?: string;
   /** Opaque session-scoped reference for an exact provider-reported image path. */
   imageDetailRef?: string;
+  /**
+   * Opaque reference for a settled tool call's whole input. While it is set,
+   * large values in `toolArgs` (file contents, replacement strings) are
+   * previews cut from that input.
+   */
+  toolArgsDetailRef?: string;
+  /** Opaque reference for finished reasoning; while set, `content` is a preview of it. */
+  contentDetailRef?: string;
   /** Original attachment name when the readable path uses a staged/generated name. */
   filename?: string;
   /** Provider timestamp for when this individual message part first arrived. */
@@ -429,6 +437,37 @@ export interface NativeMessage {
    * than reading `content` back.
    */
   peerMail?: PeerMailPresentation;
+  /** A turn the goal loop sent, read from its carrier; never the user's words. */
+  goalTurn?: GoalTurnPresentation;
+  /** A client-only goal status row, derived from the session snapshot. */
+  goalStatus?: GoalStatusPresentation;
+}
+
+/**
+ * One goal turn as its tile presents it. Empty when the row is a carrier whose
+ * payload could not be read: still a goal turn, with nothing more to say.
+ */
+export interface GoalTurnPresentation {
+  /** Counted from zero, as the carrier states it. */
+  iteration?: number;
+  maxIterations?: number;
+  objective?: string;
+  check?: string;
+  /** The check this turn answers. Untrusted output, shown only as text. */
+  failedCheck?: { exitCode: number | null; timedOut?: boolean; outputTail: string };
+  /** The verifier's rationale this turn answers. Untrusted model text. */
+  failedVerdict?: string;
+}
+
+export type GoalStatusRowKind = "set" | "check" | "verdict" | "stopped" | "ended";
+export type GoalStatusRowTone = "neutral" | "success" | "failure" | "attention";
+
+/** One short goal status row; the row's `content` is its text. */
+export interface GoalStatusPresentation {
+  kind: GoalStatusRowKind;
+  tone: GoalStatusRowTone;
+  /** Check rows: which run the row reports, so its output can be read on expand. */
+  checkAt?: string;
 }
 
 /** An agent tab a mail tile names; see `PeerMailPresentation.address`. */

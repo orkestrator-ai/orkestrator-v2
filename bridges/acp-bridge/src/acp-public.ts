@@ -196,22 +196,43 @@ export function publicApprovals(state: SessionState): unknown[] {
 }
 
 export function publicInteractions(state: SessionState): unknown[] {
-  return [...state.interactions.values()].map((interaction) =>
-    interaction.kind === "plan-approval"
-      ? {
+  return [...state.interactions.values()].map((interaction) => {
+    switch (interaction.kind) {
+      case "plan-approval":
+        return {
           id: interaction.id,
           kind: interaction.kind,
           plan: interaction.plan,
           planTruncated: interaction.planTruncated,
           ...publicDeadline(interaction),
-        }
-      : {
+        };
+      case "question":
+        return {
           id: interaction.id,
           kind: interaction.kind,
           questions: interaction.questions,
           ...publicDeadline(interaction),
-        },
-  );
+        };
+      case "mcp-form":
+        return {
+          id: interaction.id,
+          kind: interaction.kind,
+          serverName: interaction.serverName,
+          message: interaction.message,
+          schema: interaction.schema,
+          ...publicDeadline(interaction),
+        };
+      case "mcp-url":
+        return {
+          id: interaction.id,
+          kind: interaction.kind,
+          serverName: interaction.serverName,
+          message: interaction.message,
+          url: interaction.url,
+          ...publicDeadline(interaction),
+        };
+    }
+  });
 }
 
 export function setStructuredResult(state: SessionState, requestId: string, value: unknown): void {

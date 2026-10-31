@@ -57,7 +57,11 @@ async function launchNativeAgentJobInternal(
 ): Promise<Record<string, unknown>> {
   if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
   const environmentId = asNonBlankString(args.environmentId, "environmentId");
-  const requestId = asNonBlankString(args.requestId, "requestId");
+  let requestId = asNonBlankString(args.requestId, "requestId");
+  const autoMergePrUrl = options.allowCompletionAction
+    ? asOptionalString(args.autoMergePrUrl)
+    : undefined;
+  const autoMergeEnabledAt = asOptionalString(args.autoMergeEnabledAt);
   if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
   const prompt = asNonBlankString(args.prompt, "prompt");
   if (prompt.length > 100_000) throw new Error("prompt must be at most 100000 characters");
@@ -217,11 +221,40 @@ async function launchNativeAgentJobInternal(
     }
   };
 
+  if (autoMergePrUrl && !context.prAutoMerge?.isActive()) return { status: "skipped" };
   if (completionAction === "refresh-pr-after-agent-completion") {
-    const armed = await context.storage.armPrRecheckAfterAgentCompletion(environmentId);
+    const armed = await context.storage.armPrRecheckAfterAgentCompletion(environmentId, {
+      onlyIfUnarmed: !!autoMergePrUrl,
+      ...(autoMergePrUrl ? { autoMergePrUrl, autoMergeEnabledAt, requestId } : {}),
+    });
     armedAt = armed.armedAt;
     previousArmedAt = armed.previousArmedAt;
+    if (!armedAt && autoMergePrUrl) return { status: "skipped" };
+    if (autoMergePrUrl && armed.environment.autoMergeResolveRequestId)
+      requestId = armed.environment.autoMergeResolveRequestId;
   }
+
+  const authorized = async (): Promise<boolean> => {
+    if (!autoMergePrUrl) return true;
+    const current = await context.storage.getEnvironment(environmentId);
+    return (
+      context.prAutoMerge?.isActive() === true &&
+      current?.autoMerge === true &&
+      current.autoMergePrUrl === autoMergePrUrl &&
+      current.prUrl === autoMergePrUrl &&
+      (autoMergeEnabledAt === undefined || current.autoMergeEnabledAt === autoMergeEnabledAt) &&
+      current.prState === "open" &&
+      current.hasMergeConflicts === true &&
+      current.prRecheckAfterAgentCompletionArmedAt === armedAt &&
+      !current.lifecycleOperation &&
+      !current.deletionRequestedAt &&
+      current.status === "running" &&
+      (current.setupPhase === "ready" ||
+        current.setupScriptsComplete === true ||
+        current.setupOverride === true)
+    );
+  };
+  let dispatchStarted = false;
 
   const completionActionResult = completionAction
     ? {
@@ -235,6 +268,10 @@ async function launchNativeAgentJobInternal(
     : {};
 
   try {
+    if (!(await authorized())) {
+      await rollBackCompletionAction();
+      return { status: "skipped" };
+    }
     const jobId = jobIdFor(environmentId, requestId);
     if (tabReuse && completionAction) {
       const resent = await resendToOpenJobTab(context, {
@@ -306,6 +343,11 @@ async function launchNativeAgentJobInternal(
         status: "unknown",
       });
     }
+    if (!(await authorized())) {
+      await rollBackCompletionAction();
+      return { status: "skipped" };
+    }
+    dispatchStarted = true;
     const outcome = await context.nativeAgents.dispatchIntent({
       environmentId,
       agent,
@@ -343,7 +385,8 @@ async function launchNativeAgentJobInternal(
       ...completionActionResult,
     };
   } catch (error) {
-    await rollBackCompletionAction();
+    // A thrown dispatch can have reached the provider. Retain ownership; never duplicate it.
+    if (!dispatchStarted) await rollBackCompletionAction();
     throw error;
   }
 }

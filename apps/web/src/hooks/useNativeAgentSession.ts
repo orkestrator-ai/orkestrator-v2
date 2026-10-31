@@ -1772,6 +1772,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.contextUsage
           ? { contextUsage: current.contextUsage }
           : {}),
+        ...(hasAuthoritativeState && current.goal ? { goal: current.goal } : {}),
         ...(hasAuthoritativeState && current.policy ? { policy: current.policy } : {}),
         ...(hasAuthoritativeState && current.rateLimits ? { rateLimits: current.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
@@ -1925,6 +1926,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? { asyncQuestionResponses: value.asyncQuestionResponses }
           : {}),
         ...(value.contextUsage ? { contextUsage: value.contextUsage } : {}),
+        ...(value.goal ? { goal: value.goal } : {}),
         ...(value.policy ? { policy: value.policy } : {}),
         ...(value.rateLimits ? { rateLimits: value.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
@@ -3222,7 +3224,11 @@ export function useNativeAgentSession<TMessage = unknown>({
       setIsDispatching(false);
     }
   }, [beginProjectionMutation, identity, refresh]);
-  const listResumable = useCallback(() => listNativeAgentResumableSessions(identity), [identity]);
+  const listResumable = useCallback(
+    (options?: { includeArchived?: boolean }) =>
+      listNativeAgentResumableSessions({ ...identity, ...options }),
+    [identity],
+  );
   const setResumableArchived = useCallback(
     async (resumableSessionId: string, archived: boolean) => {
       await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });
@@ -3284,9 +3290,24 @@ export function useNativeAgentSession<TMessage = unknown>({
    * Grows from whatever the backend actually returned rather than from a local
    * counter, so repeated clicks cannot outrun the provider or ask for a window
    * the session never had.
+   *
+   * `automatic` is a page nobody clicked for (the tab opening, the reader
+   * scrolling near the top). It is served only from a direct cursor the
+   * provider pages cheaply, and resolves null without reading anything
+   * otherwise: minting a joined cursor, or paging one, reads the whole
+   * transcript, which stays behind the button.
    */
+  const canLoadEarlierAutomatically = useCallback(
+    () =>
+      Boolean(historyCursorRef.current) &&
+      lastTranscriptViewRef.current?.historyPaging === "direct",
+    [],
+  );
   const loadEarlierMessages = useCallback(
-    async function loadEarlierMessagesPage(): Promise<NativeAgentSessionProjection<TMessage> | null> {
+    async function loadEarlierMessagesPage(options?: {
+      automatic?: boolean;
+    }): Promise<NativeAgentSessionProjection<TMessage> | null> {
+      if (options?.automatic && !canLoadEarlierAutomatically()) return null;
       const requestedOperationEpoch = projectionOperationEpochRef.current;
       const progressive = await nativeAgentProgressiveSupported();
       if (progressive && !historyCursorRef.current) {
@@ -3539,6 +3560,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [
       applyProjection,
+      canLoadEarlierAutomatically,
       commitSyncMaterialization,
       historyRequestBudget,
       identity,
@@ -3594,6 +3616,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
+    canLoadEarlierAutomatically,
     initialLaunchOptionsRef,
     initialLaunchOptionsPendingRef,
     acknowledgeInitialLaunchOptions,

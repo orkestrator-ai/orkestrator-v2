@@ -7,6 +7,8 @@ import {
   classifyNativeCommandSubmission,
   commandSubmissionIntent,
   draftCommandBusyTitle,
+  GOAL_HANDOFF_MESSAGE,
+  goalCommandRefusal,
   HANDOFF_COMMAND_MESSAGE,
   literalEscapeAvailable,
   type NativeCommandSubmissionInput,
@@ -63,6 +65,15 @@ const IDLE_ONLY: NativeAgentSlashCommand = {
   source: "builtin",
   executionKind: "provider-command",
   inputPolicy: { busy: "idle" },
+};
+
+const GOAL: NativeAgentSlashCommand = {
+  name: "/goal",
+  id: "orkestrator:goal",
+  source: "orkestrator",
+  executionKind: "session-action",
+  bindingRevision: "orkestrator:goal",
+  inputPolicy: { arguments: "optional", attachments: "none" },
 };
 
 function classify(overrides: Partial<NativeCommandSubmissionInput> = {}) {
@@ -214,6 +225,93 @@ describe("classifyNativeCommandSubmission", () => {
     });
   });
 
+  describe("/goal", () => {
+    const commands = [REVIEW, GOAL];
+
+    test("runs now, busy or idle, and carries its arguments as typed", () => {
+      for (const busy of [false, true]) {
+        expect(classify({ text: "/goal ship it --check bun  test", commands, busy })).toEqual({
+          kind: "goal",
+          command: GOAL,
+          arguments: "ship it --check bun  test",
+          opensPanel: false,
+        });
+      }
+      expect(classify({ text: "/goal pause", commands, busy: true })).toMatchObject({
+        kind: "goal",
+        arguments: "pause",
+        opensPanel: false,
+      });
+      expect(classify({ text: "/goal resume --max-iterations 30", commands })).toMatchObject({
+        kind: "goal",
+        arguments: "resume --max-iterations 30",
+      });
+      expect(classify({ text: "/goal clear", commands })).toMatchObject({ kind: "goal" });
+    });
+
+    test("with nothing to run it opens the panel", () => {
+      for (const text of ["/goal", "/goal   ", "/goal status"]) {
+        expect(classify({ text, commands })).toMatchObject({ kind: "goal", opensPanel: true });
+      }
+    });
+
+    test("never carries an intent, so it cannot reach send or the queue as a prompt", () => {
+      expect(commandSubmissionIntent(classify({ text: "/goal x", commands }))).toBeUndefined();
+    });
+
+    test("a selection from the menu runs the same way", () => {
+      expect(
+        classify({
+          text: "/goal x",
+          commands,
+          busy: true,
+          selection: { commandId: GOAL.id!, bindingRevision: GOAL.id!, token: "/goal" },
+        }),
+      ).toMatchObject({ kind: "goal", arguments: "x" });
+    });
+
+    test("arguments the parser refuses keep the draft, with its message", () => {
+      expect(classify({ text: "/goal x --max-iterations 999", commands })).toEqual({
+        kind: "rejected",
+        message: "--max-iterations can be at most 100.",
+      });
+    });
+
+    test("attachments and annotations are refused by the input policy", () => {
+      expect(
+        classify({ text: "/goal x", commands, attachments: [{ type: "image" }] }),
+      ).toMatchObject({
+        kind: "rejected",
+        message: "/goal does not accept attachments. Remove them and retry.",
+      });
+      expect(classify({ text: "/goal x", commands, annotationCount: 1 })).toMatchObject({
+        kind: "rejected",
+      });
+    });
+
+    test("a goal cannot start or resume while a handoff waits, but can still be stopped", () => {
+      for (const text of ["/goal x", "/goal resume"]) {
+        expect(classify({ text, commands, pendingHandoff: true })).toEqual({
+          kind: "rejected",
+          message: GOAL_HANDOFF_MESSAGE,
+        });
+      }
+      for (const text of ["/goal", "/goal pause", "/goal clear"]) {
+        expect(classify({ text, commands, pendingHandoff: true })).toMatchObject({ kind: "goal" });
+      }
+    });
+
+    test("where the capability is off, the row is absent and the text stays a prompt", () => {
+      expect(classify({ text: "/goal x", commands: [REVIEW] })).toEqual({ kind: "prompt" });
+    });
+
+    test("the panel uses the same refusals", () => {
+      expect(goalCommandRefusal("x", true)).toBe(GOAL_HANDOFF_MESSAGE);
+      expect(goalCommandRefusal("pause", true)).toBeUndefined();
+      expect(goalCommandRefusal("x", false)).toBeUndefined();
+    });
+  });
+
   test("an idle /steer keeps its legacy prompt path", () => {
     expect(classify({ text: "/steer do it" })).toEqual({ kind: "prompt" });
   });
@@ -267,6 +365,9 @@ describe("command submission helpers", () => {
     expect(draftCommandBusyTitle(REVIEW, running)).toBeUndefined();
     expect(draftCommandBusyTitle(COMPACT, { ...running, running: false })).toBeUndefined();
     expect(draftCommandBusyTitle(undefined, running)).toBeUndefined();
+    // Not "Add to queue": a goal command acts now.
+    expect(draftCommandBusyTitle(GOAL, running)).toBe("Run /goal now; it never queues");
+    expect(draftCommandBusyTitle(GOAL, { ...running, running: false })).toBeUndefined();
   });
 });
 

@@ -10,7 +10,7 @@ import {
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
 import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
-import { launchWorkerPr } from "./coordinator-pr.js";
+import { launchWorkerPr, launchWorkerResolve } from "./coordinator-pr.js";
 import {
   coordinatorNodeTarget,
   RETRY_SAME_REQUEST,
@@ -35,7 +35,7 @@ import {
 /**
  * Backend commands behind the coordinator's worker surfaces (todo 0142):
  * terminal and tmux launch, browser preview launch and navigation, tab
- * editing, the PR tab, feature-plan launch, and the request
+ * editing, the PR and Resolve tabs, feature-plan launch, and the request
  * to copy the checkout's uncommitted changes into a worker.
  *
  * Every command takes the authenticated `scope` the Control MCP server built
@@ -44,7 +44,7 @@ import {
  * checkout the coordinator may only read). Mutations that create something
  * take the caller's `requestId` through `withCoordinatorReceipt`.
  *
- * The terminal, browser, tab-edit and PR commands also take `nodeId` for a
+ * The terminal, browser, tab-edit, PR and Resolve commands also take `nodeId` for a
  * worker on a connected node (todo 0395): the receipt stays here, the node
  * validates its own worker and runs the work through its `*_controller_*`
  * command, with IDs derived from this receipt's key so a retry replays there.
@@ -67,6 +67,35 @@ function requestKey(caller: CoordinatorCaller, requestId: string): string {
     .update(`${caller.coordinatorId}\0${requestId}`)
     .digest("hex")
     .slice(0, 24);
+}
+
+/**
+ * Record that this coordinator follows a worker's pull request, so status
+ * wakes report its changes (`pull-request` association; see
+ * `coordinator-status-wakes.ts`).
+ */
+async function followPullRequest(
+  context: CommandContext,
+  caller: CoordinatorCaller,
+  input: {
+    environmentId: string;
+    nodeId: string | undefined;
+    requestId: string;
+    source: "create-pr" | "resolve-conflicts";
+    prUrl?: string;
+    resolve?: { tabId: string; requestedAt: string };
+    publication?: { tabId: string; requestedAt: string };
+  },
+): Promise<void> {
+  const { nodeId, ...rest } = input;
+  await context.storage.coordinators.followCoordinatorPullRequest({
+    ...rest,
+    projectId: caller.projectId,
+    coordinatorId: caller.coordinatorId,
+    conversationId: caller.conversationId,
+    ...(nodeId ? { nodeId } : {}),
+  });
+  context.coordinators?.statusWakes.notePullRequestFollowed(input.environmentId, nodeId);
 }
 
 /** The connected node `nodeId` names; none for this node, even by its own ID. */
@@ -239,21 +268,87 @@ export function registerCoordinatorSurfaceActions(
       context,
       caller,
       { requestId, action: "create-pr", payload: { environmentId, targetBranch, nodeId } },
-      async () => {
+      async (receipt) => {
         const launch = {
           environmentId,
           projectId: remote?.projectId ?? caller.projectId,
           targetBranch,
           requestId: `coordinator-pr:${requestKey(caller, requestId)}`,
         };
-        if (remote)
-          return {
-            ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
-              remote.call<JsonRecord>("create_controller_pr", launch, launch.requestId),
-            )),
-            nodeId: remote.nodeId,
-          };
-        return launchWorkerPr(context, dependencies, launch);
+        const result = remote
+          ? {
+              ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+                remote.call<JsonRecord>("create_controller_pr", launch, launch.requestId),
+              )),
+              nodeId: remote.nodeId,
+            }
+          : await launchWorkerPr(context, dependencies, launch);
+        // Only a PR this request raises is followed; a skipped one is someone else's.
+        if (result.status === "launched")
+          await followPullRequest(context, caller, {
+            environmentId,
+            nodeId: remote?.nodeId,
+            requestId: `pr-follow:${requestId}`,
+            source: "create-pr",
+            publication: {
+              tabId: asNonBlankString(result.tabId, "PR tabId"),
+              requestedAt: receipt.createdAt,
+            },
+          });
+        return result;
+      },
+    );
+  });
+
+  /**
+   * The Resolve Conflicts button for a worker's pull request. Its PR is then
+   * followed (the same record `create_pr` writes), and the Resolve tab
+   * finishing wakes the coordinator once with the refreshed PR state.
+   */
+  register("resolve_coordinator_conflicts", async (args, context) => {
+    const caller = await coordinatorCaller(args.scope, context);
+    const input = record(args.input, "the conflict resolution input");
+    const requestId = asNonBlankString(input.requestId, "requestId");
+    const environmentId = asNonBlankString(input.environmentId, "environmentId");
+    const targetBranch = optionalText(input.targetBranch, "targetBranch", 500);
+    const nodeId = optionalText(input.nodeId, "nodeId", 200);
+    const remote = await remoteNode(context, caller, nodeId);
+    if (remote) await remote.environment(environmentId);
+    else await requireCoordinatorWorker(context, caller, environmentId);
+    return withCoordinatorReceipt(
+      context,
+      caller,
+      {
+        requestId,
+        action: "resolve-conflicts",
+        payload: { environmentId, targetBranch, nodeId },
+      },
+      async (receipt) => {
+        const launch = {
+          environmentId,
+          projectId: remote?.projectId ?? caller.projectId,
+          targetBranch,
+          requestId: `coordinator-resolve:${requestKey(caller, requestId)}`,
+        };
+        const result = remote
+          ? {
+              ...(await withRetryAdvice(RETRY_SAME_REQUEST, () =>
+                remote.call<JsonRecord>("resolve_controller_conflicts", launch, launch.requestId),
+              )),
+              nodeId: remote.nodeId,
+            }
+          : await launchWorkerResolve(context, dependencies, launch);
+        if (typeof result.tabId !== "string" || !result.tabId)
+          throw new Error("The Resolve tab did not report its tab");
+        await followPullRequest(context, caller, {
+          environmentId,
+          nodeId: remote?.nodeId,
+          requestId: `pr-follow:${requestId}`,
+          source: "resolve-conflicts",
+          ...(typeof result.prUrl === "string" && result.prUrl ? { prUrl: result.prUrl } : {}),
+          resolve: { tabId: result.tabId, requestedAt: receipt.createdAt },
+        });
+        return result;
       },
     );
   });

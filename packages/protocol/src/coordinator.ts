@@ -280,6 +280,13 @@ export interface CoordinatorDelegation {
    * episode with its own notice.
    */
   waiting?: { since: string; notifiedAt?: string };
+  /**
+   * The coordinator stopped the worker's turn (`stop_worker_turn`) while this
+   * delegation was open. The turn end still settles it and wakes the
+   * coordinator once; the notice says the coordinator stopped it, and the
+   * bounded hold for background work is skipped.
+   */
+  stopRequestedAt?: string;
 }
 
 /** The last status a coordinator was sent for one workflow or worker. */
@@ -289,13 +296,63 @@ export interface CoordinatorStatusNoticeRecord {
   notifiedAt: string;
 }
 
+/**
+ * A worker's pull request a coordinator follows (`pull-request` association).
+ *
+ * Written when the coordinator raises the PR (`create_pr`), runs
+ * `resolve_conflicts` on it, or when a review it launched reports the PR its
+ * auto-PR opened. Status wakes report the PR's state changes from it; a PR the
+ * user raised in the UI has no such record and wakes nobody.
+ */
+export interface CoordinatorPullRequestFollow {
+  source: "create-pr" | "resolve-conflicts" | "multi-review";
+  /** The pull request followed, once seen; another URL on the worker is a different PR. */
+  prUrl?: string;
+  /** `multi-review`: the review association whose `pr-opened` notice this follows. */
+  reviewAssociationId?: string;
+  /**
+   * How many PR states have been recorded (`statusNotice`), sent or quiet.
+   * The next notice is episode `notices + 1`, which makes its mail request
+   * id unique, so a state that recurs after a fix (conflicts, quiet,
+   * conflicts) is sent again, while a retry of the same episode, after a
+   * restart or from a second observer, replays the same message.
+   */
+  notices?: number;
+  /**
+   * The worker's last PR reading, captured just before its record is
+   * deleted (Merge and Cleanup), so a merge is still reported once the
+   * worker is gone.
+   */
+  final?: {
+    prUrl: string | null;
+    prState: "open" | "closed" | "merged" | null;
+    name?: string;
+    at: string;
+  };
+  /** The PR publication attempt, including turns that end without opening a PR. */
+  publication?: { tabId: string; requestedAt: string; seenWorkingAt?: string };
+  /** The newest `resolve_conflicts` run, reported once when its tab finishes. */
+  resolve?: {
+    tabId: string;
+    requestedAt: string;
+    /** The Resolve tab was seen working, so a later idle is its turn ending. */
+    seenWorkingAt?: string;
+    /** Its turn ended; the report waits briefly for the PR monitor's refresh. */
+    finishedAt?: string;
+    notifiedAt?: string;
+  };
+}
+
 export interface CoordinatorWorkflowAssociation {
   id: string;
   coordinatorId: string;
   projectId: string;
   conversationId?: string;
-  /** `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id). */
-  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run";
+  /**
+   * `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id).
+   * `pull-request`: a worker's pull request it follows (resourceId is the environment id; see `pullRequest`).
+   */
+  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run" | "pull-request";
   resourceId: string;
   /**
    * The node that holds the resource, when it is not this one: a worker
@@ -322,6 +379,8 @@ export interface CoordinatorWorkflowAssociation {
   adoptedByConversationId?: string;
   /** Present on `environment` associations that a coordinator is waiting on. */
   delegation?: CoordinatorDelegation;
+  /** Present on `pull-request` associations. */
+  pullRequest?: CoordinatorPullRequestFollow;
 }
 
 /**
@@ -338,16 +397,19 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "add_ticket_comment",
   "address_multi_review",
   "adopt_workflow",
+  "answer_worker_question",
   "cancel_build_pipeline",
   "cancel_graph_run",
   "cancel_multi_review",
   "cancel_schedule",
+  "clear_worker_goal",
   "compare_project_files",
   "create_pr",
   "create_schedule",
   "create_ticket",
   "custom_fix_multi_review",
   "edit_worker_tab",
+  "fork_worker",
   "get_build_pipeline",
   "get_environment",
   "get_feature_plan",
@@ -361,6 +423,8 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "get_tab_transcript",
   "get_ticket",
   "get_usage_limits",
+  "get_worker_changes",
+  "get_worker_goal",
   "launch_environment",
   "launch_feature_plan",
   "launch_graph",
@@ -379,11 +443,14 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "list_schedules",
   "list_tabs",
   "list_tickets",
+  "list_worker_commands",
   "list_workflows",
   "open_multi_review",
   "open_multi_review_fix",
   "open_worker_browser",
   "pause_build_pipeline",
+  "pause_schedule",
+  "pause_worker_goal",
   "propose_agents_md_update",
   "read_messages",
   "read_node_environment",
@@ -392,19 +459,25 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "request_project_file_update",
   "request_project_on_node",
   "request_root_changes",
+  "resolve_conflicts",
   "resume_build_pipeline",
+  "resume_schedule",
+  "run_worker_command",
   "send_message",
   "send_node_message",
   "send_prompt_to_node_tab",
   "send_prompt_to_tab",
+  "set_worker_goal",
   "start_build_pipeline",
   "start_environment",
   "start_multi_review",
   "start_node_environment",
   "stop_environment",
   "stop_node_environment",
+  "stop_worker_turn",
   "switch_provider_account",
   "transfer_files",
+  "update_schedule",
   "update_ticket",
 ] as const);
 
@@ -434,10 +507,12 @@ export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
  * Coordinators otherwise ended build instructions with "prepare commit + PR",
  * so the build worker opened a pull request before any review ran. A pull
  * request comes only from a PR tab: the Multi Review's auto-PR, a build
- * pipeline's own PR step, or `create_pr` once the review is settled.
+ * pipeline's own PR step, or `create_pr` once the review is settled. The rule
+ * also says which PR changes wake the coordinator and that `resolve_conflicts`
+ * is the next step for a conflicting one.
  */
 export const COORDINATOR_PR_RULE =
-  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
+  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
 
 /**
  * Self-timers and provider accounts, told to every main coordinator verbatim.
@@ -465,6 +540,16 @@ export const COORDINATOR_ASYNC_CONTRACT =
   "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
 
 /**
+ * What `create_pr` and `resolve_conflicts` tell a coordinator about being woken.
+ *
+ * Their pull request is followed by status wakes (a `pull-request`
+ * association), so the model is told what it will hear rather than left to
+ * poll `get_environment` for `prUrl`.
+ */
+export const COORDINATOR_PR_STATUS_WAKE =
+  "This conversation will be woken with a status update when this pull request opens (with its URL), starts conflicting with its base branch, fails its checks, becomes ready to merge, or is merged or closed, and once when a Resolve tab finishes, with the refreshed state. Updates that land together arrive in one wake. Read its state with get_environment; never merge it. Do not poll.";
+
+/**
  * What a workflow-starting tool tells a coordinator about being woken.
  *
  * Carried on the result for the same reason as the delegation contract: the
@@ -472,7 +557,7 @@ export const COORDINATOR_ASYNC_CONTRACT =
  * know?", and without an answer the obvious move is to poll its status.
  */
 export const COORDINATOR_WORKFLOW_STATUS_WAKE =
-  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed, a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
+  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed (after which the pull request's own changes wake you: conflicts, failing checks, ready to merge, merged or closed), a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
 
 export interface CoordinatorRepositoryContextEvent {
   revision: number;

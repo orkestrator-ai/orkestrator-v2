@@ -115,3 +115,12 @@ waiting-group cases passed (0747). This does not establish a root cause or a
 fix. The exact command, concurrent isolated-profile context and retained
 artifacts are recorded in the Validation worker review entry in
 [0747](0747-tool-group-overflow-follow.md). No assertions or timeouts changed.
+
+## History-loading main merge — 2026-10-31
+
+History-loading main merge on 2026-10-31 repeated fold gaps of 9 px mobile and 15 px desktop; the complete unchanged folding owner passed in the one-worker five-owner rerun (1600).
+
+Exact commands, eight-worker aggregate counts, sequential one-worker results,
+failure details and retained evidence are in
+[1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
+No owning implementation, assertion, timeout or skip changed between runs.

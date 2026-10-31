@@ -3,9 +3,10 @@
  * Skipped (with the reason printed) when no Chromium executable is found.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { freemem, loadavg, tmpdir, totalmem } from "node:os";
 import path from "node:path";
 
 import { chromium } from "playwright-core";
@@ -20,6 +21,7 @@ import { buildInteractiveCsp, escapeInlineScript, inlineScriptHash } from "./int
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 import { isAlive, listProcesses } from "./preview-process-tree.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
+import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -60,6 +62,7 @@ beforeAll(() => {
   // the explicit opt-in (container isolation is the default for this kind).
   runner = new TranscriptPreviewRunner({
     isolation: "process",
+    scratchRoot: previewTestScratchRoot(),
     allowProcessInteractive: true,
     onWorkerExit: (report) => exits.push(report),
   });
@@ -235,6 +238,7 @@ describe("interactive preview in Chromium", () => {
       const local: Exit[] = [];
       const target = new TranscriptPreviewRunner({
         isolation: "process",
+        scratchRoot: previewTestScratchRoot(),
         allowProcessInteractive: true,
         // probeStepMs: the hung click waits out the same step deadline, only
         // sooner; the healthy calculator job afterwards still has ample time per step.
@@ -357,19 +361,46 @@ describe("interactive preview in Chromium", () => {
           "/form",
         ];
         const reached = (path: string) => hits.some((hit) => hit.includes(path));
-        const browser = await chromium.launch({ executablePath: CHROMIUM!, headless: true });
+        // Flake 0672: this page crashed Chromium on CI twice with no reason
+        // given. Chromium's own log and the host's memory say why next time.
+        const logDirectory = mkdtempSync(path.join(tmpdir(), "ork-0672-"));
+        const logFile = path.join(logDirectory, "chrome.log");
+        const browser = await chromium.launch({
+          executablePath: CHROMIUM!,
+          headless: true,
+          args: ["--enable-logging", `--log-file=${logFile}`],
+        });
+        let crash: string | undefined;
         try {
           const page = await browser.newPage();
+          page.on("crash", () => {
+            crash = `renderer crashed at ${new Date().toISOString()}; free memory ${freemem()} of ${totalmem()} bytes; load ${loadavg().map((load) => load.toFixed(1))}`;
+          });
           await page.goto(`${sinkOrigin}/start`);
           await page.setContent(
             `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
           );
           // A positive observation: done as soon as every class has arrived.
           const deadline = Date.now() + 10_000;
-          while (!CONTROL_PATHS.every(reached) && Date.now() < deadline)
+          while (!crash && !CONTROL_PATHS.every(reached) && Date.now() < deadline)
             await new Promise((resolve) => setTimeout(resolve, 50));
+          if (crash) throw new Error("The unrestricted control page crashed");
+          const missing = CONTROL_PATHS.filter((path) => !reached(path));
+          if (missing.length > 0)
+            throw new Error(`The unrestricted control page missed requests: ${missing.join(", ")}`);
+        } catch (error) {
+          const log = existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n") : [];
+          throw new Error(
+            [
+              String(error),
+              crash ?? "no crash event",
+              "Chromium log tail:",
+              ...log.slice(-40).map((line) => line.slice(0, 300)),
+            ].join("\n"),
+          );
         } finally {
           await browser.close();
+          rmSync(logDirectory, { recursive: true, force: true });
         }
         // The control proves the sink observes every class we later expect to be blocked.
         for (const path of CONTROL_PATHS) {

@@ -40,8 +40,8 @@ describe("CompactionPart", () => {
     render(<CompactionPart part={failedPart} expansionKey="failed-compaction" />);
 
     expect(screen.getByText("Compaction failed")).toBeTruthy();
-    expect(screen.queryByText("Context compacted")).toBeNull();
-    expect(screen.queryByText(FAILED_COMPACTION_NOTE)).toBeNull();
+    expect(screen.queryByText("Context compacted") === null).toBe(true);
+    expect(screen.queryByText(FAILED_COMPACTION_NOTE) === null).toBe(true);
     fireEvent.click(screen.getByText("Show details"));
     expect(screen.getByText(FAILED_COMPACTION_NOTE)).toBeTruthy();
   });
@@ -54,7 +54,7 @@ describe("CompactionPart", () => {
       />,
     );
     expect(screen.getByText("Compaction failed")).toBeTruthy();
-    expect(screen.queryByText("Context compacted")).toBeNull();
+    expect(screen.queryByText("Context compacted") === null).toBe(true);
   });
 
   test("does not claim a pending compaction has completed", () => {
@@ -65,7 +65,7 @@ describe("CompactionPart", () => {
       />,
     );
     expect(screen.getByText("Compacting context")).toBeTruthy();
-    expect(screen.queryByText("Context compacted")).toBeNull();
+    expect(screen.queryByText("Context compacted") === null).toBe(true);
   });
 
   test("shows the boundary even with no summary at all", () => {

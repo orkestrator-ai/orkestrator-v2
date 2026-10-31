@@ -6,7 +6,9 @@ import {
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
 import { MultiReviewReviewerTab } from "../../apps/web/src/components/review/MultiReviewReviewerTab";
+import { useNativeAgentProjectionStore } from "../../apps/web/src/stores/nativeAgentProjectionStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+import { disableAutoLoadEarlier } from "../../apps/web/src/components/native-agent/useAutoLoadEarlier";
 
 const identity: NativeAgentViewIdentity = {
   backendInstanceId: "paging-fixture",
@@ -23,6 +25,9 @@ const short = query.has("short");
 // does: a direct cursor at the first kept row of a bytes-truncated window
 // (0232). Any joined sync-v1 call fails the fixture.
 const bounded = query.has("bounded");
+// The native tab pages history in by itself as the reader nears the top.
+// Without `auto` that is off, so a test can drive the button.
+if (!query.has("auto")) disableAutoLoadEarlier();
 // `paged=N` serves history N source rows at a time behind a cursor, as the live
 // bridges do, so the first click leaves more to load. `stops=N` lengthens the
 // trail and starts the tail 100 rows from its end, like the live window.
@@ -144,6 +149,28 @@ const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { bef
   await pause();
   return { status: "page" as const, ...pageBefore(page.before) };
 };
+/** The cursors the native tab paged from, in order, for tests to read. */
+const pageRequests: string[] = [];
+(window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
+/** Appends live rows without focusing a control or changing the reader's intent. */
+(window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows = () => {
+  const store = useNativeAgentProjectionStore.getState();
+  const projection = store.projections.get(identity.logicalSessionKey);
+  if (!projection) throw new Error("Paging transcript not ready");
+  store.setProjection(identity.logicalSessionKey, {
+    ...projection,
+    messages: [
+      ...projection.messages,
+      ...Array.from({ length: 12 }, (_, index) => ({
+        id: `live-${index}`,
+        role: "assistant" as const,
+        content: `Live message ${index}`,
+        createdAt: `2026-10-31T10:00:${String(index).padStart(2, "0")}.000Z`,
+        parts: [{ type: "text" as const, content: `Live message ${index}` }],
+      })),
+    ],
+  });
+};
 function installBackend() {
   useEnvironmentStore.setState({
     environments: [
@@ -214,6 +241,7 @@ function installBackend() {
           };
           break;
         case "get_native_agent_message_page":
+          pageRequests.push(String(args?.before));
           await pause();
           result = { syncVersion: 1, ...pageBefore(args?.before as string | undefined) };
           break;

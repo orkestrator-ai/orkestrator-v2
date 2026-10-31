@@ -104,8 +104,10 @@ export function parseLeadingSlashCommand(text: string): ParsedSlashCommand | nul
   };
 }
 
+export const GOAL_COMMAND_ID = "orkestrator:goal";
+
 /** Session actions a composer command can invoke, keyed by command name. */
-export type SessionActionCommandKind = "steer" | "compact";
+export type SessionActionCommandKind = "steer" | "compact" | "goal";
 
 interface SessionActionCommandDefinition {
   kind: SessionActionCommandKind;
@@ -117,7 +119,8 @@ interface SessionActionCommandDefinition {
   rejectsArguments?: string;
   description: string;
   argumentHint?: string;
-  busy: "idle" | "running";
+  /** Absent: it works in both states, and neither queues nor interrupts a turn. */
+  busy?: "idle" | "running";
   /**
    * Collision policy with a provider command of the same name.
    * `reserve`: Orkestrator's action replaces it whenever the action is
@@ -161,6 +164,16 @@ export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
     description: "Compact the conversation to free context",
     busy: "idle",
     collision: "defer",
+  },
+  // The backend's loop, one behaviour on every provider (`plans/goals.md`).
+  // Reserved, so a provider's own goal loop can never stack on top of it.
+  "/goal": {
+    kind: "goal",
+    id: GOAL_COMMAND_ID,
+    capability: "goal",
+    description: "Keep working until a goal is proven, or check, pause, resume or clear one",
+    argumentHint: "<objective> [--check <command>] | pause | resume | clear",
+    collision: "reserve",
   },
 };
 
@@ -430,7 +443,7 @@ function sessionActionDescriptor(
           ? "none"
           : "optional",
       attachments: "none",
-      busy: definition.busy,
+      ...(definition.busy ? { busy: definition.busy } : {}),
     },
   };
 }

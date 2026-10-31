@@ -1,3 +1,4 @@
+import { sessionGoal, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { StorageService } from "./storage.js";
 
@@ -28,4 +29,17 @@ export async function workerSessionActivity(
       turn === "idle" &&
       nativeAgents.sessionActivitySnapshot(environmentId, session.agent, key) === "working",
   };
+}
+
+/** The goal on a worker tab's session record. Durable, so it holds across a restart. */
+export async function workerSessionGoal(
+  storage: Pick<StorageService, "listNativeAgentSessions">,
+  environmentId: string,
+  tabId: string,
+): Promise<NativeAgentGoal | undefined> {
+  const key = `env-${environmentId}:${tabId}`;
+  const session = (await storage.listNativeAgentSessions()).find(
+    (candidate) => candidate.environmentId === environmentId && candidate.logicalSessionKey === key,
+  );
+  return session ? sessionGoal(session) : undefined;
 }

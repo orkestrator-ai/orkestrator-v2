@@ -68,6 +68,7 @@ import type {
   NativeAgentCommandRefreshOutcome,
   NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
+import type { NativeAgentGoal, NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 
 /**
  * Bounded validation output. With `known` (the size and anchor of the tail the
@@ -140,6 +141,10 @@ export interface NativeAgentJobLaunchResult {
   error?: string;
   completionActionArmed?: boolean;
   warning?: string;
+  /** The prompt went to an open tab of the same job instead of a new one. */
+  reused?: boolean;
+  /** The reused tab was busy, so the prompt waits for its current work to end. */
+  queued?: boolean;
 }
 
 /**
@@ -159,6 +164,12 @@ export async function launchNativeAgentJob(input: {
   fastMode?: boolean;
   conversationMode?: "plan" | "build";
   completionAction?: "refresh-pr-after-agent-completion";
+  /**
+   * Send to the most recent open tab of the same job when it can take a prompt,
+   * and only otherwise open a new one. `same-agent` restricts that to the chosen
+   * agent and applies the chosen model; `any-agent` keeps the tab's own.
+   */
+  tabReuse?: "any-agent" | "same-agent";
   activateTab?: boolean;
 }): Promise<NativeAgentJobLaunchResult> {
   return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
@@ -622,6 +633,40 @@ export async function stopNativeAgentSession<TMessage = unknown>(input: {
   return invoke("stop_native_agent_session", input);
 }
 
+/** What `/goal` did. A refusal rejects with a message the user can read. */
+export interface NativeAgentGoalCommandResult {
+  message: string;
+  goal?: NativeAgentGoalView;
+}
+
+/**
+ * Run `/goal` now, whether or not a turn is running. `text` is what follows the
+ * command name; it never goes through the prompt queue.
+ */
+export async function runNativeAgentGoalCommand(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  text: string;
+  model?: string;
+}): Promise<NativeAgentGoalCommandResult> {
+  return invoke("native_agent_goal_command", input);
+}
+
+/** A goal with its check output, which the session snapshot leaves out. */
+export interface NativeAgentGoalDetail {
+  goal?: NativeAgentGoal;
+  history: NativeAgentGoal[];
+}
+
+export async function getNativeAgentGoal(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<NativeAgentGoalDetail> {
+  return invoke("get_native_agent_goal", input);
+}
+
 export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
@@ -643,6 +688,8 @@ export async function listNativeAgentResumableSessions(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
+  /** Also lists conversations taken out of the list, flagged `archived`. */
+  includeArchived?: boolean;
 }): Promise<NativeAgentResumeEntry[]> {
   return invoke("list_native_agent_resumable_sessions", input);
 }

@@ -917,6 +917,73 @@ describe("TerminalWebSocketClient", () => {
     }
   });
 
+  test("announces a desync once per drop, not once per failed attempt of an outage", async () => {
+    const { client, sockets } = createHarness();
+    const output = mock((_payload: TerminalSocketPayload) => undefined);
+    client.subscribe("session-a", output);
+    openAndReady(sockets[0]!);
+    const desyncs = () =>
+      output.mock.calls.filter(([payload]) => (payload as { desynced?: boolean }).desynced === true)
+        .length;
+    expect(desyncs()).toBe(0);
+
+    sockets[0]!.close(1006, "dropped");
+    await tick();
+    expect(desyncs()).toBe(1);
+
+    // Every retry of the outage fails before it is ready.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await tick();
+      sockets.at(-1)!.close(1006, "still down");
+      await tick();
+    }
+    expect(sockets.length).toBeGreaterThan(3);
+    expect(desyncs()).toBe(1);
+    client.dispose();
+  });
+
+  test("drops a socket on a silent link, falling back and keeping the ladder", async () => {
+    const delays = captureTimerDelays();
+    try {
+      const { client, sockets, fallback } = createHarness({
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 800,
+        reconnectRandom: () => 0.5,
+      });
+      client.subscribe("session-a", () => undefined);
+      openAndReady(sockets[0]!);
+      const silent = sockets[0]!;
+      const fallbacksBefore = fallback.mock.calls.length;
+
+      client.dropConnection();
+      await tick();
+      expect(silent.readyState).toBe(MockWebSocket.CLOSED);
+      expect(fallback.mock.calls.length).toBeGreaterThan(fallbacksBefore);
+      expect(delays.values.filter((delay) => delay > 1)).toEqual([75]);
+      client.dispose();
+    } finally {
+      delays.restore();
+    }
+  });
+
+  test("retries an unanswered socket once the link is back, and leaves a ready one alone", async () => {
+    const { client, sockets, fallback } = createHarness();
+    client.subscribe("session-a", () => undefined);
+    openAndReady(sockets[0]!);
+    const fallbacksBefore = fallback.mock.calls.length;
+    client.reconnectIfNotReady();
+    expect(sockets[0]!.readyState).toBe(MockWebSocket.OPEN);
+    expect(fallback.mock.calls.length).toBe(fallbacksBefore);
+
+    sockets[0]!.close(1006, "dropped");
+    await tick();
+    const unanswered = sockets.at(-1)!;
+    expect(unanswered).not.toBe(sockets[0]);
+    client.reconnectIfNotReady();
+    expect(unanswered.readyState).toBe(MockWebSocket.CLOSED);
+    client.dispose();
+  });
+
   test("backs off socket reconnects with jitter and resets only after a healthy connection", async () => {
     const delays = captureTimerDelays();
     let now = 0;

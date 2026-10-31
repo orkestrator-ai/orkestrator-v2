@@ -212,7 +212,7 @@ test("starting a home with a missing checkout refuses to create a worktree", asy
   const home = await ensure();
   await rm(checkout, { recursive: true, force: true });
   await expect(startEnvironmentOnce(home.id, context, () => undefined)).rejects.toThrow(
-    "checkout is unavailable",
+    "local checkout does not exist",
   );
   expect(await storage.getEnvironment(home.id)).toMatchObject({ status: "error" });
   await expect(readFile(path.join(context.worktreeDir!, "README.md"))).rejects.toThrow();
@@ -225,11 +225,14 @@ test("base and detached homes never discover a PR or delete a remote ref", async
     await context.runtime.prMonitor.wakeForCompletion(home.id, context);
     await context.runtime.prMonitor.requestRefresh(home.id, context);
     expect((await storage.getEnvironment(home.id))?.prUrl).toBeNull();
-    await deleteMergedEnvironmentRemoteBranch({
-      ...home,
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-    });
+    await deleteMergedEnvironmentRemoteBranch(
+      {
+        ...home,
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+      },
+      storage,
+    );
     const detached = path.join(root, "detached");
     await runCommand("git", ["clone", checkout, detached]);
     await runCommand("git", ["checkout", "--detach"], { cwd: detached });

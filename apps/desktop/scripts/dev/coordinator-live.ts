@@ -49,7 +49,8 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * coordinator's boundary; `async` and `family` drive real workers and mail;
  * `status` drives the status wakes of a Multi Review and of a worker held on
  * an approval; `deliver-now` corrects a busy worker with `deliverNow` (and,
- * on Claude, a tmux worker that cannot take it mid-turn); `peer` drives two
+ * on Claude, a tmux worker that cannot take it mid-turn); `goal` gives a worker
+ * a goal and expects one wake when it completes; `peer` drives two
  * ordinary environments' mail with Wake peers on, and runs last because it is
  * the one case that changes the messaging defaults. Each writes its own
  * summary, and the platform's verdict combines them.
@@ -60,6 +61,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "family",
   "status",
   "deliver-now",
+  "goal",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];

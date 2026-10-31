@@ -285,17 +285,19 @@ describe("draftAttachmentPolicy", () => {
 });
 
 describe("restorableDraftAttachments", () => {
-  test("Cursor and Grok keep images and drop files (explicit regression)", () => {
+  test("Cursor keeps images and drops files; Grok keeps both (explicit regression)", () => {
     // Pinned literally as well as generated below: the old validator returned
     // `false` for every Cursor/Grok attachment regardless of type.
     expect(nativeAgentCapabilities("cursor").attachments).toEqual({ files: false, images: true });
-    expect(nativeAgentCapabilities("grok").attachments).toEqual({ files: false, images: true });
-    for (const platform of ["cursor", "grok"] as const) {
-      expect(restorableDraftAttachments(platform, undefined, [file, image])).toEqual([image]);
-      expect(restorableDraftAttachments("agent-native", { platform }, [file, image])).toEqual([
-        image,
-      ]);
-    }
+    expect(nativeAgentCapabilities("grok").attachments).toEqual({ files: true, images: true });
+    expect(restorableDraftAttachments("cursor", undefined, [file, image])).toEqual([image]);
+    expect(
+      restorableDraftAttachments("agent-native", { platform: "cursor" }, [file, image]),
+    ).toEqual([image]);
+    expect(restorableDraftAttachments("grok", undefined, [file, image])).toEqual([file, image]);
+    expect(restorableDraftAttachments("agent-native", { platform: "grok" }, [file, image])).toEqual(
+      [file, image],
+    );
   });
 
   for (const platform of AGENT_PLATFORMS) {
@@ -383,8 +385,10 @@ describe("restorableDraftAttachments", () => {
 
 describe("useNativeComposeDraftPersistence attachment restoration", () => {
   for (const platform of ["cursor", "grok"] as const) {
-    test(`an assigned ${platform} tab restores its image and re-saves it`, async () => {
+    test(`an assigned ${platform} tab restores its eligible attachments and re-saves them`, async () => {
       const environmentId = `env-assigned-${platform}`;
+      // Cursor keeps only the image; Grok keeps the file too.
+      const expected = expectedFor(platform, [file, image]);
       const sessionKey = `${environmentId}:tab`;
       const key = composeDraftKey(platform, environmentId, sessionKey);
       serveDrafts({
@@ -404,13 +408,13 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         ),
       );
 
-      await waitFor(() => expect(draftAttachmentsOf(sessionKey)).toEqual([image]));
-      // Hydration's autosave must publish the recovered image, not a filtered
-      // empty list, against the hydrated revision.
+      await waitFor(() => expect(draftAttachmentsOf(sessionKey)).toEqual(expected));
+      // Hydration's autosave must publish the recovered attachments, not a
+      // filtered empty list, against the hydrated revision.
       await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
       const [call] = saveCallsFor(key);
       expect(call?.slice(0, 3)).toEqual([key, "environment", environmentId]);
-      expect(call?.[3]).toMatchObject({ text: "look at this", attachments: [image] });
+      expect(call?.[3]).toMatchObject({ text: "look at this", attachments: expected });
       expect(call?.[4]).toBe(1);
       expect(deleteComposeDraft).not.toHaveBeenCalled();
       hook.unmount();

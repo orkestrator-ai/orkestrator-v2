@@ -167,7 +167,7 @@ describe("diagram fences through Tiptap", () => {
   test("keeps preview navigation in the canvas and offers only editable source", async () => {
     const element = await mountFence();
     const canvas = await screen.findByRole("img", { name: /^Mermaid flowchart diagram/ });
-    expect(screen.queryByRole("button", { name: "Show source" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show source" }) === null).toBe(true);
     expect(canvas.getAttribute("aria-label")).not.toContain("Show source");
     canvas.focus();
     const selection = element.editor.state.selection.from;
@@ -185,10 +185,10 @@ describe("diagram fences through Tiptap", () => {
     expect(renderer).toHaveBeenCalledTimes(1);
     await replaceSource(element, "");
     expect(sourceBlock(element).dataset.state).toBe("open");
-    expect(element.querySelector("[data-markdown-diagram-preview] svg")).toBeNull();
+    expect(element.querySelector("[data-markdown-diagram-preview] svg") === null).toBe(true);
     const latest = "flowchart TD\n  New --> Result";
     await replaceSource(element, latest);
-    expect(element.querySelector("[data-markdown-diagram-preview] svg")).toBeNull();
+    expect(element.querySelector("[data-markdown-diagram-preview] svg") === null).toBe(true);
     expect(screen.getByRole("status").textContent).toBe("Updating preview…");
     expect(renderer).toHaveBeenCalledTimes(1);
     await settlePreview();
@@ -244,7 +244,7 @@ describe("diagram fences through Tiptap", () => {
     await waitFor(() =>
       expect(element.querySelectorAll('[data-chart-mark="bar"]')).toHaveLength(6),
     );
-    expect(screen.queryByText("The chart specification is invalid")).toBeNull();
+    expect(screen.queryByText("The chart specification is invalid") === null).toBe(true);
     expect(element.editor.getMarkdown()).toContain(`\`\`\`chart\n${CHART}\n\`\`\``);
   });
 
@@ -261,7 +261,7 @@ describe("diagram fences through Tiptap", () => {
     await act(async () => {
       expect(element.editor.commands.undo()).toBe(true);
     });
-    expect(element.querySelector("[data-markdown-diagram]")).toBeNull();
+    expect(element.querySelector("[data-markdown-diagram]") === null).toBe(true);
     expect(element.querySelector("pre > code.language-text")?.textContent).toBe(MERMAID);
     expect(element.editor.state.selection.from).toBe(from + 4);
     await act(async () => {
@@ -278,7 +278,7 @@ describe("diagram fences through Tiptap", () => {
     await act(async () => {
       element.editor.commands.updateAttributes("codeBlock", { language: "ts" });
     });
-    expect(element.querySelector("[data-markdown-diagram]")).toBeNull();
+    expect(element.querySelector("[data-markdown-diagram]") === null).toBe(true);
     expect(element.querySelector("pre > code.language-ts")?.textContent).toBe(MERMAID);
     expect(element.editor.getMarkdown()).toContain(`\`\`\`ts\n${MERMAID}\n\`\`\``);
   });
@@ -314,7 +314,9 @@ describe("diagram fences through Tiptap", () => {
     await act(async () => {
       element.editor.setEditable(false);
     });
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Edit source" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Edit source" }) === null).toBe(true),
+    );
     expect(element.getAttribute("contenteditable")).toBe("false");
     expect(sourceBlock(element).textContent).toBe(MERMAID);
     const selection = element.editor.state.selection.from;

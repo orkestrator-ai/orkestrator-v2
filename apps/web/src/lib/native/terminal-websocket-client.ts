@@ -371,6 +371,27 @@ export class TerminalWebSocketClient {
     this.ensureSocket();
   };
 
+  /**
+   * The link went silent, which a socket does not notice by itself: drop it, so
+   * the HTTP fallback and the reconnect ladder take over.
+   */
+  dropConnection(): void {
+    const socket = this.socket;
+    if (!socket) return;
+    this.socket = null;
+    this.serverReady = false;
+    socket.close(1000, "Link went silent");
+    this.resetChannelsForReconnect(
+      new Error("Terminal WebSocket closed before the operation completed"),
+    );
+    this.fallbackAndReconnect();
+  }
+
+  /** The link is back: an attempt made while it was silent will never be answered. */
+  reconnectIfNotReady(): void {
+    if (!this.serverReady) this.dropConnection();
+  }
+
   private ensureSocket(): void {
     if (this.disposed || this.desired.size === 0 || this.socket || this.reconnectTimer) return;
     const createSocket =
@@ -808,11 +829,16 @@ export class TerminalWebSocketClient {
       channel.retryTimer = null;
       channel.channelId = null;
       channel.pendingRequestId = null;
+      // Once per drop. Each failed attempt during an outage ends here too, and
+      // every announcement costs each terminal a snapshot and a session read
+      // that cannot succeed. The new subscription says what recovery it needs.
+      const alreadyAnnounced = channel.awaitingSnapshot;
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = false;
       channel.receivedRevision = channel.revision;
       this.clearBuffered(channel);
       this.markUnavailable(channel);
+      if (alreadyAnnounced) continue;
       void this.emit(channel, {
         desynced: true,
         generation: channel.generation ?? 0,

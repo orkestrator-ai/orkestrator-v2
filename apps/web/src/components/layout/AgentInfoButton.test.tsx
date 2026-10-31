@@ -1135,6 +1135,33 @@ describe("AgentInfoButton usage panel", () => {
     expect(quota.queryByText("(Personal)")).toBe(null);
   });
 
+  for (const { label, email, heading } of [
+    {
+      label: "Host login",
+      email: "me@example.com",
+      heading: "(Host login) (me@example.com)",
+    },
+    { label: "me@example.com", email: "me@example.com", heading: "(me@example.com)" },
+    { label: "Host login", email: undefined, heading: "(Host login)" },
+  ]) {
+    test(`names ${label} with ${email ?? "no email"} beside the quota heading`, async () => {
+      seedUsage(usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }));
+      const base = quotaAccount("claude", label);
+      routeQuotaAccountRead(
+        mock(async () => ({
+          ...base,
+          account: { ...base.account!, identity: email ? { email } : {} },
+        })),
+      );
+
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+
+      const quota = within(screen.getByRole("region", { name: "Account usage" }));
+      expect(await quota.findByText(heading)).toBeTruthy();
+    });
+  }
+
   for (const connection of ["connected", "error"] as const) {
     test(`does not attribute retained quotas to a stopped bridge's next account (${connection})`, async () => {
       seedUsage(usage({ account: [{ window: "weekly", label: "Weekly quota", usedPercent: 25 }] }));

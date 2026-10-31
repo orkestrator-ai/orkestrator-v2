@@ -486,16 +486,44 @@ async function grokSources(
     systemDir: homes.grokSystemDir ?? "/etc/grok",
     env: homes.grokEnv ?? {},
   };
-  const managedFiles: Array<[string, string, string, number]> = [
+  // Grok's layers, lowest first (re-derived at 1.0.70): managed config sits
+  // below the user's config.toml, and requirements.toml above every file,
+  // the project's included; within each pair the later file wins.
+  const managedReason =
+    "Grok's managed configuration; your own config.toml overrides it. Add a Grok server with the same name to replace an entry.";
+  const requirementsReason =
+    "Grok's requirements.toml, set by your organisation; it overrides your config.toml and the project's, so change it where it is administered.";
+  const managedFiles: Array<[string, string, string, number, string]> = [
     [
       path.join(policy.systemDir, "managed_config.toml"),
       "managed-system",
       "System managed configuration",
       6,
+      managedReason,
     ],
-    [path.join(grokHome, "managed_config.toml"), "managed-user", "Managed configuration", 7],
+    [
+      path.join(grokHome, "managed_config.toml"),
+      "managed-user",
+      "Managed configuration",
+      7,
+      managedReason,
+    ],
+    [
+      path.join(grokHome, "requirements.toml"),
+      "requirements-user",
+      "Requirements",
+      30,
+      requirementsReason,
+    ],
+    [
+      path.join(policy.systemDir, "requirements.toml"),
+      "requirements-system",
+      "System requirements",
+      31,
+      requirementsReason,
+    ],
   ];
-  for (const [filePath, key, label, precedence] of managedFiles) {
+  for (const [filePath, key, label, precedence, readOnlyReason] of managedFiles) {
     if (await input.exists(filePath)) {
       add(
         managedSource("grok", key, filePath, homes, {
@@ -503,8 +531,7 @@ async function grokSources(
           subtree: ["mcp_servers"],
           precedence,
           label,
-          readOnlyReason:
-            "Grok's managed configuration; your own config.toml overrides it. Add a Grok server with the same name to replace an entry.",
+          readOnlyReason,
         }),
       );
     }
@@ -547,12 +574,15 @@ async function grokSources(
   }
   const claude = await grokCompat("claude", policy, read);
   const cursor = await grokCompat("cursor", policy, read);
+  // `inProject`: Grok holds the file's servers back in an untrusted folder,
+  // which `grok mcp doctor` shows for the project files and for Claude's
+  // private entry for this folder alike.
   const compat = (
     spec: SourceSpec,
     owner: string,
     enabled: { enabled: boolean; source?: string } | null,
+    inProject = spec.scope === "project",
   ): SourceSpec => {
-    const inProject = spec.scope === "project";
     const excluded =
       enabled && !enabled.enabled
         ? `Excluded: turned off by ${enabled.source ?? "a Grok compatibility setting"}.`
@@ -660,6 +690,7 @@ async function grokSources(
         },
         "Claude Code's private local configuration",
         claude,
+        true,
       ),
     );
   }

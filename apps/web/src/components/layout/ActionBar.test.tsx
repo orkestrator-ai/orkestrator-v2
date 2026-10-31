@@ -14,7 +14,6 @@ import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realSettings from "@/components/settings";
-import * as realDockerComponents from "@/components/docker";
 import * as realStores from "@/stores";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
@@ -54,7 +53,6 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
 const realTooltipSnapshot = { ...realTooltip };
 const realSettingsSnapshot = { ...realSettings };
-const realDockerComponentsSnapshot = { ...realDockerComponents };
 const realStoresSnapshot = { ...realStores };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
@@ -220,6 +218,12 @@ const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null>
 const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
+const setEnvironmentAutoMergeMock = mock(
+  async (_id: string, enabled: boolean): Promise<Environment> => ({
+    ...currentEnvironment,
+    autoMerge: enabled,
+  }),
+);
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -560,11 +564,6 @@ mock.module("@/components/settings", () => ({
     ) : null,
 }));
 
-mock.module("@/components/docker", () => ({
-  DockerStatsDialog: ({ open }: { open: boolean }) =>
-    open ? <div>Docker configuration dialog</div> : null,
-}));
-
 mock.module("@/stores", () => ({
   useConfigStore: <T,>(
     selector?: (state: {
@@ -801,6 +800,7 @@ mock.module("@/lib/backend", () => ({
   readContainerFile: readContainerFileMock,
   readLocalFile: readLocalFileMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
+  setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
   startMultiReview: startMultiReviewMock,
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
@@ -845,7 +845,6 @@ afterAll(() => {
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/settings", () => realSettingsSnapshot);
-  mock.module("@/components/docker", () => realDockerComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
@@ -1004,6 +1003,7 @@ beforeEach(() => {
   disarmRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
+  setEnvironmentAutoMergeMock.mockClear();
   mergeEnvironmentPrMock.mockImplementation(
     async (_environmentId, _method, _deleteBranch, cleanupAfterMerge) => ({
       outcome: "merged",
@@ -1079,12 +1079,12 @@ describe("ActionBar grid presentation", () => {
     try {
       render(<ActionBar presentation="grid" />);
 
-      fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
+      fireEvent.focus(screen.getByRole("button", { name: "New native agent tab" }));
       await act(async () => {
         jest.advanceTimersByTime(550);
       });
 
-      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
     } finally {
       jest.useRealTimers();
     }
@@ -1095,15 +1095,16 @@ describe("ActionBar grid presentation", () => {
     try {
       render(<ActionBar presentation="grid" />);
 
-      const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
+      const repositoryButton = screen.getByRole("button", { name: "Repository settings" });
       const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
-      fireEvent.mouseEnter(dockerButton.parentElement!);
+      fireEvent.mouseEnter(repositoryButton.parentElement!);
       fireEvent.mouseEnter(nativeButton);
       await act(async () => {
         jest.advanceTimersByTime(550);
       });
 
-      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      // Only the button's own label carries the text; no tooltip repeats it.
+      expect(screen.getAllByText("Repository settings")).toHaveLength(1);
       expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
     } finally {
       jest.useRealTimers();
@@ -1180,9 +1181,9 @@ describe("ActionBar grid presentation", () => {
     expect(toolbar).toBeTruthy();
     expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
 
-    const docker = screen.getByRole("button", { name: "Docker configuration" });
+    const repository = screen.getByRole("button", { name: "Repository settings" });
     const native = screen.getByRole("button", { name: "New native agent tab" });
-    expect(docker.lastElementChild?.textContent).toBe("Docker");
+    expect(repository.lastElementChild?.textContent).toBe("Repository settings");
     expect(native.lastElementChild?.textContent).toBe("New agent");
     expect(
       screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent,
@@ -1425,8 +1426,8 @@ describe("ActionBar experimental graphs", () => {
     render(<ActionBar />);
 
     expect(screen.getByRole("button", { name: "Multi Review" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Graphs" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Run graph…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Graphs" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Run graph…" }) === null).toBe(true);
   });
 
   test("shows Graphs and Run graph… after Multi Review once graphs are on", () => {
@@ -2143,17 +2144,14 @@ describe("ActionBar editor and run commands", () => {
 });
 
 describe("ActionBar toolbar interactions", () => {
-  test("opens Docker, repository, and environment settings", async () => {
+  test("opens repository and environment settings", async () => {
     const asyncDialogOptions = { timeout: 10_000 };
     render(<ActionBar />);
 
     // Global settings render in `GlobalSettingsHost` (its own test), not here.
     expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(
-      await screen.findByText("Docker configuration dialog", undefined, asyncDialogOptions),
-    ).toBeTruthy();
+    // Docker is a section of the global settings, not a toolbar control.
+    expect(screen.queryByRole("button", { name: "Docker configuration" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(
@@ -2178,7 +2176,7 @@ describe("ActionBar toolbar interactions", () => {
     });
   }, 60_000);
 
-  test("closes Docker configuration and preserves local controls when Docker stops", async () => {
+  test("preserves local controls when Docker stops", async () => {
     const renderActionBar = (available: boolean) => (
       <DockerAvailabilityProvider available={available}>
         <ActionBar />
@@ -2186,18 +2184,12 @@ describe("ActionBar toolbar interactions", () => {
     );
     const view = render(renderActionBar(true));
 
-    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
     view.rerender(renderActionBar(false));
 
-    expect(screen.queryByText("Docker configuration dialog") === null).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "Docker configuration" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
     expect(
       (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -2343,10 +2335,10 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
-    const docker = screen.getByRole("button", { name: "Docker configuration" });
+    const repository = screen.getByRole("button", { name: "Repository settings" });
     // "First toolbar item": the toggle precedes the other left-side controls.
     expect(
-      panelToggle.compareDocumentPosition(docker) & Node.DOCUMENT_POSITION_FOLLOWING,
+      panelToggle.compareDocumentPosition(repository) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(panelToggle);
@@ -3513,6 +3505,175 @@ describe("ActionBar workflow tabs", () => {
       }),
     );
     expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  describe("resending to an open Resolve tab", () => {
+    const openResolveTab = (
+      identity: Record<string, unknown> = {
+        jobCompletionAction: "refresh-pr-after-agent-completion",
+      },
+    ) =>
+      usePaneLayoutStore.setState({
+        activeEnvironmentId: "env-1",
+        environments: new Map([
+          [
+            "env-1",
+            {
+              activePaneId: "default",
+              containerId: "container-1",
+              root: {
+                kind: "leaf",
+                id: "default",
+                tabs: [
+                  { id: "terminal-1", type: "plain" },
+                  {
+                    id: "agent-job-resolve",
+                    type: "agent-native",
+                    ...identity,
+                    nativeAgentData: { environmentId: "env-1", platform: "codex" },
+                  },
+                ],
+                activeTabId: "terminal-1",
+              },
+            },
+          ],
+        ]),
+      } as never);
+    const launched = (queued?: true) => ({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "accepted" as const,
+      completionActionArmed: true,
+      reused: true,
+      ...(queued ? { queued } : {}),
+    });
+
+    beforeEach(() => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: true };
+    });
+
+    afterEach(() => {
+      usePaneLayoutStore.setState({ environments: new Map() });
+    });
+
+    test("a plain press asks the backend to reuse the tab and focuses it", async () => {
+      openResolveTab();
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
+          "env-1",
+          "agent-job-resolve",
+          expect.any(Object),
+        ),
+      );
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tabReuse: "any-agent",
+          completionAction: "refresh-pr-after-agent-completion",
+          activateTab: true,
+        }),
+      );
+      expect(toastInfoMock).not.toHaveBeenCalled();
+    });
+
+    test("says when the prompt is waiting behind the tab's current work", async () => {
+      openResolveTab();
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched(true));
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(toastInfoMock).toHaveBeenCalledWith(
+          "Conflict resolution is queued",
+          expect.any(Object),
+        ),
+      );
+      expect(requestPaneTabActivationMock).toHaveBeenCalled();
+    });
+
+    test("a full tab bar still resends when a Resolve tab is open", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      const button = screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      fireEvent.click(button);
+
+      await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    });
+
+    test("a full tab bar with no Resolve tab still stops the button", () => {
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+
+    test("a tab that only carries the Resolve title does not lift the tab limit", () => {
+      openResolveTab({ displayTitle: "Resolve" });
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+
+    test("the dialog stays available on a full tab bar and honours its own selection", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+      expect(screen.queryByRole("alert") === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+
+      await waitFor(() =>
+        expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+          expect.objectContaining({ tabReuse: "same-agent" }),
+        ),
+      );
+    });
+
+    test("the keyboard shortcut opens the same dialog on a full tab bar", () => {
+      openResolveTab();
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      fireEvent.keyDown(window, { key: "u", metaKey: true, shiftKey: true });
+
+      expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    });
+
+    test("reports the backend's tab limit when it had to open a new tab", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockRejectedValueOnce(
+        new Error("Environment already has the maximum of 10 tabs"),
+      );
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
+          description: "Environment already has the maximum of 10 tabs",
+        }),
+      );
+    });
   });
 
   test("continues the pinned backend Resolve launch after the selected environment changes", async () => {
@@ -8034,5 +8195,53 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.textContent).toContain("Failed to merge PR: An unexpected error occurred");
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActionBar auto-merge", () => {
+  test("saves the open PR toggle, disables it during saving, and reflects on/off", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", autoMerge: false };
+    let finish!: (environment: Environment) => void;
+    setEnvironmentAutoMergeMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const view = render(<ActionBar />);
+    const toggle = screen.getByRole("button", { name: "Auto-merge" }) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(currentEnvironment.id, true);
+    expect(toggle.disabled).toBe(true);
+    await act(async () => finish({ ...currentEnvironment, autoMerge: true }));
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, { autoMerge: true });
+    currentEnvironment = { ...currentEnvironment, autoMerge: true };
+    view.rerender(<ActionBar />);
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(currentEnvironment.id, false),
+    );
+  });
+
+  for (const state of ["merged", "closed"] as const) {
+    test(`hides auto-merge after the PR is ${state}`, () => {
+      currentEnvironment = { ...selectedEnvironment, prState: state, autoMerge: false };
+      render(<ActionBar />);
+      expect(screen.queryByRole("button", { name: "Auto-merge" })).toBeNull();
+    });
+  }
+
+  test("shows the persisted failure and removes it when recovery is announced", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    const view = render(<ActionBar />);
+    expect(screen.getByText("Auto-merge: GitHub refused the merge")).toBeTruthy();
+    currentEnvironment = { ...currentEnvironment, autoMergeError: null };
+    view.rerender(<ActionBar />);
+    expect(screen.queryByText("Auto-merge: GitHub refused the merge")).toBeNull();
   });
 });

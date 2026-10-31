@@ -396,7 +396,9 @@ export const codexCodec: ProviderCodec = {
       assign(out, previous, "http_headers", definition.headers);
     }
     if (definition.enabled === false) out.enabled = false;
-    else if (previous?.enabled === true) out.enabled = true;
+    // An explicit true must override a lower layer's false; omitting it
+    // would inherit that false again on the next load.
+    else if (definition.enabled === true) out.enabled = true;
     else delete out.enabled;
     writeAdvanced(out, definition, CODEX_ADVANCED);
     return out;

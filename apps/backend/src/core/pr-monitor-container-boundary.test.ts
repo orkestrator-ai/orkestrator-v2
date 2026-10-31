@@ -57,7 +57,7 @@ test("container detection wraps and quotes permission commands with their own ti
       "bash",
       "-lc",
       withContainerRuntimeCredential(
-        `gh pr view '${PR}' --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName`,
+        `gh pr view '${PR}' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName`,
       ),
     ],
     expect.objectContaining({ timeoutMs: PR_DETECTION_TIMEOUT_MS }),

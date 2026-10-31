@@ -429,6 +429,37 @@ export interface NativeMessage {
    * than reading `content` back.
    */
   peerMail?: PeerMailPresentation;
+  /** A turn the goal loop sent, read from its carrier; never the user's words. */
+  goalTurn?: GoalTurnPresentation;
+  /** A client-only goal status row, derived from the session snapshot. */
+  goalStatus?: GoalStatusPresentation;
+}
+
+/**
+ * One goal turn as its tile presents it. Empty when the row is a carrier whose
+ * payload could not be read: still a goal turn, with nothing more to say.
+ */
+export interface GoalTurnPresentation {
+  /** Counted from zero, as the carrier states it. */
+  iteration?: number;
+  maxIterations?: number;
+  objective?: string;
+  check?: string;
+  /** The check this turn answers. Untrusted output, shown only as text. */
+  failedCheck?: { exitCode: number | null; timedOut?: boolean; outputTail: string };
+  /** The verifier's rationale this turn answers. Untrusted model text. */
+  failedVerdict?: string;
+}
+
+export type GoalStatusRowKind = "set" | "check" | "verdict" | "stopped" | "ended";
+export type GoalStatusRowTone = "neutral" | "success" | "failure" | "attention";
+
+/** One short goal status row; the row's `content` is its text. */
+export interface GoalStatusPresentation {
+  kind: GoalStatusRowKind;
+  tone: GoalStatusRowTone;
+  /** Check rows: which run the row reports, so its output can be read on expand. */
+  checkAt?: string;
 }
 
 /** An agent tab a mail tile names; see `PeerMailPresentation.address`. */

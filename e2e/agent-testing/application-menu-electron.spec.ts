@@ -6,14 +6,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {} from "../fixtures/application-menu-electron";
+import { withCleanup } from "../process-cleanup";
 import { closeElectronWithin } from "./design-electron-cleanup";
-import { nativeMenuKeys, nativeMenuScreenshot, nativeMenuWindows } from "./native-menu-input";
+import {
+  nativeMenuAlt,
+  nativeMenuFocus,
+  nativeMenuKeys,
+  nativeMenuScreenshot,
+  nativeMenuWindows,
+} from "./native-menu-input";
 
 test("built application menu resolves native roles and dispatches callbacks", async () => {
   test.skip(process.platform === "darwin", "Windows/Linux menu qualification");
   const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-menu-"));
   let app: ElectronApplication | undefined;
-  try {
+  // A teardown failure must not hide the failure that preceded it.
+  await withCleanup(async () => {
     const fixture = path.join(directory, "main.cjs");
     execFileSync(
       "bun",
@@ -115,7 +123,11 @@ test("built application menu resolves native roles and dispatches callbacks", as
         window.webContents,
       );
       shortcuts.click(
-        { triggeredByAccelerator: true, ctrlKey: true, shiftKey: true } as Electron.KeyboardEvent,
+        {
+          triggeredByAccelerator: true,
+          ctrlKey: true,
+          shiftKey: true,
+        } as Electron.KeyboardEvent,
         window,
         window.webContents,
       );
@@ -157,23 +169,31 @@ test("built application menu resolves native roles and dispatches callbacks", as
       globalThis.applicationMenuEvents = [];
     });
 
-    // Alt selects File, two Right keys select View, End chooses Shortcuts.
-    nativeMenuKeys(
-      main!,
-      ["Alt_L", "Right", "Right", "Down", "End", "Return"],
-      "{F10}{RIGHT}{RIGHT}{DOWN}{END}{ENTER}",
-    );
+    const pageFocused = () =>
+      app!.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.isFocused(),
+      );
+    const chooseKeyboardShortcuts = async () => {
+      // A lone Alt focuses the menu bar (on File) only after the page has
+      // reported the key unhandled; keys sent before then still reach the page.
+      await expect.poll(pageFocused).toBe(true);
+      nativeMenuAlt(main!);
+      await expect.poll(pageFocused).toBe(false);
+      // Two Right keys select View, Down opens it, End chooses Shortcuts.
+      nativeMenuKeys(
+        main!,
+        ["Right", "Right", "Down", "End", "Return"],
+        "{RIGHT}{RIGHT}{DOWN}{END}{ENTER}",
+      );
+    };
+    await chooseKeyboardShortcuts();
     await expect.poll(events).toEqual(["shortcuts:open"]);
-    nativeMenuKeys(
-      main!,
-      ["Alt_L", "Right", "Right", "Down", "End", "Return"],
-      "{F10}{RIGHT}{RIGHT}{DOWN}{END}{ENTER}",
-    );
+    await chooseKeyboardShortcuts();
     await expect.poll(events).toEqual(["shortcuts:open", "shortcuts:open"]);
     nativeMenuKeys(main!, ["ctrl+n"], "^n");
     await expect.poll(events).toEqual(["shortcuts:open", "shortcuts:open", "new-window"]);
     // Display-only shortcut must not independently dispatch from Electron's menu.
-    nativeMenuKeys(main!, ["ctrl+shift+k", "ctrl+n"], "^+k^n");
+    nativeMenuKeys(main!, ["ctrl+shift+slash", "ctrl+n"], "^+/^n");
     await expect
       .poll(events)
       .toEqual(["shortcuts:open", "shortcuts:open", "new-window", "new-window"]);
@@ -211,10 +231,30 @@ test("built application menu resolves native roles and dispatches callbacks", as
     await expect
       .poll(() => nativeMenuWindows(pid).some((window) => window.id === about.id))
       .toBe(false);
+    // Xvfb has no window manager to return native focus after the panel, so
+    // the test does; the page must then take keys without being refocused.
+    if (process.platform === "linux") nativeMenuFocus(main!);
+    await expect.poll(pageFocused).toBe(true);
+    // The native view can report focus before Chromium restores the document's
+    // active element. Observe that restoration without focusing the input.
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    await expect(page.getByRole("textbox")).toBeFocused();
     nativeMenuKeys(main!, ["a"], "a");
     await expect(page.getByRole("textbox")).toHaveValue("a");
-  } finally {
-    await closeElectronWithin(app);
-    await rm(directory, { recursive: true, force: true });
-  }
+    await test.info().attach("native-input-results", {
+      body: JSON.stringify({
+        platform: process.platform,
+        electron: electronVersion,
+        repeat: test.info().repeatEachIndex,
+        events: await events(),
+        aboutDismissed: true,
+        pageFocused: await pageFocused(),
+        resumedTyping: await page.getByRole("textbox").inputValue(),
+      }),
+      contentType: "application/json",
+    });
+  }, [
+    async () => void (await closeElectronWithin(app)),
+    () => rm(directory, { recursive: true, force: true }),
+  ]);
 });

@@ -72,6 +72,8 @@ export type CommandContext = {
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
   multiReviews?: MultiReviewService;
+  /** Auto-merge of ready pull requests (`pr-auto-merge.ts`); absent in fixtures. */
+  prAutoMerge?: import("./pr-auto-merge.js").PrAutoMergeController;
   featurePlanning?: FeaturePlanningService;
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
   /** Remote-initiated Orkestrator updates of this host. */
@@ -86,6 +88,8 @@ export type CommandContext = {
   userCommands?: import("./user-commands.js").UserCommandService;
   /** Shell prompts waiting on the user, from every detector (human-prompt-registry.ts). */
   humanPrompts?: import("./human-prompt-registry.js").HumanPromptRegistry;
+  /** This machine's rolling CPU and RAM averages, read through `get_machine_load`. */
+  machineLoad?: import("./machine-load.js").MachineLoadSampler;
   /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
   nodes?: import("./nodes/index.js").NodeService;
   /** Portal read model, routing and workspaces (command node); client grants (leaf). */

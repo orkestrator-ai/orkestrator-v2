@@ -1,3 +1,4 @@
+import type { SessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
 import { describe, expect, mock, test } from "bun:test";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
@@ -75,6 +76,13 @@ describe("session title text", () => {
     );
     expect(buildSessionTitlePrompt("x", "line")).toContain("single line");
   });
+
+  test("escapes a skill mention so Codex does not load the skill", () => {
+    const prompt = buildSessionTitlePrompt("use $tidy on [$a](b) for $5");
+    expect(prompt).not.toContain("$");
+    const encoded = prompt.split("\n").find((line) => line.startsWith('"'))!;
+    expect(JSON.parse(encoded)).toBe("use $tidy on [$a](b) for $5");
+  });
 });
 
 function service(
@@ -85,6 +93,7 @@ function service(
     maxConcurrent?: number;
     maxQueued?: number;
     block?: Promise<void>;
+    policy?: () => Promise<SessionTitleGenerationPolicy>;
   } = {},
 ) {
   const runs: SessionTitleStrategy[] = [];
@@ -107,6 +116,7 @@ function service(
     ...(options.now ? { now: options.now } : {}),
     ...(options.maxConcurrent ? { maxConcurrent: options.maxConcurrent } : {}),
     ...(options.maxQueued !== undefined ? { maxQueued: options.maxQueued } : {}),
+    ...(options.policy ? { policy: options.policy } : {}),
   });
   return { titles, runs, launch };
 }
@@ -116,6 +126,49 @@ describe("SessionTitleService", () => {
     expect(sessionTitleStrategyOrder("claude")).toEqual(["claude", "codex"]);
     expect(sessionTitleStrategyOrder("codex")).toEqual(["codex", "claude"]);
     expect(sessionTitleStrategyOrder("cursor")).toEqual(["codex", "claude"]);
+  });
+
+  test("the policy can keep a first message from a second vendor", () => {
+    expect(sessionTitleStrategyOrder("claude", "own-platform")).toEqual(["claude"]);
+    expect(sessionTitleStrategyOrder("codex", "own-platform")).toEqual(["codex"]);
+    expect(sessionTitleStrategyOrder("cursor", "own-platform")).toEqual([]);
+    expect(sessionTitleStrategyOrder("claude", "off")).toEqual([]);
+    expect(sessionTitleStrategyOrder("cursor", "any-signed-in")).toEqual(["codex", "claude"]);
+  });
+
+  test("own-platform stops at the session's own login when it fails", async () => {
+    const { titles, runs } = service({
+      fail: ["claude"],
+      policy: async () => "own-platform",
+    });
+    await expect(titles.generate({ agent: "claude", source: "work" })).resolves.toBeNull();
+    expect(runs).toEqual(["claude"]);
+    // A platform with no generator never reaches another vendor's.
+    await expect(titles.generate({ agent: "cursor", source: "work" })).resolves.toBeNull();
+    expect(runs).toEqual(["claude"]);
+  });
+
+  test("off, and a policy that cannot be read, run nothing", async () => {
+    for (const policy of [
+      async () => "off" as const,
+      async () => {
+        throw new Error("config unreadable");
+      },
+    ]) {
+      const { titles, runs, launch } = service({ policy });
+      await expect(titles.generate({ agent: "codex", source: "work" })).resolves.toBeNull();
+      expect(runs).toEqual([]);
+      expect(launch).not.toHaveBeenCalled();
+    }
+  });
+
+  test("the policy is read per generation, so a change applies to the next session", async () => {
+    let policy: SessionTitleGenerationPolicy = "off";
+    const { titles, runs } = service({ policy: async () => policy });
+    await titles.generate({ agent: "codex", source: "work" });
+    policy = "any-signed-in";
+    await titles.generate({ agent: "codex", source: "work" });
+    expect(runs).toEqual(["codex"]);
   });
 
   test("uses whichever login the machine has", async () => {

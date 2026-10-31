@@ -1,3 +1,5 @@
+import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
+import { forkAcpSession } from "./acp-fork.js";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";
@@ -252,7 +254,7 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|human-prompts|prompt|compact|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|human-prompts|prompt|compact|fork|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -310,6 +312,7 @@ export async function route(
     request.method === "POST" &&
     (action === "prompt" ||
       action === "compact" ||
+      action === "fork" ||
       action === "attach" ||
       action === "config" ||
       action?.startsWith("approvals/") ||
@@ -542,7 +545,24 @@ export async function route(
     );
     if (!interaction) return json(response, 404, { error: "Interaction not found" });
     const body = await readJson(request);
-    if (interaction.kind === "plan-approval") {
+    if (interaction.kind === "mcp-form" || interaction.kind === "mcp-url") {
+      if (body.action === "accept") {
+        // Refused without answering, so the card stays up for a corrected form.
+        if (
+          interaction.kind === "mcp-form" &&
+          !isValidMcpFormContent(interaction.schema, body.content)
+        ) {
+          return json(response, 400, { error: "The answer does not match the MCP server's form" });
+        }
+        interaction.respond(
+          interaction.kind === "mcp-form"
+            ? { outcome: "accept", content: body.content as JsonObject }
+            : { outcome: "accept" },
+        );
+      } else {
+        interaction.respond({ outcome: body.action === "decline" ? "decline" : "cancel" });
+      }
+    } else if (interaction.kind === "plan-approval") {
       const outcome =
         body.action === "approve"
           ? "approved"
@@ -577,6 +597,19 @@ export async function route(
   if (action === "structured-output" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
     return json(response, 200, { structuredOutput: state.structured.get(requestId) ?? null });
+  }
+  if (action === "fork" && request.method === "POST") {
+    const body = await readJson(request);
+    const upToMessageId =
+      typeof body.upToMessageId === "string" ? body.upToMessageId.trim() : undefined;
+    if (upToMessageId && Buffer.byteLength(upToMessageId) > 1_024) {
+      return json(response, 400, { error: "upToMessageId is too long" });
+    }
+    const forked = await forkAcpSession(state, upToMessageId || undefined, clientSignal);
+    return json(response, 200, {
+      ...publicSessionReference(forked),
+      ...(forked.title ? { title: forked.title } : {}),
+    });
   }
   if ((action === "prompt" || action === "compact") && request.method === "POST") {
     let body = await readJson(request);
@@ -1005,6 +1038,7 @@ export async function route(
       state.retryCancelledPromptSequence = state.promptSequence;
     }
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.wakeRetryWait?.();
     return json(response, 202, { accepted: true });
   }
   if (action === "close" && request.method === "POST") {

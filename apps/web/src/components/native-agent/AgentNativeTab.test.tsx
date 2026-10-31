@@ -214,7 +214,9 @@ const recoverMultiReviewFixSessionMock = mock(
       backendRevision: 2,
     }) as never,
 );
-const listNativeAgentResumableSessionsMock = mock(async () => []);
+const listNativeAgentResumableSessionsMock = mock(
+  async (_input: Parameters<typeof realBackend.listNativeAgentResumableSessions>[0]) => [],
+);
 const setNativeAgentResumableSessionArchivedMock = mock(
   async (_input: Parameters<typeof realBackend.setNativeAgentResumableSessionArchived>[0]) => ({
     archived: true,
@@ -639,7 +641,7 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map() });
+  useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   useNativeNoticeDismissalStore.getState().clear();
   useMultiReviewStore.setState({ workflows: new Map() });
@@ -1438,6 +1440,361 @@ describe("AgentNativeTab", () => {
     render(<AgentNativeTab tabId="tab-not-logged-in-later" data={identity("claude")} isActive />);
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
+  });
+
+  describe("after Claude refuses a prompt with its not-logged-in notice", () => {
+    const notice = "Not logged in · Please run /login";
+
+    const image = {
+      id: "image-1",
+      type: "image" as const,
+      path: "/workspace/screen.png",
+      name: "screen.png",
+      previewUrl: "data:image/png;base64,cG5n",
+    };
+    const annotation = { id: "annotation-1", text: "Original answer", comment: "Please fix" };
+    function setRecoveryProjection(
+      sessionKey: string,
+      update: Partial<NativeAgentSessionProjection<NativeMessage>>,
+    ) {
+      const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+      const next = {
+        ...current,
+        revision: current.revision + 1,
+        ...update,
+      } as NativeAgentSessionProjection<NativeMessage>;
+      getNativeAgentProjectionMock.mockResolvedValue(next);
+      act(() => useNativeAgentProjectionStore.getState().setProjection(sessionKey, next));
+    }
+    function completeSignIn() {
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-31T00:24:00.000Z",
+      };
+    }
+    async function sendRefusedPrompt(
+      tabId: string,
+      options: { attachments?: boolean; launcher?: boolean; terminal?: boolean } = {},
+    ) {
+      accountLoginProgress = { state: "idle" };
+      const sessionKey = createSessionKey("env-1", tabId);
+      if (options.launcher) {
+        seedUnassignedDefaultCatalog();
+        useConfigStore.getState().updateGlobalConfig({ agentSettings: { defaultAgent: "claude" } });
+        seedEnvTab({
+          id: tabId,
+          type: "agent-native",
+          nativeAgentData: { environmentId: "env-1", containerId: "container-1" },
+        });
+        render(<PaneBackedAgentNativeTab tabId={tabId} />);
+        await screen.findByTestId("unassigned-native-compose-bar");
+      } else {
+        render(
+          <TerminalProvider>
+            <TerminalTabHarness createTab={mock(() => true)}>
+              <AgentNativeTab
+                tabId={tabId}
+                data={{
+                  ...identity("claude"),
+                  ...(options.terminal &&
+                  (useConfigStore.getState().config.global.useHostClaudeCredentials ?? true)
+                    ? { containerId: undefined }
+                    : {}),
+                }}
+                isActive
+              />
+            </TerminalTabHarness>
+          </TerminalProvider>,
+        );
+        await screen.findByTestId("shared-native-compose-bar");
+      }
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text: "Fix the garbled text",
+          ...(options.attachments ? { attachments: [image], annotations: [annotation] } : {}),
+        });
+      });
+      fireEvent.click(await screen.findByTitle(options.launcher ? "Start agent" : "Send"));
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).text).toBe(""),
+      );
+      await screen.findByTestId("shared-native-compose-bar");
+      // Claude runs nothing: it answers with the notice.
+      setRecoveryProjection(sessionKey, {
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Fix the garbled text",
+            createdAt: "2026-10-31T00:23:00.000Z",
+            parts: [{ type: "text", content: "Fix the garbled text" }],
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: notice,
+            createdAt: "2026-10-31T00:23:01.000Z",
+            parts: [{ type: "text", content: notice }],
+          },
+        ],
+      });
+      if (!options.terminal) {
+        fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+        await screen.findByLabelText("Sign-in code");
+      }
+      return sessionKey;
+    }
+
+    test("sends the prompt again once the user signs in", async () => {
+      await sendRefusedPrompt("tab-resend-after-sign-in");
+      expect(screen.getByText(/Your message is sent again once you sign in\./)).toBeTruthy();
+
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-31T00:24:00.000Z",
+      };
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
+        timeout: 4_000,
+      });
+      const [first, resent] = dispatchNativeAgentIntentMock.mock.calls.map(([input]) => input);
+      expect(resent).toMatchObject({ agent: "claude", prompt: first!.prompt });
+      // A new request: the refused one already ran.
+      expect(resent!.requestId).not.toBe(first!.requestId);
+      expect(screen.getByText("Signed in. Sending your message again…")).toBeTruthy();
+    });
+
+    test("recovers a launcher-first prompt after adopting its created session", async () => {
+      const key = await sendRefusedPrompt("launcher-recovery", { launcher: true });
+      expect(useNativeComposeStore.getState().sentPrompts.get(key)?.providerSessionId).toBe(
+        "claude-session",
+      );
+      completeSignIn();
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
+        timeout: 4000,
+      });
+      expect(dispatchNativeAgentIntentMock.mock.calls[1]![0].prompt).toBe(
+        dispatchNativeAgentIntentMock.mock.calls[0]![0].prompt,
+      );
+    });
+
+    test("resends original attachment-bearing payload exactly once", async () => {
+      await sendRefusedPrompt("image-recovery", { attachments: true });
+      completeSignIn();
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
+        timeout: 4000,
+      });
+      const [first, second] = dispatchNativeAgentIntentMock.mock.calls.map(([input]) => input!);
+      expect(second!.prompt).toBe(first!.prompt);
+      expect(second!.attachments).toEqual([
+        { type: "image", path: image.path, filename: image.name },
+      ]);
+      expect(extractMarkedAttachmentReferences(second!.prompt).attachments).toHaveLength(1);
+      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    });
+
+    test.each(["rejected", "unknown"] as const)(
+      "restores raw content after a %s replay without repeating it",
+      async (outcome) => {
+        const key = await sendRefusedPrompt(`recovery-${outcome}`, { attachments: true });
+        dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+          outcome,
+          requestId: input.requestId,
+          error: "Delivery failed",
+          ...(outcome === "unknown"
+            ? { origin: "transport" as const }
+            : { requestIdRetired: true }),
+        }));
+        completeSignIn();
+        await waitFor(
+          () =>
+            expect(nativeComposeDraft(useNativeComposeStore.getState(), key).text).toBe(
+              "Fix the garbled text",
+            ),
+          { timeout: 4000 },
+        );
+        const draft = nativeComposeDraft(useNativeComposeStore.getState(), key);
+        expect(draft.attachments).toEqual([image]);
+        expect(draft.annotations).toEqual([annotation]);
+        expect(extractMarkedAttachmentReferences(draft.text).attachments).toHaveLength(0);
+        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2);
+        expect(screen.getByText("Signed in. Resend your message to continue.")).toBeTruthy();
+        fireEvent.click(await screen.findByTitle("Send"));
+        await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(3));
+        expect(
+          extractMarkedAttachmentReferences(dispatchNativeAgentIntentMock.mock.calls[2]![0].prompt)
+            .attachments,
+        ).toHaveLength(1);
+      },
+    );
+
+    test("does not replay a retained prompt into a different resumed conversation", async () => {
+      const key = await sendRefusedPrompt("recovery-resume");
+      const current = useNativeAgentProjectionStore.getState().projections.get(key)!;
+      // One exchange with unrelated ids used to satisfy the old transcript-only checks.
+      setRecoveryProjection(key, {
+        sessionId: "session-b",
+        messages: (current.messages as NativeMessage[]).map((row) => ({
+          ...row,
+          id: `b-${row.id}`,
+        })),
+      });
+      completeSignIn();
+      await screen.findByText("Signed in. Resend your message to continue.", undefined, {
+        timeout: 4000,
+      });
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+      expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+    });
+
+    test.each(["new-turn", "new-refusal", "resume"] as const)(
+      "cancels a locked replay after remote %s",
+      async (change) => {
+        const key = await sendRefusedPrompt(`recovery-remote-${change}`);
+        setRecoveryProjection(key, {
+          readiness: { state: "authentication-required", message: "Sign in" },
+        });
+        completeSignIn();
+        await screen.findByText("Signed in. Sending your message again…", undefined, {
+          timeout: 4000,
+        });
+        const current = useNativeAgentProjectionStore.getState().projections.get(key)!;
+        setRecoveryProjection(key, {
+          ...(change === "resume" ? { sessionId: "session-b" } : {}),
+          messages:
+            change === "resume"
+              ? (current.messages as NativeMessage[])
+              : [
+                  ...(current.messages as NativeMessage[]),
+                  {
+                    id: "remote-user",
+                    role: "user",
+                    content: "A later prompt",
+                    createdAt: "2026-10-31T00:25:00Z",
+                    parts: [{ type: "text", content: "A later prompt" }],
+                  },
+                  ...(change === "new-refusal"
+                    ? [
+                        {
+                          id: "remote-refusal",
+                          role: "assistant" as const,
+                          content: notice,
+                          createdAt: "2026-10-31T00:25:01Z",
+                          parts: [{ type: "text" as const, content: notice }],
+                        },
+                      ]
+                    : []),
+                ],
+        });
+        setRecoveryProjection(key, { readiness: { state: "ready" } });
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+      },
+    );
+
+    test("restores an image-bearing prompt when the auth lock exceeds 30 seconds", async () => {
+      const key = await sendRefusedPrompt("recovery-timeout", { attachments: true });
+      setRecoveryProjection(key, {
+        readiness: { state: "authentication-required", message: "Sign in" },
+      });
+      const now = spyOn(Date, "now").mockReturnValue(Date.now());
+      const timeout = installControlledTimeout(30_000, { label: "auth replay timeout" });
+      try {
+        completeSignIn();
+        await waitFor(() => expect(timeout.pendingCount()).toBe(1), { timeout: 4000 });
+        act(() => {
+          expect(timeout.advance()).toBe(1);
+        });
+        expect(nativeComposeDraft(useNativeComposeStore.getState(), key)).toMatchObject({
+          text: "Fix the garbled text",
+          attachments: [image],
+          annotations: [annotation],
+        });
+        expect(screen.getByText("Signed in. Resend your message to continue.")).toBeTruthy();
+        setRecoveryProjection(key, { readiness: { state: "ready" } });
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+        timeout.assertDrained();
+      } finally {
+        timeout.restore();
+        now.mockRestore();
+      }
+    });
+
+    test("falls back to the raw draft when refreshing auth fails", async () => {
+      const key = await sendRefusedPrompt("recovery-refresh-failure", { attachments: true });
+      setRecoveryProjection(key, {
+        readiness: { state: "authentication-required", message: "Sign in" },
+      });
+      getNativeAgentProjectionMock.mockRejectedValue(new Error("Auth refresh failed"));
+      completeSignIn();
+      await waitFor(
+        () =>
+          expect(nativeComposeDraft(useNativeComposeStore.getState(), key).text).toBe(
+            "Fix the garbled text",
+          ),
+        { timeout: 4000 },
+      );
+      expect(nativeComposeDraft(useNativeComposeStore.getState(), key).attachments).toEqual([
+        image,
+      ]);
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+      expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+    });
+
+    test.each(["isolated", "terminal"] as const)(
+      "keeps manual resend guidance for %s sign-in",
+      async (path) => {
+        if (path === "isolated")
+          useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+        await sendRefusedPrompt(`recovery-${path}`, { terminal: true });
+        fireEvent.click(
+          await screen.findByRole("button", {
+            name: path === "isolated" ? "Sign in to Claude" : "Use a terminal instead",
+          }),
+        );
+        expect(
+          screen.getByText(/After signing in, return here and resend your message/),
+        ).toBeTruthy();
+        expect(screen.queryByText(/Your message is sent again once you sign in/)).toBeNull();
+        completeSignIn();
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    test("leaves the resend to the user once they have started another message", async () => {
+      const sessionKey = await sendRefusedPrompt("tab-no-resend-over-draft");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "Something else" });
+      });
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-31T00:24:00.000Z",
+      };
+      expect(
+        await screen.findByText("Signed in. Resend your message to continue.", undefined, {
+          timeout: 4_000,
+        }),
+      ).toBeTruthy();
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   test("does not mistake another provider's reply for Claude's notice", async () => {
@@ -2407,7 +2764,7 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
       const savedRevision = composeDraftRecords.get(draftKey)!.revision;
       first.unmount();
-      useNativeComposeStore.setState({ drafts: new Map() });
+      useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
 
       const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
       expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
@@ -3861,6 +4218,7 @@ describe("AgentNativeTab", () => {
               branchLabel: "Alternative branch",
             },
             { sessionId: "unnamed-fork", title: "Unnamed fork", parentId: "base" },
+            { sessionId: "archived-session", title: "Archived request", archived: true },
           ] as never,
       );
       seedUnassignedResumeTab("tab-lineage");
@@ -3874,7 +4232,14 @@ describe("AgentNativeTab", () => {
       const picker = await screen.findByRole("dialog", { name: "Resume Session" });
       expect(await within(picker).findByText("Alternative branch")).toBeTruthy();
       expect(within(picker).getByText("Fork of base")).toBeTruthy();
+      const listInput = listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0];
+      expect(listInput).toMatchObject({ agent: archive ? "codex" : "grok" });
+      if (!archive) expect(listInput).not.toHaveProperty("includeArchived");
+      expect(within(picker).queryByText("Archived request") === null).toBe(true);
       if (archive) {
+        expect(listInput).toMatchObject({ includeArchived: true });
+        fireEvent.click(within(picker).getByLabelText("Show archived (1)"));
+        expect(await within(picker).findByText("Archived request")).toBeTruthy();
         fireEvent.click(within(picker).getAllByRole("button", { name: /Remove.*list/ })[0]!);
         await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
         expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
@@ -4736,7 +5101,7 @@ describe("AgentNativeTab", () => {
     );
     expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     first.unmount();
-    useNativeComposeStore.setState({ drafts: new Map() });
+    useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
 
     const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() =>
@@ -7843,7 +8208,8 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
-  test("waits on the connecting logo until a new tab's first session exists", async () => {
+  test("shows a new tab's opening prompt while its first session is created", async () => {
+    renderVirtualizedMessages = true;
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
@@ -7861,7 +8227,21 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    const { container } = render(
+    let settleDispatch: (() => void) | undefined;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (input) =>
+        new Promise((resolve) => {
+          settleDispatch = () => resolve({ outcome: "accepted", requestId: input.requestId });
+        }),
+    );
+    const assertPromptVisible = () => {
+      const prompt = screen.getByText("Review the current changes");
+      // jsdom does not apply Tailwind styles. Check the ancestor that actually
+      // hides the transcript rather than only checking that its text exists.
+      expect(prompt.closest(".opacity-0")).toBeNull();
+      expect(screen.getAllByText("Review the current changes")).toHaveLength(1);
+    };
+    const { container, rerender } = render(
       <AgentNativeTab
         tabId="tab-new-cursor"
         data={freshTab("cursor")}
@@ -7882,14 +8262,15 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    // Cursor is still being spawned. There is no conversation to refresh, and
-    // the opening prompt cannot be injected until creation finishes, so the tab
-    // waits on the pulsing logo. A ready composer would invite a message the
-    // session cannot accept, and reconnect copy would name a session that has
-    // never existed.
-    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
-    expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
-    expect(screen.queryByText("Ready to build!") === null).toBe(true);
+    // Cursor is still being spawned and the opening prompt cannot be injected
+    // until creation finishes. The prompt is on screen anyway, with the wait
+    // shown beneath it: hiding it behind the connecting logo made the prompt
+    // look as if it arrived seconds late. Reconnect copy would name a session
+    // that has never existed.
+    assertPromptVisible();
+    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+    expect(container.querySelector("svg.agent-connecting-logo") === null).toBe(true);
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -7901,6 +8282,238 @@ describe("AgentNativeTab", () => {
     });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    // The submitted prompt's own bubble takes over; the prompt is never doubled.
+    assertPromptVisible();
+
+    // Acceptance clears the tab's initialPrompt before the turn necessarily
+    // reports running. The retired latch must keep its replacement visible too.
+    await act(async () => settleDispatch!());
+    rerender(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
+    assertPromptVisible();
+
+    const sessionKey = createSessionKey("env-1", "tab-new-cursor");
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    const response: NativeMessage = {
+      id: "opening-assistant",
+      role: "assistant",
+      content: "Inspecting the changes",
+      parts: [{ type: "text", content: "Inspecting the changes" }],
+      createdAt: "2026-10-31T00:00:01.000Z",
+    };
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        turn: { phase: "running" },
+        messages: [response],
+      }),
+    );
+    await screen.findByText("Inspecting the changes");
+    assertPromptVisible();
+    const list = screen.getByTestId("native-agent-transcript-test-list");
+    const rows = [...list.children].map((row) => row.textContent ?? "");
+    expect(rows.findIndex((row) => row.includes("Review the current changes"))).toBeLessThan(
+      rows.findIndex((row) => row.includes("Inspecting the changes")),
+    );
+    // The delayed authoritative user echo replaces the optimistic opening row.
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 2,
+        turn: { phase: "running" },
+        messages: [
+          {
+            id: "opening-user",
+            role: "user",
+            content: "Review the current changes",
+            parts: [{ type: "text", content: "Review the current changes" }],
+            createdAt: "2026-10-31T00:00:00.000Z",
+          },
+          response,
+        ],
+      }),
+    );
+    assertPromptVisible();
+  });
+
+  test("waits on the connecting logo while a prompt-less tab's first session is created", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    ensureNativeAgentSessionMock.mockImplementation(() => new Promise(() => {}));
+
+    const { container } = render(
+      <AgentNativeTab tabId="tab-new-cursor-no-prompt" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Nothing to show yet, and a ready composer would invite a message the
+    // session cannot accept.
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
+    expect(screen.queryByText(/^Starting /) === null).toBe(true);
+  });
+
+  test("shows a backend-owned startup prompt before the backend dispatches it", async () => {
+    renderVirtualizedMessages = true;
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          pendingAgentLaunch: true,
+          initialPrompt: "Add a dark mode toggle",
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "cursor",
+            style: "native",
+            status: "starting",
+          },
+        } as never,
+      ],
+    });
+    // The backend has not created the provider session yet.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () =>
+            resolve({
+              providerSessionId: "cursor-session",
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            });
+        }),
+    );
+
+    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+
+    expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+    // The backend owns this dispatch; the preview never sends anything.
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    // Dispatch returned: the launch flags clear before the echo is read. The
+    // prompt stays on screen through that gap rather than flickering out.
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        pendingAgentLaunch: false,
+        startupAgentSession: undefined,
+      });
+    });
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+
+    // The provider can stream its answer before echoing the user prompt.
+    const response: NativeMessage = {
+      id: "backend-assistant",
+      role: "assistant",
+      content: "Adding the toggle",
+      parts: [{ type: "text", content: "Adding the toggle" }],
+      createdAt: "2026-10-31T00:00:01.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      turn: { phase: "running" as const },
+      messages: [response],
+    }));
+    await act(async () => settleEnsure!());
+    await screen.findByText("Adding the toggle");
+    const prompt = screen.getByText("Add a dark mode toggle");
+    expect(prompt.closest(".opacity-0")).toBeNull();
+    const list = screen.getByTestId("native-agent-transcript-test-list");
+    const rows = [...list.children].map((row) => row.textContent ?? "");
+    expect(rows.findIndex((row) => row.includes("Add a dark mode toggle"))).toBeLessThan(
+      rows.findIndex((row) => row.includes("Adding the toggle")),
+    );
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    const sessionKey = createSessionKey("env-1", "startup-agent");
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Add a dark mode toggle",
+            parts: [{ type: "text", content: "Add a dark mode toggle" }],
+            createdAt: "2026-10-31T00:00:00.000Z",
+          },
+          response,
+        ],
+      }),
+    );
+    // The echo replaces the preview exactly once.
+    expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
+    expect(screen.queryByText(/^Starting /)).toBeNull();
+  });
+
+  test.each(["rejected", "transport", "exception"] as const)(
+    "clears startup feedback and restores the draft after an opening %s failure",
+    async (failure) => {
+      renderVirtualizedMessages = true;
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+        if (failure === "exception") throw new Error("Opening dispatch failed");
+        if (failure === "transport")
+          return {
+            outcome: "unknown",
+            requestId: input.requestId,
+            origin: "transport",
+            error: "Opening connection dropped",
+          };
+        return { outcome: "rejected", error: "Opening dispatch rejected" };
+      });
+      const tabId = `startup-failure-${failure}`;
+      const { container } = render(
+        <AgentNativeTab
+          tabId={tabId}
+          data={freshTab("cursor")}
+          initialPrompt="Recover this opening prompt"
+          isActive
+        />,
+      );
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.getByRole("textbox").textContent).toBe("Recover this opening prompt"),
+      );
+      expect(screen.queryByText(/^Starting /)).toBeNull();
+      expect(container.querySelector(".agent-thinking-shimmer")).toBeNull();
+      expect(
+        within(screen.getByTestId("native-agent-transcript-test-list")).queryByText(
+          "Recover this opening prompt",
+        ),
+      ).toBeNull();
+      expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text,
+      ).toBe("Recover this opening prompt");
+    },
+  );
+
+  test("shows a backend-owned startup prompt while setup is still running", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "running",
+          pendingAgentLaunch: true,
+          initialPrompt: "Add a dark mode toggle",
+        } as never,
+      ],
+    });
+
+    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+
+    expect(await screen.findByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    expect(screen.getByTestId("setup-pending-prompt").textContent).toBe("Add a dark mode toggle");
   });
 
   test("shows the connecting logo on a created tab that connected once but is still empty", async () => {
@@ -12414,7 +13027,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />);
       const input = await screen.findByRole("textbox");
       const head = await screen.findByRole("button", { name: "Steer queued prompt 1 of 3: First" });
-      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ }) === null).toBe(
+        true,
+      );
       act(() => input.focus());
       fireEvent.keyDown(input, { key: "ArrowUp" });
       expect(document.activeElement).toBe(head);
@@ -12495,7 +13110,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
       );
       const strip = within(await screen.findByTestId("compose-queue-strip"));
-      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
       for (const name of ["Edit queued prompt 1 of 1", "Remove queued prompt 1 of 1"]) {
         expect(Boolean(strip.queryByRole("button", { name }))).toBe(gate !== "annotation");
       }

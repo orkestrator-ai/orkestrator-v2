@@ -1,15 +1,8 @@
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
-import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
-import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
-import {
-  resolveActionDefaults,
-  resolveDefaultAgent,
-  type AgentSettingsTiers,
-} from "@orkestrator/protocol/agent-settings";
+import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
-import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 
 /** Pane title of the PR tab, matching the action bar's Create PR launch. */
@@ -147,28 +140,6 @@ export function supersedePendingAutoPr(workflow: MultiReviewWorkflow): void {
   if (workflow.autoPrLaunch?.state === "pending") delete workflow.autoPrLaunch;
 }
 
-/** The agent, model and effort a button's action default resolves to, as the action bar does. */
-async function buttonActionDefault(
-  storage: Pick<StorageService, "loadConfig">,
-  environment: Pick<Environment, "agentSettings" | "projectId">,
-  key: "pr" | "resolve",
-) {
-  const config = await storage.loadConfig();
-  const tiers: AgentSettingsTiers = {
-    environment: environment.agentSettings,
-    repository: config.repositories?.[environment.projectId]?.agentSettings,
-    global: config.global.agentSettings,
-  };
-  const enabled = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
-  const configuredFallback = resolveDefaultAgent(tiers);
-  return resolveActionDefault(resolveActionDefaults(tiers), key, {
-    fallbackAgent: enabled.includes(configuredFallback)
-      ? configuredFallback
-      : (enabled[0] ?? configuredFallback),
-    enabledAgents: enabled,
-  });
-}
-
 /** Pane title of the Resolve tab, matching the action bar's Resolve Conflicts launch. */
 export const RESOLVE_CONFLICTS_TAB_TITLE = "Resolve";
 
@@ -191,7 +162,7 @@ export async function launchResolveConflictsAgent(
 ): Promise<ResolveConflictsLaunchOutcome> {
   const environment = await storage.getEnvironment(input.environmentId);
   if (!environment) return { kind: "rejected", message: "Environment no longer exists" };
-  const action = await buttonActionDefault(storage, environment, "resolve");
+  const action = await resolveEnvironmentActionDefault(storage, environment, "resolve");
   let result: {
     tabId?: unknown;
     status?: unknown;
@@ -290,7 +261,7 @@ export async function launchPrAgent(
     };
   if (environment.prUrl) return { kind: "skipped", message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE };
 
-  const action = await buttonActionDefault(storage, environment, "pr");
+  const action = await resolveEnvironmentActionDefault(storage, environment, "pr");
 
   // Settings reads can await; authorize at the final publication boundary.
   const admission = await beforeLaunch?.();

@@ -176,10 +176,16 @@ The backend merges runtime actions into the provider list
   own `/steer` is kept, not deleted.
 - `/compact` **defers**: a provider that ships its own `/compact` (Claude's
   SDK) keeps it; otherwise the row runs the existing compact session action.
+- `/goal` is **reserved** on platforms with `actions.goal`: the backend's goal
+  loop replaces a provider's own `/goal`, so two loops can never stack on one
+  session. It has no `busy` policy: it neither queues nor interrupts a turn, it
+  journals no request, and the composer calls it directly. See
+  [goals.md](goals.md).
 
 Deduplication is by identity, never by lower-cased display name.
 
-No other shortcuts are planned (decided 2026-10-24 in
+No other shortcuts are planned beyond `/goal`, which has its own plan
+(`plans/goals.md`; decided 2026-10-24 in
 [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)).
 Clearing or starting a session, model and permission changes already have
 composer controls, and a `/review` alias would run a workflow whose scope
@@ -226,7 +232,7 @@ unavailable with a reason. Re-qualify on every pin change
 | Pi | One builder over templates, skills and extensions (`sourceInfo` origin); before attach, the same builder over a resource-only read (templates and skills) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | Before attach: `stale` with `attachPending` when the policy loads extensions, otherwise `ready`; a persisted list is `stale` after restart |
 | Grok | ACP `available_commands_update` (push only) | Name as sent; `input.hint` as argument hint | `provider-prompt` via `session/prompt` | `ready` once this process received a list, even an empty one; restored rows are `stale` and not executable |
 | Cursor | None | — | — | `unsupported` |
-| Orkestrator | Backend | `/steer`, `/compact` | `session-action` | — |
+| Orkestrator | Backend | `/steer`, `/compact`, `/goal` | `session-action` | — |
 
 ### Unavailable commands
 

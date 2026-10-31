@@ -9,7 +9,7 @@ import { bearerBridgeHeaders } from "./commands-server-health.js";
 import {
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
-  getBridgePath,
+  prepareBridgePath,
   waitForLocalServerStartup,
 } from "./commands-servers.js";
 
@@ -38,7 +38,7 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   const localServers = context.runtime.localServers;
   if (localServers.isShuttingDown()) return [];
 
-  const cwd = getBridgePath(context, "pi-bridge");
+  const cwd = await prepareBridgePath(context, "pi-bridge");
   const entrypoint = path.join(cwd, "dist", "index.js");
   if (!existsSync(cwd)) throw new Error(`pi bridge directory not found: ${cwd}`);
   if (!existsSync(entrypoint)) throw new Error(`pi bridge entrypoint not found: ${entrypoint}`);

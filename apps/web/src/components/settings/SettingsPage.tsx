@@ -4,6 +4,7 @@ import { MachineDot } from "@/components/federation/MachineDot";
 import { useCommandNode } from "@/components/federation/useCommandNode";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
+import { cn } from "@/lib/utils";
 import {
   Loader2,
   Settings2,
@@ -28,7 +29,8 @@ import {
   HardDrive,
   ChartArea,
 } from "lucide-react";
-import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
+import { DockerSettings } from "@/components/docker";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
@@ -43,6 +45,7 @@ import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import { SchedulesSettings } from "./SchedulesSettings";
 import { PermissionsSettings } from "./PermissionsSettings";
+import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS, SettingsPageLayout } from "./SettingsPageLayout";
 import {
   AccountMachineProvider,
   useAccountMachineStore,
@@ -101,6 +104,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
   { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
+  { id: "docker", label: "Docker", icon: <DockerIcon className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
@@ -157,7 +161,10 @@ export function SettingsScopeBanner({
   const ownerName = section === "machines" || inherited ? commandNode.name : workspaceName;
   return (
     <div
-      className="mb-5 flex max-w-4xl items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
+      className={cn(
+        "mb-5 flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400",
+        SETTINGS_PAGE_DEFAULT_WIDTH_CLASS,
+      )}
       data-testid="settings-scope"
     >
       <MachineDot
@@ -284,16 +291,18 @@ export function SettingsPage({
               ) : activeSection === "mcp-servers" ? (
                 <ProviderMcpSettings />
               ) : activeSection === "previews" ? (
-                <div className="space-y-8">
+                <SettingsPageLayout title="Browser previews">
                   <PreviewSettings />
                   <WebAnnotationSettings />
-                </div>
+                </SettingsPageLayout>
               ) : activeSection === "messaging" ? (
                 <MessagingSettings />
               ) : activeSection === "schedules" && schedulingEnabled ? (
                 <SchedulesSettings />
               ) : activeSection === "permissions" ? (
                 <PermissionsSettings />
+              ) : activeSection === "docker" ? (
+                <DockerSettings />
               ) : isLoading && !initialLoadDone ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

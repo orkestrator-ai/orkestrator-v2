@@ -8,6 +8,8 @@ import {
   type AgentTabState,
 } from "@orkestrator/protocol/agent-registry";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
+import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import type { CoordinatorsStorage, StorageService } from "./storage.js";
 
@@ -21,6 +23,12 @@ export interface AgentRegistrySources {
   ) => AgentActivityState | "unknown";
   /** Claude under tmux; undefined when no session exists for the tab. */
   tmux?: (environmentId: string, tabId: string) => AgentActivityState | undefined;
+  /** A native tab's goal, from its session record. */
+  goal?: (
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ) => Promise<NativeAgentGoalSummary | undefined>;
 }
 
 const WORKFLOW_TAB_TYPES = new Set(["claude-build", "multi-review"]);
@@ -40,6 +48,21 @@ function tabPlatform(tab: Record<string, unknown>): AgentPlatform | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const platform = (data as Record<string, unknown>).platform;
   return isAgentPlatform(platform) ? platform : null;
+}
+
+function sessionHandle(
+  kind: AgentRegistryEntry["kind"],
+  agent: AgentPlatform | null,
+  environmentId: string,
+  tabId: string,
+): { sessionId?: string } {
+  if (kind !== "native" || !agent) return {};
+  try {
+    return { sessionId: encodePublicSessionId(environmentId, tabId) };
+  } catch {
+    // An id outside the handle's alphabet has no handle; the entry still lists.
+    return {};
+  }
 }
 
 /**
@@ -86,6 +109,11 @@ export class AgentRegistry {
           const kind = tabKind(tab);
           if (!kind || typeof tab.id !== "string") continue;
           const agent = tabPlatform(tab);
+          const logicalSessionKey = `env-${environment.id}:${tab.id}`;
+          const goal =
+            kind === "native" && agent
+              ? await this.sources.goal?.(environment.id, agent, logicalSessionKey)
+              : undefined;
           entries.push({
             projectId: environment.projectId,
             environmentId: environment.id,
@@ -94,6 +122,7 @@ export class AgentRegistry {
             ownerKind: "environment",
             kind,
             agent,
+            ...sessionHandle(kind, agent, environment.id, tab.id),
             displayName: resolveTabDisplayName({
               tabType: String(tab.type),
               tabOrdinal,
@@ -102,8 +131,9 @@ export class AgentRegistry {
             }),
             tabOrdinal,
             state: running
-              ? this.observe(kind, environment.id, tab.id, agent, `env-${environment.id}:${tab.id}`)
+              ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
               : "stopped",
+            ...(goal ? { goal } : {}),
           });
         }
       }
@@ -124,6 +154,7 @@ export class AgentRegistry {
           ownerKind: "coordinator",
           kind: "native",
           agent,
+          ...sessionHandle("native", agent, environmentId, conversation.tabId),
           displayName: conversation.title,
           tabOrdinal: conversation.role === "side" ? (conversation.sideOrdinal ?? 0) + 1 : 1,
           state: ready

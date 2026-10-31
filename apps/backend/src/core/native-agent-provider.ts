@@ -92,6 +92,7 @@ export function createNativeAgentProvider(
           dependencies.fetch ?? fetch,
           dependencies.stageImages,
           dependencies.onObservationHint,
+          dependencies.planUsage,
         );
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.

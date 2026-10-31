@@ -1,9 +1,14 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   nativeTabLogicalSessionKey,
   type PublicSessionActivity,
   type PublicSessionSummary,
 } from "@orkestrator/protocol/public-api-resources";
+import {
+  coordinatorRuntimeEnvironment,
+  openCoordinatorConversation,
+} from "../coordinator-runtime.js";
 import type { Environment, PersistedNativeAgentSession } from "../models.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { PublicActionError } from "./errors.js";
@@ -31,16 +36,65 @@ export interface ResolvedSession {
   record: PersistedNativeAgentSession | null;
 }
 
+/**
+ * A project Coordinator conversation is a session with no environment row and
+ * no pane layout: it is the project's real checkout, never a disposable
+ * workspace (docs/architecture/coordinator.md, "Ownership"). Its runtime id
+ * resolves through the coordinator store to the synthetic environment the
+ * native-agent service already uses, with its one conversation as its one tab.
+ */
+async function coordinatorSession(
+  context: Pick<PublicActionContext, "command">,
+  runtimeId: string,
+): Promise<{ environment: Environment; tab: NativeTabInfo }> {
+  const storage = context.command.storage;
+  const open = await openCoordinatorConversation(storage, runtimeId);
+  const project = open && (await storage.getProject(open.workspace.projectId));
+  if (!open || !project) {
+    throw new PublicActionError("not-found", "The Coordinator conversation no longer exists");
+  }
+  const { workspace, conversation } = open;
+  if (!conversation.agent) {
+    throw new PublicActionError(
+      "not-ready",
+      "This Coordinator conversation has no agent yet; choose one in the app first",
+    );
+  }
+  return {
+    // A paused Coordinator reads as stopped, so prompting it is `not-ready`.
+    environment: {
+      ...coordinatorRuntimeEnvironment(runtimeId, { workspace, project }),
+      status: workspace.lifecycleState === "ready" && project.localPath ? "running" : "stopped",
+    },
+    tab: {
+      tabId: conversation.tabId,
+      agent: conversation.agent,
+      title: conversation.title.slice(0, 200),
+      hasProviderSession: Boolean(conversation.providerSessionId),
+    },
+  };
+}
+
+export function isCoordinatorSession(session: Pick<ResolvedSession, "environment">): boolean {
+  return coordinatorIdFromRuntimeId(session.environment.id) !== null;
+}
+
 export async function resolveSession(
   context: Pick<PublicActionContext, "command">,
   target: { sessionId: string; environmentId: string; tabId: string },
 ): Promise<ResolvedSession> {
   const storage = context.command.storage;
-  const environment = await storage.getEnvironment(target.environmentId);
+  const coordinator = coordinatorIdFromRuntimeId(target.environmentId)
+    ? await coordinatorSession(context, target.environmentId)
+    : null;
+  const environment =
+    coordinator?.environment ?? (await storage.getEnvironment(target.environmentId));
   if (!environment)
     throw new PublicActionError("not-found", "The session's environment no longer exists");
-  const layout = await storage.getPaneLayout(target.environmentId);
-  const tab = nativeTabsOfLayout(layout).find((candidate) => candidate.tabId === target.tabId);
+  const tabs = coordinator
+    ? [coordinator.tab]
+    : nativeTabsOfLayout(await storage.getPaneLayout(target.environmentId));
+  const tab = tabs.find((candidate) => candidate.tabId === target.tabId);
   if (!tab)
     throw new PublicActionError("not-found", "The session no longer exists (its tab was closed)");
   const logicalSessionKey = nativeTabLogicalSessionKey(target.environmentId, target.tabId);
@@ -123,7 +177,9 @@ export async function listSessionSummaries(
   environmentId: string,
 ): Promise<PublicSessionSummary[]> {
   const storage = context.command.storage;
-  const tabs = nativeTabsOfLayout(await storage.getPaneLayout(environmentId));
+  const tabs = coordinatorIdFromRuntimeId(environmentId)
+    ? [(await coordinatorSession(context, environmentId)).tab]
+    : nativeTabsOfLayout(await storage.getPaneLayout(environmentId));
   const summaries: PublicSessionSummary[] = [];
   for (const tab of tabs) {
     const logicalSessionKey = nativeTabLogicalSessionKey(environmentId, tab.tabId);

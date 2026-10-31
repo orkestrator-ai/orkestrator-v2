@@ -99,7 +99,7 @@ test("the notice names the chosen base and resets it", async () => {
   expect(screen.getByTestId("diff-base-notice").textContent).toContain("Merge #12");
 
   fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-  await waitFor(() => expect(screen.queryByTestId("diff-base-notice")).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId("diff-base-notice") === null).toBe(true));
   expect(invokeMock).toHaveBeenCalledWith("set_environment_diff_base", {
     environmentId: "env-1",
     ref: null,

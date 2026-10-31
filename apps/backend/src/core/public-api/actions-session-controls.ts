@@ -36,7 +36,12 @@ import {
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { activeRunFor, stopSessionTurn } from "./session-turn-stop.js";
 import { providerCapabilities } from "./providers.js";
-import { resolveSession, sessionActivity, type ResolvedSession } from "./sessions.js";
+import {
+  isCoordinatorSession,
+  resolveSession,
+  sessionActivity,
+  type ResolvedSession,
+} from "./sessions.js";
 import type {
   MutationActionHandler,
   PublicActionContext,
@@ -58,6 +63,16 @@ function triple(session: ResolvedSession) {
     agent: session.agent,
     logicalSessionKey: session.logicalSessionKey,
   };
+}
+
+/**
+ * A Coordinator conversation has exactly one provider session and no pane
+ * layout: nothing may rebind it to another history or add a tab beside it.
+ */
+function refuseOnCoordinator(session: ResolvedSession, action: string): void {
+  if (isCoordinatorSession(session)) {
+    throw new PublicActionError("unsupported", `A Coordinator conversation cannot be ${action}`);
+  }
 }
 
 function requireProviderSession(session: ResolvedSession): void {
@@ -313,6 +328,9 @@ const sessionConfigSet: MutationActionHandler<TargetInput & { update: Record<str
     const session = await resolveSession(context, input);
     requireProviderSession(session);
     assertReadyForAgents(session.environment);
+    if ("mode" in input.update && isCoordinatorSession(session)) {
+      throw new PublicActionError("unsupported", "A Coordinator has no mode to set");
+    }
     const controls = providerCapabilities(session.agent).controls;
     for (const [key, supported] of [
       ["modelId", controls.model],
@@ -413,6 +431,7 @@ const sessionResume: MutationActionHandler<TargetInput & { historyId: string }> 
   },
   async prepare(input, context) {
     const session = await resolveSession(context, input);
+    refuseOnCoordinator(session, "resumed from history");
     assertReadyForAgents(session.environment);
     if (!providerCapabilities(session.agent).resume) {
       throw new PublicActionError(
@@ -466,6 +485,7 @@ const sessionFork: MutationActionHandler<TargetInput & { messageId?: string }> =
   },
   async prepare(input, context) {
     const session = await resolveSession(context, input);
+    refuseOnCoordinator(session, "forked");
     requireProviderSession(session);
     assertReadyForAgents(session.environment);
     if (!providerCapabilities(session.agent).fork) {

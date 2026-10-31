@@ -1,4 +1,5 @@
 import { isSignInLink } from "@orkestrator/protocol/human-prompts";
+import { goalIsRunning, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import { createHash, randomUUID } from "node:crypto";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import {
@@ -62,6 +63,11 @@ export interface CoordinatorDelegationOptions {
    * turn end is a hand-off to a person, so it is never held for background work.
    */
   workerNeedsHuman?: (environmentId: string) => boolean;
+  /**
+   * The goal on a worker tab. While one runs the tab reads idle between
+   * iterations, and that idle is the loop's, not the worker's answer.
+   */
+  workerGoal?: (environmentId: string, tabId: string) => Promise<NativeAgentGoal | undefined>;
 }
 
 export function sanitizeCoordinatorError(value: unknown): string {
@@ -930,6 +936,16 @@ export class CoordinatorService {
     return now - since < timeoutMs ? { held: true } : { held: false, timeoutMs };
   }
 
+  /** A goal that stops settles the delegation itself (`onGoalReleasedTurnEnd`). */
+  private async goalIsDriving(association: CoordinatorWorkflowAssociation): Promise<boolean> {
+    const tabId = association.delegation?.workerTabId;
+    if (!tabId || !this.options.workerGoal) return false;
+    const goal = await this.options
+      .workerGoal(association.resourceId, tabId)
+      .catch(() => undefined);
+    return goal !== undefined && goalIsRunning(goal.status);
+  }
+
   private async closeWorkerDelegation(
     id: string,
     state: "completed" | "failed" | "stopped",
@@ -1002,7 +1018,7 @@ export class CoordinatorService {
             association.resourceId,
             association.delegation!.workerTabId,
           );
-          if (!undelivered && activity === "idle") {
+          if (!undelivered && activity === "idle" && !(await this.goalIsDriving(current))) {
             const background = await this.backgroundWorkDisposition(current);
             if (!background.held) {
               state = "completed";
@@ -1221,6 +1237,11 @@ export class CoordinatorService {
               : await this.options
                   .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
                   .catch(() => undefined);
+        const goal = association.nodeId
+          ? undefined
+          : await this.options
+              .workerGoal?.(association.resourceId, delegation.workerTabId)
+              .catch(() => undefined);
         const backgroundWorkTimeoutMs = delegation.backgroundWorkTimeoutMs;
         const backgroundWorkMinutes = Math.round((backgroundWorkTimeoutMs ?? 0) / 60_000);
         const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
@@ -1248,9 +1269,12 @@ export class CoordinatorService {
                       association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
                     }.`
                   : "") +
+                (goal
+                  ? ` Its goal is ${goal.status}${goal.statusReason ? ` (${goal.statusReason})` : ""} after ${goal.iterations} of ${goal.maxIterations} iterations.`
+                  : "") +
                 ` Inspect the environment through Orkestrator controls before deciding what to do next.` +
                 (excerpt ? `\n\nLast message: ${boundedLine(excerpt)}` : "") +
-                `\n\nRead more: \`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
+                `\n\nRead more: ${goal ? `\`get_worker_goal ${tabArgs}\`, ` : ""}\`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
             },
             {
               notice: {

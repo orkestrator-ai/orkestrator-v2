@@ -4971,6 +4971,37 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test.each([
+    ["a pipeline session", "pipeline", undefined, true],
+    ["a read-only reviewer turn of one", "pipeline", true, true],
+    ["an interactive session", "interactive-host", undefined, false],
+  ] as const)("the overload backoff of %s", async (_label, id, readOnly, longer) => {
+    const session = createSession("overload backoff");
+    track(session.id);
+    session.executionPolicy = {
+      id,
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    };
+    const prompt = sendPrompt(session.id, "Review it", { readOnly });
+    const call = await nextQueryCall();
+
+    expect(call.options.env.CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS).toBe(
+      longer ? "4000" : undefined,
+    );
+    expect(call.options.env.CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS).toBe(
+      longer ? "64000" : undefined,
+    );
+    // Both also wait out usage and rate limits.
+    expect(call.options.env.CLAUDE_CODE_RETRY_WATCHDOG).toBeUndefined();
+    expect(call.options.env.CLAUDE_CODE_MAX_RETRIES).toBeUndefined();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
   test("a worker whose policy denies tools can still use Orkestrator's mail tools", async () => {
     mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({
       servers: { orkestrator: { type: "http", url: "http://localhost/mcp" } },

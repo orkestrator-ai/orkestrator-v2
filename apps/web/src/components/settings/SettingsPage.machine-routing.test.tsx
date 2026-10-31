@@ -203,7 +203,7 @@ test("a command window with a leaf selected only offers scheduling on the window
   );
   mount("experimental");
   await screen.findByText("Codex Raw Event Logging");
-  expect(screen.queryByRole("switch", { name: "Enable scheduling" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);
   expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
   expect(writes).toEqual([]);
 
@@ -225,7 +225,7 @@ test("a command window with a leaf selected only offers scheduling on the window
   );
   fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
   await screen.findByText("Codex Raw Event Logging");
-  expect(screen.queryByRole("switch", { name: "Enable scheduling" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);
   fireEvent.click(screen.getAllByRole("button", { name: "Schedules" })[0]!);
   await waitFor(() =>
     expect(workspace.mock.calls.some(([command]) => command === "list_scheduled_jobs")).toBe(true),

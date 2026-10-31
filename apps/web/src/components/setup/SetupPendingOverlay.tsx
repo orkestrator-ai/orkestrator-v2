@@ -9,6 +9,11 @@ interface SetupPendingOverlayProps {
   setupPhase?: Environment["setupPhase"];
   /** Short agent-specific message, e.g. "Claude will connect automatically once setup finishes" */
   subtext: string;
+  /**
+   * The opening prompt that will be sent once setup finishes. Shown while
+   * waiting so the user can see what was queued, not just that something is.
+   */
+  pendingPrompt?: string;
 }
 
 /**
@@ -25,6 +30,7 @@ export function SetupPendingOverlay({
   environmentId,
   setupPhase,
   subtext,
+  pendingPrompt,
 }: SetupPendingOverlayProps) {
   const [confirming, setConfirming] = useState(false);
   const [operation, setOperation] = useState<"retry" | "override" | null>(null);
@@ -53,7 +59,15 @@ export function SetupPendingOverlay({
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+    <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-muted-foreground">
+      {pendingPrompt ? (
+        <div
+          data-testid="setup-pending-prompt"
+          className="mb-3 max-h-40 w-full max-w-xl overflow-hidden rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-sm whitespace-pre-wrap break-words text-foreground line-clamp-6"
+        >
+          {pendingPrompt}
+        </div>
+      ) : null}
       {failed ? (
         <AlertTriangle className="h-8 w-8 text-destructive" />
       ) : (

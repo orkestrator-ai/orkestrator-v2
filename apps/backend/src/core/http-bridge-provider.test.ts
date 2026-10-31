@@ -21,7 +21,8 @@ import {
   normalizeProviderReadiness,
 } from "./http-bridge-transport.js";
 import { readHttpBridgeSessionState } from "./http-bridge-progressive.js";
-import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
+import { PlanUsageState } from "./plan-usage-cache.js";
+import { HttpBridgeProvider } from "./http-bridge-provider.js";
 
 describe("HTTP bridge provider", () => {
   const operations = {
@@ -2711,40 +2712,28 @@ describe("HTTP bridge provider", () => {
   });
 
   test("a bridge on the previous account cannot update the active usage card", async () => {
-    sharedPlanUsageCache.clear();
-    setActivePlanUsageAccount("claude", "account-b");
-    try {
-      const old = httpProvider(
-        () =>
+    const planUsage = new PlanUsageState();
+    planUsage.setActiveAccount("claude", "account-b");
+    const providerOn = (accountId: string, usedPercent: number) =>
+      new HttpBridgeProvider(
+        { ...claudeConnection, accountId },
+        (async () =>
           Response.json({
             status: "running",
             contextUsage: {
               usedTokens: 1,
-              account: [{ window: "five_hour", usedPercent: 99 }],
+              account: [{ window: "five_hour", usedPercent }],
             },
-          }),
-        { ...claudeConnection, accountId: "account-a" },
+          })) as unknown as typeof fetch,
+        undefined,
+        undefined,
+        planUsage,
       );
-      await readProviderStatus(old.provider, "session-1");
-      expect(sharedPlanUsageCache.peek("claude")).toBeUndefined();
+    await readProviderStatus(providerOn("account-a", 99), "session-1");
+    expect(planUsage.cache.peek("claude")).toBeUndefined();
 
-      const current = httpProvider(
-        () =>
-          Response.json({
-            status: "running",
-            contextUsage: {
-              usedTokens: 1,
-              account: [{ window: "five_hour", usedPercent: 5 }],
-            },
-          }),
-        { ...claudeConnection, accountId: "account-b" },
-      );
-      await readProviderStatus(current.provider, "session-1");
-      expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.usedPercent).toBe(5);
-    } finally {
-      setActivePlanUsageAccount("claude", "default");
-      sharedPlanUsageCache.clear();
-    }
+    await readProviderStatus(providerOn("account-b", 5), "session-1");
+    expect(planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(5);
   });
 
   test("does not expose occupancy-only bridge usage as cumulative consumption", async () => {

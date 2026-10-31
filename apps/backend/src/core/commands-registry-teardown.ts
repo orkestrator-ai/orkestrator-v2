@@ -79,30 +79,28 @@ export function registerTeardownCommands(
     });
 
   /**
-   * One bounded provider request. The option keeps its historical
-   * `deleteTimeoutMs` name, but tab teardown no longer sends DELETE: bridges get
-   * the non-destructive `POST /session/:id/close`, OpenCode gets an abort.
+   * One bounded, non-destructive bridge close request.
    */
   const requestProviderTabSession = async (
     url: URL,
-    method: "POST" | "DELETE",
     headers: Record<string, string>,
   ): Promise<Response> => {
-    const timeoutMs = method === "POST" ? tabTeardownCloseTimeoutMs : tabTeardownDeleteTimeoutMs;
     const controller = new AbortController();
     let rejectTimeout!: (error: Error) => void;
     const timeoutResult = new Promise<Response>((_resolve, reject) => {
       rejectTimeout = reject;
     });
     const timeout = setTimeout(() => {
-      rejectTimeout(new Error(`Tab teardown request timed out after ${timeoutMs}ms`));
+      rejectTimeout(
+        new Error(`Tab teardown request timed out after ${tabTeardownCloseTimeoutMs}ms`),
+      );
       controller.abort();
-    }, timeoutMs);
+    }, tabTeardownCloseTimeoutMs);
     timeout.unref?.();
     try {
       return await Promise.race([
         tabTeardownFetch(url, {
-          method,
+          method: "POST",
           headers,
           signal: controller.signal,
         }),
@@ -163,8 +161,8 @@ export function registerTeardownCommands(
     if (!bridge) {
       throw new Error("Tab teardown bridge is unavailable or unhealthy");
     }
-    await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
-      requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
+    await closeBridgeSessionRetaining(agent, providerSessionId, (_method, path) =>
+      requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), {
         Authorization: `Bearer ${bridge.authToken}`,
       }),
     );

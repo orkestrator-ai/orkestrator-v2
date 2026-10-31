@@ -8,7 +8,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * with `--fixture-environments local,container` (C29): the user starts it,
  * switches to another environment while it runs, comes back to backend-owned
  * progress, and after it completes sees the previous container as a recovery
- * copy — also after a reload. The Docker dialog's reviewed cleanup lists
+ * copy — also after a reload. The Docker settings tab's reviewed cleanup lists
  * nothing it would remove from a live environment.
  */
 
@@ -16,6 +16,19 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
 async function login(page: Page, testInfo: TestInfo) {
+  // This host diagnostic can cover the sidebar even though local Docker reads
+  // work. Acknowledge it without altering the host's firewall or probe result.
+  await page.addLocatorHandler(
+    page.getByRole("dialog", { name: "Docker containers can't reach Orkestrator", exact: true }),
+    async (dialog) => {
+      testInfo.annotations.push({
+        type: "environment",
+        description:
+          "Acknowledged container-to-host connectivity warning; Docker Settings uses host-side reads.",
+      });
+      await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+    },
+  );
   // The one-shot login URL is parsed in memory and never copied into output.
   const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
@@ -52,11 +65,52 @@ async function openContainerSection(page: Page) {
   });
 }
 
-test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
+async function openDockerTab(page: Page) {
+  await page.getByRole("button", { name: "Global settings" }).click();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Docker", exact: true })
+    .click();
+}
+
+async function reviewDockerCleanup(page: Page) {
+  await expect(page.getByText("System Resources", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Review cleanup/ }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Can be removed/ })).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
+test("Global settings opens the Docker tab and reviewed cleanup", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await login(page, testInfo);
+  for (const pass of ["first", "after reload"]) {
+    if (pass === "after reload") await page.reload({ waitUntil: "domcontentloaded" });
+    await openDockerTab(page);
+    const unavailable = page.getByText(
+      "Docker is not running. Start Docker to see its resources and containers.",
+    );
+    await expect(page.getByText("System Resources", { exact: true }).or(unavailable)).toBeVisible();
+    if (await unavailable.isVisible()) {
+      await expect(page.getByRole("button", { name: /Review cleanup/ })).toHaveCount(0);
+      return;
+    }
+    await reviewDockerCleanup(page);
+    await expect(page.getByRole("heading", { name: "Review Docker cleanup" })).toBeVisible();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await expect(page.getByRole("alertdialog")).toBeHidden();
+    await expect(page.getByText("System Resources", { exact: true })).toBeVisible();
+  }
+});
 
 test("Docker fixture rebuild keeps running while another environment is open and rehydrates", async ({
   page,
 }, testInfo) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   test.setTimeout(8 * 60_000);
   await page.setViewportSize({ width: 1280, height: 860 });
   await login(page, testInfo);
@@ -103,8 +157,8 @@ test("Docker fixture rebuild keeps running while another environment is open and
   await page.keyboard.press("Escape");
 
   // Reviewed cleanup never offers the live environment's resources.
-  await page.getByRole("button", { name: "Docker configuration" }).click();
-  await page.getByRole("button", { name: /Review cleanup/ }).click();
+  await openDockerTab(page);
+  await reviewDockerCleanup(page);
   await expect(
     page.getByText(/Review Docker cleanup|Nothing to clean up|can be removed/i).first(),
   ).toBeVisible({ timeout: 60_000 });

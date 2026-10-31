@@ -6,7 +6,10 @@
  *
  * - Codex: `codex exec --ephemeral --ignore-user-config --ignore-rules` with a
  *   custom one-model catalog whose shell is disabled, a read-only sandbox in an
- *   empty temporary directory, and every tool-bearing feature switched off.
+ *   empty temporary directory, every tool-bearing feature switched off, and no
+ *   skill list. Codex has no switch for its global `AGENTS.md`, so that one file
+ *   still reaches the title model (the home also holds the login, so it cannot
+ *   be swapped for an empty one).
  *   Moved from `bridges/codex-bridge/src/session-titles.ts`.
  * - Claude: `claude --print --safe-mode` with no tools, no MCP, no slash
  *   commands, no setting sources and no session persistence. `--bare` would
@@ -66,6 +69,20 @@ const DISABLED_CODEX_TITLE_FEATURES = [
   "tool_call_mcp_elicitation",
   "tool_suggest",
   "unified_exec",
+  "view_image",
+] as const;
+
+/**
+ * `--ignore-user-config` drops `config.toml` but not what these switch off:
+ * the model would otherwise be told about every skill in the user's home and
+ * be offered `request_user_input`.
+ */
+const CODEX_TITLE_CONFIG_OVERRIDES = [
+  "skills.include_instructions=false",
+  "tools.experimental_request_user_input.enabled=false",
+  "include_permissions_instructions=false",
+  "include_apps_instructions=false",
+  "include_environment_context=false",
 ] as const;
 
 const SESSION_TITLE_BASE_INSTRUCTIONS = `Create only a concise session title from user-provided data.
@@ -139,6 +156,7 @@ export function buildCodexTitleCommandArgs(
     `model_catalog_json=${JSON.stringify(modelCatalogPath)}`,
     "--config",
     'web_search="disabled"',
+    ...CODEX_TITLE_CONFIG_OVERRIDES.flatMap((override) => ["--config", override]),
     "--ask-for-approval",
     "never",
     "--sandbox",

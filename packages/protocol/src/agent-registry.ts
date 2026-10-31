@@ -1,4 +1,5 @@
 import type { AgentPlatform } from "./agent-platforms.js";
+import type { NativeAgentGoalSummary } from "./native-agent-goal.js";
 
 /**
  * What one agent tab is doing right now.
@@ -21,11 +22,18 @@ export interface AgentRegistryEntry {
   kind: "native" | "tmux" | "terminal";
   /** Null for a native tab whose platform has not been chosen yet. */
   agent: AgentPlatform | null;
+  /** The public session handle of a native tab whose platform has been chosen. */
+  sessionId?: string;
   displayName: string;
   /** One-based position in the environment's tab strip. */
   tabOrdinal: number;
   state: AgentTabState;
   coordinatorRole?: "main" | "side";
+  /**
+   * The tab's goal, if it has one. `state` is about the current turn, so a tab
+   * between iterations reads `idle` while `goal.running` says it will continue.
+   */
+  goal?: NativeAgentGoalSummary;
 }
 
 export interface AgentRegistryEnvironmentSummary {

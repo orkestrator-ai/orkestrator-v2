@@ -17,6 +17,7 @@ import { beginClientMethodExercise } from "./fake-agent-final.js";
 import { announceCommands } from "./fake-agent-session.js";
 
 function retriableProviderErrorMessage(): string {
+  if (process.env.FAKE_ACP_RETRIABLE_MESSAGE) return process.env.FAKE_ACP_RETRIABLE_MESSAGE;
   const name = process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError";
   const code = process.env.FAKE_ACP_RETRIABLE_CODE ?? "resource_exhausted";
   const detail = process.env.FAKE_ACP_RETRIABLE_DETAIL ?? "Error";
@@ -307,6 +308,12 @@ export function handlePromptStart(message: JsonObject): boolean {
       return true;
     }
     if (prompt.startsWith("DIRECT:")) {
+      if (process.env.FAKE_ACP_FORK_TURNS_FILE) {
+        appendFileSync(
+          process.env.FAKE_ACP_FORK_TURNS_FILE,
+          `${JSON.stringify({ prompt, answer: prompt.slice("DIRECT:".length) })}\n`,
+        );
+      }
       write({
         jsonrpc: "2.0",
         method: "session/update",

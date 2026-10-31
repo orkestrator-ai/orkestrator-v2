@@ -1,1 +1,1 @@
-export { DockerStatsDialog } from "./DockerStatsDialog";
+export { DockerSettings } from "./DockerSettings";

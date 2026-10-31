@@ -90,6 +90,11 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "stop_coordinator_worker_turn",
   "list_coordinator_worker_commands",
   "run_coordinator_worker_command",
+  // A coordinator's goals on its own workers: this node holds the ownership.
+  "set_coordinator_worker_goal",
+  "get_coordinator_worker_goal",
+  "pause_coordinator_worker_goal",
+  "clear_coordinator_worker_goal",
   // An AGENTS.md proposal and its review belong to the coordinator's command
   // node; the read and the pull request run on the node owning the copy.
   "request_coordinator_agents_md_update",

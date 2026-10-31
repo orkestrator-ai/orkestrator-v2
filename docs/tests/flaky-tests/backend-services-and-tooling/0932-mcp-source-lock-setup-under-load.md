@@ -76,3 +76,24 @@ mise run test:logged -- --name failed-turn-mcp-store-owner -- bun test --cwd app
 ```
 
 Evidence: `orkestrator-test-run.oROs6h/failed-turn-default-suite.log.gz` and the inner `orkestrator-test-run.O6Rkzg/` directory beneath the host temporary directory. The full aggregate remains failed; an isolated owner pass is not a repair. No source-store implementation, assertion, timeout or skip changed.
+
+## Machine-load review recurrence — 2026-10-31
+
+`mise run test` on the coordinator machine-load branch, on a host at about 99%
+CPU with a `dev:test` profile running, repeated both cases: the missing
+`lockFile` at 23.92 ms and the next case's `ENOENT` at 348.59 ms. The complete
+unchanged owner passed alone (15 pass, 0.97 s):
+
+```sh
+bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+No source-store code, assertion, timeout or skip changed.
+
+## Auto-merge main-merge validation recurrence — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-feature-tests -- mise run test` on `auto-merge-toggle-811626194e15-r1`, merging feature `b5590b25e` with main `1fac33ff6`. Workspace/root/bridges/protocol reserved 6/1/2/1 slots; the browser component suite ran concurrently.
+- **Failures:** the missing `lockFile` at line 191 after 26.29 ms, followed by `ENOENT` instead of `busy` at line 231 after 266.92 ms. Backend reported 12,052 passed, 103 skipped and two failed. The default aggregate failed after 373.6 s; its desktop group also encountered a missing newly merged `@babel/core` dependency before the frozen install completed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-source-store-owner -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures` passed (exit 0, 1.1 s logged).
+- **Evidence:** `orkestrator-test-run.oLFJHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.0oakL2/merge-feature-tests.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the existing setup race; no source-store implementation, assertion, deadline or skip changed. The aggregate remains failed. After the frozen install, the complete desktop source-hint documentation test owner passed separately (exit 0, 1.3 s).

@@ -86,7 +86,10 @@ export async function mainCheckoutOf(
 /**
  * Codex trusts a project by `[projects."<path>"] trust_level` in the user
  * config. The worktree's own entry is consulted first, then its main
- * checkout's; keys are compared after resolving symlinks, exactly as written.
+ * checkout's. The folder is resolved through symlinks but the keys are not:
+ * Codex 0.166.0 ignores a key spelled through a symlink or with a trailing
+ * slash, and a grant on a parent folder (checked with `codex mcp list` in an
+ * isolated `CODEX_HOME`, and held there by `mise run verify:codex:mcp-live`).
  */
 export async function codexProjectTrust(
   codexHome: string,
@@ -103,17 +106,11 @@ export async function codexProjectTrust(
     };
   }
   const projects = isRecord(config.projects) ? config.projects : {};
-  const aliases = new Map<string, unknown>();
-  for (const [configuredPath, entry] of Object.entries(projects)) {
-    const canonical = await realpathOr(configuredPath);
-    if (canonical !== configuredPath && !aliases.has(canonical)) aliases.set(canonical, entry);
-  }
   const candidates = [await realpathOr(worktree)];
   const main = await mainCheckoutOf(worktree, read);
   if (main) candidates.push(await realpathOr(main));
   for (const candidate of candidates) {
-    // An exact canonical entry wins if the config also names a symlink to it.
-    const entry = projects[candidate] ?? aliases.get(candidate);
+    const entry = Object.hasOwn(projects, candidate) ? projects[candidate] : undefined;
     const level = isRecord(entry) ? entry.trust_level : undefined;
     const which = candidate === candidates[0] ? "this worktree" : "its main checkout";
     if (level === "trusted") {
@@ -192,51 +189,38 @@ export async function grokCompat(
   return { enabled: true };
 }
 
-function folderTrustVerdict(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") return value;
-  if (value === "trusted") return true;
-  if (value === "untrusted") return false;
-  if (isRecord(value)) return folderTrustVerdict(value.trusted ?? value.trust ?? value.decision);
-  return undefined;
-}
-
 function trimTrailingSlash(folder: string): string {
   return folder.length > 1 && folder.endsWith("/") ? folder.slice(0, -1) : folder;
 }
 
-/** The store's decision for exactly `folder`; keys are compared as written. */
+/**
+ * The store's decision for exactly `folder`; keys are compared as written.
+ * Grok 1.0.70 honours only the shape it writes itself, a `[folders."<path>"]`
+ * table with a boolean `trusted`: a bare boolean or string value, an array of
+ * tables, or another key name all read as untrusted there, so they are not a
+ * decision here either.
+ */
 function folderTrustEntry(store: Record<string, unknown>, folder: string): boolean | undefined {
   const folders = store.folders;
-  if (isRecord(folders)) {
-    for (const [configuredPath, value] of Object.entries(folders)) {
-      if (trimTrailingSlash(configuredPath) === folder) return folderTrustVerdict(value);
-    }
-    return undefined;
-  }
-  if (Array.isArray(folders)) {
-    for (const item of folders) {
-      if (
-        isRecord(item) &&
-        typeof item.path === "string" &&
-        trimTrailingSlash(item.path) === folder
-      ) {
-        return folderTrustVerdict(item);
-      }
-    }
+  if (!isRecord(folders)) return undefined;
+  for (const [configuredPath, value] of Object.entries(folders)) {
+    if (trimTrailingSlash(configuredPath) !== folder) continue;
+    return isRecord(value) && typeof value.trusted === "boolean" ? value.trusted : undefined;
   }
   return undefined;
 }
 
 /**
  * Grok's folder-trust store (`$GROK_HOME/trusted_folders.toml`), as the pinned
- * Grok 1.0.52 reads it (checked with `grok inspect` in an isolated
- * `GROK_HOME`): the decision belongs to the repository, keyed by its root with
- * symlinks resolved, and for a linked worktree by its main checkout. A grant
- * on a parent folder does not cover a repository below it, a worktree's own
- * entry is ignored, and a key spelled through a symlink does not match. The
- * worktree passed in is a checkout root, so no walk is needed. The store's
- * layout is not documented, so only recognisable decisions are reported;
- * anything else is "unknown".
+ * Grok reads it (re-derived at 1.0.70 with `grok inspect` and `grok mcp
+ * doctor` in an isolated `GROK_HOME`, and held there by `mise run
+ * verify:grok:mcp-live`): the decision belongs to the repository, keyed by its
+ * root with symlinks resolved, and for a linked worktree by its main checkout.
+ * A grant on a parent folder does not cover a repository below it, a
+ * worktree's own entry is ignored, and a key spelled through a symlink does not
+ * match. The worktree passed in is a checkout root, so no walk is needed. A
+ * repository with no decision is "unknown": `grok mcp doctor` does not start
+ * its project servers, but an interactive Grok may still ask.
  */
 export async function grokFolderTrust(
   input: GrokPolicyInput,

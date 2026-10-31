@@ -48,6 +48,9 @@ export function installRendererDiagnostics(
       : "unknown";
     record(`[DesktopStartup] renderer-gone reason=${reason}`);
   });
+  contents.on("will-prevent-unload", () => {
+    record("[Dialog] renderer beforeunload cancelled an unload");
+  });
   contents.on("console-message", ({ frame, message }) => {
     if (frame === contents.mainFrame && isDesktopStartupMessage(message)) record(message);
   });

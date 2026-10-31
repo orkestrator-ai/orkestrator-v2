@@ -113,13 +113,21 @@ let sharedProbe: WorkspaceChangeProbe | undefined;
  * One probe per backend process, shared by every OpenCode provider: its
  * snapshot queue is per repository, so two providers on one worktree (a
  * restarted bridge, an observer and an interactive tab) must share it.
+ * Process-wide on purpose: it orders snapshots of a repository on this host,
+ * whichever backend asks (docs/architecture/backend-runtime.md).
  */
 function sharedWorkspaceChangeProbe(): WorkspaceChangeProbe {
   sharedProbe ??= new WorkspaceChangeProbe();
   return sharedProbe;
 }
 
-/** One journal instance per file, since appends serialize per instance. */
+/**
+ * One journal instance per file, since appends serialize per instance.
+ * Process-wide on purpose, as is the removed set: both are keyed by paths inside
+ * a backend's data directory, so two data directories never share an entry
+ * (docs/architecture/backend-runtime.md). The removed set gains one entry per
+ * deleted OpenCode environment for the life of the process.
+ */
 const journals = new Map<string, CommandChangeJournal>();
 const removedJournalDirectories = new Set<string>();
 

@@ -3,6 +3,7 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../electron/app-constants";
 import {
   chooseAgentPlatforms,
+  createDialogHostWindow,
   createMacOsPermissionSplashWindow,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
@@ -296,6 +297,33 @@ describe("toolchain bootstrap window", () => {
     const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
     expect(loadedHtml).toContain("Checking macOS file access");
     expect(loadedHtml).toContain("those prompts appear here instead of mid-search");
+  });
+
+  test("hosts a dialog in a blank, locked-down window", async () => {
+    class FakeBrowserWindow {
+      readonly webContents = {
+        setWindowOpenHandler: mock(() => undefined),
+        on: mock(() => undefined),
+        once: mock(() => undefined),
+      };
+      readonly loadURL = mock(async (_url: string) => undefined);
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+
+      constructor(readonly options: BrowserWindowConstructorOptions) {}
+    }
+
+    const window = (await createDialogHostWindow({
+      BrowserWindowCtor: FakeBrowserWindow as never,
+      dirname: "/app/electron",
+      platform: "darwin",
+    })) as unknown as FakeBrowserWindow;
+
+    expect(window.options).toMatchObject({ title: PRODUCT_NAME, width: 520, height: 300 });
+    const loadedUrl = window.loadURL.mock.calls[0]?.[0] ?? "";
+    const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
+    expect(loadedHtml).toContain("default-src 'none'");
+    expect(loadedHtml).toContain("<body></body>");
   });
 
   test("closes and rejects when the bootstrap preload fails", async () => {

@@ -90,7 +90,6 @@ import { registerUserCommandCommands } from "./commands-registry-user-commands.j
 import { registerToolingCommands } from "./commands-registry-tools.js";
 import { registerBugReportCommands } from "./commands-registry-bug-reports.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
-import { readPlanUsage } from "./plan-usage.js";
 
 export type { CommandRegistryOptions } from "./commands-registry-types.js";
 
@@ -319,7 +318,10 @@ export function createCommandRegistry(
     runContainerFileCopyCommand,
     containerFileCopyTimeoutMs,
     refreshHostModelCatalog: options.modelCatalogRefresh ?? refreshHostModelCatalog,
-    planUsageReader: options.planUsageReader ?? readPlanUsage,
+    planUsageReader:
+      options.planUsageReader ??
+      ((context, platform, readOptions) =>
+        context.runtime.accounts.readPlanUsage(context, platform, readOptions)),
     conditionalManifestSnapshot,
     schedulePendingEnvironmentRename,
     prepareEnvironmentFirstPrompt,

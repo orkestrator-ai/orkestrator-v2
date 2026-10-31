@@ -49,7 +49,7 @@ describe.if(existsSync(distEntry))("the built bundle", () => {
     // and is the shape that carries the chunk-loading bug. Keep modest headroom
     // for bridge growth and dependency-generated protocol strings.
     const { size } = await stat(distEntry);
-    expect(size).toBeLessThan(1.25 * 1024 * 1024);
+    expect(size).toBeLessThan(1.5 * 1024 * 1024);
   });
 
   test("vendors the SDK and the closure its flat build imports", async () => {

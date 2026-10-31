@@ -272,3 +272,31 @@ mise run test:logged -- --name review-browser-tool-group-owner -- bunx playwrigh
 
 No source, assertion, timeout or skip changed. The root cause remains
 unestablished; this is the existing intermittent overflow-follow case.
+
+
+## Resolve tab reuse review — 2026-10-31
+
+Preparation repeated the mobile scrollTop 704-versus-zero assertion at
+`ToolGroupFold.spec.ts:471`. The exact browser-suite repeat passed this case
+but failed the separate fold-threshold case (1012). The complete unchanged
+ToolGroupFold owner was then included in the one-worker preparation-owner
+rerun and again failed this mobile waiting-group case; all its other cases
+passed. This recurrence remains unresolved and was not hidden by changing
+source, assertions, deadlines or skips.
+
+The combined three-owner rerun finished with 50 passed, one skipped and three
+failed in 180.2 s (the other two failures were native branch selection).
+Command and evidence are recorded in the 2026-10-31 Resolve entry in
+[0382](0382-component-browser-parallel-load.md).
+
+## Auto-merge main-merge validation — 2026-10-31
+
+The nine-worker `mise run test:logged -- --name merge-feature-browser -- mise run test:browser` run repeated the mobile waiting-group failure at line 471 (`scrollTop` 704 instead of zero). It finished with 1,019 passed, 108 skipped and three failed in 607.7 s logged; the other two failures were native branch selection.
+
+The complete unchanged ToolGroupFold and AgentLaunchDialog owners ran sequentially with one worker:
+
+```sh
+mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+All 38 ToolGroupFold cases passed; both native branch-selection cases still failed (40 passed, two failed overall; 103.5 s logged). This confirms the existing intermittent overflow-follow recurrence. No owning source, assertion, timeout or skip changed. Evidence under the host temporary directory: `orkestrator-test-run.xHtE03/merge-feature-browser.log.gz` and `orkestrator-test-run.OdWuh9/merge-browser-owners.log.gz`. The aggregate remains failed.

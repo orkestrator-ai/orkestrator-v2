@@ -11,6 +11,7 @@ export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
+import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -46,6 +47,7 @@ import type {
 import type {
   EnvironmentUnreadReason,
   IncompleteTurnNotice,
+  NativeAgentJobCompletionAction,
   NativeAgentSessionBackendTitle,
 } from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
@@ -423,15 +425,26 @@ export class StorageService {
 
   armPrRecheckAfterAgentCompletion(
     environmentId: string,
-  ): Promise<{ environment: Environment; armedAt: string | null }> {
-    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId);
+    claim?: {
+      onlyIfUnarmed?: boolean;
+      autoMergePrUrl?: string;
+      autoMergeEnabledAt?: string;
+      requestId?: string;
+    },
+  ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
+    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId, claim);
   }
 
   disarmPrRecheckAfterAgentCompletion(
     environmentId: string,
     armedAt: string,
+    previousArmedAt?: string,
   ): Promise<Environment> {
-    return this.repos.projects.disarmPrRecheckAfterAgentCompletion(environmentId, armedAt);
+    return this.repos.projects.disarmPrRecheckAfterAgentCompletion(
+      environmentId,
+      armedAt,
+      previousArmedAt,
+    );
   }
 
   acknowledgeStartupAgentSession(
@@ -489,11 +502,13 @@ export class StorageService {
       EnvironmentUnreadReason,
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
+    completionKey?: string,
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,
       occurredAt,
       reason,
+      completionKey,
     );
   }
 
@@ -725,6 +740,7 @@ export class StorageService {
     title?: string;
     isReviewTab?: boolean;
     activate?: boolean;
+    completionAction?: NativeAgentJobCompletionAction;
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureNativeAgentJobTab(input);
   }
@@ -933,6 +949,16 @@ export class StorageService {
     return this.repos.nativeAgentSessions.adoptNativeAgentSession(input);
   }
 
+  updateNativeAgentGoal(
+    key: string,
+    update: (
+      goal: NativeAgentGoal | undefined,
+      session: PersistedNativeAgentSession,
+    ) => NativeAgentGoal | null | undefined,
+  ): Promise<PersistedNativeAgentSession | undefined> {
+    return this.repos.nativeAgentSessions.updateNativeAgentGoal(key, update);
+  }
+
   updateNativeAgentSessionControls(
     key: string,
     expectedProviderSessionId: string,
@@ -1122,6 +1148,13 @@ export class StorageService {
     return this.repos.nativeAgentSessions.readNativeAgentPublicationState(key, queueKey);
   }
 
+  recordNativeAgentActivityTurn(
+    expected: PersistedNativeAgentSession,
+    state: "active" | "settled",
+  ): Promise<void> {
+    return this.repos.nativeAgentSessions.recordNativeAgentActivityTurn(expected, state);
+  }
+
   recordNativeAgentTurnOutcome(
     key: string,
     providerSessionId: string,
@@ -1183,6 +1216,22 @@ export class StorageService {
     message: unknown,
   ): Promise<PersistedPromptQueue> {
     return this.repos.prompts.enqueuePromptQueueMessage(queueKey, environmentId, message);
+  }
+
+  withNativeAgentJobLaunch<T>(environmentId: string, operation: () => Promise<T>): Promise<T> {
+    return this.repos.prompts.withNativeAgentJobLaunch(environmentId, operation);
+  }
+
+  reserveNativeAgentJobRequest(
+    ...args: Parameters<StorageRepositories["prompts"]["reserveNativeAgentJobRequest"]>
+  ) {
+    return this.repos.prompts.reserveNativeAgentJobRequest(...args);
+  }
+
+  settleNativeAgentJobRequest(
+    ...args: Parameters<StorageRepositories["prompts"]["settleNativeAgentJobRequest"]>
+  ) {
+    return this.repos.prompts.settleNativeAgentJobRequest(...args);
   }
 
   enqueuePromptQueueMessageIfAbsent(

@@ -68,10 +68,8 @@ import {
   CursorAgentIcon,
   GrokBuildIcon,
   OpenCodeIcon,
-  DockerIcon,
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
-import { DockerStatsDialog } from "@/components/docker";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -84,6 +82,7 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
+import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -223,7 +222,6 @@ interface ActionBarProps {
 
 export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const {
-    dockerAvailable,
     isGrid,
     selectedEnvironmentId,
     selectedProjectId,
@@ -245,8 +243,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     toggleSidebar,
     setRepoSettingsProjectId,
     openEnvironmentSettings,
-    dockerStatsOpen,
-    setDockerStatsOpen,
     isOpeningEditor,
     editorError,
     setEditorError,
@@ -312,6 +308,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isSelectedEnvironmentDeleting,
     canCreateTab,
     canLaunchBackendJob,
+    canLaunchResolve,
     editorUnavailableOnRemoteConnection,
     canOpenEditor,
     environmentPortAddress,
@@ -363,6 +360,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     targetBranch,
     sourceBranch,
   } = useActionBarController({ presentation });
+  const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
 
   // Configure dialogs open on the Settings action default, which is the same
   // value `actionDefaultFor` gives a plain click on the same button.
@@ -707,22 +705,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </Button>
                 </ToolbarTooltipTrigger>
               )}
-
-              <ToolbarTooltipTrigger
-                tooltip={dockerAvailable ? "Docker configuration" : "Docker is not running"}
-              >
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setDockerStatsOpen(true)}
-                  aria-label="Docker configuration"
-                  disabled={!dockerAvailable}
-                >
-                  <DockerIcon className="h-4 w-4" />
-                  {isGrid && <span className="truncate text-xs">Docker</span>}
-                </Button>
-              </ToolbarTooltipTrigger>
 
               {(isGrid || repoName) && (
                 <ToolbarTooltipTrigger
@@ -1239,6 +1221,61 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <PullRequestCheckStatusAnnouncement checkSummary={checkSummary} />
                   )}
 
+                  {!isPRFinished && selectedEnvironment?.autoMergeError && (
+                    <span
+                      role="status"
+                      className="max-w-64 truncate text-xs text-destructive"
+                      title={selectedEnvironment.autoMergeError}
+                    >
+                      Auto-merge: {selectedEnvironment.autoMergeError}
+                    </span>
+                  )}
+                  {!isPRFinished && (
+                    <ToolbarTooltipTrigger
+                      tooltip={
+                        autoMerge.enabled ? (
+                          <>
+                            <p>
+                              Auto-merge is on: this PR merges as soon as GitHub reports it ready
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Merge conflicts launch Resolve automatically. Click to turn off.
+                            </p>
+                          </>
+                        ) : (
+                          "Merge this PR automatically once it is ready, resolving conflicts as needed"
+                        )
+                      }
+                    >
+                      <Button
+                        variant={isGrid ? "ghost" : "outline"}
+                        size="icon-sm"
+                        className={cn(
+                          autoMerge.enabled &&
+                            "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
+                        )}
+                        onClick={() => void autoMerge.toggle()}
+                        aria-label="Auto-merge"
+                        aria-pressed={autoMerge.enabled}
+                        disabled={autoMerge.saving}
+                      >
+                        {autoMerge.saving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <span
+                            aria-hidden="true"
+                            className="relative inline-flex size-5 items-end justify-start"
+                          >
+                            <GitMerge className="h-4 w-4" />
+                            <span className="absolute top-0 right-0 text-[9px] leading-none font-semibold">
+                              A
+                            </span>
+                          </span>
+                        )}
+                      </Button>
+                    </ToolbarTooltipTrigger>
+                  )}
+
                   {!isPRFinished && hasMergeConflicts === false && (
                     <ToolbarTooltipTrigger
                       tooltip={
@@ -1287,7 +1324,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       tooltip={
                         <>
                           <p>GitHub is still checking whether this PR can be merged</p>
-                          {isRunning && canLaunchBackendJob && (
+                          {isRunning && canLaunchResolve && (
                             <p className="text-xs text-muted-foreground">
                               ⌘⇧U or right-click/long-press to resolve conflicts anyway
                             </p>
@@ -1336,7 +1373,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           ) : (
                             "Container must be running"
                           )
-                        ) : !canLaunchBackendJob ? (
+                        ) : !canLaunchResolve ? (
                           "Maximum tabs reached"
                         ) : (
                           <>
@@ -1367,7 +1404,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         }}
                         {...resolveLongPress.handlers}
                         data-toolbar-custom-context-menu="true"
-                        disabled={!isRunning || !canLaunchBackendJob || resolveLaunchInFlight}
+                        disabled={!isRunning || !canLaunchResolve || resolveLaunchInFlight}
                       >
                         <AlertTriangle className="h-4 w-4" />
                         <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
@@ -1661,7 +1698,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         Settings Dialogs. Global settings open from the sidebar and ⌘, and
         render in `GlobalSettingsHost`, which `AppShell` mounts.
       */}
-      <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
       {repoSettingsProject && (
         <LazyLoadBoundary

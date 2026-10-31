@@ -18,6 +18,7 @@ import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
 import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
+import { registerCoordinatorGoalActions } from "./coordinator-goal-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
@@ -143,6 +144,7 @@ export function registerCoordinatorCommands(
   registerCoordinatorReviewActions(register, dependencies);
   registerCoordinatorSurfaceActions(register, dependencies);
   registerCoordinatorWorkerTurnActions(register, dependencies);
+  registerCoordinatorGoalActions(register, dependencies);
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
   registerWorkerQuestionRelayCommands(register, dependencies);
@@ -260,6 +262,7 @@ export function registerCoordinatorCommands(
         }
       }
       const snapshot = await context.coordinators.closeConversation(id, conversation);
+      await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.storage.synchronizeAgentMailboxes();
       // A side agent's schedules end with it; the main's move to the next main.
       if (item.role === "side") {

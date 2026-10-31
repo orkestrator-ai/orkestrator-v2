@@ -5,7 +5,9 @@
  * `coordinator-live-delegation.ts`), `status` (a Multi Review's and a held
  * worker's status wakes, see `coordinator-live-status.ts`), `deliver-now` (a
  * `deliverNow` correction steered into a busy worker's turn, see
- * `coordinator-live-deliver-now.ts`) and `peer`. Every
+ * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
+ * check and wakes the coordinator once, see `coordinator-live-goal.ts`) and
+ * `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -110,6 +112,8 @@ import {
 import { runStatusScenario } from "../../apps/desktop/scripts/dev/coordinator-live-status-orchestration";
 import { runDeliverNowScenario } from "../../apps/desktop/scripts/dev/coordinator-live-deliver-now-orchestration";
 import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-live-deliver-now";
+import { runGoalScenario } from "../../apps/desktop/scripts/dev/coordinator-live-goal-orchestration";
+import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goal";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
   coordinatorTurn,
@@ -894,6 +898,35 @@ async function deliverNowCase(input: {
 }
 
 /**
+ * The goal scenario: the coordinator launches a worker, sets it a goal that takes
+ * two turns and a passing check, and is woken once when the goal completes, which
+ * it reacts to by reading the goal.
+ */
+async function goalCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runGoalScenario(input);
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the goal scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1075,6 +1108,29 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await deliverNowCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("goal")) {
+      test(`a worker's goal on ${platform} ends as an unverified claim, and wakes the coordinator once, not per iteration`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.goal);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "goal", async ({ summary, skip, cleanup }) => {
+          if (!goalApplies(platform)) {
+            skip(`${platform} has not qualified for goals, so a worker cannot hold one`);
+          }
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await goalCase({ coordinator, summary, cleanup });
         });
       });
     }

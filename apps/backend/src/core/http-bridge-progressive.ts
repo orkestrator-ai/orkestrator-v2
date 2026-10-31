@@ -21,7 +21,7 @@ import {
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
-import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "./plan-usage-cache.js";
 import {
   claudeTurnActivityFromPayload,
   normalizeClaudeBackgroundTasks,
@@ -219,6 +219,7 @@ export async function readHttpBridgeSessionState(input: {
   connection: BridgeConnection;
   fetchImpl: typeof fetch;
   sessionId: string;
+  planUsage?: PlanUsageState;
 }): Promise<ProviderSessionStateSnapshot> {
   const encodedSessionId = encodeURIComponent(input.sessionId);
   const sessionPath =
@@ -295,6 +296,7 @@ export async function readHttpBridgeSessionState(input: {
   const readiness = normalizeProviderReadiness(payload.readiness);
   const authNotice = normalizeProviderAuthNotice(payload.authNotice);
   const contextUsage = contextUsageWithPlanUsage(
+    input.planUsage,
     input.agent,
     payload.contextUsage,
     input.connection.accountId ?? "unknown",
@@ -371,6 +373,7 @@ export async function readHttpBridgeAuthoritativeSessionState(input: {
   connection: BridgeConnection;
   fetchImpl: typeof fetch;
   sessionId: string;
+  planUsage?: PlanUsageState;
   metadata: Map<string, HttpBridgeRuntimeMetadata>;
   refreshRuntimeMetadata: () => Promise<void>;
   readRuntimeHealth: () => Promise<ProviderRuntimeHealth>;

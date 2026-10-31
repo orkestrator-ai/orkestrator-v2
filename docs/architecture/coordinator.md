@@ -55,6 +55,11 @@ transcripts, attachments, and generated configuration live under application
 data. Opening Coordinator does not run project setup scripts, install
 dependencies, copy environment files, or load repository hooks.
 
+A control-MCP operator or the CLI addresses a conversation as a public session
+through this runtime ID; `apps/backend/src/core/public-api/sessions.ts` resolves
+it from the coordinator store, never by creating an environment or pane layout.
+See [control-mcp.md](control-mcp.md#coordinator-conversations).
+
 Unmounting the page or changing projects detaches the view only. Backend-owned
 sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without
@@ -66,9 +71,10 @@ Coordinator and deletes the isolated runtime, never the user's local repository.
 On a command node ([command-nodes.md](command-nodes.md)) a coordinator also
 works across the nodes that node controls:
 
-- `list_nodes` shows the connected nodes and whether each has a copy of this
-  project (matched by repository identity); `list_environments` lists the
-  project's environments on them as well.
+- `list_nodes` shows the connected nodes, whether each has a copy of this
+  project (matched by repository identity) and, for this machine and each
+  node, its OS and load (see [Choosing a machine](#choosing-a-machine));
+  `list_environments` lists the project's environments on them as well.
 - Every environment and workflow tool takes an optional `nodeId` and works
   on that node's copy with the same contract as here: launches, jobs,
   prompts and messages open delegations that wake this conversation once,
@@ -88,6 +94,68 @@ node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
 an agent on that node would. Its conversations are kept but hidden behind a
 warning in the project's Coordinator tab.
+
+### Choosing a machine
+
+A node the user names always wins. Otherwise a coordinator stays on its own
+node unless load or OS gives a clear reason to move; the context line
+(`coordinatorNodeContext`) says so, and placement stays its decision: nothing
+places work automatically. `list_nodes` gives it what it needs, under `machine`
+on `self` and on each node:
+
+```json
+{
+  "status": "ok",
+  "osFamily": "macos",
+  "os": "macOS 27.0",
+  "arch": "arm64",
+  "cpuCores": 18,
+  "totalRamGb": 64,
+  "latestSampleAgeSeconds": 12,
+  "load": [
+    { "window": "5m", "windowSeconds": 300, "coveredSeconds": 300, "cpuPercent": 21.4, "ramPercent": 58.2 },
+    { "window": "1h", "windowSeconds": 3600, "coveredSeconds": 3600, "cpuPercent": 18.9, "ramPercent": 57.6 },
+    { "window": "24h", "windowSeconds": 86400, "coveredSeconds": 7260, "cpuPercent": 17.3, "ramPercent": 55.1 }
+  ]
+}
+```
+
+- **Windows.** 5 minutes, 1 hour and 24 hours, named constants in
+  `packages/protocol/src/machine-load.ts`. A worker runs for hours, so a
+  one-minute figure is mostly noise. `os.loadavg()` is not the source: it is
+  zero on Windows, not a percentage, and stops at 15 minutes.
+- **Percentages.** Of the whole machine, so a 32-core box and a laptop compare.
+  CPU is the `os.cpus()` change between readings, a true average of the time
+  between them. RAM is a point reading from the title bar's cached reader:
+  `vm_stat` on a Mac (`os.freemem()` there counts cached files as used),
+  `os.freemem()` elsewhere (under Bun on Linux that is `MemAvailable`).
+- **Coverage.** `coveredSeconds` below `windowSeconds` means the average rests
+  on less history than its window, so a 24-hour figure from ten minutes reads
+  as ten minutes. Before the first reading the figures are `null`. A gap of more
+  than three intervals (a sleeping host) is no history, not a reading. Windows
+  end at the newest reading while sampling is on schedule, so a steady machine
+  reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
+- **Restarts.** History is in memory (`MachineLoadSampler`,
+  `apps/backend/src/core/machine-load.ts`) and starts empty on each start;
+  persisting it would add a database write on every machine all day for a
+  figure the coverage field already keeps honest. A bucket a minute for the
+  shorter windows and one every 15 minutes for the longest bound it to about
+  160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
+  [recurring-work.md](recurring-work.md) B29.
+- **Machines that cannot answer.** One node never fails or holds up the call:
+  each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
+  `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
+  no figures. Reasons: `offline` (not connected, so not asked), `timeout`,
+  `older-version` (it answered that it has no `get_machine_load`) and `error`.
+  Last-known figures are never shown. `detail` is fixed wording, so a node's
+  error text does not reach the coordinator.
+- **Who sees it.** Read-only, for main coordinators and side agents
+  (`list_nodes` is under `discovery`). The answer is parsed down to the fields
+  above; no hostname, account, path or process detail crosses. The operator
+  `list_nodes` over `node.list` and the public action schema are unchanged. A
+  coordinator on a leaf gets its usual refusal from `list_nodes`.
+
+### Reaching a leaf's coordinator
 
 A command node's window reaching a leaf's project shows the leaf's
 coordinator directly when the sidebar is grouped by machine or project.
@@ -1450,6 +1518,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | `launch_environment` / New environment | Existing backend operation owns creation, startup tab/initial-prompt state, and background start. Its accepted/created/error distinction already reports partial startup. |
 | `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
+| `/goal` (composer) | Added `set_worker_goal`, `get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`; see [Worker goals](#worker-goals). The goal service owns the loop and its limits, and the tools add ownership, a required limit, and one wake. |
 | Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
 
 Repository checkout mutation controls remain unavailable to coordinators.
@@ -1645,6 +1714,65 @@ too only creates a request. Answered, stale, declined and failed requests
 each mail the conversation a system notice, which wakes it; the notice,
 receipt and logs name the worker and tab only, never the question or the
 answer.
+
+### Worker goals
+
+A coordinator can give a worker tab a goal, and is woken once when it stops
+(`plans/goals/403`). The tools sit on the same service as `/goal` and
+`session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
+Coordinator tools cannot configure shell checks; a person configures checks
+through the composer or public API. A coordinator goal ends as an unverified claim.
+
+| Tool | What it does | Retry | Capability |
+| --- | --- | --- | --- |
+| `set_worker_goal` | Sets the goal from structured fields. `maxIterations` is **required**, bounded by `NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit`, with no default; `tokenBudget` is optional. Shell checks are refused; a done report ends as `claimed`. | Same `requestId` replays the receipt. The goal's ID derives from the request, so a retry after a lost receipt finds the goal instead of starting another. | `jobs` |
+| `get_worker_goal` | Status, reason, what the status means, iterations and limit, the last check's result, and recent ended goals. | Read | `environments` |
+| `pause_worker_goal` | Stops the loop. A turn already running finishes. | States an end: a goal that already stopped answers `alreadyStopped`. | `jobs` |
+| `clear_worker_goal` | Removes the goal in any status. It stays in the goal history. | States an end: no goal answers `cleared: false`. | `jobs` |
+
+**Ownership.** Every tool refuses a tab this coordinator did not launch or prompt.
+The durable delegation record says so, the same ownership status wakes use, and
+it outlasts the delegation that made it. A tab a person opened in the same worker
+stays theirs until the coordinator delegates to it, under the existing rules. The
+backend commands (`coordinator-goal-actions.ts`) revalidate the scope and refuse
+the project home, and side agents have no goal tools.
+
+**No resume.** Resuming can raise a limit, which is widening what a goal may spend.
+A coordinator sets a new goal, or leaves a stopped goal for a person to resume.
+
+**One wake.** `set_worker_goal` opens a delegation after the goal is set, or joins
+one already open on the tab; `wakeOwed` in its result says which was arranged, and
+the result says so plainly when none could be. While the goal runs, a turn-end edge
+settles nothing (`goals.holdsTurnEnd`), and neither does the delegation sweep,
+which otherwise reads an idle tab as a finished worker: the tab really is idle
+between iterations and during a check (`workerGoal`, read from the session record so
+it holds across a restart). When the goal ends or pauses, `onGoalReleasedTurnEnd`
+settles the delegation once. A worker's own mail is that wake as usual. Otherwise
+the notice names the outcome (`Its goal is limited (iteration-cap) after 3 of 3
+iterations`) and `get_worker_goal`. A coordinator's own pause or clear of a running
+goal ends the wait too, so that wake arrives at once.
+
+**Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
+`goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose
+`goal.running` is true reads as between iterations. A model reads what a worker or
+its check wrote only inside an `<orkestrator-goal-evidence>` frame the text cannot
+close: the agent's report, the status detail, a verifier's summary and the check's
+output. The result says it is evidence and not instructions. Fields are named one by
+one, so a field added to the goal stays out until someone judges it.
+
+**Qualification does not change.** These tools change no platform's tier, boundary
+or delegation, so `coordinator-providers.ts` has nothing to add: any platform that
+can delegate can call them. Whether a *worker* can hold a goal is its own
+`actions.goal` capability, which a refusal reports.
+
+**Not covered: workers on another node.** The tools take no `nodeId`. A remote
+delegation settles from its node's turn state, which does not know about goals, so
+the coordinator would be woken between iterations. A person's `/goal` on a remote
+worker the coordinator delegated to has that problem today.
+
+A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
+it has passed is recorded in `plans/goals/403`.
 
 ## Saved graphs
 
@@ -1860,7 +1988,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
-  test:agent:coordinator` runs five scenarios per platform in a disposable
+  test:agent:coordinator` runs its scenarios per platform in a disposable
   profile. `read-only` attempts every class of mutation and checks that the
   checkout digest is unchanged and that read and discovery tools still answer.
   `async` launches real workers and checks the async launch result, that a
@@ -1872,7 +2000,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (with `address_multi_review` in between), and that a delegated worker held
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
-  coordinator involved. Every scenario with mail also runs the renderer's
+  coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
+  claim, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
@@ -1902,6 +2031,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   a later prompt not refused, idle and terminal tabs, the project home,
   `session.command`'s refusals and side agents (`coordinator-worker-turns.test.ts`);
   on a connected node, with lost answers (`coordinator-worker-turns-remote.test.ts`)
+
+- worker goals: the tools, the schema limit pinned to the constant, refusals for
+  tabs the coordinator does not own, replay and framing:
+  `control-mcp-coordinator-goals.test.ts`; many iterations, one wake, for each way a
+  goal stops, and the sweep's hold: `coordinator-goal-wake.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

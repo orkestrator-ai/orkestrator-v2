@@ -20,6 +20,7 @@ import { serviceCommands } from "./commands/service.js";
 import { projectCommands } from "./commands/project.js";
 import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
+import { sessionGoalCommands } from "./commands/session-goal.js";
 import { ticketCommands } from "./commands/ticket.js";
 import { toolchainCommands } from "./commands/toolchain.js";
 import { pullRequestCommands } from "./commands/pull-requests.js";
@@ -43,6 +44,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...projectCommands,
   ...environmentCommands,
   ...sessionCommands,
+  ...sessionGoalCommands,
   ...changesCommands,
   ...workflowCommands,
   ...pullRequestCommands,

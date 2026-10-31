@@ -547,6 +547,19 @@ export function MultiReviewFlowFixture() {
           <button onClick={() => setIsActive(!isActive)}>
             {isActive ? "Activate other pane" : "Activate review pane"}
           </button>
+          <button
+            onClick={() => {
+              const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
+              const next = multiReviewFlowWorkflow("consolidating", count);
+              useMultiReviewStore.getState().replaceWorkflow({
+                ...next,
+                id: current.id,
+                backendRevision: current.backendRevision + 1,
+              });
+            }}
+          >
+            Advance to consolidation
+          </button>
           <input aria-label="Other pane input" />
         </div>
       )}

@@ -58,6 +58,21 @@ function plan(overrides: Partial<CommandDispatchInput> = {}) {
 }
 
 describe("planCommandDispatch", () => {
+  test("/goal plans the goal action with its arguments verbatim, idle or busy", () => {
+    for (const busy of [false, true]) {
+      expect(plan({ prompt: "/goal fix it --check bun test", busy } as never)).toEqual({
+        kind: "goal",
+        commandName: "/goal",
+        arguments: "fix it --check bun test",
+      });
+    }
+    expect(plan({ prompt: "/goal" })).toEqual({
+      kind: "goal",
+      commandName: "/goal",
+      arguments: "",
+    });
+  });
+
   test("typed canonical and alias spellings send the canonical command with verbatim arguments", () => {
     const typed = plan({ prompt: "/review  line one\n\tline two  " });
     expect(typed).toEqual({

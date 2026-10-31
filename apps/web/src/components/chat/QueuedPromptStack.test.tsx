@@ -208,7 +208,9 @@ describe("queued prompt stack", () => {
     expect(remove.tabIndex).toBe(0);
     press("ArrowUp");
     expect(document.activeElement).toBe(steerButton(3, 3));
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ }) === null).toBe(
+      true,
+    );
     press("ArrowDown");
     expect(document.activeElement).toBe(edit);
     act(() => remove.focus()); // Tab's native focus movement is covered in the browser.
@@ -360,7 +362,7 @@ describe("queued prompt stack", () => {
     });
     await waitFor(() => expect(document.activeElement).toBe(input));
     expect(inputRef.current!.getCursorPosition()).toBe(6);
-    expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+    expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true);
     expect(input.textContent).toBe("Draft in progress");
   });
 

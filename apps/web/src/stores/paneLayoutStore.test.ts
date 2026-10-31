@@ -97,6 +97,7 @@ function resetStores() {
     effortLevels: new Map(),
   });
   resetAgentHandoffCache();
+  useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
 
   closeLocalTerminalSession.mockClear();
   detachTerminal.mockClear();
@@ -455,10 +456,29 @@ describe("paneLayoutStore tab cleanup", () => {
       ]),
     });
 
+    for (const tab of tabs) {
+      const key = createSessionKey("env-native", tab.id);
+      useNativeComposeStore.getState().recordSentPrompt(key, {
+        providerSessionId: `${tab.id}-session`,
+        prompt: "Image prompt",
+        draft: { text: "Image prompt", mentions: [], annotations: [] },
+        attachments: [
+          {
+            id: "image",
+            type: "image",
+            path: "/image.png",
+            name: "image.png",
+            previewUrl: "data:image/png;base64,cG5n",
+          },
+        ],
+        priorMessageIds: new Set(),
+      });
+    }
     usePaneLayoutStore.getState().removeTab("default", "claude-tab");
     usePaneLayoutStore.getState().removeTab("default", "codex-tab");
     usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
 
+    expect(useNativeComposeStore.getState().sentPrompts.size).toBe(0);
     // None of these keeps renderer session state; the backend resolves the
     // provider session from its own persisted tab mapping.
     expect(teardownTab).toHaveBeenCalledWith({
@@ -476,6 +496,39 @@ describe("paneLayoutStore tab cleanup", () => {
       tabId: "opencode-tab",
       kind: "opencode-native",
     });
+  });
+
+  test("environment reset releases retained prompts including records outside the current pane snapshot", () => {
+    seedSingleTabEnvironment("env-reset-prompts", null, {
+      id: "native-tab",
+      type: "agent-native",
+      nativeAgentData: { environmentId: "env-reset-prompts", platform: "claude" },
+    });
+    for (const tabId of ["native-tab", "previously-removed-tab"]) {
+      useNativeComposeStore
+        .getState()
+        .recordSentPrompt(createSessionKey("env-reset-prompts", tabId), {
+          providerSessionId: tabId,
+          prompt: "image",
+          draft: { text: "image", mentions: [], annotations: [] },
+          attachments: [
+            {
+              id: "image",
+              type: "image",
+              path: "/image.png",
+              name: "image.png",
+              previewUrl: "data:image/png;base64,cG5n",
+            },
+          ],
+          priorMessageIds: new Set(),
+        });
+    }
+    const key = createSessionKey("env-reset-prompts", "native-tab");
+    useNativeComposeStore.getState().updateDraft(key, { text: "Unsent draft" });
+    usePaneLayoutStore.getState().reset("env-reset-prompts");
+    expect(useNativeComposeStore.getState().drafts.get(key)?.text).toBe("Unsent draft");
+    expect(useNativeComposeStore.getState().sentPrompts.size).toBe(0);
+    expect(teardownTab).not.toHaveBeenCalled();
   });
 
   test("closing a Pi native tab delegates Pi cleanup to the backend", () => {

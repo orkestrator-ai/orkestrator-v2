@@ -2098,6 +2098,16 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  test("forwards the auto-merge switch to the backend", async () => {
+    invokeMock.mockResolvedValueOnce({ id: "env-1", autoMerge: true });
+    const updated = await backendWrappers.setEnvironmentAutoMerge("env-1", true);
+    expect(updated.autoMerge).toBe(true);
+    expect(invokeMock).toHaveBeenLastCalledWith("set_environment_auto_merge", {
+      environmentId: "env-1",
+      enabled: true,
+    });
+  });
+
   test("forwards explicit committed-only Git status requests", async () => {
     await backendWrappers.getGitStatus("container-1", "base-sha", false);
     expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {

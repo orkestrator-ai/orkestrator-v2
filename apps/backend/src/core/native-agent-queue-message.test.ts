@@ -1,3 +1,4 @@
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { describe, expect, test } from "bun:test";
 import {
   queueBoolean,
@@ -66,3 +67,14 @@ describe("queue message modes", () => {
     expect(queueDispatchMode("codex", {})).toBe("build");
   });
 });
+
+test.each(AGENT_PLATFORMS)(
+  "%s legacy goal carriers preserve mode without the new flag",
+  (agent) => {
+    const origin = { kind: "goal", goalId: "g", iteration: 0 };
+    expect(queueDispatchMode(agent, { origin })).toBeUndefined();
+    expect(
+      queueDispatchMode(agent, { origin, mode: "build", planModeEnabled: false }),
+    ).toBeUndefined();
+  },
+);

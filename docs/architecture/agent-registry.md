@@ -19,11 +19,21 @@ Every agent tab in every environment, from the committed pane layouts:
 
 Plus every open coordinator conversation (`ownerKind: "coordinator"`, with
 `coordinatorRole`). Plain shells, browser and review/workflow tabs are not
-agent tabs.
+agent tabs. A coordinator's `environmentId` is its runtime ID, not an environment
+record.
+
+A native entry whose platform is chosen carries `sessionId`, the public session
+handle ([control-mcp.md](control-mcp.md#coordinator-conversations)).
 
 `state` is `working`, `waiting` (blocked on a person), `idle`, `stopped` (the
 environment, or the coordinator, is not running) or `unknown` (never observed).
 Each snapshot also carries per-environment counts.
+
+A native tab with a goal also has `goal`: its status, reason, iterations, limit
+and whether it has a check, and never its text. `state` is about the current
+turn, so a tab between a goal's iterations reads `idle` while `goal.running` says
+it will continue. Read from the session record, so a snapshot still never waits
+on a provider.
 
 ## Who reads it
 

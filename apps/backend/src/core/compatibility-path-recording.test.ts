@@ -36,19 +36,16 @@ test("catalogue rejection counts every outdated bridge read and leaves current r
   expect(legacy.requests.every((request) => request.url.includes("/session/"))).toBe(true);
 });
 
-test("retaining close only counts the legacy branch it takes", async () => {
-  const legacy = count("bridge-close.legacy-delete");
+test("retaining close counts only the restart notice", async () => {
   const upgrade = count("bridge-close.upgrade-required");
   await closeBridgeSessionRetaining("claude", "s1", async () =>
     Response.json({ closed: true, retained: true }),
   );
-  expect(count("bridge-close.legacy-delete")).toBe(legacy);
   expect(count("bridge-close.upgrade-required")).toBe(upgrade);
   await expect(
-    closeBridgeSessionRetaining("claude", "s1", async () => new Response(null, { status: 404 })),
+    closeBridgeSessionRetaining("codex", "s1", async () => new Response(null, { status: 404 })),
   ).rejects.toThrow("predates non-destructive tab close");
   expect(count("bridge-close.upgrade-required")).toBe(upgrade + 1);
-  expect(count("bridge-close.legacy-delete")).toBe(legacy);
 });
 
 test("MCP counters distinguish marked reports and older bridge decisions", () => {

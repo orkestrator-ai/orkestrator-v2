@@ -278,6 +278,11 @@ description = "Opt-in live coordinator suite: a disposable profile and real prov
 raw_args = true
 run = "bun apps/desktop/scripts/test-agent-coordinator-live.ts"
 
+[tasks."test:agent:goals"]
+description = "Opt-in live goal suite: a disposable profile and real provider turns per platform (--credential-source <platform> narrows)"
+raw_args = true
+run = "bun apps/desktop/scripts/test-agent-goals-live.ts"
+
 [tasks."test:agent:electron"]
 description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
@@ -350,6 +355,16 @@ run = "bun test --cwd apps/backend ./tests/claude-plugin-mcp-live.test.ts --prel
 description = "Prove OpenCode's in-place MCP reload on the pinned binary (real binary, no credentials)"
 env = { RUN_LIVE_OPENCODE_MCP = "1" }
 run = "bun test --cwd apps/backend ./tests/opencode-mcp-reload-live.test.ts --parallel=1"
+
+[tasks."verify:codex:mcp-live"]
+description = "Prove the MCP editor's Codex trust and merge rules match the pinned binary (real binary, no credentials)"
+env = { RUN_LIVE_CODEX_MCP = "1" }
+run = "bun test --cwd apps/backend ./tests/codex-mcp-parity-live.test.ts --parallel=1"
+
+[tasks."verify:grok:mcp-live"]
+description = "Prove the MCP editor's Grok trust, source and precedence rules match the pinned binary (real binary, no credentials)"
+env = { RUN_LIVE_GROK_MCP = "1" }
+run = "bun test --cwd apps/backend ./tests/grok-mcp-parity-live.test.ts --parallel=1"
 
 [tasks."verify:toolchains:live"]
 description = "Verify live toolchain artifacts"

@@ -106,8 +106,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
       target.prUrl,
       "--json",
       target.projectHome
-        ? "url,state,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
-        : "url,state,mergeable,mergeStateStatus,isDraft,baseRefName",
+        ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
+        : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
     ];
     return {
       args,
@@ -128,8 +128,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "30",
     "--json",
     target.projectHome
-      ? "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+      ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
+      : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
   ];
   return {
     args,
@@ -146,14 +146,14 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
  * permission must never stop merge/close detection or linked-task updates.
  */
 export function getPrMonitorCheckRequest(prUrl: string): PrMonitorCheckRequest {
-  const args = ["pr", "view", prUrl, "--json", "statusCheckRollup"];
+  const args = ["pr", "view", prUrl, "--json", "statusCheckRollup,headRefOid"];
   return {
     args,
-    shellCommand: `gh pr view ${quoteShell(prUrl)} --json statusCheckRollup`,
+    shellCommand: `gh pr view ${quoteShell(prUrl)} --json statusCheckRollup,headRefOid`,
   };
 }
 
-export function parsePrMonitorCheckResponse(stdout: string) {
+export function parsePrMonitorCheckResponse(stdout: string, expectedHeadSha?: string | null) {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout.trim());
@@ -162,6 +162,9 @@ export function parsePrMonitorCheckResponse(stdout: string) {
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Failed to parse gh PR check output");
+  }
+  if (expectedHeadSha && (parsed as Record<string, unknown>).headRefOid !== expectedHeadSha) {
+    throw new Error("PR head changed while reading checks");
   }
   return parsePrCheckSummary((parsed as Record<string, unknown>).statusCheckRollup);
 }
@@ -289,6 +292,8 @@ export async function detectEnvironmentPullRequest(
     /**
      * Rereads a project home's durable record first, so a lookup follows the
      * home's current checkout rather than the target captured when it was queued.
+     * Also supplies the selected GitHub credential for local `gh` runs;
+     * omitting storage uses the host login.
      */
     storage?: StorageService;
     /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */
@@ -320,7 +325,7 @@ export async function detectEnvironmentPullRequest(
     const { stdout } = await runCommand(gitHubCli(), request.args, {
       cwd: target.worktreePath,
       timeoutMs: PR_DETECTION_TIMEOUT_MS,
-      env: await gitHubCliEnv(),
+      env: await gitHubCliEnv(options.storage),
     });
     const worktreePath = target.worktreePath;
     const parsed = parsePrMonitorDetectionResponse(request, stdout);
@@ -334,7 +339,7 @@ export async function detectEnvironmentPullRequest(
           await runCommand(gitHubCli(), args, {
             cwd: worktreePath,
             timeoutMs: PR_VIEWER_PERMISSION_TIMEOUT_MS,
-            env: await gitHubCliEnv(),
+            env: await gitHubCliEnv(options.storage),
           })
         ).stdout,
     );
@@ -350,9 +355,10 @@ export async function detectEnvironmentPullRequest(
             await runCommand(gitHubCli(), checkRequest.args, {
               cwd: worktreePath,
               timeoutMs: 10_000,
-              env: await gitHubCliEnv(),
+              env: await gitHubCliEnv(options.storage),
             })
           ).stdout,
+          detection.headSha,
         ),
       );
       return {
@@ -395,6 +401,7 @@ export async function detectEnvironmentPullRequest(
           withContainerRuntimeCredential(checkRequest.shellCommand),
           10_000,
         ),
+        detection.headSha,
       ),
     );
     return {

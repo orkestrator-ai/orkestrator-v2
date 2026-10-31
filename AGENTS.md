@@ -28,7 +28,9 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
+| The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
 | Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
+| Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
 
 ## Main Branch and Pull Request Policy
 
@@ -880,12 +882,9 @@ When touching any of them:
   bridge keeps the session registered (and refuses new work on it); the
   backend keeps its durable teardown intent and the tab mapping, and the
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
-- **Legacy fallback is per bridge.** On 404/405 the backend may send the old
-  `DELETE /session/:id` only where `LEGACY_DELETE_RETAINS_HISTORY` is `true`
-  (Codex, Cursor, Grok, Pi). **Never for Claude**, whose DELETE deletes the
-  rollout: that teardown stays pending with a `bridge-upgrade-required`
-  failure the renderer shows as a restart notice. Do not add a platform to
-  that table without evidence from every released version of its DELETE.
+- **A close never falls back to DELETE.** On 404/405 the teardown stays pending
+  with a `bridge-upgrade-required` failure the renderer shows as a restart
+  notice, on every platform. Claude's DELETE deletes the rollout.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.

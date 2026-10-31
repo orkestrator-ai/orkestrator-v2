@@ -140,13 +140,14 @@ export function registerToolingCommands(
     assertOnlyKeys(args, [], "start_github_cli_login argument");
     return startGitHubCliLogin(context);
   });
-  register("get_github_cli_login", (args) => {
+  register("get_github_cli_login", (args, context) => {
     assertOnlyKeys(args, [], "get_github_cli_login argument");
-    return gitHubCliLoginProgress();
+    return gitHubCliLoginProgress(context);
   });
-  register("cancel_github_cli_login", (args) => {
+  register("cancel_github_cli_login", (args, context) => {
     assertOnlyKeys(args, ["operationId"], "cancel_github_cli_login argument");
     return cancelGitHubCliLogin(
+      context,
       args.operationId === undefined ? undefined : asString(args.operationId, "operationId"),
     );
   });

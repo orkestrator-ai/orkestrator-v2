@@ -21,6 +21,7 @@ import { markLocalBridgesForLoginRefresh } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import { withHostOpenCodeServer, type HostOpenCodeServer } from "./host-model-catalog-refresh.js";
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
 
 /**
  * Signs OpenCode model providers in from the app.
@@ -254,36 +255,10 @@ function validateInputs(
   return entries.length > 0 ? inputs : undefined;
 }
 
-interface LoginOperation {
-  progress: OpenCodeProviderLoginProgress;
-  controller: AbortController;
-  submitCode?: (code: string) => void;
-  cancelled?: boolean;
-}
-
-let current: LoginOperation | undefined;
-let mutation: symbol | undefined;
-let listFlight: Promise<OpenCodeProviderAuthSnapshot> | undefined;
-
-function snapshotProgress(): OpenCodeProviderLoginProgress {
-  return current ? { ...current.progress } : { state: "idle" };
-}
-
-export function openCodeProviderLoginProgress(): OpenCodeProviderLoginProgress {
-  return snapshotProgress();
-}
-
-function reserveMutation(): () => void {
-  if (mutation) {
-    throw new Error(
-      "Another OpenCode sign-in is in progress or a login change is finishing. Finish or cancel it first.",
-    );
-  }
-  const reservation = Symbol();
-  mutation = reservation;
-  return () => {
-    if (mutation === reservation) mutation = undefined;
-  };
+export function openCodeProviderLoginProgress(
+  context: CommandContext,
+): OpenCodeProviderLoginProgress {
+  return context.runtime.localServers.openCodeProviderLogin.progress();
 }
 
 export function createOpenCodeProviderLogin(
@@ -292,8 +267,7 @@ export function createOpenCodeProviderLogin(
   const dependencies = { ...defaultDependencies, ...overrides };
 
   async function listProviders(context: CommandContext): Promise<OpenCodeProviderAuthSnapshot> {
-    // One server answers every settings pane that asks at once.
-    listFlight ??= (async () => {
+    return context.runtime.localServers.openCodeProviderLogin.listProviders(async () => {
       const allowedProviders = normalizeOpenCodeModelProviders(
         (await context.storage.loadConfig()).global.openCodeModelProviders,
       );
@@ -308,10 +282,7 @@ export function createOpenCodeProviderLogin(
         assertResponse(auth, "Reading OpenCode sign-in methods");
         return normalizeOpenCodeProviderAuth(list.data, auth.data, allowedProviders);
       });
-    })().finally(() => {
-      listFlight = undefined;
     });
-    return listFlight;
   }
 
   async function setApiKey(
@@ -325,7 +296,7 @@ export function createOpenCodeProviderLogin(
     if (!trimmed) throw new Error("Enter an API key");
     if (trimmed.length > MAX_OPENCODE_API_KEY_LENGTH) throw new Error("The API key is too long");
     const inputs = validateInputs(metadata);
-    const release = reserveMutation();
+    const release = context.runtime.localServers.openCodeProviderLogin.reserveMutation();
     try {
       await dependencies.withServer(context, async (server) => {
         const response = await signInClient(dependencies, server).auth.set(
@@ -345,7 +316,7 @@ export function createOpenCodeProviderLogin(
 
   async function signOut(context: CommandContext, providerId: string): Promise<void> {
     const id = assertOpenCodeProviderId(providerId);
-    const release = reserveMutation();
+    const release = context.runtime.localServers.openCodeProviderLogin.reserveMutation();
     try {
       await dependencies.withServer(context, async (server) => {
         const response = await signInClient(dependencies, server).auth.remove(
@@ -383,9 +354,10 @@ export function createOpenCodeProviderLogin(
       throw new Error("Invalid sign-in method");
     }
     const inputs = validateInputs(input.inputs);
-    const release = reserveMutation();
+    const slot = context.runtime.localServers.openCodeProviderLogin;
+    const release = slot.reserveMutation();
     const controller = new AbortController();
-    const operation: LoginOperation = {
+    const operation: OpenCodeLoginOperation = {
       controller,
       progress: {
         state: "pending",
@@ -394,7 +366,7 @@ export function createOpenCodeProviderLogin(
         providerLabel: bounded(input.providerLabel, MAX_LABEL_LENGTH) ?? providerId,
       },
     };
-    current = operation;
+    slot.begin(operation);
     const deadline = setTimeout(
       () => controller.abort(new Error("The sign-in timed out.")),
       dependencies.loginTimeoutMs,
@@ -404,9 +376,9 @@ export function createOpenCodeProviderLogin(
     const finish = (update: Partial<OpenCodeProviderLoginProgress>) => {
       clearTimeout(deadline);
       release();
-      if (current !== operation || operation.progress.state !== "pending") return;
+      if (!slot.isCurrent(operation) || operation.progress.state !== "pending") return;
       if (operation.cancelled) {
-        current = undefined;
+        slot.clear();
         return;
       }
       const {
@@ -475,46 +447,22 @@ export function createOpenCodeProviderLogin(
           finish({ state: "failed", error: messageOf(reason).slice(0, MAX_ERROR_LENGTH) });
         },
       );
-    return snapshotProgress();
+    return slot.progress();
   }
 
-  function submitCode(code: string): OpenCodeProviderLoginProgress {
+  function submitCode(context: CommandContext, code: string): OpenCodeProviderLoginProgress {
     const trimmed = code.trim();
     if (!trimmed) throw new Error("Enter the sign-in code");
     if (trimmed.length > MAX_LOGIN_CODE_LENGTH) throw new Error("The sign-in code is too long");
-    if (!current?.submitCode || current.progress.state !== "pending") {
-      throw new Error("No OpenCode sign-in is waiting for a code");
-    }
-    const submit = current.submitCode;
-    current.submitCode = undefined;
-    current.progress = { ...current.progress, codeSubmitted: true };
-    submit(trimmed);
-    return snapshotProgress();
+    return context.runtime.localServers.openCodeProviderLogin.submitCode(trimmed);
   }
 
-  function cancel(operationId?: string): OpenCodeProviderLoginProgress {
-    if (
-      current?.progress.state === "pending" &&
-      (!operationId || current.progress.operationId === operationId)
-    ) {
-      // Keep the reservation and pending snapshot until the server stops.
-      current.cancelled = true;
-      current.submitCode = undefined;
-      current.controller.abort(new Error("Sign-in cancelled."));
-    }
-    return snapshotProgress();
+  function cancel(context: CommandContext, operationId?: string): OpenCodeProviderLoginProgress {
+    return context.runtime.localServers.openCodeProviderLogin.cancel(operationId);
   }
 
   return { listProviders, setApiKey, signOut, startOAuth, submitCode, cancel };
 }
 
+/** The production dependencies; its state lives on the context's runtime. */
 export const openCodeProviderLogin = createOpenCodeProviderLogin();
-
-export const __testing = {
-  reset(): void {
-    current?.controller.abort(new Error("reset"));
-    current = undefined;
-    mutation = undefined;
-    listFlight = undefined;
-  },
-};

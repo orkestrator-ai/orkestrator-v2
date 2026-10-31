@@ -11,6 +11,7 @@ import { useFilesPanelStore, useUIStore } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
+import { errorText } from "@/components/settings/machines/machine-ui";
 import type { CreateFileTabOptions } from "@/contexts";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFileManager } from "@/lib/backend";
@@ -63,7 +64,7 @@ export function FilesPanel() {
         })
         .catch((error: unknown) => {
           toast.error("Could not open the project home", {
-            description: error instanceof Error ? error.message : String(error),
+            description: errorText(error),
           });
         });
     },

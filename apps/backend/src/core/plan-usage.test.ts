@@ -3,11 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import {
-  ERROR_CACHE_TTL_MS,
-  contextUsageWithPlanUsage,
-  sharedPlanUsageCache,
-} from "./plan-usage-cache.js";
+import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import {
   CLAUDE_USAGE_URL,
   CODEX_USAGE_URL,
@@ -19,7 +16,6 @@ import {
   OPENCODE_USAGE_URL,
   openCodePlanWindows,
   RATE_LIMIT_BACKOFF_MS,
-  readPlanUsage,
 } from "./plan-usage.js";
 
 /** Storage for a runtime with no added agent accounts: reads use the host login. */
@@ -40,6 +36,7 @@ function contextWithGlobal(
       getDataDir: () => "/tmp/orkestrator-plan-usage",
       ...NO_AGENT_ACCOUNTS,
     },
+    runtime: { accounts: new AgentAccountsRuntime() },
     ...extra,
   } as unknown as CommandContext;
 }
@@ -1165,6 +1162,7 @@ describe("createPlanUsageReader credential resolution", () => {
             getDataDir: () => dir,
             ...NO_AGENT_ACCOUNTS,
           },
+          runtime: { accounts: new AgentAccountsRuntime() },
         },
       );
 
@@ -1248,6 +1246,7 @@ describe("createPlanUsageReader credential resolution", () => {
             agentAccountsDirectory: () => path.join(dir, "agent-accounts"),
           },
         },
+        runtime: { accounts: new AgentAccountsRuntime() },
       } as unknown as CommandContext;
       const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
       const snapshot = await reader(context, "codex");
@@ -1276,6 +1275,7 @@ describe("createPlanUsageReader credential resolution", () => {
           getDataDir: () => "/nonexistent",
           ...NO_AGENT_ACCOUNTS,
         },
+        runtime: { accounts: new AgentAccountsRuntime() },
       },
     );
 
@@ -1288,21 +1288,17 @@ describe("createPlanUsageReader credential resolution", () => {
   });
 });
 
-describe("shared plan-usage cache integration", () => {
-  test("serves windows a session recorded to the shared cache", async () => {
-    sharedPlanUsageCache.clear();
-    try {
-      contextUsageWithPlanUsage("claude", {
-        usedTokens: 1,
-        rateLimits: [{ label: "5-hour limit", usedPercent: 33 }],
-      });
-      const snapshot = await readPlanUsage(contextWithGlobal(), "claude");
-      expect(snapshot.status).toBe("ok");
-      expect(snapshot.windows).toEqual([
-        { window: "five_hour", label: "5-hour limit", usedPercent: 33, windowMinutes: 300 },
-      ]);
-    } finally {
-      sharedPlanUsageCache.clear();
-    }
+describe("the backend's plan-usage cache integration", () => {
+  test("serves windows a session recorded to the backend's cache", async () => {
+    const accounts = new AgentAccountsRuntime();
+    contextUsageWithPlanUsage(accounts.planUsage, "claude", {
+      usedTokens: 1,
+      rateLimits: [{ label: "5-hour limit", usedPercent: 33 }],
+    });
+    const snapshot = await accounts.readPlanUsage(contextWithGlobal(), "claude");
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.windows).toEqual([
+      { window: "five_hour", label: "5-hour limit", usedPercent: 33, windowMinutes: 300 },
+    ]);
   });
 });

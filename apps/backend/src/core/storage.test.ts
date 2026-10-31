@@ -475,6 +475,38 @@ describe("environment completion and unread state", () => {
     });
   });
 
+  test("request completion dedupe survives acknowledgement and storage reload", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const at = new Date().toISOString();
+      const completed = await storage.recordEnvironmentSessionCompletion(
+        environment.id,
+        at,
+        "agent_failed",
+        "request-completion-1",
+      );
+      await storage.setEnvironmentUnread(environment.id, false);
+      const reopened = new StorageService(storage.getDataDir());
+      await reopened.init();
+      const replay = await reopened.recordEnvironmentSessionCompletion(
+        environment.id,
+        at,
+        "agent_failed",
+        "request-completion-1",
+      );
+      expect(replay.hasUnreadWork).toBe(false);
+      expect(replay.agentSessionCompletedAt).toBe(completed.agentSessionCompletedAt);
+      const next = await reopened.recordEnvironmentSessionCompletion(
+        environment.id,
+        at,
+        "agent_finished",
+        "request-completion-2",
+      );
+      expect(next.hasUnreadWork).toBe(true);
+      expect(next.agentSessionCompletedAt).not.toBe(completed.agentSessionCompletedAt);
+    });
+  });
+
   test("does not move the unread activity token backwards for a fresh observer", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

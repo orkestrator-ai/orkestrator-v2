@@ -201,3 +201,11 @@ outside development and fails only at the moment a user selects it, while
 containers carry on working from `/opt/<name>`.
 `tests/unit/bridge-packaging.test.ts` enumerates them so the next one cannot be
 forgotten.
+
+The standalone npm package (`packages/cli`) carries them too, listed in
+`packages/cli/scripts/bridges.ts`: bundled complete, or — for a bridge whose SDK
+cannot be inlined — as its own bundle plus a pinned runtime that the backend
+installs on first start (`apps/backend/src/core/bridge-runtime-install.ts`).
+Anything that starts a bridge resolves it through `prepareBridgePath`, not
+`getBridgePath`, so that install happens. `packages/cli/tests/cli.test.ts`
+enumerates `bridges/` against that list.

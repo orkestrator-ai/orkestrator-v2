@@ -1,6 +1,7 @@
 // Hook for managing project operations with Electron backend
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
+import { errorText } from "@/components/settings/machines/machine-ui";
 import {
   applyProjectSnapshot,
   getProjectMutationVersion,
@@ -112,7 +113,7 @@ export function useProjects() {
         toast.success("Project added", { description: project.name });
         return project;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to add project";
+        const message = err instanceof Error ? errorText(err) : "Failed to add project";
         setError(message);
         toast.error("Failed to add project", { description: message });
         throw new Error(message);
@@ -134,7 +135,7 @@ export function useProjects() {
         toast.success("Project created", { description: project.name });
         return project;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to create project";
+        const message = err instanceof Error ? errorText(err) : "Failed to create project";
         setError(message);
         toast.error("Failed to create project", { description: message });
         throw new Error(message);

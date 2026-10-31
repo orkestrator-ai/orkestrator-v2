@@ -1,18 +1,22 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
+import { MachineLoadSampler } from "./machine-load.js";
+import { flushMicrotasks } from "./recurring-test-support.js";
 import { APP_VERSION } from "./constants.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import {
   cpuPercent,
   cpuTimes,
+  createCachedRamReader,
   createSystemUsageReader,
   darwinRamPercentFromVmStat,
   GPU_AVAILABLE_CACHE_MS,
   parseDarwinGpuPercent,
   parseDarwinVmStat,
   parsePercentLines,
+  RAM_AVAILABLE_CACHE_MS,
   RAM_UNAVAILABLE_CACHE_MS,
   readDarwinGpuPercent,
   readDarwinRamPercent,
@@ -713,4 +717,77 @@ describe("system usage", () => {
     expect((await read("/data")).ramPercent).toBe(56);
     expect(execute).toHaveBeenCalledTimes(2);
   });
+});
+
+test("sampler and system usage share RAM probes, expiry, failure cooldown and recovery", async () => {
+  let now = Date.UTC(2026, 9, 31);
+  let probe = Promise.withResolvers<{ stdout: string }>();
+  const execute = mock(() => probe.promise);
+  const ramReader = createCachedRamReader({
+    platform: "darwin",
+    now: () => now,
+    totalMemory: () => 1_000 * 4_096,
+    freeMemory: () => 0,
+    runCommand: execute,
+  });
+  const cpus = () => [cpu(now, now)];
+  const sampler = new MachineLoadSampler({
+    now: () => now,
+    cpus,
+    readRam: ramReader,
+    platform: "linux",
+    readFile: async () => "NAME=Linux",
+  });
+  const readUsage = createSystemUsageReader({
+    now: () => now,
+    cpus,
+    ramReader,
+    delay: async () => undefined,
+    gpuPercent: async () => null,
+    diskPercent: async () => null,
+  });
+  const vmStat = (anonymous: number) => ({
+    stdout: `Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages wired down: 0.
+Pages purgeable: 0.
+Anonymous pages: ${anonymous}.
+Pages occupied by compressor: 0.
+`,
+  });
+  const readBoth = () => Promise.all([sampler.sample(), readUsage("/test")]);
+
+  const initial = readBoth();
+  await flushMicrotasks();
+  expect(execute).toHaveBeenCalledTimes(1);
+  probe.resolve(vmStat(400));
+  expect((await initial)[1].ramPercent).toBe(40);
+
+  now += RAM_AVAILABLE_CACHE_MS - 1;
+  expect((await readBoth())[1].ramPercent).toBe(40);
+  expect(execute).toHaveBeenCalledTimes(1);
+
+  now += 60_000 - (RAM_AVAILABLE_CACHE_MS - 1);
+  probe = Promise.withResolvers();
+  const failed = readBoth();
+  await flushMicrotasks();
+  expect(execute).toHaveBeenCalledTimes(2);
+  probe.reject(new Error("vm_stat failed"));
+  expect((await failed)[1].ramPercent).toBe(40);
+  expect(sampler.report().load[0]).toMatchObject({ coveredSeconds: 60, ramPercent: 40 });
+
+  now += RAM_UNAVAILABLE_CACHE_MS - 1;
+  expect((await readBoth())[1].ramPercent).toBe(40);
+  expect(execute).toHaveBeenCalledTimes(2);
+
+  now += 60_000 - (RAM_UNAVAILABLE_CACHE_MS - 1);
+  probe = Promise.withResolvers();
+  const recovered = readBoth();
+  await flushMicrotasks();
+  expect(execute).toHaveBeenCalledTimes(3);
+  probe.resolve(vmStat(700));
+  expect((await recovered)[1].ramPercent).toBe(70);
+  // The rolling average weights the recovered reading's 30.001 s interval.
+  expect(sampler.report().load[0]).toMatchObject({ coveredSeconds: 120, ramPercent: 47.5 });
+  expect((await readBoth())[1].ramPercent).toBe(70);
+  expect(execute).toHaveBeenCalledTimes(3);
 });

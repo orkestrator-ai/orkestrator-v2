@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { Check, KeyRound, Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
@@ -14,6 +14,13 @@ interface ClaudeAuthRecoveryCardProps {
   containerId?: string;
   /** `pinned` sits above the composer, outside the transcript's own padding. */
   placement?: "transcript" | "pinned";
+  /**
+   * Sends the refused message again once signed in. Without it the card asks
+   * the user to resend it.
+   */
+  onSignedIn?: () => void;
+  /** The message is being sent again after this sign-in. */
+  resendingAfterSignIn?: boolean;
 }
 
 /**
@@ -31,6 +38,8 @@ export function ClaudeAuthRecoveryCard({
   failureAt,
   containerId,
   placement = "transcript",
+  onSignedIn,
+  resendingAfterSignIn = false,
 }: ClaudeAuthRecoveryCardProps) {
   const headingId = useId();
   const createTab = useOptionalTerminalContext()?.createTab;
@@ -40,12 +49,23 @@ export function ClaudeAuthRecoveryCard({
   const isolatedContainer = Boolean(containerId) && !useHostClaudeCredentials;
   const reauth = useAgentAccountReauth("claude", !isolatedContainer, failureAt);
   const canOpenTerminal = Boolean(createTab) && (isolatedContainer || !containerId);
-  const signedIn = reauth.progress.state === "succeeded";
+  const [terminalSignIn, setTerminalSignIn] = useState(false);
+  const automaticResend = !isolatedContainer && !terminalSignIn && Boolean(onSignedIn);
+  const signedIn = !isolatedContainer && reauth.progress.state === "succeeded";
   const signingIn = reauth.progress.state === "pending";
   // The login being renewed is this machine's; with several machines, say which.
   const machineName = useSessionMachineName();
+  // Also when the card mounts on a sign-in that already finished: the hook
+  // only adopts one completed after this failure.
+  const notifySignedIn = useEffectEvent(() => {
+    if (automaticResend) onSignedIn?.();
+  });
+  useEffect(() => {
+    if (signedIn) notifySignedIn();
+  }, [signedIn]);
 
   const openSignInTerminal = () => {
+    setTerminalSignIn(true);
     createTab?.("plain", {
       displayTitle: "Claude sign-in",
       initialCommands: [
@@ -72,13 +92,17 @@ export function ClaudeAuthRecoveryCard({
             {machineName
               ? `Each machine keeps its own Claude login, and ${machineName}'s needs signing in again.`
               : "Claude needs you to sign in again."}{" "}
-            After signing in, return here and resend your message.
+            {automaticResend || resendingAfterSignIn
+              ? "Your message is sent again once you sign in."
+              : "After signing in, return here and resend your message."}
           </p>
 
           {signedIn ? (
             <p role="status" className="mt-3 flex items-center gap-2 text-xs text-emerald-400">
               <Check aria-hidden="true" className="size-3.5" />
-              Signed in. Resend your message to continue.
+              {resendingAfterSignIn
+                ? "Signed in. Sending your message again…"
+                : "Signed in. Resend your message to continue."}
             </p>
           ) : signingIn ? (
             <div className="mt-3">
@@ -119,7 +143,10 @@ export function ClaudeAuthRecoveryCard({
                     size="sm"
                     className="gap-2"
                     disabled={reauth.starting}
-                    onClick={() => void reauth.start()}
+                    onClick={() => {
+                      setTerminalSignIn(false);
+                      void reauth.start();
+                    }}
                   >
                     {reauth.starting ? (
                       <Loader2 aria-hidden="true" className="size-4 animate-spin" />

@@ -245,9 +245,13 @@ the service:
    boot (`readStartupFailure` and `startupLogExcerpt`).
 
 A service for a second data directory on a computer that already runs
-Orkestrator gets its own unit, but it still shares the user's HOME and binds
-the default Control MCP port (34122) whenever that port is free. See
-[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md).
+Orkestrator gets its own unit, but it still shares the user's HOME. It leaves
+the fixed gateway port (34121) and Control MCP port (34122) to the default data
+directory's backend and takes free ports unless told otherwise; see
+[Default gateway port](remote-gateway.md#default-gateway-port),
+[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md)
+and
+[0996-second-backend-takes-default-gateway-port.md](../todo/cross-cutting/0996-second-backend-takes-default-gateway-port.md).
 
 `service status` reports:
 - the unit, and whether it is running

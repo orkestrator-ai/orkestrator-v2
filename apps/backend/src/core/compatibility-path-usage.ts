@@ -46,6 +46,8 @@ export const COMPATIBILITY_PATH_IDS = [
    * has no typed `fix-result` marker: it started before the typed handoff.
    */
   "build-pipeline.address-text-report",
+  /** `list_nodes` asked a node for its load and the node does not have the command yet. */
+  "machine-load.older-node",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

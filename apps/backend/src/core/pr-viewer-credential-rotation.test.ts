@@ -8,13 +8,11 @@ import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
-import { setGitHubCliConfigSource } from "./github-credentials.js";
 
 const PR = "https://github.com/acme/repo/pull/1";
 const repo = { host: "github.com", owner: "acme", repo: "repo" };
 afterEach(() => {
   mock.restore();
-  setGitHubCliConfigSource(undefined);
 });
 
 for (const oldPermission of [false, true]) {
@@ -33,7 +31,6 @@ for (const oldPermission of [false, true]) {
         useHostGitHubCredentials: false,
       });
       await storage.setGitHubToken("test-old-credential");
-      setGitHubCliConfigSource(async () => (await storage.loadConfig()).global);
       const runtime = new BackendRuntime({ emit: () => undefined });
       const context = { storage, runtime, emit: () => undefined } as unknown as CommandContext;
       const container = change === "propagate_github_token_to_containers";
@@ -77,6 +74,7 @@ for (const oldPermission of [false, true]) {
       };
       const detect = () =>
         detectEnvironmentPullRequest(target, {
+          storage,
           viewerPermissions: runtime.prMonitor.viewerPermissions,
         });
       const scope = container ? "container:c1" : "local-gh";

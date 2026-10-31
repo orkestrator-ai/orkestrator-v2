@@ -1111,6 +1111,34 @@ export class NativeAgentSessionsRepository {
     );
   }
 
+  /** Fence a content-free activity checkpoint against session rotation and dispatch. */
+  async recordNativeAgentActivityTurn(
+    expected: PersistedNativeAgentSession,
+    state: "active" | "settled",
+  ): Promise<void> {
+    await this.enqueueNativeAgentSessionMutation(expected.key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, expected.key);
+      const session = loaded.sessions[expected.key];
+      const requestId =
+        expected.pendingDispatch?.requestId ?? expected.dispatchedRequestIds?.at(-1);
+      if (
+        !session ||
+        session.providerSessionId !== expected.providerSessionId ||
+        (session.pendingDispatch?.requestId ?? session.dispatchedRequestIds?.at(-1)) !== requestId
+      )
+        return;
+      const checkpoint = { providerSessionId: session.providerSessionId, requestId, state };
+      if (
+        session.activityTurn?.providerSessionId === checkpoint.providerSessionId &&
+        session.activityTurn.requestId === requestId &&
+        session.activityTurn.state === state
+      )
+        return;
+      await this.saveNativeAgentSession(expected.key, { ...session, activityTurn: checkpoint });
+    });
+  }
+
   /**
    * Record how one dispatched request's turn ended, once. The outcome comes
    * from a provider status read made for another reason (the queue drain) or

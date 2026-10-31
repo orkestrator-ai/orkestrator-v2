@@ -7,6 +7,8 @@ import { useAccountMachine } from "./account-machine";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /** Says how old a stale reading is and why a fresh one could not be made. */
 export function StalePlanUsageNote({ snapshot }: { snapshot: PlanUsageSnapshot }) {
@@ -77,17 +79,11 @@ export function PlanUsageSection({
   const unavailable = snapshot?.status === "unavailable" ? snapshot.message : null;
 
   return (
-    <section
-      aria-label="Plan usage"
-      className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4"
-    >
+    <section aria-label="Plan usage" className={cn(SETTINGS_CARD_CLASS, "p-4")}>
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Plan usage</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            How much of this account&apos;s plan has been used in each quota window.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Plan usage">
+          How much of this account&apos;s plan has been used in each quota window.
+        </SettingsSectionHeader>
         <Button
           type="button"
           variant="ghost"

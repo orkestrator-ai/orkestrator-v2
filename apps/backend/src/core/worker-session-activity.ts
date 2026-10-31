@@ -13,10 +13,16 @@ export async function workerSessionActivity(
   const session = (await storage.listNativeAgentSessions()).find(
     (candidate) => candidate.environmentId === environmentId && candidate.logicalSessionKey === key,
   );
-  if (!session || !nativeAgents) return { turn: "unknown" as const, backgroundWorkPending: false };
+  if (!session || !nativeAgents)
+    return {
+      turn: "unknown" as const,
+      backgroundWorkPending: false,
+      requestPending: Boolean(session?.pendingDispatch),
+    };
   const turn = nativeAgents.sessionTurnActivitySnapshot(environmentId, session.agent, key);
   return {
     turn,
+    requestPending: Boolean(session.pendingDispatch),
     // This signal also includes long-lived servers/watchers, so callers must bound the hold.
     backgroundWorkPending:
       turn === "idle" &&

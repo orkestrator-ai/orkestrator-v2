@@ -546,11 +546,15 @@ describe("coordinator command registry", () => {
     const build = commands.get("start_coordinator_build_pipeline")!;
     const first = build({ scope, requestId: "build-deduped", input: buildInput }, context);
     const second = build({ scope, requestId: "build-deduped", input: buildInput }, context);
+    const contenders = Array.from({ length: 20 }, () =>
+      build({ scope, requestId: "build-deduped", input: buildInput }, context),
+    );
     const deadline = Date.now() + 2_000;
     while (startBuild.mock.calls.length === 0 && Date.now() < deadline) await Bun.sleep(5);
     expect(startBuild).toHaveBeenCalledTimes(1);
     releaseBuild();
     expect(await first).toEqual(await second);
+    for (const result of await Promise.all(contenders)) expect(result).toEqual(await first);
     expect(
       await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
     ).toContainEqual(

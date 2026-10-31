@@ -744,6 +744,7 @@ export class CoordinatorsRepository {
     prUrl?: string;
     reviewAssociationId?: string;
     resolve?: { tabId: string; requestedAt: string };
+    publication?: { tabId: string; requestedAt: string };
     /** A status the coordinator was already told elsewhere, recorded without a wake. */
     seedNoticeKey?: string;
   }): Promise<CoordinatorWorkflowAssociation> {
@@ -780,6 +781,10 @@ export class CoordinatorsRepository {
         let changed = false;
         if (input.prUrl && !follow.prUrl) {
           follow.prUrl = input.prUrl;
+          changed = true;
+        }
+        if (input.publication && follow.publication?.tabId !== input.publication.tabId) {
+          follow.publication = { ...input.publication };
           changed = true;
         }
         if (input.resolve && follow.resolve?.tabId !== input.resolve.tabId) {
@@ -838,6 +843,7 @@ export class CoordinatorsRepository {
           ...(input.prUrl ? { prUrl: input.prUrl } : {}),
           ...(input.reviewAssociationId ? { reviewAssociationId: input.reviewAssociationId } : {}),
           ...(input.resolve ? { resolve: { ...input.resolve } } : {}),
+          ...(input.publication ? { publication: { ...input.publication } } : {}),
         },
         ...(input.seedNoticeKey
           ? { statusNotice: { key: input.seedNoticeKey, notifiedAt: createdAt } }

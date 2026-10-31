@@ -92,8 +92,8 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
       "get_worker_request_state",
       { environmentId, tabId },
     );
-    // An older node does not report it: no news, as before.
-    const requestPending = pending !== "unavailable" && pending?.requestPending === true;
+    if (pending === "unavailable") return "unavailable";
+    const requestPending = pending?.requestPending === true;
     if (lifecycle === "stopped") {
       return { environment: lifecycle, tab: "unknown", ...(name ? { name } : {}), requestPending };
     }
@@ -110,7 +110,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
       tab: entry?.state ?? "unknown",
       ...(name ? { name } : {}),
       requestPending,
-      backgroundWorkPending: pending !== "unavailable" && pending?.backgroundWorkPending === true,
+      backgroundWorkPending: pending?.backgroundWorkPending === true,
     };
   }
 
@@ -194,6 +194,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
   ): Promise<RemotePullRequestReading | null | "unavailable"> {
     const environment = await read<unknown>(this.deps, nodeId, "get_environment", {
       environmentId,
+      includeFinalPrState: true,
     });
     if (environment === "unavailable") return "unavailable";
     if (!isRecord(environment)) return null;
@@ -210,7 +211,9 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
         prViewerCanMerge: row?.prViewerCanMerge ?? null,
       }),
       ...(typeof environment.name === "string" ? { name: environment.name } : {}),
-      ...(environment.deletionRequestedAt || environment.lifecycleOperation === "deleting"
+      ...(environment.finalPrState === true ||
+      environment.deletionRequestedAt ||
+      environment.lifecycleOperation === "deleting"
         ? { deleting: true }
         : {}),
     };

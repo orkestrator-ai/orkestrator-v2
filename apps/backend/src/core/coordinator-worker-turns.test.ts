@@ -352,6 +352,112 @@ describe("worker slash commands", () => {
     ).rejects.toThrow("outstanding coordinator delegation");
   });
 
+  test("a failed delegation open fails the command and a busy retry recovers the same turn", async () => {
+    const w = await world([command("/review")]);
+    w.activity("idle");
+    const original = w.harness.commands.get("open_coordinator_delegation")!;
+    w.harness.commands.set("open_coordinator_delegation", async () => {
+      throw new Error("store unavailable");
+    });
+    const input = {
+      requestId: "recover-open",
+      environmentId: "env-1",
+      tabId: w.tabId,
+      command: "review",
+    };
+    await expect(w.run("run_coordinator_worker_command", { input })).rejects.toThrow(
+      "store unavailable",
+    );
+    expect(w.stub.sends).toHaveLength(2);
+    w.activity("working");
+    w.harness.commands.set("open_coordinator_delegation", original);
+    expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
+      startsTurn: true,
+      delegationOpened: true,
+    });
+    expect(w.stub.sends).toHaveLength(2);
+    expect(await w.openDelegations()).toHaveLength(1);
+    w.activity("idle");
+    await w.coordinators.settleWorkerDelegations({
+      environmentId: "env-1",
+      tabId: w.tabId,
+      state: "completed",
+    });
+    expect(await w.openDelegations()).toHaveLength(0);
+    expect(await w.coordinatorMail()).toHaveLength(1);
+  });
+
+  test("a lost remote command answer replays while the real native session is working", async () => {
+    const w = await world([command("/review")]);
+    w.activity("idle");
+    await w.harness.storage.updateProject(w.projectId, {
+      gitUrl: "https://github.com/acme/site.git",
+    });
+    const context = w.harness.context as CommandContext;
+    context.nodes = { status: async () => ({ nodeId: "bk_command", mode: "command" }) } as never;
+    let loseAnswer = true;
+    context.nodePortal = {
+      summaries: async () => ({
+        selfId: "bk_command",
+        nodes: [
+          {
+            nodeId: "bk_leaf",
+            available: true,
+            view: { displayName: "Build node" },
+            projects: [{ ref: { projectId: w.projectId }, repositoryHint: "github.com/acme/site" }],
+          },
+        ],
+      }),
+      invokeOnNode: async ({
+        command: name,
+        args,
+      }: {
+        command: string;
+        args: Record<string, unknown>;
+      }) => {
+        if (name === "record_node_environment_origin") return { outcome: "ok", result: {} };
+        const result = await w.harness.commands.get(name)!(args, context);
+        if (name === "run_controller_worker_command" && loseAnswer) {
+          loseAnswer = false;
+          w.activity("working");
+          return { outcome: "unknown" };
+        }
+        return { outcome: "ok", result };
+      },
+    } as never;
+    const input = {
+      requestId: "remote-native",
+      nodeId: "bk_leaf",
+      environmentId: "env-1",
+      tabId: w.tabId,
+      command: "review",
+    };
+    await expect(w.run("run_coordinator_worker_command", { input })).rejects.toThrow(
+      "outcome is unknown",
+    );
+    expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
+      startsTurn: true,
+      delegationOpened: true,
+    });
+    expect(w.stub.sends).toHaveLength(2); // Initial session start, then exactly one command send.
+    expect(await w.openDelegations()).toHaveLength(1);
+    let tab: "working" | "idle" = "working";
+    w.coordinators.setRemoteAccess({
+      workerState: async () => ({ environment: "running", tab }),
+      collectMail: async () => true,
+      lastAssistantExcerpt: async () => "Review finished",
+      workflow: async () => null,
+      environmentPr: async () => ({}),
+      nodeName: async () => "Build node",
+    });
+    await w.coordinators.settleRemoteWorker("bk_leaf", "env-1");
+    tab = "idle";
+    w.activity("idle");
+    await w.coordinators.settleRemoteWorker("bk_leaf", "env-1");
+    expect(await w.openDelegations()).toHaveLength(0);
+    expect(await w.coordinatorMail()).toHaveLength(1);
+  });
+
   test("a command that answers without a turn opens no delegation", async () => {
     const w = await world([command("/help", { executionKind: "bridge-local" })]);
     w.activity("idle");

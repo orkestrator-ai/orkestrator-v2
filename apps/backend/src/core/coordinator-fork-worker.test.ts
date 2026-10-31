@@ -7,6 +7,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { parseForkWorkerLaunch } from "./coordinator-fork-worker.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { runCommand } from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
@@ -194,4 +195,131 @@ describe("parseForkWorkerLaunch", () => {
       agent: "claude",
     });
   });
+});
+
+test("a lost remote fork response recovers project mapping, origin, association and delegation", async () => {
+  await storage.updateProject(scope.projectId, { gitUrl: "https://github.com/acme/site.git" });
+  const commandStorage = new StorageService(path.join(root, "command-data"));
+  await commandStorage.init();
+  const project = await commandStorage.addProject(
+    createProject("https://github.com/acme/site.git", checkout),
+  );
+  const coordinator = new CoordinatorService(commandStorage, () => ({
+    enabled: true,
+    running: true,
+    error: null,
+  }));
+  const snapshot = await coordinator.ensure(project.id);
+  const remoteScope = {
+    projectId: project.id,
+    coordinatorId: snapshot.workspace.id,
+    conversationId: snapshot.workspace.conversations[0]!.id,
+  };
+  const leafCoordination = new NodeCoordination({
+    storage,
+    nodes: {
+      listControllers: () => [{ controllerId: "bk_command", displayName: "Command node" }],
+      mostRecentControllerId: () => "bk_command",
+      subscribe: () => () => undefined,
+      listNodes: async () => ({ nodes: [] }),
+      selfIdentity: async () => "bk_leaf",
+      link: () => null,
+    } as never,
+    portal: { readModel: { onNodeEvent: () => () => undefined } } as never,
+    invoke: async () => undefined as never,
+    emit: () => undefined,
+  });
+  context.nodeCoordination = leafCoordination;
+  let loseAnswer = true;
+  const routed: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const commandContext = {
+    storage: commandStorage,
+    coordinators: coordinator,
+    nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
+    nodePortal: {
+      summaries: async () => ({
+        selfId: "bk_command",
+        nodes: [
+          {
+            nodeId: "bk_leaf",
+            available: true,
+            view: { displayName: "Build node" },
+            projects: [
+              { ref: { projectId: scope.projectId }, repositoryHint: "github.com/acme/site" },
+            ],
+          },
+        ],
+      }),
+      invokeOnNode: async ({
+        command,
+        args,
+      }: {
+        command: string;
+        args: Record<string, unknown>;
+      }) => {
+        routed.push({ command, args });
+        const result = await commands.get(command)!(args, context);
+        if (command === "fork_controller_environment" && loseAnswer) {
+          loseAnswer = false;
+          return { outcome: "unknown" };
+        }
+        return { outcome: "ok", result };
+      },
+    },
+  } as unknown as CommandContext;
+  try {
+    const input = {
+      requestId: "remote-fork",
+      environmentId: workerId,
+      nodeId: "bk_leaf",
+      prompt: "Try an alternative",
+    };
+    const invoke = () =>
+      commands.get("fork_coordinator_worker")!({ scope: remoteScope, input }, commandContext);
+    await expect(invoke()).rejects.toThrow("outcome is unknown");
+    const result = (await invoke()) as Record<string, unknown>;
+    expect(result).toMatchObject({
+      nodeId: "bk_leaf",
+      baseCommit: head,
+      coordinatorDelegationOpened: true,
+      status: "accepted",
+    });
+    const forkId = result.environmentId as string;
+    expect(started).toEqual([forkId]);
+    expect(
+      (await storage.getEnvironmentsByProject(scope.projectId)).filter(
+        (item) => item.controlRequestId,
+      ),
+    ).toHaveLength(1);
+    expect((await storage.getEnvironment(forkId))?.projectId).toBe(scope.projectId);
+    expect(await commandStorage.getEnvironment(forkId)).toBeNull();
+    expect(
+      routed
+        .filter((call) => call.command === "fork_controller_environment")
+        .every((call) => call.args.projectId === scope.projectId),
+    ).toBe(true);
+    expect(
+      await storage.nodeMailRouter!.route({
+        fromEnvironmentId: forkId,
+        toEnvironmentId: "coordinator",
+      }),
+    ).toMatchObject({ controllerId: "bk_command" });
+    const associations = await commandStorage.coordinators.listCoordinatorWorkflowAssociations(
+      project.id,
+    );
+    expect(associations).toEqual([
+      expect.objectContaining({
+        resourceId: forkId,
+        nodeId: "bk_leaf",
+        baseCommit: head,
+        delegation: expect.objectContaining({ state: "running", workerTabId: "startup-agent" }),
+      }),
+    ]);
+    expect(await invoke()).toMatchObject({ environmentId: forkId, replayed: true });
+    expect(started).toHaveLength(1);
+  } finally {
+    leafCoordination.dispose();
+    coordinator.stopStatusWakes();
+    commandStorage.close();
+  }
 });

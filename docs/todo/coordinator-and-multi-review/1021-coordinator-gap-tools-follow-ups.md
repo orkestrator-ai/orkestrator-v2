@@ -30,7 +30,7 @@ This file holds that qualification and the gaps the build left.
 3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open.
 4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link. Status: open (needs two nodes).
 5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: open.
-6. **PR follow gaps**: a reopened PR, a PR tab that ends without opening a PR, and Merge and Cleanup of a worker on another node wake nobody. Status: open.
+6. **PR follow gaps**: PR-tab failure and remote Merge and Cleanup wakes are done; reopened PRs remain outside a finished follow. Status: open (reopened PR policy only).
 7. **"Checks failed" counts checks that are not required**: Status: open.
 8. **Separate committed and uncommitted diffs in `get_worker_changes`**: Status: open.
 
@@ -171,40 +171,30 @@ coordinator forks (`forkEnvironmentRecord` with `keepBuildPipeline: false`).
 
 ### 6. PR follow gaps
 
-**Problem.** A closed PR ends its follow, so a reopened PR is not reported. A
-PR tab that finishes without opening a PR sends no wake, so the coordinator
-waits for a `pr-opened` that never comes. Merge and Cleanup on another node
-deletes that node's worker record before the command node, which holds the
-follow, reads the merge, so the follow ends without `pr-merged`.
+**Problem.** A closed PR ends its follow, so a reopened PR is not reported.
+The PR-tab failure and remote Merge and Cleanup gaps were repaired on
+2026-10-31.
 
-**Context.** Both are recorded decisions of the build (coordinator.md,
-"Status wakes"). Ending the follow on close keeps the sweep's reads bounded.
+**Context.** Ending the follow on close keeps the sweep's reads bounded.
+Publication follows now persist the launched tab and report `pr-not-created`
+once when it ends without a URL. The leaf retains bounded terminal PR
+readings before environment deletion; remote reconciliation reads them after
+missed events and restarts.
 
-**Investigation.** Not measured how often these happen. On this node the
-merge is kept: `deleteEnvironment` stores the worker's last PR reading on its
-follows (`captureFinalPullRequest`) before removing the record. If that write
-fails it is logged and the delete goes on, so the merge can still be missed.
-Nothing like it exists for a leaf's delete. Separately, when a review joins a
-follow that has already reported `pr-opened`, both have sent it; later states
-are reported once.
+**Investigation.** Regression tests cover PR-tab idle and disappearance,
+remote merge followed by deletion before reconciliation, restart deduplication,
+and launch retries after the PR URL appears or conflicts clear. Live GitHub
+and two-node qualification remain tasks 2 and 4.
 
 **Decisions.**
 
-- **Close the PR-tab gap?**
-  - **Wake once when the PR tab's turn ends without a `prUrl`, as the Resolve tab's finish does (recommended).**
-    - Pros: the coordinator learns the PR attempt failed; reuses the Resolve
-      finish detection.
-    - Cons: one more tab watch per `create_pr`.
-  - **Leave it; the coordinator can schedule a check.**
-    - Pros: no code.
-    - Cons: contradicts the "you will be woken" text `create_pr` now returns.
-- **Keep a remote merge?**
-  - **Have the leaf relay the final PR reading in its environment-deleted event (recommended).**
-    - Pros: the same capture as on this node; no extra round trip.
-    - Cons: a node-link event change, so older leaves keep the gap.
-  - **Poll the leaf for the PR before ending a follow whose worker vanished.**
-    - Pros: no protocol change.
-    - Cons: the record is already gone, so there is nothing to read.
+- **Follow reopened PRs?**
+  - **Keep the current terminal-follow policy until needed (recommended).**
+    - Pros: bounded reads and no change to the promised terminal behavior.
+    - Cons: reopening a closed PR needs a new follow.
+  - **Retain closed follows indefinitely.**
+    - Pros: reopening could wake the original coordinator.
+    - Cons: unbounded remote polling for finished work.
 
 ### 7. "Checks failed" counts checks that are not required
 
@@ -271,8 +261,18 @@ were not checked by name. All of these were fixed on the same branch.
 
 ### Code
 
-1. Task 5 (fork and pipeline deletion), task 6 (PR-tab finish wake).
+1. Task 5 (fork and pipeline deletion), task 6 (reopened PR policy).
    Tasks 7 and 8 are recommended as no-ops for now.
+
+## Assumptions and decisions
+
+### Task 6: completion recovery
+
+Kept the terminal-follow policy for reopened PRs. Persisted the PR publication
+tab because a successful launch does not prove a PR was opened. Retained at
+most 1,000 terminal PR tombstones on the owning node so recovery also works
+when deletion events are missed; an event-only relay would not survive that
+loss. Existing action receipts provide bounded durable replay on both nodes.
 
 ## Related
 

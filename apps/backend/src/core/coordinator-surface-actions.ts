@@ -84,6 +84,7 @@ async function followPullRequest(
     source: "create-pr" | "resolve-conflicts";
     prUrl?: string;
     resolve?: { tabId: string; requestedAt: string };
+    publication?: { tabId: string; requestedAt: string };
   },
 ): Promise<void> {
   const { nodeId, ...rest } = input;
@@ -267,7 +268,7 @@ export function registerCoordinatorSurfaceActions(
       context,
       caller,
       { requestId, action: "create-pr", payload: { environmentId, targetBranch, nodeId } },
-      async () => {
+      async (receipt) => {
         const launch = {
           environmentId,
           projectId: remote?.projectId ?? caller.projectId,
@@ -289,6 +290,10 @@ export function registerCoordinatorSurfaceActions(
             nodeId: remote?.nodeId,
             requestId: `pr-follow:${requestId}`,
             source: "create-pr",
+            publication: {
+              tabId: asNonBlankString(result.tabId, "PR tabId"),
+              requestedAt: receipt.createdAt,
+            },
           });
         return result;
       },

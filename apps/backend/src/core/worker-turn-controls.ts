@@ -1,3 +1,4 @@
+import { withWorkerActionReceipt } from "./worker-action-receipts.js";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -189,47 +190,63 @@ export async function runWorkerCommand(
   input: WorkerCommandInput,
   requestId: string,
 ): Promise<JsonRecord> {
-  if (/^\/?steer$/i.test(input.command.trim()) || input.command.trim() === "orkestrator:steer")
-    throw new Error(`/steer ${LIVE_TURN_REFUSAL}`);
-  const session = await nativeWorkerSession(context, environmentId, tabId, "run_worker_command");
-  const shared = sessionContext(context, run);
-  const resolved = await resolveSessionCommand(shared, session, input).catch((error: unknown) => {
-    if (error instanceof PublicActionError && error.code === "not-found")
-      throw new PublicActionError(
-        "not-found",
-        "That tab has no such command; list_worker_commands lists them.",
-      );
-    throw error;
-  });
-  if (resolved.command.inputPolicy?.busy === "running")
-    throw new Error(`${resolved.command.name} ${LIVE_TURN_REFUSAL}`);
-  const startsTurn = !NO_TURN_KINDS.has(resolved.command.executionKind ?? "provider-prompt");
-  const mode = sessionPromptMode({ command: context }, session, undefined);
-  const outcome = await run<{ outcome: string; error?: string }>(
+  return withWorkerActionReceipt(
     context,
-    "dispatch_native_agent_intent",
-    {
-      environmentId,
-      agent: session.agent,
-      logicalSessionKey: session.logicalSessionKey,
-      requestId,
-      prompt: resolved.text,
-      command: resolved.intent,
-      ...(mode ? { mode } : {}),
+    environmentId,
+    requestId,
+    "run-worker-command",
+    { tabId, ...input },
+    async () => {
+      if (/^\/?steer$/i.test(input.command.trim()) || input.command.trim() === "orkestrator:steer")
+        throw new Error(`/steer ${LIVE_TURN_REFUSAL}`);
+      const session = await nativeWorkerSession(
+        context,
+        environmentId,
+        tabId,
+        "run_worker_command",
+      );
+      const shared = sessionContext(context, run);
+      const resolved = await resolveSessionCommand(shared, session, input).catch(
+        (error: unknown) => {
+          if (error instanceof PublicActionError && error.code === "not-found")
+            throw new PublicActionError(
+              "not-found",
+              "That tab has no such command; list_worker_commands lists them.",
+            );
+          throw error;
+        },
+      );
+      if (resolved.command.inputPolicy?.busy === "running")
+        throw new Error(`${resolved.command.name} ${LIVE_TURN_REFUSAL}`);
+      const startsTurn = !NO_TURN_KINDS.has(resolved.command.executionKind ?? "provider-prompt");
+      const mode = sessionPromptMode({ command: context }, session, undefined);
+      const outcome = await run<{ outcome: string; error?: string }>(
+        context,
+        "dispatch_native_agent_intent",
+        {
+          environmentId,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          requestId,
+          prompt: resolved.text,
+          command: resolved.intent,
+          ...(mode ? { mode } : {}),
+        },
+      );
+      if (outcome.outcome === "rejected")
+        throw new Error(
+          `The worker refused ${resolved.command.name}${outcome.error ? `: ${outcome.error.slice(0, 500)}` : ""}`,
+        );
+      return {
+        environmentId,
+        tabId,
+        agent: session.agent,
+        commandId: resolved.commandId,
+        command: resolved.command.name,
+        startsTurn,
+        outcome: outcome.outcome,
+        ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
+      };
     },
   );
-  if (outcome.outcome === "rejected")
-    throw new Error(
-      `The worker refused ${resolved.command.name}${outcome.error ? `: ${outcome.error.slice(0, 500)}` : ""}`,
-    );
-  return {
-    environmentId,
-    tabId,
-    agent: session.agent,
-    commandId: resolved.commandId,
-    command: resolved.command.name,
-    startsTurn,
-    outcome: outcome.outcome,
-    ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
-  };
 }

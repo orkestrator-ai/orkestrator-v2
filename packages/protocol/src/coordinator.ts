@@ -329,6 +329,8 @@ export interface CoordinatorPullRequestFollow {
     name?: string;
     at: string;
   };
+  /** The PR publication attempt, including turns that end without opening a PR. */
+  publication?: { tabId: string; requestedAt: string; seenWorkingAt?: string };
   /** The newest `resolve_conflicts` run, reported once when its tab finishes. */
   resolve?: {
     tabId: string;

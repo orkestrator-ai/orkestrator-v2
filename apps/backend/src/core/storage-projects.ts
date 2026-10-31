@@ -672,6 +672,28 @@ export class ProjectsRepository {
     });
   }
 
+  /** Bounded terminal PR tombstones survive deletion and missed node events. */
+  async getFinalEnvironmentPr(environmentId: string): Promise<{
+    id: string;
+    projectId: string;
+    name: string;
+    prUrl: string;
+    prState: "merged" | "closed";
+    finalPrState: true;
+  } | null> {
+    const rows = await this.context.loadJson<
+      Array<{
+        id: string;
+        projectId: string;
+        name: string;
+        prUrl: string;
+        prState: "merged" | "closed";
+        finalPrState: true;
+      }>
+    >(this.context.file("environment-final-pr.json"), () => []);
+    return rows.find((row) => row.id === environmentId) ?? null;
+  }
+
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -684,6 +706,22 @@ export class ProjectsRepository {
         // not-found contract.
         await this.scrubEnvironmentBackups(environmentId, true);
         throw new Error(`Environment not found: ${environmentId}`);
+      }
+      if (removed?.prUrl && (removed.prState === "merged" || removed.prState === "closed")) {
+        const file = this.context.file("environment-final-pr.json");
+        const rows = await this.context.loadJson<Array<Record<string, unknown>>>(file, () => []);
+        const final = {
+          id: removed.id,
+          projectId: removed.projectId,
+          name: removed.name,
+          prUrl: removed.prUrl,
+          prState: removed.prState,
+          finalPrState: true,
+        };
+        await this.context.saveSensitiveJson(file, [
+          ...rows.filter((row) => row.id !== removed.id).slice(-999),
+          final,
+        ]);
       }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);

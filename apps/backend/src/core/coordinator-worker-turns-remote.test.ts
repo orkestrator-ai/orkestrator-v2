@@ -114,6 +114,7 @@ beforeEach(async () => {
       },
       dispatchIntent: async (input: Record<string, unknown>) => {
         dispatches.push(input);
+        activity = "working";
         return { outcome: "accepted", requestId: input.requestId };
       },
     },
@@ -314,9 +315,9 @@ test("a remote slash command runs once across a lost answer and opens a delegati
     delegationOpened: true,
     delivery: "async",
   });
-  // Both attempts carried the same dispatch identity, so the leaf's journal replays.
-  expect(dispatches).toHaveLength(2);
-  expect(dispatches[0]!.requestId).toBe(dispatches[1]!.requestId);
+  // Replay precedes busy admission, and never sends to the provider twice.
+  expect(String(activity)).toBe("working");
+  expect(dispatches).toHaveLength(1);
   expect(String(dispatches[0]!.requestId)).toStartWith("coordinator-command:");
   expect(dispatches[0]).toMatchObject({
     prompt: "/review the branch",
@@ -326,4 +327,19 @@ test("a remote slash command runs once across a lost answer and opens a delegati
     (association) => association.nodeId === "bk_leaf" && association.resourceId === workerId,
   );
   expect(open).toHaveLength(1);
+  const main = await world.main();
+  world.coordinator.setRemoteAccess({
+    workerState: async () => ({ environment: "running", tab: activity }),
+    collectMail: async () => true,
+    lastAssistantExcerpt: async () => "Review finished",
+    workflow: async () => null,
+    environmentPr: async () => ({}),
+    nodeName: async () => "Build node",
+  });
+  await world.coordinator.settleRemoteWorker("bk_leaf", workerId);
+  activity = "idle";
+  await world.coordinator.settleRemoteWorker("bk_leaf", workerId);
+  await world.deliver();
+  expect(await world.storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
+  expect(world.wakes(main)).toBe(1);
 });

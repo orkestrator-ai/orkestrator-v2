@@ -25,6 +25,12 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
+import {
+  observePublicationAttempt,
+  prAttemptActivity,
+  publicationFailedStatus,
+  updateResolve,
+} from "./coordinator-pr-attempt.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { createHash } from "node:crypto";
 import {
@@ -1437,6 +1443,23 @@ export class CoordinatorStatusWakes {
       return;
     }
     if (!pr) {
+      await observePublicationAttempt(
+        this.storage,
+        remote,
+        this.options.workerActivity,
+        association,
+        this.timers.now(),
+        COORDINATOR_RESOLVE_START_GRACE_MS,
+        async () => {
+          if (!settled) return true;
+          return this.deliver(
+            workspaces,
+            association,
+            resource,
+            onNode(publicationFailedStatus(environmentId, follow.publication!.tabId)),
+          );
+        },
+      );
       if (deleting) await this.endFollow(association);
       return;
     }
@@ -1536,29 +1559,26 @@ export class CoordinatorStatusWakes {
   ): Promise<void> {
     const environmentId = association.resourceId;
     const remote = association.nodeId ? this.remote : null;
-    const activity: AgentActivityState | "unknown" = remote
-      ? await remote
-          .workerState(association.nodeId!, environmentId, resolve.tabId)
-          .then((state) =>
-            state !== "unavailable" &&
-            (state.tab === "working" || state.tab === "waiting" || state.tab === "idle")
-              ? state.tab
-              : ("unknown" as const),
-          )
-          .catch(() => "unknown" as const)
-      : ((await this.options
-          .workerActivity?.(environmentId, resolve.tabId)
-          .catch(() => "unknown" as const)) ?? "unknown");
+    const activity = await prAttemptActivity(
+      this.storage,
+      remote,
+      this.options.workerActivity,
+      association,
+      resolve.tabId,
+    );
+    if (activity === "unavailable" || activity === "pending") return;
+    if (activity === "working" || activity === "waiting") {
+      await updateResolve(this.storage, association.id, resolve.tabId, {
+        ...(!resolve.seenWorkingAt
+          ? { seenWorkingAt: new Date(this.timers.now()).toISOString() }
+          : {}),
+        finishedAt: undefined,
+      });
+      return;
+    }
     const now = this.timers.now();
     let finishedAt = resolve.finishedAt;
     if (!finishedAt) {
-      if (activity === "working" || activity === "waiting") {
-        if (!resolve.seenWorkingAt)
-          await this.updateResolve(association.id, resolve.tabId, {
-            seenWorkingAt: new Date(now).toISOString(),
-          });
-        return;
-      }
       // A tab whose session is gone (`unknown`) is not running a turn either;
       // both need the turn seen working, or the grace, before they count.
       const sinceLaunch = now - Date.parse(resolve.requestedAt);
@@ -1573,7 +1593,7 @@ export class CoordinatorStatusWakes {
         return;
       }
       finishedAt = new Date(now).toISOString();
-      await this.updateResolve(association.id, resolve.tabId, { finishedAt });
+      await updateResolve(this.storage, association.id, resolve.tabId, { finishedAt });
     }
     const finished = Date.parse(finishedAt);
     const refreshed =
@@ -1607,24 +1627,6 @@ export class CoordinatorStatusWakes {
           current.statusNotice = { key: pr.status.key, notifiedAt };
           current.pullRequest.notices = (current.pullRequest.notices ?? 0) + 1;
         }
-        return true;
-      },
-    );
-  }
-
-  private async updateResolve(
-    associationId: string,
-    tabId: string,
-    patch: { seenWorkingAt?: string; finishedAt?: string },
-  ): Promise<void> {
-    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
-      associationId,
-      (current) => {
-        const latest = current.pullRequest?.resolve;
-        if (!current.pullRequest || latest?.tabId !== tabId || latest.notifiedAt) return false;
-        if (patch.seenWorkingAt && latest.seenWorkingAt) return false;
-        if (patch.finishedAt && latest.finishedAt) return false;
-        current.pullRequest = { ...current.pullRequest, resolve: { ...latest, ...patch } };
         return true;
       },
     );

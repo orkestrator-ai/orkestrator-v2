@@ -376,6 +376,10 @@ export class StorageService {
     return this.repos.projects.addEnvironment(environment);
   }
 
+  getFinalEnvironmentPr(environmentId: string) {
+    return this.repos.projects.getFinalEnvironmentPr(environmentId);
+  }
+
   removeEnvironment(environmentId: string): Promise<void> {
     return this.repos.projects.removeEnvironment(environmentId);
   }

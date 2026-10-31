@@ -1,3 +1,4 @@
+import { withWorkerActionReceipt } from "./worker-action-receipts.js";
 import type { CommandContext } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import type { Environment } from "./models.js";
@@ -60,40 +61,50 @@ export async function launchWorkerPr(
   dependencies: Dependencies,
   input: { environmentId: string; projectId: string; targetBranch?: string; requestId: string },
 ): Promise<Record<string, unknown>> {
-  const environment = await publishableWorker(context, input);
-  if (environment.prUrl)
-    return {
-      environmentId: environment.id,
-      status: "skipped",
-      message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE,
-      prUrl: environment.prUrl,
-    };
-  await refuseActivePipeline(
+  return withWorkerActionReceipt(
     context,
-    environment,
-    "This worker belongs to a build pipeline, whose own PR step raises the pull request; follow it with get_build_pipeline",
-  );
-  const config = await context.storage.loadConfig();
-  const base = input.targetBranch ?? (config.repositories[input.projectId]?.prBaseBranch || "main");
-  const outcome = await launchPrAgent(commandInvoker(context, dependencies), context.storage, {
-    ...input,
-    targetBranch: base,
-  });
-  if (outcome.kind === "launched")
-    return {
-      environmentId: environment.id,
-      status: "launched",
-      tabId: outcome.tabId,
-      targetBranch: base,
-    };
-  if (outcome.kind === "skipped")
-    return {
-      environmentId: environment.id,
-      status: "skipped",
-      message: outcome.message,
-    };
-  throw new Error(
-    outcome.kind === "pending" ? "The PR agent launch is still pending" : outcome.message,
+    input.environmentId,
+    input.requestId,
+    "create-pr",
+    input,
+    async () => {
+      const environment = await publishableWorker(context, input);
+      if (environment.prUrl)
+        return {
+          environmentId: environment.id,
+          status: "skipped",
+          message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE,
+          prUrl: environment.prUrl,
+        };
+      await refuseActivePipeline(
+        context,
+        environment,
+        "This worker belongs to a build pipeline, whose own PR step raises the pull request; follow it with get_build_pipeline",
+      );
+      const config = await context.storage.loadConfig();
+      const base =
+        input.targetBranch ?? (config.repositories[input.projectId]?.prBaseBranch || "main");
+      const outcome = await launchPrAgent(commandInvoker(context, dependencies), context.storage, {
+        ...input,
+        targetBranch: base,
+      });
+      if (outcome.kind === "launched")
+        return {
+          environmentId: environment.id,
+          status: "launched",
+          tabId: outcome.tabId,
+          targetBranch: base,
+        };
+      if (outcome.kind === "skipped")
+        return {
+          environmentId: environment.id,
+          status: "skipped",
+          message: outcome.message,
+        };
+      throw new Error(
+        outcome.kind === "pending" ? "The PR agent launch is still pending" : outcome.message,
+      );
+    },
   );
 }
 
@@ -112,45 +123,54 @@ export async function launchWorkerResolve(
   dependencies: Dependencies,
   input: { environmentId: string; projectId: string; targetBranch?: string; requestId: string },
 ): Promise<Record<string, unknown>> {
-  const environment = await publishableWorker(context, input);
-  if (!environment.prUrl)
-    throw new Error(
-      "This worker has no pull request, so there are no conflicts to resolve; raise one with create_pr",
-    );
-  if (environment.prState === "merged" || environment.prState === "closed")
-    throw new Error(
-      `This worker's pull request is ${environment.prState}, so there is nothing to resolve`,
-    );
-  if (environment.hasMergeConflicts === false)
-    throw new Error(
-      "GitHub reports no merge conflicts on this worker's pull request; read its state with get_environment",
-    );
-  await refuseActivePipeline(
+  return withWorkerActionReceipt(
     context,
-    environment,
-    "This worker belongs to a build pipeline, whose own steps resolve its pull request's conflicts; follow it with get_build_pipeline",
+    input.environmentId,
+    input.requestId,
+    "resolve-conflicts",
+    input,
+    async () => {
+      const environment = await publishableWorker(context, input);
+      if (!environment.prUrl)
+        throw new Error(
+          "This worker has no pull request, so there are no conflicts to resolve; raise one with create_pr",
+        );
+      if (environment.prState === "merged" || environment.prState === "closed")
+        throw new Error(
+          `This worker's pull request is ${environment.prState}, so there is nothing to resolve`,
+        );
+      if (environment.hasMergeConflicts === false)
+        throw new Error(
+          "GitHub reports no merge conflicts on this worker's pull request; read its state with get_environment",
+        );
+      await refuseActivePipeline(
+        context,
+        environment,
+        "This worker belongs to a build pipeline, whose own steps resolve its pull request's conflicts; follow it with get_build_pipeline",
+      );
+      const config = await context.storage.loadConfig();
+      const base =
+        input.targetBranch ??
+        (environment.prBaseBranch || config.repositories[input.projectId]?.prBaseBranch || "main");
+      const outcome = await launchResolveConflictsAgent(
+        commandInvoker(context, dependencies),
+        context.storage,
+        { environmentId: environment.id, targetBranch: base, requestId: input.requestId },
+      );
+      if (outcome.kind !== "launched") throw new Error(outcome.message);
+      return {
+        environmentId: environment.id,
+        status: "launched",
+        tabId: outcome.tabId,
+        targetBranch: base,
+        prUrl: environment.prUrl,
+        ...(outcome.refreshArmed
+          ? {}
+          : {
+              warning:
+                "Conflict resolution started, but the automatic PR refresh was not scheduled; the state may lag until the PR monitor's next check.",
+            }),
+      };
+    },
   );
-  const config = await context.storage.loadConfig();
-  const base =
-    input.targetBranch ??
-    (environment.prBaseBranch || config.repositories[input.projectId]?.prBaseBranch || "main");
-  const outcome = await launchResolveConflictsAgent(
-    commandInvoker(context, dependencies),
-    context.storage,
-    { environmentId: environment.id, targetBranch: base, requestId: input.requestId },
-  );
-  if (outcome.kind !== "launched") throw new Error(outcome.message);
-  return {
-    environmentId: environment.id,
-    status: "launched",
-    tabId: outcome.tabId,
-    targetBranch: base,
-    prUrl: environment.prUrl,
-    ...(outcome.refreshArmed
-      ? {}
-      : {
-          warning:
-            "Conflict resolution started, but the automatic PR refresh was not scheduled; the state may lag until the PR monitor's next check.",
-        }),
-  };
 }

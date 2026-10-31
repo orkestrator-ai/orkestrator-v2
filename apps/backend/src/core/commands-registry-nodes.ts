@@ -293,10 +293,9 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
     return {
       backgroundWorkPending: activity.backgroundWorkPending,
-      requestPending: await context.storage.hasUndeliveredCoordinatorRequest(
-        args.environmentId,
-        args.tabId,
-      ),
+      requestPending:
+        activity.requestPending === true ||
+        (await context.storage.hasUndeliveredCoordinatorRequest(args.environmentId, args.tabId)),
     };
   });
 

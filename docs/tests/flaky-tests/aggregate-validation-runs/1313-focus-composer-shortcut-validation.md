@@ -69,3 +69,24 @@ streaming/folding/paging, launch-dialog and data-saving tests. These broad
 browser failures were not individually requalified or classified as new flakes;
 the targeted green results do not certify the full browser suite. No unrelated
 assertion, timeout, skip, or production code was changed to hide them.
+
+## Coordinator recovery review recurrence — 2026-10-31
+
+`mise run test:logged -- --name repaired-full-suite -- mise run test:full`
+repeated `root-change approval handles over-limit and still permits rejection`
+in `apps/web/src/components/federation/node-action-requests.test.tsx`: the
+5,000 ms deadline expired at 7052.91 ms. Workspace reserved four slots with
+two isolated workers per package; root reserved one and bridges two. Browser
+and Electron reruns also ran on the shared Linux host.
+
+The complete unchanged owner passed alone:
+`mise run test:logged -- --name isolated-node-actions-existing -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`
+(exit zero, 8.2 s; passing output removed by the runner). The same owner also
+timed out in preparation before these backend fixes. Evidence is retained in
+`/tmp/orkestrator-test-run.eeYqDS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed after completion). This confirms a recurrence without establishing
+its cause; no owner assertion, deadline or skip changed. The aggregate also
+reported the existing projection-read failure (0722), the unchanged ACP
+child-limit assertion and existing DOM-diagnostic guard violations. Its root
+group finished with 3,650 passed, one skipped and one failed. None of those
+results makes the aggregate green.

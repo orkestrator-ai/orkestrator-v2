@@ -500,7 +500,13 @@ describe("create_coordinator_pr", () => {
         coordinatorId: scope.coordinatorId,
         conversationId: scope.conversationId,
         requestId: "pr-follow:pr",
-        pullRequest: { source: "create-pr" },
+        pullRequest: {
+          source: "create-pr",
+          publication: {
+            tabId: expect.stringContaining("pr-tab:"),
+            requestedAt: expect.any(String),
+          },
+        },
       }),
     ]);
   });

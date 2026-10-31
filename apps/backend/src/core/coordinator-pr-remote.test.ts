@@ -115,6 +115,10 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
     const lost = await mcp.callCoordinatorTool(scope, "create_pr", input);
     expect(lost.isError).toBe(true);
     expect(lost.text).toContain("outcome is unknown");
+    await leaf.updateEnvironment(worker.id, {
+      prUrl: "https://github.com/acme/site/pull/1",
+      prState: "open",
+    });
     const result = await mcp.callCoordinatorTool(scope, "create_pr", input);
     expect(result.isError).toBe(false);
     expect(result.structuredContent).toMatchObject({
@@ -127,8 +131,7 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
     ).toMatchObject({ replayed: true });
     const layout = JSON.stringify((await leaf.getPaneLayout(worker.id))?.root);
     expect(layout.match(/"id":"agent-job-/g)).toHaveLength(1);
-    expect(dispatched).toHaveLength(2);
-    expect(dispatched[0]!.requestId).toBe(dispatched[1]!.requestId);
+    expect(dispatched).toHaveLength(1);
     expect(dispatched[0]!.prompt).toContain("develop");
     expect(await world.storage.getPaneLayout(worker.id)).toBeNull();
 
@@ -180,7 +183,7 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
     });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain("build pipeline");
-    expect(dispatched).toHaveLength(2);
+    expect(dispatched).toHaveLength(1);
   } finally {
     await mcp?.stop();
     await world.close();
@@ -255,13 +258,21 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
         },
       ],
     });
+    let loseResolveAnswer = true;
     const invokeOnNode = async ({
       command,
       args,
     }: {
       command: string;
       args: Record<string, unknown>;
-    }) => ({ outcome: "ok", result: await commands.get(command)!(args, leafContext) });
+    }) => {
+      const result = await commands.get(command)!(args, leafContext);
+      if (command === "resolve_controller_conflicts" && loseResolveAnswer) {
+        loseResolveAnswer = false;
+        return { outcome: "unknown" };
+      }
+      return { outcome: "ok", result };
+    };
     const rootContext = {
       storage: world.storage,
       coordinators: world.coordinator,
@@ -292,6 +303,8 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
       capabilities: coordinatorRoleCapabilities("main"),
     };
     const input = { requestId: "resolve", nodeId: "bk_leaf", environmentId: worker.id };
+    expect((await mcp.callCoordinatorTool(scope, "resolve_conflicts", input)).isError).toBe(true);
+    await leaf.updateEnvironment(worker.id, { hasMergeConflicts: false });
     const result = await mcp.callCoordinatorTool(scope, "resolve_conflicts", input);
     expect(result.isError).toBe(false);
     expect(result.structuredContent).toMatchObject({
@@ -319,6 +332,20 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
 
     const main = await world.main();
     await world.coordinator.reconcileWorkflowNotifications();
+    remote.workerState = async () => "unavailable";
+    await world.coordinator.reconcileWorkflowNotifications();
+    expect(
+      (await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)).find(
+        (item) => item.kind === "pull-request",
+      )?.pullRequest?.resolve?.finishedAt,
+    ).toBeUndefined();
+    remote.workerState = async () => ({ environment: "running", tab });
+    await world.coordinator.reconcileWorkflowNotifications();
+    expect(
+      (await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)).find(
+        (item) => item.kind === "pull-request",
+      )?.pullRequest?.resolve?.finishedAt,
+    ).toBeUndefined();
     tab = "idle";
     // The leaf's recheck: no conflicts, the refresh disarmed, its monitor vouches.
     await leaf.updateEnvironment(worker.id, {
@@ -344,6 +371,19 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
     await world.finishTurn(main);
 
     await leaf.updateEnvironment(worker.id, { prState: "merged" });
+    // The owning node applies the button's precondition too.
+    await expect(
+      commands.get("resolve_controller_conflicts")!(
+        { projectId: project.id, environmentId: worker.id, requestId: "again" },
+        leafContext,
+      ),
+    ).rejects.toThrow("is merged");
+    await leaf.removeEnvironment(worker.id);
+    const restoredLeaf = new StorageService(leaf.getDataDir());
+    await restoredLeaf.init();
+    leafContext.storage = restoredLeaf;
+    await world.restart();
+    world.coordinator.setRemoteAccess(remote);
     await world.coordinator.reconcileWorkflowNotifications();
     await world.deliver();
     await world.coordinator.reconcileWorkflowNotifications();
@@ -354,14 +394,6 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
         .flat()
         .map((carrier) => carrier.notice?.state),
     ).toEqual(["resolve-finished", "pr-merged"]);
-
-    // The owning node applies the button's precondition too.
-    await expect(
-      commands.get("resolve_controller_conflicts")!(
-        { projectId: project.id, environmentId: worker.id, requestId: "again" },
-        leafContext,
-      ),
-    ).rejects.toThrow("is merged");
   } finally {
     await mcp?.stop();
     await world.close();

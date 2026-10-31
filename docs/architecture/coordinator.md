@@ -1162,7 +1162,16 @@ writes `merged` and deletes the worker straight away, before any
 observation can run, so deleting a worker first keeps its last PR reading
 on its follows (`pullRequest.final`, `captureFinalPullRequest` in
 `deleteEnvironment`): a follow whose worker is gone still reports a merge
-or close it had not reported, once, then ends. `list_workflows` shows a
+or close it had not reported, once, then ends. The owning node also retains the
+last 1,000 terminal PR readings in `environment-final-pr.json` before deleting
+a worker. Remote follows read those tombstones through `get_environment` with
+`includeFinalPrState`, recovering a merge even after missed events or restart.
+A `create_pr` follow stores the publication tab identity and reports
+`pr-not-created` once if its turn ends without a URL, with a transcript link
+and instructions to retry. Pending dispatches and unavailable node reads
+keep publication and Resolve attempts pending beyond their start grace.
+Owning-node action receipts replay completed launches and slash commands
+before mutable PR or busy-session checks. `list_workflows` shows a
 follow with what started it, its PR URL, whether it is still followed, the
 last state reported and a Resolve tab's progress, and the worker with its PR
 fields.

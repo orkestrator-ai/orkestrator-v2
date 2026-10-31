@@ -202,9 +202,13 @@ export function registerEnvironmentCommands(
     }
     return health;
   });
-  register("get_environment", async ({ environmentId }, { storage }) => {
+  register("get_environment", async ({ environmentId, includeFinalPrState }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;
+    return environment
+      ? reconcileProjectHomeEnvironment(environment, storage)
+      : includeFinalPrState === true
+        ? storage.getFinalEnvironmentPr(asString(environmentId, "environmentId"))
+        : null;
   });
   // `claude-state-*` frames are emitted only on change, so a client whose
   // disconnect outlasted gateway replay reads the persisted state here instead

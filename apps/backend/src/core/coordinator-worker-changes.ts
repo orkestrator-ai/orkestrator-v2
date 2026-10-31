@@ -456,11 +456,11 @@ export async function readWorkerChanges(
 ): Promise<JsonRecord> {
   const environmentKey = environmentChangeResourceKey(environment.id);
   const uncommittedKey = uncommittedChangeResourceKey(environment.id);
-  const [sinceBase, uncommitted] = await Promise.all([
-    readMeasurement(run, environmentKey, options),
-    // Every uncommitted path is read (bounded) to mark sinceBase rows.
-    readMeasurement(run, uncommittedKey, options, true),
-  ]);
+  // First materialize the Git scope: its initial measurement can advance the
+  // environment projection revision. Read sinceBase after that so its live
+  // detail identities still belong to the revision returned to this caller.
+  const uncommitted = await readMeasurement(run, uncommittedKey, options, true);
+  const sinceBase = await readMeasurement(run, environmentKey, options);
   const uncommittedPaths = new Set(uncommitted.rows.map(rowPath));
   const base =
     environment.diffBaseOverride?.commit ??

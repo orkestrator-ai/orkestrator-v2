@@ -304,25 +304,18 @@ export function registerCoordinatorWorkerTurnActions(
             );
         let delegationOpened = false;
         if (result.startsTurn === true) {
-          try {
-            const opened = await run<{ opened?: boolean }>(
-              context,
-              remote ? "open_coordinator_node_delegation" : "open_coordinator_delegation",
-              {
-                scope,
-                ...(remote ? { nodeId: remote.nodeId } : {}),
-                environmentId,
-                tabId,
-                requestId,
-              },
-            );
-            delegationOpened = opened.opened === true;
-          } catch (error) {
-            console.warn(
-              "[coordinator] Could not open a delegation for a worker command:",
-              error instanceof Error ? error.message : error,
-            );
-          }
+          const opened = await run<{ opened?: boolean }>(
+            context,
+            remote ? "open_coordinator_node_delegation" : "open_coordinator_delegation",
+            {
+              scope,
+              ...(remote ? { nodeId: remote.nodeId } : {}),
+              environmentId,
+              tabId,
+              requestId,
+            },
+          );
+          delegationOpened = opened.opened === true;
         }
         return { ...result, delegationOpened };
       },

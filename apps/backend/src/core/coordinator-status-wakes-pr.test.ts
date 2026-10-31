@@ -110,7 +110,11 @@ async function follow(
   current: MailWorld,
   worker: MailActor,
   source: CoordinatorPullRequestFollow["source"],
-  extra: { prUrl?: string; resolve?: { tabId: string; requestedAt: string } } = {},
+  extra: {
+    prUrl?: string;
+    resolve?: { tabId: string; requestedAt: string };
+    publication?: { tabId: string; requestedAt: string };
+  } = {},
   requestId = `pr-follow:${source}`,
 ) {
   const main = await current.main();
@@ -627,4 +631,78 @@ describe("pull request status wakes", () => {
         .map((carrier) => carrier.notice?.resource.kind),
     ).toEqual(["pull-request", "pull-request"]);
   });
+});
+
+for (const ending of ["idle", "unknown"] as const) {
+  test(`a PR tab ending ${ending} without a URL reports once across restart`, async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("failed-pr");
+    const tabId = "pr-tab";
+    await follow(current, worker, "create-pr", {
+      publication: { tabId, requestedAt: new Date(timers.now()).toISOString() },
+    });
+    activity.set(`${worker.environmentId}:${tabId}`, "working");
+    await settle(current);
+    expect(current.wakes(coordinator)).toBe(0);
+    activity.set(`${worker.environmentId}:${tabId}`, ending);
+    await current.restart();
+    await settle(current);
+    await settle(current);
+    await current.restart();
+    await settle(current);
+    expect(states(current, coordinator)).toEqual(["pr-not-created"]);
+    expect(current.received(coordinator)[0]).toContain("get_tab_transcript");
+    expect((await followOf(current, worker))?.terminalNotifiedAt).toBeDefined();
+  });
+}
+
+test("a queued Resolve remains pending beyond the start grace", async () => {
+  const current = await createWorld();
+  const coordinator = await current.main();
+  const worker = await current.addEnvironment("queued-resolve");
+  await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: true });
+  const tabId = "slow-resolve";
+  const association = await follow(current, worker, "resolve-conflicts", {
+    resolve: { tabId, requestedAt: new Date(timers.now()).toISOString() },
+  });
+  await current.storage.coordinators.updateCoordinatorWorkflowAssociation(
+    association.id,
+    (item) => {
+      item.nodeId = "bk_leaf";
+      return true;
+    },
+  );
+  let pending = true;
+  let tab: "idle" | "working" = "idle";
+  current.coordinator.setRemoteAccess({
+    workerState: async () => ({ environment: "running", tab, requestPending: pending }),
+    pullRequestReading: async () => ({
+      reading: {
+        prUrl: PR_URL,
+        prState: "open",
+        hasMergeConflicts: true,
+        mergeability: "dirty",
+        checkSummary: null,
+        viewerCanMerge: null,
+        confirmed: true,
+        recheckArmed: false,
+      },
+    }),
+    nodeName: async () => "Leaf",
+    environmentPr: async () => ({}),
+    workflow: async () => null,
+    lastAssistantExcerpt: async () => undefined,
+  });
+  timers.advance(COORDINATOR_RESOLVE_START_GRACE_MS * 2);
+  await settle(current);
+  expect(current.wakes(coordinator)).toBe(0);
+  expect((await followOf(current, worker))?.pullRequest?.resolve?.finishedAt).toBeUndefined();
+  pending = false;
+  tab = "working";
+  await settle(current);
+  expect(current.wakes(coordinator)).toBe(0);
+  tab = "idle";
+  await settle(current);
+  expect(states(current, coordinator)).toEqual(["resolve-finished"]);
 });

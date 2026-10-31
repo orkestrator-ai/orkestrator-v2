@@ -124,3 +124,11 @@ timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-command-filter-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.2 seconds logged.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.czctSA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate completion. The passing owner's bounded runner removed its raw output; only its successful exit and duration were retained.
 - **Assessment:** recurrence confirmed by the complete unchanged owner pass. Shared-host contention remains a hypothesis; no command implementation, assertion, deadline or skip changed, and the aggregate remains non-green.
+
+## Coordinator recovery review — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name repaired-full-suite -- mise run test:full`, Bun 1.4.4 on Linux. Workspace reservation: four slots, two isolated workers per package; root: one slot; bridges: two slots. Browser and Electron reruns also ran on this host.
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`, `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx:711`, expected one projection read and received two (1924.28 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name isolated-native-commands-existing -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit zero in 9.1 s. The passing runner removed its raw output.
+- **Evidence:** `/tmp/orkestrator-test-run.eeYqDS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed after completion). The same assertion already failed in preparation before these backend fixes.
+- **Assessment:** recurrence of the tracked intermittent failure. Shared-host contention remains a hypothesis; no renderer code, assertion, timeout or skip changed.

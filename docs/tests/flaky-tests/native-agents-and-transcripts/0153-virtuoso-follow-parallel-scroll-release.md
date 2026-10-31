@@ -111,3 +111,19 @@ assertion, timeout or skip changed.
 ## Mobile-title coverage review — 2026-10-27
 
 The nine-worker component suite repeated the desktop small-wheel `false` instead of `auto` assertion. The complete unchanged owner passed with one worker in 9.5 seconds. Exact command, aggregate counts and related failure evidence are in [1155](../aggregate-validation-runs/1155-webkit-title-tooltip-0202-validation.md#coverage-review-validation--2026-10-27). No follow implementation, assertion, timeout or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-browser-suite -- mise run test:browser`
+repeated the desktop follow-decision failure at line 43 (`false` instead of
+`auto`, five-second deadline). Full component totals were 974 passed, 106
+skipped and four failed (764.2 s). The complete unchanged owner passed with
+exit 0 in 5.4 s (two desktop cases, two mobile skips):
+
+```sh
+mise run test:logged -- --name recorded-virtuoso-follow -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+Aggregate evidence is `orkestrator-test-run.CtuZX3/repaired-browser-suite.log.gz`
+below the host temporary directory. Passing owner output was removed. No
+owner implementation, assertion, timeout or skip changed; no cause was established.

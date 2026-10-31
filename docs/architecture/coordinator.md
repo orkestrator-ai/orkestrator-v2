@@ -51,6 +51,11 @@ transcripts, attachments, and generated configuration live under application
 data. Opening Coordinator does not run project setup scripts, install
 dependencies, copy environment files, or load repository hooks.
 
+A control-MCP operator or the CLI addresses a conversation as a public session
+through this runtime ID; `apps/backend/src/core/public-api/sessions.ts` resolves
+it from the coordinator store, never by creating an environment or pane layout.
+See [control-mcp.md](control-mcp.md#coordinator-conversations).
+
 Unmounting the page or changing projects detaches the view only. Backend-owned
 sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without

@@ -76,3 +76,16 @@ mise run test:logged -- --name failed-turn-mcp-store-owner -- bun test --cwd app
 ```
 
 Evidence: `orkestrator-test-run.oROs6h/failed-turn-default-suite.log.gz` and the inner `orkestrator-test-run.O6Rkzg/` directory beneath the host temporary directory. The full aggregate remains failed; an isolated owner pass is not a repair. No source-store implementation, assertion, timeout or skip changed.
+
+## Machine-load review recurrence — 2026-10-31
+
+`mise run test` on the coordinator machine-load branch, on a host at about 99%
+CPU with a `dev:test` profile running, repeated both cases: the missing
+`lockFile` at 23.92 ms and the next case's `ENOENT` at 348.59 ms. The complete
+unchanged owner passed alone (15 pass, 0.97 s):
+
+```sh
+bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+No source-store code, assertion, timeout or skip changed.

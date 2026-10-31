@@ -59,7 +59,7 @@ export class BackendRuntime {
   readonly prMonitor: PrMonitorRuntime;
   /** claude-tmux sessions, interactive panes, Claude state polls and the orphan sweep. */
   readonly tmux: TmuxRuntime;
-  /** Last plan-usage readings, login refreshers and coordinator Keychain clears. */
+  /** Account mutations, sign-ins, usage caches and container login state; see AgentAccountsRuntime. */
   readonly accounts: AgentAccountsRuntime;
   /** The short-lived `docker ps` snapshot shared by status reads. */
   readonly containerStates = new DockerContainerStateCache();

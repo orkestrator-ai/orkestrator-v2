@@ -69,6 +69,23 @@ describe("SetupPendingOverlay", () => {
     expect(screen.getByText("Claude will connect automatically")).toBeTruthy();
   });
 
+  test("shows the queued opening prompt while setup runs", () => {
+    const { rerender } = render(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
+    );
+    expect(screen.queryByTestId("setup-pending-prompt")).toBeNull();
+
+    rerender(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="running"
+        subtext="x"
+        pendingPrompt="Fix the login bug"
+      />,
+    );
+    expect(screen.getByTestId("setup-pending-prompt").textContent).toBe("Fix the login bug");
+  });
+
   test("Skip button requires a confirmation step before firing the override", () => {
     render(<SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />);
 

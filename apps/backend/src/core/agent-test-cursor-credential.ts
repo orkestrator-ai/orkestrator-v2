@@ -22,6 +22,11 @@ export function agentTestHostCursorCredentialPath(dataDir: string): string {
 }
 
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
+/**
+ * Process-wide on purpose: the process entry loads it once from its own data
+ * directory, so two agent-test backends in one process would see one key
+ * (docs/architecture/backend-runtime.md).
+ */
 let hostCursorCredential: { apiKey: string; apiKeyExpiresAtMs?: number } | undefined;
 
 export type CursorApiKeySource = "config" | "host-env" | "host-snapshot" | "none";

@@ -14,7 +14,7 @@ import {
 } from "@orkestrator/protocol/agents-md-orkestrator";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { validateGitRefName } from "./commands-agent-support.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { CommandFailedError, runCommandBuffer } from "./shell.js";
@@ -76,7 +76,9 @@ export interface AgentsMdPrDependencies {
   worktreeRoot: string;
 }
 
-export function defaultAgentsMdPrDependencies(): AgentsMdPrDependencies {
+export function defaultAgentsMdPrDependencies(
+  gitHubConfig: GitHubCliConfigSource | undefined,
+): AgentsMdPrDependencies {
   return {
     git: async (args, { cwd, timeoutMs = 60_000, input }) =>
       (
@@ -99,7 +101,11 @@ export function defaultAgentsMdPrDependencies(): AgentsMdPrDependencies {
       const { stdout } = await runCommandBuffer(gitHubCli(), args, {
         cwd,
         timeoutMs,
-        env: { ...(await gitHubCliEnv()), GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" },
+        env: {
+          ...(await gitHubCliEnv(gitHubConfig)),
+          GH_PROMPT_DISABLED: "1",
+          GH_NO_UPDATE_NOTIFIER: "1",
+        },
       });
       return stdout.toString("utf8");
     },
@@ -198,6 +204,8 @@ export async function readAgentsMdSectionFromBase(input: {
   root: string;
   baseBranch: string;
   deps?: AgentsMdPrDependencies;
+  /** The backend's storage, for `gh`'s selected credential when `deps` is left out. */
+  gitHubConfig?: GitHubCliConfigSource;
 }): Promise<{
   baseBranch: string;
   baseCommit: string;
@@ -206,7 +214,7 @@ export async function readAgentsMdSectionFromBase(input: {
   fileExists: boolean;
   section: AgentsMdSection;
 }> {
-  const deps = input.deps ?? defaultAgentsMdPrDependencies();
+  const deps = input.deps ?? defaultAgentsMdPrDependencies(input.gitHubConfig);
   const baseBranch = validateGitRefName(input.baseBranch, "base branch");
   let fetchError: string | undefined;
   await fetchBase(input.root, baseBranch, deps).catch((error: unknown) => {
@@ -263,6 +271,8 @@ export function openAgentsMdPullRequest(input: {
   reason: string;
   nodeName?: string;
   deps?: AgentsMdPrDependencies;
+  /** The backend's storage, for `gh`'s selected credential when `deps` is left out. */
+  gitHubConfig?: GitHubCliConfigSource;
 }): Promise<AgentsMdPrResult> {
   const existing = running.get(input.key);
   if (existing) return existing;
@@ -274,7 +284,7 @@ export function openAgentsMdPullRequest(input: {
 async function withPrivateDirectory(
   input: Parameters<typeof openOnce>[0],
 ): Promise<AgentsMdPrResult> {
-  const deps = input.deps ?? defaultAgentsMdPrDependencies();
+  const deps = input.deps ?? defaultAgentsMdPrDependencies(input.gitHubConfig);
   await fs.mkdir(deps.worktreeRoot, { recursive: true });
   const directory = await fs.mkdtemp(path.join(deps.worktreeRoot, "agents-md-"));
   try {
@@ -292,8 +302,10 @@ async function openOnce(input: {
   reason: string;
   nodeName?: string;
   deps?: AgentsMdPrDependencies;
+  /** The backend's storage, for `gh`'s selected credential when `deps` is left out. */
+  gitHubConfig?: GitHubCliConfigSource;
 }): Promise<AgentsMdPrResult> {
-  const deps = input.deps ?? defaultAgentsMdPrDependencies();
+  const deps = input.deps ?? defaultAgentsMdPrDependencies(input.gitHubConfig);
   if (!/^[a-f0-9]{8,64}$/.test(input.key))
     throw new AgentsMdPrError("invalid", "Invalid request key.");
   const baseBranch = validateGitRefName(input.baseBranch, "base branch");

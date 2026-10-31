@@ -1,10 +1,20 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import { createServer } from "node:net";
+import { GatewayContext } from "../../../apps/backend/src/gateway-context.js";
+import { GatewayLifecycle } from "../../../apps/backend/src/gateway-lifecycle.js";
 import os from "node:os";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultDataDir } from "../../../apps/backend/src/data-dir.js";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../apps/backend/src/fixed-ports.js";
 import * as connection from "../src/client/service-connection.js";
+import { freeServicePort } from "../src/client/commands/service.js";
+import { parseOptions } from "../../../apps/backend/src/options.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
 
@@ -20,11 +30,19 @@ afterEach(async () => {
 });
 
 async function fixture(
-  options: { publish?: boolean; tty?: boolean; credentialFailure?: boolean } = {},
+  options: {
+    publish?: boolean;
+    tty?: boolean;
+    credentialFailure?: boolean;
+    defaultDir?: boolean;
+    endpoints?: Array<{ role: string; url: string }>;
+  } = {},
 ) {
   const box = await createSandbox();
   boxes.push(box);
-  const dataDir = path.join(box.root, "data");
+  const dataDir = options.defaultDir
+    ? defaultDataDir(process.platform, box.env, box.root)
+    : path.join(box.root, "data");
   const bin = path.join(dataDir, "backend/releases/9.9.9/node_modules/orkestrator/bin");
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, "orkestrator.js"), "// fixture");
@@ -47,7 +65,7 @@ async function fixture(
           pid: process.pid,
           startedAt: new Date().toISOString(),
           url: ADDRESS,
-          endpoints: [],
+          endpoints: options.endpoints ?? [],
           authFile,
           dataDir,
           appVersion: "9.9.9",
@@ -138,6 +156,67 @@ test.each(["human", "json"])("deadline expiry reports not ready in %s output", a
       authFile: null,
     });
   else expect(result.out).toContain("not reported ready yet");
+});
+
+function installedArgs(dataDir: string): string[] {
+  return JSON.parse(readFileSync(path.join(dataDir, "backend", "service.json"), "utf8")).args;
+}
+
+test("a second backend's Tailscale Serve keeps one port across reinstalls", async () => {
+  const f = await fixture();
+  const first = await f.run(["--", "--tailscale-serve"]);
+  expect(first.code).toBe(0);
+  expect(first.out).toContain("keeps a free port chosen at install");
+  const args = installedArgs(f.dataDir);
+  expect(args.slice(0, 2)).toEqual(["--tailscale-serve", "--port"]);
+  const port = Number(args[2]);
+  expect(port).toBeGreaterThan(0);
+  expect([DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT]).not.toContain(port);
+
+  expect((await f.run(["--", "--tailscale-serve"])).code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(args);
+});
+
+test("a second backend's own --port is kept and needs no note", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--tailscale-serve", "--port", "45000"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve", "--port", "45000"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test("a second backend without Serve is told its port moves, and stays unpinned", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--host", "100.64.0.10"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--host", "100.64.0.10"]);
+  expect(result.out).toContain("changes on each start");
+  expect(result.out).toContain("-- --port PORT");
+});
+
+test("the default data directory's Serve keeps the fixed port and no note", async () => {
+  const f = await fixture({ defaultDir: true });
+  const result = await f.run(["--", "--tailscale-serve"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test.each(["human", "json"])("%s output names the local listeners", async (output) => {
+  const local = "http://127.0.0.1:45001/";
+  const f = await fixture({
+    endpoints: [
+      { role: "control", url: "http://127.0.0.1:45002/" },
+      { role: "client", url: local },
+    ],
+  });
+  const result = await f.run(["--output", output, "--timeout", "10s"]);
+  expect(result.code).toBe(0);
+  if (output === "json") expect(JSON.parse(result.out).result.clientUrls).toEqual([local]);
+  else {
+    expect(result.out).toContain(local);
+    expect(result.out).not.toContain("45002");
+  }
 });
 
 /** A launcher that has already given up by the time the install starts waiting. */
@@ -375,4 +454,80 @@ test("install waits through exhausted boots until the launcher records rollback"
     code: "operation-failed",
     message: expect.stringContaining("went back to 2.23.0"),
   });
+});
+
+test.each(["0", "34121", "34122", "-1", "65536", "garbage", "045000"])(
+  "reinstall replaces an unsuitable saved Serve port %s",
+  async (saved) => {
+    const f = await fixture();
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const file = path.join(f.dataDir, "backend/service.json");
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    config.args = ["--tailscale-serve", "--port", saved];
+    writeFileSync(file, JSON.stringify(config));
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const args = installedArgs(f.dataDir);
+    const options = parseOptions(args, {});
+    expect(options.port).toBeGreaterThan(0);
+    expect([34121, 34122]).not.toContain(options.port);
+    expect(options.strictGatewayPort).toBe(true);
+  },
+);
+
+test("a pinned Serve service parses as strict and cannot silently fall back", async () => {
+  const f = await fixture();
+  expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+  const options = parseOptions(installedArgs(f.dataDir), {});
+  expect(options.strictGatewayPort).toBe(true);
+  const held = createServer();
+  await new Promise<void>((resolve, reject) => {
+    held.once("error", reject);
+    held.listen(options.port!, "127.0.0.1", resolve);
+  });
+  const ctx = new GatewayContext(
+    {
+      dataDir: f.dataDir,
+      rendererRoot: f.dataDir,
+      backend: { invoke: async () => null },
+      env: {},
+      strictPort: options.strictGatewayPort,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    },
+    {
+      gatewayCredentialMatches: () => false,
+      gatewayCredentialExpiresAt: () => null,
+      isOriginAllowed: () => false,
+    },
+  );
+  const lifecycle = new GatewayLifecycle(ctx, { handle: async () => {} });
+  const savedArgs = installedArgs(f.dataDir);
+  try {
+    await expect(
+      lifecycle.listenWithPortFallback("127.0.0.1", options.port!),
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+    expect(ctx.servers.size).toBe(0);
+    await new Promise<void>((resolve) => held.close(() => resolve()));
+    // Once the conflicting process exits, the retry uses the saved pin.
+    expect((await lifecycle.listenWithPortFallback("127.0.0.1", options.port!)).port).toBe(
+      options.port!,
+    );
+    expect(installedArgs(f.dataDir)).toEqual(savedArgs);
+  } finally {
+    if (held.listening) await new Promise<void>((resolve) => held.close(() => resolve()));
+    await lifecycle.stop();
+  }
+});
+
+test("service allocation retries zero and reserved fixed ports", async () => {
+  const ports = [0, 34121, 34122, 45000];
+  const calls: number[] = [];
+  expect(
+    await freeServicePort(async () => {
+      const port = ports.shift()!;
+      calls.push(port);
+      return port;
+    }),
+  ).toBe("45000");
+  expect(calls).toEqual([0, 34121, 34122, 45000]);
+  await expect(freeServicePort(async () => 34121)).rejects.toThrow("Unable to allocate");
 });

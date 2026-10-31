@@ -21,11 +21,8 @@ import {
   type DragStartEvent,
   DragOverlay,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { Button } from "@/components/ui/button";
 import {
   ArrowUpDown,
@@ -614,6 +611,10 @@ export function HierarchicalSidebar() {
   const projectSortableItems = useMemo(
     () => projectSortableIds(projectTree, collapsedProjectFolders),
     [projectTree, collapsedProjectFolders],
+  );
+  const projectSortingStrategy = useMemo(
+    () => projectTreeSortingStrategy(projectTree, projectSortableItems),
+    [projectTree, projectSortableItems],
   );
   const totalEnvironmentCount = activityEnvironments.length;
   const deletingEnvironments = useEnvironmentStore((state) => state.deletingEnvironments);
@@ -1292,7 +1293,7 @@ export function HierarchicalSidebar() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={projectSortableItems} strategy={verticalListSortingStrategy}>
+        <SortableContext items={projectSortableItems} strategy={projectSortingStrategy}>
           {projectTree.map((entry) =>
             entry.kind === "project" ? (
               renderProjectGroup(entry.project)

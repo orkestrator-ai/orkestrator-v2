@@ -62,6 +62,8 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
   } finally {
     for (const pid of owned.filter(processAlive)) signalProcess(pid, "SIGKILL");
     await waitForStopped(owned, 5_000);
-    await rm(directory, { recursive: true, force: true });
+    // Windows may release Chromium's SQLite handles just after the process
+    // exit probe succeeds. Keep profile removal bounded while those close.
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

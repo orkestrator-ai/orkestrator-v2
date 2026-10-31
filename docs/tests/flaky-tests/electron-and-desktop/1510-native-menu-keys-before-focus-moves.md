@@ -24,8 +24,8 @@ again, even after `webContents.isFocused()` returned true. All five cleanup
 iterations passed. The failed run's [Linux artifact](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41219984351/artifacts/13050125215)
 retains the trace and screenshot.
 
-The spec now also observes the textbox's DOM focus before sending the single
-native `a`. This checks Chromium's restoration of the active element after
+The spec now also observes `document.hasFocus()` and the textbox's DOM focus
+before sending the single native `a`. This checks Chromium's restoration of the active element after
 native-view focus; it does not call the textbox's `focus()` or retry typing.
 Windows must regain native-view focus without an explicit foreground request;
 Linux/Xvfb still supplies the native-window focus a window manager would give.
@@ -35,3 +35,10 @@ platforms, and five real blocked-shutdown cleanup iterations. The cleanup
 fixture uses Electron in Node mode instead of the Unix-only `sleep` command.
 Successful menu runs attach the observed events, dismissal, page focus and
 textbox value; cleanup runs attach the owned process tree and stopped helper.
+
+The same run passed all five Windows menu iterations (Electron 45.0.0). Each
+reported two `shortcuts:open` events, two `new-window` events, About dismissed,
+page focus restored and the textbox containing `a`. Each Windows cleanup
+iteration reported its helper included in the owned tree and all owned PIDs
+stopped, then failed removing Chromium's SQLite profile file with `EBUSY`.
+Profile deletion now uses bounded filesystem retries after shutdown checks.

@@ -1263,6 +1263,30 @@ test("a profile requesting more than the host budget is clamped, not refused", a
   expect(done.results[0]).toMatchObject({ status: "passed", exitCode: 0, limitation: null });
 });
 
+// Playwright otherwise starts half the host's cores whatever was reserved, so
+// the browser suite ran eight workers on a three-slot grant beside the full
+// unit suite and timed out across unrelated specs (2026-10-31).
+test("a command learns the slots it was granted and that review validation runs it", async () => {
+  const report = `printf '%s %s' "$ORKESTRATOR_TEST_WORKERS" "$ORKESTRATOR_REVIEW_VALIDATION"`;
+  const { root, run } = await fixture([command("sized", report)]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [report]: { resources: [], workers: 3, memoryMiB: 256 } },
+    }),
+  );
+  const done = await waitFor(root, run, 12000, {
+    ORKESTRATOR_TEST_HOST_WORKERS: "4",
+    ORKESTRATOR_TEST_HOST_MEMORY_MIB: "1024",
+    // An inherited value must not stand in for the grant.
+    ORKESTRATOR_TEST_WORKERS: "16",
+  });
+  expect(done.results[0]).toMatchObject({ status: "passed", reservedWorkers: 3 });
+  expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toBe("3 1");
+});
+
 test("an unusable scheduling config degrades to plain scheduling instead of losing every result", async () => {
   const { root, run } = await fixture([
     command("first", "printf first"),

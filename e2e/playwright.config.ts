@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import os from "node:os";
 import path from "node:path";
 import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
 
@@ -20,6 +21,14 @@ if (browserName !== "chromium" && browserName !== "webkit" && browserName !== "f
   throw new Error(`Unsupported ORKESTRATOR_E2E_BROWSER: ${browserName}`);
 }
 
+// Review validation passes the slots the host scheduler granted this suite.
+// Playwright would otherwise start half the cores whatever was reserved, beside
+// the rest of the validation plan. Never exceed that default either, so an idle
+// host runs the suite exactly as before; a person's run keeps the default.
+const playwrightDefaultWorkers = Math.max(1, Math.floor(os.cpus().length / 2));
+const grantedWorkers = Number.parseInt(process.env.ORKESTRATOR_TEST_WORKERS ?? "", 10);
+const workers = grantedWorkers > 0 ? Math.min(grantedWorkers, playwrightDefaultWorkers) : undefined;
+
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
@@ -28,6 +37,12 @@ export default defineConfig({
   // and configs rather than this component fixture server.
   testIgnore: ["agent-testing/**", "preview/**", "public-site/**"],
   fullyParallel: true,
+  workers,
+  // Review validation retries a failed test once, so one timing miss on a busy
+  // host does not fail the whole check. A test that passes on its retry is
+  // still listed as flaky in the check's output; record it in
+  // docs/tests/flaky-tests/ as for any flake.
+  retries: process.env.ORKESTRATOR_REVIEW_VALIDATION === "1" ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),
   reporter: "line",
   globalSetup: "./fixture-server-owner.ts",

@@ -21,6 +21,7 @@ import {
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
@@ -229,7 +230,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
     vite = spawn("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         VITE_DEV_HOST: "127.0.0.1",
@@ -238,6 +239,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
       },
     });
     ownProcessGroup(vite);
+    recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
       executablePath: electronExecutable,
@@ -253,6 +255,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
       },
     });
+    recordElectronDiagnostics(app);
     launchedApp = app;
     dismissStartupDialogs(app);
     const window = await app.firstWindow();

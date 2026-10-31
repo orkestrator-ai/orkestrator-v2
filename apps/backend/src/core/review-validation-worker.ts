@@ -274,6 +274,13 @@ async function execute(cmd, index, readyAt) {
     delete env.ORKESTRATOR_VALIDATION_HEAD_REF;
     delete env.ORKESTRATOR_TEST_PARENT_RESERVATION;
     delete env.ORKESTRATOR_VALIDATION_RESOURCES;
+    delete env.ORKESTRATOR_TEST_WORKERS;
+    // Lets a suite tell review validation from a person's run of it.
+    env.ORKESTRATOR_REVIEW_VALIDATION = "1";
+    // The slots the host granted are the command's worker count. A runner that
+    // sizes itself (Playwright starts half the cores) would otherwise run more
+    // workers than were reserved and starve every other command on the host.
+    if (!cooperative && result.reservedWorkers) env.ORKESTRATOR_TEST_WORKERS = String(result.reservedWorkers);
     if (!cooperative) env.ORKESTRATOR_TEST_PARENT_RESERVATION = run.id;
     if (cooperative) env.ORKESTRATOR_VALIDATION_RESOURCES = JSON.stringify(resources);
     if (cooperative) { env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE = channel; env.ORKESTRATOR_VALIDATION_HEAD_REF = run.plan.headRef; }

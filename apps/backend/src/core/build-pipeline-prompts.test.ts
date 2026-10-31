@@ -690,6 +690,37 @@ describe("build pipeline prompts", () => {
     );
   });
 
+  test("verificationPrompt states the backend's ancestry answer for the validated commit", () => {
+    const snapshot = { status: "clean" as const, head: "captured-head" };
+    const ancestry = (isAncestor: boolean) =>
+      verificationPrompt(pipeline(), "", "main", snapshot, undefined, {
+        headRef: "validated-sha",
+        head: "captured-head",
+        isAncestor,
+      });
+
+    const kept = ancestry(true);
+    expect(kept).toContain(
+      "**Validated commit in history**: the backend confirmed that the validated commit `validated-sha` is an ancestor of the captured HEAD `captured-head`",
+    );
+    expect(kept).not.toContain("**Validated commit not in history**");
+
+    const rewritten = ancestry(false);
+    expect(rewritten).toContain(
+      "**Validated commit not in history**: the backend confirmed that the validated commit `validated-sha` is not an ancestor of the captured HEAD `captured-head`",
+    );
+    expect(rewritten).toContain("do not check the ancestry again");
+    // The fact precedes the rule that tells the verifier what it means.
+    expect(rewritten.indexOf("**Validated commit not in history**")).toBeLessThan(
+      rewritten.indexOf("**Recorded failures**"),
+    );
+
+    // Without an answer the verifier checks the ancestry itself, as before.
+    const unknown = verificationPrompt(pipeline(), "", "main", snapshot);
+    expect(unknown).not.toContain("**Validated commit");
+    expect(unknown).toContain("git merge-base --is-ancestor <headRef> HEAD");
+  });
+
   test("verificationPrompt keeps the checkout's Git-visible state unchanged", () => {
     const prompt = verificationPrompt(pipeline(), "", "main");
 
@@ -1037,6 +1068,12 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("The verifier does not rerun checks");
     expect(prompt).toContain(ADDRESS_OUTPUT_CONTRACT);
     expect(prompt).not.toContain("End with a validation report as your final message");
+    // A rebase would rewrite the validated commit away, and Verify could then
+    // credit no repair; validation is not rerun to recover.
+    expect(prompt).toContain(
+      "Keep the validated commit `validated-sha` in this branch's history: do not rebase, amend, squash or reset",
+    );
+    expect(prompt).toContain("merge origin/release into this branch instead of rebasing onto it");
     // The contract stays inside the system frame, before the implementation-mode rules.
     expect(prompt.indexOf("Report your work in the fix result")).toBeLessThan(
       prompt.indexOf("This is an implementation turn"),

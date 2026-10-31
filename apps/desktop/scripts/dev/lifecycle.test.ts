@@ -1,4 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +12,9 @@ import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   electronReadinessTimeoutMs,
+  outputTail,
   startDevelopment,
+  withOutputTails,
   configuredDevWorktreeRoot,
   profileWorktreeLocation,
 } from "./lifecycle.js";
@@ -90,6 +94,33 @@ describe("Electron readiness", () => {
     // after a fixed timeout meant `mise run dev` never reached the app.
     expect(electronReadinessTimeoutMs("development")).toBeNull();
     expect(electronReadinessTimeoutMs("agent-test")).toBe(60_000);
+  });
+});
+
+describe("startup failure output", () => {
+  // The isolated runner resets the profile, deleting electron.log and vite.log,
+  // so an Electron that exits before readiness must quote its own output.
+  test("quotes the latest output of both streams, bounded", () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    }) as unknown as ChildProcess;
+    const tail = outputTail(child, 16);
+    child.stdout!.emit("data", Buffer.from("early output\n"));
+    child.stderr!.emit("data", Buffer.from("renderer failed\n"));
+    // Only the newest characters are kept, whichever stream they came from.
+    expect(tail()).toBe("renderer failed");
+  });
+
+  test("names each tail that has output and omits empty ones", () => {
+    expect(
+      withOutputTails("Electron exited before readiness (code 0, signal none)", {
+        Electron: () => "No usable Codex toolchain",
+        Vite: () => "",
+      }),
+    ).toBe(
+      "Electron exited before readiness (code 0, signal none)\nElectron output tail:\nNo usable Codex toolchain",
+    );
   });
 });
 

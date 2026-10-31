@@ -57,6 +57,16 @@ no check still fails and `limitations` is empty.
   the diff. Only this round's live Address session after its latest review
   counts. A round whose clean review went straight to Verify, or whose Address
   was skipped or never had a result accepted, has no report and Verify says so.
+- **The validated commit stays in history.** Verify credits a repair only when
+  it comes after the commit validation ran on, and validation is not rerun. The
+  Address prompt (`validationHistoryRule`) therefore forbids rebasing,
+  amending, squashing or resetting the validated commits and has Address merge
+  the target branch when a repair needs upstream commits. Before Verify, the
+  stage asks `get_environment_commit_ancestry` whether that commit is an
+  ancestor of the captured HEAD and states the answer in the prompt
+  (`validationAncestry` in `build-pipeline-stage-prompts.ts`). When Git cannot
+  answer, the section is left out and the verifier checks the ancestry itself.
+  A graph's Verify node captures no HEAD, so it always checks it itself.
 - **Older sessions.** `addressReportKind: "fix-result"` on the session is the
   recorded marker of a typed Address turn. An Address session without it was
   started before the typed handoff (or by a path with no result transport): it

@@ -17,7 +17,7 @@ import path from "node:path";
 const root = path.resolve(import.meta.dir, "..", "..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
-type MiseTask = { run?: string | string[]; env?: Record<string, string> };
+type MiseTask = { run?: string | string[]; env?: Record<string, string>; depends?: string[] };
 
 const miseTasks = (): Record<string, MiseTask> =>
   (Bun.TOML.parse(read("mise.toml")) as { tasks: Record<string, MiseTask> }).tasks;
@@ -316,6 +316,24 @@ test("one-shot browser tasks own setup/cleanup and reserve their workspace witho
     expect(policy.cooperativeCommands).not.toContain(command);
   }
   expect(policy.commandProfiles[full].covers).toContain(design);
+});
+
+// A new host or a Playwright upgrade otherwise fails every browser test with
+// "Executable doesn't exist" (review validation on a fresh machine, 2026-10-31).
+test("suites that launch Playwright's Chromium install it first without pruning other builds", () => {
+  const tasks = miseTasks();
+  expect(tasks["playwright:install"]!.run).toBe(
+    "bunx playwright install --no-remove --no-progress chromium",
+  );
+  for (const task of [
+    "test:browser",
+    "test:agent:browser",
+    "test:agent:browser:isolated",
+    "test:agent:design:isolated",
+    "test:agent:docker",
+  ]) {
+    expect(tasks[task]!.depends).toContain("playwright:install");
+  }
 });
 
 test("the live coordinator suite runs only when asked for", () => {

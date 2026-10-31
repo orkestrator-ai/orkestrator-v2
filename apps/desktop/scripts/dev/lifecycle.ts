@@ -121,6 +121,31 @@ function attachLog(child: ChildProcess, filePath: string, onLine?: (line: string
   child.stderr?.on("data", (chunk: Buffer) => void writer.write(chunk).catch(() => undefined));
 }
 
+/**
+ * The last few KiB a child printed on either stream, for a startup error to
+ * quote. The logs it also writes live in the profile, which the isolated
+ * runner's reset deletes, so an Electron that exits before readiness would
+ * otherwise leave nothing to read (review validation, 2026-10-31).
+ */
+export function outputTail(child: ChildProcess, maxChars = 4_000): () => string {
+  let tail = "";
+  const keep = (chunk: Buffer) => {
+    tail = (tail + chunk.toString("utf8")).slice(-maxChars);
+  };
+  child.stdout?.on("data", keep);
+  child.stderr?.on("data", keep);
+  return () => tail.trim();
+}
+
+/** `message` followed by each named output tail that has anything in it. */
+export function withOutputTails(message: string, tails: Record<string, () => string>): string {
+  const sections = Object.entries(tails)
+    .map(([name, read]) => [name, read()] as const)
+    .filter(([, text]) => text.length > 0)
+    .map(([name, text]) => `\n${name} output tail:\n${text}`);
+  return `${message}${sections.join("")}`;
+}
+
 async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -650,6 +675,7 @@ export async function startDevelopment(
       },
     });
     attachLog(vite, path.join(profile.logDir, "vite.log"));
+    const viteTail = outputTail(vite);
     if (!vite.pid) throw new Error("Vite failed to start");
     await writeStatus({
       pids: { ...status.pids, vite: vite.pid },
@@ -675,6 +701,9 @@ export async function startDevelopment(
       },
     });
     if (!electron.pid) throw new Error("Electron failed to start");
+    const electronTail = outputTail(electron);
+    const startupFailure = (message: string) =>
+      new Error(withOutputTails(message, { Electron: electronTail, Vite: viteTail }));
     await writeStatus({
       pids: { ...status.pids, electron: electron.pid },
       processStartTimes: { ...status.processStartTimes, electron: childStartTime(electron) },
@@ -692,15 +721,20 @@ export async function startDevelopment(
               ELECTRON_READINESS_TIMEOUT_MS,
             )
           : setTimeout(
-              () => reject(new Error("Timed out waiting for Electron/backend readiness")),
+              () => reject(startupFailure("Timed out waiting for Electron/backend readiness")),
               timeoutMs,
             );
       electron!.once("error", reject);
       electron!.once("exit", (code, signal) =>
-        reject(
-          new Error(
-            `Electron exited before readiness (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
-          ),
+        // Output still in the pipes lands after "exit"; let it reach the tail.
+        setTimeout(
+          () =>
+            reject(
+              startupFailure(
+                `Electron exited before readiness (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
+              ),
+            ),
+          250,
         ),
       );
       attachLog(electron!, path.join(profile.logDir, "electron.log"), (line) => {

@@ -63,10 +63,14 @@
       "memoryMiB": 128
     },
     "mise run test:browser": {
-      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"]
+      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"],
+      "workers": 8,
+      "minWorkers": 4
     },
     "mise run test:logged -- --name browser -- mise run test:browser": {
-      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"]
+      "resources": ["host:tcp:1422", "host:tcp:4423", "workspace:output/playwright"],
+      "workers": 8,
+      "minWorkers": 4
     }
   }
 }

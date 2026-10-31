@@ -68,6 +68,11 @@ import {
   type FixtureServer,
 } from "./web-annotations-support";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  recordElectronDiagnostics,
+  recordProcessOutput,
+  withElectronDiagnostics,
+} from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -137,6 +142,7 @@ async function launchElectron(
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
     },
   });
+  recordElectronDiagnostics(app);
   dismissStartupDialogs(app);
   // Keep a bounded tail of main-process output for startup diagnostics only.
   let tail = "";
@@ -638,7 +644,7 @@ exit 91
   const vite = spawn("bun", ["run", "dev"], {
     cwd: webRoot,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       VITE_DEV_HOST: "127.0.0.1",
@@ -647,10 +653,11 @@ exit 91
     },
   });
   ownProcessGroup(vite);
+  recordProcessOutput("vite", vite);
   const partial = { temporaryRoot, profile, profilePath, rendererUrl, vite } as Stack;
   stack = partial;
   await waitForUrl(rendererUrl);
-  const { app, window } = await launchElectron(partial);
+  const { app, window } = await withElectronDiagnostics(() => launchElectron(partial));
   partial.app = app;
   partial.window = window;
 

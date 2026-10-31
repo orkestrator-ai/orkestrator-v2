@@ -712,3 +712,54 @@ formatting and scoped lint pass; the full default suite passes in 170 seconds.
 The complete unchanged streaming owner then passed alone (exit 0, 47.7 s),
 confirming the 0767 recurrence for this run. The native branch failures remain
 persistent; they are not newly classified flakes.
+
+## PR auto-merge review validation — 2026-10-31
+
+The exact recorded command, `mise run test:logged -- --name browser -- mise run
+test:browser`, completed with 982 passed, 106 skipped and eight failed using
+nine Playwright workers (634.1 s). The complete repository command, `mise run
+test`, passed all four groups after the checkout-local pinned Codex binary was
+installed. Auto-merge backend, monitor, launch, startup, and rendered ActionBar
+regressions and scoped static checks passed.
+
+The browser failures were in unchanged owners:
+
+- Mobile `PaneBreakpoint.spec.ts:98`: first visible transcript message 35 instead of 36.
+- Both viewports, `ToolGroupFold.spec.ts:442`: the appended group retained scrollTop 704 instead of zero.
+- Mobile `DataSavingGateway.spec.ts:18`: `gateway-state` was absent after reload.
+- Desktop `BackgroundTaskOutcome.spec.ts:18`: container Task outcome card focus timed out.
+- Desktop `KeyboardShortcuts.spec.ts:33`: two xterm helper textareas matched a strict locator.
+- Both viewports, `AgentLaunchDialog.spec.ts:18`: native branch selection retained `rel` instead of `release/2.0`.
+
+Evidence is `orkestrator-test-run.FPsNFB/browser.log.gz` below the host temporary
+directory. The complete unchanged native branch owner also failed alone with
+one worker (two passed, two failed, 23.6 s):
+
+```sh
+mise run test:logged -- --name native-datalist-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+Its evidence is `orkestrator-test-run.DXTVKS/native-datalist-isolated.log.gz`.
+The remaining five complete browser owners were rerun sequentially in one
+worker, without source, assertion, timeout, or skip changes:
+
+```sh
+mise run test:logged -- --name browser-failing-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts e2e/ToolGroupFold.spec.ts e2e/DataSavingGateway.spec.ts e2e/BackgroundTaskOutcome.spec.ts e2e/KeyboardShortcuts.spec.ts --workers=1
+```
+
+The complete five-owner rerun passed (exit 0, 277.1 s). This confirms the
+six non-native-picker aggregate failures were intermittent in this run. The
+native picker remains non-green in its separate unchanged owning-file run.
+No browser implementation, assertion, timeout, or skip changed. Shared-host
+load and concurrent fixture activity were observed, but no root cause was
+established. The failed aggregate prevented the chained public-site suite
+from starting; no public-site files changed.
+
+## PR auto-merge main-merge validation — 2026-10-31
+
+- **Merge parents:** feature `b5590b25e`, target main `1fac33ff6`. Original merge conflicts were only four prose registry documents; both branches' observations were preserved. Additional checks covered the pre-existing uncommitted toolbar visual adjustment.
+- **Static checks:** `mise run format:check`, `mise run lint` (warnings only), and `mise run test:logged -- --name merge-feature-types -- mise run typecheck` passed. Typechecking initially needed the newly merged desktop `@babel/core` dependency; `mise exec -- bun install --frozen-lockfile` installed it without lockfile changes.
+- **Default suite:** `mise run test:logged -- --name merge-feature-tests -- mise run test` failed after 374.5 s logged. Root, bridges and protocol passed. All web tests passed (10,989 passed, ten skipped). Backend had two registered source-lock setup failures, case [0932](../backend-services-and-tooling/0932-mcp-source-lock-setup-under-load.md#auto-merge-main-merge-validation-recurrence--2026-10-31); the complete unchanged owner passed alone (1.1 s). Desktop encountered the missing dependency before installation completed; its complete source-hint documentation owner passed afterwards (1.3 s). The original aggregate remains failed.
+- **Browser suite:** `mise run test:logged -- --name merge-feature-browser -- mise run test:browser`, nine Playwright workers, finished with 1,019 passed, 108 skipped and three failed (607.7 s logged): both native branch-picker cases retained `rel` instead of `release/2.0`, and mobile ToolGroupFold retained scrollTop 704 instead of zero. The component-stage failure prevented the chained public-site stage from starting; no public-site files changed.
+- **Complete unchanged owners:** `mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1` finished with 40 passed and two failed (103.5 s). All 38 ToolGroupFold cases passed, confirming [0747](../web-ui/0747-tool-group-overflow-follow.md#auto-merge-main-merge-validation--2026-10-31); both persistent native branch-selection failures remained. No owning source, assertion, timeout or skip changed.
+- **Evidence:** `orkestrator-test-run.0oakL2/merge-feature-tests.log.gz`, inner `orkestrator-test-run.oLFJHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, `orkestrator-test-run.xHtE03/merge-feature-browser.log.gz`, and `orkestrator-test-run.OdWuh9/merge-browser-owners.log.gz`, below the host temporary directory.

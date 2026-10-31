@@ -77,7 +77,12 @@ export interface Fixture {
 }
 
 export function createFixture(
-  options: { environmentType?: "local" | "containerized"; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    environmentType?: "local" | "containerized";
+    env?: NodeJS.ProcessEnv;
+    /** Added Claude accounts' directories (`claude-account-copies.ts`). */
+    claudeAccountHomes?: () => Promise<string[]>;
+  } = {},
 ): Fixture {
   const root = mkdtempSync(path.join(tmpdir(), "mcp-mgmt-"));
   const home = path.join(root, "home");
@@ -181,6 +186,7 @@ export function createFixture(
       emit: (event, payload) => events.push([event, payload]),
       probe,
       loadRollout: async () => rollout.value,
+      claudeAccountHomes: options.claudeAccountHomes,
       readContainerFile: async (_containerId, filePath) => {
         if (environment.status !== "running") return { state: "offline" };
         const text = containerFiles.get(filePath);

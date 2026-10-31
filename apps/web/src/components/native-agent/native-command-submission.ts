@@ -13,9 +13,11 @@ import {
   withCommandIdentities,
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
+  GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
 } from "@orkestrator/protocol/agent-slash-commands";
+import { parseGoalCommandArguments } from "@orkestrator/protocol/native-agent-goal";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   NativeAgentCommandCatalogueState,
@@ -44,6 +46,12 @@ export type NativeCommandSubmission =
     }
   /** Orkestrator's compact action; never a prompt, never queued. */
   | { kind: "compact"; command: NativeAgentSlashCommand }
+  /**
+   * `/goal`: runs now whether or not a turn is running, and never queues.
+   * `arguments` is what follows the name, as typed. With nothing to run
+   * (`/goal`, `/goal status`) the composer opens the goal panel instead.
+   */
+  | { kind: "goal"; command: NativeAgentSlashCommand; arguments: string; opensPanel: boolean }
   /** Refused before sending; the draft is kept. */
   | { kind: "rejected"; message: string; literalEscape?: boolean };
 
@@ -66,6 +74,9 @@ export interface NativeCommandSubmissionInput {
 
 export const HANDOFF_COMMAND_MESSAGE =
   "Send a normal message first to complete the agent handoff; slash commands cannot carry transferred history.";
+
+export const GOAL_HANDOFF_MESSAGE =
+  "Send a normal message first to complete the agent handoff; a goal cannot carry transferred history.";
 
 function selectedIntent(command: NativeAgentSlashCommand): SelectedCommandIntent {
   return {
@@ -113,6 +124,22 @@ function attachmentRefusal(
     return `${command.name} accepts image attachments only. Remove the other files and retry.`;
   }
   return undefined;
+}
+
+/**
+ * Why `/goal` with these arguments cannot run, before asking the backend. A goal
+ * sends its own turns, and those cannot carry transferred history, so one must
+ * not start while a handoff is waiting for its first message.
+ */
+export function goalCommandRefusal(
+  goalArguments: string,
+  pendingHandoff: boolean,
+): string | undefined {
+  const parsed = parseGoalCommandArguments(goalArguments);
+  if (parsed.kind === "error") return parsed.message;
+  return pendingHandoff && (parsed.kind === "set" || parsed.kind === "resume")
+    ? GOAL_HANDOFF_MESSAGE
+    : undefined;
 }
 
 export function classifyNativeCommandSubmission(
@@ -178,6 +205,17 @@ export function classifyNativeCommandSubmission(
     }
     return { kind: "compact", command };
   }
+  if (command.id === GOAL_COMMAND_ID) {
+    const goalArguments = resolution.token.arguments;
+    const refusal = goalCommandRefusal(goalArguments, input.pendingHandoff);
+    if (refusal) return { kind: "rejected", message: refusal };
+    return {
+      kind: "goal",
+      command,
+      arguments: goalArguments,
+      opensPanel: parseGoalCommandArguments(goalArguments).kind === "status",
+    };
+  }
   if (input.pendingHandoff && command.executionKind !== "session-action") {
     return { kind: "rejected", message: HANDOFF_COMMAND_MESSAGE };
   }
@@ -208,6 +246,7 @@ export function draftCommandBusyTitle(
   if (command.id === COMPACT_COMMAND_ID) {
     return `${command.name} runs only while ${state.agentLabel} is idle`;
   }
+  if (command.id === GOAL_COMMAND_ID) return `Run ${command.name} now; it never queues`;
   return command.inputPolicy?.busy === "idle" && state.canQueue
     ? `Queue ${command.name} — it runs when ${state.agentLabel} is idle`
     : undefined;

@@ -98,6 +98,7 @@ function sameOriginAdapter(nativeRetry: boolean): EventStreamContractAdapter {
         onmessage: ((event: { data: string; lastEventId: string }) => void) | null = null;
         onerror: (() => void) | null = null;
         readyState = 0;
+        addEventListener(_type: string, _listener: () => void): void {}
         lastEventId: string | null = null;
         timer: ReturnType<typeof setTimeout> | null = null;
         closed = false;

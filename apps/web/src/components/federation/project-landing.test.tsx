@@ -192,7 +192,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
           expect(
             screen.getByText(mode === "leaf" ? "Project Home" : "Project Coordinator"),
           ).toBeTruthy();
-          expect(screen.queryByTestId("leaf-mode-coordinator-gate")).toBeNull();
+          expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
           expect(useRemoteWorkspaceStore.getState().active).toBeNull();
         }
       } finally {

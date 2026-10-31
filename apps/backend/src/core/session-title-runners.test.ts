@@ -38,7 +38,7 @@ function executable(body: string): string {
 }
 
 /** The Codex CLI pinned by `config/codex-version.json`, as the app ships it. */
-function pinnedCodexCli(): string {
+function pinnedCodexCli(): string | undefined {
   const repoRoot = path.join(import.meta.dir, "../../../..");
   const { version } = JSON.parse(
     readFileSync(path.join(repoRoot, "config", "codex-version.json"), "utf8"),
@@ -59,7 +59,7 @@ function pinnedCodexCli(): string {
     path.join(toolchainRoot, "codex", version, `${platform}-${architecture}`, "codex"),
     path.join(repoRoot, "binaries", "codex"),
   ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 afterEach(() => {
@@ -93,8 +93,14 @@ describe("Codex title runner", () => {
     expect(args.slice(0, execIndex)).toEqual(
       expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never"]),
     );
-    for (const feature of ["shell_tool", "hooks", "plugins", "apps", "multi_agent"]) {
+    for (const feature of ["shell_tool", "hooks", "plugins", "apps", "multi_agent", "view_image"]) {
       expect(args.slice(0, execIndex).join(" ")).toContain(`--disable ${feature}`);
+    }
+    for (const override of [
+      "skills.include_instructions=false",
+      "tools.experimental_request_user_input.enabled=false",
+    ]) {
+      expect(args.slice(0, execIndex).join(" ")).toContain(`--config ${override}`);
     }
     expect(args.slice(execIndex)).toEqual(
       expect.arrayContaining([
@@ -108,44 +114,45 @@ describe("Codex title runner", () => {
     expect(args.at(-1)).toBe("-");
   });
 
-  test("the pinned Codex parser accepts the production argument shape and secured catalog", () => {
-    const codexPath = pinnedCodexCli();
-    expect(
-      existsSync(codexPath),
-      `Pinned Codex CLI not found at ${codexPath}. Run \`mise run toolchain:install --tool codex\` ` +
-        `(or \`mise run download:codex\` for binaries/codex), or set CODEX_PROTOCOL_BINARY.`,
-    ).toBe(true);
-    const directory = temporaryDirectory();
-    // A throwaway home: neither probe may read this machine's Codex login or config.
-    const env = { ...process.env, CODEX_HOME: temporaryDirectory() };
-    const catalogPath = path.join(directory, "catalog.json");
-    const schemaPath = path.join(directory, "schema.json");
-    writeFileSync(catalogPath, JSON.stringify(buildCodexTitleModelCatalog()));
-    writeFileSync(schemaPath, JSON.stringify(buildCodexTitleOutputSchema()));
+  const codexPath = pinnedCodexCli();
+  test.skipIf(!codexPath)(
+    "the pinned Codex parser accepts the production argument shape and secured catalog",
+    () => {
+      if (!codexPath) throw new Error("Pinned Codex CLI is unavailable");
+      const directory = temporaryDirectory();
+      // A throwaway home: neither probe may read this machine's Codex login or config.
+      const env = { ...process.env, CODEX_HOME: temporaryDirectory() };
+      const catalogPath = path.join(directory, "catalog.json");
+      const schemaPath = path.join(directory, "schema.json");
+      writeFileSync(catalogPath, JSON.stringify(buildCodexTitleModelCatalog()));
+      writeFileSync(schemaPath, JSON.stringify(buildCodexTitleOutputSchema()));
 
-    const args = buildCodexTitleCommandArgs(
-      directory,
-      path.join(directory, "title.txt"),
-      catalogPath,
-      schemaPath,
-    );
-    args[args.length - 1] = "--help";
-    expect(spawnSync(codexPath, args, { encoding: "utf8", env }).status).toBe(0);
+      const args = buildCodexTitleCommandArgs(
+        directory,
+        path.join(directory, "title.txt"),
+        catalogPath,
+        schemaPath,
+      );
+      args[args.length - 1] = "--help";
+      expect(spawnSync(codexPath, args, { encoding: "utf8", env }).status).toBe(0);
 
-    const models = spawnSync(
-      codexPath,
-      ["--config", `model_catalog_json=${JSON.stringify(catalogPath)}`, "debug", "models"],
-      { encoding: "utf8", env },
-    );
-    expect(models.status).toBe(0);
-    const parsed = JSON.parse(models.stdout) as { models: Array<Record<string, unknown>> };
-    expect(parsed.models[0]).toMatchObject({
-      slug: CODEX_BACKGROUND_TASK_MODEL,
-      shell_type: "disabled",
-      apply_patch_tool_type: null,
-      input_modalities: ["text"],
-    });
-  });
+      const models = spawnSync(
+        codexPath,
+        ["--config", `model_catalog_json=${JSON.stringify(catalogPath)}`, "debug", "models"],
+        { encoding: "utf8", env },
+      );
+      expect(models.status).toBe(0);
+      const parsed = JSON.parse(models.stdout) as { models: Array<Record<string, unknown>> };
+      expect(parsed.models[0]).toMatchObject({
+        slug: CODEX_BACKGROUND_TASK_MODEL,
+        shell_type: "disabled",
+        apply_patch_tool_type: null,
+        input_modalities: ["text"],
+      });
+      // macOS scans a newly installed binary on first exec, which alone took 4.75 s.
+    },
+    30_000,
+  );
 
   test("hands the source to stdin, reads the output file and cleans up", async () => {
     const root = temporaryDirectory();
@@ -250,6 +257,20 @@ describe("Claude title runner", () => {
     expect(readFileSync(path.join(root, "stdin"), "utf8")).toContain(
       JSON.stringify("PRIVATE-TITLE-SOURCE the login flow is broken"),
     );
+  });
+
+  test("a CLI failure is a rejection, never a title made of its error text", async () => {
+    // How `claude -p` 2.1.314 reports a failure: exit 1, the error on stdout.
+    await expect(
+      generateClaudeSessionTitle({
+        executable: executable(
+          "cat > /dev/null\nprintf 'Not logged in \\302\\267 Please run /login\\n'\nexit 1",
+        ),
+        env: process.env,
+        source: "prompt",
+        run: runCommand,
+      }),
+    ).rejects.toThrow("Not logged in");
   });
 
   test("rejects an empty answer", async () => {

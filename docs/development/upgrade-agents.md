@@ -1049,7 +1049,21 @@ the pinned binary's parser over the production argument shape.
    absolute paths, credentials, and tokens; run
    `scripts/scrub-codex-recording.ts`, use `--strip-content` when appropriate,
    and inspect the diff before committing.
-8. Search for the old version literal. Runtime comments marked “Verified
+8. Re-prove the MCP editor's Codex rules on the new binary, without
+   credentials:
+
+   ```bash
+   CODEX_CLI_PATH=/absolute/path/to/new/codex mise run verify:codex:mcp-live
+   ```
+
+   It compares `codex mcp list --json` in throwaway homes with the catalogue:
+   project trust (`codexProjectTrust` in `native-policy.ts`: exact
+   `[projects."<path>"]` keys, worktree then main checkout), field-by-field
+   merging of same-name entries (`codexMergedStatus` in `catalog.ts`), and
+   which files are sources. A failure means the editor's Codex rows no longer
+   match what Codex loads; fix the mirror and the table in
+   [`mcp-management.md`](../architecture/mcp-management.md) before bumping.
+9. Search for the old version literal. Runtime comments marked “Verified
    against codex …” need to be revalidated before their version is changed.
    Test fixtures and fake user-agent strings do not all need to track the pin;
    update them only when the assertion is intended to represent the current
@@ -1726,7 +1740,22 @@ experiments and the updater.
 5. Confirm the argv contract by hand using the checks above. This is the
    step nothing else covers.
 6. Re-check [what Grok declares versus what it does](#what-grok-declares-versus-what-it-does).
-7. Smoke-test an interactive tab, including the inactive-environment path.
+7. Re-prove the MCP editor's Grok rules on the new binary, without
+   credentials:
+
+   ```bash
+   GROK_CLI_PATH=/absolute/path/to/new/grok mise run verify:grok:mcp-live
+   ```
+
+   It compares `grok inspect --json`, `grok mcp doctor --json` and `grok mcp
+   list --json` in throwaway homes with the catalogue: folder trust
+   (`grokFolderTrust`), which project-bound sources an untrusted folder holds
+   back, the precedence of every file Grok reads (`grokSources` in
+   `providers.ts`), the `[compat.*] mcps` switches (`grokCompat`) and saved
+   enable. Also diff the guide Grok unpacks into `$GROK_HOME/docs/user-guide`
+   (`07-mcp-servers.md`, `05-configuration.md`, `09-plugins.md`) against the
+   previous version's for new sources or policy keys the guard does not cover.
+8. Smoke-test an interactive tab, including the inactive-environment path.
 
 The `stable` pointer, not the binary, decides the channel. `grok --version` for
 1.0.44 printed `[alpha]` although `…/cli/stable` named it; a build can be promoted
@@ -1734,6 +1763,11 @@ without being rebuilt, so the label is not evidence that the pin is wrong. Compa
 against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
 
 ## Repository-wide validation
+
+A pin change can add a native goal command or tool, or move a turn edge the goal
+loop relies on, so re-run `mise run test:agent:goals --credential-source <platform>`
+for the changed provider ([goals.md](../architecture/goals.md)). It makes real
+model calls and is never part of the default tier.
 
 Run the cheap drift, downloader, and manager checks before live downloads:
 

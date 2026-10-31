@@ -336,11 +336,12 @@ export async function syncClaudeAccountSettings(
   accountHome: string,
   hostJsonPath: string,
 ): Promise<"synced" | "unchanged" | "skipped"> {
-  const host = await readJsonObjectFile(hostJsonPath);
-  if (!host) return "skipped";
   const accountJsonPath = path.join(accountHome, ".claude.json");
   let outcome: "synced" | "unchanged" | "skipped" = "skipped";
   const locked = await withClaudeJsonLock(accountJsonPath, async () => {
+    // A waiter must copy the latest revision, even if a newer save overtook it.
+    const host = await readJsonObjectFile(hostJsonPath);
+    if (!host) return;
     const current = await readJsonObjectFile(accountJsonPath);
     if (current === undefined) return;
     const account = current ?? {};
@@ -350,6 +351,16 @@ export async function syncClaudeAccountSettings(
     else delete next.mcpServers;
     if (host.hasCompletedOnboarding === true) next.hasCompletedOnboarding = true;
     const projects: JsonObject = { ...asObject(account.projects) };
+    // Account-only project servers must disappear too. Preserve account-local
+    // history, statistics and trust for projects the host does not name.
+    for (const [projectPath, value] of Object.entries(projects)) {
+      const entry = asObject(value);
+      if (!entry || !("mcpServers" in entry) || asObject(asObject(host.projects)?.[projectPath]))
+        continue;
+      const nextEntry = { ...entry };
+      delete nextEntry.mcpServers;
+      projects[projectPath] = nextEntry;
+    }
     for (const [projectPath, value] of Object.entries(asObject(host.projects) ?? {})) {
       const hostEntry = asObject(value);
       if (!hostEntry) continue;

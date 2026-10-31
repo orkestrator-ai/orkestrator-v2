@@ -35,3 +35,21 @@ Evidence below the host temporary directory:
 and `orkestrator-test-run.th3zhT/merge-pass3-default.log.gz`.
 This repeats the existing asynchronous delivery symptom; no new cause was
 established and no owning source, assertion, deadline or skip changed.
+
+## Goal main-merge validation — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+  The default aggregate reserved workspace/root/bridge/protocol worker budgets
+  of 6/1/2/1; web and desktop used two isolated file workers and backend used
+  four. No browser suite ran alongside it in this worktree. The logger reported
+  679.9 s total, including about 342 s waiting for the shared-host scheduler.
+- **Failure:** after `finishTurn`, the row still had `placement: pending-inject`
+  when `injected` was expected (302.98 ms). Backend reported 12,241 passed,
+  103 skipped and one failed across 822 files.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-node-coordination-owner -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures`
+  passed, exit 0, in 2.0 s.
+- **Evidence:** `orkestrator-test-run.Am7yHz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `orkestrator-test-run.lhybBa/merge-tests.log.gz` below the host temporary
+  directory. The aggregate remained non-green. The complete unchanged owner
+  passed separately; no owning implementation, assertion, deadline or skip
+  changed. The cause remains unconfirmed.

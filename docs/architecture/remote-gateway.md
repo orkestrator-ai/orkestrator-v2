@@ -321,7 +321,7 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   before losing it counts as a first failure again. A server that accepts
   connections and drops them at once keeps backing off.
 - The main stream resumes from its cursor. The gateway's 25 s keepalive also
-  advances the cursor: before each keepalive comment it flushes a cursor frame
+  advances the cursor: before each keepalive it flushes a cursor frame
   past any events a scoped stream filtered out, so a quiet stream reconnects
   from a current position instead of replaying the filtered range. Terminal
   output has no replay, so
@@ -336,8 +336,29 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   mid-wait. Nothing happens when no stream is waiting.
 - None of these early retries resets the ladder. One that fails waits for
   the next step.
-- The browser keeps retrying an `EventSource` itself until it gives up
-  (`CLOSED`). The ladder only takes over from there.
+- A same-origin `EventSource` is closed on its first error and rebuilt on the
+  ladder from the current cursor. Left alone, a browser retries it by itself on
+  a fixed 3 s timer for the whole outage, in step with every other tab the same
+  outage dropped. The gateway still accepts `Last-Event-ID`.
+- A link can drop with no answer at all (a tailnet peer that vanished), and then
+  an open stream never errors: its socket waits on TCP for many minutes. So
+  every client watches for silence. A main stream that shows no sign of life for
+  60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`, two 25 s keepalives and some slack)
+  counts as lost, and an attempt with no answer after 20 s
+  (`GATEWAY_STREAM_CONNECT_TIMEOUT_MS`) counts as failed. Fetch-based clients
+  (direct browser, Electron) read the keepalive comments. An `EventSource` cannot
+  see a comment, so it asks with `keepaliveEvents=1` for a named
+  `gateway.keepalive` event, sent once at connect and then on each tick. A
+  gateway that ignores the parameter sends none, and the client then does not
+  watch that open stream, so an older backend is not taken for a dead link. The
+  terminal streams and the terminal WebSocket share the link and have no watchdog
+  of their own: the main stream's drops them too, and retries any of their
+  attempts still unanswered once it reopens.
+- A stream refused with `401` is no outage, because the link is up and no retry
+  will help. The state goes back to `connecting` while retries continue, so reads
+  run again and show the failure, and an agent-test tab goes to its login page.
+  An `EventSource` cannot read the status that closed it, so an HTTP failure on
+  one asks the same gate with `GET /__orkestrator/gateway-settings`.
 - Going offline in the browser pauses and resets nothing, because a local
   backend stays reachable without internet.
 - The opt-in terminal WebSocket has its own reconnect owner
@@ -351,7 +372,7 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   retry.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
-  backed-off and browser retries until a stream opens. The renderer uses it
+  backed-off retries until a stream opens. The renderer uses it
   to pause presentation reads and show the connection banner (see
   [event-snapshot-recovery.md](event-snapshot-recovery.md#freshness-in-the-ui)).
 

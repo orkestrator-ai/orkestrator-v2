@@ -119,6 +119,21 @@ describe("withSessionActionSlashCommands", () => {
     });
   });
 
+  test("/goal replaces a provider's own row only where the loop is available", () => {
+    const provider = [{ name: "/goal", description: "Native goal", source: "builtin" as const }];
+    const off = withSessionActionSlashCommands(provider, capabilities({}));
+    expect(off.map((command) => command.executionKind)).not.toContain("session-action");
+    const on = withSessionActionSlashCommands(provider, capabilities({ goal: true }));
+    expect(on).toHaveLength(1);
+    expect(on[0]).toMatchObject({
+      name: "/goal",
+      id: "orkestrator:goal",
+      executionKind: "session-action",
+      inputPolicy: { arguments: "optional", attachments: "none" },
+    });
+    expect(on[0]?.inputPolicy?.busy).toBeUndefined();
+  });
+
   test("keeps a provider's own command when the same-named action is unavailable", () => {
     // The old merge deleted any `/steer` whenever steering was unqualified,
     // silently removing a provider command the user could still run.

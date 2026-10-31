@@ -1372,6 +1372,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | `launch_environment` / New environment | Existing backend operation owns creation, startup tab/initial-prompt state, and background start. Its accepted/created/error distinction already reports partial startup. |
 | `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
+| `/goal` (composer) | Added `set_worker_goal`, `get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`; see [Worker goals](#worker-goals). The goal service owns the loop and its limits, and the tools add ownership, a required limit, and one wake. |
 | Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
 
 Repository checkout mutation controls remain unavailable to coordinators.
@@ -1442,6 +1443,65 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
 The coordinator never sees the patch.
+
+### Worker goals
+
+A coordinator can give a worker tab a goal, and is woken once when it stops
+(`plans/goals/403`). The tools sit on the same service as `/goal` and
+`session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
+Coordinator tools cannot configure shell checks; a person configures checks
+through the composer or public API. A coordinator goal ends as an unverified claim.
+
+| Tool | What it does | Retry | Capability |
+| --- | --- | --- | --- |
+| `set_worker_goal` | Sets the goal from structured fields. `maxIterations` is **required**, bounded by `NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit`, with no default; `tokenBudget` is optional. Shell checks are refused; a done report ends as `claimed`. | Same `requestId` replays the receipt. The goal's ID derives from the request, so a retry after a lost receipt finds the goal instead of starting another. | `jobs` |
+| `get_worker_goal` | Status, reason, what the status means, iterations and limit, the last check's result, and recent ended goals. | Read | `environments` |
+| `pause_worker_goal` | Stops the loop. A turn already running finishes. | States an end: a goal that already stopped answers `alreadyStopped`. | `jobs` |
+| `clear_worker_goal` | Removes the goal in any status. It stays in the goal history. | States an end: no goal answers `cleared: false`. | `jobs` |
+
+**Ownership.** Every tool refuses a tab this coordinator did not launch or prompt.
+The durable delegation record says so, the same ownership status wakes use, and
+it outlasts the delegation that made it. A tab a person opened in the same worker
+stays theirs until the coordinator delegates to it, under the existing rules. The
+backend commands (`coordinator-goal-actions.ts`) revalidate the scope and refuse
+the project home, and side agents have no goal tools.
+
+**No resume.** Resuming can raise a limit, which is widening what a goal may spend.
+A coordinator sets a new goal, or leaves a stopped goal for a person to resume.
+
+**One wake.** `set_worker_goal` opens a delegation after the goal is set, or joins
+one already open on the tab; `wakeOwed` in its result says which was arranged, and
+the result says so plainly when none could be. While the goal runs, a turn-end edge
+settles nothing (`goals.holdsTurnEnd`), and neither does the delegation sweep,
+which otherwise reads an idle tab as a finished worker: the tab really is idle
+between iterations and during a check (`workerGoal`, read from the session record so
+it holds across a restart). When the goal ends or pauses, `onGoalReleasedTurnEnd`
+settles the delegation once. A worker's own mail is that wake as usual. Otherwise
+the notice names the outcome (`Its goal is limited (iteration-cap) after 3 of 3
+iterations`) and `get_worker_goal`. A coordinator's own pause or clear of a running
+goal ends the wait too, so that wake arrives at once.
+
+**Status reads.** `get_worker_goal` and `get_tab_state` report the goal through
+`goalForModel`, and `list_agents` adds its status and counts, so an `idle` tab whose
+`goal.running` is true reads as between iterations. A model reads what a worker or
+its check wrote only inside an `<orkestrator-goal-evidence>` frame the text cannot
+close: the agent's report, the status detail, a verifier's summary and the check's
+output. The result says it is evidence and not instructions. Fields are named one by
+one, so a field added to the goal stays out until someone judges it.
+
+**Qualification does not change.** These tools change no platform's tier, boundary
+or delegation, so `coordinator-providers.ts` has nothing to add: any platform that
+can delegate can call them. Whether a *worker* can hold a goal is its own
+`actions.goal` capability, which a refusal reports.
+
+**Not covered: workers on another node.** The tools take no `nodeId`. A remote
+delegation settles from its node's turn state, which does not know about goals, so
+the coordinator would be woken between iterations. A person's `/goal` on a remote
+worker the coordinator delegated to has that problem today.
+
+A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
+it has passed is recorded in `plans/goals/403`.
 
 ## Saved graphs
 
@@ -1646,7 +1706,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
-  test:agent:coordinator` runs five scenarios per platform in a disposable
+  test:agent:coordinator` runs its scenarios per platform in a disposable
   profile. `read-only` attempts every class of mutation and checks that the
   checkout digest is unchanged and that read and discovery tools still answer.
   `async` launches real workers and checks the async launch result, that a
@@ -1658,7 +1718,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (with `address_multi_review` in between), and that a delegated worker held
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
-  coordinator involved. Every scenario with mail also runs the renderer's
+  coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
+  claim, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in
@@ -1677,6 +1738,10 @@ guarantee, not by one end-to-end scenario replayed per platform:
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
   and side agents: `control-mcp-server.test.ts`
+- worker goals: the tools, the schema limit pinned to the constant, refusals for
+  tabs the coordinator does not own, replay and framing:
+  `control-mcp-coordinator-goals.test.ts`; many iterations, one wake, for each way a
+  goal stops, and the sweep's hold: `coordinator-goal-wake.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

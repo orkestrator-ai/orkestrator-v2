@@ -106,6 +106,44 @@ describe("NativeAgentSessionTitles", () => {
     expect(h.titles.resolve(h.read({ providerTitle: "Generated title" }))).toBe("Generated title");
   });
 
+  // Offline half of the title qualification: what the renderer ends up showing
+  // on every platform when nothing could generate a title, and when the
+  // provider will not take the one chosen. Cursor and Grok have no setter.
+  describe.each(["claude", "codex", "opencode", "cursor", "grok", "pi"] as const)("%s", (agent) => {
+    const providerSetter = agent !== "cursor" && agent !== "grok";
+
+    test("falls back to the first message and keeps it", async () => {
+      const h = harness({ generated: null });
+      const read = (overrides: Partial<SessionTitleRead> = {}) =>
+        h.read({
+          agent,
+          ...(providerSetter ? {} : { setProviderTitle: undefined }),
+          ...overrides,
+        });
+      const fallback = "Please fix the OAuth callback race in the login flow";
+      expect(h.titles.resolve(read())).toBe(fallback);
+      await settle(h.titles);
+      expect(h.generate.mock.calls[0]?.[0].agent).toBe(agent);
+      expect(h.records.get("session-1")).toMatchObject({ title: fallback, source: "fallback" });
+      expect(h.titles.resolve(read())).toBe(fallback);
+    });
+
+    test("a provider that refuses the title does not lose it", async () => {
+      const h = harness({ failPush: true });
+      const read = (overrides: Partial<SessionTitleRead> = {}) =>
+        h.read({
+          agent,
+          ...(providerSetter ? {} : { setProviderTitle: undefined }),
+          ...overrides,
+        });
+      h.titles.resolve(read());
+      await settle(h.titles);
+      expect(h.setProviderTitle).toHaveBeenCalledTimes(providerSetter ? 1 : 0);
+      expect(h.records.get("session-1")?.pushed).toBeUndefined();
+      expect(h.titles.resolve(read({ providerTitle: "Provider summary" }))).toBe("Generated title");
+    });
+  });
+
   test("with the generator unavailable the first message is the title", async () => {
     const h = harness({ generated: null });
     h.titles.resolve(h.read());

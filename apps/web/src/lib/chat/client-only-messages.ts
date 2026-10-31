@@ -23,6 +23,8 @@ export const SYSTEM_MESSAGE_PREFIX = "system-";
 
 export const OPTIMISTIC_MESSAGE_PREFIX = "optimistic-";
 export const PEER_MAIL_MESSAGE_PREFIX = "peer-mail-";
+export const GOAL_TURN_MESSAGE_PREFIX = "goal-turn-";
+export const GOAL_STATUS_MESSAGE_PREFIX = "goal-status-";
 
 /**
  * Transcript marker written when the user interrupts a turn.
@@ -136,7 +138,9 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
     message.id.startsWith(ERROR_MESSAGE_PREFIX) ||
     message.id.startsWith(SYSTEM_MESSAGE_PREFIX) ||
     isOptimisticNativeMessage(message) ||
-    message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX)
+    message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX) ||
+    message.id.startsWith(GOAL_TURN_MESSAGE_PREFIX) ||
+    message.id.startsWith(GOAL_STATUS_MESSAGE_PREFIX)
   );
 }
 type PeerMailDisplayMessage = Pick<

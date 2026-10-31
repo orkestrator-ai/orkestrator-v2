@@ -21,8 +21,8 @@ import type {
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
 /** PR detection result containing URL, state, and merge conflict status */
 
-export async function checkDocker(): Promise<DockerAvailability> {
-  return invoke<DockerAvailability>("check_docker");
+export async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
+  return machineInvoke<DockerAvailability>(machine, "check_docker");
 }
 
 /** The latest "can containers reach the agent tools server?" result. */
@@ -47,12 +47,18 @@ export async function dockerStartContainer(containerId: string): Promise<void> {
   return invoke("docker_start_container", { containerId });
 }
 
-export async function dockerStopContainer(containerId: string): Promise<void> {
-  return invoke("docker_stop_container", { containerId });
+export async function dockerStopContainer(
+  containerId: string,
+  machine?: AccountMachine,
+): Promise<void> {
+  return machineInvoke(machine, "docker_stop_container", { containerId });
 }
 
-export async function dockerRemoveContainer(containerId: string): Promise<void> {
-  return invoke("docker_remove_container", { containerId });
+export async function dockerRemoveContainer(
+  containerId: string,
+  machine?: AccountMachine,
+): Promise<void> {
+  return machineInvoke(machine, "docker_remove_container", { containerId });
 }
 
 export async function dockerContainerStatus(containerId: string): Promise<EnvironmentStatus> {
@@ -134,13 +140,13 @@ export interface ContainerInfo {
 }
 
 /** Get Docker system statistics (memory, CPU, disk usage) */
-export async function getDockerSystemStats(): Promise<DockerSystemStats> {
-  return invoke<DockerSystemStats>("get_docker_system_stats");
+export async function getDockerSystemStats(machine?: AccountMachine): Promise<DockerSystemStats> {
+  return machineInvoke<DockerSystemStats>(machine, "get_docker_system_stats");
 }
 
 /** Get all containers using the orkestrator-ai image */
-export async function getOrkestratorContainers(): Promise<ContainerInfo[]> {
-  return invoke<ContainerInfo[]>("get_orkestrator_containers");
+export async function getOrkestratorContainers(machine?: AccountMachine): Promise<ContainerInfo[]> {
+  return machineInvoke<ContainerInfo[]>(machine, "get_orkestrator_containers");
 }
 
 /** Reattach an orphaned container to a project by creating a new environment entry */
@@ -148,8 +154,13 @@ export async function reattachContainer(
   projectId: string,
   containerId: string,
   name?: string,
+  machine?: AccountMachine,
 ): Promise<Environment> {
-  return invoke<Environment>("reattach_container", { projectId, containerId, name });
+  return machineInvoke<Environment>(machine, "reattach_container", {
+    projectId,
+    containerId,
+    name,
+  });
 }
 
 /** Get container logs (non-streaming, returns last N lines) */
@@ -626,31 +637,37 @@ export async function openLocalInEditor(path: string, editor: PreferredEditor): 
 /** Represents a file changed in git */
 
 /** Configured environment image: identity and container-contract compatibility. */
-export async function getDockerImageStatus(): Promise<ImageStatus> {
-  return invoke<ImageStatus>("get_docker_image_status");
+export async function getDockerImageStatus(machine?: AccountMachine): Promise<ImageStatus> {
+  return machineInvoke<ImageStatus>(machine, "get_docker_image_status");
 }
 
 /** Effective Docker daemon topology (endpoint kind, rootless, versions). */
-export async function getDockerTopology(refresh = false): Promise<DockerTopology> {
-  return invoke<DockerTopology>("get_docker_topology", { refresh });
+export async function getDockerTopology(
+  refresh = false,
+  machine?: AccountMachine,
+): Promise<DockerTopology> {
+  return machineInvoke<DockerTopology>(machine, "get_docker_topology", { refresh });
 }
 
 /**
  * Reviewed cleanup: lists this installation's containers and volumes with why
  * each is kept, and binds the removable ones to a short-lived token.
  */
-export async function previewDockerCleanup(): Promise<CleanupPreview> {
-  return invoke<CleanupPreview>("docker_cleanup_preview");
+export async function previewDockerCleanup(machine?: AccountMachine): Promise<CleanupPreview> {
+  return machineInvoke<CleanupPreview>(machine, "docker_cleanup_preview");
 }
 
 /** Removes only the selected resources of one preview; the token is consumed. */
-export async function executeDockerCleanup(selection: {
-  selectionToken: string;
-  containerIds: string[];
-  volumeNames: string[];
-  networkNames?: string[];
-}): Promise<CleanupExecuteResult> {
-  return invoke<CleanupExecuteResult>("docker_cleanup_execute", selection);
+export async function executeDockerCleanup(
+  selection: {
+    selectionToken: string;
+    containerIds: string[];
+    volumeNames: string[];
+    networkNames?: string[];
+  },
+  machine?: AccountMachine,
+): Promise<CleanupExecuteResult> {
+  return machineInvoke<CleanupExecuteResult>(machine, "docker_cleanup_execute", selection);
 }
 
 /** The Docker daemon's capacity (on Docker Desktop, its VM) and disk use. */

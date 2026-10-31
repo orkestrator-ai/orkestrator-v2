@@ -19,6 +19,7 @@ import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js"
 import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
 import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
+import { SESSION_GOAL_HANDLERS } from "./actions-session-goals.js";
 import { SESSION_HANDLERS } from "./actions-sessions.js";
 import { SETTINGS_HANDLERS } from "./actions-settings.js";
 import { TICKET_HANDLERS } from "./actions-tickets.js";
@@ -45,6 +46,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...SESSION_HANDLERS,
     ...SESSION_COMMAND_HANDLERS,
     ...SESSION_CONTROL_HANDLERS,
+    ...SESSION_GOAL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
     ...REVIEW_HANDLERS,

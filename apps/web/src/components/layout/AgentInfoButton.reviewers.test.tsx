@@ -303,7 +303,7 @@ describe("reviewer session boundaries", () => {
     const inventory = within(screen.getByLabelText("MCP servers"));
     for (const name of ["healthy", "disabled", "failed"]) {
       expect(inventory.getAllByText(name).length).toBeGreaterThan(0);
-      expect(inventory.queryByRole("button", { name: new RegExp(name) })).toBeNull();
+      expect(inventory.queryByRole("button", { name: new RegExp(name) }) === null).toBe(true);
     }
     expect(inventory.getByText("Connection refused")).toBeTruthy();
     fireEvent.click(inventory.getByText("healthy"));
@@ -342,7 +342,7 @@ describe("reviewer session boundaries", () => {
       open();
       expect(await screen.findByText(hint)).toBeTruthy();
       expect(Boolean(screen.queryByRole("button", { name: "Sign in to Claude" }))).toBe(shared);
-      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Sign in" }) === null).toBe(true);
     });
   }
 

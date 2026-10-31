@@ -162,7 +162,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [openAppDialog],
   );
   const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
-  const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
@@ -357,10 +356,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const isRunning =
     isLocalReady ||
     (dockerAvailable && !isLocalEnvironment && selectedEnvironment?.status === "running");
-
-  useEffect(() => {
-    if (!dockerAvailable) setDockerStatsOpen(false);
-  }, [dockerAvailable]);
 
   const {
     prUrl,
@@ -2133,7 +2128,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const sourceBranch = selectedEnvironment?.branch || "current branch";
 
   return {
-    dockerAvailable,
     isGrid,
     selectedEnvironmentId,
     selectedProjectId,
@@ -2159,8 +2153,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     repoSettingsProjectId,
     setRepoSettingsProjectId,
     openEnvironmentSettings,
-    dockerStatsOpen,
-    setDockerStatsOpen,
     isOpeningEditor,
     setIsOpeningEditor,
     editorError,

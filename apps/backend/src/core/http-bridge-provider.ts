@@ -1087,8 +1087,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl);
+  listResumableSessions(options?: {
+    includeArchived?: boolean;
+  }): Promise<NativeAgentResumeEntry[]> {
+    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl, options);
   }
 
   slashCommands(sessionId?: string) {

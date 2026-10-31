@@ -33,6 +33,23 @@ export const GATEWAY_CURSOR_EVENT = "gateway.cursor";
 /** Query parameter a fetch-based client uses to resume from its cursor. */
 export const GATEWAY_EVENT_CURSOR_PARAM = "since";
 /**
+ * Query parameter asking for keepalives an `EventSource` can see. It never
+ * surfaces the gateway's `: keepalive` comment, so it asks for this named event
+ * instead. A named event skips `onmessage`, and a gateway that ignores the
+ * parameter just never sends it, which tells the client not to expect any.
+ */
+export const GATEWAY_KEEPALIVE_EVENTS_PARAM = "keepaliveEvents";
+export const GATEWAY_KEEPALIVE_EVENT = "gateway.keepalive";
+/**
+ * A link that drops with no answer (a tailnet peer that vanished) never errors
+ * an open stream: the socket waits on TCP for many minutes. A stream the gateway
+ * has said nothing on for two keepalives (`KEEPALIVE_MS`, 25 s) and some slack is
+ * treated as lost, and a connection attempt that gets no answer is given up on
+ * sooner, so a link that returns is found again promptly.
+ */
+export const GATEWAY_STREAM_SILENCE_LIMIT_MS = 60_000;
+export const GATEWAY_STREAM_CONNECT_TIMEOUT_MS = 20_000;
+/**
  * Matches the gateway's per-client hard buffer (`SSE_CLIENT_HARD_BUFFER_BYTES`)
  * so a legitimate snapshot is never refused, while a peer that never ends a
  * frame cannot grow client memory without bound.

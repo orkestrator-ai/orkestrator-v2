@@ -155,6 +155,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * — Claude's prompt-suggestion chip.
    */
   topAccessory?: ReactNode;
+  /** Above the composer in every layout: the goal pill. */
+  statusAccessory?: ReactNode;
 
   annotations?: readonly TranscriptAnnotation[];
   annotationInteractionEnabled?: boolean;
@@ -221,6 +223,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   asyncQuestionResponses,
   respondToAsyncQuestion,
   topAccessory,
+  statusAccessory,
   annotations = [],
   annotationInteractionEnabled = true,
   onAddAnnotation,
@@ -592,6 +595,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           (pinRefreshShimmer ? <SessionRefreshShimmer active variant="pinned" /> : null) ??
           desyncNotice
         }
+        statusAccessory={statusAccessory}
         topAccessory={
           topAccessory || !isAtBottom ? (
             <div className="flex min-w-0 items-center gap-2">

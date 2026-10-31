@@ -59,13 +59,18 @@ copy_stream() {
     local select=()
     [ "$#" -gt 0 ] && select=(--wildcards --no-wildcards-match-slash "$@")
     # One read of the source feeds four consumers: extraction, the regular
-    # file manifest, the listing used for symlinks and directories, and the
-    # copied root (the stream's first member). A selective listing holds only
-    # the matching members, so there the root is read from the whole stream;
-    # a whole-tree listing already starts with it.
+    # file manifest, the listing used for symlinks and directories, and a
+    # whole-stream listing with block numbers. That last one gives the copied
+    # root (the stream's first member; a selective listing holds only the
+    # matching members) and how the stream ended: GNU tar accepts a stream
+    # that stops right after a complete member, so only the end-of-archive
+    # block proves that nothing was cut off.
     tee >(tar -x -C "$dst" -f - "${filter[@]}" 2>"$WORK/extract.err"; echo "$?" > "$WORK/extract.status") \
         >(tar -tv -f - "${select[@]}" > "$WORK/raw-listing" 2>/dev/null; echo done > "$WORK/listing.status") \
-        >(if [ "${#select[@]}" -gt 0 ]; then tar -tv -f - 2>/dev/null | awk 'NR == 1' > "$WORK/root-entry"; else cat > /dev/null; fi; echo done > "$WORK/root.status") \
+        >(LC_ALL=C tar -tvR -f - 2>/dev/null | awk -v root="$WORK/root-entry" -v end="$WORK/stream-end" '
+            NR == 1 { line = $0; sub(/^block [0-9]+: /, "", line); print line > root }
+            { last = $0 }
+            END { print last > end }'; echo done > "$WORK/root.status") \
         | tar -x -f - "${filter[@]}" \
             --to-command='printf "%s\t%s\t%s:%s\t%s\t%s\n" "$TAR_FILENAME" "$TAR_MODE" "$TAR_UID" "$TAR_GID" "$TAR_SIZE" "$(sha256sum | cut -d" " -f1)"' \
             > "$WORK/source.files" 2>/dev/null
@@ -76,6 +81,10 @@ copy_stream() {
     done
     # A listing that never finished cannot prove the root is not a link.
     if [ ! -s "$WORK/listing.status" ] || [ ! -s "$WORK/root.status" ]; then
+        result status=extract-failed
+        return 3
+    fi
+    if ! grep -q -E '^block [0-9]+: \*\* Block of NULs \*\*$' "$WORK/stream-end"; then
         result status=extract-failed
         return 3
     fi

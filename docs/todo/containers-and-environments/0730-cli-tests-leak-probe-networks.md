@@ -25,15 +25,19 @@ in 0241 unless task 4 below takes the reaper.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Re-checked 2026-10-31
+against `main` at `931e5541`: the switch (`index.ts:2304`, both harnesses),
+`dispose()` from `Backend.shutdown()` (`index.ts:2504`) and the network reaper
+(`container-host-reachability.ts` `reapStaleProbes`) are all in place. Line
+numbers cited below are from the original analysis.
 
 ### Tasks
 
-1. **Confirm the two sources**: run each harness once and diff the probe-network list by label. Status: open; needs a Linux host (the check never probes on macOS, where this was implemented).
+1. **Confirm the two sources**: run each harness once and diff the probe-network list by label. Status: done (2026-10-31, beelink, Linux, Docker Engine 29.9.2): both harnesses leave nothing, and a probing backend stopped by SIGTERM leaves nothing either; see Assumptions and decisions.
 2. **Settle the boot probe on shutdown**: a SIGTERM'd backend removes its probe network before it exits, within a bound. Status: done (2026-10-28).
 3. **Keep harness backends from probing**: the CLI test and scenario backends start without the boot check. Status: done (2026-10-28).
 4. **Make `reapStaleProbes` match its comment**: remove its owner's unattached probe networks, or say it does not. Status: done (2026-10-28); ticks 0241 task 3.
-5. **Regression test and live check**: a unit test for the shutdown path and a before/after network count. Status: unit tests done (2026-10-28), and a live check of `dispose()` and the reaper against Docker Desktop. The harness before/after count on Linux is still open.
+5. **Regression test and live check**: a unit test for the shutdown path and a before/after network count. Status: done. Unit tests 2026-10-28; live check of `dispose()` and the reaper on Docker Desktop 2026-10-28 and on Linux Engine 2026-10-31.
 
 ### 1. Confirm the two sources
 
@@ -143,11 +147,58 @@ Made 2026-10-28 while implementing this file together with
 
 ### Task 1: confirming the sources
 
-- **Chose:** not done here; deferred to a Linux host.
+- **Chose (2026-10-28):** not done here; deferred to a Linux host.
 - **Why:** the work ran on macOS, where `runCheck` returns `not-linux` before
   any Docker call. A harness run here cannot create a probe network, so a
   before/after diff would be empty whatever the code does. `cli.test.ts` ran
   here with the count at 0 before and after; that is not evidence.
+
+### Task 1: Linux qualification (2026-10-31)
+
+- **Chose:** the recommended before/after diff, plus controls with the boot
+  check forced on. With the switch off, a clean diff only proves that the
+  switch works. The controls show that the shutdown fix holds when a backend
+  does probe, and that the measure would catch a leak.
+- **Host:** beelink, Arch Linux, rootful Docker Engine 29.9.2, `main` at
+  `931e5541`, the CLI built with `mise run build:cli`. The daemon had no probe
+  networks at the start (02:18 UTC), and other workers were using it. A
+  `docker events` recorder logged every network create and destroy and every
+  probe-role container event for the whole run.
+- **Harnesses, as shipped (switch off):**
+  - `bun test --cwd packages/cli --preload ../../tests/setup-node.ts
+    tests/cli.test.ts --parallel=1`: 8 passed, and the label list was
+    0 before and 0 after.
+  - `mise run test:cli:scenarios`: all 9 scenarios passed, and the list was
+    0 before and 0 after. None of the 9 scenario owners (`sha256` of each
+    `/tmp/ork-cli-*/data`) created a probe network. One probe network
+    appeared during the run (`ork-33594a4bfd1a31f1-…`, 02:20:38–44). Its
+    owner matches no scenario data directory, it was another process on the
+    daemon, and it removed itself within 6 s.
+- **Controls, switch on** (a throwaway script ran the packaged launcher with
+  `NODE_ENV=development` on a fresh temporary data directory, under a
+  temporary `HOME`):
+  - SIGTERM straight after `ready`, 3 runs: the signal landed before network
+    creation, shutdown took 0.27–0.67 s, and nothing was left.
+  - SIGTERM as soon as the probe network existed, 3 runs: nothing was left.
+    Twice the closed guard and the check's own `finally` removed the network
+    within about 0.3 s. Once both probe containers were running, so
+    `dispose()` waited its 3 s and logged `shutdown removing probe resources
+    … containers=2`. It killed both containers and then removed the network,
+    and the backend exited 3.9 s after the signal.
+  - SIGKILL as soon as the probe network existed: the network leaked, while
+    the two probe containers (`--rm`) went away by themselves. This is the
+    sensitivity control: a leak does show up in the measure.
+  - Restarting that same data directory: the boot check logged `removing 1
+    stale probe network(s)` (the owner reaper from 0241 task 3), then ran and
+    removed its own network. The list went back to 0.
+- **Answers "Needs verification":** on this host, with the probe image
+  already present, the check reaches network creation about 0.5–1 s after
+  `ready`. Without the switch and the shutdown fix, a backend stopped in
+  the following ~5 s would have leaked on most runs, not only when the image
+  had to be pulled.
+- **Cleanup:** this run created only the networks of its own control owners.
+  Each one was removed by its own backend or by the reaper, and the label
+  list ended at 0. Nothing that existed before the run was touched.
 
 ### Task 2: settling the probe on shutdown
 
@@ -219,7 +270,10 @@ Made 2026-10-28 while implementing this file together with
 - In a process that exits at once, a probe container whose start failed
   because its network was gone may stay `Created` under a one-off owner. It
   holds no network.
-- Not seen yet; it needs the Linux qualification below to tell.
+- Linux (2026-10-31): not seen. In every SIGTERM control the probe
+  containers were removed before the process exited. After the SIGKILL
+  control only the network was left, and the containers' `--rm` removed
+  them.
 
 ## Current state
 
@@ -253,6 +307,8 @@ Items 1 to 4 are done (2026-10-28).
 
 ### Qualification
 
+Done 2026-10-31 on beelink (see Assumptions and decisions, task 1).
+
 - On a Linux host with Docker: record
   `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe`,
   run `mise run build:cli`, then
@@ -274,8 +330,9 @@ Items 1 to 4 are done (2026-10-28).
 
 ## Needs verification
 
-- Whether `cli.test.ts`'s development backend leaks on most runs or only when
-  the probe image has to be pulled (task 1 will show it).
+- Answered 2026-10-31 (task 1): with the image present, the check creates
+  its network within about a second of `ready`, so before the fix most quick
+  stops would have leaked, not only those that pulled the image.
 
 ## Related
 

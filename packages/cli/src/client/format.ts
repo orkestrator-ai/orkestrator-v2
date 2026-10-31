@@ -130,6 +130,12 @@ export function sessionLines(session: PublicSessionSummary): string[] {
     ["latest request", session.latestRequestId],
     ["pending interactions", session.pendingInteractionCount],
     ["recoverable dispatch", session.recoverableDispatch],
+    [
+      "goal",
+      session.goal
+        ? `${session.goal.status} (${session.goal.iterations}/${session.goal.maxIterations})`
+        : undefined,
+    ],
   ]);
 }
 

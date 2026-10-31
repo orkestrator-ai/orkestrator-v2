@@ -4,7 +4,8 @@ Checked against `main` at `2459b05c` (2026-10-15); Claude credentials
 against `688f9f69` (2026-10-21); default allowlists and the external egress
 prototype against `b83ae534` (2026-10-22); the production egress gateway and
 the credential-delivery items against branch
-`todo-0018-container-isolation-e228f2a04b8e` (2026-10-25).
+`todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
+against `main` at `931e5541` (2026-10-31).
 
 ## Task analysis
 
@@ -12,15 +13,15 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence exists but is not recorded here).
+1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; ticking it waits for the decision below).
 2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done.
-3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: open.
+3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch once tasks 1 to 3 pass. Status: blocked (on tasks 1 to 3).
 5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
 6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
 7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
 8. **OpenCode and Pi past expiry and sign-out**: live OAuth checks for OpenCode and Pi, including item 7's sign-out removal. Status: blocked (on a fresh host OpenCode or Pi OAuth login).
-9. **Stale statements in this file**: a renamed function, a rootless claim that is now out of date, and the CI run that is not recorded. Status: open.
+9. **Stale statements in this file**: a renamed function, a rootless claim that is now out of date, and the CI run that is not recorded. Status: done 2026-10-31.
 
 ### 1. Gateway on rootful Linux Engine
 
@@ -114,6 +115,63 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
     - Pros: already pass in CI.
     - Cons: they never exercise real TTL-driven turnover.
 
+**Result (2026-10-31).** All three conditions ran against a disposable Docker
+daemon on beelink (Arch Linux, kernel 7.1.8, x86_64): `docker:29-dind`
+(Engine 29.9.2, rootful) in a privileged container with its own data volume
+and a supervisor that restarts `dockerd` when it exits, so the host daemon was
+never restarted or reconfigured. Its `daemon.json` enabled IPv6 on every new
+bridge network (`default-network-opts`), with address pools `172.30.0.0/16`
+and the global-scope `2001:db8:100::/56`. Image: `orkestrator-v2:latest`
+(`2.34.4-beta`, revision `f2d21713`, whose firewall and gateway scripts match
+`main`; capabilities include `egress-gateway=1`, `network-policy=3`), plus
+`orkestrator-v2:q0018-revoke`, the same image with this change's
+`firewall-domains.sh`. The new opt-in suite
+`apps/backend/tests/container-live-egress-conditions.test.ts` creates and
+starts runtimes through the backend (`createDockerContainer`,
+`prepareEgressGatewayForStart`). Details are in
+[container qualification](../../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31).
+- **IPv6: passed, nothing to fix.** The environment network, created by the
+  backend's own `network create`, got `2001:db8:100::/64`. A control container
+  without the sysctl reached a peer's IPv6 echo port. The gateway and the
+  runtime had no IPv6 address at all (`/proc/net/if_inet6` empty) and
+  `disable_ipv6=1` on every interface, including one Docker attached after
+  creation. The runtime could not reach the peer over IPv6 as `node` or root.
+  The report said `ipv6: blocked`, with `ip6tables -P OUTPUT DROP` in the
+  gateway. The same held on a daemon without the IPv6 default when the test
+  attached an IPv6 network to the gateway itself
+  (`ORKESTRATOR_LIVE_IPV6_NETWORK=1`).
+- **Daemon restart: passed, nothing to fix.** With `live-restore` off (two
+  real `dockerd` restarts): a runtime stopped through the backend, and one
+  running when the daemon stopped, both came back with neither container
+  started by Docker. A bare `docker start` of the runtime was refused while
+  its gateway was stopped. The backend's start path brought both up in order
+  with the policy applied: `CapEff` 0, `-P OUTPUT DROP`, IPv6 off, the allowed
+  registry reachable and `example.com` rejected. With `live-restore` on, both
+  containers kept running in the same namespace (gateway `StartedAt`
+  unchanged). The rules, Docker's embedded DNS and a manual refresh all
+  worked afterwards, and the start path returned `ready`.
+- **DNS rotation: one gap found and fixed.** A resolver inside the gateway
+  answered the allowed name with local peers' addresses and rotated them.
+  Added addresses got the full 21,600 s kernel timeout, and a rotated-away
+  address kept the rest of its own timeout. An open connection to it survived
+  the rotation. A watcher probing every 50 ms through five swaps never reached
+  the unlisted peer and was never refused by the carried one. The refresh
+  delay followed the TTL within its bounds (30 s became 300, 4000 s became
+  1800). The kernel dropped an expired address on time with no refresh
+  running, and new connections were refused. **But a connection opened before
+  that expiry kept working, through the next refresh and indefinitely.**
+  `ork_rebuild_allowlist` revoked only what the live set held before the swap,
+  and the kernel had already removed the expired entry. That broke the
+  documented guarantee that an address leaving the set has its tracked
+  connections deleted. **Fix:** every application now records the set's
+  members (`/var/lib/orkestrator/allowed-entries`), and a rebuild revokes what
+  that record or the live set held and the new set lacks. A connection to an
+  expired address is now cut at the next refresh, at most 30 minutes after
+  the expiry. Regression tests: `tests/unit/firewall-refresh.test.ts` ("an
+  address the kernel expired between refreshes still has its connections
+  revoked", which fails before the fix), and the live DNS test, which failed at
+  that assertion on the release image and passes on the patched one.
+
 ### 4. Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap
 
 **Problem.** The cap keeps a second topology alive, one where a root terminal can change the firewall. Every gateway change has to stay correct for both.
@@ -145,7 +203,7 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
 
 **Context.** The "Claude host refresh and mid-session pickup, live (high)" entry. The trigger is a `-p` run with an unknown model (`CLAUDE_HOST_REFRESH_MODEL`). The file says to re-check it after each Claude Code upgrade.
 
-**Investigation.** `refreshHostClaudeLogin` (`apps/backend/src/core/claude-host-login-refresh.ts:35`) is unchanged since `c17f1c8d` (2026-10-22). The keeper polls every five minutes and refreshes inside a five-minute lead (`apps/backend/src/core/container-claude-login-keeper.ts:43`-`:48`, `TOKEN_REPLACEMENT_LEAD_MS` at `apps/backend/src/core/agent-accounts-active.ts:178`), so this file's "last four minutes" is a looser test window than the code's. The pins have moved since the check: `CLAUDE_CLI_VERSION=2.1.309` (`docker/Dockerfile:193`), and the Agent SDK is 0.3.309. `docs/development/upgrade-agents.md:621` says the trigger "is still as checked against 2.1.296", so the required re-check after the upgrade was not done.
+**Investigation.** `refreshHostClaudeLogin` (`apps/backend/src/core/claude-host-login-refresh.ts:35`) is unchanged since `c17f1c8d` (2026-10-22). The keeper polls every five minutes and refreshes inside a five-minute lead (`apps/backend/src/core/container-claude-login-keeper.ts:43`-`:48`, `TOKEN_REPLACEMENT_LEAD_MS` at `apps/backend/src/core/agent-accounts-active.ts:178`), so this file's "last four minutes" is a looser test window than the code's. The pins have moved since the check: `CLAUDE_CLI_VERSION=2.1.314` (`docker/Dockerfile:193`, as of 2026-10-31), and the Agent SDK is 0.3.314. `docs/development/upgrade-agents.md:636` says the trigger "is still as checked against 2.1.296", so the required re-check after the upgrade was not done.
 
 **Decisions.**
 
@@ -156,8 +214,8 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
   - **The user's own host login.**
     - Pros: no extra account.
     - Cons: a failure signs the user out of every Claude client on the host.
-- **Re-check the trigger against 2.1.309 first?**
-  - **Yes, repeat the fake-login container probe on 2.1.309 before the live run (recommended).**
+- **Re-check the trigger against the current pin (2.1.314) first?**
+  - **Yes, repeat the fake-login container probe on the current pin before the live run (recommended).**
     - Pros: cheap, no credentials, and the upgrade guide already demands it.
     - Cons: a fake token still cannot prove a proactive refresh of a real unexpired token.
   - **Go straight to the live run.**
@@ -195,7 +253,7 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
 
 **Context.** The "Grok past expiry with a live login (medium)" entry and the Grok half of the MCP/renewal entry. Both have waited since 2026-10-21 because the host Grok login has been expired. [0061](0061-container-qualification-follow-ups.md) also owes the opt-in `e2e/agent-testing/grok-container-login.spec.ts` run.
 
-**Investigation.** The push this file calls `syncContainerGrokLogin` no longer exists by that name. Grok goes through the shared `syncContainerLogin` (`agent-accounts-containers.ts:636`), with its own entry in the provider table (`:516`) and the sign-out drop at `:669`-`:682`. `ContainerLoginFileWatcher` polls every 60 s (`apps/backend/src/core/container-login-file-watcher.ts:43`). The Grok pin is now 1.0.67 (`docker/Dockerfile:196`); the 2026-10-21 container ran 1.0.52.
+**Investigation.** The push this file calls `syncContainerGrokLogin` no longer exists by that name. Grok goes through the shared `syncContainerLogin` (`agent-accounts-containers.ts:636`), with its own entry in the provider table (`:516`) and the sign-out drop at `:669`-`:682`. `ContainerLoginFileWatcher` polls every 60 s (`apps/backend/src/core/container-login-file-watcher.ts:43`). The Grok pin is now 1.0.70 (`GROK_BUILD_VERSION`, `docker/Dockerfile:196`, as of 2026-10-31); the 2026-10-21 container ran 1.0.52.
 
 **Decisions.**
 
@@ -220,7 +278,7 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
 
 **Context.** The "OpenCode and Pi past expiry with live OAuth logins (medium)" entry. The rotation analysis was made against OpenCode 1.19.0 and Pi 1.2.0 sources.
 
-**Investigation.** The pins have moved to `OPENCODE_CLI_VERSION=1.19.4` and `PI_CLI_VERSION=1.4.0` (`docker/Dockerfile:195`, `:197`). The restriction fails safe: only providers named in `NON_ROTATING_OAUTH_PROVIDERS` (`packages/protocol/src/login-snapshots.ts:226`) keep their refresh token. Any other OAuth provider, including one added upstream since, is staged access-only (`login-snapshots.ts:311`-`:324`). A new provider can therefore cost a sign-out, but cannot leak a rotating token. The merge command is `buildMergeContainerProviderAuthCommand` (`agent-accounts-containers.ts:567`).
+**Investigation.** The pins have moved to `OPENCODE_CLI_VERSION=1.19.5` and `PI_CLI_VERSION=1.4.0` (as of 2026-10-31) (`docker/Dockerfile:195`, `:197`). The restriction fails safe: only providers named in `NON_ROTATING_OAUTH_PROVIDERS` (`packages/protocol/src/login-snapshots.ts:226`) keep their refresh token. Any other OAuth provider, including one added upstream since, is staged access-only (`login-snapshots.ts:311`-`:324`). A new provider can therefore cost a sign-out, but cannot leak a rotating token. The merge command is `buildMergeContainerProviderAuthCommand` (`agent-accounts-containers.ts:567`).
 
 **Decisions.**
 
@@ -262,19 +320,42 @@ Still unproved on rootless with a current image: the firewall suite's gateway-sp
     - Pros: immediate accuracy.
     - Cons: a second edit to the same lines soon after.
 
+**Result (2026-10-31).** Corrected together with task 3's write-up, which
+also records the CI evidence for task 1:
+- "Current state" now names `syncContainerLogin` for the Grok push.
+- The tuple entry no longer says a rootless kernel is unconfirmed, and points
+  at the 2026-10-25 rootless pass.
+- Qualification records the Linux Engine CI runs, re-checked with `gh run
+  view`. 40338400817 (`e8306626`, 2026-10-26) and 40999226305 (`79c35c0b`,
+  2026-10-30, the latest, Engine 28.0.4, image `egress-gateway=1`) passed
+  every step on `ubuntu-24.04` and `ubuntu-24.04-arm`: replacement 12/12,
+  network 4/4, firewall 2/2, readiness 9/9 on each. Run 40409285999 failed
+  only in C14 legacy migration (replacement suite), and the weekly
+  40304582303 in the lifecycle step. PR runs 40746551838 (2026-10-28) and
+  40799843615 (2026-10-29) also passed. `container-qualification.md`'s
+  "Not covered: Linux Engine" line is in the 2026-10-25 Desktop entry and is
+  left as history; the new 2026-10-31 entry records the CI runs.
+- The Claude test window now says five minutes.
+- The pins quoted in tasks 5, 7 and 8 are updated to `docker/Dockerfile`
+  today: Claude Code 2.1.314 with Agent SDK 0.3.314, Grok 1.0.70, OpenCode
+  1.19.5, Pi 1.4.0. The OpenCode and Pi rotation analysis is marked as made
+  against 1.19.0 and 1.2.0 and not re-checked since (task 8 owns that).
+
 Restricted mode limits where a container can connect with an IPv4 ipset
 firewall. Since 2026-10-25 a restricted runtime from a current image is
 enforced from outside: an egress gateway owns its network namespace and the
 runtime holds no `NET_ADMIN`. Containers receive access-only copies of the
 host's rotating OAuth logins, and renewals now reach running containers. What
-remains is live qualification: the gateway on Linux Engine and rootless, and
-renewal delivery with real, fresh provider logins.
+remains is live qualification: the gateway on rootless (Linux Engine CI
+passes and the IPv6, daemon-restart and DNS-rotation conditions are recorded),
+and renewal delivery with real, fresh provider logins.
 
 ## Current state
 
 - Firewall: `docker/init-firewall.sh` (boot, policy 3), `docker/firewall-domains.sh`
   (shared library: per-address expiry, TTL refresh, atomic `ipset swap`,
-  conntrack revocation), `docker/update-firewall.sh` (`--set-domains`,
+  conntrack revocation, which since 2026-10-31 also covers an address the
+  kernel expired between refreshes), `docker/update-firewall.sh` (`--set-domains`,
   `--add`, `--remove`, `--host-ports`, `--refresh-loop`) and
   `docker/network-policy-entrypoint.sh` (records the policy once, root-owned).
 - Allowed traffic sits in one ipset, `allowed-domains`. Under policy 3 it
@@ -359,7 +440,7 @@ renewal delivery with real, fresh provider logins.
   Staging (`accessOnlyLogin` in `portable-inputs.ts`), the restage before
   every `docker start` (`refreshStagedAgentAccountLogins`, now for Codex and
   Grok whether or not an account was added), the account-switch push and a
-  push before every Grok bridge start (`syncContainerGrokLogin`) all blank
+  push before every Grok bridge start (`syncContainerLogin`) all blank
   the refresh token and drop an expired login. Codex's `last_refresh` is set
   to now, so Codex uses its access token (ten days at issue) until it
   expires instead of trying a refresh it cannot make. The entrypoint
@@ -418,7 +499,8 @@ renewal delivery with real, fresh provider logins.
   auth storage, and OpenCode's OAuth plugins call `Auth.get`, a file read, on
   every request. An OpenCode server only learns of a provider first signed in
   after it started when it restarts, as on the host. Checked against
-  the pinned sources (OpenCode 1.19.0 plugins, Pi 1.2.0 `pi-ai`): Anthropic,
+  the sources pinned at the time (OpenCode 1.19.0 plugins, Pi 1.2.0 `pi-ai`;
+  the pins are now 1.19.5 and 1.4.0, not re-checked, see task 8): Anthropic,
   OpenAI (Codex and ChatGPT), xAI, Kimi and Radius store the new refresh token
   on every refresh, so they rotate (OpenAI's and xAI's are known single-use).
   GitHub Copilot keeps the GitHub OAuth token as `refresh` and only exchanges
@@ -475,15 +557,17 @@ renewal delivery with real, fresh provider logins.
      otherwise). Docker refuses a runtime whose gateway is not running
      (observed live). Runtimes have no restart policy, so Docker never starts
      either container after a daemon restart; the backend's start path keeps
-     the order. A live daemon restart was not run (Qualification).
+     the order. A live daemon restart passed on a disposable Linux Engine on
+     2026-10-31, with `live-restore` off and on (Qualification).
    - [x] Gateway image (decided 2026-10-25): reuse the workload image rather
      than build a smaller one. See "Assumptions and decisions".
    - [x] `NET_ADMIN` dropped from gateway runtimes and the `init-firewall.sh`
      sudo grant removed from the image (2026-10-25). The root entrypoint runs
      the firewall step for every image. `no-new-privileges` was reconsidered
      and stays off (see "Assumptions and decisions").
-   - [ ] Qualify on Linux Engine and rootless, including IPv6. Sibling
-     isolation passed on Docker Desktop (2026-10-25). See Qualification.
+   - [ ] Qualify on Linux Engine and rootless. Sibling isolation passed on
+     Docker Desktop (2026-10-25); IPv6, a daemon restart and DNS rotation
+     passed on a disposable Linux Engine (2026-10-31). See Qualification.
    A plain HTTP proxy was not pursued: it does not constrain direct sockets
    without network enforcement beside it.
 2. [x] Change the network mode in place. Decided 2026-10-25 not to build it:
@@ -555,15 +639,31 @@ renewal delivery with real, fresh provider logins.
     gateway applied its firewall 3.8 s after `docker start` and used 1.8 MiB
     and 3 PIDs.
 - Egress gateway on Linux Engine and rootless (high; on by default for
-  restricted runtimes on a current image). Still owed: Linux Engine
-  (amd64 and arm64), a rootless daemon, a daemon with IPv6 enabled, a Docker
-  daemon restart with stopped runtimes and gateways, and DNS rotation. To
-  collect: the `container-live-qualification.yml` workflow runs the live
-  firewall, network, readiness and replacement suites on `ubuntu-24.04` and
-  `ubuntu-24.04-arm` for a pull request that changes them (this branch
-  does). On a rootless host run the same command as above against an image
-  built there. Until Linux Engine passes, `ORKESTRATOR_EGRESS=in-container`
+  restricted runtimes on a current image). Still owed: a rootless daemon
+  (task 2), and the decision whether the CI runs below count as the rootful
+  pass (task 1). On a rootless host run the live suites against an image
+  built there. Until both are recorded, `ORKESTRATOR_EGRESS=in-container`
   restores the in-container firewall.
+  - Linux Engine CI (`container-live-qualification.yml`, recorded
+    2026-10-31 from `gh run view`). Run 40999226305 (head `79c35c0b`,
+    2026-10-30, Engine 28.0.4, image capabilities including
+    `egress-gateway=1,network-policy=3`) passed every step on `ubuntu-24.04`
+    and `ubuntu-24.04-arm`: replacement 12/12, network 4/4 (C22 behind the
+    gateway), firewall 2/2 (C23 and tuples, `CapEff` 0, tampering refused,
+    gateway restart), readiness 9/9 (a gateway that cannot apply its
+    firewall refuses the start) on each runner. Run 40338400817 (`e8306626`,
+    2026-10-26) passed the same steps, and PR runs 40746551838 (2026-10-28)
+    and 40799843615 (2026-10-29) passed too. Run 40409285999 (`e53ea683`)
+    failed only C14 legacy migration in the replacement suite. The weekly
+    run 40304582303 (`main`, 2026-10-26) failed in the lifecycle step.
+  - IPv6, daemon restart and DNS rotation, on a disposable Linux Engine
+    29.9.2 (2026-10-31): see task 3's result and
+    [container qualification](../../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31).
+    The workflow now also runs the IPv6 and DNS rotation cases
+    (`container-live-egress-conditions.test.ts`, with
+    `ORKESTRATOR_LIVE_IPV6_NETWORK=1`). The daemon-restart case runs only
+    with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`, against a disposable
+    daemon.
 - External egress prototype, run on 2026-10-22 on Docker Desktop 29.7.2
   (aarch64) with image `orkestrator-v2:latest` (= `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0`)
   and this change's firewall scripts bind-mounted:
@@ -601,7 +701,8 @@ renewal delivery with real, fresh provider logins.
 - Claude host refresh and mid-session pickup, live (high; on by default).
   Nothing has yet run `refreshHostClaudeLogin` against a real login, because
   doing so spends the host's refresh token. On a host or disposable account
-  whose access token is inside its last four minutes, with a Claude bridge
+  whose access token is inside its last five minutes (the keeper's
+  `TOKEN_REPLACEMENT_LEAD_MS`), with a Claude bridge
   running in a container: confirm the keeper's `-p` run renews the host login
   (new `expiresAt`, no model request billed, the user's `claude` still signed
   in afterwards), that the renewal reaches the container, and that the
@@ -721,16 +822,19 @@ renewal delivery with real, fresh provider logins.
   tracked in [0019-container-platform-qualification.md](0019-container-platform-qualification.md).
   Allowed provider access, blocked destinations, host callbacks, sibling
   isolation and firewall initialisation failure passed live on Docker Desktop
-  on 2026-10-25, behind the egress gateway (above). Still owed there and on
-  Linux Engine: DNS rotation and IPv6.
+  on 2026-10-25, behind the egress gateway (above). For the gateway, DNS
+  rotation and IPv6 passed on a disposable Linux Engine on 2026-10-31
+  (task 3); 0019's own packet matrix tracks its remaining platforms.
 - Policy 3 port tuples ran live on Docker Desktop (Engine 29.9.2, arm64) on
   2026-10-25, through the egress gateway and with the in-container
   firewall. C22 showed that an allowed domain answers on 443, another port on
   the same address is rejected, and Git over SSH reaches GitHub. C23 covered
   per-port edits and revocation, and the TCP/UDP echo-peer tuple test (an
   established flow removed and another kept) passed, so that kernel supports
-  `hash:net,port`. A rootless kernel is still unconfirmed (init fails closed
-  without it); it is part of the Linux Engine and rootless item above. The
+  `hash:net,port`. A rootless kernel passed the tuples on 2026-10-25 with
+  `ip_set`, `xt_set` and `nf_tables` loaded
+  ([container qualification](../../development/container-qualification.md#rootless-linux-host-2026-10-25));
+  the gateway's own rootless checks are task 2. The
   earlier attempt on Docker Desktop 29.8.1 never started a container
   (`/tmp/orkestrator-test-run.0g2KQN/live-firewall.log.gz`). The command:
 
@@ -902,6 +1006,77 @@ Recorded 2026-10-25, while implementing items 1–7.
     login.
   - Cons: after a restart, a container-made login also has a blank refresh
     token, so a later host sign-out removes it too.
+
+Recorded 2026-10-31, while doing tasks 3 and 9.
+
+- **Where the three conditions ran.**
+  - Options: the host's own daemon; a second `dockerd` on the host; a
+    `docker:dind` daemon in a privileged container; a disposable VM.
+  - Chosen: `docker:29-dind`, with its own volume and `daemon.json`, reached
+    through a socket in a private directory and restarted by a supervisor
+    loop. That gave the same Engine version as the host (29.9.2).
+  - Why: the host daemon runs other environments and must not be restarted
+    or reconfigured. A second host `dockerd` needs root and shares the host's
+    network namespace and firewall. No VM was available.
+  - Pros: a real daemon restart and a real IPv6 default, with nothing on the
+    host changed (the host's `net.ipv6.conf.all.forwarding` stayed 0).
+  - Cons: a nested daemon is not a user's machine. Its "host" is the dind
+    container, so a test that needs a host listener (the live network suite,
+    or the firewall suite's published-port check) cannot run against it
+    unchanged. The firewall suite was therefore also run on the host daemon.
+- **IPv6 coverage in CI.**
+  - Options: run the IPv6 case only on daemons whose defaults enable IPv6;
+    or let it attach its own IPv6 network to the gateway when the operator
+    opts in.
+  - Chosen: both. The test uses the daemon default when there is one, and
+    with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` it attaches a ULA network
+    instead. The CI workflow sets the variable. Without either, it logs "IPv6
+    not covered" rather than passing silently.
+  - Why: creating an IPv6 network can switch on the host's IPv6 forwarding,
+    which a developer's live run must never do unasked. Hosted runners are
+    disposable.
+- **Environment networks still do not pass `--ipv6=false`.**
+  - Options: pass it, so a daemon default never gives the network IPv6; or
+    leave network creation as it is.
+  - Chosen: leave it. The namespace owner's sysctl was shown to keep every
+    interface, including one attached later, without IPv6, and the firewall
+    drops IPv6 behind that. The comment in `container-network.ts` and the
+    lifecycle doc now say a daemon default can still give the network IPv6.
+  - Pros: no change to network creation or adoption, and no dependence on
+    how each Engine version handles `--ipv6=false` against
+    `default-network-opts`.
+  - Cons: such a daemon still allocates an IPv6 subnet that nothing uses.
+- **DNS rotation pass criterion.**
+  - Options: a real CDN domain observed for more than one TTL and for six
+    hours; or a resolver the test controls, inside the gateway, rotating
+    peer addresses on demand, with expiry brought forward by editing the
+    address record.
+  - Chosen: the controlled resolver. It drives the production refresh
+    (`update-firewall.sh --refresh`), real `dig`, `ipset` kernel timeouts and
+    `conntrack`, deterministically and in seconds, and it found the
+    revocation gap. A real-CDN six-hour soak was not run. It would add only
+    the observation that a real CDN rotates within its TTL.
+- **Revoking connections to addresses the kernel expired.**
+  - Options: (a) record the set's members at each application and include
+    them in the "before" side of the next diff; (b) sweep every tracked
+    connection at each refresh and re-test it against the set; (c) schedule
+    a refresh at the earliest carried expiry instead of relying on the
+    kernel timeout.
+  - Chosen: (a). It reuses the existing per-tuple revocation, so it revokes
+    exactly what a removal would.
+  - Pros: small, root-only state (`/var/lib/orkestrator/allowed-entries`),
+    bounded by the existing revocation cap, and an image without the record
+    behaves as before.
+  - Cons: the connection is cut at the next refresh, up to 30 minutes after
+    the expiry, not at the expiry itself. New connections are refused from
+    the expiry on. (b) would have to repeat every other accept rule (DNS,
+    host services, ingress) and could cut legitimate flows. (c) adds
+    scheduling state and still needs (a) when a refresh is late.
+  - Only images built from this change carry the fix; existing runtimes get
+    it on rebuild.
+- **Task 1 stays open.** The CI runs are recorded, but whether they count as
+  the rootful qualification is task 1's own decision, and this delegation
+  left task 1 open.
 
 ## Related
 

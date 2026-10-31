@@ -29,7 +29,7 @@ describe("mobile responsive layout contracts", () => {
       "overflow-x-auto",
       "sm:w-[min(calc(100%_-_2rem),56rem)]",
     ],
-    ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
+    ["apps/web/src/components/docker/DockerSettings.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",
       "grid min-w-0 items-center gap-2",

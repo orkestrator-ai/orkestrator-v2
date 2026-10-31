@@ -109,6 +109,7 @@ export interface PrMonitorTarget {
 }
 
 export interface PrDetection {
+  headSha?: string | null;
   baseBranch?: string;
   url: string;
   state: PrState;
@@ -259,7 +260,10 @@ interface PrMonitorEntry {
   reconciliation: Map<string, Set<ReconciliationStep>>;
   /** Latest successfully observed PR identity, including failed persist attempts. */
   observedPr: { url: string; state: PrState } | null;
-  /** Latest check rollup; intentionally runtime state so every UI rehydrates from the monitor. */
+  /** Head confirmed by the separately fetched check rollup. */
+  headSha: string | null;
+  lastSuccessfulCheckStartedAt: string | null;
+  /** Latest check rollup; runtime state so every UI rehydrates from the monitor. */
   checkSummary: PrCheckSummary | null;
   /** Last completed rollup-query attempt; limits GitHub traffic independently of PR polling. */
   lastCheckSummaryAt: number | null;
@@ -652,6 +656,8 @@ export class PrMonitorService {
       reconciliation: new Map(),
       observedPr:
         target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
+      headSha: null,
+      lastSuccessfulCheckStartedAt: null,
       checkSummary: null,
       lastCheckSummaryAt: null,
       viewerCanMerge: null,
@@ -914,6 +920,7 @@ export class PrMonitorService {
     // terminal reconciliation while queued is simply included in this check.
     const generation = entry.generation;
     const detectionTarget = entry.target;
+    const checkStartedAt = this.options.now();
     let transition: PrMonitorTransition | undefined;
     try {
       let detection: PrDetection | null = null;
@@ -949,6 +956,7 @@ export class PrMonitorService {
       } else {
         entry.consecutiveErrors = 0;
         entry.lastSuccessfulCheckAt = this.options.now();
+        entry.lastSuccessfulCheckStartedAt = checkStartedAt;
         if (detection) transition = await this.applyDetection(entry, detection, generation);
         else await this.applyNotFound(entry, generation);
         this.metrics.outcome("pr-detection", transition ? "changed" : "unchanged");
@@ -1307,6 +1315,9 @@ export class PrMonitorService {
       entry.checkSummary =
         detection.checkSummary && detection.checkSummary.total > 0 ? detection.checkSummary : null;
     }
+    // Only a head with checks read for that head can authorize unattended merge.
+    entry.headSha =
+      detection.checkSummaryStatus === "succeeded" ? (detection.headSha ?? null) : null;
     // Like the rollup, the permission belongs to one open PR. An observation
     // that did not look keeps the last answer for the same PR.
     if (detection.url !== previous.prUrl || detection.state !== "open") {
@@ -1531,6 +1542,9 @@ export class PrMonitorService {
       checkSummary: entry.checkSummary,
       lastSuccessfulCheckAt: entry.lastSuccessfulCheckAt,
       viewerCanMerge: entry.viewerCanMerge,
+      mergeability: entry.target.prMergeability ?? null,
+      headSha: entry.headSha,
+      lastSuccessfulCheckStartedAt: entry.lastSuccessfulCheckStartedAt,
     };
   }
 
@@ -1543,6 +1557,8 @@ export class PrMonitorService {
     const summaryChanged =
       shouldClearSummary && (entry.checkSummary !== null || entry.viewerCanMerge !== null);
     if (shouldClearSummary) {
+      entry.headSha = null;
+      entry.lastSuccessfulCheckStartedAt = null;
       entry.checkSummary = null;
       entry.lastCheckSummaryAt = null;
       entry.viewerCanMerge = null;
@@ -1665,15 +1681,16 @@ function isSameObservableState(
   b: PrMonitorEnvironmentState,
 ): boolean {
   return (
+    a.headSha === b.headSha &&
+    a.mergeability === b.mergeability &&
+    a.lastSuccessfulCheckStartedAt === b.lastSuccessfulCheckStartedAt &&
     a.mode === b.mode &&
     // Included so a "detecting" state announced mid-check is always followed
     // by the lowered state; otherwise the dedupe strands clients on a spinner.
     a.checkInProgress === b.checkInProgress &&
     a.consecutiveErrors === b.consecutiveErrors &&
-    // The first answered check of an entry is announced once, so a client can
-    // tell a reading confirmed in this backend's lifetime from a restored one
-    // (the "ready to merge" shimmer waits for it). Later answered checks move
-    // the timestamp silently.
+    // Observation start time above also wakes auto-merge after a refresh with
+    // unchanged PR fields. A pre-request reading cannot authorize new intent.
     (a.lastSuccessfulCheckAt == null) === (b.lastSuccessfulCheckAt == null) &&
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&

@@ -148,6 +148,7 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("claude").composer.localSettings).toBe(true);
     expect(nativeAgentCapabilities("claude").composer.promptSuggestions).toBe(true);
     expect(nativeAgentCapabilities("claude").actions).toEqual({
+      goal: true,
       compact: true,
       rewindFiles: true,
       steer: true,
@@ -158,6 +159,7 @@ describe("native agent capability table", () => {
       images: true,
     });
     expect(nativeAgentCapabilities("codex").actions).toEqual({
+      goal: true,
       compact: true,
       steer: true,
       review: true,
@@ -222,8 +224,8 @@ describe("native agent capability table", () => {
       // Cursor through the SDK's `agent.summarize()`.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
         platform === "cursor"
-          ? { steer: true, rewindMessages: true, compact: true }
-          : { compact: true },
+          ? { goal: true, steer: true, rewindMessages: true, compact: true, archive: true }
+          : { compact: true, goal: true },
       );
     }
   });

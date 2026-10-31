@@ -1772,6 +1772,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.contextUsage
           ? { contextUsage: current.contextUsage }
           : {}),
+        ...(hasAuthoritativeState && current.goal ? { goal: current.goal } : {}),
         ...(hasAuthoritativeState && current.policy ? { policy: current.policy } : {}),
         ...(hasAuthoritativeState && current.rateLimits ? { rateLimits: current.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
@@ -1925,6 +1926,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? { asyncQuestionResponses: value.asyncQuestionResponses }
           : {}),
         ...(value.contextUsage ? { contextUsage: value.contextUsage } : {}),
+        ...(value.goal ? { goal: value.goal } : {}),
         ...(value.policy ? { policy: value.policy } : {}),
         ...(value.rateLimits ? { rateLimits: value.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
@@ -3222,7 +3224,11 @@ export function useNativeAgentSession<TMessage = unknown>({
       setIsDispatching(false);
     }
   }, [beginProjectionMutation, identity, refresh]);
-  const listResumable = useCallback(() => listNativeAgentResumableSessions(identity), [identity]);
+  const listResumable = useCallback(
+    (options?: { includeArchived?: boolean }) =>
+      listNativeAgentResumableSessions({ ...identity, ...options }),
+    [identity],
+  );
   const setResumableArchived = useCallback(
     async (resumableSessionId: string, archived: boolean) => {
       await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });

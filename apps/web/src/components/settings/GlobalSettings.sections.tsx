@@ -7,6 +7,7 @@ import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
+import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -304,6 +305,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCodexMaxConcurrentThreads,
     claudeBackgroundCommandLimitHours,
     setClaudeBackgroundCommandLimitHours,
+    sessionTitleGeneration,
+    setSessionTitleGeneration,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,
@@ -1064,6 +1067,40 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <p className="text-xs text-muted-foreground/70">
           Disabling a platform hides new launch choices; existing sessions and files are kept.
         </p>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <Label htmlFor="session-title-generation">Session titles</Label>
+          <p
+            id="session-title-generation-description"
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            A session is named by a short model run on its first message, using this machine&apos;s
+            Codex or Claude login. With any signed-in login, the first message of a Cursor, Grok, Pi
+            or OpenCode session goes to OpenAI or Anthropic, and a Codex or Claude session&apos;s
+            goes to the other one if its own login cannot write the title. Otherwise the title is
+            cut from the first message.
+          </p>
+        </div>
+        <Select
+          value={sessionTitleGeneration}
+          onValueChange={(value) => {
+            if (isSessionTitleGenerationPolicy(value)) setSessionTitleGeneration(value);
+          }}
+        >
+          <SelectTrigger
+            id="session-title-generation"
+            aria-describedby="session-title-generation-description"
+            className="w-full max-w-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="any-signed-in">Any signed-in login</SelectItem>
+            <SelectItem value="own-platform">The session&apos;s own login only</SelectItem>
+            <SelectItem value="off">Off: use the first message</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>

@@ -82,6 +82,18 @@ export function queueDispatchMode(
   agent: BuildPipelineAgent,
   message: unknown,
 ): ProviderExecutionMode | undefined {
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    const origin = (message as Record<string, unknown>).origin;
+    // Old persisted carriers predate preserveSessionMode. A goal never owns a
+    // mode change, including when a parked carrier is recovered after upgrade.
+    if (
+      origin &&
+      typeof origin === "object" &&
+      !Array.isArray(origin) &&
+      (origin as Record<string, unknown>).kind === "goal"
+    )
+      return undefined;
+  }
   if (
     message &&
     typeof message === "object" &&

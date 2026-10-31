@@ -49,3 +49,14 @@ The default fixture port belonged to another checkout; it was left alone. No
 gateway implementation, assertion, timeout or skip changed. This establishes
 intermittence; host contention remains a hypothesis. Aggregate follow-up is
 recorded in [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
+
+## Session history review — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name review-browser -- mise run test:browser`;
+  nine workers, 983 passed, 106 skipped and eleven failed. The mobile data-saving
+  gateway case repeated its deadline.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1`
+  passed, exit 0, in 34.3 seconds.
+- **Evidence:** `orkestrator-test-run.MA9mVk/review-browser.log.gz` under the host
+  temporary directory; aggregate details in case 1166. No implementation,
+  assertion, timeout or skip changed.

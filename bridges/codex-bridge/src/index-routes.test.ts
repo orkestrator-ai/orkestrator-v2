@@ -569,6 +569,22 @@ describe("session collection route outcomes", () => {
     );
   });
 
+  test("lists archived conversations only when asked", async () => {
+    const seen: unknown[] = [];
+    await withRuntimeMethod(
+      "listSessions",
+      async (options: unknown) => {
+        seen.push(options);
+        return { sessions: [], cwd: "/workspace" };
+      },
+      async () => {
+        await app.request("/session/list");
+        await app.request("/session/list?includeArchived=1");
+        expect(seen).toEqual([{ includeArchived: false }, { includeArchived: true }]);
+      },
+    );
+  });
+
   test("creates a session from a valid or malformed JSON body", async () => {
     const bodies: unknown[] = [];
     await withRuntimeMethod(

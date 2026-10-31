@@ -132,3 +132,19 @@ written under `output/playwright/test-results/`; owner runs reuse that directory
 The complete data-saving gateway owner passed separately:
 `mise run test:logged -- --name review-data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1`
 (exit 0, 34.3 seconds; recurrence in case 1310).
+
+### Final exact default-suite retry
+
+`mise run test:logged -- --name review-full-suite-retry -- mise run test` was
+launched after the listing bound was corrected. It waited 1,296.6 seconds for
+host capacity, then ran all four groups. The full bridge group and Codex
+protocol check passed. Root reported 3,310 passed, one failed and one between-test
+error: the same unchanged disk-report owner timed out at 5,049.40 ms (case 0259).
+The wrapper reached its 1,800-second deadline and terminated the unfinished
+workspace group; the final retry is incomplete, not a passing full-suite result.
+
+Evidence: `orkestrator-test-run.J36lvj/review-full-suite-retry.log.gz` (wrapper)
+and `orkestrator-test-run.NyF4PB/` (group logs), under the host temporary directory.
+All validation commands have exited. No application profile was started, and no
+fixture server remained listening on port 1422 after browser validation.
+Implementation and regression fixes are committed as `3aaa072d7`.

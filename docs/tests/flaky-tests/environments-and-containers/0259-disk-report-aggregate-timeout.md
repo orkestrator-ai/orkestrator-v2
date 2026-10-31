@@ -342,3 +342,12 @@ is recorded in agent-engines todo 1020.
 - **Assessment:** this run has no isolated pass, so it is not newly classified
   as flaky. Earlier confirmed observations remain unchanged. No disk-report
   implementation, assertion or deadline was changed for the session-history work.
+
+The exact corrected default-suite retry on 2026-10-31 repeated this same case at
+5,049.40 ms: root 3,310 passed, one failed and one between-test error in 474.28 s.
+The earlier complete owner remained non-green, so no new isolated pass is claimed.
+The retry first queued for 1,296.6 s, passed bridges and the protocol check, then
+hit its 1,800-second wrapper deadline while workspace tests were unfinished.
+Evidence: `orkestrator-test-run.J36lvj/review-full-suite-retry.log.gz` and
+`orkestrator-test-run.NyF4PB/root-and-agent-support-tests.log` in the host temporary
+directory. No disk-report code, assertion or deadline was changed.

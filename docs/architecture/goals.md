@@ -76,7 +76,7 @@ identity; resuming the goal creates a new one after a retired delivery.
   still does.
 - **Check:** 10 minutes. A check that times out or cannot start pauses the goal
   rather than telling the agent it failed. A check runs under `bash -lc` in the
-  workspace, through the worker behind `environment.exec`, and runs again after a
+  workspace, through the worker behind `environment.exec`, and may run again after a
   backend restart, so a check must be safe to repeat. Worker identities are
   durable: recovery adopts a worker still running. Stop, delete and move drain
   checks and their descendants before changing the environment. Backend shutdown
@@ -95,7 +95,10 @@ widen or complete a goal.
 
 ## Stops, restarts and side effects
 
-- **Stop always wins.** No turn follows until a person resumes.
+- **Stop always wins.** It pauses the goal directly, including queued carriers
+  and provider startup while activity still says idle. Provider interruption
+  runs concurrently so a pending dispatch's storage lease cannot delay the abort.
+  No turn follows until a person resumes.
 - **Backend restart:** `init` rebuilds the index and picks up running goals.
 - **Replaced conversation:** a goal is bound to `providerSessionId`, and a different
   one pauses it. Resume rebinds it. A fork does not inherit it.
@@ -163,11 +166,31 @@ never passes, `blocked`, Stop and resume, and a queued user prompt. On Claude,
 `goals-restart-live.spec.ts` also kills the backend during a check and mid-turn. On
 Claude and Codex, the coordinator scenario delegates a goal and gets one wake.
 
+The no-progress stop (four unchanged turns) and token budget exhaustion (one turn)
+passed live on all six providers. First and later continuations preserved Plan on
+Claude, Codex, OpenCode, Cursor and Grok; OpenCode uses its primary Plan profile.
+Pi exposes no Plan mode or Plan profile, so its inherited-mode handoff is covered
+by deterministic provider dispatch tests instead.
+
+The review repair reran the full deterministic suite, typecheck, lint and format
+checks successfully, plus the CLI scenario and Docker fixture suites. The live
+repair sweep repeats the loop and limits cases; compact, verifier, background and
+browser cases had already passed in the six-provider sweep. Rejected dispatch,
+publication/cancellation races, untracked-file progress, check shutdown and local
+environment stop/delete/move have deterministic regression coverage. A 17 MiB
+trace regression confirms sanitization retains oversized failure evidence; live
+failure traces also survived without an artifact bound error.
+
+The component browser rerun had 988 passes, 106 skips and two failures in the
+unchanged `AgentLaunchDialog` branch picker (desktop and mobile). Its owning file
+also failed alone; the observations are recorded in the existing
+[validation case](../tests/flaky-tests/aggregate-validation-runs/0958-transcript-scroll-review-validation.md).
+The separate public-site browser suite passed.
+
 Not proven live:
 
 - A failed turn, except on OpenCode, where a real upstream 403 paused the goal. The
   others rely on fakes.
-- The no-progress stop and a token budget being reached, by fakes only.
 - A context overflow during a goal. A compact while a goal waits stands in for it.
 - A goal extension on Pi, or a stop hook in a user's Cursor config.
 - A worker on another node: its delegation can wake a coordinator between iterations.

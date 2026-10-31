@@ -362,9 +362,40 @@ export async function loadCatalog(
       }
     }
   }
+  markCodexMergedDefinitions(entries);
   markPiLoadRules(entries);
   markGrokDisabledList(sources, entries);
   return { sources, entries };
+}
+
+/** Decode only after Codex recursively merges tables; arrays and scalars replace. */
+function mergeCodexFields(lower: NativeEntry, higher: NativeEntry): NativeEntry {
+  const merged = { ...lower };
+  for (const [key, value] of Object.entries(higher)) {
+    const previous = merged[key];
+    merged[key] =
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      previous &&
+      typeof previous === "object" &&
+      !Array.isArray(previous)
+        ? mergeCodexFields(previous as NativeEntry, value as NativeEntry)
+        : value;
+  }
+  return merged;
+}
+
+function markCodexMergedDefinitions(entries: LoadedEntry[]): void {
+  const view = computeEffective(entries);
+  for (const winner of view.winners.values()) {
+    if (winner.source.spec.provider !== "codex" || !winner.raw) continue;
+    const layers = [winner, ...(view.shadows.get(winner.entryId) ?? [])];
+    const raw = layers
+      .toReversed()
+      .reduce((merged, layer) => mergeCodexFields(merged, layer.raw ?? {}), {} as NativeEntry);
+    winner.definition = PROVIDER_CODECS.codex.decode(raw);
+  }
 }
 
 /**
@@ -722,8 +753,6 @@ interface CodexMergedStatus {
   enabled: boolean;
 }
 
-const NO_TRANSPORT = "No command or URL.";
-
 /**
  * A winning Codex entry's status once Codex merges the same name's layers
  * field by field (re-derived at 0.166.0 and held there by `mise run
@@ -736,11 +765,14 @@ function codexMergedStatus(
   lower: readonly LoadedEntry[],
 ): CodexMergedStatus | undefined {
   const definition = entry.definition!;
+  if (definition.invalidReason || definition.unsupportedReason) return undefined;
   const inherited =
-    definition.invalidReason === NO_TRANSPORT
-      ? lower.find((candidate) => candidate.definition && !candidate.definition.invalidReason)
+    typeof entry.raw?.command !== "string" && typeof entry.raw?.url !== "string"
+      ? lower.find(
+          (candidate) =>
+            typeof candidate.raw?.command === "string" || typeof candidate.raw?.url === "string",
+        )
       : undefined;
-  if ((definition.invalidReason && !inherited) || definition.unsupportedReason) return undefined;
   const note = PROVIDER_CODECS.codex.mergeNote;
   const setter = [entry, ...lower].find((layer) => typeof layer.raw?.enabled === "boolean");
   if (setter?.raw?.enabled === false) {
@@ -842,6 +874,20 @@ export function summarizeEntries(
       (merged = codexMergedStatus(entry, view.shadows.get(entry.entryId) ?? []))
     ) {
       ({ status, statusReason } = merged);
+    } else if (
+      entry.source.spec.provider === "grok" &&
+      entry.source.spec.sourceId.startsWith("grok:requirements-") &&
+      entry.raw?.enabled === false &&
+      Object.keys(entry.raw).length === 1
+    ) {
+      if (winner && winner !== entry) {
+        status = "shadowed";
+        shadowedBy = winner.entryId;
+        statusReason = `Overridden by ${winner.source.spec.label}.`;
+      } else {
+        status = "disabled";
+        statusReason = `Disabled by administrator policy in ${entry.source.spec.label}.`;
+      }
     } else if (definition.invalidReason) {
       status = "invalid";
       statusReason = definition.invalidReason;

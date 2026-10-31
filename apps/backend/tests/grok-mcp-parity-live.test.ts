@@ -491,10 +491,13 @@ describe.skipIf(!ENABLED)(`Grok ${PINNED_TOOLCHAIN_VERSIONS.grok} MCP rules`, ()
       path.join(box.grokHome, "config.toml"),
       `disabled_mcp_servers = ["listed"]\n\n${SERVER("off", "off")}enabled = false\n\n${SERVER("on", "on")}`,
     );
-    box.write(path.join(box.repo, ".grok", "config.toml"), SERVER("listed", "listed"));
+    box.write(
+      path.join(box.repo, ".grok", "config.toml"),
+      SERVER("listed", "listed") + SERVER("policy_off", "policy_off"),
+    );
     box.write(
       path.join(box.grokHome, "requirements.toml"),
-      `[mcp_servers.on2]\ncommand = "/nonexistent/x"\nenabled = false\n`,
+      `[mcp_servers.on2]\ncommand = "/nonexistent/x"\nenabled = false\n[mcp_servers.policy_off]\nenabled = false\n`,
     );
     // `grok inspect` still lists a server named in `disabled_mcp_servers`
     // (and drops one with `enabled = false`); `grok mcp list` and `doctor`
@@ -502,8 +505,12 @@ describe.skipIf(!ENABLED)(`Grok ${PINNED_TOOLCHAIN_VERSIONS.grok} MCP rules`, ()
     const listed = box.grok(box.repo, "mcp", "list") as Array<{ name: string; enabled: boolean }>;
     const loaded = new Set(listed.filter((server) => server.enabled).map((server) => server.name));
     const { definitions, effective } = await box.catalog(box.repo);
-    for (const name of ["off", "on", "listed", "on2"]) {
-      const row = definitions.find((item) => item.entryId === effective[name]);
+    for (const name of ["off", "on", "listed", "on2", "policy_off"]) {
+      const row =
+        definitions.find((item) => item.entryId === effective[name]) ??
+        definitions.find((item) => item.name === name);
+      expect(row?.status).toBe(name === "on" ? "effective" : "disabled");
+      if (name === "policy_off") expect(row?.statusReason).toContain("administrator policy");
       const running = row?.status === "effective" && row.enabled !== false;
       expect({ name, running }).toEqual({ name, running: loaded.has(name) });
     }

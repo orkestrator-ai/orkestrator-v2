@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { loadCatalog, summarizeEntries } from "./catalog.js";
+import { editableDefinition, loadCatalog, summarizeEntries } from "./catalog.js";
 import {
   CONTAINER_CLAUDE_LOCAL_REASON,
   CONTAINER_HOMES,
@@ -69,7 +69,7 @@ async function catalogFor(provider: "codex" | "grok" | "opencode") {
   const specs = await providerSources(provider, hostContext());
   const store = new McpSourceStore({ keyFile: path.join(root, "data", "revision.key") });
   const catalog = await loadCatalog(store, specs);
-  return { specs, ...summarizeEntries(catalog, providerCapabilities(provider)) };
+  return { specs, catalog, ...summarizeEntries(catalog, providerCapabilities(provider)) };
 }
 
 const WRITABLE = { writable: true, persistentWorkspace: false, unavailableReason: "Unavailable." };
@@ -119,15 +119,77 @@ describe("read-only system and managed layers", () => {
         `[mcp_servers.alone]\nargs = ["x"]\n`,
       ].join("\n"),
     );
-    const { definitions, effective } = await catalogFor("codex");
+    const { definitions, effective, catalog } = await catalogFor("codex");
     const winner = (name: string) => definitions.find((row) => row.entryId === effective[name])!;
     expect(winner("partial")).toMatchObject({ sourceId: "codex:user", status: "effective" });
     expect(winner("partial").statusReason).toContain("System configuration");
     expect(winner("inherits_off")).toMatchObject({ status: "disabled", enabled: false });
     expect(winner("inherits_off").statusReason).toContain("System configuration");
     expect(winner("back_on")).toMatchObject({ status: "effective", enabled: true });
+    for (const name of ["partial", "inherits_off", "back_on"]) {
+      expect(winner(name).actions.edit.supported).toBe(true);
+      expect(winner(name).actions.setEnabled.supported).toBe(true);
+      expect(winner(name).readOnlyReason).toBeUndefined();
+      const editable = editableDefinition(
+        catalog.entries.find((entry) => entry.entryId === winner(name).entryId)!,
+        providerCapabilities("codex"),
+      );
+      expect(editable.transport).toBe("stdio");
+      expect(editable.enabled).toBe(winner(name).enabled);
+      expect(editable.readOnlyReason).toBeUndefined();
+    }
     // With nothing to inherit from, a missing command is still invalid.
     expect(winner("alone").status).toBe("invalid");
+  });
+
+  test("Codex validates partial fields after merging inherited transport and tables", async () => {
+    const cases = {
+      args: "args = 42",
+      env: "env = { BAD = 42 }",
+      headers: "http_headers = { BAD = 42 }",
+      inherited_bad: 'env = { GOOD = "ok" }',
+      repaired: 'args = ["fixed"]',
+    };
+    write(
+      "etc/codex/config.toml",
+      Object.keys(cases)
+        .map(
+          (name) =>
+            `[mcp_servers.${name}]\ncommand = "sys"\n` +
+            (name === "inherited_bad" ? "env = { BAD = 42 }\n" : "") +
+            (name === "repaired" ? "args = 42\n" : ""),
+        )
+        .join("\n"),
+    );
+    write(
+      "home/.codex/config.toml",
+      Object.entries(cases)
+        .map(([name, fields]) => `[mcp_servers.${name}]\n${fields}\n`)
+        .join("\n"),
+    );
+    const { definitions, effective } = await catalogFor("codex");
+    for (const name of Object.keys(cases)) {
+      const row = definitions.find((entry) => entry.entryId === effective[name])!;
+      expect(row.status).toBe(name === "repaired" ? "effective" : "invalid");
+      expect(row.actions.edit.supported).toBe(name === "repaired");
+      expect(row.actions.setEnabled.supported).toBe(name === "repaired");
+      if (name !== "repaired") expect(row.statusReason).toBe("Some values are not text.");
+    }
+  });
+
+  test("Grok disable-only requirements express administrator policy", async () => {
+    write("home/.grok/config.toml", '[mcp_servers.off]\ncommand = "user"\n');
+    write("home/.grok/requirements.toml", "[mcp_servers.off]\nenabled = false\n");
+    const { definitions, effective } = await catalogFor("grok");
+    const row = definitions.find((entry) => entry.entryId === effective.off)!;
+    expect(row).toMatchObject({
+      sourceId: "grok:requirements-user",
+      status: "disabled",
+      enabled: false,
+    });
+    expect(row.statusReason).toContain("administrator policy");
+    expect(row.readOnlyReason).toContain("organisation");
+    expect(definitions.find((entry) => entry.sourceId === "grok:user")?.status).toBe("shadowed");
   });
 
   test("absent system files add no rows", async () => {

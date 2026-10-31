@@ -816,14 +816,23 @@ export class McpManagementService {
           definition = patched.definition;
           changedFields = patched.changed;
         }
+        intendedEntry =
+          target.provider === "codex" && operation.kind === "set-enabled"
+            ? { ...entry.raw, enabled: operation.enabled }
+            : cleanEntry(codec.encode(definition, entry.raw));
         fieldErrors.push(
           ...codec.validate(definition, entry.name, false),
           ...capabilityErrors(definition, capabilities),
-          ...projectSecretErrors(spec, entry.definition, definition),
+          // Codex's editor shows inherited fields too. Judge newly saved
+          // project secrets against the native row, not its merged user values.
+          ...projectSecretErrors(
+            spec,
+            target.provider === "codex" ? codec.decode(entry.raw!) : entry.definition,
+            target.provider === "codex" ? codec.decode(intendedEntry) : definition,
+          ),
         );
         entryName = entry.name;
         resultName = entry.name;
-        intendedEntry = cleanEntry(codec.encode(definition, entry.raw));
         edit = tomlDeepEqual(intendedEntry, entry.raw)
           ? null
           : { kind: "update", name: entry.name, previous: entry.raw!, entry: intendedEntry };

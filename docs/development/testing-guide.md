@@ -1082,7 +1082,8 @@ A profile describes what a command wants, not what the host has: a requirement
 larger than the frozen host budget is clamped down to it rather than refused, so
 a lowered ceiling slows a command instead of making it permanently incomplete.
 
-An admitted ordinary command is told its grant in `ORKESTRATOR_TEST_WORKERS`,
+An admitted ordinary command is told its grant in `ORKESTRATOR_VALIDATION_GRANTED_WORKERS`,
+leaving the per-package `ORKESTRATOR_TEST_WORKERS` setting unchanged,
 and every validation command sees `ORKESTRATOR_REVIEW_VALIDATION=1`. The
 component browser suite (`e2e/playwright.config.ts`) runs the smaller of the
 grant and Playwright's own default of half the cores, so a busy host runs fewer

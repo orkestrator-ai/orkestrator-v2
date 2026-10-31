@@ -26,7 +26,10 @@ if (browserName !== "chromium" && browserName !== "webkit" && browserName !== "f
 // the rest of the validation plan. Never exceed that default either, so an idle
 // host runs the suite exactly as before; a person's run keeps the default.
 const playwrightDefaultWorkers = Math.max(1, Math.floor(os.cpus().length / 2));
-const grantedWorkers = Number.parseInt(process.env.ORKESTRATOR_TEST_WORKERS ?? "", 10);
+const grantedWorkers = Number.parseInt(
+  process.env.ORKESTRATOR_VALIDATION_GRANTED_WORKERS ?? "",
+  10,
+);
 const workers = grantedWorkers > 0 ? Math.min(grantedWorkers, playwrightDefaultWorkers) : undefined;
 
 export default defineConfig({

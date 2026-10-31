@@ -76,7 +76,7 @@ async function control(
   root: string,
   run: ReviewValidationRun,
   action = "start",
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
   resultId?: string,
   workerSource = REVIEW_VALIDATION_WORKER,
 ) {
@@ -169,7 +169,7 @@ async function waitFor(
   root: string,
   run: ReviewValidationRun,
   timeoutMs: number,
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
 ) {
   const started = await control(root, run, "start", extraEnv);
   if (["planned", "running"].includes(started.status)) {
@@ -1267,7 +1267,7 @@ test("a profile requesting more than the host budget is clamped, not refused", a
 // the browser suite ran eight workers on a three-slot grant beside the full
 // unit suite and timed out across unrelated specs (2026-10-31).
 test("a command learns the slots it was granted and that review validation runs it", async () => {
-  const report = `printf '%s %s' "$ORKESTRATOR_TEST_WORKERS" "$ORKESTRATOR_REVIEW_VALIDATION"`;
+  const report = `printf '%s %s' "$ORKESTRATOR_VALIDATION_GRANTED_WORKERS" "$ORKESTRATOR_REVIEW_VALIDATION"`;
   const { root, run } = await fixture([command("sized", report)]);
   await writeFile(
     path.join(root, ".orkestrator-test-scheduler.json"),
@@ -1281,7 +1281,7 @@ test("a command learns the slots it was granted and that review validation runs 
     ORKESTRATOR_TEST_HOST_WORKERS: "4",
     ORKESTRATOR_TEST_HOST_MEMORY_MIB: "1024",
     // An inherited value must not stand in for the grant.
-    ORKESTRATOR_TEST_WORKERS: "16",
+    ORKESTRATOR_VALIDATION_GRANTED_WORKERS: "16",
   });
   expect(done.results[0]).toMatchObject({ status: "passed", reservedWorkers: 3 });
   expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toBe("3 1");
@@ -1782,3 +1782,48 @@ if [ "$1" = "-c" ]; then printf 'fallback\\n' >> '${calls}'; fi
     }
   }
 }, 20_000);
+
+test("ordinary commands get a dedicated host grant without changing package parallelism", async () => {
+  for (const packageWorkers of [undefined, "2"]) {
+    const { root, run } = await fixture([
+      command(
+        "environment",
+        'printf "%s,%s,%s" "${ORKESTRATOR_TEST_WORKERS-unset}" "$ORKESTRATOR_VALIDATION_GRANTED_WORKERS" "$ORKESTRATOR_REVIEW_VALIDATION"',
+      ),
+    ]);
+    const done = await waitFor(root, run, 10000, {
+      ORKESTRATOR_TEST_WORKERS: packageWorkers,
+      ORKESTRATOR_VALIDATION_GRANTED_WORKERS: "99",
+    });
+    expect(done.results[0]!.status).toBe("passed");
+    const result = done.results[0]!;
+    expect(await readFile(path.join(root, result.stdoutPath!), "utf8")).toBe(
+      `${packageWorkers ?? "unset"},${result.reservedWorkers},1`,
+    );
+  }
+}, 30000);
+
+test("a bridge validation plan keeps every package's serial worker default", async () => {
+  const bridges = ["claude", "codex", "cursor", "pi", "acp"];
+  const commands = await Promise.all(
+    bridges.map(async (bridge) => {
+      const manifest = JSON.parse(
+        await readFile(
+          path.resolve(import.meta.dir, `../../../../bridges/${bridge}-bridge/package.json`),
+          "utf8",
+        ),
+      ) as { scripts: { "test:bridge": string } };
+      // Execute the repository's real shell expansion, recording the Bun argv
+      // instead of launching five unrelated suites inside this regression.
+      return command(bridge, `bun() { printf '%s\\n' "$@"; }; ${manifest.scripts["test:bridge"]}`);
+    }),
+  );
+  const { root, run } = await fixture(commands);
+  const done = await waitFor(root, run, 15000, { ORKESTRATOR_TEST_WORKERS: undefined });
+  expect(done.results.map((result) => result.status)).toEqual(bridges.map(() => "passed"));
+  for (const result of done.results) {
+    expect((await readFile(path.join(root, result.stdoutPath!), "utf8")).split("\n")).toContain(
+      "--parallel=1",
+    );
+  }
+}, 20000);

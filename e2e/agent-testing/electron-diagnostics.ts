@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { ElectronApplication, Page, TestInfo } from "@playwright/test";
 
@@ -55,11 +57,14 @@ export function markTestStart(title: string): void {
   record("test", `--- ${title} ---`);
 }
 
-/** Attaches the collected lines to a failed test; its report prints them inline. */
+/** Saves complete diagnostics; the line reporter prints the attachment path. */
 export async function attachElectronDiagnostics(testInfo: TestInfo): Promise<void> {
   if (lines.length === 0) return;
+  const diagnosticsPath = testInfo.outputPath("electron-diagnostics.txt");
+  await mkdir(dirname(diagnosticsPath), { recursive: true });
+  await writeFile(diagnosticsPath, lines.join("\n"), { mode: 0o600 });
   await testInfo.attach("electron-diagnostics", {
-    body: lines.join("\n"),
+    path: diagnosticsPath,
     contentType: "text/plain",
   });
 }

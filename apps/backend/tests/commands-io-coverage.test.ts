@@ -1513,6 +1513,61 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     );
   });
 
+  test("probes ancestry through Docker exec and treats unavailable Git evidence as unknown", async () => {
+    const ancestor = "a".repeat(40);
+    const descendant = "b".repeat(40);
+    const commands = createCommandRegistry();
+    const context = createContext({
+      id: "env-1",
+      environmentType: "container",
+      containerId: "container-1",
+    });
+    const ancestry = () =>
+      commands.get("get_environment_commit_ancestry")!(
+        { environmentId: "env-1", ancestor, descendant },
+        context,
+      );
+    for (const [output, exitCode, expected] of [
+      [ancestor.toUpperCase(), 0, true],
+      [descendant, 0, false],
+      ["invalid Git output", 0, null],
+      ["", 128, null],
+    ] as const) {
+      await withFakeDocker(
+        `#!/bin/sh
+printf '%s\\n' "$@" > "$FAKE_DOCKER_LOG"
+printf '%s\\n' '${output}'
+exit ${exitCode}
+`,
+        async ({ logPath }) => {
+          expect(await ancestry()).toEqual({ isAncestor: expected });
+          expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+            "exec",
+            "-w",
+            "/workspace",
+            "container-1",
+            "git",
+            "merge-base",
+            ancestor,
+            descendant,
+          ]);
+        },
+      );
+    }
+  });
+
+  test("ancestry rejects missing environments and unavailable command runners", async () => {
+    const args = { environmentId: "env-1", ancestor: "a".repeat(40), descendant: "b".repeat(40) };
+    const ancestry = createCommandRegistry().get("get_environment_commit_ancestry")!;
+    for (const [environment, message] of [
+      [null, "Environment not found"],
+      [{ id: "env-1", environmentType: "local" }, "Local environment worktree is not available"],
+      [{ id: "env-1", environmentType: "container" }, "Container environment is not available"],
+    ] as const) {
+      await expect(ancestry(args, createContext(environment))).rejects.toThrow(message);
+    }
+  });
+
   // A local worktree runs on the user's own machine, where the backend inherits
   // whatever PATH the OS handed Electron. A GUI launch on macOS has git in
   // /usr/bin but no Node at all, so a probe that needed one would take every

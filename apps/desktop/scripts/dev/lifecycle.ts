@@ -520,6 +520,9 @@ export async function startDevelopment(
     roots?: RuntimeProfileRoots;
     prune?: typeof pruneProfiles;
     turbo?: TurboRunner;
+    spawn?: typeof spawn;
+    waitForUrl?: typeof waitForUrl;
+    writeStatus?: typeof atomicWriteJson;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -639,7 +642,7 @@ export async function startDevelopment(
   let shuttingDown = false;
   const writeStatus = async (updates: Partial<RuntimeStatusManifest>) => {
     status = { ...status, ...updates, updatedAt: new Date().toISOString() };
-    await atomicWriteJson(statusPath, status);
+    await (dependencies.writeStatus ?? atomicWriteJson)(statusPath, status);
   };
   const shutdown = async (finalStatus: "stopped" | "failed", error?: unknown) => {
     if (shuttingDown) return;
@@ -663,7 +666,7 @@ export async function startDevelopment(
       truncate(path.join(profile.logDir, "vite.log"), 0).catch(() => undefined),
       truncate(path.join(profile.logDir, "electron.log"), 0).catch(() => undefined),
     ]);
-    vite = spawn("bun", ["run", "dev"], {
+    vite = (dependencies.spawn ?? spawn)("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -681,35 +684,35 @@ export async function startDevelopment(
       pids: { ...status.pids, vite: vite.pid },
       processStartTimes: { ...status.processStartTimes, vite: childStartTime(vite) },
     });
-    await waitForUrl(rendererUrl);
+    await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
     const electronEnv = { ...process.env };
     delete electronEnv.ELECTRON_RUN_AS_NODE;
-    electron = spawn(electronExecutable, ["apps/desktop/dist/electron/main.js"], {
-      cwd: repositoryRoot,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...electronEnv,
-        ELECTRON_DEV: "1",
-        VITE_DEV_SERVER_URL: rendererUrl,
-        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-        // Development profiles routinely coexist with the installed app and
-        // with one another. Let the OS reserve an isolated control-MCP port;
-        // the backend publishes that URL in its descriptor and readiness frame.
-        ORKESTRATOR_CONTROL_MCP_PORT: electronEnv.ORKESTRATOR_CONTROL_MCP_PORT ?? "0",
+    electron = (dependencies.spawn ?? spawn)(
+      electronExecutable,
+      ["apps/desktop/dist/electron/main.js"],
+      {
+        cwd: repositoryRoot,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...electronEnv,
+          ELECTRON_DEV: "1",
+          VITE_DEV_SERVER_URL: rendererUrl,
+          ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+          // Development profiles routinely coexist with the installed app and
+          // with one another. Let the OS reserve an isolated control-MCP port;
+          // the backend publishes that URL in its descriptor and readiness frame.
+          ORKESTRATOR_CONTROL_MCP_PORT: electronEnv.ORKESTRATOR_CONTROL_MCP_PORT ?? "0",
+        },
       },
-    });
+    );
     if (!electron.pid) throw new Error("Electron failed to start");
-    const electronTail = outputTail(electron);
+    let electronTail = () => "";
     const startupFailure = (message: string) =>
       new Error(withOutputTails(message, { Electron: electronTail, Vite: viteTail }));
-    await writeStatus({
-      pids: { ...status.pids, electron: electron.pid },
-      processStartTimes: { ...status.processStartTimes, electron: childStartTime(electron) },
-    });
-
-    const ready = await new Promise<ElectronReady>((resolve, reject) => {
+    // Observe the one-shot frame before status persistence can yield to stdout.
+    const readiness = new Promise<ElectronReady>((resolve, reject) => {
       const timeoutMs = electronReadinessTimeoutMs(flavor);
       const timeout =
         timeoutMs === null
@@ -724,8 +727,12 @@ export async function startDevelopment(
               () => reject(startupFailure("Timed out waiting for Electron/backend readiness")),
               timeoutMs,
             );
-      electron!.once("error", reject);
-      electron!.once("exit", (code, signal) =>
+      electron!.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      electron!.once("exit", (code, signal) => {
+        clearTimeout(timeout);
         // Output still in the pipes lands after "exit"; let it reach the tail.
         setTimeout(
           () =>
@@ -735,8 +742,8 @@ export async function startDevelopment(
               ),
             ),
           250,
-        ),
-      );
+        );
+      });
       attachLog(electron!, path.join(profile.logDir, "electron.log"), (line) => {
         try {
           const message = JSON.parse(line) as Partial<ElectronReady>;
@@ -747,6 +754,16 @@ export async function startDevelopment(
         } catch {}
       });
     });
+    electronTail = outputTail(electron);
+    // A child may fail while the status write is pending; keep its rejection
+    // handled until we await the original promise below.
+    void readiness.catch(() => undefined);
+    await writeStatus({
+      pids: { ...status.pids, electron: electron.pid },
+      processStartTimes: { ...status.processStartTimes, electron: childStartTime(electron) },
+    });
+
+    const ready = await readiness;
     assertElectronReadiness(ready, { flavor, fixture: args.fixture });
     let testProject: string | undefined;
     const fixtureUrl = ready.browserUrl ?? ready.invokeUrl;

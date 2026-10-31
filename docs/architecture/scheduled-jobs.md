@@ -335,10 +335,12 @@ since it always runs as the owner.
   action goes through the same conversion as `create_schedule`, so
   `remind_me` and `authorizeAccountSwitch` keep their rules (main only, a
   user-started turn, one-shot). A self-timer that carries the user's
-  account-switch permission cannot be retimed or made repeating on its own:
-  the permission was given for that time, so the action has to be given again
-  with `authorizeAccountSwitch` in a user turn, or the timer cancelled and set
-  again.
+  account-switch permission cannot, on its own, have anything changed that
+  can move when it fires (`at`, `cron`, `everyMinutes`, `startAt`,
+  `timeZone`, or `catchUpMinutes`, which would let a missed timer fire days
+  late): the permission was given for that time, so the action has to be
+  given again with `authorizeAccountSwitch` in a user turn, or the timer
+  cancelled and set again. Its name can still change.
 - **Operator MCP credentials**: the public actions below, as direct tools
   (`schedule_create`, …) and through `run_action`, under the new
   `schedules` capability (in `full` and `read-only`, not in `voice`).

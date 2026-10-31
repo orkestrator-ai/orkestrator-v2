@@ -215,18 +215,20 @@ export function registerCoordinatorWorkerTurnActions(
           throw error;
         }
         const waiting = marks.reduce((count, marked) => count + marked.open, 0);
-        if (result.stopped === true && result.acknowledged === true) {
-          // The turn is over: settle now rather than on the next edge or sweep,
-          // so a prompt to this tab is not refused over a stale delegation.
-          await (
-            remote
-              ? context.coordinators?.settleRemoteWorker(remote.nodeId, environmentId)
-              : context.coordinators?.settleWorkerDelegations({
-                  environmentId,
-                  tabId,
-                  state: "completed",
-                })
-          )?.catch(() => undefined);
+        if (remote && result.stopped === true) {
+          // Ask the node for the worker's state now rather than on the next
+          // sweep. Safe whether or not the stop was confirmed: the remote
+          // rules close a delegation only on the state the node reports.
+          await context.coordinators
+            ?.settleRemoteWorker(remote.nodeId, environmentId)
+            .catch(() => undefined);
+        } else if (!remote && result.stopped === true && result.acknowledged === true) {
+          // The agent confirmed the turn is over: settle now rather than on
+          // the next edge or sweep, so a prompt to this tab is not refused
+          // over a stale delegation. An unconfirmed stop waits for the edge.
+          await context.coordinators
+            ?.settleWorkerDelegations({ environmentId, tabId, state: "completed" })
+            .catch(() => undefined);
         }
         return { ...result, ...(result.stopped === true ? { delegationOpen: waiting > 0 } : {}) };
       },

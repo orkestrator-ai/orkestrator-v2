@@ -221,6 +221,35 @@ describe("stop_worker_turn", () => {
     expect(abort).toHaveBeenCalledTimes(1);
   });
 
+  for (const [status, closed] of [
+    ["error", "failed"],
+    ["stopped", "stopped"],
+  ] as const) {
+    test(`the stop note survives a delegation the sweep closes as ${closed}`, async () => {
+      const w = await world();
+      w.activity("working");
+      await w.run("open_coordinator_delegation", {
+        environmentId: "env-1",
+        tabId: w.tabId,
+        requestId: `job-${closed}`,
+      });
+      // Unconfirmed: the delegation waits for the turn end, which never comes.
+      expect(
+        await w.run("stop_coordinator_worker_turn", {
+          input: { requestId: `stop-${closed}`, environmentId: "env-1", tabId: w.tabId },
+        }),
+      ).toMatchObject({ stopped: true, acknowledged: false, delegationOpen: true });
+      await w.harness.storage.updateEnvironment("env-1", { status });
+      await w.coordinators.reconcileWorkerDelegations();
+      expect(await w.openDelegations()).toHaveLength(0);
+      const mail = await w.coordinatorMail();
+      expect(mail).toHaveLength(1);
+      expect(mail[0]!.subject).toContain(closed);
+      expect(mail[0]!.body).toContain(`${closed} after you stopped its turn with stop_worker_turn`);
+      expect(mail[0]!.body).not.toContain("without sending a report");
+    });
+  }
+
   test("an idle tab answers plainly, and nothing is marked or stopped", async () => {
     const w = await world();
     w.activity("idle");

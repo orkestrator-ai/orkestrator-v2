@@ -379,31 +379,49 @@ test.describe(`goal loop: ${platform}`, () => {
     record.probe = facts;
     // Which goal tools reach a session, as the model sees them. A closure this
     // qualification relies on shows up here as an empty list.
-    await invoke("dispatch_native_agent_intent", {
-      ...identity,
-      requestId: `probe-${Date.now()}`,
-      prompt:
-        "List every tool available to you whose name contains the word goal, in any letter case, one name per line. If there are none, reply NONE. Use no tools.",
-      ...(model ? { model } : {}),
-    });
-    const settled = async () => {
-      for (let wait = 0; wait < 90; wait += 1) {
+    const ask = async (name: string, prompt: string) => {
+      const before = (await invoke<Projection>("get_native_agent_projection", identity)).messages
+        ?.length;
+      await invoke("dispatch_native_agent_intent", {
+        ...identity,
+        requestId: `probe-${name}-${Date.now()}`,
+        prompt,
+        ...(model ? { model } : {}),
+      });
+      const deadline = Date.now() + TURN_TIMEOUT_MS;
+      while (Date.now() < deadline) {
         const view = await invoke<Projection>("get_native_agent_projection", identity);
-        const phase = view.turn.phase;
-        if (phase === "idle" || phase === "error") return view;
+        const rows = view.messages ?? [];
+        const reply = [...rows].reverse().find((row) => row.role === "assistant");
+        if (
+          (view.turn.phase === "idle" || view.turn.phase === "error") &&
+          rows.length > (before ?? 0) &&
+          reply
+        ) {
+          const text =
+            typeof reply.content === "string"
+              ? reply.content
+              : JSON.stringify((reply as { parts?: unknown }).parts ?? reply.content ?? "");
+          facts[name] = text.slice(0, 400);
+          writeSummary();
+          return text;
+        }
         await page.waitForTimeout(2_000);
       }
-      throw new Error("the probe turn never ended");
+      throw new Error(`the ${name} probe turn never ended`);
     };
-    const view = await settled();
-    const last = [...(view.messages ?? [])].reverse().find((row) => row.role === "assistant");
-    const text =
-      typeof last?.content === "string"
-        ? last.content
-        : JSON.stringify((last as { parts?: unknown } | undefined)?.parts ?? last?.content ?? "");
-    facts.goalToolsTheModelNames = text.slice(0, 400);
-    writeSummary();
-    expect(text).toContain("report_goal");
+    // What the model says it has. Codex defers MCP tools, so it may not list
+    // report_goal even though it can call it: this is a record, not an assertion.
+    await ask(
+      "goalToolsTheModelNames",
+      "List every tool available to you whose name contains the word goal, in any letter case, one name per line. If there are none, reply NONE. Use no tools.",
+    );
+    // Whether the agent's shell works in this session at all, with no goal set.
+    const shell = await ask(
+      "shellWithNoGoal",
+      "Run the shell command: echo probe-shell-ok . Reply with its output only.",
+    );
+    const shellWorks = shell.includes("probe-shell-ok");
 
     // A task the agent leaves running must not hide the turn's end from the loop.
     await invoke("native_agent_goal_command", {
@@ -424,7 +442,8 @@ test.describe(`goal loop: ${platform}`, () => {
       iterations: goal?.iterations,
     };
     writeSummary();
-    expect(goal?.status).toBe("claimed");
+    // With no working shell, the agent saying so is the loop working.
+    expect(goal?.status).toBe(shellWorks ? "claimed" : "blocked");
     void workspace;
   });
 

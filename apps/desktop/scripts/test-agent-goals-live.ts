@@ -4,7 +4,7 @@ import { runIsolatedBrowser } from "./dev/isolated-browser.js";
 import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/owner-supervisor.js";
 
 /**
- * `mise run test:agent:goals [--credential-source <platform>]… [--environment local|container] [--browser-only]`
+ * `mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
  *
  * One disposable `dev:test --fixture` profile per platform, authorized for that
  * platform's host credential alone, runs `goals-live.spec.ts`, then is stopped
@@ -20,7 +20,6 @@ type Platform = (typeof PLATFORMS)[number];
 
 function parseArguments(args: readonly string[]) {
   const platforms: Platform[] = [];
-  let environment = "local";
   let browserOnly = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -31,25 +30,22 @@ function parseArguments(args: readonly string[]) {
       }
       platforms.push(value as Platform);
       index += 1;
-    } else if (arg === "--environment" && (value === "local" || value === "container")) {
-      environment = value;
-      index += 1;
     } else if (arg === "--browser-only") {
       browserOnly = true;
     } else {
       throw new Error(
-        `Unknown argument: ${arg}. Use --credential-source <platform>, --environment local|container and --browser-only.`,
+        `Unknown argument: ${arg}. Use --credential-source <platform> and --browser-only.`,
       );
     }
   }
-  return { platforms: platforms.length > 0 ? platforms : [...PLATFORMS], environment, browserOnly };
+  return { platforms: platforms.length > 0 ? platforms : [...PLATFORMS], browserOnly };
 }
 
 const args = process.argv.slice(2);
 const supervised = args[0] === SUPERVISED_FLAG;
 if (supervised) args.shift();
 // Validated before anything starts, so a typo fails without a profile.
-const { platforms, environment, browserOnly } = parseArguments(args);
+const { platforms, browserOnly } = parseArguments(args);
 
 if (supervised) {
   const owner = ownerAbortSignal();
@@ -63,20 +59,13 @@ if (supervised) {
       try {
         code = await runIsolatedBrowser({
           profile,
-          profileArgs: [
-            "--credential-source",
-            platform,
-            "--agent-platforms",
-            platform,
-            ...(environment === "container" ? ["--fixture-environments", "local,container"] : []),
-          ],
+          profileArgs: ["--credential-source", platform, "--agent-platforms", platform],
           suite: {
             label: `live goals (${platform})`,
             config: "e2e/agent-testing/playwright.goals.config.ts",
             env: {
               ORKESTRATOR_AGENT_TEST_LIVE_GOALS: "1",
               ORKESTRATOR_AGENT_TEST_GOAL_PLATFORM: platform,
-              ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT: environment,
               ...(browserOnly ? { ORKESTRATOR_AGENT_TEST_GOAL_ONLY: "browser" } : {}),
             },
           },

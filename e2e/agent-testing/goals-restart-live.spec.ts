@@ -176,7 +176,23 @@ test.describe("a goal across a killed backend", () => {
         if (accept(goal)) return goal!;
         await page.waitForTimeout(1_000);
       }
-      throw new Error(`${label}: last ${JSON.stringify(goal)}`);
+      const queues = await invoke("list_prompt_queues", { environmentId: environment.id }).catch(
+        (error: unknown) => String(error),
+      );
+      const view = await invoke<Record<string, unknown>>(
+        "get_native_agent_projection",
+        identity,
+      ).catch((error: unknown) => ({ error: String(error) }));
+      throw new Error(
+        `${label}: last ${JSON.stringify(goal)}\nqueues ${JSON.stringify(queues).slice(0, 1500)}\nturn ${JSON.stringify(
+          {
+            turn: view.turn,
+            connection: view.connection,
+            recoverableDispatch: view.recoverableDispatch,
+            notices: view.notices,
+          },
+        ).slice(0, 1500)}`,
+      );
     };
     const lines = (file: string) =>
       (workspace.read(file) ?? "").split("\n").filter((line) => line.length > 0);

@@ -1155,7 +1155,7 @@ session writes.
 
 ### Live goal suite
 
-`mise run test:agent:goals [--credential-source <platform>]… [--environment local|container] [--browser-only]`
+`mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
 gives each platform a disposable profile holding that platform's host credential
 alone, runs `e2e/agent-testing/goals-live.spec.ts`, then stops and resets it. It
 drives the goal loop through every scenario and asserts on the durable goal record
@@ -1163,7 +1163,10 @@ and the workspace: a passing check after several iterations, no check, a check t
 never passes, `blocked`, Stop and resume, a queued user prompt, and clear. It writes
 `output/agent-testing/<profile>/goals/summary-<platform>.json`. Each scenario spends
 real tokens on the smallest model the catalogue names, so nothing else runs it.
-`ORKESTRATOR_AGENT_TEST_GOAL_MODEL_<PLATFORM>` overrides the model. To qualify a
+A container run needs a hand-started profile (`--fixture-environments local,container`)
+and `ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT=container`, and
+`goals-restart-live.spec.ts`, which kills the backend, also needs one; its header has
+the commands. `ORKESTRATOR_AGENT_TEST_GOAL_MODEL_<PLATFORM>` overrides the model. To qualify a
 provider whose capability is off, add it to `GOAL_QUALIFIED_PLATFORMS` locally first.
 
 ### Live coordinator suite

@@ -757,7 +757,7 @@ export function renderGoalCarrier(goal: NativeAgentGoal): string {
     goal.iterations === 0
       ? "The user set this goal. Work toward the objective in the payload."
       : "The goal in the payload is not finished. Keep working toward it from where you are, without repeating finished work.";
-  return `${GOAL_CARRIER_OPEN}\n${GOAL_PAYLOAD_OPEN}\n${frameJson(payload)}\n${GOAL_PAYLOAD_CLOSE}\n${opening}${failure} ${proof} When the objective is met, call the orkestrator report_goal tool with this goalId and status "done". If you cannot continue without a person, call it with status "blocked" and say why. Otherwise keep working. Do not ask whether to continue. Normal sandbox, approval and project rules still apply.\n${GOAL_CARRIER_CLOSE}`;
+  return `${GOAL_CARRIER_OPEN}\n${GOAL_PAYLOAD_OPEN}\n${frameJson(payload)}\n${GOAL_PAYLOAD_CLOSE}\n${opening}${failure} ${proof} When the objective is met, call the orkestrator report_goal tool with this goalId and status "done". If you cannot continue without a person, call it with status "blocked" and say why. Otherwise keep working. Do not ask whether to continue, and do not use any other goal tool you may have. Normal sandbox, approval and project rules still apply.\n${GOAL_CARRIER_CLOSE}`;
 }
 
 /** Whether a provider row is a goal turn rather than something a person typed. */

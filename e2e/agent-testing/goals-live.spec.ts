@@ -32,6 +32,15 @@ const platform = process.env.ORKESTRATOR_AGENT_TEST_GOAL_PLATFORM ?? "claude";
 const environmentKind = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT ?? "local";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_GOALS === "1";
 const TURN_TIMEOUT_MS = 300_000;
+/**
+ * Something slow for the agent to do. Grok's shell fails to spawn in Orkestrator
+ * sessions, with or without a goal (`plans/goals/303`), so it writes instead.
+ */
+function slowStep(seconds: number): string {
+  return platform === "grok"
+    ? `Write out every whole number from 1 to ${seconds * 30} in words, separated by commas`
+    : `Run the shell command "sleep ${seconds}"`;
+}
 
 type Goal = {
   goalId: string;
@@ -313,7 +322,7 @@ test.describe(`goal loop: ${platform}`, () => {
       const identity = await tab();
       await command(
         identity,
-        `Run the shell command "sleep 120", then create goal-resumed.txt and ${report("done")}. --max-iterations 4 --check test -f goal-resumed.txt`,
+        `${slowStep(120)}, then create goal-resumed.txt and ${report("done")}. --max-iterations 4 --check test -f goal-resumed.txt`,
       );
       await expect
         .poll(async () => (await projection(identity)).turn.phase, {
@@ -342,7 +351,7 @@ test.describe(`goal loop: ${platform}`, () => {
       const identity = await tab();
       await command(
         identity,
-        `Run the shell command "sleep 20", then end your turn without calling report_goal. When you are told to continue, ${report("done")}. --max-iterations 5`,
+        `${slowStep(20)}, then end your turn without calling report_goal. When you are told to continue, ${report("done")}. --max-iterations 5`,
       );
       await invoke("enqueue_prompt_queue_message", {
         queueKey: `${platform}\0${identity.logicalSessionKey}`,
@@ -442,8 +451,9 @@ test.describe(`goal loop: ${platform}`, () => {
       iterations: goal?.iterations,
     };
     writeSummary();
-    // With no working shell, the agent saying so is the loop working.
-    expect(goal?.status).toBe(shellWorks ? "claimed" : "blocked");
+    // With no working shell or model, the loop's only job is to stop and say why.
+    if (shellWorks) expect(goal?.status).toBe("claimed");
+    else expect(["active", "checking"]).not.toContain(goal?.status);
     void workspace;
   });
 

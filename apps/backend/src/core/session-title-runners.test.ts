@@ -93,8 +93,14 @@ describe("Codex title runner", () => {
     expect(args.slice(0, execIndex)).toEqual(
       expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never"]),
     );
-    for (const feature of ["shell_tool", "hooks", "plugins", "apps", "multi_agent"]) {
+    for (const feature of ["shell_tool", "hooks", "plugins", "apps", "multi_agent", "view_image"]) {
       expect(args.slice(0, execIndex).join(" ")).toContain(`--disable ${feature}`);
+    }
+    for (const override of [
+      "skills.include_instructions=false",
+      "tools.experimental_request_user_input.enabled=false",
+    ]) {
+      expect(args.slice(0, execIndex).join(" ")).toContain(`--config ${override}`);
     }
     expect(args.slice(execIndex)).toEqual(
       expect.arrayContaining([
@@ -145,7 +151,8 @@ describe("Codex title runner", () => {
       apply_patch_tool_type: null,
       input_modalities: ["text"],
     });
-  });
+    // macOS scans a newly installed binary on first exec, which alone took 4.75 s.
+  }, 30_000);
 
   test("hands the source to stdin, reads the output file and cleans up", async () => {
     const root = temporaryDirectory();
@@ -250,6 +257,20 @@ describe("Claude title runner", () => {
     expect(readFileSync(path.join(root, "stdin"), "utf8")).toContain(
       JSON.stringify("PRIVATE-TITLE-SOURCE the login flow is broken"),
     );
+  });
+
+  test("a CLI failure is a rejection, never a title made of its error text", async () => {
+    // How `claude -p` 2.1.314 reports a failure: exit 1, the error on stdout.
+    await expect(
+      generateClaudeSessionTitle({
+        executable: executable(
+          "cat > /dev/null\nprintf 'Not logged in \\302\\267 Please run /login\\n'\nexit 1",
+        ),
+        env: process.env,
+        source: "prompt",
+        run: runCommand,
+      }),
+    ).rejects.toThrow("Not logged in");
   });
 
   test("rejects an empty answer", async () => {

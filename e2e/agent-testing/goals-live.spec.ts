@@ -239,6 +239,9 @@ test.describe(`goal loop: ${platform}`, () => {
     }
 
     const note = (name: string, goal: Goal, extra: Record<string, unknown> = {}) => {
+      console.log(
+        `[goals-live] ${platform} ${name}: ${goal.status} (${goal.statusReason ?? "none"}), ${goal.iterations} iterations`,
+      );
       scenarios[name] = {
         status: goal.status,
         reason: goal.statusReason,
@@ -395,6 +398,9 @@ test.describe(`goal loop: ${platform}`, () => {
       while (Date.now() < deadline) {
         goal = (await invoke<{ goal?: Goal }>("get_native_agent_goal", identity)).goal;
         if (goal && !["active", "checking", "verifying"].includes(goal.status)) {
+          console.log(
+            `[goals-live] ${platform} ${label}: ${goal.status} (${goal.statusReason ?? "none"}), ${goal.iterations} iterations`,
+          );
           scenarios[label] = {
             status: goal.status,
             reason: goal.statusReason,

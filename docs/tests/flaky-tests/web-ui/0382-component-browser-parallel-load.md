@@ -215,3 +215,23 @@ ORKESTRATOR_E2E_PORT=15427 mise run test:logged -- --name failed-turn-browser-ow
 The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7 s). All cases in AgentUsage, DesignCanvas, EnvironmentSettingsDrawer, KeyboardShortcuts, TranscriptPaging and VirtuosoFollow passed, confirming their aggregate failures were intermittent. Both AgentLaunchDialog native selection cases still returned `rel` instead of `release/2.0`; these remain unresolved, not newly classified flakes. The original ToolGroupFold released-reader case passed, but that owner failed its separate mobile waiting-group overflow-follow case (the existing 0747 record); the complete owner was not green.
 
 Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
+
+## Claude sign-in replay review — 2026-10-31
+
+The eight-worker rerun of `mise run test:logged -- --name browser -- mise run test:browser`
+failed the mobile `e2e/NativeAttachments.spec.ts:6` case, `attachments retain names
+until decoded, wrap, and survive remount and reload`. After reload the loading
+image still showed `loading.png`; the case exceeded its 30 s deadline at line 75.
+The complete unchanged owner passed both viewport cases with one worker (82.0 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=14492 mise run test:logged -- --name recovery-attachments-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/playwright/recovery-attachments
+```
+
+The broad run's evidence is `/tmp/orkestrator-test-run.utMrMj/browser.log` (compressed
+to `browser.log.gz` at completion). This confirms an intermittent attachment-owner
+failure; it does not classify the broad run's other failures as flakes. A separate
+one-worker `NativeHeldSend.spec.ts` rerun failed before fixture controls appeared,
+including a Vite dynamic-import fetch failure; that owner remains non-green
+(`/tmp/orkestrator-test-run.i7n9E6/recovery-held-send-browser.log.gz`). No assertion,
+timeout, or implementation in either browser owner changed.

@@ -272,7 +272,8 @@ describe("LM-01/LM-03 the coordinator's node context", () => {
   test("a command node with nodes defaults to itself and deletes only on request", () => {
     const line = coordinatorNodeContext(commandStatus, 2)!;
     expect(line).toContain("2 connected nodes");
-    expect(line).toContain("Work on this node unless the user names another node");
+    expect(line).toContain("A node the user names always wins");
+    expect(line).toContain("work on this node unless load or OS gives a clear reason to move");
     expect(line).toContain("takes an optional nodeId");
     expect(line).toContain("Never delete an environment on your own initiative");
     expect(coordinatorNodeContext({ ...commandStatus, mode: "standalone" }, 0)).toBeNull();

@@ -67,11 +67,11 @@ class MockEventSource {
   onopen: ((event?: Event) => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
+  addEventListener(_type: string, _listener: () => void): void {}
   closed = false;
   /**
-   * Mirrors the real `EventSource`. A browser retries a `CONNECTING` socket on
-   * its own but abandons a `CLOSED` one, and the gateway has to tell those
-   * apart to know whether it must rebuild the shared terminal stream itself.
+   * Mirrors the real `EventSource`: `CONNECTING` after a network failure, which
+   * a browser would retry on its own, and `CLOSED` after an HTTP error.
    */
   readyState: number = EVENT_SOURCE_CONNECTING;
 
@@ -3461,7 +3461,9 @@ describe("web gateway browser API", () => {
     expect(MockEventSource.instances).toHaveLength(1);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
-    expect(source.url).toBe("/__orkestrator/events?excludeEvents=terminal-output-");
+    expect(source.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&keepaliveEvents=1",
+    );
     expect(source.options).toEqual({ withCredentials: true });
 
     const connectedCallback = mock(() => undefined);
@@ -3505,13 +3507,13 @@ describe("web gateway browser API", () => {
     expect(source.closed).toBe(true);
   });
 
-  test("retains the newest browser cursor across automatic retry and stream recreation", () => {
+  test("retains the newest browser cursor across a dropped stream and stream recreation", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const warning = mock(() => undefined);
     const originalWarn = console.warn;
     console.warn = warning;
     try {
-      const api = createBrowserGatewayApi();
+      const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
       const cursorCallback = mock(() => undefined);
       const unsubscribe = api.listen("gateway.cursor", cursorCallback);
       const firstSource = MockEventSource.instances[0];
@@ -3527,12 +3529,18 @@ describe("web gateway browser API", () => {
         }),
       );
 
-      // CONNECTING means the browser owns the retry. The client must keep the
-      // same EventSource and continue accepting its later authoritative IDs.
+      // The replacement resumes from the cursor, as a browser's own retry would
+      // through Last-Event-ID.
       firstSource.fail(EVENT_SOURCE_CONNECTING);
-      expect(MockEventSource.instances).toHaveLength(1);
-      expect(firstSource.closed).toBe(false);
-      firstSource.onmessage?.(
+      await waitForCondition(
+        () => MockEventSource.instances.length === 2,
+        "The dropped stream was not replaced",
+      );
+      const secondSource = MockEventSource.instances[1]!;
+      expect(secondSource.url).toBe(
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A5&keepaliveEvents=1",
+      );
+      secondSource.onmessage?.(
         new MessageEvent("message", {
           data: JSON.stringify({
             event: "gateway.cursor",
@@ -3544,12 +3552,12 @@ describe("web gateway browser API", () => {
 
       expect(cursorCallback).not.toHaveBeenCalled();
       unsubscribe();
-      expect(firstSource.closed).toBe(true);
+      expect(secondSource.closed).toBe(true);
 
       const stopReplacement = api.listen("menu-zoom", () => undefined);
-      expect(MockEventSource.instances).toHaveLength(2);
-      expect(MockEventSource.instances[1]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8",
+      expect(MockEventSource.instances).toHaveLength(3);
+      expect(MockEventSource.instances[2]?.url).toBe(
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8&keepaliveEvents=1",
       );
       stopReplacement();
     } finally {
@@ -3584,7 +3592,7 @@ describe("web gateway browser API", () => {
         "The authoritative stream was not rebuilt after a fatal error",
       );
       expect(MockEventSource.instances[1]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4&keepaliveEvents=1",
       );
 
       // The abandoned socket must not keep dispatching into the live listeners.
@@ -3604,7 +3612,7 @@ describe("web gateway browser API", () => {
     }
   });
 
-  test("does not rebuild a browser stream the browser is still retrying", () => {
+  test("takes a dropped browser stream's retry over instead of leaving it to the browser", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const warning = mock(() => undefined);
     const originalWarn = console.warn;
@@ -3615,9 +3623,13 @@ describe("web gateway browser API", () => {
       const source = MockEventSource.instances[0];
       if (!source) throw new Error("EventSource was not created");
 
+      // Left CONNECTING, the browser would keep retrying at its own fixed pace.
       source.fail(EVENT_SOURCE_CONNECTING);
-      expect(MockEventSource.instances).toHaveLength(1);
-      expect(source.closed).toBe(false);
+      expect(source.closed).toBe(true);
+      await waitForCondition(
+        () => MockEventSource.instances.length === 2,
+        "The dropped stream was not replaced",
+      );
       unsubscribe();
     } finally {
       console.warn = originalWarn;
@@ -3673,7 +3685,7 @@ describe("web gateway browser API", () => {
     const stopReplacement = api.listen("menu-zoom", () => undefined);
     const replacement = MockEventSource.instances.at(-1);
     expect(replacement?.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3",
+      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3&keepaliveEvents=1",
     );
     stopReplacement();
   });
@@ -3930,18 +3942,13 @@ describe("web gateway browser API", () => {
       source.open();
       await api.eventStreamReady("terminal-output-session-1");
 
-      // A CONNECTING socket is one the browser is still retrying itself.
-      // Rebuilding here would race that retry.
+      // Whatever state the failure left the socket in, the ladder owns the retry
+      // and every browser terminal shares this one socket.
       source.fail(EVENT_SOURCE_CONNECTING);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(MockEventSource.instances).toHaveLength(1);
-      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
-
-      // A CLOSED socket is dead. Nothing else rebuilds it, and every browser
-      // terminal now shares this one socket.
-      source.fail(EVENT_SOURCE_CLOSED);
+      expect(source.closed).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(MockEventSource.instances).toHaveLength(2);
+      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
       const replacement = MockEventSource.instances[1]!;
       expect(replacement.url).toBe(
         "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session-1",

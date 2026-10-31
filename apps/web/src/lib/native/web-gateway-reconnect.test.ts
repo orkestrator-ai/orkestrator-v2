@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
 import { clearDirectGatewayTransport } from "./gateway-auth-transport";
+import { GATEWAY_KEEPALIVE_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 
 /**
  * The gateway's event stream reconnect policy: consecutive failures back off
@@ -222,6 +223,10 @@ class MockEventSource {
   onopen: (() => void) | null = null;
   onmessage: ((message: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
+  readonly namedListeners = new Map<string, () => void>();
+  addEventListener(type: string, listener: () => void): void {
+    this.namedListeners.set(type, listener);
+  }
   readyState = EVENT_SOURCE_CONNECTING;
   closed = false;
 
@@ -239,6 +244,11 @@ class MockEventSource {
   open(): void {
     this.readyState = EVENT_SOURCE_OPEN;
     this.onopen?.();
+  }
+
+  /** The gateway's keepalive event: a named event, so `onmessage` never sees it. */
+  keepalive(): void {
+    this.namedListeners.get(GATEWAY_KEEPALIVE_EVENT)?.();
   }
 
   /** A fatal failure: the browser abandons a CLOSED socket. */
@@ -284,6 +294,13 @@ function manualTimers() {
   return {
     delays: () => armed.map((timer) => timer.delay),
     pendingDelays: () => [...pending.values()].map((timer) => timer.delay),
+    /** Fire the first of the pending timers that asked for `delay`. */
+    fireFirst(delay: number): void {
+      const match = [...pending.values()].find((timer) => timer.delay === delay);
+      if (!match) throw new Error(`Expected a pending ${delay} ms timer`);
+      pending.delete(match.id);
+      match.run();
+    },
     /** Fire the one pending timer that asked for `delay`. */
     fire(delay: number): void {
       const matches = [...pending.values()].filter((timer) => timer.delay === delay);
@@ -294,6 +311,15 @@ function manualTimers() {
       matches[0]!.run();
     },
   };
+}
+
+/** Waits on real timers, for the cases that exercise the real watchdog interval. */
+async function waitForReal(condition: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(message);
+    await new Promise((resolve) => originalSetTimeout(resolve, 5));
+  }
 }
 
 /** Let promise chains run without waiting on any real timer. */
@@ -1005,7 +1031,7 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
 });
 
 describe("gateway main stream connection state", () => {
-  test("a same-origin stream reports connected, disconnected while the browser retries, and idle when unused", async () => {
+  test("a same-origin stream reports connected, disconnected until a retry opens, and idle when unused", async () => {
     console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
@@ -1026,20 +1052,22 @@ describe("gateway main stream connection state", () => {
     main().open();
     expect(api.eventStreamConnection.state()).toBe("connected");
 
-    // A recoverable error: the browser keeps the socket CONNECTING and retries.
+    // A network failure: still disconnected through the backed-off retry...
     main().readyState = EVENT_SOURCE_CONNECTING;
     main().onerror?.();
-    expect(api.eventStreamConnection.state()).toBe("disconnected");
-    main().open();
-    expect(api.eventStreamConnection.state()).toBe("connected");
-
-    // A fatal error: still disconnected through the backed-off retry...
-    main().fail();
     expect(api.eventStreamConnection.state()).toBe("disconnected");
     timers.fire(100);
     expect(MockEventSource.instances).toHaveLength(2);
     expect(api.eventStreamConnection.state()).toBe("disconnected");
     // ...until the retry opens.
+    main().open();
+    expect(api.eventStreamConnection.state()).toBe("connected");
+
+    // The same for an HTTP error, on the next rung.
+    main().fail();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    timers.fire(200);
+    expect(MockEventSource.instances).toHaveLength(3);
     main().open();
     expect(api.eventStreamConnection.state()).toBe("connected");
 
@@ -1142,4 +1170,346 @@ test("replacing a disconnected gateway reports idle and clears its state listene
   expect(states).toHaveLength(stateCount);
   stopNext();
   stopState();
+});
+
+describe("same-origin streams follow the ladder, not the browser's fixed retry", () => {
+  test("tabs dropped together retry on their own jitter, and back off, for the whole outage", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const timers = manualTimers();
+    // Two tabs with different jitter samples, as two tabs always have.
+    const samples = [0, 0.999_999];
+    const stops = samples.map((sample) => {
+      const api = createBrowserGatewayApi({
+        eventReconnectDelayMs: 1_000,
+        eventReconnectRandom: () => sample,
+      });
+      return api.listen("changed", () => undefined);
+    });
+    const [first, second] = MockEventSource.instances as [MockEventSource, MockEventSource];
+    first.open();
+    second.open();
+
+    // A network failure leaves the socket CONNECTING, which a browser would retry
+    // itself every 3 s, in step with every other tab the outage dropped.
+    for (const source of [first, second]) {
+      source.readyState = EVENT_SOURCE_CONNECTING;
+      source.onerror?.();
+      expect(source.closed).toBe(true);
+    }
+    expect(timers.delays()).toEqual([500, 1_000]);
+
+    // Each retry that fails climbs that tab's own ladder.
+    timers.fire(500);
+    const retry = MockEventSource.instances.at(-1)!;
+    retry.readyState = EVENT_SOURCE_CONNECTING;
+    retry.onerror?.();
+    expect(timers.delays()).toEqual([500, 1_000, 1_000]);
+    for (const stop of stops) stop();
+  });
+
+  test("the shared terminal socket returns on the ladder and with the main stream", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 1_000,
+      eventReconnectRandom: TOP_OF_RANGE,
+    });
+    const output = mock(() => undefined);
+    const stopMain = api.listen("changed", () => undefined);
+    const stopTerminal = api.listen("terminal-output-one", output);
+    await flushMicrotasks();
+    const main = MockEventSource.instances[0]!;
+    const terminal = terminalSources()[0]!;
+    main.open();
+    terminal.open();
+
+    for (const source of [main, terminal]) {
+      source.readyState = EVENT_SOURCE_CONNECTING;
+      source.onerror?.();
+      expect(source.closed).toBe(true);
+    }
+    expect(timers.pendingDelays()).toEqual([1_000, 1_000]);
+
+    // The main stream's return retries the terminal at once, and the terminal
+    // is told it missed output.
+    timers.fireFirst(1_000);
+    MockEventSource.instances
+      .filter((source) => source.terminalEvents === null)
+      .at(-1)!
+      .open();
+    await flushMicrotasks();
+    const replacement = terminalSources().at(-1)!;
+    expect(replacement).not.toBe(terminal);
+    replacement.open();
+    expect(output).toHaveBeenCalledWith({ desynced: true });
+    stopTerminal();
+    stopMain();
+  });
+});
+
+describe("a link that drops without an answer", () => {
+  const SILENCE_MS = 40;
+  const CONNECT_MS = 40;
+
+  test("a same-origin stream that stops its keepalives counts as lost, and is replaced", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 1,
+      eventStreamSilenceLimitMs: SILENCE_MS,
+      eventStreamConnectTimeoutMs: 10_000,
+    });
+    const output = mock(() => undefined);
+    const stop = api.listen("changed", () => undefined);
+    const stopTerminal = api.listen("terminal-output-one", output);
+    await flushMicrotasks();
+    const main = MockEventSource.instances[0]!;
+    const terminal = terminalSources()[0]!;
+    main.keepalive();
+    main.open();
+    terminal.open();
+    expect(main.url).toContain("keepaliveEvents=1");
+    expect(terminal.url).not.toContain("keepaliveEvents");
+
+    // Keepalives keep it alive past the limit.
+    for (let tick = 0; tick < 5; tick += 1) {
+      await new Promise((resolve) => setTimeout(resolve, SILENCE_MS / 2));
+      main.keepalive();
+    }
+    expect(api.eventStreamConnection.state()).toBe("connected");
+    expect(main.closed).toBe(false);
+
+    // Then nothing arrives, and nothing errors either.
+    await waitForReal(() => main.closed, "The silent stream was never dropped");
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    // The terminal stream shares the link, and has no watchdog of its own.
+    expect(terminal.closed).toBe(true);
+    await waitForReal(
+      () => MockEventSource.instances.filter((source) => source.terminalEvents === null).length > 1,
+      "The silent stream was never replaced",
+    );
+    stopTerminal();
+    stop();
+    expect(api.eventStreamConnection.state()).toBe("idle");
+  });
+
+  test("a gateway that never sends keepalive events is not taken for a dead link", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 1,
+      eventStreamSilenceLimitMs: SILENCE_MS,
+      eventStreamConnectTimeoutMs: CONNECT_MS,
+    });
+    const stop = api.listen("changed", () => undefined);
+    const main = MockEventSource.instances[0]!;
+    main.open();
+    await new Promise((resolve) => setTimeout(resolve, SILENCE_MS * 3));
+    expect(main.closed).toBe(false);
+    expect(api.eventStreamConnection.state()).toBe("connected");
+    stop();
+  });
+
+  test("a same-origin attempt nothing answers is given up on and retried", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 1,
+      eventStreamSilenceLimitMs: SILENCE_MS,
+      eventStreamConnectTimeoutMs: CONNECT_MS,
+    });
+    const stop = api.listen("changed", () => undefined);
+    const main = MockEventSource.instances[0]!;
+    await waitForReal(() => main.closed, "The unanswered attempt was never given up on");
+    await waitForReal(() => MockEventSource.instances.length > 1, "The attempt was never retried");
+    stop();
+  });
+
+  test("a direct stream counts its keepalive comments, and is replaced once they stop", async () => {
+    console.warn = mock(() => undefined);
+    const responses: Array<{ push(text: string): void; aborted: boolean }> = [];
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      const encoder = new TextEncoder();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          controller = streamController;
+        },
+      });
+      const entry = {
+        push: (text: string) => controller.enqueue(encoder.encode(text)),
+        aborted: false,
+      };
+      init?.signal?.addEventListener("abort", () => {
+        entry.aborted = true;
+      });
+      responses.push(entry);
+      return new Response(body, { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      ...DIRECT,
+      eventReconnectDelayMs: 1,
+      eventStreamSilenceLimitMs: SILENCE_MS,
+      eventStreamConnectTimeoutMs: CONNECT_MS,
+    });
+    const stop = api.listen("changed", () => undefined);
+    await waitForReal(() => api.eventStreamConnection.state() === "connected", "Never connected");
+    for (let tick = 0; tick < 5; tick += 1) {
+      responses[0]!.push(": keepalive\n\n");
+      await new Promise((resolve) => setTimeout(resolve, SILENCE_MS / 2));
+    }
+    expect(responses).toHaveLength(1);
+    expect(api.eventStreamConnection.state()).toBe("connected");
+
+    await waitForReal(() => responses[0]!.aborted, "The silent stream was never dropped");
+    await waitForReal(() => responses.length > 1, "The silent stream was never replaced");
+    stop();
+  });
+
+  test("a direct attempt nothing answers is given up on and retried", async () => {
+    console.warn = mock(() => undefined);
+    let attempts = 0;
+    globalThis.fetch = mock((_input: unknown, init?: RequestInit) => {
+      attempts += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("Aborted", "AbortError")),
+        );
+      });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      ...DIRECT,
+      eventReconnectDelayMs: 1,
+      eventStreamSilenceLimitMs: SILENCE_MS,
+      eventStreamConnectTimeoutMs: CONNECT_MS,
+    });
+    const stop = api.listen("changed", () => undefined);
+    await waitForReal(() => attempts > 1, "The unanswered attempt was never retried");
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    stop();
+  });
+});
+
+describe("a stream the gateway refuses for its credential", () => {
+  test("a same-origin 401 is no outage, and an agent-test tab leaves for its login page", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const lapsed = mock(() => undefined);
+    const requested: string[] = [];
+    globalThis.fetch = mock(async (input: unknown) => {
+      requested.push(String(input));
+      // The session check at startup succeeds; the credential then lapses.
+      return String(input).endsWith("/agent-test/session")
+        ? new Response("{}", { status: 200 })
+        : new Response("{}", { status: 401 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 60_000,
+      agentTestSessionActivity: true,
+      onCredentialLapsed: lapsed,
+    });
+    await flushMicrotasks();
+    const states: string[] = [];
+    api.eventStreamConnection.subscribe((state) => states.push(state));
+    const stop = api.listen("changed", () => undefined);
+    const main = MockEventSource.instances[0]!;
+    main.open();
+
+    main.fail();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    await until(() => lapsed.mock.calls.length === 1, "The lapse was never noticed");
+    // Reads run again and show the 401, instead of a banner promising a reconnect.
+    expect(api.eventStreamConnection.state()).toBe("connecting");
+    expect(requested.at(-1)).toBe("/__orkestrator/gateway-settings");
+    stop();
+  });
+
+  test("a refusal after an outage that followed a refusal is still noticed", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const fetched = mock(async () => new Response("{}", { status: 401 }));
+    globalThis.fetch = fetched as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ eventReconnectDelayMs: 1 });
+    const stop = api.listen("changed", () => undefined);
+    let current = MockEventSource.instances[0]!;
+    const nextAttempt = async () => {
+      const previous = current;
+      await waitForReal(() => MockEventSource.instances.at(-1) !== previous, "No retry");
+      current = MockEventSource.instances.at(-1)!;
+    };
+
+    current.open();
+    current.fail();
+    await waitForReal(() => api.eventStreamConnection.state() === "connecting", "First refusal");
+    expect(fetched).toHaveBeenCalledTimes(1);
+
+    // Another refusal asks nothing more.
+    await nextAttempt();
+    current.fail();
+    await flushMicrotasks();
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(api.eventStreamConnection.state()).toBe("connecting");
+
+    // Then the link drops, and the gateway refuses again when it returns.
+    await nextAttempt();
+    current.readyState = EVENT_SOURCE_CONNECTING;
+    current.onerror?.();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    await nextAttempt();
+    current.fail();
+    await waitForReal(() => fetched.mock.calls.length === 2, "The new refusal was not checked");
+    await waitForReal(
+      () => api.eventStreamConnection.state() === "connecting",
+      "Stuck disconnected",
+    );
+    stop();
+  });
+
+  test("a same-origin network failure asks nothing: only an HTTP error can be the credential", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const fetched = mock(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetched as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ eventReconnectDelayMs: 60_000 });
+    const stop = api.listen("changed", () => undefined);
+    const main = MockEventSource.instances[0]!;
+    main.open();
+    main.readyState = EVENT_SOURCE_CONNECTING;
+    main.onerror?.();
+    await flushMicrotasks();
+    expect(fetched).not.toHaveBeenCalled();
+    expect(api.eventStreamConnection.state()).toBe("disconnected");
+    stop();
+  });
+
+  test("a direct 401 is no outage either, while other failures still are", async () => {
+    console.warn = mock(() => undefined);
+    let status = 401;
+    const fetched = mock(async () => new Response("{}", { status }));
+    globalThis.fetch = fetched as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      ...DIRECT,
+      eventReconnectDelayMs: 5,
+    });
+    const states: string[] = [];
+    api.eventStreamConnection.subscribe((state) => states.push(state));
+    const stop = api.listen("changed", () => undefined);
+    await waitForReal(() => fetched.mock.calls.length > 2, "No retry");
+    expect(states).not.toContain("disconnected");
+    expect(api.eventStreamConnection.state()).toBe("connecting");
+
+    status = 503;
+    await waitForReal(() => states.includes("disconnected"), "A 503 was not an outage");
+    stop();
+  });
 });

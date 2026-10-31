@@ -13,6 +13,10 @@ import { GatewayHttpError } from "@/lib/native/gateway-http-error";
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
+  GATEWAY_KEEPALIVE_EVENT,
+  GATEWAY_KEEPALIVE_EVENTS_PARAM,
+  GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
+  GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
   isGatewayTransportEvent,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
@@ -41,9 +45,9 @@ const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 /**
  * `EventSource.CLOSED`, spelled as the spec's fixed numeric value rather than
- * read off the constructor: a same-origin browser may have replaced the global,
- * and the constant is what distinguishes a dead socket from one the browser is
- * still retrying for us.
+ * read off the constructor: a same-origin browser may have replaced the global.
+ * The gateway answered with an HTTP error, as opposed to a network failure,
+ * which leaves the socket CONNECTING.
  */
 const EVENT_SOURCE_CLOSED = 2;
 export const AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
@@ -111,6 +115,10 @@ export interface BrowserGatewayOptions {
   eventReconnectRandom?: () => number;
   /** Clock that decides whether a dropped stream had stayed up long enough. */
   eventReconnectNow?: () => number;
+  /** A main stream the gateway stays silent on this long counts as lost. */
+  eventStreamSilenceLimitMs?: number;
+  /** A main stream attempt with no answer after this long counts as failed. */
+  eventStreamConnectTimeoutMs?: number;
   reportBootMetrics?: boolean;
   /** Same-origin app install probes for the agent-test-only activity endpoint. */
   agentTestSessionActivity?: boolean;
@@ -183,6 +191,35 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       }
     }
   };
+  const streamSilenceLimitMs = options.eventStreamSilenceLimitMs ?? GATEWAY_STREAM_SILENCE_LIMIT_MS;
+  const streamConnectTimeoutMs =
+    options.eventStreamConnectTimeoutMs ?? GATEWAY_STREAM_CONNECT_TIMEOUT_MS;
+  const livenessNow = options.eventReconnectNow ?? Date.now;
+  /** When the main stream counts as lost unless it shows some sign of life first. */
+  let mainStreamDeadline: number | null = null;
+  let mainStreamWatchdog: ReturnType<typeof setInterval> | null = null;
+  /** Until the stream opens again, a refusal means this and not a new outage. */
+  let mainStreamCredentialRefused = false;
+  /** A silent drop happened, so a terminal attempt still unanswered is on the dead link. */
+  let silentDropSinceMainOpen = false;
+  const watchMainStream = (withinMs: number) => {
+    mainStreamDeadline = livenessNow() + withinMs;
+    if (mainStreamWatchdog) return;
+    mainStreamWatchdog = setInterval(
+      () => {
+        if (mainStreamDeadline !== null && livenessNow() >= mainStreamDeadline) {
+          dropSilentStreams();
+        }
+      },
+      Math.min(streamSilenceLimitMs, streamConnectTimeoutMs) / 4,
+    );
+    mainStreamWatchdog.unref?.();
+  };
+  const stopWatchingMainStream = () => {
+    mainStreamDeadline = null;
+    if (mainStreamWatchdog) clearInterval(mainStreamWatchdog);
+    mainStreamWatchdog = null;
+  };
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsLoadObserved =
@@ -218,6 +255,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
      * this socket and the consumer has to re-read the authoritative snapshot.
      */
     connectedBefore: boolean;
+    /** Whether this direct stream's current attempt got an answer. */
+    fetchOpen: boolean;
     /**
      * Whether this terminal is currently consuming the compatibility SSE
      * transport. WebSocket readiness is channel-scoped: an authenticated
@@ -323,6 +362,30 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }
   };
 
+  /**
+   * The gateway refused the stream's credential, so the link is up and no retry
+   * will help. That is no outage: stop calling it one, so reads run again and
+   * show the failure (see `transport-connectivity.ts`) instead of a banner
+   * promising a reconnect, and an agent-test tab goes to its login page.
+   */
+  const mainStreamCredentialRejected = () => {
+    mainStreamCredentialRefused = true;
+    handleCredentialLapse();
+    setMainStreamConnectionState("connecting");
+  };
+
+  /** An `EventSource` cannot read the status that closed it, so ask the same gate. */
+  const checkMainStreamCredential = () => {
+    void fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
+      credentials,
+      headers: requestHeaders(),
+    })
+      .then((response) => {
+        if (response.status === 401) mainStreamCredentialRejected();
+      })
+      .catch(() => undefined);
+  };
+
   const detectAgentTestSession = async () => {
     if (credentials !== "same-origin" || !options.agentTestSessionActivity) return;
     const controller = new AbortController();
@@ -389,6 +452,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       if (included) params.set("includeEvents", included);
     }
     if (!terminalEvents && since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+    // Only an `EventSource` needs it, and only the main stream is watched.
+    if (!terminalEvents && !bearerToken && !baseUrl) {
+      params.set(GATEWAY_KEEPALIVE_EVENTS_PARAM, "1");
+    }
     return `${GATEWAY_PREFIX}/events?${params.toString()}`;
   };
 
@@ -569,11 +636,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     mainStreamFrames = false,
     terminalFallback = false,
   ): Promise<void> =>
-    readSseStream(response.body!, controller.signal, (frame) => {
-      if (!frame.data) return;
-      if (mainStreamFrames) dispatchMainFrame(frame.data, frame.id);
-      else dispatchMessage(frame.data, { terminalFallback });
-    });
+    readSseStream(
+      response.body!,
+      controller.signal,
+      (frame) => {
+        if (!frame.data) return;
+        if (mainStreamFrames) dispatchMainFrame(frame.data, frame.id);
+        else dispatchMessage(frame.data, { terminalFallback });
+      },
+      undefined,
+      mainStreamFrames ? () => watchMainStream(streamSilenceLimitMs) : undefined,
+    );
+
+  /** The main stream the watchdog gave up on, while its abort unwinds. */
+  let silentMainStream: AbortController | null = null;
 
   const scheduleReconnect = () => {
     if (!hasMainEventListeners() || reconnectTimer) return;
@@ -588,6 +664,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     startBootMetricsReporter();
     const controller = new AbortController();
     streamAbortController = controller;
+    watchMainStream(streamConnectTimeoutMs);
+    let credentialRejected = false;
 
     void (async () => {
       try {
@@ -596,12 +674,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           headers: requestHeaders(),
           signal: controller.signal,
         });
+        if (response.status === 401) credentialRejected = true;
         if (!response.ok || !response.body) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
         }
         mainStreamBackoff.connected();
+        watchMainStream(streamSilenceLimitMs);
         setMainStreamConnectionState("connected");
-        retryWaitingTerminalFallbacks();
+        afterMainStreamOpened();
         if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
           bootMetricsEventStreamConnectedMs = performance.now();
           maybeSendBootMetrics();
@@ -612,11 +692,19 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           console.warn("[RemoteGateway] Event stream disconnected", error);
         }
       } finally {
-        const shouldReconnect = !controller.signal.aborted;
+        // An abort means someone stopped this stream on purpose; the watchdog is
+        // the one aborter that still wants a replacement.
+        const silent = silentMainStream === controller;
+        const shouldReconnect = silent || !controller.signal.aborted;
         controller.abort();
-        if (streamAbortController === controller) streamAbortController = null;
+        if (silent) silentMainStream = null;
+        if (streamAbortController === controller) {
+          streamAbortController = null;
+          stopWatchingMainStream();
+        }
         if (shouldReconnect) {
-          setMainStreamConnectionState("disconnected");
+          if (credentialRejected) mainStreamCredentialRejected();
+          else setMainStreamConnectionState("disconnected");
           scheduleReconnect();
         }
       }
@@ -637,11 +725,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       withCredentials: true,
     });
     eventSource = source;
+    watchMainStream(streamConnectTimeoutMs);
+    // Set by the gateway's first keepalive; an older gateway never sends one.
+    let keepalivesExpected = false;
+    source.addEventListener(GATEWAY_KEEPALIVE_EVENT, () => {
+      if (eventSource !== source) return;
+      keepalivesExpected = true;
+      watchMainStream(streamSilenceLimitMs);
+    });
     source.onopen = () => {
       if (eventSource === source) {
+        if (!keepalivesExpected) stopWatchingMainStream();
         mainStreamBackoff.connected();
         setMainStreamConnectionState("connected");
-        retryWaitingTerminalFallbacks();
+        afterMainStreamOpened();
       }
       if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
         bootMetricsEventStreamConnectedMs = performance.now();
@@ -650,23 +747,74 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     };
     source.onmessage = (message) => {
       if (eventSource !== source) return;
+      if (keepalivesExpected) watchMainStream(streamSilenceLimitMs);
       dispatchMainFrame(message.data, message.lastEventId);
     };
     source.onerror = () => {
       if (eventSource !== source) return;
       console.warn("[RemoteGateway] Event stream disconnected");
-      // Whether the browser is retrying it or it is CLOSED, nothing is
-      // arriving until the next `onopen`.
-      setMainStreamConnectionState("disconnected");
-      // A recoverable error leaves the socket CONNECTING and the browser retries
-      // it for us, carrying Last-Event-ID; reconnecting here would race that. A
-      // CLOSED socket is dead, and because `ensureEventStream` early-returns
-      // while `eventSource` is set, nothing else would ever rebuild it — the tab
-      // would silently stop receiving every authoritative event until reload.
-      if (source.readyState !== EVENT_SOURCE_CLOSED) return;
+      const refused = source.readyState === EVENT_SOURCE_CLOSED;
+      // A network failure ends what a refusal told us, so the next one asks again.
+      if (!refused) mainStreamCredentialRefused = false;
+      if (!mainStreamCredentialRefused) setMainStreamConnectionState("disconnected");
+      // Left CONNECTING, the browser would retry by itself: every 3 s for the
+      // whole outage, and in lock-step across tabs when a restart drops them
+      // together. Take the retry over, so it follows the jittered ladder like
+      // every other stream. The new socket resumes from `mainStream.cursor`.
+      source.close();
       eventSource = null;
+      stopWatchingMainStream();
+      if (refused && !mainStreamCredentialRefused) checkMainStreamCredential();
       scheduleReconnect();
     };
+  };
+
+  /**
+   * The main stream shows no sign of life, or an attempt got no answer: the link
+   * dropped without telling anyone. It carries the terminal streams too, and
+   * they have no watchdog of their own.
+   */
+  const dropSilentStreams = () => {
+    stopWatchingMainStream();
+    console.warn("[RemoteGateway] Event stream disconnected: the link went silent");
+    setMainStreamConnectionState("disconnected");
+    silentDropSinceMainOpen = true;
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+      scheduleReconnect();
+    }
+    if (streamAbortController) {
+      silentMainStream = streamAbortController;
+      streamAbortController.abort();
+    }
+    if (browserTerminalEventSource) {
+      closeBrowserTerminalEventSource();
+      scheduleBrowserTerminalReconnect();
+    }
+    for (const stream of terminalEventStreams.values()) stream.controller?.abort();
+    terminalSocket?.dropConnection();
+  };
+
+  const afterMainStreamOpened = () => {
+    mainStreamCredentialRefused = false;
+    retryWaitingTerminalFallbacks();
+    if (!silentDropSinceMainOpen) return;
+    silentDropSinceMainOpen = false;
+    // An attempt made while the link was silent will never be answered, and
+    // only its own TCP timeout would end it. The link is back, so try again.
+    if (browserTerminalEventSource && !browserTerminalEventSourceOpen) {
+      closeBrowserTerminalEventSource();
+      refreshBrowserTerminalEventSource();
+    }
+    for (const stream of terminalEventStreams.values()) {
+      if (!stream.controller || stream.fetchOpen) continue;
+      const controller = stream.controller;
+      stream.controller = null;
+      controller.abort();
+      startTerminalEventFallback(stream);
+    }
+    terminalSocket?.reconnectIfNotReady();
   };
 
   const closeEventStreamIfIdle = () => {
@@ -677,6 +825,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     streamAbortController = null;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+    stopWatchingMainStream();
     // A later listener starts a fresh connection, not the tail of an old outage.
     mainStreamBackoff.reset();
     setMainStreamConnectionState("idle");
@@ -709,6 +858,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     resolveTerminalStreamReady(stream);
     if (!isReconnect) return;
     dispatchMessage(JSON.stringify({ event: stream.event, payload: { desynced: true } }));
+  };
+
+  const closeBrowserTerminalEventSource = () => {
+    browserTerminalEventSource?.close();
+    browserTerminalEventSource = null;
+    browserTerminalSubscribedEvents = null;
+    browserTerminalEventSourceOpen = false;
   };
 
   const clearBrowserTerminalReconnectTimer = () => {
@@ -860,15 +1016,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       source.onerror = () => {
         if (browserTerminalEventSource !== source) return;
         console.warn("[RemoteGateway] Terminal event stream disconnected");
-        // A recoverable error leaves the socket CONNECTING and the browser
-        // retries it for us; reconnecting here would race that. A CLOSED socket
-        // is dead and nothing else will rebuild it — and because every browser
-        // terminal now shares this one socket, leaving it dead silently strands
-        // every mounted terminal rather than one.
-        if (source.readyState !== EVENT_SOURCE_CLOSED) return;
-        browserTerminalEventSource = null;
-        browserTerminalSubscribedEvents = null;
-        browserTerminalEventSourceOpen = false;
+        // As for the main stream: the jittered ladder owns the retry, rather
+        // than the browser's fixed one, and one shared socket means one ladder
+        // however many terminals it strands.
+        closeBrowserTerminalEventSource();
         scheduleBrowserTerminalReconnect();
       };
     });
@@ -901,6 +1052,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
             terminalEventStreams.get(stream.event) !== stream
           )
             return;
+          stream.fetchOpen = true;
           stream.backoff.connected();
           announceTerminalStreamOpen(stream);
           await consumeFetchEventStream(response, controller, false, true);
@@ -910,9 +1062,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           }
         } finally {
           controller.abort();
-          if (stream.controller === controller) stream.controller = null;
+          if (stream.controller === controller) {
+            stream.controller = null;
+            stream.fetchOpen = false;
+          }
           if (
             !stream.closed &&
+            // A newer attempt replaced this one and owns the stream now.
+            !stream.controller &&
             // Stopping the fallback works by aborting this controller, which is
             // what runs this block. Without this check the stop schedules its
             // own replacement and the terminal ends up on both transports.
@@ -1088,6 +1245,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       resolveReady,
       readyResolved: false,
       connectedBefore: false,
+      fetchOpen: false,
       fallbackActive: false,
       closed: false,
     };
@@ -1346,6 +1504,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     setMainStreamConnectionState("idle");
     mainStreamConnectionListeners.clear();
     disposeAgentTestActivity();
+    stopWatchingMainStream();
     removeRetryWakeListeners();
     terminalInput.dispose(reason);
     terminalSocket?.dispose();

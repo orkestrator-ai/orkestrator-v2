@@ -142,3 +142,67 @@ test("does not announce a stream response arriving after stopListening", async (
   expect(onEvent).not.toHaveBeenCalled();
   expect(cancelled).toHaveBeenCalledTimes(1);
 });
+
+test("a stream that stops its keepalives, or an attempt nothing answers, is given up on", async () => {
+  console.error = mock(() => undefined);
+  const encoder = new TextEncoder();
+  const attempts: Array<{ aborted: boolean; push?: (text: string) => void }> = [];
+  globalThis.fetch = Object.assign(
+    mock((_input: RequestInfo | URL, init?: RequestInit) => {
+      const attempt: (typeof attempts)[number] = { aborted: false };
+      attempts.push(attempt);
+      // The second attempt is never answered, as on a link that has gone silent.
+      const answered = attempts.length !== 2;
+      return new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          attempt.aborted = true;
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+        if (!answered) return;
+        resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                attempt.push = (text) => controller.enqueue(encoder.encode(text));
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      });
+    }),
+    { preconnect: originalFetch.preconnect },
+  );
+  const client = new BackendHttpClient("http://127.0.0.1:34121/", "fixture-token", {
+    eventReconnectDelayMs: 1,
+  });
+  const states: string[] = [];
+  client.listen(() => undefined, {
+    onStreamState: (state) => states.push(state),
+    streamSilenceLimitMs: 40,
+    streamConnectTimeoutMs: 40,
+  });
+  const waitUntil = async (condition: () => boolean, message: string) => {
+    const deadline = Date.now() + 5_000;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error(message);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  try {
+    await waitUntil(() => states[0] === "open", "The stream never opened");
+    // Keepalive comments carry it past the limit.
+    for (let tick = 0; tick < 5; tick += 1) {
+      attempts[0]!.push?.(": keepalive\n\n");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(states).toEqual(["open"]);
+
+    await waitUntil(() => states.includes("closed"), "The silent stream was never given up on");
+    expect(attempts[0]!.aborted).toBe(true);
+    await waitUntil(() => attempts.length >= 3, "The unanswered attempt was never retried");
+    expect(attempts[1]!.aborted).toBe(true);
+  } finally {
+    client.stopListening();
+  }
+});

@@ -15,6 +15,8 @@ import {
 } from "@orkestrator/protocol/host-maintenance";
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
+  GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
+  GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
@@ -319,6 +321,9 @@ export type BackendStreamState = "open" | "closed";
 export type BackendListenOptions = {
   /** Called when the authoritative stream opens or drops (it reconnects by itself). */
   onStreamState?: (state: BackendStreamState) => void;
+  /** Test overrides for how long a silent stream or attempt is given. */
+  streamSilenceLimitMs?: number;
+  streamConnectTimeoutMs?: number;
 };
 
 export class BackendHttpClient {
@@ -543,13 +548,28 @@ export class BackendHttpClient {
       maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
       healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
     });
+    const silenceLimitMs = options.streamSilenceLimitMs ?? GATEWAY_STREAM_SILENCE_LIMIT_MS;
+    const connectTimeoutMs = options.streamConnectTimeoutMs ?? GATEWAY_STREAM_CONNECT_TIMEOUT_MS;
     while (!signal.aborted) {
+      // A link that drops with no answer never errors the stream: give up on it
+      // once the gateway's keepalives stop, and on an attempt nothing answers.
+      const attempt = new AbortController();
+      const abortAttempt = () => attempt.abort();
+      signal.addEventListener("abort", abortAttempt, { once: true });
+      let deadline = Date.now() + connectTimeoutMs;
+      const watchdog = setInterval(
+        () => {
+          if (Date.now() >= deadline) attempt.abort();
+        },
+        Math.min(silenceLimitMs, connectTimeoutMs) / 4,
+      );
+      watchdog.unref?.();
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
         const response = await fetch(url, {
           headers: { authorization: `Bearer ${this.token}` },
-          signal,
+          signal: attempt.signal,
         });
         if (!response.ok || !response.body)
           throw new Error(`Backend event stream returned HTTP ${response.status}`);
@@ -557,24 +577,36 @@ export class BackendHttpClient {
           await response.body.cancel().catch(() => undefined);
           return;
         }
+        deadline = Date.now() + silenceLimitMs;
         backoff.connected();
         options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
         // caught-up reconnect must trigger exact snapshot recovery.
         onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
-        await readSseStream(response.body, signal, (frame) => {
-          if (!frame.data) return;
-          const message = stream.accept(frame.data, frame.id);
-          if (message.kind === "event") onEvent(message.event, message.payload);
-          else if (message.kind === "resync")
-            onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
-          else if (message.kind === "malformed") {
-            console.warn("[BackendClient] Dropped malformed event stream frame");
-          }
-        });
+        await readSseStream(
+          response.body,
+          attempt.signal,
+          (frame) => {
+            if (!frame.data) return;
+            const message = stream.accept(frame.data, frame.id);
+            if (message.kind === "event") onEvent(message.event, message.payload);
+            else if (message.kind === "resync")
+              onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+            else if (message.kind === "malformed") {
+              console.warn("[BackendClient] Dropped malformed event stream frame");
+            }
+          },
+          undefined,
+          () => {
+            deadline = Date.now() + silenceLimitMs;
+          },
+        );
       } catch (error) {
         if (signal.aborted) return;
         console.error("[BackendClient] Event stream disconnected:", error);
+      } finally {
+        clearInterval(watchdog);
+        signal.removeEventListener("abort", abortAttempt);
       }
       if (signal.aborted) return;
       options.onStreamState?.("closed");

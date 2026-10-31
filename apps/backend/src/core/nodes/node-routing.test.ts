@@ -30,6 +30,9 @@ test("controller PR publication is node-link only, never workspace-grant access"
   expect(isNodeExcludedCommand("create_controller_pr")).toBe(false);
   expect(isWorkspaceExcludedCommand("create_controller_pr")).toBe(true);
   expect(isNodeExcludedCommand("create_coordinator_pr")).toBe(true);
+  expect(isNodeExcludedCommand("resolve_controller_conflicts")).toBe(false);
+  expect(isWorkspaceExcludedCommand("resolve_controller_conflicts")).toBe(true);
+  expect(isNodeExcludedCommand("resolve_coordinator_conflicts")).toBe(true);
 });
 
 test("controller worker surfaces are node-link only, never workspace-grant access", () => {

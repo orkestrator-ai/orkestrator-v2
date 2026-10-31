@@ -565,8 +565,8 @@ agents, models, defaults and base branch tip), `list_environments`,
 `stop_environment`, `get_repository_context`, the build pipeline tools,
 the Multi Review tools (custom fix and reviewer tabs included) and the worker
 surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab`,
-`create_pr`, `get_worker_changes`, `fork_worker`, `stop_worker_turn`,
-`list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
+`create_pr`, `resolve_conflicts`, `get_worker_changes`, `fork_worker`,
+`stop_worker_turn`, `list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
 the project's environments on the other nodes. The older `*_node_*` tools
 remain and use the same paths.
 
@@ -590,9 +590,14 @@ remain and use the same paths.
   and the worker's report wakes the coordinator or is held while the
   coordinator waits on that worker. A remote delegation closes when the
   node shows the worker's turn has ended, or its environment failed,
-  stopped or disappeared; build pipelines and Multi Reviews on a node send
-  status wakes whose suggested calls carry the `nodeId`. The node's relayed
-  `resource-changed` events make this prompt; the maintenance sweep covers
+  stopped or disappeared; build pipelines, Multi Reviews and pull requests
+  the coordinator follows on a node send status wakes whose suggested calls
+  carry the `nodeId`. A followed pull request is read from the node's
+  `get_environment` and the PR monitor health its summaries relay (check
+  counts, merge permission, `prMonitorConfirmed`), so "ready to merge" on a
+  node needs its summaries to be current. The node's relayed
+  `resource-changed` events (`environment` and `environment-pr-health`
+  included) make this prompt; the maintenance sweep covers
   missed events, and an unreachable node changes nothing
   (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
 

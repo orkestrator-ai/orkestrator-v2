@@ -524,11 +524,20 @@ list and run a native tab's slash commands with `session.command`'s
 restrictions (`list_worker_commands`, `run_worker_command`; capability
 `jobs`, so main only), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
-fix (`custom_fix_multi_review`), launch feature planning, fork a worker from
+fix (`custom_fix_multi_review`), raise a reviewed worker's pull request
+(`create_pr`, the PR tab) and resolve its conflicts (`resolve_conflicts`, the
+Resolve tab, refused as the button is when the worker has no open,
+conflicting PR), launch feature planning, fork a worker from
 its last commit into a new delegated worker (`fork_worker`, capability
 `environments`, a `requestId` receipt), and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
-[`coordinator.md`](coordinator.md#worker-surfaces). `get_worker_changes`
+[`coordinator.md`](coordinator.md#worker-surfaces). `create_pr` and
+`resolve_conflicts` have capability `multi-review`, so side agents never get
+them; neither merges. Its `get_environment` and `list_environments` rows
+also carry a worker's PR conflicts, mergeability, check counts and whether
+it is ready to merge (`prHasMergeConflicts`, `prMergeability`, `prChecks`,
+`prReadyToMerge`), from the PR monitor and never from a GitHub call made for
+the read; see [`coordinator.md`](coordinator.md#control-mcp). `get_worker_changes`
 (capability `discovery`, so side agents have it too) reads what a worker
 changed, local or container: branch, base, commits since the base, changed
 and uncommitted files with line counts, and bounded diffs, all from backend
@@ -573,8 +582,10 @@ message ID so restart reconciliation cannot lose or duplicate them. Besides
 completion, a coordinator is sent a status notice when work it started settles
 — a Multi Review ready to address or fixed, its automatic PR session started,
 opened or failed, a build paused on an error, a stall, a delegated tab waiting
-on input — and the tools that start a workflow
-say so in their result (`delivery: "async"`); see
+on input, a pull request it raised (or resolved, or its review's auto-PR
+opened) opening, conflicting, failing a check, becoming ready to merge,
+merging or closing, and its Resolve tab finishing — and the tools that start a workflow
+or raise or resolve a PR say so in their result (`delivery: "async"`); see
 [`coordinator.md`](coordinator.md#status-wakes).
 
 Agent launches, prompt dispatches, agent messages, ticket creation, comment

@@ -30,7 +30,7 @@ import {
   runMultiReviewSurface,
   startMultiReviewAt,
 } from "./coordinator-review-actions.js";
-import { launchWorkerPr } from "./coordinator-pr.js";
+import { launchWorkerPr, launchWorkerResolve } from "./coordinator-pr.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
 import {
@@ -160,6 +160,23 @@ export function registerControllerWorkflowCommands(
     )
       throw new Error("Expected targetBranch of 1-500 characters");
     return launchWorkerPr(context, dependencies, {
+      projectId: asNonBlankString(args.projectId, "projectId"),
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+      ...(typeof targetBranch === "string" ? { targetBranch: targetBranch.trim() } : {}),
+    });
+  });
+
+  // The Resolve Conflicts button for a command node's coordinator: this
+  // node's PR reading, repository defaults and Resolve action default decide.
+  register("resolve_controller_conflicts", async (args, context) => {
+    const targetBranch = args.targetBranch;
+    if (
+      targetBranch !== undefined &&
+      (typeof targetBranch !== "string" || !targetBranch.trim() || targetBranch.length > 500)
+    )
+      throw new Error("Expected targetBranch of 1-500 characters");
+    return launchWorkerResolve(context, dependencies, {
       projectId: asNonBlankString(args.projectId, "projectId"),
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       requestId: asNonBlankString(args.requestId, "requestId"),

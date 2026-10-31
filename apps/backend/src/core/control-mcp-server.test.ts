@@ -14,6 +14,7 @@ import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_PR_STATUS_WAKE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -479,6 +480,8 @@ describe("Orkestrator control MCP server", () => {
       "launch_feature_plan",
       "get_feature_plan",
       "custom_fix_multi_review",
+      "create_pr",
+      "resolve_conflicts",
     ];
     const main = (await server.listCoordinatorTools(scope)) as Array<{ name: string }>;
     for (const name of surfaces) expect(main.map((tool) => tool.name)).toContain(name);
@@ -506,6 +509,64 @@ describe("Orkestrator control MCP server", () => {
       conversationId: "conversation-1",
     });
     expect(forwarded?.args.input).toMatchObject({ environmentId: "env-1", tabType: "plain" });
+
+    // The PR and Resolve tabs say the conversation will hear how the PR goes.
+    overrides.set("create_coordinator_pr", () => ({
+      environmentId: "env-1",
+      status: "launched",
+      tabId: "pr-tab",
+    }));
+    const raised = await server.callCoordinatorTool(scope, "create_pr", {
+      requestId: "pr",
+      environmentId: "env-1",
+    });
+    expect(raised.isError).not.toBe(true);
+    expect(raised.text).toContain(COORDINATOR_PR_STATUS_WAKE);
+    overrides.set("create_coordinator_pr", () => ({ environmentId: "env-1", status: "skipped" }));
+    expect(
+      (
+        await server.callCoordinatorTool(scope, "create_pr", {
+          requestId: "pr2",
+          environmentId: "env-1",
+        })
+      ).text,
+    ).toContain("not followed");
+    overrides.set("resolve_coordinator_conflicts", () => ({
+      environmentId: "env-1",
+      status: "launched",
+      tabId: "resolve-tab",
+    }));
+    const resolving = await server.callCoordinatorTool(scope, "resolve_conflicts", {
+      requestId: "resolve",
+      environmentId: "env-1",
+      targetBranch: "main",
+    });
+    expect(resolving.isError).not.toBe(true);
+    expect(resolving.text).toContain(COORDINATOR_PR_STATUS_WAKE);
+    expect(
+      invocations.findLast((entry) => entry.command === "resolve_coordinator_conflicts")?.args,
+    ).toEqual({
+      scope: {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+      },
+      input: { requestId: "resolve", environmentId: "env-1", targetBranch: "main" },
+    });
+    expect(
+      (
+        await server.callCoordinatorTool(
+          {
+            ...scope,
+            conversationId: "side-1",
+            mailboxIncarnationId: "incarnation-2",
+            capabilities: coordinatorRoleCapabilities("side"),
+          },
+          "resolve_conflicts",
+          { requestId: "side", environmentId: "env-1" },
+        )
+      ).isError,
+    ).toBe(true);
 
     // The AGENTS.md proposal only forwards the validated proposal; a side
     // agent cannot call it, and a path or extra field is refused up front.
@@ -2922,6 +2983,152 @@ describe("Orkestrator control MCP server", () => {
     remoteAvailable = false;
     expect(await list()).not.toHaveProperty("repeatedRead");
     worker = { ...worker, agentActivityState: "idle" };
+    expect(await list()).not.toHaveProperty("repeatedRead");
+  });
+
+  test("coordinator environment reads carry PR readiness, and its change is a new answer", async () => {
+    const prUrl = "https://github.com/org/repo/pull/7";
+    let worker: Record<string, unknown> = {
+      id: "env-worker",
+      projectId: "project-1",
+      name: "worker",
+      status: "running",
+      agentActivityState: "idle",
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+    };
+    let checks = { passed: 2, total: 3, pending: 1 };
+    let remote: Record<string, unknown> = {
+      ref: { environmentId: "remote-worker" },
+      projectId: "p-leaf",
+      name: "Remote worker",
+      status: "running",
+      activity: "idle",
+      prState: "open",
+      prHasMergeConflicts: false,
+      prMergeability: "clean",
+      prMonitorConfirmed: true,
+    };
+    overrides.set("get_environment_snapshots", () => [worker]);
+    overrides.set("get_environment", () => worker);
+    overrides.set("get_environment_pr_health", ({ projectId, environmentIds }) => {
+      expect(projectId).toBe("project-1");
+      expect(environmentIds).toEqual(["env-worker"]);
+      return { "env-worker": { prMonitorConfirmed: true, prCheckSummary: checks } };
+    });
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-pr",
+            tabId: "coordinator-tab",
+            mailboxIncarnationId: "incarnation-1",
+          },
+        ],
+      },
+    }));
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_self",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          freshness: "current",
+          view: { displayName: "Build box" },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [remote],
+        },
+      ],
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-pr",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+    const callTool = async (name: string, args: Record<string, unknown> = {}) =>
+      (
+        await rpc(credential.url, credential.token, "tools/call", {
+          name,
+          arguments: args,
+        })
+      ).body.result?.structuredContent as Record<string, unknown> | undefined;
+    const list = () => callTool("list_environments");
+
+    expect(await list()).toMatchObject({
+      environments: [
+        {
+          id: "env-worker",
+          prUrl,
+          prState: "open",
+          prHasMergeConflicts: false,
+          prMergeability: "clean",
+          prChecks: { passed: 2, failed: 0, pending: 1, total: 3 },
+          prReadyToMerge: false,
+          prNotReadyReason: "checks-pending",
+        },
+      ],
+      otherNodes: [
+        {
+          nodeId: "bk_leaf",
+          environments: [
+            {
+              environmentId: "remote-worker",
+              prState: "open",
+              prHasMergeConflicts: false,
+              prReadyToMerge: true,
+            },
+          ],
+        },
+      ],
+    });
+    expect(await callTool("get_environment", { environmentId: "env-worker" })).toMatchObject({
+      environment: { prChecks: { failed: 0, pending: 1 }, prReadyToMerge: false },
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect(await list()).not.toHaveProperty("repeatedRead");
+    expect(await list()).toHaveProperty("repeatedRead", true);
+
+    // The checks finishing is news, even with nothing else changed.
+    checks = { passed: 3, total: 3, pending: 0 };
+    const ready = await list();
+    expect(ready).not.toHaveProperty("repeatedRead");
+    expect(ready).toMatchObject({
+      environments: [{ prReadyToMerge: true, prChecks: { passed: 3 } }],
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) await list();
+    expect(await list()).toHaveProperty("repeatedRead", true);
+
+    // So is another node's PR starting to conflict.
+    remote = { ...remote, prHasMergeConflicts: true, prMergeability: "dirty" };
+    const conflicting = await list();
+    expect(conflicting).not.toHaveProperty("repeatedRead");
+    expect(conflicting).toMatchObject({
+      otherNodes: [
+        {
+          environments: [
+            { prHasMergeConflicts: true, prReadyToMerge: false, prNotReadyReason: "conflicts" },
+          ],
+        },
+      ],
+    });
+    worker = { ...worker, prMergeability: "behind" };
     expect(await list()).not.toHaveProperty("repeatedRead");
   });
 

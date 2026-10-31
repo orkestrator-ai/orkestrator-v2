@@ -3,8 +3,10 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
 
 import { nativeTab } from "../control-shared-actions.js";
+import { prReadingFrom } from "../coordinator-pr-status.js";
 import type {
   CoordinatorRemoteAccess,
+  RemotePullRequestReading,
   RemoteWorkerState,
   RemoteWorkflowRecord,
 } from "../coordinator-remote.js";
@@ -186,6 +188,34 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
     return { prUrl: environment.prUrl, prState: environment.prState };
   }
 
+  async pullRequestReading(
+    nodeId: string,
+    environmentId: string,
+  ): Promise<RemotePullRequestReading | null | "unavailable"> {
+    const environment = await read<unknown>(this.deps, nodeId, "get_environment", {
+      environmentId,
+    });
+    if (environment === "unavailable") return "unavailable";
+    if (!isRecord(environment)) return null;
+    // The node relays its monitor's health in its summaries (todo 0796); a
+    // node that predates it, or summaries that are not current, never vouch.
+    const summaries = await this.deps.summaries([nodeId]).catch(() => null);
+    const node = summaries?.nodes.find((entry) => entry.nodeId === nodeId);
+    const row = node?.environments.find((entry) => entry.ref.environmentId === environmentId);
+    const current = node?.available === true && node.freshness === "current";
+    return {
+      reading: prReadingFrom(environment, {
+        prMonitorConfirmed: current && row?.prMonitorConfirmed === true,
+        prCheckSummary: row?.prCheckSummary ?? null,
+        prViewerCanMerge: row?.prViewerCanMerge ?? null,
+      }),
+      ...(typeof environment.name === "string" ? { name: environment.name } : {}),
+      ...(environment.deletionRequestedAt || environment.lifecycleOperation === "deleting"
+        ? { deleting: true }
+        : {}),
+    };
+  }
+
   async nodeName(nodeId: string): Promise<string> {
     const summaries = await this.deps.summaries([nodeId]);
     return summaries.nodes[0]?.view.displayName ?? nodeId;
@@ -207,6 +237,8 @@ export function bridgeRemoteCoordinatorEvents(input: {
     kind: "multi-review" | "build-pipeline",
     id: string,
   ): void;
+  /** An environment's record or PR monitor health changed there (followed pull requests). */
+  noteRemotePullRequestChange?(nodeId: string, environmentId: string): void;
   timers?: {
     setTimeout(callback: () => void, ms: number): unknown;
   };
@@ -221,7 +253,12 @@ export function bridgeRemoteCoordinatorEvents(input: {
       input.noteRemoteWorkflowChange(nodeId, change.resource, change.id);
       return;
     }
+    if (change.resource === "environment-pr-health") {
+      input.noteRemotePullRequestChange?.(nodeId, change.id);
+      return;
+    }
     if (change.resource !== "environment") return;
+    input.noteRemotePullRequestChange?.(nodeId, change.id);
     const key = `${nodeId}\0${change.id}`;
     if (pending.has(key)) return;
     pending.add(key);

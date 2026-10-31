@@ -148,7 +148,7 @@ export function registerCoordinatorWorkflowTools(
               resource = { id: resourceId, status: "pending" };
             } else if (!inv) {
               resource = { id: resourceId, status: "unavailable" };
-            } else if (kind === "environment") {
+            } else if (kind === "environment" || kind === "pull-request") {
               const environment = await inv<unknown>("get_environment", {
                 environmentId: resourceId,
               });

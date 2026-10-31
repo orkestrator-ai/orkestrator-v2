@@ -39,6 +39,7 @@ export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "launch-terminal",
   "open-browser",
   "create-pr",
+  "resolve-conflicts",
   "custom-fix",
   "launch-feature-plan",
   "request-root-changes",

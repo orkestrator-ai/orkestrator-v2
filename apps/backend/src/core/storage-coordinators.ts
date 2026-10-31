@@ -721,6 +721,107 @@ export class CoordinatorsRepository {
     });
   }
 
+  /**
+   * Follow a worker's pull request for one coordinator (a `pull-request`
+   * association), or update the live record that already does.
+   *
+   * One live record per coordinator, worker and node: `create_pr` followed by
+   * `resolve_conflicts` share it, and a new Resolve run replaces the previous
+   * one's bookkeeping. A record for another PR URL, or one already finished
+   * (merged, closed, gone), is left alone and a new one is made. The same
+   * `requestId` returns the record it made, so a retry adds nothing.
+   */
+  async followCoordinatorPullRequest(input: {
+    projectId: string;
+    coordinatorId: string;
+    conversationId?: string;
+    environmentId: string;
+    nodeId?: string;
+    requestId: string;
+    source: NonNullable<CoordinatorWorkflowAssociation["pullRequest"]>["source"];
+    prUrl?: string;
+    reviewAssociationId?: string;
+    resolve?: { tabId: string; requestedAt: string };
+    /** A status the coordinator was already told elsewhere, recorded without a wake. */
+    seedNoticeKey?: string;
+  }): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const same = store.workflows.find(
+        (item) => item.coordinatorId === input.coordinatorId && item.requestId === input.requestId,
+      );
+      if (same) {
+        if (
+          same.kind !== "pull-request" ||
+          same.resourceId !== input.environmentId ||
+          same.nodeId !== input.nodeId
+        )
+          throw new Error("Coordinator request id was reused with a different payload");
+        return same;
+      }
+      const live = store.workflows.find(
+        (item) =>
+          item.kind === "pull-request" &&
+          item.coordinatorId === input.coordinatorId &&
+          item.projectId === input.projectId &&
+          item.resourceId === input.environmentId &&
+          item.nodeId === input.nodeId &&
+          !item.terminalNotifiedAt &&
+          (!input.prUrl || !item.pullRequest?.prUrl || item.pullRequest.prUrl === input.prUrl),
+      );
+      if (live) {
+        const follow = { ...(live.pullRequest ?? { source: input.source }) };
+        let changed = false;
+        if (input.prUrl && !follow.prUrl) {
+          follow.prUrl = input.prUrl;
+          changed = true;
+        }
+        if (input.resolve && follow.resolve?.tabId !== input.resolve.tabId) {
+          follow.resolve = { ...input.resolve };
+          changed = true;
+        }
+        if (input.conversationId && live.conversationId !== input.conversationId) {
+          // The newest request comes from the conversation now following it.
+          live.conversationId = input.conversationId;
+          changed = true;
+        }
+        if (!changed) return live;
+        live.pullRequest = follow;
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return live;
+      }
+      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
+        throw new Error("Coordinator workflow association store is full");
+      }
+      const createdAt = new Date().toISOString();
+      const association: CoordinatorWorkflowAssociation = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        coordinatorId: input.coordinatorId,
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        kind: "pull-request",
+        resourceId: input.environmentId,
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+        requestId: input.requestId,
+        createdAt,
+        pullRequest: {
+          source: input.source,
+          ...(input.prUrl ? { prUrl: input.prUrl } : {}),
+          ...(input.reviewAssociationId ? { reviewAssociationId: input.reviewAssociationId } : {}),
+          ...(input.resolve ? { resolve: { ...input.resolve } } : {}),
+        },
+        ...(input.seedNoticeKey
+          ? { statusNotice: { key: input.seedNoticeKey, notifiedAt: createdAt } }
+          : {}),
+      };
+      store.workflows.push(association);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
   async markCoordinatorWorkflowNotified(associationId: string, revision: number): Promise<void> {
     await this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
@@ -909,6 +1010,7 @@ export type CoordinatorsStorage = Pick<
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
   | "updateCoordinatorWorkflowAssociation"
+  | "followCoordinatorPullRequest"
   | "markCoordinatorWorkflowNotified"
   | "adoptCoordinatorWorkflowAssociation"
   | "coordinatorAttachmentDirectory"

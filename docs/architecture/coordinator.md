@@ -720,7 +720,24 @@ the contract attached, after three identical answers inside 120 seconds. The
 guard never withholds data. For `list_environments` "identical" means the same
 filters and the same lifecycle, setup, activity and PR state for every listed
 environment (and every other node's rows); `lastActivityAt` is left out, so
-re-listing while a worker is still `working` counts as the same answer.
+re-listing while a worker is still `working` counts as the same answer. PR
+state there is the whole reading below: a PR that starts conflicting, has a
+check finish or fail, or becomes ready to merge is a different answer.
+
+A coordinator's `get_environment` and `list_environments` rows for a worker
+with a pull request carry, besides `prUrl` and `prState`,
+`prHasMergeConflicts`, `prMergeability` (`clean`, `blocked`, `dirty`,
+`behind`, `unstable`, `unknown`, `unavailable`), `prChecks` (`passed`,
+`failed`, `pending` and `total` counts, or null) and `prReadyToMerge` with
+`prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
+`evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
+the rule behind the sidebar's shimmer, with the PR monitor's confirmation as
+its freshness: this node's announced monitor state
+(`get_environment_pr_health`, which never asks GitHub), or for another
+node's rows the health its summaries relay while that node is connected and
+current. Other nodes' rows carry `prState` and these fields but never a URL,
+since summaries do not. They are states and counts only, never check names
+or logs. Operator reads are unchanged.
 
 ## Worker delegation
 
@@ -758,8 +775,15 @@ resolve conflicts:
   `create_pr` refuses its own worker while the pipeline can still raise the PR.
   Forks and workers left by a removed, failed, cancelled or completed pipeline
   can use `create_pr`.
+- Once raised, the coordinator follows the PR: it is woken when it opens,
+  conflicts with its base, fails a check, becomes ready to merge, merges or
+  closes (see [Status wakes](#status-wakes)). On a conflict it calls
+  `resolve_conflicts`, which opens the worker's Resolve tab (the Resolve
+  Conflicts button) and wakes it once that tab finishes, with the refreshed
+  state. It never merges; the user does.
 
-The main coordinator's context carries this as `COORDINATOR_PR_RULE`
+The main coordinator's context carries this, the PR wakes and
+`resolve_conflicts` included, as `COORDINATOR_PR_RULE`
 (`packages/protocol/src/coordinator.ts`), also in the Control MCP
 instructions, and `launch_environment`, `launch_job` and `send_prompt_to_tab`
 repeat it in their descriptions. Every delegation frame tells the worker the
@@ -1035,11 +1059,12 @@ or prompted **settles**, so it can keep track and respond without polling
 **Ownership.** Only resources with a coordinator workflow association: the
 durable record written at launch or prompt time with the coordinator and
 conversation ids (`launch_multi_review`, `start_multi_review`,
-`start_build_pipeline`, `launch_graph` (a `graph-run` association), and the
+`start_build_pipeline`, `launch_graph` (a `graph-run` association),
+`create_pr` and `resolve_conflicts` (a `pull-request` association), and the
 delegations `launch_environment`,
 `launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
-build the user started in the UI has no association and never wakes a
-coordinator. Notices go to the main coordinator, like every other report, and
+build the user started in the UI, or a pull request the user raised, has no
+association and never wakes a coordinator. Notices go to the main coordinator, like every other report, and
 do not start one: with no main open they wait, and the sweep sends the state
 current when one opens.
 
@@ -1061,6 +1086,8 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
+| Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a check failed (`pr-checks-failed`), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
+| Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
@@ -1107,6 +1134,44 @@ with a line saying no Fix or PR started. A Fix started later is not covered by
 the clean report's PR. A legacy structured Fix holds `completed` until its PR launch settles,
 then lists the PR outcome in its details.
 
+**Pull requests.** A `pull-request` association (`resourceId` the worker,
+`pullRequest` the follow) is the coordinator's claim on one worker's PR,
+reduced by `pullRequestStatus` in `coordinator-pr-status.ts`. It is written by
+`create_pr` when the PR tab launched (a skipped one raised nothing), by
+`resolve_conflicts` (pinned to the PR it resolves), and by the review
+observer once a coordinator-launched review with auto-PR has reported
+`pr-opened` (seeded as already told, so it is not repeated) or `pr-unknown`,
+or completed with its PR session started. From then on the review records
+its own PR states silently and the follow reports them. One live follow per
+coordinator, worker and node: `create_pr` and a later `resolve_conflicts`
+share it. The follow pins the first PR URL it sees; another URL on the
+worker, the worker disappearing, a merge or a close ends it
+(`terminalNotifiedAt`), so a reopened PR is not reported.
+
+Every key ends with a hash of the PR URL. `pr-opened` is sent once per PR;
+a first reading that already conflicts, fails or is ready sends that instead,
+with the URL. An open PR with nothing to act on (checks running, review
+required, behind) is recorded without a wake, so the next conflict or
+failure after a fix is news again, while a reading that cannot tell (GitHub
+recomputing mergeability, the monitor not confirming it) changes nothing.
+Conflicts are the monitor's `hasMergeConflicts` or `dirty` mergeability.
+"Failed" is the check rollup reporting a failed check: it counts every
+check, so required ones are not told apart. "Ready to merge" is the
+sidebar's rule (`pr-merge-readiness.ts`) with the monitor's confirmation, so
+it needs this node's monitor (or a connected node's current summaries) to
+vouch for the reading.
+
+A Resolve tab is followed through its turn: seen working, then idle or gone
+(or so a minute after launch, for a turn too short to see), then held until
+the PR monitor's recheck lands (the Resolve completion action is disarmed,
+or this node's monitor answered after the turn ended) or one more minute
+passes, then reported once as `resolve-finished` with the state it left the
+PR in. While it runs, the PR's own changes are not sent, and the report's
+state is recorded so it is not sent again. Workers on a connected node are
+followed the same way, through that node's `get_environment`, its relayed
+summaries and its relayed `environment` and `environment-pr-health` changes;
+an unreachable node is no news.
+
 **Setting.** **Settings → Messaging → Coordinator status updates**
 (`coordinatorStatusWakes`): *Finished work only* (`off`, what woke a
 coordinator before status wakes), *Decisions and problems* (`settled`, the
@@ -1119,7 +1184,8 @@ structured `notice` (resource kind and ids, state, tone), a subject such as
 eight 400-character detail lines) and the calls that read more or act —
 `get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
 `get_build_pipeline`, `resume_build_pipeline`, `get_graph_run`,
-`get_tab_state`, `get_tab_transcript` — written out with their arguments. In the transcript it
+`get_tab_state`, `get_tab_transcript`, `get_environment`,
+`resolve_conflicts` — written out with their arguments. In the transcript it
 is a mail tile toned by the notice.
 
 **No wake storms.**
@@ -1147,14 +1213,17 @@ is a mail tile toned by the notice.
 
 **Delivery.** The durable mailbox and the existing drain: presence-gated
 injection, ack/read semantics, retry and restart recovery are the mail
-store's. Workflow saves wake an observation within seconds; the
+store's. Workflow saves, and environment and PR-health changes of a followed
+worker, wake an observation within seconds; the
 `coordinator-repair` maintenance job (every 60 s, and at startup) re-reads
-every owned workflow and open delegation, which recovers a missed save, a
-timer lost to a restart, or bookkeeping that never landed.
+every owned workflow, followed pull request and open delegation, which
+recovers a missed save, a timer lost to a restart, or bookkeeping that never
+landed.
 `launch_multi_review`, `address_multi_review`, `start_multi_review`,
 `start_build_pipeline` and `launch_graph` return `delivery: "async"` with
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
-rather than left to poll `get_multi_review`.
+rather than left to poll `get_multi_review`; `create_pr` (when it launched)
+and `resolve_conflicts` return `COORDINATOR_PR_STATUS_WAKE`.
 
 ## Launch defaults
 
@@ -1367,15 +1436,16 @@ that work. It does not widen the checkout boundary; the checkout itself is
 read directly, and `get_worker_changes` refuses the project home.
 
 `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
-`get_worker_changes`, `fork_worker`, `stop_worker_turn`,
+`resolve_conflicts`, `get_worker_changes`, `fork_worker`, `stop_worker_turn`,
 `list_worker_commands`, `run_worker_command`, `custom_fix_multi_review` and
 `open_multi_review` (with or without `reviewerId`) also take `nodeId` for a
 worker on a connected node. The
-receipt, and any adoption of the review, stay on the command node; the node
+receipt, any adoption of the review, and a PR follow stay on the command node; the node
 that owns the worker checks its project and refuses its checkout, then runs
 the work through a controller command (`launch_controller_terminal`,
 `open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
-`get_controller_worker_changes`, `fork_controller_environment`, or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
+`resolve_controller_conflicts`, `get_controller_worker_changes`,
+`fork_controller_environment`, or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
 in `commands-registry-controller-workflows.ts`; `stop_controller_worker_turn`,
 `list_controller_worker_commands` and `run_controller_worker_command` in
 `coordinator-worker-turn-actions.ts`). Those are node-link only,
@@ -1402,7 +1472,8 @@ node and only the approved answer crosses the link
 | `run_worker_command` | Picks one row of that menu: `session.command`'s resolution and every refusal it has (missing, ambiguous, unavailable, changed since listed, wrong arguments, busy tab, parked dispatch), dispatched as a selection, never as prompt text. `/steer` is refused. A command that starts a provider turn opens a delegation, as `send_prompt_to_tab` does, and is refused while one is open on that tab; one that answers without a turn (`bridge-local`, an Orkestrator session action such as `/compact`) opens none and says to read its output with `get_tab_transcript`. | Replays the receipt; the dispatch request ID derives from it, so a retry after a lost answer replays on the node that owns the worker. | The command runs in the tab as if the user picked it. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
-| `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
+| `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
+| `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus. One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
@@ -1704,7 +1775,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - status wakes (ownership, one wake per settled transition per resource kind,
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,
-  `coordinator-status-wakes-graph.test.ts`
+  `coordinator-status-wakes-graph.test.ts`; pull requests (the reducer and
+  environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
+  tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
+  worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)
+- `create_pr` and `resolve_conflicts` admission, preconditions and follows:
+  `coordinator-surface-actions.test.ts`
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a

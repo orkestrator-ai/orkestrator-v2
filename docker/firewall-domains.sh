@@ -13,7 +13,9 @@
 # their recorded expiry, and the kernel drops them then even when no refresh
 # runs at all. An address that leaves the set is revoked: its tracked
 # connections are deleted, so established flows are re-checked against the new
-# set rather than continuing on an old conntrack entry.
+# set rather than continuing on an old conntrack entry. One the kernel expired
+# between refreshes is revoked by the next refresh, which compares against the
+# entries recorded when the set was last applied.
 #
 # Network policy 3 stores address, protocol and port tuples rather than
 # addresses: an allowed domain is reachable on TCP 443, or on exactly the port
@@ -38,6 +40,10 @@ ORK_ADDRESSES="$ORK_STATE_DIR/domain-addresses"
 ORK_GITHUB_ACTIVE="$ORK_STATE_DIR/github-ranges-active"
 ORK_GITHUB_SEED=/etc/orkestrator-seed/github-ranges
 ORK_GITHUB_CACHE="$ORK_STATE_DIR/github-ranges"
+# The live set's members when it was last applied. The kernel drops an
+# expired address on its own, between refreshes, so the live set alone cannot
+# say what left it; this record can.
+ORK_ENTRIES="$ORK_STATE_DIR/allowed-entries"
 
 # Gateway lookups must never consult Docker's workload-writable network files.
 # Legacy in-container enforcement retains its resolver behavior.
@@ -372,6 +378,15 @@ ork_add_domains() {
 ork_commit_addresses() {
     chmod 0644 "$ORK_ADDRESSES.next"
     mv -f "$ORK_ADDRESSES.next" "$ORK_ADDRESSES"
+    ork_members "$ORK_SET" > "$ORK_ENTRIES.next" || return 1
+    chmod 0644 "$ORK_ENTRIES.next"
+    mv -f "$ORK_ENTRIES.next" "$ORK_ENTRIES"
+}
+
+# Entries the live set held when it was last applied, sorted like ork_members.
+ork_recorded_entries() {
+    [ -f "$ORK_ENTRIES" ] && [ ! -L "$ORK_ENTRIES" ] || return 0
+    LC_ALL=C sort -u "$ORK_ENTRIES"
 }
 
 # Next refresh delay in seconds.
@@ -460,7 +475,10 @@ ork_rebuild_allowlist() {
         ipset destroy "$ORK_NEXT_SET" 2>/dev/null || true
         return 1
     fi
-    old=$(ork_members "$ORK_SET")
+    # What was allowed: the live set, plus what the kernel has expired from it
+    # since it was applied. Those expired entries' connections are still
+    # tracked, so they are revoked like any other entry that left.
+    old=$( { ork_members "$ORK_SET"; ork_recorded_entries; } | LC_ALL=C sort -u)
     if ! ipset swap "$ORK_NEXT_SET" "$ORK_SET"; then
         ipset destroy "$ORK_NEXT_SET" 2>/dev/null || true
         return 1

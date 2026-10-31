@@ -210,6 +210,52 @@ describe("firewall allowlist refresh and edits", () => {
     });
   });
 
+  test.skipIf(NO_GNU_DATE !== undefined)(
+    titleWithSkip(
+      "an address the kernel expired between refreshes still has its connections revoked",
+      NO_GNU_DATE,
+    ),
+    () => {
+      withFixture(
+        (fixture) => {
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          expect(fixture.members().has("192.0.2.10,tcp:443")).toBe(true);
+          // Six hours pass with no refresh: the kernel drops the rotated-away
+          // address on its own timeout, before any refresh can see it go.
+          const sets = join(fixture.dir, "ipsets", "allowed-domains");
+          writeFileSync(
+            sets,
+            readFileSync(sets, "utf8")
+              .split("\n")
+              .filter((line) => !line.startsWith("192.0.2.10,"))
+              .join("\n"),
+          );
+          const record = join(fixture.dir, "var", "domain-addresses");
+          writeFileSync(
+            record,
+            readFileSync(record, "utf8").replace(
+              /^a\.example 192\.0\.2\.10 \d+$/m,
+              `a.example 192.0.2.10 ${Math.floor(Date.now() / 1000) - 1}`,
+            ),
+          );
+          writeFileSync(join(fixture.dir, "calls"), "");
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          const calls = fixture.calls();
+          // Its established flows are deleted per tuple, like a removal.
+          expect(calls).toContain("conntrack -D -p tcp --dport 443 -d 192.0.2.10");
+          expect(calls).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10");
+          expect(calls).not.toContain("-d 192.0.2.99");
+          expect(fixture.status()).toMatchObject({ revokedEntries: 2 });
+          // Revoked once: a later refresh has nothing left to revoke.
+          writeFileSync(join(fixture.dir, "calls"), "");
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          expect(fixture.calls()).not.toContain("conntrack -D");
+        },
+        { policy: 3 },
+      );
+    },
+  );
+
   test("add and remove edit the stored list through the same swap", () => {
     withFixture((fixture) => {
       const answers = "a.example 192.0.2.10 600\nc.example 192.0.2.30 600\n";

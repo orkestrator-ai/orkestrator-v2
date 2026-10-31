@@ -158,3 +158,37 @@ The `streamed media in Chromium` hook deadline now has its owner case,
 after it recurred in the 0247 acceptance verification's `mise run test`. The
 `ToolGroupFold.spec.ts:79` fold above is still to do, so this record stays
 open.
+
+
+## Project checkout review validation — 2026-10-31
+
+The exact recorded browser command,
+`mise run test:logged -- --name browser -- mise run test:browser`,
+finished with 984 passed, 106 skipped and two failed in 10.4 minutes
+(nine Playwright workers). Both failures were the native branch suggestion
+in `e2e/AgentLaunchDialog.spec.ts:18`, on mobile and desktop: the input
+remained `rel` instead of becoming `release/2.0` within five seconds. The
+preparation run's ToolGroupFold, StreamingTranscript and VirtuosoFollow
+failures did not recur in this complete rerun.
+
+The complete unchanged branch-picker owner retained both native failures
+with one worker (two passed, two failed, 25.0 s):
+
+```sh
+mise run test:logged -- --name native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/checkout-review-native-owner
+```
+
+The component failure prevented the chained public-site command from
+starting. Its separate command passed (exit 0, 11.6 s):
+
+```sh
+mise run test:logged -- --name public-site-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+Evidence: `orkestrator-test-run.LE3ryb/browser.log.gz` and
+`orkestrator-test-run.6PBWMu/native-branch-owner.log.gz` in the host
+temporary directory, plus traces under
+`output/playwright/checkout-review-native-owner/`. The checkout diagnostic
+fixes change no native picker, browser assertion, deadline or skip. Both
+failures reproduce alone and remain unresolved; they are not inferred to
+be load-only flakes.

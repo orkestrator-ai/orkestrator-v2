@@ -110,6 +110,39 @@ const PLATFORMS = [
 ] as const;
 
 describe("goal attention", () => {
+  for (const agent of ["claude", "codex", "opencode", "cursor", "grok", "pi"] as const) {
+    test(`${agent}: Stop pauses a goal while its carrier waits and the provider still reports idle`, async () => {
+      const stub = createProviderStub(agent);
+      await withService(
+        { prefix: "orkestrator-goal-starting-stop-", provider: async () => stub.provider },
+        async ({ storage, service }) => {
+          const identity = { environmentId: "env-1", agent, logicalSessionKey: "env-env-1:tab-1" };
+          const session = await service.ensureSession(identity);
+          await storage.updateNativeAgentGoal(session.key, () =>
+            goal({ providerSessionId: session.providerSessionId }),
+          );
+          const queueKey = `${agent}\0${identity.logicalSessionKey}`;
+          await storage.savePromptQueue(queueKey, "env-1", [
+            {
+              id: "goal:g1:0",
+              requestId: "goal:g1:0",
+              text: "continue",
+              origin: { kind: "goal", goalId: "g1", iteration: 0 },
+            },
+          ]);
+
+          await service.stopProjectionSession(identity);
+          const stopped = sessionGoal((await storage.getNativeAgentSession(session.key))!);
+          expect(stopped?.status).toBe("paused");
+          expect(stopped?.statusReason).toBe("user-stopped");
+          await service.drainPromptQueueForSession(identity);
+          expect(stub.send).not.toHaveBeenCalled();
+          expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+        },
+      );
+    });
+  }
+
   for (const connection of PLATFORMS) {
     test(`${connection.agent}: a turn the goal will follow up rings nothing`, async () => {
       const { provider, finish } = bridge(connection, {});

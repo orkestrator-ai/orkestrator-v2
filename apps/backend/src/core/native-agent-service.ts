@@ -2167,10 +2167,19 @@ export class NativeAgentService {
     );
   }
 
-  stopProjectionSession(
+  async stopProjectionSession(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
-    return this.sessionOperations.stopProjectionSession(input);
+    // Do not wait on a dispatch's storage lease before sending the abort that
+    // releases it. Both tasks are observed immediately, and Stop only settles
+    // after the durable goal fence and provider interrupt have both finished.
+    const [, projection] = await Promise.all([
+      this.goals.userStop(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      ),
+      this.sessionOperations.stopProjectionSession(input),
+    ]);
+    return projection;
   }
 
   stopProjectionBackgroundTask(

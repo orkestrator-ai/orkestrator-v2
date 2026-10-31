@@ -184,7 +184,8 @@ not advertise at its version before sending it.
 | `session prompt SESSION [--literal] [--enqueue] [--attach F]` | `session.prompt` | `dispatch_native_agent_intent`; with `--enqueue`, the native prompt queue (`enqueuePromptQueueMessageIfAbsent`, drained by `drainPromptQueue`) | provider |
 | `session commands SESSION [--refresh]` | `session.commands` | the session's cached command catalogue (`refresh_native_agent_commands` with `--refresh`) | read |
 | `session command SESSION --command ID\|NAME [-- ARGS]` | `session.command` | `dispatch_native_agent_intent` with `{ kind: "selected" }` intent (or the queue with `--enqueue`) | provider |
-| `session stop/steer` | `session.stop/steer` | `stop_native_agent_session`, steer session action | provider |
+| `session stop` | `session.stop` | `stop_native_agent_session`; pauses its goal and cancels its check or verifier | metadata, provider, filesystem, process |
+| `session steer` | `session.steer` | steer session action | provider |
 | `session config get/set` | `session.config.get/set` | live composer controls | provider |
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |

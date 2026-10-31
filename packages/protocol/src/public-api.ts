@@ -310,10 +310,10 @@ export const PUBLIC_ACTIONS = {
   "session.stop": {
     version: 1,
     mutation: true,
-    effects: ["provider-session"],
+    effects: ["metadata", "provider-session", "filesystem", "process"],
     observation: "receipt",
     milestone: "C",
-    summary: "Stop the current turn of one session, optionally bound to an expected run.",
+    summary: "Stop the current turn and pause its goal, optionally bound to an expected run.",
   },
   "session.steer": {
     version: 1,

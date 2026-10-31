@@ -242,6 +242,14 @@ export class NativeAgentGoalService {
     if (this.running.has(sessionKey)) this.wake(sessionKey);
   }
 
+  /** Stop fences queued/startup carriers even before a provider reports work. */
+  async userStop(sessionKey: string): Promise<void> {
+    const session = await this.host.storage.getNativeAgentSession(sessionKey);
+    const goal = session ? sessionGoal(session) : undefined;
+    if (goal && goalIsRunning(goal.status))
+      await this.apply(sessionKey, goal.goalId, { kind: "user-stop" });
+  }
+
   /** Called from the activity sweep. Costs nothing with no running goal. */
   sweep(): void {
     if (this.running.size === 0) return;

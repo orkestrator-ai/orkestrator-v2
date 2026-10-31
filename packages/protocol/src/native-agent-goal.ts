@@ -425,6 +425,7 @@ export type GoalEvent =
   | { kind: "report"; report: NativeAgentGoalReport }
   | { kind: "continuation-sent" }
   | { kind: "user-pause" }
+  | { kind: "user-stop" }
   | { kind: "user-resume"; maxIterations?: number; tokenBudget?: number }
   | { kind: "session-replaced" }
   | { kind: "runtime-stopped" }
@@ -666,6 +667,9 @@ export function nextGoalState(
     case "user-pause":
       if (!goalIsRunning(goal.status)) return unchanged;
       return { goal: settle(goal, now, "paused", "user-paused"), action: "none" };
+    case "user-stop":
+      if (!goalIsRunning(goal.status)) return unchanged;
+      return { goal: settle(goal, now, "paused", "user-stopped"), action: "none" };
     case "user-resume": {
       if (goalIsRunning(goal.status) || goalIsTerminal(goal.status)) return unchanged;
       const { pendingReport: _pendingReport, ...rest } = goal;

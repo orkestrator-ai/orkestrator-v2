@@ -1945,7 +1945,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "idle" });
+    ).toEqual({ activity: "idle", turnFailed: true });
 
     const rejected = await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",

@@ -220,7 +220,7 @@ describe("MobileAppShellLayout", () => {
 
     rerender(<MobileAppShellLayout {...props} titleNameSignal={null} />);
     const plain = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
-    expect(plain.querySelector("[data-merge-ready]")).toBeNull();
+    expect(plain.querySelector("[data-merge-ready]") === null).toBe(true);
     expect(plain.hasAttribute("aria-describedby")).toBe(false);
     expect(plain.textContent).toBe("pgstack1 - feature-auth");
   });
@@ -232,7 +232,7 @@ describe("MobileAppShellLayout", () => {
       titleNameSignal: "merge-ready" as const,
     });
     const title = screen.getByRole("button", { name: "pgstack1" });
-    expect(title.querySelector("[data-merge-ready]")).toBeNull();
+    expect(title.querySelector("[data-merge-ready]") === null).toBe(true);
   });
 
   test("bounds the mobile title and toggles its full text with touch taps", async () => {

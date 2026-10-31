@@ -1425,8 +1425,8 @@ describe("ActionBar experimental graphs", () => {
     render(<ActionBar />);
 
     expect(screen.getByRole("button", { name: "Multi Review" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Graphs" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Run graph…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Graphs" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Run graph…" }) === null).toBe(true);
   });
 
   test("shows Graphs and Run graph… after Multi Review once graphs are on", () => {

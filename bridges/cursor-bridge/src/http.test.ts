@@ -7,6 +7,7 @@
  * working while every unit test still passes.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Cursor } from "@cursor/sdk";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,17 +22,39 @@ import {
 } from "./agent-session.js";
 import { authToken } from "./config.js";
 import { route } from "./http.js";
+import { useCursorModelsForTests } from "./models.js";
 import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
 import { useCursorSdkRuntimeForTests } from "./sdk-runtime.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake, fakeAgent, type FakeAgent } from "./testing/fake-agent.js";
 import { applyInteractionUpdate } from "./translate.js";
-import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, credentialStore } from "./credentials.js";
+import {
+  CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+  credentialStore,
+  useCursorCredentialRuntimeForTests,
+} from "./credentials.js";
 
 let server: Server;
 let baseUrl: string;
+let restoreModels: () => void;
+let restoreCredentials: () => void;
 
 beforeEach(async () => {
+  // No test here may reach Cursor (flake 0182). With CURSOR_API_KEY set,
+  // session creation read the model catalogue (a 30 s bound, and the next
+  // test's creation joined the same in-flight probe) and the status route
+  // looked up the account with no bound at all, so the route, and the
+  // afterEach waiting for the server to close, hung on the network. The
+  // credential store is the empty one a CI runner has, not the host's login.
+  restoreModels = useCursorModelsForTests({ list: async () => [] } as never);
+  restoreCredentials = useCursorCredentialRuntimeForTests({
+    store: {
+      load: async () => undefined,
+      save: async () => undefined,
+      clear: async () => undefined,
+    } as never,
+    auth: Cursor.auth,
+  });
   sessions.clear();
   clientSessionKeys.clear();
   server = createServer((request, response) => {
@@ -46,6 +69,8 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   sessions.clear();
   clientSessionKeys.clear();
+  restoreCredentials();
+  restoreModels();
 });
 
 /**

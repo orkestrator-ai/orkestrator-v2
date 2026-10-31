@@ -479,6 +479,15 @@ export class NativeAgentService {
     await this.launches.settleStoppedSessions(environmentId, sessions);
   }
 
+  /**
+   * The backend is about to stop this environment's bridges on purpose, so a
+   * sweep that finds one gone must not report its turn as failed
+   * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
+   */
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
+  }
+
   /** Whether the session's last turn was cut off by its runtime stopping. */
   sessionStoppedMidTurn(
     environmentId: string,
@@ -544,6 +553,7 @@ export class NativeAgentService {
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: options.planUsage,
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -3763,6 +3773,7 @@ export class NativeAgentService {
         provider = createNativeAgentProvider(connection, {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: this.options.planUsage,
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -3804,7 +3815,9 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, {});
+            provider = createNativeAgentProvider(connection, {
+              planUsage: this.options.planUsage,
+            });
             this.providerRegistry.cache(key, provider, identity);
           }
         }

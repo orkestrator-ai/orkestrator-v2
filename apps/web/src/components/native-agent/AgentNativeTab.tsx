@@ -252,6 +252,25 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           filename: attachment.name,
         })),
       };
+      // The tab's controller sends this again if Claude answers it with its
+      // not-logged-in notice and the user then signs in.
+      composeStore.recordSentPrompt(
+        sessionKey,
+        platform === "claude" &&
+          (!props.data.containerId ||
+            (useConfigStore.getState().config.global.useHostClaudeCredentials ?? true))
+          ? {
+              draft: {
+                text: draft?.text ?? "",
+                mentions: draft?.mentions ?? [],
+                annotations: draft?.annotations ?? [],
+              },
+              prompt,
+              attachments: draft?.attachments ?? [],
+              priorMessageIds: new Set(),
+            }
+          : undefined,
+      );
       setStartingFirstPrompt(true);
       composeStore.updateDraft(sessionKey, {
         requestId,
@@ -282,7 +301,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
       }
       await persistLockedPane("send");
     },
-    [persistLockedPane, props.data.environmentId, props.tabId],
+    [persistLockedPane, props.data.containerId, props.data.environmentId, props.tabId],
   );
   /**
    * Bind a coordinator conversation to the platform its first prompt chose.

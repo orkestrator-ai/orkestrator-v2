@@ -69,7 +69,7 @@ import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { withoutRetiredParameterValues } from "./native-agent-retired-parameters.js";
-import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
+import { contextUsageWithPlanUsage, type PlanUsageState } from "./plan-usage-cache.js";
 import {
   claudeBackgroundObservation,
   claudeReadOnlySandboxObservation,
@@ -137,6 +137,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly fetchImpl: typeof fetch,
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
     observationHint?: ProviderCommonDependencies["onObservationHint"],
+    private readonly planUsage?: PlanUsageState,
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
     this.observationWakeup = new HttpBridgeObservationWakeup(
@@ -158,7 +159,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   private contextUsage(value: unknown) {
-    return contextUsageWithPlanUsage(this.agent, value, this.connection.accountId ?? "unknown");
+    return contextUsageWithPlanUsage(
+      this.planUsage,
+      this.agent,
+      value,
+      this.connection.accountId ?? "unknown",
+    );
   }
 
   /** See `AgentSessionProvider.observationStreamLive` and `HttpBridgeObservationWakeup`. */
@@ -569,6 +575,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       connection: this.connection,
       fetchImpl: this.fetchImpl,
       sessionId,
+      planUsage: this.planUsage,
       metadata: this.interactiveMetadata,
       refreshRuntimeMetadata: () => this.refreshRuntimeMetadata(sessionId),
       readRuntimeHealth: () => this.runtimeHealth(sessionId),

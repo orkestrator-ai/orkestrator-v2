@@ -7,6 +7,7 @@ import {
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { PUBLIC_API_LIMITS, type PublicDispatchState } from "@orkestrator/protocol/public-api";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { validateSelection } from "../control-shared-actions.js";
 import type { Environment } from "../models.js";
@@ -34,7 +35,12 @@ import {
   stageAttachments,
   type ParsedAttachment,
 } from "./prompt-delivery.js";
-import { resolveSession, sessionActivity, type ResolvedSession } from "./sessions.js";
+import {
+  isCoordinatorSession,
+  resolveSession,
+  sessionActivity,
+  type ResolvedSession,
+} from "./sessions.js";
 import type {
   ExecuteOutcome,
   MutationActionHandler,
@@ -58,7 +64,9 @@ export function assertReadyForAgents(environment: Environment): void {
   if (!isSetupReady(environment)) {
     throw new PublicActionError(
       "not-ready",
-      "The environment is not running with setup complete; start it with --wait ready first",
+      coordinatorIdFromRuntimeId(environment.id)
+        ? "The Coordinator is paused or its checkout is unavailable; resume it in the app first"
+        : "The environment is not running with setup complete; start it with --wait ready first",
       { details: { status: environment.status, setupPhase: environment.setupPhase ?? null } },
     );
   }
@@ -397,6 +405,11 @@ export function sessionPromptMode(
   session: ResolvedSession,
   requested: "plan" | "build" | undefined,
 ): "plan" | "build" | undefined {
+  if (isCoordinatorSession(session)) {
+    // The app offers a Coordinator no mode either: its read-only policy is fixed.
+    if (requested) throw new PublicActionError("unsupported", "A Coordinator has no mode to set");
+    return undefined;
+  }
   if (requested || !nativeAgentCapabilities(session.agent).composer.mode) return requested;
   // Several providers persist a prompt's mode on the session.
   const current =
@@ -449,7 +462,7 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
   async prepare(input, context) {
     const session = await resolveSession(context, input);
     assertSessionAcceptsPrompt(context, session, input.enqueue === true);
-    assertAttachmentSupport(session.agent, input.attachments);
+    assertAttachmentSupport(session.agent, input.attachments, isCoordinatorSession(session));
     const mode = sessionPromptMode(context, session, input.mode);
     const command = input.literal ? ({ kind: "literal" } as const) : undefined;
     return {

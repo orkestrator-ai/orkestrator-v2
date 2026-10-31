@@ -411,3 +411,39 @@ describe("native job queue admission", () => {
     });
   });
 });
+
+test("activity checkpoints reject stale requests and rotated provider sessions", async () => {
+  await withStorage(async (storage) => {
+    await createSession(storage);
+    await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r1", async () => {});
+    const first = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    await storage.recordNativeAgentActivityTurn(first, "active");
+    await storage.recordNativeAgentActivityTurn(first, "settled");
+    expect((await storage.getNativeAgentSession(SESSION_KEY))?.activityTurn).toMatchObject({
+      requestId: "r1",
+      state: "settled",
+    });
+    await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r2", async () => {});
+    const second = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    await storage.recordNativeAgentActivityTurn(second, "active");
+    await storage.recordNativeAgentActivityTurn(first, "settled");
+    expect((await storage.getNativeAgentSession(SESSION_KEY))?.activityTurn).toMatchObject({
+      requestId: "r2",
+      state: "active",
+    });
+    await storage.adoptNativeAgentSession({
+      key: SESSION_KEY,
+      environmentId: "e1",
+      agent: "claude",
+      logicalSessionKey: LOGICAL,
+      providerSessionId: "provider-2",
+      expectedProviderSessionId: "provider-1",
+    });
+    await storage.recordNativeAgentActivityTurn(second, "settled");
+    const rotated = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    expect(
+      rotated.activityTurn?.providerSessionId === "provider-2" &&
+        rotated.activityTurn.state === "settled",
+    ).toBe(false);
+  });
+});

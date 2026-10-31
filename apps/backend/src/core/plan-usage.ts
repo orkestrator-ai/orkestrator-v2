@@ -37,7 +37,6 @@ import {
   createPlanUsageCache,
   ERROR_CACHE_TTL_MS,
   okSnapshot,
-  sharedPlanUsageCache,
   type PlanUsageCache,
 } from "./plan-usage-cache.js";
 import { asRecord } from "./agent-provider-runtime.js";
@@ -607,11 +606,13 @@ export type PlanUsageReadOptions = {
   force?: boolean;
 };
 
-export type PlanUsageReader = ((
+export type PlanUsageRead = (
   context: CommandContext,
   platform: AgentPlatform,
   options?: PlanUsageReadOptions,
-) => Promise<PlanUsageSnapshot>) & {
+) => Promise<PlanUsageSnapshot>;
+
+export type PlanUsageReader = PlanUsageRead & {
   /**
    * Fold account windows a running session just reported into the cache.
    *
@@ -883,8 +884,8 @@ export function createPlanUsageReader(
   overrides: PlanUsageReaderDependencies = {},
 ): PlanUsageReader {
   const now = overrides.now ?? Date.now;
-  // A reader built for a test gets its own cache; the shared one is what the
-  // session path writes through, so the default reader takes that.
+  // A reader built for a test gets its own cache; `AgentAccountsRuntime` builds
+  // the backend's reader over the cache its session path writes through.
   const cache = overrides.cache ?? createPlanUsageCache(now);
   const flights = new Map<PlanUsagePlatform, Promise<PlanUsageSnapshot>>();
   const readGenerations = new Map<PlanUsagePlatform, number>();
@@ -990,8 +991,6 @@ export function createPlanUsageReader(
 
   return reader;
 }
-
-export const readPlanUsage = createPlanUsageReader({ cache: sharedPlanUsageCache });
 
 /**
  * One account's plan windows read with an explicit credential: an access token

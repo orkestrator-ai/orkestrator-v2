@@ -21,6 +21,8 @@ export interface AgentRegistryEntry {
   kind: "native" | "tmux" | "terminal";
   /** Null for a native tab whose platform has not been chosen yet. */
   agent: AgentPlatform | null;
+  /** The public session handle of a native tab whose platform has been chosen. */
+  sessionId?: string;
   displayName: string;
   /** One-based position in the environment's tab strip. */
   tabOrdinal: number;

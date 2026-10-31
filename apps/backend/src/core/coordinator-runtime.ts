@@ -90,6 +90,25 @@ export async function resolveCoordinatorRuntime(
   };
 }
 
+/**
+ * The open conversation a coordinator runtime id names, whatever its lifecycle
+ * state: a paused coordinator's sessions can still be read, unlike
+ * `resolveCoordinatorRuntime`, which answers whether one can run.
+ */
+export async function openCoordinatorConversation(
+  storage: Pick<StorageService, "coordinators">,
+  runtimeId: string,
+): Promise<{ workspace: CoordinatorWorkspace; conversation: CoordinatorConversation } | null> {
+  const coordinatorId = coordinatorIdFromRuntimeId(runtimeId);
+  if (!coordinatorId) return null;
+  const workspace = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+  const conversationId = coordinatorConversationIdFromRuntimeId(runtimeId);
+  const conversation = workspace?.conversations.find(
+    (candidate) => candidate.id === conversationId && !candidate.closedAt,
+  );
+  return workspace && conversation ? { workspace, conversation } : null;
+}
+
 export function coordinatorRuntimeUnavailableMessage(
   resolution: Extract<CoordinatorRuntimeResolution, { status: "unavailable" }>,
 ): string {

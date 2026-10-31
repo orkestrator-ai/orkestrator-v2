@@ -41,6 +41,16 @@ mise run test:logged -- --name design-profile-owner -- bun test --cwd apps/backe
 No design implementation, assertion, deadline or skip changed. The full-suite
 retry remains non-green solely because of this known cleanup race.
 
+## Occurrence 2026-10-30
+
+`mise run test` on the todo 0742 structured-tickets branch (a Kanban storage
+fix; nothing in `design/` changed) failed this test after 140.80 ms with the
+same symptom: the profile was gone and `48963-48966-0123abcd.json` was still in
+the ledger. The owner then passed alone three times in a row (27 pass each,
+`bun --cwd=apps/backend test ./src/core/design/browser-profiles.test.ts`).
+Aggregate evidence: `orkestrator-test-run.bzzSIG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the host temporary directory.
+
 ## Leaf-check readiness review — 2026-10-30
 
 The exact final `mise run test` rerun repeated the same ledger assertion at

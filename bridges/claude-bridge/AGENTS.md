@@ -260,6 +260,13 @@ invariants keep it honest:
   configuration can launch helpers even for `git diff` or `git status`, so
   hook-only turns use reading tools or delegate Git to a worker.
 
+## Goals stay with the backend
+
+Orkestrator's goal loop runs in the backend (`plans/goals.md`, D1 and D2), so
+`ProposeGoal` is in `disallowedTools` on every turn, and the catalogue's `/goal`
+row is replaced by the backend's session action. Two loops must never stack on
+one session.
+
 ## Overload retries
 
 Claude Code retries a 529 itself; the bridge adds no loop of its own. A session

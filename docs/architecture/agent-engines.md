@@ -637,6 +637,10 @@ history holds no message for the request.
 
 ### Maintaining the OpenCode integration
 
+Upstream is building a goal plugin into OpenCode core, unreleased at 1.19.5. If a pin
+ships it, reserve its command and record how to keep it off, because Orkestrator's
+loop must not stack on it ([goals.md](goals.md)).
+
 The v2 SDK uses flat parameters instead of nested `path`/`body` objects:
 
 ```typescript

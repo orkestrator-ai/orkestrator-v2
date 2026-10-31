@@ -1,4 +1,5 @@
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import {
   encodePublicSessionId,
   nativeTabLogicalSessionKey,
@@ -151,6 +152,7 @@ export function publicSessionSummary(
       : null;
   const createdAt = session?.pendingDispatch?.createdAt;
   const parkedAgeMs = createdAt ? Date.now() - Date.parse(createdAt) : Number.POSITIVE_INFINITY;
+  const goal = session ? sessionGoal(session) : undefined;
   return {
     id: encodePublicSessionId(environmentId, tab.tabId),
     environmentId,
@@ -168,6 +170,7 @@ export function publicSessionSummary(
         }
       : null,
     pendingInteractionCount,
+    ...(goal ? { goal: goalStatusSummary(goal) } : {}),
     createdAt: session?.createdAt ?? null,
     updatedAt: session?.updatedAt ?? null,
   };

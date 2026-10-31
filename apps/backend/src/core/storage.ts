@@ -11,6 +11,7 @@ export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
+import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -942,6 +943,16 @@ export class StorageService {
       },
   ): Promise<PersistedNativeAgentSession> {
     return this.repos.nativeAgentSessions.adoptNativeAgentSession(input);
+  }
+
+  updateNativeAgentGoal(
+    key: string,
+    update: (
+      goal: NativeAgentGoal | undefined,
+      session: PersistedNativeAgentSession,
+    ) => NativeAgentGoal | null | undefined,
+  ): Promise<PersistedNativeAgentSession | undefined> {
+    return this.repos.nativeAgentSessions.updateNativeAgentGoal(key, update);
   }
 
   updateNativeAgentSessionControls(

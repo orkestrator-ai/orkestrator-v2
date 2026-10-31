@@ -3864,7 +3864,8 @@ describe("NativeAgentService", () => {
         const first = await service.getProjection(identity);
         // A legacy provider list gets a synthetic, clearly-legacy identity; the
         // runtime actions are merged beside it with their own descriptors.
-        expect(first?.slashCommands).toEqual([
+        // Scoped to the rows this test is about; `/goal` has its own coverage.
+        expect(first?.slashCommands?.filter((row) => row.id !== "orkestrator:goal")).toEqual([
           {
             name: "/review",
             description: "Review the current changes",
@@ -3990,6 +3991,7 @@ describe("NativeAgentService", () => {
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
           "/compact",
+          "/goal",
           "/steer",
         ]);
 
@@ -4001,6 +4003,7 @@ describe("NativeAgentService", () => {
         expect(updated?.slashCommands?.map((command) => command.name)).toEqual([
           "/new",
           "/compact",
+          "/goal",
           "/steer",
         ]);
       },
@@ -4070,6 +4073,7 @@ describe("NativeAgentService", () => {
           expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
             "/old",
             "/compact",
+            "/goal",
             "/steer",
           ]);
 
@@ -4095,6 +4099,7 @@ describe("NativeAgentService", () => {
           expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
             "/compact",
+            "/goal",
             "/steer",
           ]);
 
@@ -4110,6 +4115,7 @@ describe("NativeAgentService", () => {
           expect(settled?.slashCommands?.map((command) => command.name)).toEqual([
             "/new",
             "/compact",
+            "/goal",
             "/steer",
           ]);
         } finally {
@@ -4171,6 +4177,7 @@ describe("NativeAgentService", () => {
         expect(initial?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
           "/compact",
+          "/goal",
           "/steer",
         ]);
 
@@ -4183,6 +4190,7 @@ describe("NativeAgentService", () => {
         expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
           "/new",
           "/compact",
+          "/goal",
           "/steer",
         ]);
       },
@@ -4233,6 +4241,7 @@ describe("NativeAgentService", () => {
         expect(stale?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
           "/compact",
+          "/goal",
           "/steer",
         ]);
 
@@ -4263,6 +4272,7 @@ describe("NativeAgentService", () => {
         expect(withinBackoff?.slashCommands?.map((command) => command.name)).toEqual([
           "/old",
           "/compact",
+          "/goal",
           "/steer",
         ]);
 
@@ -4298,6 +4308,7 @@ describe("NativeAgentService", () => {
         expect(projection?.slashCommands?.map((command) => command.name)).toEqual([
           "/review",
           "/compact",
+          "/goal",
           "/steer",
         ]);
         expect(projection?.capabilities.attachments).toEqual({

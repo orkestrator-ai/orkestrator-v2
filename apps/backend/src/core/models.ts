@@ -744,6 +744,14 @@ export interface PersistedNativeAgentSession {
     state: "active" | "settled";
   };
   /**
+   * The session's goal (`plans/goals.md`). Read through `sessionGoal`: like
+   * `retiredDispatch`, a malformed value reads as absent rather than making the
+   * session unreadable.
+   */
+  goal?: import("@orkestrator/protocol/native-agent-goal").NativeAgentGoal;
+  /** The last few ended goals, without their check output. */
+  goalHistory?: import("@orkestrator/protocol/native-agent-goal").NativeAgentGoal[];
+  /**
    * Bounded request ids whose turn was still active when a stop was requested.
    * A provider reports a stopped turn as idle, so this is the only durable
    * evidence that the turn did not finish on its own.

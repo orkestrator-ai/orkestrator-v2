@@ -311,14 +311,14 @@ export function createDelegationWatch(
      */
     async until(
       label: string,
-      done: (observation: DelegationObservation) => boolean,
+      done: (observation: DelegationObservation) => boolean | Promise<boolean>,
       timeoutMs = coordinatorLiveBudgets().step,
     ): Promise<DelegationObservation> {
       const started = Date.now();
       let nextHeartbeat = started + HEARTBEAT_MS;
       for (;;) {
         const observation = await watch.observe();
-        if (done(observation)) return observation;
+        if (await done(observation)) return observation;
         const [failedWorker, workerError] = [...workerErrors][0] ?? [];
         if (failedWorker) {
           throw new Error(

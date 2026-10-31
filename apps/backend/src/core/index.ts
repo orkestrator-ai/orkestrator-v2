@@ -1,3 +1,6 @@
+import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
+import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
 import { randomUUID } from "node:crypto";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -12,7 +15,7 @@ import { readTaskOutputTail } from "./task-output-tail.js";
 import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { UserCommandService } from "./user-commands.js";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
-import { workerSessionActivity } from "./worker-session-activity.js";
+import { workerSessionActivity, workerSessionGoal } from "./worker-session-activity.js";
 import {
   defaultOwnerLabel,
   ScheduledJobExecutor,
@@ -252,6 +255,8 @@ export class OrkestratorBackend {
   private multiReviewGraph: MultiReviewGraphEngine | null = null;
   private readonly graphDescribe: GraphDescribeService;
   private readonly graphDescribeProviders: GraphAgentProviders;
+  private readonly goalVerifier: NativeAgentGoalVerifier;
+  private readonly goalVerifierProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
   private readonly graphMock: GraphMockRuns;
   /** Waiting graph runs in the sidebar: activity and attention (item 208). */
@@ -321,6 +326,7 @@ export class OrkestratorBackend {
     Partial<
       Pick<
         AgentToolsServer,
+        | "setGoalToolHost"
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
@@ -379,6 +385,7 @@ export class OrkestratorBackend {
       Partial<
         Pick<
           AgentToolsServer,
+          | "setGoalToolHost"
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
@@ -695,6 +702,7 @@ export class OrkestratorBackend {
             .backgroundWorkPending,
         waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
         workerNeedsHuman: (environmentId) => humanPrompts.hasEnvironmentPrompt(environmentId),
+        workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId),
       },
     );
     context.coordinators = this.coordinators;
@@ -882,6 +890,9 @@ export class OrkestratorBackend {
               });
           }
           if (isAgentTurnEndTransition(event)) {
+            // Read before the loop reacts: a turn it will follow up is not the
+            // worker reporting back, and it settles when the loop stops.
+            const goalHolds = this.nativeAgents.goals.holdsTurnEnd(event.sessionKey);
             // Capture the turn's end state and publish turn-net/thread-net.
             let changesFinalized: Promise<unknown> = Promise.resolve();
             if (event.owner !== "coordinator" && event.logicalSessionKey) {
@@ -919,7 +930,10 @@ export class OrkestratorBackend {
              * coordinator could previously reach thirty seconds.
              */
             void Promise.all([changesFinalized, annotationsObserved])
-              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .then(() => {
+                this.nativeAgents.goals.noteTurnEnded(event.sessionKey);
+                return this.nativeAgents.drainPromptQueueForSession(event);
+              })
               .catch((error: unknown) => {
                 console.warn(
                   "[backend] Failed to drain the prompt queue after a turn ended:",
@@ -946,7 +960,7 @@ export class OrkestratorBackend {
                 ? event.logicalSessionKey.slice(`env-${event.environmentId}:`.length)
                 : undefined;
             void (
-              workerTabId
+              workerTabId && !goalHolds
                 ? this.coordinators.settleWorkerDelegations({
                     environmentId: event.environmentId,
                     tabId: workerTabId,
@@ -968,6 +982,36 @@ export class OrkestratorBackend {
                 );
               });
           }
+        },
+        goalEnvironment: {
+          runCheck: async (input) => {
+            const environment = await storage.getEnvironment(input.environmentId);
+            if (!environment) return { kind: "unavailable", detail: "The environment is gone." };
+            return runGoalCheck(environment, context, input);
+          },
+          workspaceFingerprint: async (environmentId) => {
+            const environment = await storage.getEnvironment(environmentId);
+            return environment ? goalWorkspaceFingerprint(environment) : undefined;
+          },
+          // Built after this service: its bridges need the command invoker.
+          verifier: {
+            run: (request) => this.goalVerifier.run(request),
+            stopRun: (input) => this.goalVerifier.stopRun(input),
+            problem: (agent) => this.goalVerifier.problem(agent),
+          },
+        },
+        onGoalReleasedTurnEnd: async (session) => {
+          if (
+            session.owner?.kind !== "coordinator" &&
+            session.logicalSessionKey.startsWith(`env-${session.environmentId}:`)
+          ) {
+            await this.coordinators.settleWorkerDelegations({
+              environmentId: session.environmentId,
+              tabId: session.logicalSessionKey.slice(`env-${session.environmentId}:`.length),
+              state: "completed",
+            });
+          }
+          await this.agentMail.drainInjects();
         },
         onAsyncQuestionAttention: (event) => {
           options.emit("native-agent-async-question", {
@@ -1002,11 +1046,19 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    this.agentTools.setGoalToolHost?.(this.nativeAgents.goals);
     context.agentRegistry = new AgentRegistry(storage, {
       native: (environmentId, agent, logicalSessionKey) =>
         this.nativeAgents.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey),
       tmux: (environmentId, tabId) =>
         this.runtime.tmux.sessions.get(environmentId, tabId)?.activityState(),
+      goal: async (environmentId, agent, logicalSessionKey) => {
+        const session = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+        );
+        const goal = session ? sessionGoal(session) : undefined;
+        return goal ? goalStatusSummary(goal) : undefined;
+      },
     });
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
@@ -1384,6 +1436,22 @@ export class OrkestratorBackend {
       ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
     });
     context.graphDescribe = this.graphDescribe;
+    // A goal's optional verifier session (plans/goals/401).
+    this.goalVerifierProviders = new GraphAgentProviders({
+      connection: (environment, agent) =>
+        graphAgentBridgeConnection(invokeCommand, agent, environment),
+      dependencies: { workflowResults: this.workflowResults },
+    });
+    this.goalVerifier = new NativeAgentGoalVerifier({
+      storage,
+      providers: this.goalVerifierProviders,
+      workflowResults: this.workflowResults,
+      ...(resolveAgentToolConnection
+        ? { agentTools: { workflowResultConnection: resolveAgentToolConnection } }
+        : {}),
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      rollout: this.workflowResultRollout,
+    });
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -2611,6 +2679,8 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain native agent work:", error);
         }
+        // After the service above stops its verifiers, so none loses a provider mid-call.
+        this.goalVerifierProviders.shutdown();
         await nodesStopped;
         await scheduledJobsStopped;
         const commandTermination = await userCommandsStopped;

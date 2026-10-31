@@ -1,4 +1,5 @@
 import type { AgentPlatform } from "./agent-platforms.js";
+import type { NativeAgentGoalSummary } from "./native-agent-goal.js";
 
 /**
  * What one agent tab is doing right now.
@@ -28,6 +29,11 @@ export interface AgentRegistryEntry {
   tabOrdinal: number;
   state: AgentTabState;
   coordinatorRole?: "main" | "side";
+  /**
+   * The tab's goal, if it has one. `state` is about the current turn, so a tab
+   * between iterations reads `idle` while `goal.running` says it will continue.
+   */
+  goal?: NativeAgentGoalSummary;
 }
 
 export interface AgentRegistryEnvironmentSummary {

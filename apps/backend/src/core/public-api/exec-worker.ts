@@ -158,9 +158,15 @@ function ensureDirectory() {
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Exec artifact directory is invalid");
 }
 function readState() {
-  const info = fs.lstatSync(statePath);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024) throw new Error("Invalid exec state");
-  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  let state;
+  try {
+    const info = fs.lstatSync(statePath);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024) throw new Error("Invalid exec state");
+    state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return { operationId: input.operationId, status: "missing" };
+    throw error;
+  }
   if (state.operationId !== input.operationId) throw new Error("Exec identity changed");
   // A worker that stops reporting is lost, whatever its PID now names.
   if (state.status !== "exited" && Date.now() - state.heartbeat > 15000) state.status = "lost";
@@ -183,11 +189,31 @@ function readWindow(name) {
   } finally { fs.closeSync(fd); }
 }
 async function main() {
+  if (input.action === "list-goal-checks") {
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+    catch (error) { if (error.code === "ENOENT") { process.stdout.write("[]"); return; } throw error; }
+    const operations = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^goal-check-[a-f0-9]{64}$/.test(entry.name)) continue;
+      const file = path.join(directory, entry.name, "state.json");
+      let state;
+      try {
+        const info = fs.lstatSync(file);
+        if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024) throw new Error("Invalid goal check state");
+        state = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (state.environmentId === input.environmentId && state.operationId === entry.name) operations.push(entry.name);
+      if (operations.length > 1000) throw new Error("Too many goal checks to drain");
+    }
+    process.stdout.write(JSON.stringify(operations));
+    return;
+  }
   if (input.action === "start") {
     ensureDirectory();
     let claimed = false;
     try {
-      fs.writeFileSync(statePath, JSON.stringify({ version: 1, operationId: input.operationId, status: "starting", heartbeat: Date.now() }), { flag: "wx", mode: 0o600 });
+      fs.writeFileSync(statePath, JSON.stringify({ version: 1, operationId: input.operationId, environmentId: input.environmentId, status: "starting", heartbeat: Date.now() }), { flag: "wx", mode: 0o600 });
       claimed = true;
     } catch (error) { if (error.code !== "EEXIST") throw error; }
     if (claimed) {
@@ -203,11 +229,19 @@ async function main() {
     return;
   }
   if (!fs.existsSync(statePath)) { process.stdout.write(JSON.stringify({ operationId: input.operationId, status: "missing" })); return; }
+  if (input.action === "cleanup") {
+    const state = readState();
+    if (state.status === "missing") { process.stdout.write(JSON.stringify(state)); return; }
+    if (state.status !== "exited") throw new Error("Cannot remove a live worker");
+    fs.rmSync(directory, { recursive: true, force: true });
+    process.stdout.write(JSON.stringify(state));
+    return;
+  }
   if (input.action === "cancel") {
     fs.writeFileSync(path.join(directory, "cancel"), "", { mode: 0o600, flag: "a" });
     const deadline = Date.now() + 15000;
     let state = readState();
-    while (state.status !== "exited" && state.status !== "lost" && Date.now() < deadline) {
+    while (state.status !== "exited" && state.status !== "lost" && state.status !== "missing" && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 200));
       state = readState();
     }

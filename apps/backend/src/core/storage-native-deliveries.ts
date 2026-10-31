@@ -1,3 +1,8 @@
+import {
+  goalContinuationRequestId,
+  isGoalContinuationRequestId,
+  sessionGoal,
+} from "@orkestrator/protocol/native-agent-goal";
 import { createHash } from "node:crypto";
 import {
   isNativeAgentSteerRejectedOutcome,
@@ -134,6 +139,20 @@ export class NativeAgentDeliveries {
           );
         }
         return { session, dispatched: false };
+      }
+
+      // The session mutation lease also orders pause/clear against provider I/O.
+      // A reservation may outlive its goal, but must never start a new turn.
+      if (isGoalContinuationRequestId(requestId)) {
+        const goal = sessionGoal(session);
+        if (
+          !goal ||
+          goal.status !== "active" ||
+          goal.providerSessionId !== session.providerSessionId ||
+          requestId !== goalContinuationRequestId(goal.goalId, goal.iterations - 1)
+        ) {
+          return { session, dispatched: false };
+        }
       }
 
       if (pendingDispatch && pendingDispatch.requestId !== requestId) {

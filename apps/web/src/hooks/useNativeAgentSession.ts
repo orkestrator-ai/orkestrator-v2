@@ -1772,6 +1772,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.contextUsage
           ? { contextUsage: current.contextUsage }
           : {}),
+        ...(hasAuthoritativeState && current.goal ? { goal: current.goal } : {}),
         ...(hasAuthoritativeState && current.policy ? { policy: current.policy } : {}),
         ...(hasAuthoritativeState && current.rateLimits ? { rateLimits: current.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
@@ -1925,6 +1926,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? { asyncQuestionResponses: value.asyncQuestionResponses }
           : {}),
         ...(value.contextUsage ? { contextUsage: value.contextUsage } : {}),
+        ...(value.goal ? { goal: value.goal } : {}),
         ...(value.policy ? { policy: value.policy } : {}),
         ...(value.rateLimits ? { rateLimits: value.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),

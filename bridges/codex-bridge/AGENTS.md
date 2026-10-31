@@ -319,3 +319,10 @@ replay shows it as the card, never as a message the user typed. See
   redact prompt or file content unless you pass `--strip-content`. The recorder
   itself must stay O(1) in the read loop — buffer and flush off-loop, never await
   a write.
+
+## Goals stay off
+
+`features.goals=false` stays in `codexAppServerConfigOverrides`. Orkestrator's
+goal loop runs in the backend on every provider (`plans/goals.md`, D1 and D2).
+Codex's own loop starts turns with no `turn/start`, which the runtime drops
+because it handles only the turn it dispatched.

@@ -8,6 +8,11 @@ import {
 } from "./models.js";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
 import {
+  goalHistoryWith,
+  sessionGoal,
+  type NativeAgentGoal,
+} from "@orkestrator/protocol/native-agent-goal";
+import {
   NATIVE_AGENT_SESSION_VERSION,
   createHash,
   isAgentInteractionResolutionJournal,
@@ -729,6 +734,44 @@ export class NativeAgentSessionsRepository {
       }
       this.announceNativeAgentRecord(saved);
       return saved;
+    });
+  }
+
+  /**
+   * Change a session's goal under the session lease, so it cannot race a
+   * dispatch or another change. `update` returns the next goal, `null` to remove
+   * it, or `undefined` to change nothing; a stale caller decides that from the
+   * goal it is handed. A replaced or removed goal moves to the bounded history.
+   */
+  async updateNativeAgentGoal(
+    key: string,
+    update: (
+      goal: NativeAgentGoal | undefined,
+      session: PersistedNativeAgentSession,
+    ) => NativeAgentGoal | null | undefined,
+  ): Promise<PersistedNativeAgentSession | undefined> {
+    if (!isNonBlankString(key)) throw new Error("Native agent goal update key is invalid");
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session) return undefined;
+      const current = sessionGoal(session);
+      const next = update(current, session);
+      if (next === undefined) return session;
+      const replaced = current && (next === null || next.goalId !== current.goalId);
+      const { goal: _goal, ...rest } = session;
+      const updated: PersistedNativeAgentSession = {
+        ...rest,
+        ...(next ? { goal: next } : {}),
+        ...(replaced ? { goalHistory: goalHistoryWith(session.goalHistory, current) } : {}),
+        updatedAt: nowIso(),
+      };
+      sessions[key] = updated;
+      await this.saveNativeAgentSession(key, updated);
+      this.announceNativeAgentRecord(updated);
+      return updated;
     });
   }
 

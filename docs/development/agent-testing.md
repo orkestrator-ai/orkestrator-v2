@@ -1217,6 +1217,22 @@ the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
 
+### Live goal suite
+
+`mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
+gives each platform a disposable profile holding that platform's host credential
+alone, runs `e2e/agent-testing/goals-live.spec.ts`, then stops and resets it. It
+drives the goal loop through every scenario and asserts on the durable goal record
+and the workspace: a passing check after several iterations, no check, a check that
+never passes, `blocked`, Stop and resume, a queued user prompt, and clear. It writes
+`output/agent-testing/<profile>/goals/summary-<platform>.json`. Each scenario spends
+real tokens on the smallest model the catalogue names, so nothing else runs it.
+A container run needs a hand-started profile (`--fixture-environments local,container`)
+and `ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT=container`, and
+`goals-restart-live.spec.ts`, which kills the backend, also needs one; its header has
+the commands. `ORKESTRATOR_AGENT_TEST_GOAL_MODEL_<PLATFORM>` overrides the model. To qualify a
+provider whose capability is off, add it to `GOAL_QUALIFIED_PLATFORMS` locally first.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
@@ -1224,7 +1240,8 @@ read-only boundary (`read-only`), that delegation never waits inside a turn
 (`async`), that worker mail flows with nobody's help (`family`), that the
 status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
-(`deliver-now`), and that peer mail between two ordinary environments wakes
+(`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
+coordinator once (`goal`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -1474,8 +1491,35 @@ the `steer-unsupported` hold note before its gate opens, and it is injected
 `coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
 runs the orchestration over a scripted command transport.
 
+The `goal` case (`plans/goals/403`) proves a coordinator can give a worker a goal
+and react to its end. It runs only where the platform's `actions.goal` capability
+is on, so other platforms record a skip, gives the coordinator two prompts and
+waits at most six step budgets:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario goal
+```
+
+The coordinator launches one worker whose task is a one-word reply, and that
+launch's own wake passes first. A second prompt has it call `set_worker_goal` once
+on that tab with `maxIterations: 3`, the check `test -f goal-<token>-two` and an
+objective that takes two turns: the first creates `goal-<token>-one` and ends
+without `report_goal`, and the second creates the file the check needs and reports
+`done`. Two turns on purpose: with one there would be no iteration to wake on. The
+prompt also tells it to call `get_worker_goal` once when woken. The harness then
+reads the goal on each poll until it stops and the wake settles, and watches 30 more
+seconds for a second wake. It passes when the set result names the goal with
+`wakeOwed: true`; the goal ends `complete` with reason `check-passed`, a passing
+`lastCheck` and two or three iterations; the goal's delegation closes and wakes the
+coordinator only after the goal's `endedAt`; exactly one coordinator turn follows
+the set turn; the notice names the outcome and `get_worker_goal`, unless a report
+the worker mailed was the wake; and `get_worker_goal` returned `complete`. The
+prompts and verdict are in `coordinator-live-goal.ts`;
+`coordinator-live-goal-orchestration.test.ts` runs the orchestration over a scripted
+command transport.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the renderer's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

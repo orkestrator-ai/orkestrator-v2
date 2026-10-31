@@ -10,9 +10,9 @@ import { sanitizeRunArtifacts } from "./global-teardown";
  * `onExit` runs after every reporter's `onEnd`. List this reporter last.
  */
 export default class ArtifactSanitizingReporter implements Reporter {
-  private readonly suite: "browser" | "coordinator";
+  private readonly suite: "browser" | "coordinator" | "goals";
 
-  constructor(options: { suite?: "browser" | "coordinator" } = {}) {
+  constructor(options: { suite?: "browser" | "coordinator" | "goals" } = {}) {
     this.suite = options.suite ?? "browser";
   }
 

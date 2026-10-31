@@ -278,6 +278,11 @@ description = "Opt-in live coordinator suite: a disposable profile and real prov
 raw_args = true
 run = "bun apps/desktop/scripts/test-agent-coordinator-live.ts"
 
+[tasks."test:agent:goals"]
+description = "Opt-in live goal suite: a disposable profile and real provider turns per platform (--credential-source <platform> narrows)"
+raw_args = true
+run = "bun apps/desktop/scripts/test-agent-goals-live.ts"
+
 [tasks."test:agent:electron"]
 description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"

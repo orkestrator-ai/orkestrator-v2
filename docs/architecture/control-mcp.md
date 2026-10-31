@@ -185,6 +185,7 @@ beside its schema in `PUBLIC_ACTION_INPUTS`:
   grant that `projects` must not imply, so only the operator's own CLI
   cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`,
+  `session.goal.set`, `session.goal.resume` (a goal can run many unattended turns),
   `build.launch`, `graph.launch` (a graph's system nodes may push), `pr.create`
   and `pr.resolve` (each pushes to the remote), the other
   [pull request changes](#pull-requests) that speak for the user on GitHub, and
@@ -556,6 +557,9 @@ a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
 fix (`custom_fix_multi_review`), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
 [`coordinator.md`](coordinator.md#worker-surfaces).
+It can give a tab it launched or prompted a goal (`set_worker_goal`,
+`get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`); see
+[`coordinator.md`](coordinator.md#worker-goals).
 The main coordinator can propose saving durable decisions to the
 `## Orkestrator` section of the project's root `AGENTS.md`
 (`propose_agents_md_update`, capability `environments`, so never a side

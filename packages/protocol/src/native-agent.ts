@@ -1,3 +1,4 @@
+import { GOAL_QUALIFIED_PLATFORMS } from "./native-agent-goal.js";
 import {
   AGENT_INTERACTION_KINDS,
   type AgentInteractionKind,
@@ -1039,6 +1040,8 @@ export interface NativeAgentCapabilities {
     redo?: boolean;
     share?: boolean;
     steer?: boolean;
+    /** The backend's `/goal` loop runs on this platform (`plans/goals.md`). */
+    goal?: boolean;
     review?: boolean;
     rewindMessages?: boolean;
     branches?: boolean;
@@ -1106,6 +1109,14 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
  * so the divergence was invisible until a user hit it.
  */
 export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
+  const capabilities = platformCapabilities(agent);
+  // A platform gains the goal loop only after its live run passes (D14).
+  return (GOAL_QUALIFIED_PLATFORMS as readonly AgentPlatform[]).includes(agent)
+    ? { ...capabilities, actions: { ...capabilities.actions, goal: true } }
+    : capabilities;
+}
+
+function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
   const capabilities = richNativeAgentCapabilities();
   if (agent === "cursor" || agent === "grok") {
     return {
@@ -2405,6 +2416,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   /** Content-free durable delivery state for transcript-native async questions. */
   asyncQuestionResponses?: NativeAgentAsyncQuestionResponse[];
   contextUsage?: NativeAgentContextUsage;
+  /** The session's goal, read from the session record. Absent: no goal. */
+  goal?: import("./native-agent-goal.js").NativeAgentGoalView;
   /** Backend-owned policy actually supplied to the provider session. */
   policy?: NativeAgentExecutionPolicy;
   /** Provider limits can arrive before the first token-usage snapshot. */
@@ -2508,6 +2521,8 @@ export interface NativeAgentSessionStateView {
   queue?: NativeAgentQueueSnapshot;
   asyncQuestionResponses?: NativeAgentAsyncQuestionResponse[];
   contextUsage?: NativeAgentContextUsage;
+  /** The session's goal, read from the session record. Absent: no goal. */
+  goal?: import("./native-agent-goal.js").NativeAgentGoalView;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
   /** False when runtime-backed notices could not be refreshed for this state. */
@@ -2656,6 +2671,7 @@ export type NativeAgentProjectionField =
   | "queue"
   | "asyncQuestionResponses"
   | "contextUsage"
+  | "goal"
   | "rateLimits"
   | "runtime"
   | "runtimeHealthAuthoritative"
@@ -2746,6 +2762,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "queue",
   "asyncQuestionResponses",
   "contextUsage",
+  "goal",
   "rateLimits",
   "runtime",
   "runtimeHealthAuthoritative",
@@ -2770,6 +2787,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "queue",
   "asyncQuestionResponses",
   "contextUsage",
+  "goal",
   "rateLimits",
   "runtime",
   "runtimeHealthAuthoritative",

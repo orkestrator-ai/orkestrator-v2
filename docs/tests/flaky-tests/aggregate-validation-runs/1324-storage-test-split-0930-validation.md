@@ -69,3 +69,19 @@ deadline or skip changes. The node-coordination mismatch reads as a race: the
 inject completed before the test read the placement. That is a hypothesis, not
 confirmed. The branch changes no production code, and every storage test and
 the writer guard passed in both runs. Neither run is a green aggregate.
+
+
+## Goal review repair recurrence — 2026-10-31
+
+The unrelated node-coordination owner again failed an injection-placement
+assertion in the full `mise run test` run: `a command node's deliverNow on this
+leaf > node coordinator requests stay pending while held, until injection`,
+line 348 (315.91 ms). The complete unchanged owner passed alone in 2.4 s:
+
+```sh
+mise run test:logged -- --name goal-node-owner -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.Zau4wx/review-tests.log.gz` in the host temporary
+directory. This establishes a recurrence that passes alone, not a cause or fix.
+No assertion, timeout, skip or node-coordination implementation changed.

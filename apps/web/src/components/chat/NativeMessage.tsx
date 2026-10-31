@@ -22,6 +22,7 @@ import {
 } from "@/lib/chat/native-message-adapters";
 import {
   ERROR_MESSAGE_PREFIX,
+  GOAL_TURN_MESSAGE_PREFIX,
   PEER_MAIL_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   splitPeerMailNativeMessageContent,
@@ -43,6 +44,7 @@ import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
+import { GoalStatusRow, GoalTurnTile } from "./GoalTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 import { RichMessageContext } from "@/lib/chat/rich-identity";
@@ -196,6 +198,27 @@ export const NativeMessage = memo(function NativeMessage({
       <MailTile
         mail={message.peerMail ?? peerMailFromContent(message)}
         expansionKey={`peer-mail:${stableAgentExpansionScope}:${message.id}`}
+        timestampLabel={formatTime(message.createdAt)}
+      />
+    );
+  }
+
+  if (message.id.startsWith(GOAL_TURN_MESSAGE_PREFIX)) {
+    return (
+      <GoalTurnTile
+        turn={message.goalTurn ?? {}}
+        expansionKey={`goal-turn:${stableAgentExpansionScope}:${message.id}`}
+        timestampLabel={formatTime(message.createdAt)}
+      />
+    );
+  }
+
+  if (message.goalStatus) {
+    return (
+      <GoalStatusRow
+        status={message.goalStatus}
+        text={message.content}
+        expansionKey={`goal-status:${stableAgentExpansionScope}:${message.id}`}
         timestampLabel={formatTime(message.createdAt)}
       />
     );

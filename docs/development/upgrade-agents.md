@@ -1764,6 +1764,11 @@ against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
 
 ## Repository-wide validation
 
+A pin change can add a native goal command or tool, or move a turn edge the goal
+loop relies on, so re-run `mise run test:agent:goals --credential-source <platform>`
+for the changed provider ([goals.md](../architecture/goals.md)). It makes real
+model calls and is never part of the default tier.
+
 Run the cheap drift, downloader, and manager checks before live downloads:
 
 ```bash

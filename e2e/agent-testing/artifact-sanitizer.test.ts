@@ -1,3 +1,4 @@
+import { writeGoalSummary } from "./goals-live-summary";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
@@ -126,4 +127,45 @@ describe("agent-test artifact sanitizer", () => {
     expect(retained).not.toContain(secret);
     expect(retained).toContain("[REDACTED]");
   });
+});
+
+test("a long failed-run trace larger than 16 MiB survives redaction", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-long-trace-"));
+  const source = await mkdtemp(path.join(os.tmpdir(), "ork-agent-long-trace-source-"));
+  temporaryDirectories.push(root, source);
+  // Store without compression so the archive itself exceeds the old bound.
+  const content = "x".repeat(17 * 1024 * 1024) + "\ncookie: orkestrator_gateway_auth=secret\n";
+  await writeFile(path.join(source, "trace.network"), content);
+  const archive = path.join(root, "trace.zip");
+  expect(spawnSync("zip", ["-0", "-q", archive, "trace.network"], { cwd: source }).status).toBe(0);
+  expect((await stat(archive)).size).toBeGreaterThan(16 * 1024 * 1024);
+  await sanitizeAgentTestingArtifacts(root, []);
+  const unpacked = spawnSync("unzip", ["-p", archive, "trace.network"], {
+    maxBuffer: 20 * 1024 * 1024,
+  }).stdout.toString();
+  expect(unpacked).toContain("orkestrator_gateway_auth=[REDACTED]");
+  expect(unpacked).not.toContain("=secret");
+}, 20_000);
+
+test("later live-goal workers retain earlier statuses and error detail", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-goal-summary-"));
+  temporaryDirectories.push(root);
+  const file = path.join(root, "summary.json");
+  const identity = { platform: "grok", environmentKind: "local" };
+  writeGoalSummary(file, {
+    ...identity,
+    scenarios: { blocked: { status: "blocked", detail: "needs a key" } },
+  });
+  // A replacement worker has a fresh module-level record.
+  writeGoalSummary(file, { ...identity, scenarios: { compact: { status: "complete" } } });
+  expect(JSON.parse(await readFile(file, "utf8")).scenarios).toEqual({
+    blocked: { status: "blocked", detail: "needs a key" },
+    compact: { status: "complete" },
+  });
+  writeGoalSummary(file, {
+    platform: "codex",
+    environmentKind: "local",
+    scenarios: { plan: { status: "limited" } },
+  });
+  expect(Object.keys(JSON.parse(await readFile(file, "utf8")).scenarios)).toEqual(["plan"]);
 });

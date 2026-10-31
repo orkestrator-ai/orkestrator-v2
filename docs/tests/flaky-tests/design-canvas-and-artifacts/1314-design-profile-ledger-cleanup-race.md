@@ -46,6 +46,16 @@ The complete owner had passed alone earlier in this repair turn; no source in
 this owner changed. Evidence: `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 below the host temporary directory.
 
+## Occurrence 2026-10-30
+
+`mise run test` on the todo 0742 structured-tickets branch (a Kanban storage
+fix; nothing in `design/` changed) failed this test after 140.80 ms with the
+same symptom: the profile was gone and `48963-48966-0123abcd.json` was still in
+the ledger. The owner then passed alone three times in a row (27 pass each,
+`bun --cwd=apps/backend test ./src/core/design/browser-profiles.test.ts`).
+Aggregate evidence: `orkestrator-test-run.bzzSIG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the host temporary directory.
+
 ## Leaf-check readiness review — 2026-10-30
 
 The exact final `mise run test` rerun repeated the same ledger assertion at

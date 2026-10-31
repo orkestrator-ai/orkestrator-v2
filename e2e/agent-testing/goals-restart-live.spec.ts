@@ -220,13 +220,16 @@ test.describe("a goal across a killed backend", () => {
     const lines = (file: string) =>
       (workspace.read(file) ?? "").split("\n").filter((line) => line.length > 0);
 
-    await test.step("killed during a check, the check runs again and the goal completes", async () => {
+    await test.step("killed during a check, recovery adopts its worker and the goal completes", async () => {
       const identity = await openTab("restart-check");
       await invoke("native_agent_goal_command", {
         ...identity,
         text: `Append one line to goal-restart-a.log with printf, create goal-restart-a.txt, then call the orkestrator report_goal tool with status "done". --max-iterations 4 --check printf 'run\\n' >> goal-check-runs.log; sleep 20; test -f goal-restart-a.txt`,
       });
       await waitFor(identity, (goal) => goal?.status === "checking", "reaching the check");
+      await expect
+        .poll(() => lines("goal-check-runs.log").length, { timeout: 30_000, intervals: [100] })
+        .toBe(1);
       await crashAndRestart();
       await relogin();
       const goal = await waitFor(
@@ -235,8 +238,8 @@ test.describe("a goal across a killed backend", () => {
         "completing after the restart",
       );
       expect(goal.lastCheck?.passed).toBe(true);
-      // The killed check may or may not have got past its first line.
-      expect(lines("goal-check-runs.log").length).toBeGreaterThanOrEqual(1);
+      // Its durable identity recovers the same worker and result, never a twin.
+      expect(lines("goal-check-runs.log")).toHaveLength(1);
       // The turn before the check ran once: the restart re-sent nothing.
       expect(goal.iterations).toBe(1);
       expect(lines("goal-restart-a.log")).toHaveLength(1);

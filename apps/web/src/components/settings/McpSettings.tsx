@@ -78,7 +78,7 @@ const CAPABILITY_TEXT: Record<string, string> = {
   "sessions.control": "Start, prompt, steer and stop sessions",
   interactions: "Answer questions and approvals",
   "environments.lifecycle": "Create, start and stop environments",
-  "environments.destructive": "Delete and recreate environments",
+  "environments.destructive": "Delete and recreate environments, merge pull requests",
   exec: "Run commands in environments",
   projects: "Add, create and remove projects",
   settings: "Change project and environment settings",

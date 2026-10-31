@@ -19,6 +19,7 @@
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import { BUILD_ACTION_INPUTS, REVIEW_LENS_INPUT } from "./public-api-inputs-build.js";
 import { GRAPH_ACTION_INPUTS } from "./public-api-inputs-graph.js";
+import { PR_ACTION_INPUTS } from "./public-api-inputs-pr.js";
 import {
   DELIVERY_POLICIES,
   TICKET_KIND_GUIDANCE,
@@ -1428,6 +1429,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ environmentId: "env-1" }],
     },
+    ...PR_ACTION_INPUTS,
     "attention.list": {
       capability: "sessions.read",
       confirmation: "never",

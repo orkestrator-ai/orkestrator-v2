@@ -13,7 +13,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Live container sessions (review gap 9)**: save an environment-private server during a running turn in a container and confirm the turn finishes and the next turn loads it, for Claude, Codex, Cursor and Pi (plus terminal work not being interrupted). Status: open.
 2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: open.
 3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered. Status: open (needs two machines).
-4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: open (docs only).
+4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: done (2026-10-31).
 
 ### 1. Live container sessions (review gap 9)
 
@@ -78,12 +78,12 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The file batches remote runs with [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md). Decision 12 says remote backends are not detected on the backend side; the editor shows where the connection is made from instead.
 
-**Investigation.** The text is rendered unconditionally from the environment, not from any remote detection (`McpServerForm.tsx:460`), so what a remote browser sees is the same component output as a local one. 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:199`) lists 0039 but not this file, so the batching the file relies on would not pick this item up. Its Docker row (`:197`) does list 0040.
+**Investigation.** The text is rendered unconditionally from the environment, not from any remote detection (`McpServerForm.tsx:460`), so what a remote browser sees is the same component output as a local one. 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:470`) lists this file since 2026-10-31 (task 4), so the batch picks this item up. Its Docker row (`:468`) already listed 0040.
 
 **Decisions.**
 
 - **Keep it as a two-machine run, or retire it?**
-  - **Keep it, and add this file to 0031's two-machine row so the batch includes it (recommended).**
+  - **Keep it, and add this file to 0031's two-machine row so the batch includes it (recommended; the row was updated under task 4).**
     - Pros: the one real check that a remote user sees the hint and no callback; costs nothing extra if 0039's remote run happens anyway.
     - Cons: depends on a second machine being set up.
   - **Retire it as proven by construction.**
@@ -94,6 +94,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Cons: the browser's `localhost` is still the backend host, which is exactly what the check must rule out.
 
 ### 4. Stale notes in this file
+
+Done 2026-10-31 on `main` at `931e5541`, taking the recommended option; see decision 17.
 
 **Problem.** Two notes in this file no longer match the rest of the docs.
 
@@ -306,11 +308,13 @@ remote runs with
   was rerun against a fresh image built from the merged tree
   (`orkestrator-v2:mcp0040-qual2`). All 3 cases passed (46 assertions, none
   skipped), and no containers were left behind.
-- Observation, not investigated here: my first version of the rebuild test
-  went through a legacy-to-volume **migration** of a container that had
-  staged Codex inputs, and the migration refused with `root-symlink` twice.
-  C14, which stages no inputs, passes, and a fresh staged container has no
-  symlinks in its homes. This was tracked in todo 0058.
+- Observation, since fixed: my first version of the rebuild test went through
+  a legacy-to-volume **migration** of a container that had staged Codex inputs,
+  and the migration refused with `root-symlink` twice. C14, which stages no
+  inputs, passes, and a fresh staged container has no symlinks in its homes.
+  Fixed on 2026-10-26 (#1306, todo 0058, retired on 2026-10-29): images from
+  then on read the root from the whole archive stream (see
+  [`container-lifecycle.md`](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild)).
 - UI (`apps/web/src/components/settings/mcp-servers/`):
   - `McpEnvironmentOverlay.tsx` shows each overlay state with its actions:
     reapply when pending; import or reapply when diverged; keep or use
@@ -505,6 +509,14 @@ All of these are additive and in scope.
     - Rejected: a single record write either before the container write
       (which could misreport divergence) or after it (which could lose the
       new baseline).
+17. **Correcting the stale notes now** (2026-10-31, task 4).
+    - Options: correct them now, including a one-row edit to 0031; or wait until
+      the qualification runs are recorded.
+    - Chosen: now.
+    - Why: the remote check could otherwise be missed by whoever runs 0031's
+      batch first.
+    - Pros: cheap, and it closes the gap. Cons: touches 0031, which is outside
+      this file.
 
 ## Open questions
 

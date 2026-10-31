@@ -1,8 +1,17 @@
 import { afterAll, describe, expect, jest, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import {
+  BRIDGE_RUNTIMES_DIRECTORY,
+  BUNDLED_BRIDGES,
+  ON_DEMAND_BRIDGES,
+  RUNTIME_DESCRIPTOR,
+  RUNTIME_SUBDIRECTORY,
+} from "../scripts/bridges.js";
+import { lockedPackages, runtimeManifest } from "../scripts/lock-bridge-runtimes.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -17,20 +26,41 @@ const EXIT_TIMEOUT_MS = 10_000;
 
 jest.setTimeout(40_000);
 
-// Every artifact scripts/build.ts emits, relative to the package root.
+const bridgeArtifact = (name: string) => `resources/${name}/dist/index.js`;
+
+// Every complete artifact scripts/build.ts emits, relative to the package root.
+// On-demand bridges are checked separately: their externals are installed by
+// the backend from a runtime manifest, not declared by this package.
 const ARTIFACTS = [
   "dist/client.js",
   "dist/main.js",
-  "resources/claude-bridge/dist/index.js",
-  "resources/codex-bridge/dist/index.js",
+  ...BUNDLED_BRIDGES.map((bridge) => bridgeArtifact(bridge.name)),
 ];
 
 // The workspaces whose sources those artifacts are bundled from.
 const SOURCE_WORKSPACES = [
   "apps/backend/package.json",
-  "bridges/claude-bridge/package.json",
-  "bridges/codex-bridge/package.json",
+  ...BUNDLED_BRIDGES.map((bridge) => `bridges/${bridge.name}/package.json`),
 ];
+
+/** Workspace bridges with a build script, the same enumeration as tests/unit/bridge-packaging.test.ts. */
+function buildableBridges(): string[] {
+  const bridgesRoot = path.join(repositoryRoot, "bridges");
+  return readdirSync(bridgesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .filter((name) => {
+      try {
+        const manifest = JSON.parse(
+          readFileSync(path.join(bridgesRoot, name, "package.json"), "utf8"),
+        ) as { scripts?: Record<string, string> };
+        return typeof manifest.scripts?.build === "string";
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
 
 // Bun emits unbundled imports as line-anchored ESM statements, so anchoring
 // avoids matching import-like text inside bundled string data. `require("...")`
@@ -193,15 +223,94 @@ describe("orkestrator CLI package", () => {
     }
   });
 
-  test("stages a self-contained backend and both bridge entrypoints", async () => {
+  test("stages a self-contained backend and every bridge entrypoint", async () => {
     await expect(Bun.file(path.join(packageRoot, "dist/main.js")).exists()).resolves.toBe(true);
     await expect(Bun.file(path.join(packageRoot, "dist/client.js")).exists()).resolves.toBe(true);
-    await expect(
-      Bun.file(path.join(packageRoot, "resources/claude-bridge/dist/index.js")).exists(),
-    ).resolves.toBe(true);
-    await expect(
-      Bun.file(path.join(packageRoot, "resources/codex-bridge/dist/index.js")).exists(),
-    ).resolves.toBe(true);
+    for (const bridge of [...BUNDLED_BRIDGES, ...ON_DEMAND_BRIDGES]) {
+      await expect(
+        Bun.file(path.join(packageRoot, bridgeArtifact(bridge.name))).exists(),
+      ).resolves.toBe(true);
+    }
+  });
+
+  test("carries every buildable bridge, bundled or on demand", () => {
+    // `bridges/cursor-bridge` once shipped only in the desktop app, and a
+    // standalone backend failed the first Cursor session with "bridge
+    // directory not found". Enumerating the workspace stops the next one.
+    const carried = [...BUNDLED_BRIDGES, ...ON_DEMAND_BRIDGES].map((bridge) => bridge.name);
+    expect(carried.sort()).toEqual(buildableBridges());
+    expect(new Set(carried).size).toBe(carried.length);
+  });
+
+  test("keeps external exactly what each on-demand bridge's own build does", async () => {
+    for (const bridge of ON_DEMAND_BRIDGES) {
+      const manifest = await readManifest(`bridges/${bridge.name}/package.json`);
+      const build = (manifest as { scripts?: Record<string, string> }).scripts?.build ?? "";
+      const external = [...build.matchAll(/--external[ =](\S+)/g)].map((match) => match[1]!);
+      expect({ [bridge.name]: [...bridge.external].sort() }).toEqual({
+        [bridge.name]: external.sort(),
+      });
+      // And the bundle resolves nothing else at runtime. (An external that is
+      // only ever imported for types leaves no import behind.)
+      const unexpected = (await unbundledPackages(bridgeArtifact(bridge.name))).filter(
+        (name) => !bridge.external.includes(name),
+      );
+      expect({ [bridge.name]: unexpected }).toEqual({ [bridge.name]: [] });
+    }
+  });
+
+  test("commits each on-demand runtime manifest and lockfile in step with the bridge", async () => {
+    const rootPatches =
+      ((await readManifest("package.json")) as { patchedDependencies?: Record<string, string> })
+        .patchedDependencies ?? {};
+    for (const bridge of ON_DEMAND_BRIDGES) {
+      const directory = path.join(packageRoot, BRIDGE_RUNTIMES_DIRECTORY, bridge.name);
+      const committed = (await Bun.file(path.join(directory, "package.json")).json()) as {
+        dependencies?: Record<string, string>;
+        patchedDependencies?: Record<string, string>;
+      };
+      const lockfile = await readFile(path.join(directory, "bun.lock"), "utf8");
+
+      // Every repository patch for a package the closure resolves applies here
+      // too, or the standalone bridge would run code the repository never does.
+      const locked = lockedPackages(lockfile);
+      const patches = Object.fromEntries(
+        Object.entries(rootPatches).filter(([key]) =>
+          locked.has(key.slice(0, key.lastIndexOf("@"))),
+        ),
+      );
+      // Regenerate with `bun packages/cli/scripts/lock-bridge-runtimes.ts`.
+      expect(committed).toEqual(await runtimeManifest(bridge, patches));
+
+      // `--frozen-lockfile` refuses a lockfile whose root does not match.
+      for (const [name, version] of Object.entries(committed.dependencies ?? {})) {
+        expect(lockfile).toContain(`"${name}": "${version}"`);
+        expect(lockfile).toContain(`"${name}": ["${name}@${version}"`);
+      }
+      for (const [key, file] of Object.entries(committed.patchedDependencies ?? {})) {
+        expect(lockfile).toContain(`"${key}": "${file}"`);
+      }
+    }
+  });
+
+  test("stages each on-demand bridge's install inputs and digest", async () => {
+    for (const bridge of ON_DEMAND_BRIDGES) {
+      const runtime = path.join(packageRoot, "resources", bridge.name, RUNTIME_SUBDIRECTORY);
+      const descriptor = (await Bun.file(path.join(runtime, RUNTIME_DESCRIPTOR)).json()) as {
+        bridge?: string;
+        digest?: string;
+      };
+      expect(descriptor.bridge).toBe(bridge.name);
+      // The backend accepts nothing else as a path segment.
+      expect(descriptor.digest).toMatch(/^[0-9a-f]{16}$/);
+      const manifest = (await Bun.file(path.join(runtime, "package.json")).json()) as {
+        patchedDependencies?: Record<string, string>;
+      };
+      await expect(Bun.file(path.join(runtime, "bun.lock")).exists()).resolves.toBe(true);
+      for (const file of Object.values(manifest.patchedDependencies ?? {})) {
+        await expect(Bun.file(path.join(runtime, file)).exists()).resolves.toBe(true);
+      }
+    }
   });
 
   test("declares exactly the packages its bundles resolve at runtime", async () => {
@@ -277,8 +386,18 @@ describe("orkestrator CLI package", () => {
       "dist/client.js",
       "dist/main.js",
       "package.json",
+      "resources/acp-bridge/dist/index.js",
       "resources/claude-bridge/dist/index.js",
       "resources/codex-bridge/dist/index.js",
+      "resources/cursor-bridge/dist/index.js",
+      "resources/cursor-bridge/runtime/bun.lock",
+      "resources/cursor-bridge/runtime/install.json",
+      "resources/cursor-bridge/runtime/package.json",
+      "resources/cursor-bridge/runtime/patches/@cursor%2Fsdk@1.2.0.patch",
+      "resources/pi-bridge/dist/index.js",
+      "resources/pi-bridge/runtime/bun.lock",
+      "resources/pi-bridge/runtime/install.json",
+      "resources/pi-bridge/runtime/package.json",
     ]);
   });
 

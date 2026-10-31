@@ -78,6 +78,7 @@ import {
   resolveBunBinary,
 } from "./commands-agent-support.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
+import { ensureBridgeRuntime, onDemandBridgeRuntime } from "./bridge-runtime-install.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
 import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
@@ -347,13 +348,44 @@ export async function waitForLocalServerStartup(
   });
 }
 
-export function getBridgePath(
-  context: CommandContext,
-  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge" | "pi-bridge" | "cursor-bridge",
-): string {
+export type BridgeName =
+  "claude-bridge" | "codex-bridge" | "acp-bridge" | "pi-bridge" | "cursor-bridge";
+
+function onDemandRuntime(context: CommandContext, bridgeName: BridgeName) {
+  return onDemandBridgeRuntime(
+    context.resourceRoot,
+    () => context.storage.getDataDir(),
+    bridgeName,
+  );
+}
+
+/**
+ * The directory a bridge starts from. The standalone package installs some
+ * bridges' SDKs on first use, so this may name a directory that does not exist
+ * yet; anything about to start a bridge uses `prepareBridgePath` instead.
+ */
+export function getBridgePath(context: CommandContext, bridgeName: BridgeName): string {
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
-  return path.join(context.resourceRoot, bridgeName);
+  return (
+    onDemandRuntime(context, bridgeName)?.installDir ?? path.join(context.resourceRoot, bridgeName)
+  );
+}
+
+/**
+ * `getBridgePath`, after installing the bridge's runtime if the standalone
+ * package ships it on demand (`bridge-runtime-install.ts`). The first start
+ * waits for the install; every later one finds it in place.
+ */
+export async function prepareBridgePath(
+  context: CommandContext,
+  bridgeName: BridgeName,
+): Promise<string> {
+  const devPath = path.join(context.appRoot, "bridges", bridgeName);
+  if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
+  const runtime = onDemandRuntime(context, bridgeName);
+  if (!runtime) return path.join(context.resourceRoot, bridgeName);
+  return ensureBridgeRuntime(runtime, { bun: resolveBunBinary(context) });
 }
 
 export { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
@@ -1038,7 +1070,7 @@ async function startLocalServerAttempt(
     }
   } else if (kind === "pi") {
     command = resolveBunBinary(context);
-    cwd = getBridgePath(context, "pi-bridge");
+    cwd = await prepareBridgePath(context, "pi-bridge");
     // Pi's own configuration directory holds `auth.json`, which is the user's
     // provider credentials. A local worktree runs as the user, so the default
     // `~/.pi/agent` is exactly the one they signed in with — leaving it unset
@@ -1068,7 +1100,7 @@ async function startLocalServerAttempt(
     // The SDK's Shell tool still defaults to `process.cwd()` when the model
     // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
     // bootstrapped: see `applyWorkingDirectory` in the bridge's `config.ts`.
-    cwd = getBridgePath(context, "cursor-bridge");
+    cwd = await prepareBridgePath(context, "cursor-bridge");
     env.CURSOR_BRIDGE_STATE_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "cursor-bridge-state",

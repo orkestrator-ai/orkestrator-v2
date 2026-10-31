@@ -98,6 +98,14 @@ points at the installed set and the service uses it by default for that data
 directory — restart a running service to pick up a new one. Pass `--data-dir`
 when the service does, and see `orkestrator toolchain install --help`.
 
+## Cursor and Pi
+
+The Cursor and Pi bridges ship without their SDKs, which are too large or too
+platform-specific to bundle. The first time one starts, the backend installs
+the SDK it pins into `<data-dir>/bridge-runtimes/` with
+`bun install --frozen-lockfile`, so that first start needs access to the npm
+registry. Later starts, and restarts, reuse it.
+
 ## Client commands
 
 Select the backend explicitly. A running backend publishes a private

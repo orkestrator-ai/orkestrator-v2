@@ -194,7 +194,14 @@ describe("syncClaudeAccountSettings", () => {
       JSON.stringify({
         oauthAccount: { emailAddress: "second@example.com" },
         mcpServers: { stale: {} },
-        projects: { "/repo": { allowedTools: ["Bash"], lastCost: 3 } },
+        projects: {
+          "/repo": { allowedTools: ["Bash"], lastCost: 3 },
+          "/account-only": {
+            mcpServers: { inside: { command: "inside" } },
+            lastCost: 7,
+            hasTrustDialogAccepted: true,
+          },
+        },
       }),
     );
 
@@ -204,6 +211,7 @@ describe("syncClaudeAccountSettings", () => {
     expect(synced.oauthAccount).toEqual({ emailAddress: "second@example.com" });
     expect(synced.mcpServers).toEqual({ docs: { type: "stdio", command: "docs" } });
     expect(synced.hasCompletedOnboarding).toBe(true);
+    expect(synced.projects["/account-only"]).toEqual({ lastCost: 7, hasTrustDialogAccepted: true });
     // Synced keys follow the host, including removal; the account's own stats stay.
     expect(synced.projects["/repo"]).toEqual({
       mcpServers: { local: { type: "stdio", command: "local" } },

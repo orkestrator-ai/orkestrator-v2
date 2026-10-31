@@ -94,6 +94,7 @@ import {
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
+import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,
@@ -1063,6 +1064,7 @@ export class OrkestratorBackend {
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
+      claudeAccountHomes: () => addedClaudeAccountHomes(context),
     });
     // Web annotations: backend-owned threads and requests. Execution goes
     // through the native queue via the dispatch adapter; the tool host is

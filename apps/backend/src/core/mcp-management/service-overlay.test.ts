@@ -104,7 +104,7 @@ describe("environment-private saves", () => {
     expect(codexServers()).toEqual({
       inherited: { command: "inherited" },
       other: { command: "other" },
-      mine: { command: "mine" },
+      mine: { command: "mine", enabled: true },
     });
     // Other settings in the container's copy are kept.
     expect(fixture.containerFiles.get(CODEX)).toContain(`model = "gpt"`);
@@ -186,12 +186,12 @@ describe("environment-private saves", () => {
       conflicts: [{ name: "inherited", reason: expect.stringContaining("changed after") }],
     });
     await resolve({ kind: "keep-environment", name: "inherited" });
-    expect(codexServers().inherited).toEqual({ command: "mine" });
+    expect(codexServers().inherited).toEqual({ command: "mine", enabled: true });
     after = (await snapshotOf()).snapshot;
     expect(source(after).overlay?.state).toBe("in-sync");
     // Re-anchored: the next restart with the same upstream value keeps the user's.
     await restart(changed);
-    expect(codexServers().inherited).toEqual({ command: "mine" });
+    expect(codexServers().inherited).toEqual({ command: "mine", enabled: true });
   });
 
   test("take-inherited drops the environment's change for that name", async () => {
@@ -236,7 +236,7 @@ describe("in-container edits", () => {
     expect(mcpManagementErrorFromUnknown(error)?.code).toBe("environment-diverged");
     // A boot of the same id never overwrites it either.
     expect(await fixture.service.materialiseEnvironment("env-1")).toBe(0);
-    expect(codexServers().mine).toEqual({ command: "edited" });
+    expect(codexServers().mine).toEqual({ command: "edited", enabled: true });
   });
 
   test("import adopts the in-container edit, and the next restart keeps it", async () => {
@@ -244,13 +244,13 @@ describe("in-container edits", () => {
     await resolve({ kind: "import" });
     expect((await snapshotOf()).snapshot.sources[0]!.overlay).toMatchObject({ state: "in-sync" });
     await restart();
-    expect(codexServers().mine).toEqual({ command: "edited" });
+    expect(codexServers().mine).toEqual({ command: "edited", enabled: true });
   });
 
   test("reapply restores this environment's version", async () => {
     await editInside();
     await resolve({ kind: "reapply" });
-    expect(codexServers().mine).toEqual({ command: "mine" });
+    expect(codexServers().mine).toEqual({ command: "mine", enabled: true });
     expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("in-sync");
   });
 
@@ -493,7 +493,7 @@ describe("boot recovery regressions", () => {
     fixture.containerFiles.delete(CODEX);
     fixture.containerBoot.value = "empty-rebuild";
     expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
-    expect(codexServers()).toEqual({ mine: { command: "mine" } });
+    expect(codexServers()).toEqual({ mine: { command: "mine", enabled: true } });
     expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
     await resolve({ kind: "reset" });
     expect(codexServers()).toEqual({});
@@ -506,7 +506,7 @@ describe("boot recovery regressions", () => {
     expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("pending");
     expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
     expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
-    expect(codexServers().mine).toEqual({ command: "mine" });
+    expect(codexServers().mine).toEqual({ command: "mine", enabled: true });
     expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("in-sync");
   });
 
@@ -594,14 +594,14 @@ describe("boot recovery regressions", () => {
     test(`${name} survives add, rebuild, conflict resolution and removal`, async () => {
       await addCodex(name);
       await restart();
-      expect(codexServers()[name]).toEqual({ command: name });
+      expect(codexServers()[name]).toEqual({ command: name, enabled: true });
       const changed = `${INHERITED_CODEX}\n[mcp_servers.${name}]\ncommand = "upstream"\n`;
       await restart(changed);
       expect(source((await snapshotOf()).snapshot).overlay?.conflicts.map((c) => c.name)).toEqual([
         name,
       ]);
       await resolve({ kind: "keep-environment", name });
-      expect(codexServers()[name]).toEqual({ command: name });
+      expect(codexServers()[name]).toEqual({ command: name, enabled: true });
       await removeCodex(name);
       await restart(changed);
       expect(Object.hasOwn(codexServers(), name)).toBe(false);
@@ -677,11 +677,13 @@ for (const action of ["save", "reset", "refresh"] as const) {
       });
     } else expect("error" in result).toBe(false);
     expect(Object.hasOwn(codexServers(), "mine")).toBe(action !== "reset");
-    if (action === "save") expect(codexServers().latest).toEqual({ command: "latest" });
+    if (action === "save")
+      expect(codexServers().latest).toEqual({ command: "latest", enabled: true });
     const after = source((await snapshotOf()).snapshot).overlay;
     expect(after?.state).toBe(action === "reset" ? undefined : "in-sync");
     await restart();
-    if (action === "save") expect(codexServers().latest).toEqual({ command: "latest" });
+    if (action === "save")
+      expect(codexServers().latest).toEqual({ command: "latest", enabled: true });
     if (action === "reset") expect(Object.hasOwn(codexServers(), "mine")).toBe(false);
   });
 }
@@ -720,7 +722,7 @@ test("corrupt-record recovery refuses unreadable defaults and retains the record
   fixture.write("home/.codex/config.toml", "not valid = [");
   let error = await resolve({ kind: "reset" }).catch((error) => error);
   expect(mcpManagementErrorFromUnknown(error)?.code).toBe("malformed-source");
-  expect(codexServers().mine).toEqual({ command: "mine" });
+  expect(codexServers().mine).toEqual({ command: "mine", enabled: true });
   expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("corrupt");
   fixture.write("home/.codex/config.toml", INHERITED_CODEX);
   fixture.containerWriteControl.failNext = true;

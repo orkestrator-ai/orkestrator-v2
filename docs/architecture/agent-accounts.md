@@ -93,7 +93,23 @@ local-scope MCP servers from. `syncClaudeAccountSettings` therefore copies
 `mcpServers`, `hasCompletedOnboarding` and each project's MCP, trust and
 allowed-tools keys from the host file before every launch. It holds Claude's
 own `.claude.json.lock` directory lock while it does, and never touches the
-account's own keys.
+account's own keys. The copy replaces the account's `mcpServers`, so a server
+added inside an account home (`claude mcp add` in an account's terminal) is
+overwritten; the MCP editor says so on Claude's user and private-local
+sources while an added Claude account exists.
+
+The bridge keeps reading the host file (`homedir()/.claude.json`) at every
+turn and hands its servers to the running CLI, so an MCP editor save reaches a
+running account session on its next message. The CLI itself loads the
+account's copy only when it starts, and a bridge starts many CLIs (one after
+each idle close), so the MCP editor also refreshes every account's copy after
+each save of the host file (`mcp-management/claude-account-copies.ts`). When
+the copy's source is the file the bridge reads, the backend also sets
+`ORKESTRATOR_CLAUDE_ACCOUNT_HOME` to the account directory; the bridge then
+reports a server only the copy names (`claudeAccountOnlyMcpServerNames`) as
+stale from launch and refuses its tools, so removing a server that a copy
+still names is never reported `applied` while the account's CLI runs it. Proven on the pinned CLI, without
+credentials, by the `account` case of `mise run verify:claude:mcp-live`.
 
 Credentials are never copied between account directories. Refresh tokens
 rotate, so a copy goes stale as soon as the original refreshes.

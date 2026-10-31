@@ -131,6 +131,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
 
+      # IPv6 on an attached network and DNS rotation. The daemon-restart case
+      # needs a disposable daemon and stays a manual run (0018 task 3).
+      - name: Live egress conditions (IPv6, DNS rotation)
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_LIVE_IPV6_NETWORK: "1"
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts --parallel=1
+
       - name: Live readiness faults (C09, C10, C22, C23)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1

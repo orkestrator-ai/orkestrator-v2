@@ -8,26 +8,31 @@ rules re-derived from the pinned Grok 1.0.52. Code items 2, 3, 5, 6 and 12
 closed, items 4 and 7 decided, item 8 pinned by a canary, and the OpenCode
 rules re-derived from the pinned OpenCode 1.19.4 on 2026-10-25 from
 `ba7cc8d4` (branch `todo-0039-mcp-management-36df0f37c530`; see
-[Assumptions and decisions](#assumptions-and-decisions)).
+[Assumptions and decisions](#assumptions-and-decisions)). Tasks 2, 3 and 12
+closed and task 8 worked on 2026-10-31 from `931e5541` (branch
+`todo-0039-mcp-management-d5f657bb2ee5`): Grok rules re-derived at 1.0.70,
+Codex and Grok parity guards added, agent-account copies kept in step.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; re-checked 2026-10-31
+against `main` at `931e5541` (pins: Claude 2.1.314, Codex 0.166.0, Grok
+1.0.70, OpenCode 1.19.5, Pi 1.4.0).
 
 ### Tasks
 
 1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Status: blocked (upstream Claude Code; canary in place, report not filed).
-2. **Re-derive Grok rules at 1.0.67**: trust rule, source and precedence table were derived at 1.0.52; the pin is 1.0.67 (also "Needs verification": whether 1.0.67 follows the 1.0.52 rule). Status: open.
-3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: open.
-4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host).
+2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
+3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
+4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun).
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: open.
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: open.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: open.
-8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: open.
+8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up [1163](1163-claude-probe-reconnect-inventory.md)).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: partly done (container behaviour superseded by 0040).
 10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (on tasks 4 to 7).
-11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: open (decision only).
-12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: open.
+11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: open (decision only; recommendation recorded 2026-10-31).
+12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
 
 ### 1. Replaced Claude server processes linger (code item 8)
 
@@ -50,9 +55,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: no lingering process, independent of upstream.
     - Cons: a CLI restart costs a process spawn and drops in-process state; the bridge deliberately keeps one runtime per session (#950).
 
-### 2. Re-derive Grok rules at 1.0.67
+### 2. Re-derive Grok rules at 1.0.70
 
-**Problem.** The catalogue's Grok trust rule, source list and precedence were traced at 1.0.52. The pin moved to 1.0.67, so Grok rows may be wrong about which servers load.
+**Problem.** The catalogue's Grok trust rule, source list and precedence were traced at 1.0.52. The pin moved to 1.0.67 and then 1.0.70 (#1473), so Grok rows may be wrong about which servers load.
 
 **Context.** The rule is in `grokFolderTrust` (`apps/backend/src/core/mcp-management/native-policy.ts:241`, doc comment naming 1.0.52 at `:232`) and `grokSources` (`apps/backend/src/core/mcp-management/providers.ts:476`, trust used at `:532`). `docs/architecture/mcp-management.md:72` documents it at 1.0.52. The method was `grok inspect` in throwaway `GROK_HOME`s, which needs no login.
 
@@ -67,6 +72,16 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Read the rule out of the binary's embedded source, as done for OpenCode.**
     - Pros: finds rules `inspect` does not expose.
     - Cons: Grok is a compiled binary; tracing it is slower and less certain than for OpenCode's embedded JavaScript.
+
+**Outcome (2026-10-31).** Re-derived on the pinned 1.0.70 (installed hash-verified into a throwaway data directory with `mise run toolchain:install --data-dir`), with `grok inspect --json`, `grok mcp doctor --json` and `grok mcp list --json` in throwaway `HOME`/`GROK_HOME`s and no login, plus the user guide the binary unpacks into `$GROK_HOME/docs/user-guide` (diffed against 1.0.52's and 1.0.67's).
+
+- **Trust rule: unchanged since 1.0.52.** The repository root, symlinks resolved, trailing slash tolerated; a linked worktree takes its main checkout's entry and its own is ignored (also when the main checkout declines); a grant on a non-git parent, an enclosing repository or a symlinked key does not count; `GROK_FOLDER_TRUST=0` and `[folder_trust] enabled = false` turn the gate off. New: only `[folders."<path>"] trusted = <bool>` (the shape `grok --trust` writes) is a decision; a bare boolean, a string, an array of tables or another key name all read as untrusted, while the catalogue accepted four of them as grants. Fixed (`folderTrustEntry` in `native-policy.ts`). Grok also reports a folder with nothing to hold back as trusted, which changes nothing for MCP rows.
+- **The gate holds for MCP.** `grok mcp doctor` refuses to start an untrusted (or undecided) folder's project `.grok/config.toml`, `.mcp.json`, `.cursor/mcp.json` and Claude's `projects[<repo>]` servers ("repo-local (project-scoped) server not started for an untrusted folder"), and the probe server's own log shows no process. `inspect` and `mcp list` still list them either way. The catalogue gated the first three but not Claude's private entry; fixed (`compat-claude-local` now carries the project's trust).
+- **Sources: `requirements.toml` defines servers.** `$GROK_HOME/requirements.toml` (and, by Grok's configuration reference, `/etc/grok/requirements.toml` after it) can define and pin MCP servers, and its definition outranks the user and project files. 1.0.52 and 1.0.67 behave the same, so this was missed at 1.0.52. Added as read-only `grok:requirements-user` (30) and `grok:requirements-system` (31) sources. A requirements entry that only sets `enabled = false` turns the server off.
+- **Precedence: unchanged.** Project > user > managed (`$GROK_HOME` over `/etc/grok`); native > Claude (private entry > user entry) > Cursor (project > user) > `.mcp.json`. A linked worktree reads only its own files, not its main checkout's. `GROK_CONFIG` does not carry `mcp_servers`.
+- **Compatibility switches: unchanged.** `inspect`'s `externalCompat` cells agree with `grokCompat` for config, managed, requirements, environment and project-file cases; `inspect` and `doctor` list a switched-off vendor's servers anyway.
+- **Saved enable.** `grok mcp list` and `doctor` treat `enabled = false` and `disabled_mcp_servers` as off, as the catalogue does; `inspect` drops the first but still lists the second.
+- Doc comments, `docs/architecture/mcp-management.md` (source table, "Grok's org layers") and unit tests (`providers.test.ts`, `service-grok.test.ts`) updated. The rules are held by task 3's guard.
 
 ### 3. Parity guards for Codex and Grok
 
@@ -86,13 +101,23 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: no code.
     - Cons: exactly what let Grok drift from 1.0.52 to 1.0.67 untraced.
 
+**Outcome (2026-10-31).** Built as recommended: two opt-in, credential-free tests under `apps/backend/tests/` (slow tier by their `-live.test.ts` name), each running the pinned binary in throwaway homes against fixture files and comparing with the catalogue, exposed as `mise run verify:codex:mcp-live` and `mise run verify:grok:mcp-live` and listed in the Codex and Grok upgrade steps of `docs/development/upgrade-agents.md`. Binary from `CODEX_CLI_PATH`/`GROK_CLI_PATH`, else the toolchain directory as the OpenCode guard does.
+
+- **Grok** (`grok-mcp-parity-live.test.ts`, 31 cases, 2.0 s on 1.0.70): 14 trust shapes (`inspect`'s `projectTrusted` against `grokFolderTrust`), the untrusted gate on every project-bound source (`mcp doctor`), 8 precedence pairs (`inspect`'s kept definition against the effective row), 6 compatibility-switch cases (`externalCompat` against `grokCompat`) and saved enable (`mcp list`). Run against the catalogue as it was, it fails 5 cases, the three gaps task 2 fixed.
+- **Codex** (`codex-mcp-parity-live.test.ts`, 20 cases, 1.2 s on 0.166.0): `codex mcp list --json` in the repository against `codexProjectTrust` for 12 trust shapes, 6 same-name merge cases and the sources read. It found two mismatches, both fixed:
+  - Trust keys are matched exactly: Codex ignores a key spelled through a symlink (even for a session started through that symlink) or with a trailing slash, which the catalogue counted as grants. The folder itself is resolved through symlinks. (`codexProjectTrust`; the old unit test asserting the opposite was rewritten.)
+  - Codex merges same-name entries field by field, and the winning row's status did not: a project entry with only `args` (no command) runs with the user's command, one with only `enabled = true` turns a disabled user server back on, and one that replaces only the command keeps the user's `enabled = false`. The catalogue showed the first two as off and the third as running. Fixed with `codexMergedStatus` in `catalog.ts`.
+  - Confirmed unchanged: worktree entry, then main checkout's; no ancestor grants; `$CODEX_HOME/managed_config.toml` is not a source.
+- Not covered by either guard: `/etc/codex` and `/etc/grok` files (root needed) and live sessions (`mcp list`/`inspect`/`doctor` use the same loaders as a session, but the session path itself is task 4's and task 6's).
+- Running the OpenCode guard at the new OpenCode pin 1.19.5 found it failing on this host ("opencode serve did not come up", also at 1.19.4): a request that reaches `opencode serve` while its first instance boots can hang, and the readiness poll had no request timeout. Each call is now bounded (15 s) and the readiness deadline is 60 s; it passes on 1.19.5 (2 passed, 3.8 s), so the user-file cache and in-place reload task 11 relies on still hold.
+
 ### 4. Grok live probes and the untrusted-project check
 
 **Problem.** Grok is the only provider whose apply strategy (`restart-required` then `applied`) has never run live, and whether an untrusted Grok session really skips project MCP servers is unknown because `grok inspect` lists them either way.
 
 **Context.** The host's Grok login expired on 2026-10-16/19. Refreshing from a copy would rotate the host's login, so the earlier runs skipped Grok. 0015 holds the related trust evidence for instructions, commands and skills.
 
-**Investigation.** Nothing has changed the blocker. Profile isolation since `d4171748` (#1116) means a profile authorising the Grok credential gets a snapshot of the host login, so once the host is signed in again the run needs no hand-seeding.
+**Investigation.** Nothing has changed the blocker. Profile isolation since `d4171748` (#1116) means a profile authorising the Grok credential gets a snapshot of the host login, so once the host is signed in again the run needs no hand-seeding. Since 2026-10-31 there is credential-free evidence for the gate: at 1.0.70 `grok mcp doctor` refuses to start an untrusted folder's project servers (task 2), and `verify:grok:mcp-live` holds that. `doctor` is not a session, so the live check still decides it.
 
 **Decisions.**
 
@@ -197,6 +222,15 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: repeatable.
     - Cons: building conflicts and a failing server fixture is significant spec work for UI with good component coverage.
 
+**Outcome (2026-10-31).** Not the recommended hand-walk: a repeatable spec, `e2e/agent-testing/mcp-ui-matrix.spec.ts` (registered in `playwright.browser.config.ts`, opt-in with `ORKESTRATOR_AGENT_TEST_MCP_UI=1`), on a `dev:test --fixture --no-agent-credentials --agent-platforms claude` profile (`mcp0039-ui`, stopped and reset afterwards). Final run: 2 passed, no retries, 109.5 s, at host load 25–53. Screenshots in `output/agent-testing/mcp0039-ui/mcp-ui-matrix/` (git-ignored).
+
+- **Conflict recovery, 1440 and 390 px: pass.** Edit a `.mcp.json` server, open the review, change the file from outside, save: refused, file unchanged; "Reload latest and review again" keeps the edit and the second save keeps both the edit and the outside entry; the same after a page reload.
+- **Secret replacement, 1440 and 390 px: pass.** A user-scope server in the profile's own `~/.claude.json` shows only "Value saved"; replace, review and save write the new value (compared in memory, never printed); neither old nor new value appears in the page's HTML in the list, editor, review, after saving, on reopening or after a reload.
+- **Healthy and failing Claude server, reconnect, reload (desktop): pass.** Without credentials the Claude CLI still connects and reports its MCP servers before the turn fails "Not logged in", so no model is called. The projection read `mcpui-ok` connected and `mcpui-late` failed ("1 down"); after creating the missing script, a click on the failed row reconnected it and "down" cleared; after a hard reload the panel matched the backend projection (counts, statuses, tool counts).
+- **Caveat and follow-up.** The refused turn's CLI exits, so the reconnect ran through the bridge's stand-in probe CLI, not a running session. That path replaced the session's whole list with the probe's: the injected `orkestrator` row vanished ("Tools 23 · 3 servers" to "Tools 2 · 2 servers") and the layers changed from `user` to `project`. Recorded as [1163-claude-probe-reconnect-inventory.md](1163-claude-probe-reconnect-inventory.md); reconnect on a running CLI needs a turn the provider accepts.
+- **Defect fixed on the way.** A `dev:test` profile started from an Orkestrator agent shell inherits `NODE_ENV=production`, so its backend looked for packaged bridges and every Claude tab failed ("claude bridge directory not found"). `createBackendProcessEnvironment` (`apps/desktop/electron/backend-process.ts`) now drops an inherited `NODE_ENV=production` for development and agent-test profiles only, with a test in `apps/desktop/tests/backend-process.test.ts`.
+- The host's "Docker containers can't reach Orkestrator" notice covers the dialog footer at 390 px; it comes from this host's firewall, not the MCP UI.
+
 ### 9. Containers and remote
 
 **Problem.** The item asks for the "read-only container catalogue (ok, absent, oversized, offline)" through the Docker suite and a remote browser check. The container part describes behaviour that no longer exists.
@@ -261,6 +295,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: smoother local sign-in.
     - Cons: needs an OAuth fixture and a remote-browser exclusion rule.
 
+**Recommendation (2026-10-31, not acted on).** Keep both recommended options: no restart button, and the CLI route for OpenCode MCP sign-in, with the `mcp.auth.authenticate` verification item dropped. New evidence: at the current pin 1.19.5 `verify:opencode:mcp-live` still shows the user files cached for the server's lifetime and the in-place reload working (2 passed, after the harness fix in task 3), so the reason for `restart-required` stands and nothing cheaper has appeared. A restart button becomes worth building only if user-scope OpenCode saves turn out to be common; revisit at the next OpenCode bump, when the guard reruns anyway. Status stays open for the maintainer's decision.
+
 ### 12. Agent-account homes
 
 **Problem.** With a Claude agent account, `syncClaudeAccountSettings` copies host `mcpServers` into the account's `.claude.json` one way before launch, overwriting servers added inside the account home, and nothing says so. Since a CLI runtime outlives turns, when a running account session sees an editor write is unclear, and the running-CLI sync cannot report a server that only the account's file loaded as stale.
@@ -278,6 +314,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Link the account's `mcpServers` to the host file instead of copying.**
     - Pros: removes the overwrite and staleness classes.
     - Cons: `.claude.json` is one file holding both servers and account keys like `oauthAccount`, so it cannot be linked per key.
+
+**Outcome (2026-10-31).** Measured first, then fixed, as recommended; the stale reporting was small enough to do here instead of a follow-up.
+
+- **When an account session sees a save.** On an added account the bridge runs with `CLAUDE_CONFIG_DIR=<account home>` (`agent-accounts-active.ts`), so the CLI reads the account's copy of `.claude.json`, while the bridge reads the host file on every turn and pushes the inline set into the running CLI. So a running CLI picked up adds, edits and removals at its next message, as for the host login. But the copy was refreshed only when a bridge process launched, so the CLI the same bridge starts after an idle close loaded the old copy: a removed server came back, was not reported stale, and apply said `applied` because the bridge's digest of the host file matched. Servers added inside an account's own copy were never reported either.
+- **Fixed.** The editor now refreshes every added Claude account's copy after a save of `claude:user` or `claude:local` (`mcp-management/claude-account-copies.ts`, same lock and merge as the launch sync), before apply. The backend marks an account bridge with `ORKESTRATOR_CLAUDE_ACCOUNT_HOME` (only when the copy's source is the `HOME/.claude.json` the bridge reads), and the bridge reports servers only the copy names as stale from launch and refuses their tools with their own reason (`claudeAccountOnlyMcpServerNames` in `mcp-config.ts`, `accountOnly` in `session-manager-prompt-mcp-sync.ts`). Codex accounts are unaffected (they link `config.toml`).
+- **UI note.** While an added Claude account exists, the `claude:user` and `claude:local` sources carry the note "Added Claude accounts use their own copy of these servers. Orkestrator replaces each copy with this file's servers when you save here and before it starts Claude on an account, so servers added inside an account's own configuration are overwritten, and Orkestrator sessions do not use them." It shows in the source header above its servers (no renderer change).
+- **Evidence.** A new `account` scenario in `session-manager-prompt-mcp-sync.live-probe.ts`, run by `mise run verify:claude:mcp-live` on the real CLI without credentials: the CLI never loads a host-only SSE server (it does not read the host file), the copy-only `extra` runs and is stale from launch, a host add loads and a host removal unloads in the running CLI. Unit tests: `mcp-config-account.test.ts`, `session-manager-prompt-mcp-sync.test.ts`, `service-claude-accounts.test.ts`, `agent-accounts-active.test.ts`, `McpStatusAndStates.test.tsx`. Documented in `docs/architecture/agent-accounts.md`.
+- **Not proven.** No session on a real signed-in account ran; the backend-to-bridge handoff is unit-tested. A host-file edit made outside the editor reaches an account's copy only at the next bridge launch or editor save (reported stale and refused meanwhile). Bridges launched before this change report nothing for account-only servers until they relaunch.
 
 The MCP server editor ([`mcp-management.md`](../../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
@@ -350,8 +394,9 @@ collects the live evidence the shipped behaviour has never had.
   credentials; it passed again on 2026-10-22 at CLI 2.1.296 (6.0 s, after
   one silent hang recorded as flake 0671), and on 2026-10-25 at CLI 2.1.309
   (9.4 s) with the new "replace" scenario (item 8).
-- Current pins (2026-10-25): Claude Agent SDK 0.3.309 / CLI 2.1.309, Codex
-  0.164.0, OpenCode 1.19.4, Grok 1.0.67, Pi 1.4.0. The live records below
+- Current pins (2026-10-31): Claude CLI 2.1.314, Codex 0.166.0, OpenCode
+  1.19.5, Grok 1.0.70, Pi 1.4.0 (2026-10-25: Claude Agent SDK 0.3.309 / CLI
+  2.1.309, Codex 0.164.0, OpenCode 1.19.4, Grok 1.0.67). The live records below
   used the earlier pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex
   0.162.1, OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0.
 - Live probe spec: `e2e/agent-testing/mcp-apply-live.spec.ts` (opt-in,
@@ -366,14 +411,23 @@ collects the live evidence the shipped behaviour has never had.
   does. A Codex runtime whose app-server already reloaded the change is held
   and not watched, since it keeps the change until its next reload.
 - Grok project trust (`grokFolderTrust` in `native-policy.ts`, `grokSources`
-  in `providers.ts`) follows the pinned Grok 1.0.52, checked with
-  `grok inspect` in throwaway `GROK_HOME`s on 2026-10-22: the decision is the
-  exact entry for the repository root (symlinks resolved, trailing slash
-  tolerated), and for a linked worktree its main checkout's; a grant on a
-  non-git parent, on the worktree itself, on a nested repository's parent, or
-  spelled through a symlink (`/tmp` for `/private/tmp`) does not count. A
-  session whose policy turns project resources on is `allowed`, because the
-  ACP bridge runs Grok with `GROK_FOLDER_TRUST=0`. Containers already were.
+  in `providers.ts`) follows the pinned Grok 1.0.70, re-derived on 2026-10-31
+  with `grok inspect` and `grok mcp doctor` in throwaway `GROK_HOME`s (task 2)
+  and held by `mise run verify:grok:mcp-live`: the decision is the exact
+  `[folders."<path>"] trusted = <bool>` entry for the repository root
+  (symlinks resolved, trailing slash tolerated), and for a linked worktree its
+  main checkout's; a grant on a non-git parent, on the worktree itself, on a
+  nested repository's parent, or spelled through a symlink (`/tmp` for
+  `/private/tmp`) does not count. The gate covers the project file,
+  `.mcp.json`, `.cursor/mcp.json` and Claude's `projects[<repo>]` servers.
+  `requirements.toml` servers outrank every other file. A session whose
+  policy turns project resources on is `allowed`, because the ACP bridge runs
+  Grok with `GROK_FOLDER_TRUST=0`. Containers already were.
+- Codex project trust and same-name merging follow the pinned 0.166.0,
+  checked with `codex mcp list` and held by `mise run verify:codex:mcp-live`:
+  trust keys match exactly (no symlinked or trailing-slash spelling), and the
+  winning row's status follows Codex's field-by-field merge
+  (`codexMergedStatus`).
 - Codex `listMcpServers` and the runtime-health MCP panel follow
   `mcpServerStatus/list`'s `nextCursor` (100 per page, at most 10 pages; a
   truncated read keeps the last cursor). Live-inventory `error` strings are
@@ -501,12 +555,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   2026-10-25 from the loader embedded in the pinned binary (record below):
   the table holds, except that the managed folder on macOS is
   `/Library/Application Support/opencode` (fixed: `opencodeManagedDir`), and
-  the user files are cached for the server's lifetime (apply now says so).
-  Grok: the pin moved to 1.0.67 after the 1.0.52 trust re-derivation of
-  2026-10-22, so its trust rule, source and precedence table all need
-  deriving again with `grok inspect` in throwaway `GROK_HOME`s. Codex has no
-  parity guard yet; Pi's two parity tests and Claude's live probe pass at the
-  new pins.
+  the user files are cached for the server's lifetime (apply now says so);
+  the guard passes at 1.19.5 (2026-10-31). Grok: done for 1.0.70 on
+  2026-10-31 (task 2). Codex: guarded since 2026-10-31 (task 3). Pi's two
+  parity tests and Claude's live probe passed at the 2026-10-25 pins.
 - **Grok and Pi live probes.** Run `mcp-apply-live.spec.ts` for Grok (user
   and project scopes, saved `enabled`, SSE) once the host has a current Grok
   login (it expired on 2026-10-19, so Grok is still unrun). Pi ran on
@@ -548,9 +600,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   environment, settings dialogs, inactive apply, offline recovery and reload
   on the real stack at desktop width. Full mode also checks transcript tool
   results and post-reload live inventory (see the qualification record below).
-  Remaining UI matrix: conflict recovery and secret replacement at desktop
-  and narrow widths; a Claude fixture with one healthy and one failing server,
-  reconnect from the panel, reload, and confirm status comes from the snapshot.
+  The rest of the UI matrix (conflict recovery and secret replacement at
+  desktop and narrow widths; a healthy and a failing Claude server, reconnect,
+  reload) passed on 2026-10-31 in `mcp-ui-matrix.spec.ts` (task 8); reconnect
+  on a running CLI remains, with 1163.
 - **Containers and remote.** The read-only container catalogue (ok, absent,
   oversized, offline) through `mise run test:agent:docker`, and a remote
   browser showing correct backend paths and operation recovery.
@@ -950,8 +1003,9 @@ directory and were deleted with it.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
   For Pi the two parity tests fail when either side moves; for OpenCode,
   `verify:opencode:mcp-live` fails when the user-file cache or the in-place
-  reload changes; Claude's running-CLI behaviour has `verify:claude:mcp-live`.
-  Codex and Grok have no such guard yet.
+  reload changes; Claude's running-CLI behaviour has `verify:claude:mcp-live`;
+  Codex and Grok have `verify:codex:mcp-live` and `verify:grok:mcp-live`
+  (since 2026-10-31).
 - Terminal sessions get guidance only; no command is injected.
 - **Runtime generation** is the environment's recorded bridge pid plus the
   persisted provider session id, as a keyed 16-character label. It needs no
@@ -1022,30 +1076,30 @@ directory and were deleted with it.
 ## Needs verification
 
 - Whether an untrusted Grok session really skips project MCP servers. At
-  1.0.52, `grok inspect --json` and `grok mcp list` list a project
-  `.grok/config.toml` server whether or not `projectTrusted` is true, so they
-  cannot show it. The catalogue keeps treating trust as the gate, as
+  1.0.52 and still at 1.0.70, `grok inspect --json` and `grok mcp list` list
+  a project `.grok/config.toml` server whether or not `projectTrusted` is
+  true, so they cannot show it. Partly answered 2026-10-31: at 1.0.70
+  `grok mcp doctor` does not start an untrusted folder's project-bound
+  servers (the project file, `.mcp.json`, `.cursor/mcp.json`, Claude's
+  `projects[<repo>]`), and the fixture server's own log shows no process
+  (task 2). The catalogue keeps treating trust as the gate, as
   [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md)
-  describes it (its live evidence covered instructions, commands and skills,
-  not MCP servers); a live session check needs a Grok
-  login (the host's expired on 2026-10-19). The host's own `grok` is 1.0.62,
-  not the pin; the checks used the toolchain's 1.0.52.
+  describes it. A live session check (task 4) still needs a Grok login (the
+  host's expired on 2026-10-19).
 
 - ~~How OpenCode OAuth completes after `mcp.auth.start`.~~ Traced 2026-10-25:
   it does not (see the OpenCode 1.19.4 record). Whether
   `mcp.auth.authenticate` could be driven from the panel (it opens the
   browser on the server's machine and holds the request up to 5 minutes) is
   not verified; the guidance route is what ships.
-- Whether Grok 1.0.67 still follows the 1.0.52 trust rule and source table.
-- Agent-account homes: `syncClaudeAccountSettings`
-  (`apps/backend/src/core/agent-accounts-homes.ts`) copies host
-  `mcpServers` into an account's `.claude.json` one way, before launch, and
-  Codex account homes link `config.toml` (`CODEX_SHARED_ENTRIES`). Check when
-  a running Claude account session sees an editor write now that the runtime
-  outlives turns, and say in the UI that servers added inside an account home
-  are overwritten. The running-CLI sync only knows the names the bridge reads
-  from `homedir()/.claude.json`, so a server the CLI loaded from the account's
-  own `.claude.json` and nowhere else is never reported stale when removed.
+- ~~Whether Grok 1.0.67 still follows the 1.0.52 trust rule and source
+  table.~~ Checked 2026-10-31 at the new pin 1.0.70 (task 2): the trust rule
+  and precedence hold; the catalogue gained `requirements.toml` sources, the
+  store-shape rule and trust on Claude's private entry.
+- ~~Agent-account homes: when a running Claude account session sees an
+  editor write, the UI note, and stale reporting for account-only servers.~~
+  Done 2026-10-31 (task 12), proven on the real CLI without credentials; a
+  session on a real signed-in account is still unrun.
 
 ## Assumptions and decisions
 
@@ -1066,6 +1120,131 @@ Made on 2026-10-25 while closing the code items, without stopping to ask.
 | Count-only MCP tiles (item 6) | (a) delete; (b) show only when no list is reported | (b): an older bridge that reports only the count still shows something | No duplicate number beside the list | Two code paths |
 | Rename probe (item 12) | (a) a tool name the model cannot substitute; (b) pin another model; (c) accept a substitution when the runtime's inventory proves the old name gone | (c): a renamed process keeps its label and tool, so (a) cannot work; (b) breaks when the model changes | Absence is proven by the runtime, not by the model's choice | Needs the session to report an inventory (OpenCode does) |
 | Item 8 report | (a) file it with Anthropic now; (b) draft it and pin the behaviour | (b): filing is outward-facing; the canary tells us when it is fixed | Nothing published without a maintainer | Still unreported |
+
+### 2026-10-31: tasks 2, 3, 8, 11 and 12
+
+Made without stopping to ask, following the (recommended) options unless
+noted.
+
+#### Task 2: how to read the Grok rules
+
+Chose the recommended `grok inspect` method, extended with `grok mcp doctor`
+and `grok mcp list`, on the pinned 1.0.70 installed into a throwaway data
+directory (not the operator's toolchains or `~/.grok`), plus a diff of the
+user guide the binary unpacks. `doctor` was the one surface that shows the
+trust gate applying to MCP servers without a login; `inspect` alone could not.
+Reading the compiled binary's source was not needed.
+
+#### Task 2: catalogue fixes found by the re-derivation
+
+Fixed rather than documented: the trust-store shape (other shapes were
+counted as grants Grok does not honour), trust on Claude's private entry (an
+untrusted folder's server was shown as loading), and `requirements.toml` as
+a source (a pinned server was shown as overridden by the user's own). Each
+makes a row claim less than before or name the real winner; none changes
+what is written. Alternative: leave them and record the gaps; rejected
+because each misstates which server runs.
+
+#### Task 2: undecided trust stays `unknown`
+
+`grok mcp doctor` treats an undecided folder like a declined one, so the
+catalogue could say `excluded`. Kept `unknown`: an interactive Grok asks for
+trust, and the ACP session's behaviour is task 4's open question.
+
+#### Task 3: guard shape and reference command
+
+Chose the recommended credential-free opt-in tests with `verify:*` tasks.
+For Codex the reference is `codex mcp list --json` rather than an app-server
+`config/read` or `mcpServerStatus/list`: it needs no JSON-RPC client, starts
+no server, and uses the same loader. For Grok, `inspect` for trust and
+precedence, `doctor` for the gate, `mcp list` for saved enable, because
+`inspect` still lists `disabled_mcp_servers` names. Each test compares with
+the catalogue's own functions and `summarizeEntries`, not with hard-coded
+expectations, so it fails when either side moves.
+
+#### Task 3: fix the Codex mismatches the guard found
+
+The guard found two Codex rules the catalogue mirrored wrongly (exact trust
+keys; field-by-field merge of `command` and `enabled`). Options: (a) fix
+both; (b) mark the cases `test.failing` and write a follow-up; (c) loosen the
+guard. Chose (a): both are small and contained (`codexProjectTrust`, and
+`codexMergedStatus` touching only the winning Codex row's status and
+`enabled`), and one of them showed a server as running that Codex keeps off.
+Edit actions on a partial entry are unchanged (the form still requires a
+command, so editing one writes a full entry).
+
+#### Task 3: OpenCode guard harness
+
+Found while checking task 11: `verify:opencode:mcp-live` failed on this host
+at 1.19.4 and 1.19.5 because a request to a booting `opencode serve` can
+hang and the poll had no timeout. Bounded every call (15 s) and widened the
+readiness deadline to 60 s. Not recorded as a flake: it failed every time
+when run alone, so it was a harness bug.
+
+#### Task 8: a spec instead of the hand-walk
+
+Options: (a) the recommended hand-walk with screenshots: cheap, no
+regression protection; (b) a Playwright spec: more work, repeatable. Chose
+(b), against the recommendation, because the cost the to-do named turned out
+small: no credentials are needed (the Claude CLI reports MCP servers before
+the login failure), and the failing server is a script created later. The
+spec is opt-in (`ORKESTRATOR_AGENT_TEST_MCP_UI=1`) and its live case skips
+unless the profile lists no Claude credential source, because the default
+real-stack suites run with credentials and must never start a turn there.
+Cost: an opt-in spec can drift unless someone runs it.
+
+#### Task 8: the probe-reconnect inventory defect is a follow-up
+
+Not fixed here: it is in the Claude bridge's MCP catalogue code
+(`session-manager-catalog.ts`), outside the matrix, and was found while task
+12 was changing neighbouring bridge files. Recorded as 1163 with a
+recommended merge of only the acted-on row.
+
+#### Task 8: launcher `NODE_ENV` fix
+
+Fixed in place: a one-condition change limited to development and
+agent-test profiles that blocked every local agent tab in a profile started
+from an agent shell. Production profiles keep their `NODE_ENV`.
+
+#### Task 11: recommendation only
+
+Left open as instructed; recommended keeping `restart-required` and the CLI
+sign-in route (see the task).
+
+#### Task 12: how editor saves reach account sessions
+
+Options: (a) document only; (b) have the bridge read the account's copy;
+(c) refresh every account copy after each editor save and report copy-only
+servers as stale; (d) re-sync before every prompt dispatch; (e) the bridge
+re-syncs before each CLI launch. Chose (c): smallest change that is correct
+for editor saves and never reports a false `applied`. (b) would delay saves
+to the next bridge launch and change behaviour for users with their own
+`CLAUDE_CONFIG_DIR`; (d) puts a file lock on the dispatch path; (e) gives the
+bridge write access to account homes. Cost: an outside edit of the host file
+waits for the next launch or editor save (stale and refused meanwhile).
+
+#### Task 12: copy-only servers are stale and refused
+
+Options: report only, or report and refuse their tools like any stale server.
+Chose refuse, so stale has one meaning; the refusal says to add the server to
+the user's Claude configuration. Cost: a server added with `claude mcp add` in
+an account terminal is unusable in Orkestrator sessions, though it was
+already wiped at the next launch.
+
+#### Task 12: which bridges get it, and where the note goes
+
+Only bridges the backend marks (`ORKESTRATOR_CLAUDE_ACCOUNT_HOME` equal to
+`CLAUDE_CONFIG_DIR`) and only when the copy's source is the file the bridge
+reads, so a user's own `CLAUDE_CONFIG_DIR` is never treated as a copy. The
+note is backend text on the `claude:user` and `claude:local` sources, shown
+only while an added Claude account exists. Alternatives were appending it to
+every Claude capability text, writing it in the web app, or putting it on the
+Accounts page; the source header is where those servers are edited.
+
+#### Task 12: no follow-up to-do
+
+The to-do recommended a follow-up for account-only stale reporting; done here
+instead because it fitted in the same bridge change.
 
 ## Related
 

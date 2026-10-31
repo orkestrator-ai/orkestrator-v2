@@ -213,6 +213,11 @@ export {
   withProviderContextWindow,
 } from "./native-agent-projection-helpers.js";
 
+/** Serialized body plus the cache's reference and bookkeeping allowance. */
+function toolDetailEntryBytes(serialized: string, localImagePath = ""): number {
+  return Buffer.byteLength(serialized) + Buffer.byteLength(localImagePath) + 64;
+}
+
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
   historyStartIndex?: number;
@@ -797,11 +802,7 @@ export class NativeAgentTranscriptProjection {
       .digest("hex")
       .slice(0, 32);
     let stored: NativeAgentToolDetails = { detailRef, ...details };
-    let bytes =
-      Buffer.byteLength(serializedDetails) +
-      Buffer.byteLength(options.localImagePath ?? "") +
-      detailRef.length +
-      32;
+    let bytes = toolDetailEntryBytes(serializedDetails, options.localImagePath);
     let storedLocalImagePath = options.localImagePath;
     if (bytes > (options.maximumBytes ?? NATIVE_TOOL_DETAIL_MAX_BYTES)) {
       stored = {
@@ -947,24 +948,32 @@ export class NativeAgentTranscriptProjection {
     // value is fetched when the row is expanded (native-agent-deferred-display.ts).
     // The detail holds the redacted input, never the grant.
     const argsPreview = deferredToolArgsPreview(part, projected.toolArgs);
-    if (argsPreview) {
+    const argsDetails = { toolArgs: projected.toolArgs as Record<string, unknown> };
+    // Keep the full value inline when the cache cannot serve it. Count JSON
+    // escaping, UTF-8 and entry overhead exactly as cacheToolDetails does.
+    if (
+      argsPreview &&
+      toolDetailEntryBytes(JSON.stringify(argsDetails)) <= NATIVE_TOOL_DETAIL_MAX_BYTES
+    ) {
       projected.toolArgsDetailRef = this.cacheToolDetails(
         sessionKey,
         messageId,
         `${partPath}/args`,
-        {
-          toolArgs: projected.toolArgs as Record<string, unknown>,
-        },
+        argsDetails,
       );
       projected.toolArgs = argsPreview;
     }
     const thinkingPreview = deferredThinkingPreview(part, settled);
-    if (thinkingPreview !== undefined) {
+    const thinkingDetails = { thinking: part.content as string };
+    if (
+      thinkingPreview !== undefined &&
+      toolDetailEntryBytes(JSON.stringify(thinkingDetails)) <= NATIVE_TOOL_DETAIL_MAX_BYTES
+    ) {
       projected.contentDetailRef = this.cacheToolDetails(
         sessionKey,
         messageId,
         `${partPath}/thinking`,
-        { thinking: part.content as string },
+        thinkingDetails,
       );
       projected.content = thinkingPreview;
     }

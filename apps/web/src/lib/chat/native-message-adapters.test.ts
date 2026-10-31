@@ -2904,6 +2904,15 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("compares deferred identity before collapsing streamed previews", () => {
+    const first = { type: "thinking" as const, content: "Shared…", contentDetailRef: "first" };
+    const second = { ...first, contentDetailRef: "second" };
+    const inline = { type: "thinking" as const, content: "Shared…" };
+    expect(dedupeStreamedNativeParts([first, second, inline])).toEqual([first, second, inline]);
+    expect(dedupeStreamedNativeParts([first, { ...first }])).toEqual([first]);
+    expect(dedupeStreamedNativeParts([inline, first])).toEqual([inline, first]);
+  });
+
   test("groups tools around agent boundaries and discards standalone results", () => {
     const grouped = groupNativeToolActivity([
       { type: "thinking", content: "Plan" },

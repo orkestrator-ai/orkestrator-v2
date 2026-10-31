@@ -6,6 +6,7 @@ import {
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
 import { MultiReviewReviewerTab } from "../../apps/web/src/components/review/MultiReviewReviewerTab";
+import { useNativeAgentProjectionStore } from "../../apps/web/src/stores/nativeAgentProjectionStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { disableAutoLoadEarlier } from "../../apps/web/src/components/native-agent/useAutoLoadEarlier";
 
@@ -151,6 +152,25 @@ const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { bef
 /** The cursors the native tab paged from, in order, for tests to read. */
 const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
+/** Appends live rows without focusing a control or changing the reader's intent. */
+(window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows = () => {
+  const store = useNativeAgentProjectionStore.getState();
+  const projection = store.projections.get(identity.logicalSessionKey);
+  if (!projection) throw new Error("Paging transcript not ready");
+  store.setProjection(identity.logicalSessionKey, {
+    ...projection,
+    messages: [
+      ...projection.messages,
+      ...Array.from({ length: 12 }, (_, index) => ({
+        id: `live-${index}`,
+        role: "assistant" as const,
+        content: `Live message ${index}`,
+        createdAt: `2026-10-31T10:00:${String(index).padStart(2, "0")}.000Z`,
+        parts: [{ type: "text" as const, content: `Live message ${index}` }],
+      })),
+    ],
+  });
+};
 function installBackend() {
   useEnvironmentStore.setState({
     environments: [

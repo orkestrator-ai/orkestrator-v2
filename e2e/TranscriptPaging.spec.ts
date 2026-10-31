@@ -443,3 +443,31 @@ test("native: history pages in without a click, opening with a page and paging n
     page.getByRole("button", { name: "Load earlier messages", exact: true }),
   ).toHaveCount(0);
 });
+
+test("native: the automatic opening page keeps following subsequent live rows", async ({
+  page,
+}) => {
+  await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20&slow=1");
+  const list = page.locator("[data-transcript-scroller]");
+  const distanceFromBottom = () =>
+    list.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  await expect(list).toBeVisible();
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests,
+      ),
+    )
+    .toEqual(["before-200"]);
+  // Wait for the page to land, not merely for its request to start.
+  await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0);
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  const before = await list.evaluate((element) => element.scrollTop);
+  await page.evaluate(() =>
+    (window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows(),
+  );
+  await expect(list.getByText("Live message 11", { exact: true })).toBeInViewport();
+  await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(before);
+});

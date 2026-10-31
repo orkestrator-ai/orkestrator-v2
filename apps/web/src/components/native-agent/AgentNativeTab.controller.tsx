@@ -436,7 +436,7 @@ export function SharedNativeAgentController({
   // its buttons disabled for the duration, instead of making the card vanish the
   // instant the user acts on it.
   const [isResolvingDispatch, setIsResolvingDispatch] = useState(false);
-  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [earlierRequest, setEarlierRequest] = useState<{ sessionKey: string } | null>(null);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
@@ -1109,19 +1109,25 @@ export function SharedNativeAgentController({
     scrollToIndex,
   });
   // Load earlier messages keeps the reader on the row they were reading.
-  const loadEarlierPlace = useHeldTranscriptPlace();
+  const loadingEarlier = earlierRequest?.sessionKey === sessionKey;
+  const loadEarlierPlace = useHeldTranscriptPlace(sessionKey);
   useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
   const loadEarlierAutomatically = useCallback(
     async (scroller: HTMLElement | null) => {
-      loadEarlierPlace.hold(scroller, scrollProps.controller);
-      setLoadingEarlier(true);
+      // An opening page must leave live follow armed. History restoration
+      // owns navigation and would otherwise release follow at the live tail.
+      if (!scrollProps.controller.wantsFollow) {
+        loadEarlierPlace.hold(scroller, scrollProps.controller);
+      }
+      const request = { sessionKey };
+      setEarlierRequest(request);
       try {
         await loadEarlierMessages({ automatic: true });
       } finally {
-        setLoadingEarlier(false);
+        setEarlierRequest((current) => (current === request ? null : current));
       }
     },
-    [loadEarlierMessages, loadEarlierPlace, scrollProps.controller],
+    [loadEarlierMessages, loadEarlierPlace, scrollProps.controller, sessionKey],
   );
   // Opens with a history page above the live window, and pages on as the
   // reader nears the top, without the button.
@@ -3767,14 +3773,17 @@ export function SharedNativeAgentController({
                     event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
                     scrollProps.controller,
                   );
-                  setLoadingEarlier(true);
+                  const request = { sessionKey };
+                  setEarlierRequest(request);
                   void loadEarlierMessages()
                     .catch((error) =>
                       toast.error(
                         error instanceof Error ? error.message : "Failed to load earlier messages",
                       ),
                     )
-                    .finally(() => setLoadingEarlier(false));
+                    .finally(() =>
+                      setEarlierRequest((current) => (current === request ? null : current)),
+                    );
                 }}
               >
                 {loadingEarlier ? "Loading…" : "Load earlier messages"}

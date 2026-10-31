@@ -69,6 +69,17 @@ export function useAutoLoadEarlier({
   /** The head the session opened at: the opening page is owed until it moves. */
   const openedAtRef = useRef<{ sessionKey: string; headId: string | undefined } | null>(null);
   const inFlightRef = useRef(false);
+  const lifecycleRef = useRef<object | null>(null);
+  // A completion from a hidden, replaced or unmounted view cannot settle a
+  // request started by its successor, even if it has the same head id.
+  useEffect(() => {
+    const lifecycle = {};
+    lifecycleRef.current = lifecycle;
+    inFlightRef.current = false;
+    return () => {
+      lifecycleRef.current = null;
+    };
+  }, [sessionKey, isActive]);
   /** Where the last automatic pages were requested from, once they settled. */
   const [finished, setFinished] = useState<{
     sessionKey: string;
@@ -108,7 +119,9 @@ export function useAutoLoadEarlier({
     }
     inFlightRef.current = true;
     const requested = { sessionKey, headId };
+    const lifecycle = lifecycleRef.current;
     const finish = () => {
+      if (lifecycleRef.current !== lifecycle) return;
       inFlightRef.current = false;
       setFinished((previous) => ({
         ...requested,

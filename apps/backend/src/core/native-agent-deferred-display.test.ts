@@ -14,6 +14,8 @@ import {
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
+import { NATIVE_TOOL_DETAIL_MAX_BYTES } from "./native-agent-service-shared.js";
+
 const LARGE = "x".repeat(5_000);
 
 function settledTool(toolName: string, toolArgs: Record<string, unknown>) {
@@ -166,6 +168,68 @@ describe("NativeAgentService deferred display", () => {
       },
     );
   });
+
+  for (const kind of ["args", "thinking"] as const) {
+    for (const extra of [-1, 0, 1, 128]) {
+      test(`${kind} remains reachable at the encoded detail ceiling ${extra >= 0 ? "+" : ""}${extra}`, async () => {
+        // Include multibyte UTF-8 and JSON escaping, not only ASCII lengths.
+        const seed = '€"\\\n'.repeat(1_000);
+        const details = (body: string) =>
+          kind === "args"
+            ? { toolArgs: { file_path: "/w/a.ts", content: body } }
+            : { thinking: body };
+        // Cache entries reserve 32 characters for the reference and 32 bytes
+        // for bookkeeping, in addition to the encoded details object.
+        const body =
+          seed +
+          "x".repeat(
+            NATIVE_TOOL_DETAIL_MAX_BYTES +
+              extra -
+              64 -
+              Buffer.byteLength(JSON.stringify(details(seed))),
+          );
+        expect(Buffer.byteLength(JSON.stringify(details(body))) + 64).toBe(
+          NATIVE_TOOL_DETAIL_MAX_BYTES + extra,
+        );
+        const messages = [
+          {
+            id: "boundary",
+            role: "assistant" as const,
+            content: "",
+            createdAt: "2026-10-31T10:00:00.000Z",
+            parts: [
+              kind === "args"
+                ? settledTool("Write", { file_path: "/w/a.ts", content: body })
+                : { type: "thinking", content: body },
+              { type: "text", content: "Done" },
+            ],
+          },
+        ];
+        const stub = serviceFor(messages);
+        await withService(
+          { prefix: "orkestrator-native-deferred-limit-", provider: async () => stub.provider },
+          async ({ service }) => {
+            await service.ensureSession(identity);
+            const projection = await service.getProjection(identity);
+            const part = (projection!.messages[0] as { parts: ProjectedPart[] }).parts[0]!;
+            const ref = kind === "args" ? part.toolArgsDetailRef : part.contentDetailRef;
+            if (extra <= 0) {
+              expect(ref).toBeString();
+              const detail = await service.getProjectionToolDetails({
+                ...identity,
+                detailRef: ref!,
+              });
+              expect(kind === "args" ? detail.toolArgs!.content : detail.thinking).toBe(body);
+              expect(detail.toolError).toBeUndefined();
+            } else {
+              expect(ref).toBeUndefined();
+              expect(kind === "args" ? part.toolArgs!.content : part.content).toBe(body);
+            }
+          },
+        );
+      });
+    }
+  }
 
   test("re-reads the provider when a deferred input was evicted", async () => {
     const messages = [

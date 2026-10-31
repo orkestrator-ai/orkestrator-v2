@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import { getNativeMessageBoundarySourceId } from "@/lib/chat/native-message-adapters";
 import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
 import type {
@@ -111,6 +111,8 @@ function captureFrom(scroller: HTMLElement): SemanticAnchor | null {
  * latest message.
  */
 export class HeldTranscriptPlace {
+  constructor(readonly sessionKey?: string) {}
+
   private held: RowIdentity | null = null;
   private first: RowIdentity | null = null;
   /** The head row's first source when the place was held: unchanged means still waiting. */
@@ -196,8 +198,10 @@ export class HeldTranscriptPlace {
 }
 
 /** One stable place per mounted transcript view. */
-export function useHeldTranscriptPlace(): HeldTranscriptPlace {
-  return useState(() => new HeldTranscriptPlace())[0];
+export function useHeldTranscriptPlace(sessionKey?: string): HeldTranscriptPlace {
+  const place = useMemo(() => new HeldTranscriptPlace(sessionKey), [sessionKey]);
+  useLayoutEffect(() => () => place.release(), [place]);
+  return place;
 }
 
 /** Scrolls back to a held place once the rows above it have rendered. */

@@ -131,6 +131,68 @@ describe("useAutoLoadEarlier", () => {
     await settle();
   });
 
+  test("a replaced session opens immediately and ignores the old pending completion", async () => {
+    const old = pages();
+    const next = pages();
+    const input = baseInput({ load: old.load });
+    const view = render(<Harness {...input} withSentinel={false} />);
+    const replacement = baseInput({ sessionKey: "session-2", load: next.load });
+    view.rerender(<Harness {...replacement} withSentinel={false} />);
+    expect(next.load).toHaveBeenCalledTimes(1);
+
+    await old.settle();
+    view.rerender(<Harness {...replacement} available={() => true} withSentinel={false} />);
+    expect(next.load).toHaveBeenCalledTimes(1);
+    // Old misses must not count against this session's own retry allowance.
+    await next.settle("fail");
+    expect(next.load).toHaveBeenCalledTimes(2);
+    await next.settle("fail");
+    expect(next.load).toHaveBeenCalledTimes(2);
+  });
+
+  test("deactivation and reactivation isolate a pending page from its successor", async () => {
+    const { load, settle } = pages();
+    const input = baseInput({ load });
+    const view = render(<Harness {...input} withSentinel={false} />);
+    view.rerender(<Harness {...input} isActive={false} withSentinel={false} />);
+    view.rerender(<Harness {...input} withSentinel={false} />);
+    expect(load).toHaveBeenCalledTimes(2);
+    // Settle the request from before deactivation while the new one is pending.
+    await settle();
+    view.rerender(<Harness {...input} available={() => true} withSentinel={false} />);
+    expect(load).toHaveBeenCalledTimes(2);
+    view.rerender(<Harness {...input} headId="row-0" withSentinel={false} />);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  test("a page completed while inactive is adopted on return without another opening page", async () => {
+    const { load, settle } = pages();
+    const input = baseInput({ load });
+    const view = render(<Harness {...input} withSentinel={false} />);
+    view.rerender(<Harness {...input} isActive={false} loading withSentinel={false} />);
+    view.rerender(<Harness {...input} isActive={false} headId="row-0" withSentinel={false} />);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(1);
+    view.rerender(<Harness {...input} headId="row-0" withSentinel={false} />);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  test("remounting while a page is pending gives the new mount its own opening request", async () => {
+    const old = pages();
+    const next = pages();
+    const view = render(<Harness {...baseInput({ load: old.load })} withSentinel={false} />);
+    view.unmount();
+    const input = baseInput({ load: next.load });
+    const remounted = render(<Harness {...input} withSentinel={false} />);
+    expect(next.load).toHaveBeenCalledTimes(1);
+    await old.settle("fail");
+    expect(next.load).toHaveBeenCalledTimes(1);
+    remounted.rerender(<Harness {...input} headId="row-0" withSentinel={false} />);
+    await next.settle();
+    expect(next.load).toHaveBeenCalledTimes(1);
+  });
+
   test("never pages without a cheap cursor or without earlier history", () => {
     const input = baseInput({ available: () => false });
     const view = render(<Harness {...input} withSentinel />);

@@ -27,3 +27,21 @@
 - **Next step:** unchanged. Capture Chromium's crash reason (Playwright
   `page.on("crash")` plus the browser's stderr) in the test's failure output so
   the next recurrence says why.
+
+## Masked on CI, and diagnostics added — 2026-10-31 (todo 0030)
+
+- From 2026-10-29 (#1425) every CI `main` run failed this file's process
+  cases, and about 30 other real-Chromium preview cases, deterministically:
+  the private test TMPDIR put Chromium's `SingletonSocket` at 113 bytes, past
+  Linux's 108-byte limit, and the worker reported it as "could not start with
+  its sandbox enabled". That is fixed (the preview tests make worker scratch in
+  the parent TMPDIR), so CI can show this case again. No `Page crashed` appeared
+  in the 27 failing `main` runs read from 2026-10-28 to 2026-10-31.
+- The control case now launches Chromium with `--enable-logging
+  --log-file=<tmp>` and, on failure, reports the page's `crash` event with the
+  host's free memory and load average, and the last 40 lines of Chromium's log.
+  Checked by forcing a renderer crash locally (`chrome://crash` before
+  `setContent`): the failure printed the crash event, memory, load and log
+  tail.
+- **Next step:** read that output at the next CI recurrence.
+

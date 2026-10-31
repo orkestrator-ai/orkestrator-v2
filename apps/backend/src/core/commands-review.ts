@@ -42,6 +42,7 @@ import {
 } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
 import { gitExcludeSetupScript } from "./tmux-hooks.js";
+import { isMergePermissionError } from "./pr-viewer-permission.js";
 import {
   MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
   normalizeGeneratedReviewPackage,
@@ -1327,22 +1328,32 @@ async function runStoredEnvironmentMergeOnce<T>(
       lifecycleOperation: "merging",
       lifecycleOperationStartedAt: new Date().toISOString(),
     });
-    const result =
-      environment.environmentType === "local"
-        ? await mergePullRequestViaGitHubApi(
-            environment.prUrl!,
-            method,
-            deleteBranch,
-            environment.worktreePath!,
-            expectedHeadSha,
-          )
-        : await mergePullRequestInContainer(
-            environment.containerId!,
-            method,
-            deleteBranch,
-            expectedHeadSha,
-            environment.prUrl ?? undefined,
-          );
+    let result: MergePrResult;
+    try {
+      result =
+        environment.environmentType === "local"
+          ? await mergePullRequestViaGitHubApi(
+              environment.prUrl!,
+              method,
+              deleteBranch,
+              environment.worktreePath!,
+              expectedHeadSha,
+            )
+          : await mergePullRequestInContainer(
+              environment.containerId!,
+              method,
+              deleteBranch,
+              expectedHeadSha,
+              environment.prUrl ?? undefined,
+            );
+    } catch (error) {
+      // The shimmer said this credential may merge; ask GitHub again on the
+      // next check instead of trusting the cached answer for up to an hour.
+      if (isMergePermissionError(error)) {
+        context.runtime.prMonitor.invalidateViewerPermission(environment);
+      }
+      throw error;
+    }
     // A merge moved the base branch on the remote (or may have, when the
     // outcome is unknown): the next diff must not wait out a fetch cooldown to
     // see it. A still-pending merge changed nothing yet.

@@ -1,6 +1,7 @@
-import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const manifest = (await Bun.file(path.join(packageRoot, "package.json")).json()) as {
@@ -76,6 +77,36 @@ try {
         `Installed package cannot resolve ${specifier} from ${directory}: ${
           error instanceof Error ? error.message : String(error)
         }`,
+      );
+    }
+  }
+
+  // On-demand bridges install their SDKs on first use. Do what the backend does
+  // (`apps/backend/src/core/bridge-runtime-install.ts`) from the installed
+  // package's own inputs, so a lockfile the registry no longer satisfies or a
+  // patch that no longer applies fails here rather than on a user's machine.
+  for (const bridge of ON_DEMAND_BRIDGES) {
+    const source = path.join(installedRoot, "resources", bridge.name);
+    const target = path.join(temporaryRoot, "bridge-runtimes", bridge.name);
+    await cp(path.join(source, RUNTIME_SUBDIRECTORY), target, { recursive: true });
+    await mkdir(path.join(target, "dist"), { recursive: true });
+    await cp(path.join(source, "dist", "index.js"), path.join(target, "dist", "index.js"));
+    await run(
+      [
+        process.execPath,
+        "install",
+        "--frozen-lockfile",
+        "--production",
+        "--linker=hoisted",
+        "--ignore-scripts",
+        "--no-progress",
+        "--no-summary",
+      ],
+      target,
+    );
+    for (const specifier of bridge.external) {
+      console.log(
+        `${bridge.name}: resolved ${specifier} -> ${Bun.resolveSync(specifier, path.join(target, "dist"))}`,
       );
     }
   }

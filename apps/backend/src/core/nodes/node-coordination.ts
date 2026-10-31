@@ -305,13 +305,19 @@ export class NodeCoordination {
    * Leaf side
    */
 
-  /** Mail from a command node's coordinator to an agent on this node. */
+  /**
+   * Mail from a command node's coordinator to an agent on this node. `steer`
+   * is its `deliverNow`: the pending entry is marked as a local coordinator's
+   * would be, and the caller runs the one delivery pass that settles it.
+   */
   async deliverIncoming(args: Record<string, unknown>): Promise<{
     messageId: string;
     toTabId: string;
     toEnvironmentName: string;
     toTabName?: string;
     placement: string;
+    placementReason?: string;
+    injectedVia?: "steer";
   }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
@@ -351,7 +357,7 @@ export class NodeCoordination {
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: describeCoordinatorMail(body, controller.displayName),
       },
-      { newDelegation: true },
+      { newDelegation: true, steer: args.steer === true },
     );
     await this.leafMail.recordThread(message.id, mailbox);
     // An environment the coordinator talks to reports back to it, until
@@ -370,6 +376,7 @@ export class NodeCoordination {
       ...(toTabName ? { toTabName } : {}),
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+      ...(message.injectedVia ? { injectedVia: message.injectedVia } : {}),
     };
   }
 

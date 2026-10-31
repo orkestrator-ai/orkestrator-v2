@@ -51,6 +51,8 @@ export interface ProviderActivityObservation {
   readyForInput?: boolean;
   /** A released root turn still owes a response, independently of composer readiness. */
   completionPending?: boolean;
+  /** See `SessionActivityObservation.turnFailed`: the latest turn ended on an error. */
+  turnFailed?: true;
   /**
    * Opaque revision of what the session view shows beyond its activity
    * (`SessionActivityObservation.contentRevision`). A bridge that reports it
@@ -109,6 +111,12 @@ export interface ProviderSessionObservation {
    */
   commandSandboxOff?: string;
 }
+
+/**
+ * What {@link AgentSessionProvider.turnTerminalError} answers for a turn the
+ * user stopped. A workflow reads it as a failed turn; the unread bell does not.
+ */
+export const TURN_STOPPED_BY_USER_MESSAGE = "Query stopped by user.";
 
 /** A provider-caused stop of a turn the same session can continue. */
 export type ProviderTurnInterruption = "restart";
@@ -742,7 +750,8 @@ export interface AgentSessionProvider {
    * turn visibly finished without one. For providers whose lifecycle reads
    * idle after a failed turn because the failure is kept in the transcript
    * instead (OpenCode). Throws while no finished answer is visible, so an
-   * early idle read is never taken as success.
+   * early idle read is never taken as success. A stop the user asked for
+   * answers {@link TURN_STOPPED_BY_USER_MESSAGE}.
    */
   turnTerminalError?(sessionId: string, requestId: string): Promise<string | null>;
   status(sessionId: string): Promise<ProviderStatus>;

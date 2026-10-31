@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import {
   isLocalEnvironmentReadyToMerge,
   isNodeEnvironmentReadyToMerge,
   localEnvironmentPrMergeState,
+  nodeEnvironmentPrMergeState,
   type ReadyToMergeEnvironment,
 } from "./pr-merge-readiness";
 
@@ -69,6 +72,7 @@ describe("isLocalEnvironmentReadyToMerge", () => {
     ["it has conflicts", { hasMergeConflicts: true }, {}, "current"],
     ["a newer monitor reading has conflicts", {}, { hasMergeConflicts: true }, "current"],
     ["the monitor conflict reading is unknown", {}, { hasMergeConflicts: null }, "current"],
+    ["the merging credential lacks push access", {}, { viewerCanMerge: false }, "current"],
   ] as const)("not ready when %s", (_label, environmentOverrides, monitorOverrides, sync) => {
     expect(
       isLocalEnvironmentReadyToMerge(
@@ -81,6 +85,14 @@ describe("isLocalEnvironmentReadyToMerge", () => {
 
   test("not ready without a monitor entry", () => {
     expect(isLocalEnvironmentReadyToMerge(environment(), null, "current")).toBe(false);
+  });
+
+  test("an unknown merge permission does not hide readiness", () => {
+    for (const viewerCanMerge of [null, undefined, true]) {
+      expect(
+        isLocalEnvironmentReadyToMerge(environment(), monitor({ viewerCanMerge }), "current"),
+      ).toBe(true);
+    }
   });
 });
 
@@ -150,10 +162,24 @@ describe("isNodeEnvironmentReadyToMerge", () => {
     } as FederatedEnvironment;
   }
 
-  test("even a current clean snapshot cannot confirm leaf monitor health", () => {
+  test("a current clean reading the leaf's monitor vouches for is ready", () => {
+    expect(isNodeEnvironmentReadyToMerge(remote({ prMonitorConfirmed: true }), live)).toBe(true);
+    expect(nodeEnvironmentPrMergeState(remote({ prMonitorConfirmed: true }), live)).toBe("ready");
+  });
+
+  test("an unconfirmed reading is never ready, even when current and clean", () => {
     // Identical persisted summaries can follow a failed detection, expired
-    // credentials, or a restart before the first successful detection.
+    // credentials, or a restart before the first successful detection. A leaf
+    // that predates the relay never sends the flag.
     expect(isNodeEnvironmentReadyToMerge(remote(), live)).toBe(false);
+  });
+
+  test("confirmed conflicts show as conflicts; unconfirmed ones show nothing", () => {
+    const conflicted = { prHasMergeConflicts: true } as const;
+    expect(
+      nodeEnvironmentPrMergeState(remote({ ...conflicted, prMonitorConfirmed: true }), live),
+    ).toBe("conflicts");
+    expect(nodeEnvironmentPrMergeState(remote(conflicted), live)).toBeNull();
   });
 
   test.each([
@@ -166,12 +192,43 @@ describe("isNodeEnvironmentReadyToMerge", () => {
     ["no PR", { prState: undefined, prHasMergeConflicts: undefined }, live],
     ["a draft", { prMergeability: "unavailable" }, live],
     ["conflicts", { prHasMergeConflicts: true }, live],
+    ["the leaf's credential lacks push access", { prViewerCanMerge: false }, live],
   ] as const)("not ready when %s", (_label, overrides, machine) => {
     expect(
       isNodeEnvironmentReadyToMerge(
-        remote(overrides as Partial<FederatedEnvironment>),
+        remote({ prMonitorConfirmed: true, ...(overrides as Partial<FederatedEnvironment>) }),
         machine as Parameters<typeof isNodeEnvironmentReadyToMerge>[1],
       ),
     ).toBe(false);
   });
+});
+
+test("leaf check counts survive summary projection and match local readiness across rollup-only transitions", () => {
+  const live = { transport: "connected", freshness: "current" } as const;
+  for (const checkSummary of [
+    { passed: 1, total: 2, pending: 0 },
+    { passed: 2, total: 2, pending: 0 },
+    { passed: 1, total: 2, pending: 1 },
+    { passed: 2, total: 2, pending: 0 },
+    { passed: 1, total: 2, pending: 0 },
+  ]) {
+    const summary = toNodeEnvironmentSummary("bk_leaf" as BackendId, {
+      ...environment(),
+      id: "env-1",
+      projectId: "p",
+      name: "feature",
+      prMonitorConfirmed: true,
+      prCheckSummary: checkSummary,
+    });
+    const remote = {
+      ...summary,
+      ref: { backendId: "bk_leaf", environmentId: "env-1" },
+    } as FederatedEnvironment;
+    expect(nodeEnvironmentPrMergeState(remote, live)).toBe(
+      localEnvironmentPrMergeState(environment(), monitor({ checkSummary }), "current"),
+    );
+    expect(isNodeEnvironmentReadyToMerge(remote, live)).toBe(
+      checkSummary.passed === checkSummary.total,
+    );
+  }
 });

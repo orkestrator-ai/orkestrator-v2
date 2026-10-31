@@ -2,7 +2,8 @@
  * The design renderer records each browser profile it launches so a later
  * backend can remove the profile of a killed one (0248), and only that: never
  * a profile it did not record, one a live browser or backend still owns, one
- * changed within the age floor, or one a live process names.
+ * changed within the age floor, or one a live process names. Each launch's
+ * artifacts directory lives in the ledger and goes with its record (0830).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -83,6 +84,12 @@ describe("userDataDirFromArgs", () => {
     expect(userDataDirFromArgs(undefined)).toBeUndefined();
   });
 });
+
+/** Backdates an artifacts directory past the age floor. */
+function age(directory: string) {
+  const old = new Date(Date.now() - DESIGN_PROFILE_STALE_MS - 60_000);
+  utimesSync(directory, old, old);
+}
 
 describe("DesignProfileLedger", () => {
   test("a profile Playwright removed on close takes its record with it", async () => {
@@ -268,6 +275,114 @@ describe("DesignProfileLedger", () => {
   });
 });
 
+describe("DesignProfileLedger artifacts directories", () => {
+  test("are made inside the ledger, named for this backend", async () => {
+    const { ledgerDir } = fixture();
+    const artifacts = await ledger(ledgerDir).createArtifactsDir();
+    expect(path.dirname(artifacts!)).toBe(ledgerDir);
+    expect(path.basename(artifacts!)).toMatch(new RegExp(`^artifacts-${process.pid}-[0-9a-f]{8}$`));
+    expect(existsSync(artifacts!)).toBe(true);
+  });
+
+  test("go with the record once Playwright has removed the profile", async () => {
+    const { ledgerDir, temp } = fixture();
+    const target = ledger(ledgerDir);
+    const profile = makeProfile(temp);
+    const artifacts = (await target.createArtifactsDir())!;
+    const record = (await target.record(BROWSER_PID, profile, artifacts))!;
+    expect(JSON.parse(readFileSync(record, "utf8")).artifacts).toBe(artifacts);
+    await target.release(record);
+    expect(existsSync(artifacts)).toBe(true);
+    rmSync(profile, { recursive: true });
+    await target.release(record);
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
+
+  test("startup removes a killed backend's artifacts with its profile", async () => {
+    const { ledgerDir, temp } = fixture();
+    const profile = makeProfile(temp);
+    const artifacts = (await ledger(ledgerDir).createArtifactsDir())!;
+    writeFileSync(path.join(artifacts, "download"), "x");
+    orphan((await ledger(ledgerDir).record(BROWSER_PID, profile, artifacts))!);
+    expect(await ledger(ledgerDir).sweep()).toEqual([profile]);
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
+
+  test("startup removes the artifacts of a record whose profile is already gone", async () => {
+    const { ledgerDir, temp } = fixture();
+    const profile = makeProfile(temp);
+    const artifacts = (await ledger(ledgerDir).createArtifactsDir())!;
+    orphan((await ledger(ledgerDir).record(BROWSER_PID, profile, artifacts))!);
+    rmSync(profile, { recursive: true });
+    expect(await ledger(ledgerDir).sweep()).toEqual([]);
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
+
+  test("a kept record keeps its artifacts, however old", async () => {
+    const { ledgerDir, temp } = fixture();
+    const profile = makeProfile(temp);
+    const artifacts = (await ledger(ledgerDir).createArtifactsDir())!;
+    orphan((await ledger(ledgerDir).record(BROWSER_PID, profile, artifacts))!);
+    age(artifacts);
+    const browserAlive = ledger(ledgerDir, { isProcessAlive: (pid) => pid === BROWSER_PID });
+    expect(await browserAlive.sweep()).toEqual([]);
+    expect(existsSync(artifacts)).toBe(true);
+  });
+
+  test("startup removes an unrecorded one only once its backend exited and it aged", async () => {
+    const { ledgerDir } = fixture();
+    mkdirSync(ledgerDir, { recursive: true });
+    const killed = path.join(ledgerDir, "artifacts-4000000-0123abcd");
+    const young = path.join(ledgerDir, "artifacts-4000000-89abcdef");
+    const ours = path.join(ledgerDir, `artifacts-${process.pid}-0123abcd`);
+    const other = path.join(ledgerDir, "artifacts-unrelated");
+    for (const directory of [killed, young, ours, other]) mkdirSync(directory);
+    for (const directory of [killed, ours, other]) age(directory);
+    expect(await ledger(ledgerDir).sweep()).toEqual([]);
+    expect(readdirSync(ledgerDir).sort()).toEqual(
+      [young, ours, other].map((directory) => path.basename(directory)).sort(),
+    );
+  });
+
+  test("an unreadable record keeps every unrecorded one", async () => {
+    const { ledgerDir } = fixture();
+    mkdirSync(ledgerDir, { recursive: true });
+    const killed = path.join(ledgerDir, "artifacts-4000000-0123abcd");
+    mkdirSync(killed);
+    age(killed);
+    // A directory with a record's name cannot be read as one.
+    mkdirSync(path.join(ledgerDir, "4000000-4000001-0123abcd.json"));
+    expect(await ledger(ledgerDir).sweep()).toEqual([]);
+    expect(existsSync(killed)).toBe(true);
+  });
+
+  test("never acts on an artifacts path outside the ledger", async () => {
+    const { ledgerDir, temp } = fixture();
+    const precious = path.join(temp, "artifacts-4000000-0123abcd");
+    mkdirSync(precious);
+    const profile = makeProfile(temp);
+    const target = ledger(ledgerDir);
+    // record() leaves it out...
+    const record = (await target.record(BROWSER_PID, profile, precious))!;
+    expect(JSON.parse(readFileSync(record, "utf8")).artifacts).toBeUndefined();
+    await target.discardArtifactsDir(precious);
+    // ...and a forged record naming it is dropped untouched.
+    writeFileSync(
+      record,
+      JSON.stringify({
+        profile,
+        artifacts: precious,
+        backend: { pid: 4_000_000, start: null },
+        browser: { pid: BROWSER_PID, start: null },
+      }),
+    );
+    expect(await target.sweep()).toEqual([]);
+    expect(existsSync(precious)).toBe(true);
+    expect(existsSync(profile)).toBe(true);
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
+});
+
 async function until(predicate: () => boolean, ms = 5_000): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (!predicate() && Date.now() < deadline)
@@ -298,19 +413,61 @@ describe("DesignRenderer with a profile ledger", () => {
     test(`closing keeps the record only while the profile remains (${removeOnClose ? "removed" : "left"})`, async () => {
       const { ledgerDir, temp } = fixture();
       const profile = makeProfile(temp);
+      let artifactsDir: string | undefined;
       const renderer = new DesignRenderer({
-        launchBrowser: async () => handle(profile, removeOnClose),
+        launchBrowser: async (options) => {
+          artifactsDir = options.artifactsDir;
+          return handle(profile, removeOnClose);
+        },
         executablePath: () => "/chromium",
         profiles: ledger(ledgerDir),
       });
       await renderer.probe(true);
-      expect(await until(() => existsSync(ledgerDir) && readdirSync(ledgerDir).length === 1)).toBe(
+      // The record and the artifacts directory Playwright was given.
+      expect(await until(() => existsSync(ledgerDir) && readdirSync(ledgerDir).length === 2)).toBe(
         true,
       );
+      expect(path.dirname(artifactsDir!)).toBe(ledgerDir);
       await renderer.close();
-      expect(readdirSync(ledgerDir)).toHaveLength(removeOnClose ? 0 : 1);
+      expect(readdirSync(ledgerDir)).toHaveLength(removeOnClose ? 0 : 2);
     });
   }
+
+  test("a failed launch removes the artifacts directory it was given", async () => {
+    const { ledgerDir } = fixture();
+    let artifactsDir: string | undefined;
+    const renderer = new DesignRenderer({
+      launchBrowser: async (options) => {
+        artifactsDir = options.artifactsDir;
+        throw new Error("no browser");
+      },
+      executablePath: () => "/chromium",
+      profiles: ledger(ledgerDir),
+    });
+    await renderer.probe(true);
+    expect(artifactsDir).toBeDefined();
+    expect(await until(() => !existsSync(artifactsDir!))).toBe(true);
+    await renderer.close();
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
+
+  test("a browser it could not record leaves no artifacts directory once closed", async () => {
+    const { ledgerDir } = fixture();
+    let artifactsDir: string | undefined;
+    const renderer = new DesignRenderer({
+      launchBrowser: async (options) => {
+        artifactsDir = options.artifactsDir;
+        // No profile on the command line: nothing to record.
+        return { ...handle("", false), profileDir: undefined };
+      },
+      executablePath: () => "/chromium",
+      profiles: ledger(ledgerDir),
+    });
+    await renderer.probe(true);
+    expect(await until(() => Boolean(artifactsDir && existsSync(artifactsDir)))).toBe(true);
+    await renderer.close();
+    expect(readdirSync(ledgerDir)).toEqual([]);
+  });
 
   test("sweepStaleProfiles reports what the ledger removed", async () => {
     const { ledgerDir, temp } = fixture();

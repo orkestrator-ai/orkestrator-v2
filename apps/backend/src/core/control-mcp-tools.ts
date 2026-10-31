@@ -1870,14 +1870,23 @@ export async function createControlMcp(
               requestId: input.requestId,
               ...(input.subject ? { subject: input.subject } : {}),
               body: input.body,
+              ...(deliverNow === true ? { deliverNow: true } : {}),
             });
             if (!isRecord(sent)) throw new Error("Message send returned no result");
-            const { coordinatorDelegationOpened, ...summary } = sent;
+            const {
+              coordinatorDelegationOpened,
+              deliverNow: remoteOutcome,
+              deliverNowNote: remoteNote,
+              ...summary
+            } = sent;
             return toolResult({
               message: summary,
-              ...(deliverNow === true
-                ? coordinatorDeliverNowResult(summary, { unsupported: true })
-                : {}),
+              // The leaf's outcome when it could steer; an older leaf cannot.
+              ...(deliverNow !== true
+                ? {}
+                : remoteOutcome !== undefined
+                  ? { deliverNow: remoteOutcome, deliverNowNote: remoteNote }
+                  : coordinatorDeliverNowResult(summary, { unsupported: true })),
               ...(coordinatorDelegationOpened === true ? asyncDelegationResult() : {}),
             });
           }

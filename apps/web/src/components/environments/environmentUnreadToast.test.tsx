@@ -55,6 +55,15 @@ describe("showEnvironmentUnreadToast", () => {
     );
   });
 
+  test("a failed turn is not announced as completed work", () => {
+    showEnvironmentUnreadToast(environment({ unreadReason: "agent_failed" }));
+
+    expect(lastToast().title).toBe("Agent stopped with an error");
+    expect(lastToast().options.description).toBe(
+      "Review: The agent's turn failed before it finished. Open the tab to see the error.",
+    );
+  });
+
   test("shows the same amber bell as the environment list", () => {
     showEnvironmentUnreadToast(environment({ unreadReason: "agent_finished" }));
 
@@ -84,6 +93,7 @@ describe("describeUnreadReason", () => {
     const titles = (
       [
         "agent_finished",
+        "agent_failed",
         "agent_ready",
         "agent_waiting",
         "agent_question",

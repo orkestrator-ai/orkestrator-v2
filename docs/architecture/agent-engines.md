@@ -1133,7 +1133,7 @@ the provider's mode map and its vendor extension, model-update and
 session-update methods, so a second ACP agent is a record plus a platform id.
 Grok 1.0.52 still sent `session/request_permission` over ACP before every
 edit, command, fetch and MCP call under that flag (not rechecked at the
-1.0.67 pin), so the bridge answers those
+1.0.67 or 1.0.70 pins), so the bridge answers those
 with the allow option while the policy is `auto-approve`. It never does so for
 a kind the policy denies (`edit`/`delete`/`move` against a file-write denial,
 `execute` against a shell denial, `fetch` against a network denial); those
@@ -1158,15 +1158,15 @@ that list. Native Grok mail is on:
 session's CLI child and reloads it; it is never written into process env.
 
 `initialize` requires the SDK's `PROTOCOL_VERSION` (1 at
-`@agentclientprotocol/sdk` 2.0.1). An agent that negotiates any other version
+`@agentclientprotocol/sdk` 2.1.0). An agent that negotiates any other version
 is terminated and the session fails with a message naming both versions; the
 bridge does not try to speak a version it was not built against. The bridge
 advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` client
 capabilities. It reads the agent's `promptCapabilities` to decide what the
 prompt route may send; `undeclaredPromptCapabilities()` can credit a provider
 known to understate one. That table is empty today: Grok 1.0.52 answered
-`image: false` while reading inline image blocks, and 1.0.67 declares
-`image: true` itself.
+`image: false` while reading inline image blocks, and 1.0.67 and 1.0.70
+declare `image: true` themselves.
 
 Inbound, it handles `session/update` notifications
 (`agent_message_chunk`, `tool_call`, `tool_call_update`,
@@ -1211,7 +1211,7 @@ whose agent advertised `sessionCapabilities.close` is sent ACP `session/close`
 (best effort, bounded by `ACP_CLOSE_SESSION_WAIT_MS`). The spec makes that
 cancel-and-release, not delete; the bridge never sends `session/delete`, and
 Grok CLI 1.0.52 kept the conversation listed and loadable after it (not
-rechecked at 1.0.67). Close
+rechecked at 1.0.67 or 1.0.70). Close
 drops the bridge's own journal and usage for the session and leaves Grok's
 store untouched, so `/session/list` + `session/load` reopen the conversation.
 

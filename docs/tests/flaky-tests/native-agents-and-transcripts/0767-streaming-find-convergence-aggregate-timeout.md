@@ -149,3 +149,20 @@ under the host temporary directory. The passing logged runner discarded its
 output. No transcript implementation, assertion, deadline or skip changed.
 This observation matches the earlier aggregate-only recurrence; the cause
 remains unconfirmed. The public-site suite passed separately in 10.5 seconds.
+
+
+## Leaf-check readiness review — 2026-10-30
+
+Preparation repeated the desktop find-convergence failure in the nine-worker
+browser aggregate (971 passed, 106 skipped, seven failed). The complete
+unchanged owner passed both viewports in 72.9 s with one worker:
+
+```sh
+ORKESTRATOR_E2E_PORT=1457 mise run test:logged -- --name pr-review-StreamingTranscript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/pr-review-StreamingTranscript-owner
+```
+
+The exact full browser rerun also passed this case in both viewports (976
+passed, 106 skipped, only the two native branch-picker cases failed). Evidence:
+`orkestrator-test-run.VyCqpD/browser.log.gz` under the host temporary directory.
+The host still ran other validation during the owner run; the cause remains
+unconfirmed. No transcript implementation, assertion, timeout or skip changed.

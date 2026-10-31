@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { PR_MONITOR_CHANGED_EVENT, type PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
-import { PrMonitorService } from "./pr-monitor.js";
+import {
+  PR_MONITOR_CHANGED_EVENT,
+  type PrMonitorEnvironmentState,
+  type PrCheckSummary,
+  type PrMonitorEvent,
+} from "@orkestrator/protocol/pr-monitor";
+import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
+import { PrMonitorService, type PrMonitorServiceOptions } from "./pr-monitor.js";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
@@ -13,6 +19,18 @@ import {
   projectHomePrTarget,
 } from "./commands-pr-monitor.js";
 import { readCheckoutBranch, refreshProjectHomeBranch } from "./project-home-environment.js";
+import {
+  PrViewerPermissionCache,
+  prViewerPermissionScope,
+  prViewerRepository,
+} from "./pr-viewer-permission.js";
+
+/** What a node summary relays about an environment's PR monitor (todo 0796). */
+export interface RelayedPrMonitorHealth {
+  prMonitorConfirmed?: true;
+  prViewerCanMerge?: boolean;
+  prCheckSummary?: PrCheckSummary;
+}
 
 /**
  * Starts the cleanup that follows a merged PR when the environment asked for
@@ -30,6 +48,8 @@ export type PrMonitorRuntimeOptions = {
    * the environment, and `get_environments` resumes it through its own context.
    */
   scheduleMergeCleanup?: MergeCleanupScheduler;
+  /** Clock and timers for deterministic runtime integration tests. */
+  timing?: Pick<PrMonitorServiceOptions, "schedule" | "cancel" | "monotonicNow" | "random">;
 };
 
 /**
@@ -53,8 +73,16 @@ export class PrMonitorRuntime {
   private warnedMissingMergeCleanup = false;
   private closedService: Pick<PrMonitorService, keyof PrMonitorService> | undefined;
   private readonly listeners = new Set<(event: PrMonitorEvent) => void>();
+  /** Merge permission per credential scope and repository, refreshed hourly. */
+  readonly viewerPermissions = new PrViewerPermissionCache();
+  /**
+   * The monitor-side inputs of each environment's relayed health, as last
+   * announced. A change announces `environment-pr-health` so command nodes
+   * re-read the summary; uneventful events (another error, the same rollup) do not.
+   */
+  private readonly relayedInputs = new Map<string, string>();
 
-  constructor(options: PrMonitorRuntimeOptions = {}) {
+  constructor(private readonly options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
   }
 
@@ -185,6 +213,49 @@ export class PrMonitorRuntime {
   }
 
   /**
+   * Forgets the cached merge permission for an environment's PR, e.g. after a
+   * merge failed with a permission error. The next open-PR check asks again.
+   */
+  invalidateViewerPermission(environment: Environment): void {
+    const repository = prViewerRepository(environment.prUrl);
+    const scope = prViewerPermissionScope(environmentToPrMonitorTarget(environment));
+    if (repository && scope) this.viewerPermissions.invalidate(scope, repository);
+  }
+
+  /**
+   * The health a node summary relays for one environment, from the monitor's
+   * announced state (what clients of this backend see). Never starts the
+   * monitor: an environment it does not hold is unconfirmed.
+   */
+  relayedHealth(
+    environment: Pick<
+      Environment,
+      "id" | "prUrl" | "prState" | "hasMergeConflicts" | "environmentType" | "status"
+    >,
+    announced: ReadonlyMap<string, PrMonitorEnvironmentState> = this.announcedStates(),
+  ): RelayedPrMonitorHealth {
+    const state = announced.get(environment.id) ?? null;
+    if (!state || state.prUrl == null || state.prUrl !== (environment.prUrl ?? null)) return {};
+    return {
+      ...(isPrReadingConfirmedByMonitor(environment, state)
+        ? { prMonitorConfirmed: true as const }
+        : {}),
+      ...(state.checkSummary ? { prCheckSummary: { ...state.checkSummary } } : {}),
+      ...(typeof state.viewerCanMerge === "boolean"
+        ? { prViewerCanMerge: state.viewerCanMerge }
+        : {}),
+    };
+  }
+
+  /** Announced monitor state by environment; empty before first use or after shutdown. */
+  announcedStates(): Map<string, PrMonitorEnvironmentState> {
+    const entries = this.closedService
+      ? []
+      : (this.monitor?.service.revisionedSnapshot().entries ?? []);
+    return new Map(entries.map((entry) => [entry.environmentId, entry]));
+  }
+
+  /**
    * In-process observers of every announced monitor event (graph
    * `wait-for-checks` nodes wait on them instead of polling). Listeners run
    * synchronously after the event is emitted; one that throws is ignored.
@@ -197,6 +268,7 @@ export class PrMonitorRuntime {
   private announce(event: string, payload: unknown): void {
     this.emit?.(event, payload);
     if (event !== PR_MONITOR_CHANGED_EVENT) return;
+    this.noteRelayedInputs(payload as PrMonitorEvent);
     for (const listener of this.listeners) {
       try {
         listener(payload as PrMonitorEvent);
@@ -206,10 +278,35 @@ export class PrMonitorRuntime {
     }
   }
 
+  /**
+   * Announces `environment-pr-health` when the monitor-side inputs of an
+   * environment's relayed health change. Inputs that live on the environment
+   * record (status, persisted PR fields) announce themselves when written.
+   * Content-free: the PR URL is compared here but never leaves in the hint.
+   */
+  private noteRelayedInputs(event: PrMonitorEvent): void {
+    const environmentId = event.environmentId;
+    const inputs = "removed" in event ? null : relayedInputsKey(event.state);
+    const previous = this.relayedInputs.get(environmentId) ?? null;
+    if (inputs === null) this.relayedInputs.delete(environmentId);
+    else this.relayedInputs.set(environmentId, inputs);
+    if (inputs === previous) return;
+    const storage = this.storage;
+    if (!storage) return;
+    void storage
+      .getEnvironment(environmentId)
+      .then((environment) => {
+        if (environment) storage.announceEnvironmentPrHealth(environmentId, environment.projectId);
+      })
+      .catch(() => undefined);
+  }
+
   /** Terminal close: releases every PR polling timer and the admission pool. */
   shutdown(): void {
     if (this.closedService) return;
     this.invalidatePendingSync();
+    this.viewerPermissions.clear();
+    this.relayedInputs.clear();
     const monitor = this.monitor;
     this.monitor = null;
     monitor?.service.shutdown();
@@ -256,12 +353,17 @@ export class PrMonitorRuntime {
      */
     const admission = new WorkAdmissionPool({ name: "external-pr" });
     const service = new PrMonitorService({
+      ...this.options.timing,
       emit: (event, payload) => this.announce(event, payload),
       admission,
       cooldownScope: prMonitorCooldownScope,
       effects: {
         detect: (target, options) =>
-          detectEnvironmentPullRequest(target, { ...options, storage: this.storage }),
+          detectEnvironmentPullRequest(target, {
+            ...options,
+            storage: this.storage,
+            viewerPermissions: this.viewerPermissions,
+          }),
         persistPr: async (environmentId, detection) => {
           await this.requireStorage().updateEnvironment(environmentId, {
             prUrl: detection.url,
@@ -310,4 +412,19 @@ export class PrMonitorRuntime {
     });
     return { service, admission };
   }
+}
+
+/** The monitor-side inputs of `RelayedPrMonitorHealth`, as one comparable key. */
+function relayedInputsKey(state: PrMonitorEnvironmentState): string {
+  return JSON.stringify([
+    state.consecutiveErrors === 0,
+    state.lastSuccessfulCheckAt != null,
+    state.prUrl,
+    state.prState,
+    state.hasMergeConflicts,
+    state.viewerCanMerge ?? null,
+    state.checkSummary?.passed ?? null,
+    state.checkSummary?.total ?? null,
+    state.checkSummary?.pending ?? null,
+  ]);
 }

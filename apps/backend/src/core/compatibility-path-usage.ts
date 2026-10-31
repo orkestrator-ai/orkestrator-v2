@@ -21,9 +21,7 @@
 export const COMPATIBILITY_PATH_IDS = [
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
   "slash-catalogue.outdated-bridge",
-  /** A bridge without `POST /session/:id/close` was closed through its legacy DELETE. */
-  "bridge-close.legacy-delete",
-  /** A bridge without the close route and with a destructive DELETE got the restart notice. */
+  /** A bridge without `POST /session/:id/close` got the restart notice. */
   "bridge-close.upgrade-required",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",
@@ -48,6 +46,8 @@ export const COMPATIBILITY_PATH_IDS = [
    * has no typed `fix-result` marker: it started before the typed handoff.
    */
   "build-pipeline.address-text-report",
+  /** `list_nodes` asked a node for its load and the node does not have the command yet. */
+  "machine-load.older-node",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

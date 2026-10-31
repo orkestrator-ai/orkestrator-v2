@@ -40,15 +40,15 @@ describe("CompatibilityPathUsage", () => {
   test("counts each path with its first and last use, without a sink", () => {
     const time = clock();
     const usage = new CompatibilityPathUsage(time.now);
-    usage.record("bridge-close.legacy-delete");
+    usage.record("bridge-close.upgrade-required");
     time.advance(1_000);
-    usage.record("bridge-close.legacy-delete");
+    usage.record("bridge-close.upgrade-required");
     usage.record("history.joined-v1-page");
 
     expect(usage.snapshot()).toEqual({
       version: 1,
       paths: {
-        "bridge-close.legacy-delete": {
+        "bridge-close.upgrade-required": {
           count: 2,
           firstSeenAt: "2026-10-24T10:00:00.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -61,7 +61,7 @@ describe("CompatibilityPathUsage", () => {
       },
     });
     // Without a sink nothing is lost by reading.
-    expect(usage.snapshot().paths["bridge-close.legacy-delete"]?.count).toBe(2);
+    expect(usage.snapshot().paths["bridge-close.upgrade-required"]?.count).toBe(2);
   });
 
   test("persists totals across backends sharing a data directory", async () => {
@@ -217,14 +217,14 @@ describe("CompatibilityPathUsage", () => {
     usage.attach(sink);
     try {
       usage.record("history.joined-v1-page");
-      usage.record("bridge-close.legacy-delete");
+      usage.record("bridge-close.upgrade-required");
       const original = usage.snapshot();
       time.advance(1_000);
       usage.record("history.joined-v1-page");
       fail = true;
       for (let i = 0; i < 2; i++) {
         expect(usage.snapshot().paths).toEqual({
-          "bridge-close.legacy-delete": original.paths["bridge-close.legacy-delete"],
+          "bridge-close.upgrade-required": original.paths["bridge-close.upgrade-required"],
           "history.joined-v1-page": {
             count: 2,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
@@ -301,7 +301,7 @@ describe("normalizeCompatibilityPathUsage", () => {
       normalizeCompatibilityPathUsage({
         version: 1,
         paths: {
-          "bridge-close.legacy-delete": {
+          "bridge-close.upgrade-required": {
             count: 4,
             firstSeenAt: "2026-10-20T00:00:00.000Z",
             lastSeenAt: "2026-10-21T00:00:00.000Z",
@@ -317,7 +317,7 @@ describe("normalizeCompatibilityPathUsage", () => {
     ).toEqual({
       version: 1,
       paths: {
-        "bridge-close.legacy-delete": {
+        "bridge-close.upgrade-required": {
           count: 4,
           firstSeenAt: "2026-10-20T00:00:00.000Z",
           lastSeenAt: "2026-10-21T00:00:00.000Z",
@@ -329,13 +329,13 @@ describe("normalizeCompatibilityPathUsage", () => {
 });
 
 describe("compatibility paths record their use", () => {
-  test("the legacy DELETE close counts once per close", async () => {
+  test("the close restart notice counts once per close", async () => {
     const before =
-      compatibilityPathUsage.snapshot().paths["bridge-close.legacy-delete"]?.count ?? 0;
-    await closeBridgeSessionRetaining("codex", "s1", async (method) =>
-      method === "POST" ? new Response(null, { status: 404 }) : new Response(null, { status: 204 }),
-    );
-    expect(compatibilityPathUsage.snapshot().paths["bridge-close.legacy-delete"]?.count).toBe(
+      compatibilityPathUsage.snapshot().paths["bridge-close.upgrade-required"]?.count ?? 0;
+    await expect(
+      closeBridgeSessionRetaining("codex", "s1", async () => new Response(null, { status: 404 })),
+    ).rejects.toThrow("predates non-destructive tab close");
+    expect(compatibilityPathUsage.snapshot().paths["bridge-close.upgrade-required"]?.count).toBe(
       before + 1,
     );
   });

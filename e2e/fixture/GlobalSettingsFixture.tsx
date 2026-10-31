@@ -2,6 +2,7 @@ import { PlanUsageFixture } from "./PlanUsageFixture";
 import { useState } from "react";
 import { GlobalSettings } from "../../apps/web/src/components/settings/GlobalSettings";
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
+import type { GlobalSettingsSection } from "../../apps/web/src/lib/settings-navigation";
 import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
 
 function installGlobalSettingsFixture() {
@@ -27,6 +28,16 @@ function installGlobalSettingsFixture() {
           localStorage.setItem("global-settings-config", JSON.stringify(config));
           return config as T;
         }
+        case "get_app_version":
+          return "2.34.4" as T;
+        case "get_log_storage_stats":
+          return {
+            fileCount: 0,
+            totalBytes: 0,
+            oldestFile: null,
+            newestFile: null,
+            retentionDays: 7,
+          } as T;
         case "get_log_directory":
           return "/fixture/logs" as T;
         case "list_agent_accounts":
@@ -62,7 +73,9 @@ export function GlobalSettingsFixture() {
     <main className="p-4">
       <GlobalSettings
         activeSection={
-          new URLSearchParams(window.location.search).get("section") ??
+          (new URLSearchParams(window.location.search).get(
+            "section",
+          ) as GlobalSettingsSection | null) ??
           (new URLSearchParams(window.location.search).has("cursor-disabled") ? "cursor" : "claude")
         }
       />

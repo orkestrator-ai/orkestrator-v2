@@ -140,6 +140,10 @@ export interface NativeAgentJobLaunchResult {
   error?: string;
   completionActionArmed?: boolean;
   warning?: string;
+  /** The prompt went to an open tab of the same job instead of a new one. */
+  reused?: boolean;
+  /** The reused tab was busy, so the prompt waits for its current work to end. */
+  queued?: boolean;
 }
 
 /**
@@ -159,6 +163,12 @@ export async function launchNativeAgentJob(input: {
   fastMode?: boolean;
   conversationMode?: "plan" | "build";
   completionAction?: "refresh-pr-after-agent-completion";
+  /**
+   * Send to the most recent open tab of the same job when it can take a prompt,
+   * and only otherwise open a new one. `same-agent` restricts that to the chosen
+   * agent and applies the chosen model; `any-agent` keeps the tab's own.
+   */
+  tabReuse?: "any-agent" | "same-agent";
   activateTab?: boolean;
 }): Promise<NativeAgentJobLaunchResult> {
   return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);

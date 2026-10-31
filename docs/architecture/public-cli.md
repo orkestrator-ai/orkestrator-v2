@@ -174,7 +174,7 @@ not advertise at its version before sending it.
 | `environment launch` | `environment.launch` | create + start + startup reconciliation's single first prompt | all |
 | `environment exec ID -- ARGV…` | `environment.exec` | environment-side exec worker | filesystem, process |
 | `agent options` | `agent.options` | model catalogues (`--refresh` asks providers) | read |
-| `session list/get` | `session.list/get` | pane layout + native-session records (metadata only) | read |
+| `session list/get` | `session.list/get` | pane layout + native-session records (metadata only); a Coordinator conversation's runtime ID (from `mail mailboxes`) resolves from the coordinator store, see [control-mcp.md](control-mcp.md#coordinator-conversations) | read |
 | `session start [--literal] [--attach F]` | `session.start` | `launch_native_agent_job` (durable job tab, exactly-once first prompt) | provider |
 | `session prompt SESSION [--literal] [--enqueue] [--attach F]` | `session.prompt` | `dispatch_native_agent_intent`; with `--enqueue`, the native prompt queue (`enqueuePromptQueueMessageIfAbsent`, drained by `drainPromptQueue`) | provider |
 | `session commands SESSION [--refresh]` | `session.commands` | the session's cached command catalogue (`refresh_native_agent_commands` with `--refresh`) | read |
@@ -199,7 +199,7 @@ not advertise at its version before sending it.
 | `graph launch TEMPLATE --project P (--environment ENV \| --new-worktree \| --new-container) [--role KEY=A[/M[@E]][,…]]… [--focus ROLE[.N]=TEXT]… [--focus-file ROLE[.N]=PATH]… [--param KEY=VALUE]… [--input NAME=JSON]… [--input-file NAME=PATH]… [--ticket T [--ticket-input NAME]]` | `graph.launch` | the one launch service every surface uses (`GraphRunLaunchService.launch`, `requestedBy: "cli"`) | metadata, filesystem, provider, external |
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
-| `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion | provider, external |
+| `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion. Always a new tab with its own receipt; the button can reuse this tab, but this action never resends to one | provider, external |
 | `pr get ENV` / `pr timeline ENV` / `pr files ENV [--path P]` / `pr options ENV` | `pr.get` / `pr.timeline` / `pr.files` / `pr.options` | the environment's pull request, read live through the viewer's commands; `pr get` reports `attachment` (`stored`, `detected`, `none`, `unknown`) | read |
 | `pr list PROJECT [--filter F] [--query Q]` | `pr.list` | the viewer's pull request list | read |
 | `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |

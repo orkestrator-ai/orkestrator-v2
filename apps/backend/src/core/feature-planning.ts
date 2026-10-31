@@ -47,6 +47,7 @@ import {
   settleArtifactDispatchTurn,
   type ArtifactTurnDispatch,
 } from "./workflow-artifact-turns.js";
+import type { PlanUsageState } from "./plan-usage-cache.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -203,6 +204,8 @@ export interface FeaturePlanningServiceOptions extends KeyedWorkflowServiceOptio
   provider?: (environmentId: string) => Promise<BuildPipelineProvider>;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;
+  /** This backend's plan usage (`runtime.accounts.planUsage`); sessions report into it. */
+  planUsage?: PlanUsageState;
   resolveAgentToolConnection?: (
     environmentId: string,
     projectId: string,
@@ -1297,6 +1300,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
         : await this.containerConnection(environment);
     const provider = createBuildPipelineProvider(connection, {
       workflowResults: this.options.workflowResults,
+      planUsage: this.options.planUsage,
     });
     this.providers.set(environmentId, provider);
     return provider;

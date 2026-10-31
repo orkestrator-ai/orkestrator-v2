@@ -2,12 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `79f3bc97`.
+Analysed 2026-10-28 against `main` at `79f3bc97`. Rechecked 2026-10-31 against
+`main` at `931e5541`: the schema is now version 5, which changes task 2's answer
+and gives task 1 a decision to take (see each).
 
 ### Tasks
 
-1. **Retire the live-claim read**: once no supported backend can write a claim into a shared database, restore every stored claim to the head and drop the `outstandingClaim` guards. Status: open (blocked on the support window: no Stable release without the claim commands exists yet).
-2. **Correct which backends can still write a claim**: the register row says "through v2.28.0-beta", but the commands shipped through v2.29.0-beta, and schema version 4 shuts out every release before v2.24.0-alpha. Status: open.
+1. **Retire the live-claim read**: once no supported backend can write a claim into a shared database, restore every stored claim to the head and drop the `outstandingClaim` guards. Status: open (blocked on the support window: no Stable release without the claim commands exists yet; see the 2026-10-31 decision below on whether schema 5 lifts that).
+2. **Correct which backends can still write a claim**: the register row said "through v2.28.0-beta", but the commands shipped through v2.29.0-beta, and the schema now shuts out every one of those releases. Status: done (2026-10-31).
 
 The 2026-10-27 work (per-load normalization, retiring the standalone recovery
 timer and its counter) is done; see Current state.
@@ -57,16 +59,30 @@ work across the window"), so the shape upgrade itself never goes away.
   at or above it only 60 days after the first Stable release from `v2.30.0`
   on is published, so not before late December 2026 even if one shipped
   today.
+- **Rechecked 2026-10-31: schema 5.** `retireLoopedReviewsMigration`
+  (`storage-retired-features.ts:72`, `e1865cf5e`, #1417, 2026-10-29) made the
+  schema version 5. It is in `v2.34.4-beta` and absent from `v2.34.3-beta`. So
+  every claim-writing release now refuses a database a current backend has
+  opened (`storage-database.ts:338`). What is left is a claim carried across the
+  upgrade, or a backend that opened the database before version 5 and is still
+  running: the version is checked only at open.
 
 **Decisions.**
 
+- **Does schema 5 lift the block before the window would? (2026-10-31, not taken: this batch was told to leave task 1.)**
+  - **Yes: treat the register's "can no longer share the database" as met once version 5 has shipped, and do task 1 after the next Stable release carries it (recommended).**
+    - Pros: the register row's condition is about sharing a database, and the schema now decides that; removes every `outstandingClaim` reader without waiting 60 days from that Stable release; the downgrade rule already accepts an older release refusing newer data.
+    - Cons: a claim held by an old backend still running across the migration would go back to the head while its holder may yet submit it, so it could run twice; that is a single-host, single-restart race but it touches at-most-once dispatch, and it departs from the window's floor rule.
+  - **No: keep waiting for the floor, late December 2026 at the earliest.**
+    - Pros: follows the window rule as written; no new reasoning about running peers.
+    - Cons: keeps 40 references across 13 backend files for a writer that can no longer open the database.
 - **What does retirement remove?**
   - **Keep `restoreLegacyPromptQueueClaims` as a load pass that restores every claim to the head, and delete the live-lease branch and every `outstandingClaim` reader (recommended).**
     - Pros: honours "record upgrades are permanent", so a database that still holds a claim loads without loss; no schema bump; queue readers lose the extra rule.
     - Cons: one cheap pass stays on every queue load.
-  - **Move the restore into a new numbered migration (version 5) and delete the load pass.**
+  - **Move the restore into a new numbered migration (version 6 now that 5 is taken) and delete the load pass.**
     - Pros: no legacy code on the load path.
-    - Cons: every earlier release then refuses the database (`StorageDatabaseVersionError`), a downgrade fence for the whole window for the sake of a small read; it also misses a claim a peer writes after the migration ran.
+    - Cons: it misses a claim a peer writes after the migration ran. The original objection, that every earlier release would then refuse the database, no longer separates the options for claim writers, which version 5 already refuses, but it would add a fence for `v2.34.4-beta` onwards.
   - **Delete the field and the pass entirely.**
     - Pros: least code.
     - Cons: a stored claim's message is silently dropped, which the window rules forbid.
@@ -80,7 +96,9 @@ work across the window"), so the shape upgrade itself never goes away.
 
 ### 2. Correct which backends can still write a claim
 
-**Problem.** The register row says the path serves "claim-writing backends
+Done 2026-10-31, with a different answer from the one recorded below; see "Assumptions and decisions".
+
+**Problem.** The register row said the path serves "claim-writing backends
 through v2.28.0-beta". That is wrong at the top and broader than it needs to be
 at the bottom.
 
@@ -160,7 +178,6 @@ task 1 is unchanged, because the floor rule follows Stable releases.
 ### Code
 
 1. Retire the live-claim read (task 1), once the window allows it.
-2. Correct the register row's "Serves" cell (task 2).
 
 ## Constraints and rationale
 
@@ -169,15 +186,37 @@ task 1 is unchanged, because the floor rule follows Stable releases.
   even during a live lease, because no published renderer called the
   commands; review showed an external caller of an older backend's command
   can still hold the prompt, so exclusion stays until settlement or expiry.
-- No schema version bump: a bump would stop supported older releases from
-  opening the store, and per-load normalization also covers claims another
-  backend writes while this one runs.
+- No schema version bump for this path: per-load normalization also covers
+  claims another backend writes while this one runs. The other reason given
+  here, that a bump would stop older releases opening the store, stopped applying
+  when an unrelated migration took the schema to version 5.
 - No recovery counter: normalization is a read, and counting reads would not
   count recovered claims.
 - The restore must never dispatch the prompt itself; it only returns the
   message to the head for the ordinary dispatch path.
 
 ## Assumptions and decisions
+
+### What the register row says (2026-10-31, task 2)
+
+- **Options.** (a) The text recommended above: "published claim-writing releases
+  v2.26.1-alpha to v2.29.0-beta (earlier releases refuse a schema-4 database)".
+  (b) Name the top of the range and say what schema 5 leaves.
+- **Choice: (b).**
+- **Why.** On `main` the schema is 5, so (a) is out of date as to which backends
+  can share the database. Its lower bound also stops mattering: a backend of any
+  claim-writing release, Stable included (the commands are in `v2.21.0` and
+  `v2.23.0`), may have left a claim, or still be running from before the
+  migration. `storage.md` carried the same "up to v2.28.0-beta" claim and was
+  corrected with it.
+- **Pros.** True on current `main`, and points the reader at what task 1 must
+  still consider. **Cons.** A longer cell than the rest of the table.
+- **Noted, not changed.** (a)'s "published" was doubtful too. GitHub now lists
+  `v2.26.1-alpha` as a draft, but gives it a publish time (2026-10-22) and so does
+  every alpha from `v2.24.0-alpha`: `release:publish` hides each older alpha when
+  the next ships (`releasing.md`). So "drafts that were never published" in
+  `version-compatibility.md`'s support window section looks wrong. Whether those
+  alphas count as covered is a policy call, so it was left for the user.
 
 ### Keep the file (2026-10-28, tasks 1 and 2)
 

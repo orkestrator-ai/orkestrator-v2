@@ -68,9 +68,8 @@ export function unfenceTabTeardownSessionId(value: string | undefined): {
 
 /**
  * Stable marker on a tab teardown failure caused by a bridge that predates
- * `POST /session/:id/close` and whose legacy DELETE would delete history
- * (Claude). The close stays pending until the environment runs a current
- * bridge; the renderer shows a bounded, non-destructive notice for it.
+ * `POST /session/:id/close`. The close stays pending until the environment runs
+ * a current bridge; the renderer shows a bounded, non-destructive notice for it.
  *
  * Carried in the error message because command failures reach the renderer
  * as text (the gateway forwards `error.message`, Electron may prefix it).

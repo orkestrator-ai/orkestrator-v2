@@ -2,6 +2,7 @@ import { mock } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
+import { AgentRegistry } from "../agent-registry.js";
 import type { CommandContext } from "../commands-context.js";
 import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
@@ -91,6 +92,10 @@ export async function setup(agent: BuildPipelineAgent = "claude") {
     { provider: async () => stub.provider },
   );
   (harness.context as { nativeAgents?: NativeAgentService }).nativeAgents = service;
+  (harness.context as { agentRegistry?: AgentRegistry }).agentRegistry = new AgentRegistry(
+    harness.storage,
+    { native: (id, platform, key) => service.sessionTurnActivitySnapshot(id, platform, key) },
+  );
   sessionHarnesses.push({ harness, service });
   const project = await harness.storage.addProject(
     createProject("https://example.invalid/session.git"),

@@ -55,6 +55,7 @@ import {
   type GraphScheduleForm,
 } from "./graph-schedule-model";
 import { ScheduleGraphFields } from "./ScheduleGraphFields";
+import { SETTINGS_CARD_CLASS, SettingsPageLayout } from "./SettingsPageLayout";
 
 /**
  * Settings → Schedules: every scheduled job on this backend, who owns it,
@@ -170,25 +171,17 @@ export function SchedulesSettings() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 pb-8">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-400">
-            Backend timing
-          </p>
-          <h2 className="mt-2 text-xl font-semibold">Schedules</h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Actions the backend runs at a set time, once or repeatedly, as whoever created them:
-            you, a Control MCP client, an agent or a coordinator. Missed fires run late only within
-            their catch-up window.
-          </p>
-        </div>
+    <SettingsPageLayout
+      width="wide"
+      title="Schedules"
+      description="Actions the backend runs at a set time, once or repeatedly, as whoever created them: you, a Control MCP client, an agent or a coordinator. Missed fires run late only within their catch-up window."
+      actions={
         <Button size="sm" onClick={() => void openEditor()}>
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
           New schedule
         </Button>
-      </div>
-
+      }
+    >
       {error ? (
         <p className="rounded-md border border-red-500/40 p-3 text-sm text-red-300" role="alert">
           {error}
@@ -209,14 +202,14 @@ export function SchedulesSettings() {
       ) : null}
 
       {schedules && schedules.length > 0 ? (
-        <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">
+        <ul className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
           {schedules.map((job) => (
             <li
               key={job.id}
               className="flex flex-wrap items-center gap-3 p-3"
               data-testid="schedule-row"
             >
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-[1_1_16rem]">
                 <div className="flex items-center gap-2">
                   <span className="truncate font-medium">{job.name}</span>
                   {job.state !== "active" ? (
@@ -333,7 +326,7 @@ export function SchedulesSettings() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </SettingsPageLayout>
   );
 }
 

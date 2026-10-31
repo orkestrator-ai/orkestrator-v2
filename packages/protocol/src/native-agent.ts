@@ -1111,9 +1111,15 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     return {
       ...capabilities,
       // Cursor's SDK bridge and Grok's ACP bridge read inline image content
-      // blocks; neither takes files.
-      attachments: { files: false, images: true },
-      fork: false,
+      // blocks. Only Grok takes files: it advertises ACP `embeddedContext`
+      // (1.0.67 and 1.0.70), and the ACP bridge sends a text file as a
+      // `resource` block, refusing binary content and any agent that does not
+      // advertise the capability. Cursor's SDK message is text and images only.
+      attachments: { files: agent === "grok", images: true },
+      // Grok forks through its `_x.ai/session/fork` extension (ACP's own
+      // `session/fork` is unstable and Grok does not advertise it). Cursor's
+      // SDK has no fork.
+      fork: agent === "grok",
       slashCommands: agent === "grok",
       // Cursor applies a prompt's mode as a composer patch and Grok through ACP
       // `session/set_mode`: both persist on the session.
@@ -1125,10 +1131,11 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // it" and the live composer's `fastModeAvailable` / `modes` decides.
       // Grok compacts through its own `/compact`, which the ACP bridge runs as
       // a selected command; a session whose live inventory lacks it answers
-      // the action 422 `command-unavailable`.
+      // the action 422 `command-unavailable`. Cursor compacts through the SDK's
+      // `agent.summarize()`.
       actions:
         agent === "cursor"
-          ? { steer: true, rewindMessages: true, archive: true }
+          ? { steer: true, rewindMessages: true, compact: true, archive: true }
           : { compact: true },
       // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
       // raises anything. Grok's ACP wire does: it answers
@@ -1139,7 +1146,16 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         kinds:
           agent === "cursor"
             ? []
-            : ["question", "plan-approval", "command-approval", "file-approval", "permission"],
+            : [
+                "question",
+                "plan-approval",
+                "command-approval",
+                "file-approval",
+                "permission",
+                // Forwarded over Grok's `_x.ai/mcp/elicit` extension request.
+                "mcp-form",
+                "mcp-url",
+              ],
       },
     };
   }

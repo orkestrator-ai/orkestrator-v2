@@ -339,6 +339,94 @@ describe("HTTP bridge provider (ACP)", () => {
     expect(bodies.at(-1)).toEqual({ decision: "deny" });
   });
 
+  test("maps a Grok MCP elicitation and answers it through the interaction route", async () => {
+    const requestedAt = Date.now();
+    const bodies: Array<{ url: string; body: unknown }> = [];
+    const timing = { requestedAt, expiresAt: requestedAt + 300_000 };
+    const { provider } = httpProvider((url, init) => {
+      if (url.includes("/interactions/")) {
+        bodies.push({ url, body: JSON.parse(String(init.body)) });
+        return Response.json({ resolved: true });
+      }
+      if (url.endsWith("/approvals")) return Response.json({ approvals: [] });
+      if (url.endsWith("/interactions")) {
+        return Response.json({
+          interactions: [
+            {
+              id: "form",
+              kind: "mcp-form",
+              serverName: "probe",
+              message: "What is your name?",
+              schema: { type: "object", properties: { name: { type: "string" } } },
+              ...timing,
+            },
+            {
+              id: "link",
+              kind: "mcp-url",
+              serverName: "probe",
+              message: "Please sign in",
+              url: "https://example.com/auth",
+              ...timing,
+            },
+          ],
+        });
+      }
+      return Response.json({ sessionId: "grok-1" });
+    }, grokConnection);
+
+    await provider.createSession("build", "Grok");
+    const { requests } = await provider.interactions!.listPendingInteractions("grok-1");
+    const form = requests.find((request) => request.kind === "mcp-form")!;
+    const link = requests.find((request) => request.kind === "mcp-url")!;
+    expect(form).toMatchObject({
+      provider: "grok",
+      presentation: { title: "probe needs input", body: "What is your name?" },
+    });
+    expect(link.presentation).toMatchObject({
+      title: "Sign in to probe",
+      url: "https://example.com/auth",
+    });
+
+    const answered = answerResolution(form);
+    await provider.interactions!.resolveInteraction("grok-1", form.id, {
+      ...answered,
+      answer: {
+        ...answered.answer!,
+        answers: [{ questionId: "mcp-form-content", freeText: JSON.stringify({ name: "Ada" }) }],
+      },
+    });
+    await provider.interactions!.resolveInteraction("grok-1", link.id, declineResolution(link));
+    expect(bodies).toEqual([
+      {
+        url: expect.stringContaining("/interactions/form"),
+        body: { action: "accept", content: { name: "Ada" } },
+      },
+      { url: expect.stringContaining("/interactions/link"), body: { action: "decline" } },
+    ]);
+  });
+
+  test("forks a Grok session through the bridge", async () => {
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/fork")) {
+        posts.push({ url, body: JSON.parse(String(init.body)) });
+        return Response.json({ sessionId: "grok-fork", title: "Forked" });
+      }
+      return Response.json({ sessionId: "grok-1" });
+    }, grokConnection);
+    await provider.createSession("build", "Grok");
+    expect(await provider.forkSession!("grok-1", "message-1")).toMatchObject({
+      sessionId: "grok-fork",
+      title: "Forked",
+    });
+    expect(posts).toEqual([
+      {
+        url: expect.stringContaining("/session/grok-1/fork"),
+        body: { upToMessageId: "message-1" },
+      },
+    ]);
+  });
+
   test("maps a Grok command or file change onto its own approval kind", async () => {
     const requestedAt = Date.now();
     const bodies: unknown[] = [];

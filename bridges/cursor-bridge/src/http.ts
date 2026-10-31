@@ -46,6 +46,7 @@ import {
 } from "./steer-journal.js";
 import { refreshPlanAccountWindows } from "./plan-usage.js";
 import {
+  dispatchCompaction,
   dispatchPrompt,
   errorText,
   journal,
@@ -416,7 +417,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages|close))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|usage|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages|compact|close))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -659,6 +660,9 @@ async function routeSession(
   }
   if (action === "steer" && !subject && request.method === "POST") {
     return await handleSteer(request, response, state);
+  }
+  if (action === "compact" && !subject && request.method === "POST") {
+    return await handleCompact(response, state);
   }
   if (action === "rewind-messages" && request.method === "POST") {
     const body = await readJson(request);
@@ -1332,6 +1336,93 @@ async function dispatchClaimedPrompt(
   state.turnCompletion = completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+/**
+ * `agent.summarize()` as a turn: it holds the session busy, a cancel stops it
+ * and a close waits for it, exactly like a prompt. Answered as soon as the run
+ * has started, because a summary can outlast any request budget; the boundary
+ * on the transcript carries the outcome.
+ */
+async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
+  if (state.status === "running" || state.dispatching || state.rewinding) {
+    throw new HttpError(409, "Session is already running");
+  }
+  assertSessionOpen(state);
+  state.dispatching = true;
+  state.pendingCancelPromptSequence = undefined;
+  let releaseClaim!: () => void;
+  const claim = new Promise<void>((resolve) => (releaseClaim = resolve));
+  state.dispatchClaim = claim;
+  try {
+    let agent: Awaited<ReturnType<typeof ensureAgent>>;
+    try {
+      agent = await ensureAgent(state, { atTurnStart: true, requireCurrentModel: true });
+      assertSessionOpen(state);
+      // The identity of an agent the attach may just have created is on disk
+      // before it can start a run, as for a prompt.
+      await persistBarrier();
+      assertSessionOpen(state);
+    } catch (error) {
+      state.dispatching = false;
+      throw error;
+    }
+    // A cancel parked during the attach: nothing has started, so nothing runs.
+    if (state.pendingCancelPromptSequence === state.promptSequence + 1) {
+      state.pendingCancelPromptSequence = undefined;
+      state.dispatching = false;
+      return json(response, 202, { accepted: true, cancelled: true });
+    }
+
+    const statusBefore = state.status;
+    const errorBefore = state.error;
+    state.status = "running";
+    state.error = undefined;
+    state.promptSequence += 1;
+    state.turnStartedAt = Date.now();
+    state.currentRunUsage = undefined;
+    state.currentTurnOutputTokenEstimate = undefined;
+    state.currentRunDeltaUsage = undefined;
+    state.currentRunStreamUsage = undefined;
+    state.currentRunUsageUpdatedAt = undefined;
+    state.currentRunModelId = state.composer.selectedModelId;
+    state.currentTurnUsage = {};
+    state.currentTurnOutput = null;
+    beginAssistantTurn(state);
+    state.revision += 1;
+    schedulePersist();
+
+    let handle: Awaited<ReturnType<typeof dispatchCompaction>>;
+    try {
+      handle = await dispatchCompaction(state, agent);
+    } catch (error) {
+      // No run started (see `dispatchCompaction`), so the session goes back to
+      // what it was. The SDK's own text can carry path content, hence the
+      // fixed wording; only "nothing to compact yet" is the caller's to fix.
+      state.status = statusBefore;
+      state.error = errorBefore;
+      state.dispatching = false;
+      state.currentTurnUsage = undefined;
+      state.currentRunModelId = undefined;
+      state.revision += 1;
+      schedulePersist();
+      // Matched on the words: a missing model is a `ConfigurationError` too.
+      if (error instanceof Error && error.message.includes("no saved conversation")) {
+        return json(response, 409, { error: "This Cursor session has nothing to compact yet" });
+      }
+      void detachAgent(state).catch(() => undefined);
+      return json(response, 502, { error: "Cursor could not start compaction" });
+    }
+    state.dispatching = false;
+    const completion: Promise<void> = handle.completion.finally(() => {
+      if (state.turnCompletion === completion) state.turnCompletion = undefined;
+    });
+    state.turnCompletion = completion;
+    return json(response, 202, { accepted: true });
+  } finally {
+    if (state.dispatchClaim === claim) state.dispatchClaim = undefined;
+    releaseClaim();
+  }
 }
 
 function appendLocalExchange(

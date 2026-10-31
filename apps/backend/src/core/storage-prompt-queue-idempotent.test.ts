@@ -328,3 +328,122 @@ describe("backend-authored queue items", () => {
     });
   });
 });
+
+describe("native job queue admission", () => {
+  const fingerprint = "a".repeat(64);
+  test("coalesces different request IDs atomically across storage instances", async () => {
+    await withStorage(async (storage) => {
+      const second = new StorageService(storage.getDataDir());
+      await second.init();
+      await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          (index % 2 ? second : storage).reserveNativeAgentJobRequest(
+            KEY,
+            "e1",
+            {
+              requestId: `press-${index}`,
+              fingerprint,
+              status: "accepted",
+              queued: true,
+            },
+            message(`press-${index}`),
+            true,
+          ),
+        ),
+      );
+      const queue = await storage.getPromptQueue(KEY);
+      expect(queue?.messages).toHaveLength(1);
+      expect(queue?.jobReceipts).toHaveLength(8);
+    });
+  });
+
+  test("older receipts do not suppress work after a later turn supersedes them", async () => {
+    await withStorage(async (storage) => {
+      await createSession(storage);
+      await storage.reserveNativeAgentJobRequest(KEY, "e1", {
+        requestId: "old",
+        fingerprint,
+        status: "accepted",
+      });
+      await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "old", async () => undefined);
+      await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "later-turn", async () => undefined);
+      await storage.reserveNativeAgentJobRequest(
+        KEY,
+        "e1",
+        { requestId: "fresh", fingerprint, status: "accepted", queued: true },
+        message("fresh"),
+        true,
+      );
+      expect((await storage.getPromptQueue(KEY))?.messages).toHaveLength(1);
+    });
+  });
+
+  test("a completed turn allows another plain press, while request retries stay bound", async () => {
+    await withStorage(async (storage) => {
+      await createSession(storage);
+      await storage.reserveNativeAgentJobRequest(KEY, "e1", {
+        requestId: "first",
+        fingerprint,
+        status: "unknown",
+      });
+      await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "first", async () => undefined);
+      await storage.settleNativeAgentJobRequest(KEY, "first", "accepted");
+      await storage.recordNativeAgentTurnOutcome(SESSION_KEY, "provider-1", {
+        requestId: "first",
+        outcome: "completed",
+        observedAt: new Date().toISOString(),
+      });
+      await storage.reserveNativeAgentJobRequest(
+        KEY,
+        "e1",
+        { requestId: "next", fingerprint, status: "accepted", queued: true },
+        message("next"),
+        true,
+      );
+      expect((await storage.getPromptQueue(KEY))?.messages).toHaveLength(1);
+      expect(
+        await storage.reserveNativeAgentJobRequest(KEY, "e1", {
+          requestId: "first",
+          fingerprint,
+          status: "unknown",
+        }),
+      ).toMatchObject({ status: "accepted" });
+    });
+  });
+});
+
+test("activity checkpoints reject stale requests and rotated provider sessions", async () => {
+  await withStorage(async (storage) => {
+    await createSession(storage);
+    await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r1", async () => {});
+    const first = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    await storage.recordNativeAgentActivityTurn(first, "active");
+    await storage.recordNativeAgentActivityTurn(first, "settled");
+    expect((await storage.getNativeAgentSession(SESSION_KEY))?.activityTurn).toMatchObject({
+      requestId: "r1",
+      state: "settled",
+    });
+    await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, "r2", async () => {});
+    const second = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    await storage.recordNativeAgentActivityTurn(second, "active");
+    await storage.recordNativeAgentActivityTurn(first, "settled");
+    expect((await storage.getNativeAgentSession(SESSION_KEY))?.activityTurn).toMatchObject({
+      requestId: "r2",
+      state: "active",
+    });
+    await storage.adoptNativeAgentSession({
+      key: SESSION_KEY,
+      environmentId: "e1",
+      agent: "claude",
+      logicalSessionKey: LOGICAL,
+      providerSessionId: "provider-2",
+      expectedProviderSessionId: "provider-1",
+    });
+    await storage.recordNativeAgentActivityTurn(second, "settled");
+    const rotated = (await storage.getNativeAgentSession(SESSION_KEY))!;
+    expect(
+      rotated.activityTurn?.providerSessionId === "provider-2" &&
+        rotated.activityTurn.state === "settled",
+    ).toBe(false);
+  });
+});

@@ -148,3 +148,22 @@ and `orkestrator-test-run.NyF4PB/` (group logs), under the host temporary direct
 All validation commands have exited. No application profile was started, and no
 fixture server remained listening on port 1422 after browser validation.
 Implementation and regression fixes are committed as `3aaa072d7`.
+
+## Main merge conflict validation — 2026-10-31
+
+Merged main `34ae91067af9afec5bbc9ec4897044d1dd0f73f7` into branch head
+`85cc8b0302fa19a9dbf7e3146aa729b2f021bfd4`. The complete original ten-file
+conflict list is retained with both parent IDs in local Git metadata. Settings
+keeps the title policy within main's page layout, the fixture keeps its typed
+section selection, and Cursor retains both compact and archive capabilities
+with the matching protocol assertion. Both branches' registry history remains.
+
+- **Static checks:** `mise run test:logged -- --name merge-check -- mise run check` passed (22.7 s), including format, lint and all typechecks. Conflict-marker and staged whitespace checks passed.
+- **Default suite:** `mise run test:logged -- --name merge-default-tests -- mise run test` exited 1 (452.3 s). All workspace packages, all five bridges and the protocol-lockfile group passed. Root/support had 3,320 passes, one failure and one error: the existing disk-report deadline at 5,058.29 ms. Its complete unchanged owner passed alone (3.5 s); exact command and evidence are in [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md#session-title-branch-main-merge--2026-10-31). Aggregate evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.YCy8ks/merge-default-tests.log.gz`.
+- **Broad browser attempt:** `mise run test:logged -- --name merge-browser -- mise run test:browser` passed the e2e typecheck, then ran nine Chromium workers alongside the default suite on the shared host (observed load average about 58). It was deliberately interrupted after 111.5 s following widespread unrelated 30-second timeouts: 17 passed, three skipped, ten failed, eight interrupted and 1,092 not run. The ten failures were in `AddProjectDialog.spec.ts`, `AgentModelPicker.spec.ts`, `AgentsMdApproval.spec.ts`, `AgentUsage.spec.ts` and `BackgroundTaskOutcome.spec.ts`; these owners were not rerun alone, so this observation is not newly classified as flaky. Public-site smoke did not run. Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.L0Fc8T/merge-browser.log.gz`.
+- **Conflict-scoped browser verification:** after the default suite finished, `mise run test:logged -- --name merge-settings-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts e2e/FullscreenSettingsLayout.spec.ts e2e/SettingsPageLayout.spec.ts e2e/NativeResumeSession.spec.ts --workers=1` passed, exit 0 (39.6 s logged, 32 scheduled cases with viewport-specific skips). Both configured phone and desktop projects ran. Coverage includes settings sizing and keyboard navigation, title-policy disclosure and persistence across reload, and archived conversation restore before resume. Passing raw output was removed by the bounded logger.
+
+No test assertion, timeout or skip was weakened. The complete default suite
+remains non-green because of the confirmed disk-report recurrence, and the broad
+browser attempt remains incomplete. No isolated real-stack profile or live
+provider qualification was started for these merge resolutions.

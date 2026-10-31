@@ -243,7 +243,10 @@ original tools remain:
 
 Operator credentials also get, under the names a coordinator already uses:
 
-- `list_nodes` (`node.list`): this machine and the leaf nodes it controls.
+- `list_nodes` (`node.list`): this machine and the leaf nodes it controls. A
+  coordinator's `list_nodes` is a different tool with the same name
+  (`control-mcp-nodes.ts`), and it also reports each machine's OS and load: see
+  [coordinator.md](coordinator.md#choosing-a-machine).
 - `launch_multi_review` (and `start_multi_review`, the same action for an
   operator), `list_multi_reviews`, `get_multi_review`, `open_multi_review`,
   `open_multi_review_fix`, `address_multi_review`, `cancel_multi_review`
@@ -258,7 +261,9 @@ Operator credentials also get, under the names a coordinator already uses:
   default) through `session.start`'s job path, so it is a run with a receipt
   that `run_status` follows. `create_pr` is refused while the environment has a
   PR and starts PR monitoring; `resolve_conflicts` refreshes the PR when it
-  finishes. Neither merges.
+  finishes. Neither merges. Only the button reuses an open Resolve tab
+  ([github-pull-requests.md](github-pull-requests.md#the-resolve-button));
+  `resolve_conflicts` always opens a tab, so its receipt names that tab's run.
 - `merge_pr` (`pr.merge`): the action bar's Merge and Merge and Cleanup buttons,
   over `merge_environment_pr`, with a confirm token on every call. It takes the
   same arguments as the direct tool `pr_merge`; see
@@ -357,6 +362,36 @@ pre-public tools:
   terminal-tab and launch-default details the public reads do not carry, and a
   read has no request key or intent to diverge on. They are listed only when
   the credential may call the matching public read.
+
+### Coordinator conversations
+
+An operator credential reaches a project's Coordinator conversations through
+the ordinary session tools. A conversation has no environment row and no pane
+layout ([coordinator.md](coordinator.md#ownership)), so `list_agents` gives it
+a runtime ID (`coordinator:<id>:<conversation>`) in `environmentId` and a
+`sessionId`, and `resolve_target` finds it as "coordinator" or "<project>
+coordinator".
+
+- `session.list`, `session.get`, `session.transcript`, `list_tabs`,
+  `get_tab_state` and `get_tab_transcript` read it, also while it is paused.
+  The tab tools see one `agent-native` tab.
+- `session.prompt`, `session.command`, `session.stop`, `session.steer`, model
+  changes and interaction answers act on it under `sessions.control` and
+  `interactions`, like any session. Its run settles the same way, and as
+  `interrupted` if the conversation is closed.
+- Refused: `session.fork` and `session.resume` (`unsupported`: one conversation
+  has one provider session), any `mode` (`unsupported`: the app offers none, its
+  read-only policy is fixed), file attachments (`capability-unavailable`: images
+  are stored under application data, and nothing is written to the checkout) and
+  `session.start` and environment actions (`not-found`, naming it a Coordinator).
+- A paused Coordinator or a conversation with no provider session yet is
+  `not-ready`, a conversation with no agent yet is `not-ready` even to read, and
+  a closed one is `not-found`.
+
+This changes nothing about mail: `send_message` from a credential stays
+inbox-only. `session.prompt` is the explicit way to start a turn. Coordinator
+credentials do not gain this; they keep their own project-scoped tools.
+`attention.list` and `overview` do not cover Coordinator conversations yet.
 
 Discovery summaries, native-tab resolution, launch options and selection
 validation live in `apps/backend/src/core/control-shared-actions.ts`, shared

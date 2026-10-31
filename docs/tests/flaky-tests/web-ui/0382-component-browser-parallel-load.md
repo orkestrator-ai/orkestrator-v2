@@ -216,7 +216,6 @@ The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7
 
 Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
 
-
 ## Hidden flow graph review — 2026-10-31
 
 The requested hidden-selection centering and scroll-race fixes passed their
@@ -273,3 +272,32 @@ the host temporary directory. This is a failed owning-file rerun, not a new
 flake confirmation; the prior follow history remains in
 [0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md).
 No cause was established. The broad browser command remains non-green.
+
+## Claude sign-in replay review — 2026-10-31
+
+The eight-worker rerun of `mise run test:logged -- --name browser -- mise run test:browser`
+failed the mobile `e2e/NativeAttachments.spec.ts:6` case, `attachments retain names
+until decoded, wrap, and survive remount and reload`. After reload the loading
+image still showed `loading.png`; the case exceeded its 30 s deadline at line 75.
+The complete unchanged owner passed both viewport cases with one worker (82.0 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=14492 mise run test:logged -- --name recovery-attachments-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/playwright/recovery-attachments
+```
+
+The broad component run completed with 809 passed, 106 skipped and 177 failed
+(25.8 minutes, exit 1); the chained public-site suite was not reached. Its evidence
+is `/tmp/orkestrator-test-run.utMrMj/browser.log.gz`. This confirms an intermittent
+attachment-owner failure; it does not classify the broad run's other failures as
+flakes. A separate
+one-worker `NativeHeldSend.spec.ts` rerun failed before fixture controls appeared,
+including a Vite dynamic-import fetch failure; that owner remains non-green
+(`/tmp/orkestrator-test-run.i7n9E6/recovery-held-send-browser.log.gz`). No assertion,
+timeout, or implementation in either browser owner changed.
+
+The final stable-source rerun of `mise run test:logged -- --name recovery-default -- mise run test`
+passed all four default-tier groups (681.2 s including an approximately 414 s
+admission wait). The complete controller owner, the eight-file focused renderer
+and store check, web typechecking, affected-file lint, and repository formatting
+also passed. No source, assertion, timeout, or skip changed after those focused
+checks; the subsequent changes only recorded this evidence.

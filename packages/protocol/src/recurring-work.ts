@@ -68,6 +68,7 @@ export const RECURRING_JOB_KINDS = [
   // Backend: host samples, providers and transport.
   "system-usage-sample",
   "process-usage",
+  "machine-load-sample",
   "opencode-reconnect",
   "gateway-heartbeat",
 ] as const;
@@ -404,6 +405,15 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   "system-usage-sample": backend("C08", "read", "interactive", 5_000, "join", "none"),
   // Open process panels only (3 s); concurrent reads from every client join.
   "process-usage": backend("C08", "read", "interactive", 3_000, "join", "none"),
+  // Every backend, whether or not anything reads it: history is the point.
+  "machine-load-sample": backend(
+    "B29",
+    "interval",
+    "discovery",
+    60_000,
+    "skip-while-running",
+    "none",
+  ),
   "opencode-reconnect": backend(
     "B22",
     "event",

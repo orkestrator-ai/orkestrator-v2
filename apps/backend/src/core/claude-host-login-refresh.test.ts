@@ -9,6 +9,7 @@ import {
   CLAUDE_HOST_REFRESH_RETRY_MS,
 } from "./container-claude-login-keeper.js";
 import { CommandFailedError } from "./shell.js";
+import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 
 let root: string | undefined;
@@ -91,6 +92,7 @@ describe("refreshHostClaudeLogin", () => {
     test(`the keeper diagnoses ${details.timedOut ? "timeout" : "missing executable"} once per backoff window`, async () => {
       const ctx = await context();
       const now = Date.now();
+      Object.assign(ctx, { runtime: { accounts: new AgentAccountsRuntime() } });
       Object.assign(ctx.storage, {
         loadConfig: async () => ({ global: {} }),
         agentAccounts: { loadAgentAccounts: async () => ({ accounts: [], active: {} }) },

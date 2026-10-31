@@ -16,6 +16,8 @@ import { observe, ObservationStopped, throwIfInterrupted, type ObserveOptions } 
 export interface ServiceConnection {
   /** Browser listener (the Tailscale Serve URL with `--tailscale-serve`). */
   browserUrl: string | null;
+  /** Loopback client listeners, which name the local port behind any address. */
+  clientUrls: string[];
   authFile: string;
   token: string | null;
   credentialError?: string;
@@ -120,6 +122,9 @@ export async function awaitServiceConnection(
         descriptor.endpoints?.some((endpoint) => endpoint.url === descriptor.url)
           ? null
           : descriptor.url),
+      clientUrls: (descriptor.endpoints ?? [])
+        .filter((endpoint) => endpoint.role === "client")
+        .map((endpoint) => endpoint.url),
       authFile: descriptor.authFile,
       token: null,
     };

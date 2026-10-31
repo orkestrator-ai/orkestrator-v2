@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { errorText } from "@/components/settings/machines/machine-ui";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
@@ -110,7 +111,7 @@ export function useProjectHomeActivation() {
       })
       .catch((error: unknown) => {
         if (cancelled || isProjectHomeDeletionInProgress(selectedProjectId)) return;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorText(error);
         setFailure({ key, message });
         toast.error("Could not open the project home", {
           description: message,

@@ -91,7 +91,6 @@ assertion, timeout or skip changed. Asynchronous ledger removal remains a
 hypothesis. Other outcomes are in
 [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
 
-
 ## Hidden flow graph review — 2026-10-31
 
 The required exact `mise run test` rerun repeated this assertion after 261.25 ms.
@@ -110,3 +109,20 @@ Aggregate evidence: `orkestrator-test-run.Od2gTp/workspace-web-backend-desktop-w
 below the host temporary directory. No implementation, assertion, timeout or
 skip in either owner changed. This repeats the existing intermittent symptom;
 no new cause was established.
+
+## Failed-turn restart validation observation
+
+On 2026-10-31, while validating [0940](../../../todo/cross-cutting/0940-failed-turn-reads-as-completed.md)
+task 3, `mise run test` failed this case in 100.81 ms: the JSON ledger entry was
+still present at line 505 after the profile had gone. The backend reported
+11,713 passed, 103 skipped and this one failure across 804 files (109.36 s), on a
+host running other workers (the whole run took 1,002 s against 521 s earlier the
+same day). The same test passed in that earlier run. The complete unchanged owner
+then passed alone three times out of three (37 passed):
+
+```sh
+mise exec -- bun test src/core/design/browser-profiles.test.ts
+```
+
+run from `apps/backend`. No design code, assertion, timeout or skip changed.
+Asynchronous ledger removal remains a hypothesis.

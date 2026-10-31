@@ -12,6 +12,7 @@ import {
 import { restrictProviderAuthEntries } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
+import type { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import type { AppConfig, Environment } from "./models.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -697,7 +698,10 @@ async function containerClaudeCredentials(
   global: AppConfig["global"],
   active: ResolvedAgentAccount,
 ): Promise<ClaudeLoginHandoff | undefined> {
-  return claudeLoginHandoff(await activeClaudeCredentials(context, global, active));
+  return claudeLoginHandoff(
+    context.runtime.accounts,
+    await activeClaudeCredentials(context, global, active),
+  );
 }
 
 /**
@@ -710,54 +714,20 @@ export interface ClaudeLoginHandoff {
   payload: string;
 }
 
-/** The host's MCP refresh-token digests, most recent first, per `mcpOAuth` key. */
-const hostMcpRefreshDigests = new Map<string, string[]>();
-const MAX_MCP_DIGESTS_PER_SERVER = 8;
-const MAX_MCP_SERVERS = 128;
-
-function rememberHostMcpRefreshTokens(credentials: string): void {
-  let mcpOAuth: unknown;
-  try {
-    mcpOAuth = (JSON.parse(credentials) as { mcpOAuth?: unknown } | null)?.mcpOAuth;
-  } catch {
-    return;
-  }
-  if (!mcpOAuth || typeof mcpOAuth !== "object" || Array.isArray(mcpOAuth)) return;
-  for (const [key, entry] of Object.entries(mcpOAuth)) {
-    const token = (entry as { refreshToken?: unknown } | null)?.refreshToken;
-    if (typeof token !== "string" || !token.trim()) continue;
-    const digest = createHash("sha256").update(token).digest("hex");
-    const known = hostMcpRefreshDigests.get(key) ?? [];
-    hostMcpRefreshDigests.delete(key);
-    hostMcpRefreshDigests.set(
-      key,
-      [digest, ...known.filter((value) => value !== digest)].slice(0, MAX_MCP_DIGESTS_PER_SERVER),
-    );
-  }
-  for (const key of hostMcpRefreshDigests.keys()) {
-    if (hostMcpRefreshDigests.size <= MAX_MCP_SERVERS) break;
-    hostMcpRefreshDigests.delete(key);
-  }
-}
-
 /** The host's whole Claude credential as a container handoff; undefined when nothing is usable. */
 export function claudeLoginHandoff(
+  accounts: Pick<AgentAccountsRuntime, "hostMcpRefreshDigests">,
   credentials: string | undefined,
 ): ClaudeLoginHandoff | undefined {
   const text = accessOnlyLoginText("claude", credentials);
   if (!text || credentials === undefined) return undefined;
-  rememberHostMcpRefreshTokens(credentials);
+  accounts.hostMcpRefreshDigests.remember(credentials);
   return {
     payload: JSON.stringify({
       login: JSON.parse(text) as unknown,
-      hostMcpRefresh: Object.fromEntries(hostMcpRefreshDigests),
+      hostMcpRefresh: accounts.hostMcpRefreshDigests.snapshot(),
     }),
   };
-}
-
-/** Test seam: forget the MCP refresh tokens seen on the host. */
-export function resetHostMcpRefreshDigests(): void {
-  hostMcpRefreshDigests.clear();
 }
 
 /**
@@ -951,34 +921,36 @@ async function freshContainerClaudeCredentials(
   return containerClaudeCredentials(context, global, active);
 }
 
-/**
- * What each container was last handed, as a digest of the access-only text,
- * so the keeper only writes into a container when the host's login changed.
- * Lost on restart, when every running container is simply pushed once more.
- */
-const pushedClaudeLogins = new Map<string, string>();
-
 function loginDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
 async function pipeClaudeLogin(
+  context: CommandContext,
   runners: ContainerRunners,
   containerId: string,
   handoff: ClaudeLoginHandoff,
 ): Promise<void> {
   await runners.pipe(containerId, SYNC_CONTAINER_CLAUDE_LOGIN_COMMAND, handoff.payload);
-  pushedClaudeLogins.set(containerId, loginDigest(handoff.payload));
+  context.runtime.accounts.rememberPushedClaudeLogin(containerId, loginDigest(handoff.payload));
 }
 
-async function removeClaudeLogin(runners: ContainerRunners, containerId: string): Promise<void> {
+async function removeClaudeLogin(
+  context: CommandContext,
+  runners: ContainerRunners,
+  containerId: string,
+): Promise<void> {
   await runners.exec(containerId, `rm -f ${CONTAINER_CLAUDE_CREDENTIAL_FILE}`);
-  pushedClaudeLogins.delete(containerId);
+  context.runtime.accounts.forgetPushedClaudeLogin(containerId);
 }
 
-async function restrictClaudeLogin(runners: ContainerRunners, containerId: string): Promise<void> {
+async function restrictClaudeLogin(
+  context: CommandContext,
+  runners: ContainerRunners,
+  containerId: string,
+): Promise<void> {
   await runners.exec(containerId, RESTRICT_CONTAINER_CLAUDE_CREDENTIAL_COMMAND);
-  pushedClaudeLogins.delete(containerId);
+  context.runtime.accounts.forgetPushedClaudeLogin(containerId);
 }
 
 /**
@@ -1038,7 +1010,7 @@ export async function syncContainerClaudeLoginUnlocked(
       handover &&
       handover.account.accountId === accountId &&
       handover.account.loginGeneration === generation
-        ? claudeLoginHandoff(handover.credentials)
+        ? claudeLoginHandoff(context.runtime.accounts, handover.credentials)
         : await freshContainerClaudeCredentials(context, global, active);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
@@ -1059,11 +1031,13 @@ export async function syncContainerClaudeLoginUnlocked(
       return false;
     }
     if (!text) {
-      if (options.restrictWhenUnusable) await restrictClaudeLogin(runners, containerId);
+      if (options.restrictWhenUnusable) await restrictClaudeLogin(context, runners, containerId);
       return false;
     }
-    if (pushedClaudeLogins.get(containerId) === loginDigest(text.payload)) return false;
-    await pipeClaudeLogin(runners, containerId, text);
+    if (context.runtime.accounts.pushedClaudeLogin(containerId) === loginDigest(text.payload)) {
+      return false;
+    }
+    await pipeClaudeLogin(context, runners, containerId, text);
     return true;
   } catch (error) {
     logFailure("Failed to sync the Claude login into the container", error);
@@ -1190,16 +1164,16 @@ export async function syncContainerAgentAccountsOnStart(
       const marker = accountMarker(active);
       const credentials = await freshContainerClaudeCredentials(context, global, active);
       if (credentials) {
-        await pipeClaudeLogin(runners, containerId, credentials);
+        await pipeClaudeLogin(context, runners, containerId, credentials);
       } else if (
         global.useHostClaudeCredentials === false ||
         (await accountHasBeenUsed(context, "claude"))
       ) {
-        await removeClaudeLogin(runners, containerId);
+        await removeClaudeLogin(context, runners, containerId);
       } else {
         // The host has no usable token: whatever the container kept must
         // still not be able to refresh the host's login.
-        await restrictClaudeLogin(runners, containerId);
+        await restrictClaudeLogin(context, runners, containerId);
       }
       if (await accountHasBeenUsed(context, "claude")) {
         // The boot copied the host's `.claude.json`, so the identity still
@@ -1275,15 +1249,15 @@ async function pushContainerLogin(
 ): Promise<void> {
   if (platform === "claude") {
     if (global.useHostClaudeCredentials === false) {
-      await removeClaudeLogin(runners, containerId);
+      await removeClaudeLogin(context, runners, containerId);
       return;
     }
     const credentials = await freshContainerClaudeCredentials(context, global, active);
     if (credentials) {
-      await pipeClaudeLogin(runners, containerId, credentials);
+      await pipeClaudeLogin(context, runners, containerId, credentials);
     } else {
       // Signed out beats silently staying on the previous account.
-      await removeClaudeLogin(runners, containerId);
+      await removeClaudeLogin(context, runners, containerId);
     }
     const identity = await activeClaudeOAuthAccount(context, active);
     if (identity === undefined) return;

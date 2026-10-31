@@ -81,7 +81,7 @@ async function pushSeed(files: Record<string, string>, message = "seed") {
 }
 
 function deps(): AgentsMdPrDependencies {
-  const real = defaultAgentsMdPrDependencies();
+  const real = defaultAgentsMdPrDependencies(undefined);
   return {
     ...real,
     worktreeRoot: path.join(root, "worktrees"),

@@ -513,8 +513,10 @@ or mint credentials. Repository branch switching and synchronization are UI-only
 backend actions and are not MCP tools.
 
 In addition to the ordinary discovery tools, a coordinator can schedule
-actions for later (`create_schedule`, `list_schedules`, `cancel_schedule`,
-capability `schedules`, granted to the main and side roles; see
+actions for later and manage its own schedules (`create_schedule`,
+`list_schedules`, `cancel_schedule`, `pause_schedule`, `resume_schedule`,
+`update_schedule`, capability `schedules`, granted to the main and side
+roles; `update_schedule` checks a new action as `create_schedule` does; see
 [scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, run saved graphs, and use durable mailbox
@@ -552,10 +554,39 @@ a template (D6); a test asserts none exists. A coordinator schedules a graph
 with `create_schedule` and `type: "tool", tool: "launch_graph"`.
 It can also drive a worker's own surfaces: open a terminal or tmux tab
 (`launch_terminal`), open or navigate a browser preview
-(`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open
+(`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), stop
+one tab's running turn without stopping the environment (`stop_worker_turn`),
+list and run a native tab's slash commands with `session.command`'s
+restrictions (`list_worker_commands`, `run_worker_command`; capability
+`jobs`, so main only), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
-fix (`custom_fix_multi_review`), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
+fix (`custom_fix_multi_review`), raise a reviewed worker's pull request
+(`create_pr`, the PR tab) and resolve its conflicts (`resolve_conflicts`, the
+Resolve tab, refused as the button is when the worker has no open,
+conflicting PR), launch feature planning, fork a worker from
+its last commit into a new delegated worker (`fork_worker`, capability
+`environments`, a `requestId` receipt), and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
+[`coordinator.md`](coordinator.md#worker-surfaces). `create_pr` and
+`resolve_conflicts` have capability `multi-review`, so side agents never get
+them; neither merges. Its `get_environment` and `list_environments` rows
+also carry a worker's PR conflicts, mergeability, check counts and whether
+it is ready to merge (`prHasMergeConflicts`, `prMergeability`, `prChecks`,
+`prReadyToMerge`), from the PR monitor and never from a GitHub call made for
+the read; see [`coordinator.md`](coordinator.md#control-mcp). `get_worker_changes`
+(capability `discovery`, so side agents have it too) reads what a worker
+changed, local or container: branch, base, commits since the base, changed
+and uncommitted files with line counts, and bounded diffs, all from backend
+change tracking; it only reads and refuses the project home.
+For a worker waiting on a question, the main coordinator reads the question in
+`get_tab_state` (`state.interactions`) and may propose an answer
+(`answer_worker_question`, capability `environments`, with `nodeId` for a
+worker on a connected node). It answers nothing: the user confirms, edits or
+declines it, and only the approval answers the worker through
+`answer_project_worker_question` or, on another node,
+`answer_controller_worker_question`. Both, and
+`resolve_native_agent_interaction` itself, are refused by name to coordinator
+credentials. Approvals and permissions are never relayed; see
 [`coordinator.md`](coordinator.md#worker-surfaces).
 It can give a tab it launched or prompted a goal (`set_worker_goal`,
 `get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`); see
@@ -590,8 +621,10 @@ message ID so restart reconciliation cannot lose or duplicate them. Besides
 completion, a coordinator is sent a status notice when work it started settles
 — a Multi Review ready to address or fixed, its automatic PR session started,
 opened or failed, a build paused on an error, a stall, a delegated tab waiting
-on input — and the tools that start a workflow
-say so in their result (`delivery: "async"`); see
+on input, a pull request it raised (or resolved, or its review's auto-PR
+opened) opening, conflicting, failing a check, becoming ready to merge,
+merging or closing, and its Resolve tab finishing — and the tools that start a workflow
+or raise or resolve a PR say so in their result (`delivery: "async"`); see
 [`coordinator.md`](coordinator.md#status-wakes).
 
 Agent launches, prompt dispatches, agent messages, ticket creation, comment

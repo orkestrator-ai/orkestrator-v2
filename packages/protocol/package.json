@@ -67,6 +67,7 @@
     "./portal-layout": "./src/portal-layout.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./coordinator-surfaces": "./src/coordinator-surfaces.ts",
+    "./worker-question-relay": "./src/worker-question-relay.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./node/claude-linux-sandbox": "./src/node/claude-linux-sandbox.ts",
     "./node/claude-plugin-set": "./src/node/claude-plugin-set.ts",

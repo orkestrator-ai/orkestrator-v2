@@ -1,4 +1,5 @@
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
+import type { CoordinatorPrReading } from "./coordinator-pr-status.js";
 import type { CoordinatorWaitingBlocker } from "./coordinator-status-wakes.js";
 
 /**
@@ -40,6 +41,14 @@ export interface RemoteWorkflowRecord {
   environmentId?: string;
 }
 
+/** A followed pull request on another node, as `CoordinatorRemoteAccess.pullRequestReading` reads it. */
+export interface RemotePullRequestReading {
+  reading: CoordinatorPrReading;
+  name?: string;
+  /** The worker is being deleted there: report a final merge, then stop following. */
+  deleting?: boolean;
+}
+
 export interface CoordinatorRemoteAccess {
   workerState(nodeId: string, environmentId: string, tabId: string): Promise<RemoteWorkerState>;
   /** The worker's last assistant text, best effort. */
@@ -64,6 +73,15 @@ export interface CoordinatorRemoteAccess {
     nodeId: string,
     environmentId: string,
   ): Promise<{ prUrl?: unknown; prState?: unknown }>;
+  /**
+   * A worker's pull request reading for a followed PR: its environment record
+   * on the node, with the monitor health that node relays in its summaries.
+   * Null when the environment is gone there.
+   */
+  pullRequestReading?(
+    nodeId: string,
+    environmentId: string,
+  ): Promise<RemotePullRequestReading | null | "unavailable">;
   nodeName(nodeId: string): Promise<string>;
   /** True only after a complete outbox drain, including coalesced follow-ups. */
   collectMail?(nodeId: string): Promise<boolean>;

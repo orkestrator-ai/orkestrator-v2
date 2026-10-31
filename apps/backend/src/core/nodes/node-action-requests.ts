@@ -3,6 +3,11 @@ import {
   parseAgentsMdChanges,
   type AgentsMdChange,
 } from "@orkestrator/protocol/agents-md-orkestrator";
+import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
+import {
+  parseWorkerQuestionAnswers,
+  type WorkerQuestionRelay,
+} from "@orkestrator/protocol/worker-question-relay";
 
 /**
  * Actions a coordinator may only *request*; the user approves or rejects
@@ -28,10 +33,16 @@ import {
  *   Settings switch uses. It changes which subscription pays for every new
  *   turn there, so it needs the user unless a self-timer carries their
  *   permission (see `control-mcp-account-tools.ts`).
+ * - `answer-worker-question`: answer a question a worker on one node is
+ *   waiting on, with the answer the coordinator proposed or the user's edit
+ *   of it, through the same `resolve_native_agent_interaction` the worker's
+ *   tab uses. A question no longer pending settles `stale` and nothing is
+ *   sent. Approvals and permissions are never relayed.
  *
  * Requests hold names and identifiers only, never file contents or values;
- * the one exception is an AGENTS.md proposal's entries, which are the
- * coordinator's own bounded words the user reviews.
+ * the exceptions are an AGENTS.md proposal's entries, which are the
+ * coordinator's own bounded words the user reviews, and a worker question
+ * relay's bounded copy of the question and proposed answer.
  * The outcome is mailed back to the requesting coordinator conversation.
  *
  * An approved `update-agents-md` request keeps the user's final entries, and
@@ -50,7 +61,8 @@ export type NodeActionKind =
   | "reveal-env-value"
   | "apply-root-changes"
   | "update-agents-md"
-  | "switch-agent-account";
+  | "switch-agent-account"
+  | "answer-worker-question";
 
 /** Kinds whose approved, unfinished runs are resumed after a restart. */
 const RESUMABLE_KINDS: ReadonlySet<NodeActionKind> = new Set(["update-agents-md"]);
@@ -74,7 +86,15 @@ export interface NodeActionTarget {
 }
 
 export type NodeActionState =
-  "pending" | "approved" | "rejected" | "expired" | "executed" | "failed" | "outcome-unknown";
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "executed"
+  | "failed"
+  | "outcome-unknown"
+  /** Approved, but what it acts on had already gone; nothing was done. */
+  | "stale";
 
 export interface NodeActionRequest {
   requestId: string;
@@ -85,6 +105,8 @@ export interface NodeActionRequest {
   reason?: string;
   /** `update-agents-md`: the coordinator's proposal. */
   agentsMd?: { changes: AgentsMdChange[] };
+  /** `answer-worker-question`: the question as proposed and the coordinator's answer. */
+  workerQuestion?: WorkerQuestionRelay;
   createdAt: string;
   expiresAt: string;
   state: NodeActionState;
@@ -104,12 +126,21 @@ export interface NodeActionApproval {
   rememberFiles?: boolean;
   /** `update-agents-md`: the entries as the user edited them. */
   changes?: AgentsMdChange[];
+  /** `answer-worker-question`: the answer as the user settled it. */
+  answers?: AgentInteractionQuestionAnswer[];
 }
 
 export type NodeActionExecutor = (
   request: NodeActionRequest,
   approval: NodeActionApproval,
-) => Promise<{ code: string; message: string; url?: string; outcomeUnknown?: boolean }>;
+) => Promise<{
+  code: string;
+  message: string;
+  url?: string;
+  outcomeUnknown?: boolean;
+  /** What the request acts on had already gone; nothing was done. */
+  stale?: boolean;
+}>;
 
 /** Bounded, validated approval choices; unknown fields are dropped. */
 export function parseNodeActionApproval(value: unknown): NodeActionApproval {
@@ -135,6 +166,7 @@ export function parseNodeActionApproval(value: unknown): NodeActionApproval {
   }
   if (raw.rememberFiles !== undefined) approval.rememberFiles = raw.rememberFiles === true;
   if (raw.changes !== undefined) approval.changes = parseAgentsMdChanges(raw.changes);
+  if (raw.answers !== undefined) approval.answers = parseWorkerQuestionAnswers(raw.answers);
   return approval;
 }
 
@@ -199,6 +231,7 @@ export class NodeActionRequests {
     requestedBy: NodeActionRequest["requestedBy"];
     reason?: string;
     agentsMd?: NodeActionRequest["agentsMd"];
+    workerQuestion?: NodeActionRequest["workerQuestion"];
   }): Promise<NodeActionRequest> {
     if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
       throw new Error("Expected a requestId of 1-256 characters");
@@ -213,7 +246,8 @@ export class NodeActionRequests {
           JSON.stringify(existing.targets) !== JSON.stringify(input.targets) ||
           JSON.stringify(existing.requestedBy) !== JSON.stringify(input.requestedBy) ||
           existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined) ||
-          JSON.stringify(existing.agentsMd) !== JSON.stringify(input.agentsMd)
+          JSON.stringify(existing.agentsMd) !== JSON.stringify(input.agentsMd) ||
+          JSON.stringify(existing.workerQuestion) !== JSON.stringify(input.workerQuestion)
         )
           throw new Error("Request ID was reused with a different payload");
         await this.persist();
@@ -229,6 +263,7 @@ export class NodeActionRequests {
       requestedBy: { ...input.requestedBy },
       ...(input.reason ? { reason: input.reason.slice(0, 500) } : {}),
       ...(input.agentsMd ? { agentsMd: structuredClone(input.agentsMd) } : {}),
+      ...(input.workerQuestion ? { workerQuestion: structuredClone(input.workerQuestion) } : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + NODE_ACTION_REQUEST_TTL_MS).toISOString(),
       state: "pending",
@@ -312,7 +347,11 @@ export class NodeActionRequests {
       } else {
         try {
           const outcome = await executor(structuredClone(request), approval);
-          request.state = outcome.outcomeUnknown ? "outcome-unknown" : "executed";
+          request.state = outcome.outcomeUnknown
+            ? "outcome-unknown"
+            : outcome.stale
+              ? "stale"
+              : "executed";
           request.result = {
             code: outcome.code,
             message: outcome.message,
@@ -364,7 +403,9 @@ export class NodeActionRequests {
 }
 
 /** One line the user and the coordinator both read, naming every node and environment. */
-export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "targets">): string {
+export function describeNodeAction(
+  request: Pick<NodeActionRequest, "kind" | "targets" | "workerQuestion">,
+): string {
   const names = (target: NodeActionTarget) => target.environmentName ?? target.environmentId ?? "";
   switch (request.kind) {
     case "delete-environment":
@@ -401,6 +442,13 @@ export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "ta
         .map(
           (target) =>
             `the active ${target.platform === "codex" ? "Codex" : "Claude"} account on ${target.nodeName} to “${target.accountLabel ?? target.accountId}”`,
+        )
+        .join(", ")}`;
+    case "answer-worker-question":
+      return `Answer a question ${request.targets
+        .map(
+          (target) =>
+            `${request.workerQuestion?.tabName ? `in tab “${request.workerQuestion.tabName}” ` : ""}of “${names(target)}” on ${target.nodeName}`,
         )
         .join(", ")}`;
     case "update-agents-md":

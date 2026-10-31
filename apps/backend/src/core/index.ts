@@ -702,6 +702,14 @@ export class OrkestratorBackend {
             .backgroundWorkPending,
         waitingBlocker: (environmentId, tabId) => this.waitingBlocker(environmentId, tabId),
         workerNeedsHuman: (environmentId) => humanPrompts.hasEnvironmentPrompt(environmentId),
+        // Followed pull requests: the monitor's announced state, never a GitHub call.
+        prMonitorHealth: (environment) => {
+          const announced = this.runtime.prMonitor.announcedStates();
+          return {
+            ...this.runtime.prMonitor.relayedHealth(environment, announced),
+            lastSuccessfulCheckAt: announced.get(environment.id)?.lastSuccessfulCheckAt ?? null,
+          };
+        },
         workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId),
       },
     );
@@ -764,6 +772,8 @@ export class OrkestratorBackend {
         this.coordinators.settleRemoteWorker(nodeId, environmentId),
       noteRemoteWorkflowChange: (nodeId, kind, id) =>
         this.coordinators.statusWakes.noteRemoteWorkflowChange(nodeId, kind, id),
+      noteRemotePullRequestChange: (nodeId, environmentId) =>
+        this.coordinators.statusWakes.notePullRequestChange(environmentId, nodeId),
     });
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"

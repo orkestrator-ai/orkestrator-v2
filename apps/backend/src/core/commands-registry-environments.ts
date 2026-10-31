@@ -181,9 +181,34 @@ export function registerEnvironmentCommands(
       ...runtime.prMonitor.relayedHealth(environment, announced),
     }));
   });
-  register("get_environment", async ({ environmentId }, { storage }) => {
+  /**
+   * The PR monitor health of a project's environments (check counts, merge
+   * permission, whether the monitor vouches for the reading), from announced
+   * monitor state only: no reconciliation and no GitHub call. A coordinator's
+   * environment reads add it to decide "ready to merge".
+   */
+  register("get_environment_pr_health", async (args, { storage, runtime }) => {
+    const projectId = asString(args.projectId, "projectId");
+    const wanted = Array.isArray(args.environmentIds)
+      ? new Set(
+          args.environmentIds.filter((id): id is string => typeof id === "string").slice(0, 1_000),
+        )
+      : null;
+    const announced = runtime.prMonitor.announcedStates();
+    const health: Record<string, ReturnType<typeof runtime.prMonitor.relayedHealth>> = {};
+    for (const environment of await storage.getEnvironmentsByProject(projectId)) {
+      if (!environment.prUrl || (wanted && !wanted.has(environment.id))) continue;
+      health[environment.id] = runtime.prMonitor.relayedHealth(environment, announced);
+    }
+    return health;
+  });
+  register("get_environment", async ({ environmentId, includeFinalPrState }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    return environment ? reconcileProjectHomeEnvironment(environment, storage) : null;
+    return environment
+      ? reconcileProjectHomeEnvironment(environment, storage)
+      : includeFinalPrState === true
+        ? storage.getFinalEnvironmentPr(asString(environmentId, "environmentId"))
+        : null;
   });
   // `claude-state-*` frames are emitted only on change, so a client whose
   // disconnect outlasted gateway replay reads the persisted state here instead

@@ -9,13 +9,15 @@ import {
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
 import { z } from "zod";
-import type { ScheduleCreateInput } from "./service.js";
+import type { ScheduleCreateInput, ScheduleUpdateInput } from "./service.js";
 
 /**
  * `create_schedule`, `list_schedules` and `cancel_schedule`, shared by the
  * agent tools MCP (an agent in an environment) and the coordinator's Control
- * MCP. Each surface supplies a backend that acts as the caller its credential
- * authenticated; the tool arguments can never name a different owner.
+ * MCP, plus the coordinator's `pause_schedule`, `resume_schedule` and
+ * `update_schedule`. Each surface supplies a backend that acts as the caller
+ * its credential authenticated; the tool arguments can never name a
+ * different owner.
  */
 
 /** A self-timer's account-switch permission, as the coordinator asked for it. */
@@ -43,6 +45,14 @@ export interface ScheduleToolBackend {
   ): Promise<{ schedule: ScheduledJob; replayed: boolean }>;
   list(tabId?: string): Promise<ScheduledJobSummary[]>;
   cancel(scheduleId: string, tabId?: string): Promise<{ scheduleId: string; deleted: boolean }>;
+  /**
+   * Coordinators only: one of the caller's schedules, and the edits the
+   * public `schedule.pause`, `schedule.resume` and `schedule.update` make.
+   */
+  get?(scheduleId: string): Promise<ScheduledJob>;
+  pause?(scheduleId: string): Promise<ScheduledJob>;
+  resume?(scheduleId: string): Promise<ScheduledJob>;
+  update?(scheduleId: string, input: ScheduleUpdateInput): Promise<ScheduledJob>;
 }
 
 export type ScheduleToolSurface = "agent" | "coordinator";
@@ -262,6 +272,57 @@ export function scheduleActionFromTool(action: ActionInput): ScheduleAction {
   }
 }
 
+/**
+ * The stored action for a tool action, as `create_schedule` and
+ * `update_schedule` both build it: a self-timer through the backend (which
+ * checks and stamps any account-switch permission), anything else as given.
+ */
+async function toolScheduleAction(
+  backend: ScheduleToolBackend,
+  input: ActionInput,
+  repeating: boolean,
+): Promise<ScheduleAction> {
+  if (input.authorizeAccountSwitch && input.type !== "remind_me") {
+    throw new Error("authorizeAccountSwitch goes with action type remind_me");
+  }
+  if (input.authorizeAccountSwitch && repeating) {
+    throw new Error("authorizeAccountSwitch requires a one-shot self-timer (at)");
+  }
+  if (input.type !== "remind_me") return scheduleActionFromTool(input);
+  if (!backend.selfTimer) throw new Error("remind_me is a coordinator self-timer");
+  return backend.selfTimer({
+    body: required(input.body, "body", "remind_me"),
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.authorizeAccountSwitch
+      ? { authorize: input.authorizeAccountSwitch as SelfTimerAuthorization }
+      : {}),
+  });
+}
+
+/**
+ * Whether an update can change when a schedule fires: its trigger, the zone
+ * its wall times are read in, or how late a missed fire may still run.
+ */
+function movesFire(
+  timing: Pick<ScheduleUpdateInput, "at" | "cron" | "startAt" | "timeZone" | "catchUpMinutes">,
+  everyMinutes: number | undefined,
+): boolean {
+  return (
+    timing.at !== undefined ||
+    timing.cron !== undefined ||
+    everyMinutes !== undefined ||
+    timing.startAt !== undefined ||
+    timing.timeZone !== undefined ||
+    timing.catchUpMinutes !== undefined
+  );
+}
+
+/** The reminder's subject is "Scheduled reminder: <name>". */
+function selfTimerName(body: string): string {
+  const summary = body.replace(/\s+/g, " ").trim();
+  return `Self-timer: ${summary.length > 80 ? `${summary.slice(0, 79)}…` : summary}`;
+}
+
 function scheduleView(job: ScheduledJob | ScheduledJobSummary) {
   const last =
     "lastFire" in job
@@ -324,6 +385,31 @@ export function registerScheduleTools(
     if (!resolved) throw new Error("Scheduled jobs are unavailable");
     return resolved;
   };
+  const timingFields = {
+    name: z.string().trim().min(1).max(120).optional(),
+    at: z.string().trim().min(1).max(64).optional(),
+    cron: z.string().trim().min(1).max(200).optional(),
+    everyMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(366 * 24 * 60)
+      .optional(),
+    startAt: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe("With everyMinutes: the first fire."),
+    timeZone: z.string().trim().min(1).max(64).optional().describe(`IANA zone; default ${zone}.`),
+    catchUpMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(7 * 24 * 60)
+      .optional(),
+  };
   server.registerTool(
     "create_schedule",
     {
@@ -338,35 +424,7 @@ export function registerScheduleTools(
       inputSchema: z.object({
         ...caller,
         requestId: z.string().trim().min(1).max(200),
-        name: z.string().trim().min(1).max(120).optional(),
-        at: z.string().trim().min(1).max(64).optional(),
-        cron: z.string().trim().min(1).max(200).optional(),
-        everyMinutes: z
-          .number()
-          .int()
-          .min(1)
-          .max(366 * 24 * 60)
-          .optional(),
-        startAt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(64)
-          .optional()
-          .describe("With everyMinutes: the first fire."),
-        timeZone: z
-          .string()
-          .trim()
-          .min(1)
-          .max(64)
-          .optional()
-          .describe(`IANA zone; default ${zone}.`),
-        catchUpMinutes: z
-          .number()
-          .int()
-          .min(0)
-          .max(7 * 24 * 60)
-          .optional(),
+        ...timingFields,
         action: actionSchema(surface),
       }),
       annotations: {
@@ -379,32 +437,13 @@ export function registerScheduleTools(
     async ({ requestId, everyMinutes, action, tabId, ...timing }) => {
       const resolved = available();
       const input = action as ActionInput;
-      if (input.authorizeAccountSwitch && input.type !== "remind_me") {
-        throw new Error("authorizeAccountSwitch goes with action type remind_me");
-      }
-      if (
-        input.authorizeAccountSwitch &&
-        (timing.cron !== undefined || everyMinutes !== undefined)
-      ) {
-        throw new Error("authorizeAccountSwitch requires a one-shot self-timer (at)");
-      }
-      let scheduled: ScheduleAction;
-      if (input.type === "remind_me") {
-        if (!resolved.selfTimer) throw new Error("remind_me is a coordinator self-timer");
-        scheduled = await resolved.selfTimer({
-          body: required(input.body, "body", "remind_me"),
-          ...(input.subject ? { subject: input.subject } : {}),
-          ...(input.authorizeAccountSwitch
-            ? { authorize: input.authorizeAccountSwitch as SelfTimerAuthorization }
-            : {}),
-        });
-      } else {
-        scheduled = scheduleActionFromTool(input);
-      }
+      const scheduled = await toolScheduleAction(
+        resolved,
+        input,
+        timing.cron !== undefined || everyMinutes !== undefined,
+      );
       if (input.type === "remind_me" && timing.name === undefined) {
-        // The reminder's subject is "Scheduled reminder: <name>".
-        const summary = input.body!.replace(/\s+/g, " ").trim();
-        timing.name = `Self-timer: ${summary.length > 80 ? `${summary.slice(0, 79)}…` : summary}`;
+        timing.name = selfTimerName(input.body!);
       }
       const created = await resolved.create(
         {
@@ -465,5 +504,106 @@ export function registerScheduleTools(
       textResult(
         await available().cancel(scheduleId, typeof tabId === "string" ? tabId : undefined),
       ),
+  );
+  if (surface === "coordinator") registerScheduleEditTools(server, available, timingFields);
+}
+
+/**
+ * `pause_schedule`, `resume_schedule` and `update_schedule`: the coordinator's
+ * form of `schedule.pause`, `schedule.resume` and `schedule.update`, on its
+ * own schedules only. An action given to `update_schedule` is built and
+ * checked exactly as `create_schedule` builds and checks it, under the
+ * caller's current scope, so a side agent cannot schedule a tool it cannot
+ * call; the backend lets only the schedule's owner change its action.
+ */
+function registerScheduleEditTools(
+  server: McpServer,
+  available: () => ScheduleToolBackend,
+  timingFields: Record<string, z.ZodType>,
+): void {
+  const edits = () => {
+    const resolved = available();
+    if (!resolved.get || !resolved.pause || !resolved.resume || !resolved.update)
+      throw new Error("Editing schedules is unavailable here");
+    return resolved as Required<ScheduleToolBackend>;
+  };
+  const scheduleId = z.string().trim().min(1).max(100);
+  const write = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+  server.registerTool(
+    "pause_schedule",
+    {
+      title: "Pause a schedule",
+      description:
+        "Pause one of your schedules: it does not fire until resume_schedule. A fire already running finishes. Time spent paused is not caught up.",
+      inputSchema: z.object({ scheduleId }).strict(),
+      annotations: write,
+    },
+    async ({ scheduleId }) => textResult(scheduleView(await edits().pause(scheduleId))),
+  );
+  server.registerTool(
+    "resume_schedule",
+    {
+      title: "Resume a schedule",
+      description:
+        "Resume one of your paused schedules, including one Orkestrator paused because its target was deleted or its authority was lost (it pauses again at the next fire if that is still so). It fires next at its next slot after now; missed slots are not replayed.",
+      inputSchema: z.object({ scheduleId }).strict(),
+      annotations: write,
+    },
+    async ({ scheduleId }) => textResult(scheduleView(await edits().resume(scheduleId))),
+  );
+  server.registerTool(
+    "update_schedule",
+    {
+      title: "Change a schedule",
+      description:
+        "Change one of your schedules: its name, its time (exactly one of at, cron or everyMinutes replaces the old one), timeZone, catchUpMinutes or its action. Fields you leave out keep their value. A new action is checked as create_schedule checks it: it runs as you, with your permissions at fire time, and anything you could not do directly is refused. Only the schedule's owner can change its action. A self-timer that carries the user's account-switch permission keeps it only for the time it was given for: to change its time, timeZone or catchUpMinutes, give the action again with authorizeAccountSwitch in a turn the user started, or cancel it and create a new one. Giving a finished one-shot a new time runs it again.",
+      inputSchema: z
+        .object({ scheduleId, ...timingFields, action: actionSchema("coordinator").optional() })
+        .strict(),
+      annotations: { ...write, openWorldHint: true },
+    },
+    async (args) => {
+      const { scheduleId, everyMinutes, action, ...timing } = args as {
+        scheduleId: string;
+        everyMinutes?: number;
+        action?: ActionInput;
+      } & Omit<ScheduleUpdateInput, "action" | "everySeconds">;
+      const resolved = edits();
+      const existing = await resolved.get(scheduleId);
+      const retimed =
+        timing.at !== undefined || timing.cron !== undefined || everyMinutes !== undefined;
+      const repeating = retimed
+        ? timing.cron !== undefined || everyMinutes !== undefined
+        : existing.trigger.kind !== "once";
+      let scheduled: ScheduleAction | undefined;
+      if (action) {
+        scheduled = await toolScheduleAction(resolved, action, repeating);
+        if (action.type === "remind_me" && timing.name === undefined)
+          timing.name = selfTimerName(action.body!);
+      } else if (movesFire(timing, everyMinutes) && scheduleAccountSwitchGrant(existing.action)) {
+        // The user's permission was for the time they gave; anything that can
+        // change when it fires (a new time, zone or catch-up window) needs
+        // their word again.
+        throw new Error(
+          "This self-timer carries the user's permission to switch accounts at the time it was set for. To change at, cron, everyMinutes, startAt, timeZone or catchUpMinutes, give the action again (remind_me with authorizeAccountSwitch) in a turn the user started, or cancel it and create a new one. Its name can still be changed.",
+        );
+      }
+      const updated = await resolved.update(scheduleId, {
+        ...timing,
+        ...(everyMinutes !== undefined ? { everySeconds: everyMinutes * 60 } : {}),
+        ...(scheduled ? { action: scheduled } : {}),
+      });
+      return textResult({
+        ...scheduleView(updated),
+        ...(scheduleAccountSwitchGrant(updated.action)
+          ? { carriesAccountSwitchPermission: true }
+          : {}),
+      });
+    },
   );
 }

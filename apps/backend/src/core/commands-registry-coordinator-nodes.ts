@@ -184,7 +184,7 @@ async function mailbox(context: CommandContext, caller: Caller) {
 }
 
 /** Reports from that environment come back to this conversation. */
-async function recordOrigin(
+export async function recordOrigin(
   context: CommandContext,
   caller: Caller,
   target: CoordinatorNodeTarget,
@@ -198,7 +198,7 @@ async function recordOrigin(
 }
 
 /** The report contract a worker on another node is given with its delegation. */
-function remoteReportInstruction(nodeName: string): string {
+export function remoteReportInstruction(nodeName: string): string {
   return (
     `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
     `The coordinator runs on the command node that controls this machine (${nodeName} is this machine's name there). It is idle while you work and is woken once, when your turn ends. ` +
@@ -244,7 +244,7 @@ async function openNodeDelegation(
  * now, and its reports count against a fresh pair budget, as a new local
  * delegation's do.
  */
-async function startRemoteRequest(
+export async function startRemoteRequest(
   context: CommandContext,
   caller: Caller,
   associationId: string,

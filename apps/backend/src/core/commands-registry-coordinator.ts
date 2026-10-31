@@ -17,9 +17,11 @@ import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
+import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
 import { registerCoordinatorGoalActions } from "./coordinator-goal-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
+import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
 import {
   buildPipelineInputWithDefaults,
   multiReviewInputWithDefaults,
@@ -108,6 +110,14 @@ async function assertWorkerDelegationAvailable(
   }
 }
 
+/** The report contract a worker on this node is given with its delegation. */
+export function localReportInstruction(): string {
+  return (
+    `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
+    `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed), then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`
+  );
+}
+
 export async function assertContainerDelegationCommitPublished(
   context: CommandContext,
   projectId: string,
@@ -133,9 +143,11 @@ export function registerCoordinatorCommands(
 ): void {
   registerCoordinatorReviewActions(register, dependencies);
   registerCoordinatorSurfaceActions(register, dependencies);
+  registerCoordinatorWorkerTurnActions(register, dependencies);
   registerCoordinatorGoalActions(register, dependencies);
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
+  registerWorkerQuestionRelayCommands(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);
@@ -606,9 +618,7 @@ export function registerCoordinatorCommands(
                 conversationId,
                 baseBranch: delegationBaseBranch,
                 baseCommit: delegationBaseCommit,
-                instruction:
-                  `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
-                  `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed), then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`,
+                instruction: localReportInstruction(),
               },
               input.initialPrompt,
             )
@@ -722,75 +732,80 @@ export function registerCoordinatorCommands(
     const projectId = asNonBlankString(identity.projectId, "projectId");
     const coordinatorId = asNonBlankString(identity.coordinatorId, "coordinatorId");
     const conversationId = asNonBlankString(identity.conversationId, "conversationId");
-    await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
     const stableRequestId = asNonBlankString(requestId, "requestId");
     if (!record(input) || input.projectId !== projectId) {
       throw new Error("Invalid scoped build pipeline request");
     }
-    // Choices the coordinator left out run the Build button's saved defaults.
-    // The request hash below stays over the caller's payload, so a retry after
-    // the user edits their defaults still replays the original pipeline.
     const requestedInput = input;
-    input = buildPipelineInputWithDefaults(
-      requestedInput,
-      savedLaunchSettings(await context.storage.loadConfig(), projectId),
-    );
-    if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
-      throw new Error("Invalid scoped build pipeline request");
-    }
-    if (!input.delegationBaseBranch || !input.delegationBaseCommit) {
-      throw new Error("Coordinator build pipelines require an explicit base branch and commit");
-    }
-    if (input.existingEnvironmentId) {
-      const environment = await context.storage.getEnvironment(input.existingEnvironmentId);
-      if (
-        !environment ||
-        environment.projectId !== projectId ||
-        environment.createdFromCommit?.toLowerCase() !== input.delegationBaseCommit.toLowerCase()
-      ) {
-        throw new Error(
-          "The existing worker environment was not created from the requested delegation commit",
+    return runWorkflowStart(
+      `${projectId}\0${coordinatorId}\0${conversationId}\0build\0${stableRequestId}\0${actionHash(input)}`,
+      async () => {
+        await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
+        // Choices the coordinator left out run the Build button's saved defaults.
+        // The request hash below stays over the caller's payload, so a retry after
+        // the user edits their defaults still replays the original pipeline.
+        input = buildPipelineInputWithDefaults(
+          requestedInput,
+          savedLaunchSettings(await context.storage.loadConfig(), projectId),
         );
-      }
-    } else if (input.environmentType === "containerized") {
-      await assertContainerDelegationCommitPublished(
-        context,
-        projectId,
-        input.delegationBaseCommit,
-      );
-    }
-    const payloadHash = actionHash(requestedInput);
-    return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-      const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
-        id: randomUUID(),
-        projectId,
-        coordinatorId,
-        conversationId,
-        kind: "build-pipeline",
-        resourceId: `pending:${stableRequestId}`,
-        requestId: stableRequestId,
-        payloadHash,
-        baseBranch: input.delegationBaseBranch,
-        baseCommit: input.delegationBaseCommit,
-        createdAt: new Date().toISOString(),
-      });
-      if (!receipt.claimed && !receipt.association.pending) {
-        const existing = await context.storage.getBuildPipeline(receipt.association.resourceId);
-        if (!existing) throw new Error("Associated build pipeline was not found");
-        return existing.snapshot;
-      }
-      if (!receipt.claimed) {
-        throw new Error("Build pipeline creation is already in progress; retry this requestId");
-      }
-      // BuildPipelineService has its own durable admission key, so reclaiming a
-      // reservation after a crash returns the already-created workflow.
-      const workflow = await buildPipelines.start(input);
-      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-        receipt.association.id,
-        workflow.id,
-      );
-      return workflow;
-    });
+        if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
+          throw new Error("Invalid scoped build pipeline request");
+        }
+        if (!input.delegationBaseBranch || !input.delegationBaseCommit) {
+          throw new Error("Coordinator build pipelines require an explicit base branch and commit");
+        }
+        if (input.existingEnvironmentId) {
+          const environment = await context.storage.getEnvironment(input.existingEnvironmentId);
+          if (
+            !environment ||
+            environment.projectId !== projectId ||
+            environment.createdFromCommit?.toLowerCase() !==
+              input.delegationBaseCommit.toLowerCase()
+          ) {
+            throw new Error(
+              "The existing worker environment was not created from the requested delegation commit",
+            );
+          }
+        } else if (input.environmentType === "containerized") {
+          await assertContainerDelegationCommitPublished(
+            context,
+            projectId,
+            input.delegationBaseCommit,
+          );
+        }
+        const payloadHash = actionHash(requestedInput);
+
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
+          id: randomUUID(),
+          projectId,
+          coordinatorId,
+          conversationId,
+          kind: "build-pipeline",
+          resourceId: `pending:${stableRequestId}`,
+          requestId: stableRequestId,
+          payloadHash,
+          baseBranch: input.delegationBaseBranch,
+          baseCommit: input.delegationBaseCommit,
+          createdAt: new Date().toISOString(),
+        });
+        if (!receipt.claimed && !receipt.association.pending) {
+          const existing = await context.storage.getBuildPipeline(receipt.association.resourceId);
+          if (!existing) throw new Error("Associated build pipeline was not found");
+          return existing.snapshot;
+        }
+        if (!receipt.claimed) {
+          throw new Error("Build pipeline creation is already in progress; retry this requestId");
+        }
+        // BuildPipelineService has its own durable admission key, so reclaiming a
+        // reservation after a crash returns the already-created workflow.
+        const workflow = await buildPipelines.start(input);
+        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+          receipt.association.id,
+          workflow.id,
+        );
+        return workflow;
+      },
+    );
   });
   register(
     "start_coordinator_multi_review",

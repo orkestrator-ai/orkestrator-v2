@@ -127,6 +127,9 @@ export const SCHEDULE_TOOL_NAMES = [
   "create_schedule",
   "list_schedules",
   "cancel_schedule",
+  "pause_schedule",
+  "resume_schedule",
+  "update_schedule",
 ] as const;
 
 const RETRYABLE_PUBLIC_CODES = new Set(["busy", "not-ready", "dispatch-parked"]);
@@ -381,7 +384,7 @@ export class ScheduledJobExecutor {
 
   private assertToolSchedulable(tools: readonly InProcessToolInfo[], tool: string): void {
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(tool)) {
-      throw new ScheduleAuthorityError("A schedule cannot create or cancel schedules");
+      throw new ScheduleAuthorityError("A schedule cannot create, change or cancel schedules");
     }
     const found = tools.find((item) => item.name === tool);
     if (!found)
@@ -560,7 +563,7 @@ export class ScheduledJobExecutor {
     }
     const tool = ownerTool(job.action);
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(tool)) {
-      throw new ScheduleAuthorityError("A schedule cannot create or cancel schedules");
+      throw new ScheduleAuthorityError("A schedule cannot create, change or cancel schedules");
     }
     const result = await this.runtime.agentTools.callTool(owner, tool, {
       ...job.action.input,
@@ -631,7 +634,7 @@ export class ScheduledJobExecutor {
       };
     }
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(tool)) {
-      throw new ScheduleAuthorityError("A schedule cannot create or cancel schedules");
+      throw new ScheduleAuthorityError("A schedule cannot create, change or cancel schedules");
     }
     const result = await this.runtime.controlMcp.callCoordinatorTool(scope, tool, args);
     const outcome = toolOutcome(tool, result);

@@ -10,6 +10,8 @@ import {
 } from "./control-mcp-review-actions.js";
 import { registerAccountTools } from "./control-mcp-account-tools.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
+import { registerCoordinatorWorkerTools } from "./control-mcp-coordinator-worker-tools.js";
+import { registerCoordinatorWorkerTurnTools } from "./control-mcp-coordinator-worker-turns.js";
 import { registerCoordinatorGoalTools } from "./control-mcp-coordinator-goals.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
@@ -31,6 +33,13 @@ import {
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "./control-shared-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
+import {
+  coordinatorPrFields,
+  nodePrHealth,
+  prReadingFrom,
+  pullRequestFollowSummary,
+  thisNodePrHealth,
+} from "./coordinator-pr-status.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
 import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
@@ -68,6 +77,8 @@ export function registerCoordinatorWorkflowTools(
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
+  registerCoordinatorWorkerTools(server, invoke, coordinatorScope);
+  registerCoordinatorWorkerTurnTools(server, invoke, coordinatorScope);
   registerCoordinatorGoalTools(server, invoke, coordinatorScope);
   registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
@@ -111,7 +122,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, multi-review and graph-run associations for this project with bounded authoritative summaries.",
+        "List durable worker, build-pipeline, multi-review, graph-run and pull-request associations for this project with bounded authoritative summaries. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge).",
       inputSchema: z.object({}),
       annotations: readAnnotations(),
     },
@@ -151,6 +162,20 @@ export function registerCoordinatorWorkflowTools(
                 environmentId: resourceId,
               });
               resource = isRecord(environment) ? environmentSummary(environment) : null;
+            } else if (kind === "pull-request") {
+              // The worker, with the PR fields its environment reads carry.
+              const environment = await inv<unknown>("get_environment", {
+                environmentId: resourceId,
+              });
+              if (isRecord(environment)) {
+                const health = nodeId
+                  ? await nodePrHealth(invoke, nodeId)
+                  : await thisNodePrHealth(invoke, coordinatorScope.projectId, [environment]);
+                resource = {
+                  ...environmentSummary(environment),
+                  ...coordinatorPrFields(prReadingFrom(environment, health.get(resourceId))),
+                };
+              }
             } else if (kind === "build-pipeline") {
               const workflow = await inv<unknown>("get_build_pipeline", {
                 pipelineId: resourceId,
@@ -182,6 +207,7 @@ export function registerCoordinatorWorkflowTools(
             baseBranch: association.baseBranch,
             baseCommit: association.baseCommit,
             createdAt: association.createdAt,
+            ...(kind === "pull-request" ? { follow: pullRequestFollowSummary(association) } : {}),
             resource,
           };
         }),
@@ -572,7 +598,7 @@ export function registerCoordinatorWorkflowTools(
 function coordinatorScheduleBackend(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-): ScheduleToolBackend & { get(scheduleId: string): Promise<ScheduledJob> } {
+): Required<ScheduleToolBackend> {
   const ownConversation = async (): Promise<{ owner: ScheduleOwner; record: JsonRecord }> => {
     const snapshot = await invoke<unknown>("get_project_coordinator", {
       projectId: scope.projectId,
@@ -676,6 +702,24 @@ function coordinatorScheduleBackend(
       return invoke<{ scheduleId: string; deleted: boolean }>(
         "delete_scheduled_job",
         withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async pause(scheduleId) {
+      return invoke<ScheduledJob>(
+        "pause_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async resume(scheduleId) {
+      return invoke<ScheduledJob>(
+        "resume_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async update(scheduleId, input) {
+      return invoke<ScheduledJob>(
+        "update_scheduled_job",
+        withScheduleActor({ ...input, scheduleId }, await owner()),
       );
     },
   };

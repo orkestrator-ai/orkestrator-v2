@@ -898,6 +898,8 @@ export class CoordinatorService {
     const probe = this.options.workerBackgroundWork;
     if (
       !delegation ||
+      // The coordinator stopped this turn itself: the end is the answer.
+      delegation.stopRequestedAt ||
       // Waiting on the user: the coordinator has to hear now, not in minutes.
       this.options.workerNeedsHuman?.(association.resourceId) ||
       !(
@@ -1201,12 +1203,24 @@ export class CoordinatorService {
           (environment?.name ??
             (remoteState && remoteState !== "unavailable" ? remoteState.name : undefined) ??
             association.resourceId) + (nodeName ? ` on ${nodeName}` : "");
+        // A turn the coordinator stopped (stop_worker_turn) ends like any
+        // other, however its delegation closed (the turn end, or a failed or
+        // stopped environment); say who stopped it, so a turn end is not read
+        // as the worker finishing.
+        const stoppedByCoordinator = delegation.stopRequestedAt !== undefined;
         const outcome =
           delegation.state === "completed"
-            ? "finished"
+            ? stoppedByCoordinator
+              ? "stopped"
+              : "finished"
             : delegation.state === "failed"
               ? "failed"
               : "stopped";
+        const stopNote = !stoppedByCoordinator
+          ? `without sending a report.`
+          : delegation.state === "completed"
+            ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
+            : `after you stopped its turn with stop_worker_turn, before it sent a report.`;
         // What the worker last said is the closest thing to a report it left.
         // Only a finished turn has a live session worth reading; best effort.
         const excerpt =
@@ -1246,7 +1260,7 @@ export class CoordinatorService {
               subject: `Worker ${label} ${outcome}`,
               body:
                 `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
-                `without sending a report.` +
+                stopNote +
                 (backgroundWorkTimeoutMs !== undefined
                   ? ` Its turn ended while work it started in the background was still running, and none of it reported for ${backgroundWorkMinutes} ${backgroundWorkMinutes === 1 ? "minute" : "minutes"}; it may resume if that work reports.`
                   : "") +
@@ -1273,11 +1287,13 @@ export class CoordinatorService {
                 },
                 state: delegation.state,
                 tone:
-                  delegation.state === "completed"
-                    ? "success"
-                    : delegation.state === "failed"
-                      ? "failure"
-                      : "info",
+                  delegation.state === "failed"
+                    ? "failure"
+                    : stoppedByCoordinator
+                      ? "info"
+                      : delegation.state === "completed"
+                        ? "success"
+                        : "info",
               },
             },
           )

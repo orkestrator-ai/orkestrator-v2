@@ -309,6 +309,10 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_PR_RULE).toContain("create_pr");
     expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
     expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
+    // It also says how a raised PR is followed, and that merging is the user's.
+    expect(COORDINATOR_PR_RULE).toContain("You are woken when a pull request you raised opens");
+    expect(COORDINATOR_PR_RULE).toContain("call resolve_conflicts");
+    expect(COORDINATOR_PR_RULE).toContain("Never merge a pull request");
     // The worker is told the same, whatever the coordinator's prompt says.
     expect(COORDINATOR_WORKER_NO_PR_INSTRUCTION).toContain("Do not open a pull request");
     expect(COORDINATOR_WORKER_NO_PR_INSTRUCTION).toContain("even if the prompt below asks");

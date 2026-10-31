@@ -7,6 +7,7 @@ import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordin
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { StorageService } from "./storage.js";
 import type { CommandContext } from "./commands-context.js";
+import { workerSessionActivity } from "./worker-session-activity.js";
 import { createCommandRegistry } from "./commands-registry.js";
 
 const worlds: MailWorld[] = [];
@@ -110,5 +111,34 @@ test("production coordinator and leaf RPC share the raw/turn activity probe and 
     turn.mockRestore();
     pending.mockRestore();
     await backend.shutdown();
+  }
+});
+
+test("a queued native dispatch remains pending even when no activity service is available", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const sessions = spyOn(world.storage, "listNativeAgentSessions").mockResolvedValue([
+    {
+      environmentId: "queued",
+      logicalSessionKey: "env-queued:resolve",
+      agent: "codex",
+      pendingDispatch: { requestId: "resolve-start" },
+    },
+  ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
+  try {
+    expect(await workerSessionActivity(world.storage, undefined, "queued", "resolve")).toEqual({
+      turn: "unknown",
+      backgroundWorkPending: false,
+      requestPending: true,
+    });
+    const context = { storage: world.storage } as CommandContext;
+    expect(
+      await createCommandRegistry().get("get_worker_request_state")!(
+        { environmentId: "queued", tabId: "resolve" },
+        context,
+      ),
+    ).toMatchObject({ requestPending: true });
+  } finally {
+    sessions.mockRestore();
   }
 });

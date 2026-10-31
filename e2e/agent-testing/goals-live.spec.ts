@@ -400,18 +400,76 @@ test.describe(`goal loop: ${platform}`, () => {
         if (goal && !["active", "checking", "verifying"].includes(goal.status)) return goal;
         await page.waitForTimeout(2_000);
       }
-      throw new Error(`never ended; last ${JSON.stringify({ status: goal?.status })}`);
+      const queues = await invoke<
+        {
+          queueKey: string;
+          messages?: { id: string }[];
+          dispatchError?: unknown;
+          inFlight?: unknown;
+        }[]
+      >("list_prompt_queues", { environmentId: environment.id }).catch(() => []);
+      const view = await invoke<Projection>("get_native_agent_projection", identity).catch(
+        () => undefined,
+      );
+      throw new Error(
+        `never ended; last ${JSON.stringify({
+          status: goal?.status,
+          iterations: goal?.iterations,
+          phase: view?.turn.phase,
+          queues: queues.map((queue) => ({
+            ids: queue.messages?.map((message) => message.id),
+            dispatchError: queue.dispatchError,
+            inFlight: Boolean(queue.inFlight),
+          })),
+        })}`,
+      );
     };
     const scenarios = record.scenarios as Record<string, unknown>;
 
-    // A compaction queued behind the first turn runs first, and the loop goes on.
+    // Compacting while a goal waits, then resuming: the loop carries on with the
+    // shorter context. Providers also compact inside a turn, which the loop never sees.
     const compacting = await openTab(invoke, environment, "goals-compact", container, model);
     await send(
       compacting,
-      `Create goal-compact-1.txt and end your turn without calling report_goal. When you are told to continue, create goal-compact-2.txt, then call the orkestrator report_goal tool with status "done". --max-iterations 4 --check test -f goal-compact-2.txt`,
+      `Create goal-compact-1.txt, then call the orkestrator report_goal tool with status "blocked", saying you need to be told to continue. Once you are told to continue, create goal-compact-2.txt, then call report_goal with status "done". --max-iterations 4 --check test -f goal-compact-2.txt`,
     );
+    const waiting = await ended(compacting);
+    expect(waiting.status).toBe("blocked");
+    const compacted = await invoke<{ outcome?: string }>("perform_native_agent_session_action", {
+      ...compacting,
+      action: { kind: "compact" },
+    }).catch((error: unknown) => ({ outcome: `refused: ${String(error).slice(0, 200)}` }));
+    // A compact may run as a turn of its own; let it finish before resuming.
+    const settleBy = Date.now() + TURN_TIMEOUT_MS;
+    while (Date.now() < settleBy) {
+      const phase = (await invoke<Projection>("get_native_agent_projection", compacting)).turn
+        .phase;
+      if (phase === "idle" || phase === "error") break;
+      await page.waitForTimeout(2_000);
+    }
+    await send(compacting, "resume");
+    const afterCompact = await ended(compacting);
+    scenarios.compact = {
+      compacted: compacted?.outcome,
+      status: afterCompact.status,
+      reason: afterCompact.statusReason,
+      iterations: afterCompact.iterations,
+    };
+    writeSummary();
+    expect(afterCompact.status).toBe("complete");
+    expect(workspace.read("goal-compact-2.txt")).toBeDefined();
+
+    // A typed `/compact` delivered through the queue, with no goal anywhere: a
+    // record of what it does on this provider, not an assertion about goals.
+    const plain = await openTab(invoke, environment, "goals-plain-compact", container, model);
+    await invoke("dispatch_native_agent_intent", {
+      ...plain,
+      requestId: `plain-${Date.now()}`,
+      prompt: "Reply with one word.",
+      ...(model ? { model } : {}),
+    });
     await invoke("enqueue_prompt_queue_message", {
-      queueKey: `${platform}\0${compacting.logicalSessionKey}`,
+      queueKey: `${platform}\0${plain.logicalSessionKey}`,
       environmentId: environment.id,
       message: {
         id: `compact-${Date.now()}`,
@@ -420,15 +478,16 @@ test.describe(`goal loop: ${platform}`, () => {
         command: { kind: "typed" },
       },
     });
-    const afterCompact = await ended(compacting);
-    scenarios.compact = {
-      status: afterCompact.status,
-      reason: afterCompact.statusReason,
-      iterations: afterCompact.iterations,
-    };
+    let plainPhase: string | undefined;
+    const plainBy = Date.now() + 120_000;
+    await page.waitForTimeout(20_000);
+    while (Date.now() < plainBy) {
+      plainPhase = (await invoke<Projection>("get_native_agent_projection", plain)).turn.phase;
+      if (plainPhase === "idle" || plainPhase === "error") break;
+      await page.waitForTimeout(2_000);
+    }
+    record.queuedCompactWithNoGoal = plainPhase;
     writeSummary();
-    expect(afterCompact.status).toBe("complete");
-    expect(workspace.read("goal-compact-2.txt")).toBeDefined();
 
     // No check: an independent read-only session decides.
     const verifying = await openTab(invoke, environment, "goals-verifier", container, model);

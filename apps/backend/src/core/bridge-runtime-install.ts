@@ -17,6 +17,7 @@
  * beside the previous runtime instead of over it, and a bridge that is running
  * never has its modules replaced underneath it.
  */
+import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -124,9 +125,25 @@ async function install(
   }
   const bridgeRoot = path.dirname(runtime.installDir);
   await mkdir(bridgeRoot, { recursive: true, mode: 0o700 });
-  // One backend owns a data directory, and this process's flight map admits one
-  // install per digest, so any staging directory left here is a dead attempt.
-  await removeEntries(bridgeRoot, (name) => name.startsWith(STAGING_PREFIX));
+  const lock = await acquireInstallLock(bridgeRoot, options.timeoutMs);
+  try {
+    // A different backend may have finished this digest while we waited.
+    if (isBridgeRuntimeInstalled(runtime)) return runtime.installDir;
+    return await installLocked(runtime, options, label, bridgeRoot);
+  } finally {
+    lock.close();
+  }
+}
+
+async function installLocked(
+  runtime: OnDemandBridgeRuntime,
+  options: BridgeRuntimeInstallOptions,
+  label: string,
+  bridgeRoot: string,
+): Promise<string> {
+  // Older installers may not participate in our lock. Preserve their staging
+  // trees while their owners are alive; unknown ownership is also preserved.
+  await removeEntries(bridgeRoot, abandonedStaging);
 
   const staging = path.join(
     bridgeRoot,
@@ -180,14 +197,9 @@ async function install(
     await rm(staging, { recursive: true, force: true });
   }
 
-  // Earlier digests belong to builds this backend no longer runs. A launcher
-  // rollback reinstalls its own from bun's cache.
-  await removeEntries(bridgeRoot, (name) => name !== runtime.digest).catch((error: unknown) => {
-    console.warn(
-      `[ElectronBackend] Could not remove superseded ${runtime.bridge} runtimes:`,
-      error instanceof Error ? error.message : "unknown error",
-    );
-  });
+  // Keep previous digests. Other backends, bridges and their lazy-loading
+  // helpers may still use them, even after the installing backend has exited.
+  // Reclamation needs a separate maintenance pass with proof of no live users.
   console.log(`[ElectronBackend] Installed ${label} support into ${runtime.installDir}`);
   return runtime.installDir;
 }
@@ -211,4 +223,50 @@ async function removeEntries(directory: string, match: (name: string) => boolean
       .filter(match)
       .map((name) => rm(path.join(directory, name), { recursive: true, force: true })),
   );
+}
+
+/**
+ * A dedicated SQLite write transaction supplies an OS-backed cross-process
+ * lock, released even on a crash. This database contains no application data.
+ * Disable SQLite's synchronous busy wait and poll asynchronously so a second
+ * installer never blocks this backend's event loop. Do not unlink this file:
+ * waiters must always lock the same inode.
+ */
+async function acquireInstallLock(
+  directory: string,
+  timeoutMs = BRIDGE_RUNTIME_INSTALL_TIMEOUT_MS,
+) {
+  const lock = new Database(path.join(directory, ".install-lock.sqlite"));
+  lock.exec("PRAGMA busy_timeout = 0");
+  const deadline = Date.now() + timeoutMs;
+  try {
+    for (;;) {
+      try {
+        lock.exec("BEGIN IMMEDIATE");
+        return lock;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "SQLITE_BUSY") throw error;
+        if (Date.now() >= deadline)
+          throw new Error("Timed out waiting for bridge runtime installer");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  } catch (error) {
+    lock.close();
+    throw error;
+  }
+}
+
+function abandonedStaging(name: string): boolean {
+  if (!name.startsWith(STAGING_PREFIX)) return false;
+  const owner = /^\.staging-[0-9a-f]{16,64}-(\d+)-\d+$/.exec(name);
+  if (!owner) return false;
+  const pid = Number(owner[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }

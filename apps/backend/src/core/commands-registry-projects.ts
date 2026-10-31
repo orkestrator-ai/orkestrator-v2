@@ -1057,11 +1057,8 @@ export function registerProjectCommands(
    */
   register("cursor_sdk_login_start", async (payload, context) => {
     return startCursorSdkLogin(context, {
-      bridgeEntrypoint: nodePath.join(
-        await prepareBridgePath(context, "cursor-bridge"),
-        "dist",
-        "index.js",
-      ),
+      bridgeEntrypoint: async () =>
+        nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
       runtime: resolveBunBinary(context),
       // A client opens the link in its own browser, which may be on another
       // machine. Without the flag (an older client) this machine's desktop

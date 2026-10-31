@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
@@ -38,6 +38,84 @@ async function stop(child: Bun.Subprocess): Promise<number | undefined> {
     return await child.exited;
   } finally {
     clearTimeout(escalation);
+  }
+}
+
+/** Execute the installed bundle and its real SDK imports, with only catalogue I/O stubbed. */
+async function probePackedBridge(directory: string, name: string): Promise<void> {
+  const probe = path.join(directory, "packed-probe.mjs");
+  await writeFile(
+    probe,
+    `
+    const bridge = await import("./dist/index.js");
+    try {
+      const cursor = ${JSON.stringify(name)} === "cursor-bridge";
+      if (cursor) {
+        bridge.useCursorModelsForTests({ list: async () => [{ id: "packed-model", displayName: "Packed model" }] });
+      } else {
+        bridge.setModelRuntimeFactoryForTests(async () => ({
+          getAvailable: async () => [{
+            id: "packed-model", name: "Packed model", provider: "packed", api: "openai-completions",
+            baseUrl: "https://example.invalid", reasoning: false, input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192, maxTokens: 1024,
+          }],
+          getProvider: () => ({ name: "Packed" }),
+        }));
+      }
+      const address = bridge.server.address();
+      if (!address || typeof address === "string") throw new Error("Packed bridge did not listen");
+      const base = "http://127.0.0.1:" + address.port;
+      const headers = { authorization: "Bearer packed-smoke-token" };
+      const health = await fetch(base + "/global/health", { headers });
+      if (!health.ok) throw new Error("Packed bridge health failed: " + health.status);
+      const response = await fetch(base + "/global/models", { headers });
+      const body = await response.json();
+      const expected = cursor ? "packed-model" : "packed/packed-model";
+      if (!response.ok || !body.models?.some((model) => model.id === expected)) {
+        throw new Error("Packed bridge catalogue failed: " + JSON.stringify(body));
+      }
+      console.log(${JSON.stringify(name + ": packed runtime launch and catalogue passed")});
+    } finally {
+      await bridge.shutdown();
+    }
+  `,
+  );
+  const child = Bun.spawn([process.execPath, probe], {
+    cwd: directory,
+    env: {
+      ...process.env,
+      HOME: path.join(directory, "home"),
+      XDG_CONFIG_HOME: path.join(directory, "home", ".config"),
+      PORT: "0",
+      HOSTNAME: "127.0.0.1",
+      CWD: directory,
+      ORKESTRATOR_PARENT_PID: String(process.pid),
+      PI_BRIDGE_LIBRARY_ONLY: "0",
+      PI_AGENT_DIR: path.join(directory, "pi-agent"),
+      PI_BRIDGE_STATE_DIR: path.join(directory, "pi-state"),
+      PI_BRIDGE_AUTH_FILE: path.join(directory, "pi-auth.json"),
+      CURSOR_BRIDGE_STATE_DIR: path.join(directory, "cursor-state"),
+      CURSOR_BRIDGE_AUTH_FILE: path.join(directory, "cursor-auth.json"),
+      CURSOR_API_KEY: "packed-smoke-fake-key",
+      PI_BRIDGE_TOKEN: "packed-smoke-token",
+      CURSOR_BRIDGE_TOKEN: "packed-smoke-token",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), READY_TIMEOUT_MS);
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (code !== 0) throw new Error(`${name} packed probe exited ${code}: ${stderr.slice(-2000)}`);
+    console.log(stdout.trim());
+  } finally {
+    clearTimeout(timeout);
+    await stop(child);
   }
 }
 
@@ -109,6 +187,7 @@ try {
         `${bridge.name}: resolved ${specifier} -> ${Bun.resolveSync(specifier, path.join(target, "dist"))}`,
       );
     }
+    await probePackedBridge(target, bridge.name);
   }
 
   const dataDir = path.join(temporaryRoot, "data");

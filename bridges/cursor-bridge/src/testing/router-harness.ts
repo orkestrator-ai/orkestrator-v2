@@ -252,7 +252,7 @@ export function holdPublication(): {
  */
 export function stubAttach(options: {
   create?: () => Promise<SDKAgent>;
-  resume?: (agentId: string) => Promise<SDKAgent>;
+  resume?: (agentId: string, options: import("@cursor/sdk").AgentOptions) => Promise<SDKAgent>;
 }): () => void {
   const previousApiKey = process.env.CURSOR_API_KEY;
   process.env.CURSOR_API_KEY = "lifecycle-test-key";
@@ -269,9 +269,9 @@ export function stubAttach(options: {
       if (!options.create) throw new Error("this test does not create agents");
       return options.create();
     },
-    resume: async (agentId: string) => {
+    resume: async (agentId: string, agentOptions: import("@cursor/sdk").AgentOptions) => {
       if (!options.resume) throw new Error("this test does not resume agents");
-      return options.resume(agentId);
+      return options.resume(agentId, agentOptions);
     },
     listRuns: async () => ({ items: [] }),
   } as unknown as Parameters<typeof useCursorAgentForTests>[0]);

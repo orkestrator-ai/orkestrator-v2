@@ -1260,7 +1260,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor") {
       throw new PromptRejectedError(`${this.agent} does not support session forks`);
     }
     const response = await bridgeFetch(

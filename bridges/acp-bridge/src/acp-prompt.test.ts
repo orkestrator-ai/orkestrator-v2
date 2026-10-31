@@ -1,6 +1,7 @@
 import { describe, expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Must precede every bridge import below: `acp-prompt.js` pulls in
 // `acp-context.js`, which resolves `ACP_PROVIDER` at module scope and throws
@@ -1506,6 +1507,64 @@ describe("ACP bridge", () => {
     expect(user?.parts.map((part) => part.sourcePartId)).toEqual([
       `${messageId}:1`,
       `${messageId}:2`,
+    ]);
+  });
+
+  test("sends a text file as an embedded resource to an agent that advertises embeddedContext", async () => {
+    // Grok advertises `promptCapabilities.embeddedContext`, so its capability
+    // row offers file attachments; this is the path those sends take.
+    const workspace = await temporaryDirectory();
+    const blocksFile = resolve(workspace, "prompt-blocks.log");
+    await fs.writeFile(resolve(workspace, "notes.txt"), "line one\nline two\n");
+    await fs.writeFile(resolve(workspace, "blob.bin"), Buffer.from([0x41, 0x00, 0x42]));
+    const { base, headers } = await spawnBridge({
+      env: {
+        CWD: workspace,
+        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+        FAKE_ACP_EMBEDDED_CONTEXT: "true",
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    const send = (requestId: string, path: string) =>
+      nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:summarise it",
+          requestId,
+          attachments: [{ type: "file", path, filename: path }],
+        }),
+      });
+
+    const binary = await send("file-binary-1", "blob.bin");
+    expect(binary.status).toBe(400);
+
+    const dispatched = await send("file-text-1", "notes.txt");
+    expect(dispatched.status).toBe(202);
+    await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+
+    const lines = (await fs.readFile(blocksFile, "utf8")).trim().split("\n");
+    // The refused binary never reached the agent.
+    expect(lines).toHaveLength(1);
+    const blocks = JSON.parse(lines[0]!) as Array<Record<string, unknown>>;
+    expect(blocks).toEqual([
+      { type: "text", text: "DIRECT:summarise it" },
+      {
+        type: "resource",
+        resource: {
+          uri: pathToFileURL(resolve(workspace, "notes.txt")).href,
+          mimeType: "text/plain",
+          text: "line one\nline two\n",
+        },
+      },
     ]);
   });
 

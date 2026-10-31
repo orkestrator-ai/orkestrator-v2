@@ -27,6 +27,7 @@ import {
   asRecord,
   assertOnlyKeys,
   asBoolean,
+  asRequiredBoolean,
   asNumber,
   asStringArray,
   asNonBlankString,
@@ -53,6 +54,7 @@ import {
   getLocalServerStatus,
   conciseError,
   cleanupErrorMessage,
+  toClientEnvironment,
 } from "./commands-helpers.js";
 import type { MergeEnvironmentPrResult } from "./commands-helpers.js";
 
@@ -401,6 +403,26 @@ export function registerPullRequestCommands(
       asString(environmentId, "environmentId"),
       context,
     );
+  });
+  /**
+   * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
+   * flag is durable; turning it on also asks the monitor for a fresh reading
+   * and evaluates the current one, so a PR that is already ready merges now
+   * rather than on its next change.
+   */
+  register("set_environment_auto_merge", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "enabled"], "arguments");
+    const id = asString(args.environmentId, "environmentId");
+    const enabled = asRequiredBoolean(args.enabled, "enabled");
+    const updated = await context.storage.updateEnvironment(id, { autoMerge: enabled });
+    if (enabled) {
+      // Advisory: the durable flag stands even if the monitor cannot check now.
+      await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {
+        console.warn(`[pr-auto-merge] Could not refresh the PR of ${id}:`, conciseError(error));
+      });
+      void context.prAutoMerge?.evaluate(id);
+    }
+    return toClientEnvironment(updated);
   });
   /**
    * Durably arm the next completed agent turn to re-check a conflicting PR.

@@ -136,6 +136,11 @@ export interface Environment {
    * from older backends. Read through `@/lib/pr-merge-readiness`, never alone.
    */
   prMergeability?: GitHubPullRequestMergeability | null;
+  /**
+   * The backend merges the open PR once GitHub reports it ready and launches
+   * Resolve when it conflicts. Absent from older backends; means off.
+   */
+  autoMerge?: boolean;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;

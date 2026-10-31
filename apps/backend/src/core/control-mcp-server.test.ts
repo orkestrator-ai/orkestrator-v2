@@ -273,6 +273,11 @@ describe("Orkestrator control MCP server", () => {
         checked.invoke("merge_environment_pr", { method: "squash", deleteBranch: true }),
       ).rejects.toThrow("Coordinator capability denied");
       expect(invocations.some((item) => item.command === "merge_environment_pr")).toBe(false);
+      // Arming auto-merge would let the backend merge on the coordinator's behalf.
+      await expect(
+        checked.invoke("set_environment_auto_merge", { environmentId: "env-1", enabled: true }),
+      ).rejects.toThrow("Coordinator capability denied");
+      expect(invocations.some((item) => item.command === "set_environment_auto_merge")).toBe(false);
     });
 
     test(`workflow tool wake promises match the ${mode} observer policy`, async () => {

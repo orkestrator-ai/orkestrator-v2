@@ -343,6 +343,12 @@ export interface Environment {
    * unrelated concurrent turn cannot consume it.
    */
   prRecheckAfterAgentCompletionArmedAt?: string;
+  /**
+   * The user asked the backend to merge this environment's open pull request
+   * as soon as GitHub reports it ready, and to launch Resolve when it
+   * conflicts (`pr-auto-merge.ts`). Absent means off.
+   */
+  autoMerge?: boolean;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;

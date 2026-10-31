@@ -186,3 +186,38 @@ holds the band's colour still and a small icon appears (merge, merge conflict,
 or question). Under forced colours the sweep is removed. The row's
 `aria-describedby` reads "Ready to merge", "Merge conflicts to resolve" or
 "Waiting for your answer", and so does its hover card.
+
+## Auto-merge
+
+The **Auto-merge** toggle in the action bar's PR section (shown while the PR is
+open) sets the environment's durable `autoMerge` flag through
+`set_environment_auto_merge`. While the flag is on, the sidebar row shows a
+white merge icon to the right of the environment name. Turning it off stores an
+explicit `false`, because renderers merge environment records field by field.
+
+The merging is done by the backend, not the renderer, so it keeps working with
+no window open and resumes after a restart. `PrAutoMergeController`
+(`apps/backend/src/core/pr-auto-merge.ts`) subscribes to the PR monitor's
+in-process events and re-evaluates an environment on each announced reading,
+and once more when the toggle is switched on (after asking the monitor for a
+fresh check). `decideAutoMerge` uses `evaluatePrMergeReadiness` with the same
+freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
+
+- **Ready**: it runs `merge_environment_pr` exactly as the Merge PR button does
+  (squash, delete the branch, no environment cleanup).
+- **Conflicts**: it launches the Resolve agent through `launch_native_agent_job`
+  with the `resolve` action default, the PR's base branch, and the
+  `refresh-pr-after-agent-completion` completion action, without taking focus.
+  That action arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor
+  clears only once GitHub stops reporting conflicts. While it is armed no
+  second Resolve is launched, so a manual Resolve also counts, and a Resolve
+  that finishes with conflicts still present is left for the user rather than
+  relaunched.
+- **Anything else** (stale, mergeability unknown, draft, blocked, behind,
+  checks pending or failing, no merge permission): it waits for the next
+  reading.
+
+A failed merge or launch is retried after 60 s, doubling up to 15 minutes. A
+successful attempt also holds the same PR for 60 s, because a merge GitHub has
+accepted but not completed still reads as open and clean. Coordinators cannot
+call `set_environment_auto_merge`, as they cannot call `merge_environment_pr`.

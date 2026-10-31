@@ -1,11 +1,5 @@
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
-import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
-import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
-import {
-  resolveActionDefaults,
-  resolveDefaultAgent,
-  type AgentSettingsTiers,
-} from "@orkestrator/protocol/agent-settings";
+import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt } from "@orkestrator/protocol/pr-prompt";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
@@ -208,20 +202,7 @@ export async function launchPrAgent(
     };
   if (environment.prUrl) return { kind: "skipped", message: MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE };
 
-  const config = await storage.loadConfig();
-  const tiers: AgentSettingsTiers = {
-    environment: environment.agentSettings,
-    repository: config.repositories?.[environment.projectId]?.agentSettings,
-    global: config.global.agentSettings,
-  };
-  const enabled = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
-  const configuredFallback = resolveDefaultAgent(tiers);
-  const action = resolveActionDefault(resolveActionDefaults(tiers), "pr", {
-    fallbackAgent: enabled.includes(configuredFallback)
-      ? configuredFallback
-      : (enabled[0] ?? configuredFallback),
-    enabledAgents: enabled,
-  });
+  const action = await resolveEnvironmentActionDefault(storage, environment, "pr");
 
   // Settings reads can await; authorize at the final publication boundary.
   const admission = await beforeLaunch?.();

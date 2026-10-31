@@ -84,6 +84,7 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
+import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -363,6 +364,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     targetBranch,
     sourceBranch,
   } = useActionBarController({ presentation });
+  const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
 
   // Configure dialogs open on the Settings action default, which is the same
   // value `actionDefaultFor` gives a plain click on the same button.
@@ -1237,6 +1239,45 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </ToolbarTooltipTrigger>
                   {!isPRFinished && checkSummary && checkSummary.total > 0 && (
                     <PullRequestCheckStatusAnnouncement checkSummary={checkSummary} />
+                  )}
+
+                  {!isPRFinished && (
+                    <ToolbarTooltipTrigger
+                      tooltip={
+                        autoMerge.enabled ? (
+                          <>
+                            <p>
+                              Auto-merge is on: this PR merges as soon as GitHub reports it ready
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Merge conflicts launch Resolve automatically. Click to turn off.
+                            </p>
+                          </>
+                        ) : (
+                          "Merge this PR automatically once it is ready, resolving conflicts as needed"
+                        )
+                      }
+                    >
+                      <Button
+                        variant={isGrid ? "ghost" : "outline"}
+                        size="sm"
+                        className={cn(
+                          "gap-2",
+                          autoMerge.enabled &&
+                            "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
+                        )}
+                        onClick={() => void autoMerge.toggle()}
+                        aria-pressed={autoMerge.enabled}
+                        disabled={autoMerge.saving}
+                      >
+                        {autoMerge.saving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <GitMerge className="h-4 w-4" />
+                        )}
+                        <span className={cn(isGrid && "truncate text-xs")}>Auto-merge</span>
+                      </Button>
+                    </ToolbarTooltipTrigger>
                   )}
 
                   {!isPRFinished && hasMergeConflicts === false && (

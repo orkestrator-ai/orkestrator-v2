@@ -971,6 +971,11 @@ export class ProjectsRepository {
       if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
         environment.setupOverride = updates.setupOverride;
       }
+      if ("autoMerge" in updates) {
+        // Off is an explicit `false`, like lifecycleError's `null`: renderers
+        // merge snapshots field-by-field, so a dropped key would leave it on.
+        environment.autoMerge = updates.autoMerge === true;
+      }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
         if (intents === undefined || intents === null) {

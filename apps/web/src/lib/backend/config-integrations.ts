@@ -633,6 +633,17 @@ export async function mergeEnvironmentPr(
   });
 }
 
+/**
+ * Turns the backend's auto-merge on or off: while on, it merges the open PR
+ * once GitHub reports it ready and launches Resolve when it conflicts.
+ */
+export async function setEnvironmentAutoMerge(
+  environmentId: string,
+  enabled: boolean,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_auto_merge", { environmentId, enabled });
+}
+
 /** Submit and verify the current branch's PR merge from its container */
 export async function mergePr(
   containerId: string,

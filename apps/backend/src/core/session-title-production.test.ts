@@ -93,7 +93,8 @@ describe("production session title service", () => {
         appRoot: root,
         resourceRoot: root,
         toolchainBinDir: root,
-      } as CommandContext;
+        storage: { loadConfig: async () => ({ global: {} }) },
+      } as unknown as CommandContext;
       const service = createSessionTitleService(context);
       try {
         // An unrelated platform still uses the only signed-in strategy.
@@ -114,6 +115,15 @@ describe("production session title service", () => {
           expect(launchOrder).toEqual(["account:codex"]);
           expect(hostEnvironment).not.toHaveBeenCalled();
         }
+        // The saved setting decides: a Pi session's first message stays home.
+        const ownLoginOnly = createSessionTitleService({
+          ...context,
+          storage: {
+            loadConfig: async () => ({ global: { sessionTitleGeneration: "own-platform" } }),
+          },
+        } as unknown as CommandContext);
+        await expect(ownLoginOnly.generate({ agent: "pi", source: "Fixture" })).resolves.toBeNull();
+        await ownLoginOnly.shutdown();
       } finally {
         await service.shutdown();
         await rm(root, { recursive: true, force: true });

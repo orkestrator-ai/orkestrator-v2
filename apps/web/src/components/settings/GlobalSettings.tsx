@@ -49,6 +49,11 @@ import {
   resolveClaudeBackgroundCommandLimitHours,
 } from "@orkestrator/protocol/claude-background-commands";
 import {
+  DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+  resolveSessionTitleGenerationPolicy,
+  type SessionTitleGenerationPolicy,
+} from "@orkestrator/protocol/session-title-generation";
+import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
   isValidDebugLogRetentionDays,
@@ -129,6 +134,7 @@ interface CoreFieldsSnapshot {
   openCodeModelProviders: string[];
   codexMaxConcurrentThreads: number;
   claudeBackgroundCommandLimitHours: number;
+  sessionTitleGeneration: SessionTitleGenerationPolicy;
   terminalAppearance: TerminalAppearance;
   terminalScrollback: number;
   terminalHistoryEnabled: boolean;
@@ -176,6 +182,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     claudeBackgroundCommandLimitHours: resolveClaudeBackgroundCommandLimitHours(
       global.claudeBackgroundCommandLimitHours,
     ),
+    sessionTitleGeneration: resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
     terminalAppearance: {
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
@@ -265,6 +272,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
+    resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
     global.terminalAppearance?.fontFamily ?? "",
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
@@ -347,6 +355,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   );
   const [claudeBackgroundCommandLimitHours, setClaudeBackgroundCommandLimitHours] = useState(() =>
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
+  );
+  const [sessionTitleGeneration, setSessionTitleGeneration] = useState(() =>
+    resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
     global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
@@ -468,6 +479,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setClaudeBackgroundCommandLimitHours(
       resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     );
+    setSessionTitleGeneration(resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration));
     const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
     setTerminalFontFamily(appearance.fontFamily);
     setTerminalFontSize(appearance.fontSize);
@@ -653,6 +665,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
+      sessionTitleGeneration,
       terminalAppearance: {
         fontFamily: terminalFontFamily,
         fontSize: terminalFontSize,
@@ -691,6 +704,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       openCodeModelProviders,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
+      sessionTitleGeneration,
       terminalFontFamily,
       terminalFontSize,
       terminalBackgroundColor,
@@ -867,6 +881,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         openCodeModelProviders: string[];
         codexMaxConcurrentThreads: number;
         claudeBackgroundCommandLimitHours?: number;
+        sessionTitleGeneration?: SessionTitleGenerationPolicy;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         terminalHistoryEnabled: boolean;
@@ -905,6 +920,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         // Absent keeps the Claude CLI's own ceiling and its foreground limit.
         ...(claudeBackgroundCommandLimitHours !== DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS
           ? { claudeBackgroundCommandLimitHours }
+          : {}),
+        // Absent keeps following the default if it ever changes.
+        ...(sessionTitleGeneration !== DEFAULT_SESSION_TITLE_GENERATION_POLICY
+          ? { sessionTitleGeneration }
           : {}),
         terminalAppearance: {
           fontFamily: terminalFontFamily,
@@ -1166,6 +1185,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setCodexMaxConcurrentThreads,
     claudeBackgroundCommandLimitHours,
     setClaudeBackgroundCommandLimitHours,
+    sessionTitleGeneration,
+    setSessionTitleGeneration,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,

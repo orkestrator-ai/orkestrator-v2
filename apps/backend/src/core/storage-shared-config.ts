@@ -49,6 +49,7 @@ import {
   MAX_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
   MIN_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
 } from "@orkestrator/protocol/claude-background-commands";
+import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
 import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
@@ -89,6 +90,13 @@ export function validateClaudeBackgroundCommandLimitHours(value: unknown): numbe
   return value;
 }
 
+/** Absent means the default policy. */
+export function validateSessionTitleGeneration(value: unknown): void {
+  if (value !== undefined && !isSessionTitleGenerationPolicy(value)) {
+    throw new Error("sessionTitleGeneration must be any-signed-in, own-platform or off.");
+  }
+}
+
 export function migrateLegacyReviewInstruction(global: JsonRecord): JsonRecord {
   if (
     global.reviewInstruction === undefined &&
@@ -117,6 +125,7 @@ export function validateConfigReviewInstruction(value: unknown): AppConfig {
   parseReviewInstruction(global.reviewInstruction);
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
   validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
+  validateSessionTitleGeneration(global.sessionTitleGeneration);
   return {
     ...value,
     global,
@@ -131,6 +140,7 @@ export function validateGlobalReviewInstruction(value: unknown): AppConfig["glob
   parseReviewInstruction(global.reviewInstruction);
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
   validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
+  validateSessionTitleGeneration(global.sessionTitleGeneration);
   return global as unknown as AppConfig["global"];
 }
 
@@ -182,6 +192,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.claudeBackgroundCommandLimitHours,
   )
     ? global.claudeBackgroundCommandLimitHours
+    : undefined;
+  const sessionTitleGeneration = isSessionTitleGenerationPolicy(global.sessionTitleGeneration)
+    ? global.sessionTitleGeneration
     : undefined;
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
@@ -326,6 +339,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.claudeBackgroundCommandLimitHours === claudeBackgroundCommandLimitHours &&
+    global.sessionTitleGeneration === sessionTitleGeneration &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
     global.terminalHistoryEnabled === terminalHistoryRetention.enabled &&
     global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
@@ -356,6 +370,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ...nextGlobal,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
+      sessionTitleGeneration,
       debugLogRetentionDays,
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,

@@ -883,6 +883,27 @@ records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
 
+### MCP editor and live panel without credentials
+
+`e2e/agent-testing/mcp-ui-matrix.spec.ts` drives the MCP editor's conflict
+recovery and secret replacement at 1440 and 390 px, then a Claude session
+with one healthy and one failing fixture server: reconnect from the live
+panel and a hard reload. No model is called: without a login the Claude CLI
+still connects and reports its MCP servers before the turn fails. It needs
+`ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips unless the
+profile lists no Claude credential source:
+
+```bash
+mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp-ui ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
+  mise run test:logged -- --name mcp-ui -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-ui-matrix.spec.ts
+```
+
+Screenshots go to `output/agent-testing/<run-id>/mcp-ui-matrix/`. Secret
+values are compared in memory and never printed or captured.
+
 ### Live slash commands in an inactive environment
 
 `e2e/agent-testing/slash-command-inactive.spec.ts` sends a selected project

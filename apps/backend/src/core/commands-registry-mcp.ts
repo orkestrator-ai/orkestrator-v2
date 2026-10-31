@@ -22,6 +22,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
 import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
+import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
@@ -515,6 +516,7 @@ export function mcpManagement(context: CommandContext): McpManagementService {
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
+      claudeAccountHomes: () => addedClaudeAccountHomes(context),
     });
     services.set(context.storage, service);
   }

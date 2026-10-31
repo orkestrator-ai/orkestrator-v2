@@ -283,7 +283,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
   const { plugins, sdkPrompt, queryEnvironment, mcpServers, mcpServerNames, mcpServersKey } = plan;
   const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
   // Created before the query so the hooks it launches with read this state.
-  const mcp = createClaudeRuntimeMcp(mcpServers, mcpServerNames);
+  const mcp = createClaudeRuntimeMcp(mcpServers, mcpServerNames, plan.accountOnlyMcpServers);
   // Hooks and callbacks fire on the runtime's behalf for whichever turn
   // they concern: the one whose row holds the tool, else the latest turn.
   const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -185,13 +185,24 @@ describe("Codex project trust comes from Codex's own settings", () => {
     expect(project.trust).toBe("excluded");
   });
 
-  test("trust keys are compared after resolving symlinks", async () => {
+  test("the folder is resolved through symlinks, the trust keys are not", async () => {
     const link = path.join(fixture.root, "link");
     symlinkSync(fixture.worktree, link);
     fixture.environment.worktreePath = link;
-    fixture.write("home/.codex/config.toml", `[projects."${link}"]\ntrust_level = "trusted"\n`);
-    const { project } = await codexProject();
+    fixture.write(
+      "home/.codex/config.toml",
+      `[projects."${realpathSync(fixture.worktree)}"]\ntrust_level = "trusted"\n`,
+    );
+    let { project } = await codexProject();
     expect(project.trust).toBe("allowed");
+
+    // Codex 0.166.0 ignores a key spelled through a symlink or with a
+    // trailing slash, even for a session started in that spelling.
+    for (const key of [link, `${realpathSync(fixture.worktree)}/`]) {
+      fixture.write("home/.codex/config.toml", `[projects."${key}"]\ntrust_level = "trusted"\n`);
+      ({ project } = await codexProject());
+      expect(project.trust).toBe("unknown");
+    }
   });
 });
 

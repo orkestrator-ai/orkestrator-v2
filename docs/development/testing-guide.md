@@ -187,6 +187,13 @@ The bundled Chromium build does not expose this native popup through automation
 on macOS; use the Chrome channel for this spec rather than simulating a
 suggestion by assigning the input value.
 
+The bundled Chromium itself needs no manual step. `test:browser`, the
+`test:agent:browser*` tasks, `test:agent:design:isolated` and
+`test:agent:docker` depend on `mise run playwright:install`, which downloads the
+build the pinned Playwright needs into the shared cache and does nothing when it
+is already there. It passes `--no-remove`, so builds that worktrees on another
+Playwright version still use are kept.
+
 ### macOS shell-test prerequisites
 
 The default root suite executes Linux container scripts in isolated host
@@ -1088,6 +1095,18 @@ Exact repository `commandProfiles` can declare `workers`, `minWorkers` and
 A profile describes what a command wants, not what the host has: a requirement
 larger than the frozen host budget is clamped down to it rather than refused, so
 a lowered ceiling slows a command instead of making it permanently incomplete.
+
+An admitted ordinary command is told its grant in `ORKESTRATOR_VALIDATION_GRANTED_WORKERS`,
+leaving the per-package `ORKESTRATOR_TEST_WORKERS` setting unchanged,
+and every validation command sees `ORKESTRATOR_REVIEW_VALIDATION=1`. The
+component browser suite (`e2e/playwright.config.ts`) runs the smaller of the
+grant and Playwright's own default of half the cores, so a busy host runs fewer
+browser workers instead of starving them, and an idle one runs as many as a
+person's run. Its profile asks for eight slots with a floor of four, because
+measured CPU use undercounts a suite that mostly waits on pages. Under review
+validation that suite also retries a failed test once. A test that passes on
+its retry is listed as flaky in the check's output; record it in the flake
+registry like any other.
 
 Use `workspace:` resource names for workspace-local directories and services, and
 `workspace:*` to exclude other commands in the same worktree. Use `host:` names

@@ -53,6 +53,7 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { closeElectron, electronProcessTree } from "./design-electron-cleanup";
 import { ownProcessGroup, stopProcessGroup, waitForStopped, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -162,7 +163,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
     vite = spawn("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         VITE_DEV_HOST: "127.0.0.1",
@@ -171,6 +172,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
       },
     });
     ownProcessGroup(vite);
+    recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     app = await electron.launch({
       executablePath: electronExecutable,
@@ -185,6 +187,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
       },
     });
+    recordElectronDiagnostics(app);
     const electronApp = app;
     dismissStartupDialogs(electronApp);
     const window = await electronApp.firstWindow({ timeout: 90_000 });

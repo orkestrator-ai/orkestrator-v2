@@ -65,6 +65,11 @@ import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { startPreviewFixture, type PreviewFixture } from "../../test-fixtures/preview-app/server";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  recordElectronDiagnostics,
+  recordProcessOutput,
+  withElectronDiagnostics,
+} from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -214,6 +219,7 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
       [AGENT_TEST_PREVIEW_RETENTION_ENV]: "2000",
     },
   });
+  recordElectronDiagnostics(app);
   dismissStartupDialogs(app);
   // A bounded tail of main-process output, for startup diagnostics only.
   let tail = "";
@@ -757,7 +763,7 @@ test.beforeAll(async () => {
   const vite = spawn("bun", ["run", "dev"], {
     cwd: webRoot,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       VITE_DEV_HOST: "127.0.0.1",
@@ -766,6 +772,7 @@ test.beforeAll(async () => {
     },
   });
   ownProcessGroup(vite);
+  recordProcessOutput("vite", vite);
   const partial = {
     temporaryRoot,
     profile,
@@ -788,7 +795,7 @@ test.beforeAll(async () => {
     b: { marker: "svc-b", fixture: fixtures[1]!, port: fixtures[1]!.port } as Service,
   };
   await waitForUrl(rendererUrl);
-  const { app, window, windowId } = await launchElectron(partial);
+  const { app, window, windowId } = await withElectronDiagnostics(() => launchElectron(partial));
   partial.app = app;
   partial.window = window;
   partial.windowId = windowId;

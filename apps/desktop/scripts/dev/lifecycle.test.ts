@@ -1,16 +1,20 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { initializeProfile } from "./profile-io.js";
+import { atomicWriteJson, initializeProfile } from "./profile-io.js";
 import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   electronReadinessTimeoutMs,
+  outputTail,
   startDevelopment,
+  withOutputTails,
   configuredDevWorktreeRoot,
   profileWorktreeLocation,
 } from "./lifecycle.js";
@@ -90,6 +94,108 @@ describe("Electron readiness", () => {
     // after a fixed timeout meant `mise run dev` never reached the app.
     expect(electronReadinessTimeoutMs("development")).toBeNull();
     expect(electronReadinessTimeoutMs("agent-test")).toBe(60_000);
+  });
+  test("keeps the one-shot ready frame emitted during post-spawn status persistence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
+    const roots = {
+      developmentRoot: path.join(root, "dev"),
+      productionDataDir: path.join(root, "production"),
+      homeDir: root,
+    };
+    const args = parseDevArguments(["--profile", "ready-race"]);
+    const profile = resolveRuntimeProfile({
+      repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
+      requestedId: args.profile,
+      roots,
+    });
+    const child = () =>
+      Object.assign(new EventEmitter(), {
+        pid: 1_000_000_000,
+        exitCode: 0,
+        signalCode: null,
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      }) as unknown as ChildProcess;
+    const vite = child();
+    const electron = child();
+    const frame = JSON.stringify({
+      ...complete,
+      type: "orkestrator-electron-ready",
+      profile: profile.id,
+    });
+    let postSpawnWritePending = false;
+    let reachedReady = false;
+    const signals = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+    const watchdog = setTimeout(() => electron.emit("exit", 1, null), 2000);
+    try {
+      await startDevelopment(args, "development", {
+        roots,
+        prune: async () => [],
+        typecheck: () => ({ status: 0 }),
+        bundle: async () =>
+          ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
+        spawn: ((command: string) =>
+          command === "bun" ? vite : electron) as typeof import("node:child_process").spawn,
+        waitForUrl: async () => {},
+        writeStatus: async (file, value) => {
+          const status = value as { status: string; pids: { electron?: number } };
+          if (status.status === "starting" && status.pids.electron) {
+            postSpawnWritePending = true;
+            // Deliver the entire frame while the asynchronous write is pending.
+            await new Promise<void>((resolve) =>
+              setImmediate(() => {
+                electron.stdout!.emit("data", Buffer.from(`${frame}\n`));
+                resolve();
+              }),
+            );
+          }
+          if (status.status === "ready") {
+            reachedReady = true;
+            clearTimeout(watchdog);
+          }
+          await atomicWriteJson(file, value);
+          if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
+        },
+      });
+      expect(postSpawnWritePending).toBe(true);
+      expect(reachedReady).toBe(true);
+      expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
+    } finally {
+      clearTimeout(watchdog);
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        for (const listener of process.listeners(signal)) {
+          if (!signals[signal].includes(listener)) process.removeListener(signal, listener);
+        }
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("startup failure output", () => {
+  // The isolated runner resets the profile, deleting electron.log and vite.log,
+  // so an Electron that exits before readiness must quote its own output.
+  test("quotes the latest output of both streams, bounded", () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    }) as unknown as ChildProcess;
+    const tail = outputTail(child, 16);
+    child.stdout!.emit("data", Buffer.from("early output\n"));
+    child.stderr!.emit("data", Buffer.from("renderer failed\n"));
+    // Only the newest characters are kept, whichever stream they came from.
+    expect(tail()).toBe("renderer failed");
+  });
+
+  test("names each tail that has output and omits empty ones", () => {
+    expect(
+      withOutputTails("Electron exited before readiness (code 0, signal none)", {
+        Electron: () => "No usable Codex toolchain",
+        Vite: () => "",
+      }),
+    ).toBe(
+      "Electron exited before readiness (code 0, signal none)\nElectron output tail:\nNo usable Codex toolchain",
+    );
   });
 });
 

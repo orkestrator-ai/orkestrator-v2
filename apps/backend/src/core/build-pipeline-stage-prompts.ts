@@ -33,6 +33,7 @@ import {
   resolveConflictsPrompt,
   verificationPrompt,
   type ReviewWorktreeSnapshot,
+  type ValidationAncestry,
 } from "./build-pipeline-prompts.js";
 import {
   BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
@@ -177,6 +178,7 @@ export class BuildPipelineStagePrompts {
           target,
           worktree,
           await verificationAddressReport(this.ctx.transcriptCheckpoints, pipeline),
+          await this.validationAncestry(pipeline, worktree),
         ),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
@@ -214,5 +216,33 @@ export class BuildPipelineStagePrompts {
       };
     }
     return { prompt: resolveConflictsPrompt(target), images: [] };
+  }
+
+  /**
+   * Whether the validated commit is in the history of the HEAD Verify starts
+   * from. It is checked against the captured HEAD, not the live one, so it
+   * describes the same commit the certification baseline names. Undefined when
+   * there is nothing to compare or Git cannot say; the verifier then checks
+   * the ancestry itself, as before.
+   */
+  private async validationAncestry(
+    pipeline: BuildPipeline,
+    worktree: ReviewWorktreeSnapshot | undefined,
+  ): Promise<ValidationAncestry | undefined> {
+    const headRef = pipeline.reviewPackage?.headRef;
+    if (!headRef || !worktree || worktree.status === "unknown") return undefined;
+    const head = worktree.head;
+    if (headRef.toLowerCase() === head.toLowerCase()) return { headRef, head, isAncestor: true };
+    try {
+      const result = await this.ctx.invoke<{ isAncestor?: unknown }>(
+        "get_environment_commit_ancestry",
+        { environmentId: pipeline.environmentId, ancestor: headRef, descendant: head },
+      );
+      return typeof result?.isAncestor === "boolean"
+        ? { headRef, head, isAncestor: result.isAncestor }
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }

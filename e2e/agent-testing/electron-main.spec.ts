@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import {
   writeRemoteRelaunchMarker,
@@ -166,7 +167,7 @@ async function testIndependentWindows(
     vite = spawn("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         VITE_DEV_HOST: "127.0.0.1",
@@ -175,6 +176,7 @@ async function testIndependentWindows(
       },
     });
     ownProcessGroup(vite);
+    recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
       executablePath: electronExecutable,
@@ -191,6 +193,7 @@ async function testIndependentWindows(
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
       },
     });
+    recordElectronDiagnostics(app);
     launchedApp = app;
     dismissStartupDialogs(app);
     // Startup can briefly create a bootstrap window, and development opens
@@ -867,7 +870,7 @@ test("a real window with a missing preload reaches recovery without mounting the
     vite = spawn("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         VITE_DEV_HOST: "127.0.0.1",
@@ -875,6 +878,7 @@ test("a real window with a missing preload reaches recovery without mounting the
       },
     });
     ownProcessGroup(vite);
+    recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
     await writeFile(
       entrypoint,
@@ -901,6 +905,7 @@ test("a real window with a missing preload reaches recovery without mounting the
       args: [...ELECTRON_TEST_SWITCHES, entrypoint],
       cwd: repositoryRoot,
     });
+    recordElectronDiagnostics(app);
     launchedApp = app;
     const window = await app.firstWindow();
     await expect(window.getByRole("alert")).toContainText("Orkestrator couldn’t connect", {
@@ -969,6 +974,7 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
       ],
       cwd: repositoryRoot,
     });
+    recordElectronDiagnostics(app);
     launchedApp = app;
     await app.firstWindow();
 

@@ -1472,6 +1472,102 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     expect(cheap.head).toBe(committed.head);
   });
 
+  // Verify is told whether the validated commit survived Address. A rebase
+  // rewrites it away, and that must read as "no", not as an unknown.
+  test("answers whether a commit is in the history of another in a local worktree", async () => {
+    const root = await createTempDir("ork-commands-io-ancestry-");
+    const git = async (...args: string[]) =>
+      (await runCommand("git", args, { cwd: root, timeoutMs: 30_000 })).stdout.trim();
+    await git("init", "--initial-branch=main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await git("commit", "--allow-empty", "-m", "base");
+    const base = await git("rev-parse", "HEAD");
+    await git("commit", "--allow-empty", "-m", "validated");
+    const validated = await git("rev-parse", "HEAD");
+    await git("commit", "--allow-empty", "-m", "repair");
+    const repaired = await git("rev-parse", "HEAD");
+    // The same change replayed onto the base: what a rebase leaves behind.
+    await git("checkout", "--quiet", "-b", "rebased", base);
+    await git("commit", "--allow-empty", "-m", "validated, replayed");
+    const rebased = await git("rev-parse", "HEAD");
+
+    const context = createContext({ id: "env-1", environmentType: "local", worktreePath: root });
+    const commands = createCommandRegistry();
+    const ancestry = (ancestor: string, descendant: string) =>
+      commands.get("get_environment_commit_ancestry")?.(
+        { environmentId: "env-1", ancestor, descendant },
+        context,
+      ) as Promise<{ isAncestor: boolean | null }>;
+
+    expect(await ancestry(validated, repaired)).toEqual({ isAncestor: true });
+    expect(await ancestry(validated, validated)).toEqual({ isAncestor: true });
+    expect(await ancestry(validated, rebased)).toEqual({ isAncestor: false });
+    expect(await ancestry(repaired, validated)).toEqual({ isAncestor: false });
+    // A commit the repository does not have is unknown, not "no".
+    expect(await ancestry("f".repeat(40), repaired)).toEqual({ isAncestor: null });
+    // Only full commit ids reach Git: a ref or an option is refused.
+    await expect(ancestry("HEAD", repaired)).rejects.toThrow("ancestor must be a full commit id");
+    await expect(ancestry(validated, "--all")).rejects.toThrow(
+      "descendant must be a full commit id",
+    );
+  });
+
+  test("probes ancestry through Docker exec and treats unavailable Git evidence as unknown", async () => {
+    const ancestor = "a".repeat(40);
+    const descendant = "b".repeat(40);
+    const commands = createCommandRegistry();
+    const context = createContext({
+      id: "env-1",
+      environmentType: "container",
+      containerId: "container-1",
+    });
+    const ancestry = () =>
+      commands.get("get_environment_commit_ancestry")!(
+        { environmentId: "env-1", ancestor, descendant },
+        context,
+      );
+    for (const [output, exitCode, expected] of [
+      [ancestor.toUpperCase(), 0, true],
+      [descendant, 0, false],
+      ["invalid Git output", 0, null],
+      ["", 128, null],
+    ] as const) {
+      await withFakeDocker(
+        `#!/bin/sh
+printf '%s\\n' "$@" > "$FAKE_DOCKER_LOG"
+printf '%s\\n' '${output}'
+exit ${exitCode}
+`,
+        async ({ logPath }) => {
+          expect(await ancestry()).toEqual({ isAncestor: expected });
+          expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toEqual([
+            "exec",
+            "-w",
+            "/workspace",
+            "container-1",
+            "git",
+            "merge-base",
+            ancestor,
+            descendant,
+          ]);
+        },
+      );
+    }
+  });
+
+  test("ancestry rejects missing environments and unavailable command runners", async () => {
+    const args = { environmentId: "env-1", ancestor: "a".repeat(40), descendant: "b".repeat(40) };
+    const ancestry = createCommandRegistry().get("get_environment_commit_ancestry")!;
+    for (const [environment, message] of [
+      [null, "Environment not found"],
+      [{ id: "env-1", environmentType: "local" }, "Local environment worktree is not available"],
+      [{ id: "env-1", environmentType: "container" }, "Container environment is not available"],
+    ] as const) {
+      await expect(ancestry(args, createContext(environment))).rejects.toThrow(message);
+    }
+  });
+
   // A local worktree runs on the user's own machine, where the backend inherits
   // whatever PATH the OS handed Electron. A GUI launch on macOS has git in
   // /usr/bin but no Node at all, so a probe that needed one would take every

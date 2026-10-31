@@ -648,10 +648,22 @@ export function addressValidationGuidance(
   return [
     recordedValidationSection(reviewPackage),
     `Fix every recorded failure that relates to the ticket or this branch's changes, then rerun only that check. ${excusedFailureRule(targetBranch)} For a failure you believe is unrelated: ${targetReproductionSteps(targetBranch)} Do not change unrelated code or tests to hide a failure.`,
+    reviewPackage ? validationHistoryRule(reviewPackage.headRef, targetBranch) : "",
     ADDRESS_FIX_RESULT_REPORTING,
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * Verify credits a repair only when it follows the validated commit in the
+ * branch's history (`verificationFailureInstruction`). A rebase rewrites that
+ * commit away, so every recorded failure then blocks completion even after it
+ * was fixed. Validation is not rerun to recover from that, so Address must
+ * keep the commit an ancestor: a merge brings in upstream fixes and keeps it.
+ */
+function validationHistoryRule(headRef: string, targetBranch: string): string {
+  return `Keep the validated commit \`${headRef}\` in this branch's history: do not rebase, amend, squash or reset the commits it contains. The verifier credits a repair only when it comes after that commit in the history, and validation is not rerun, so rewriting it leaves every recorded failure blocking completion. If a repair needs commits from origin/${targetBranch}, merge origin/${targetBranch} into this branch instead of rebasing onto it.`;
 }
 
 /**
@@ -675,6 +687,24 @@ export const ADDRESS_OUTPUT_CONTRACT =
  */
 export function verificationFailureInstruction(targetBranch: string): string {
   return `**Recorded failures**: judge them from the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failed or incomplete recorded check blocks completion when it exercises code this branch changes or an acceptance criterion depends on it, unless a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD. To establish a later repair, use the recorded validation headRef as <headRef>: confirm it is an ancestor of HEAD with git merge-base --is-ancestor <headRef> HEAD, inspect git log --oneline <headRef>..HEAD and the relevant commit diffs, and check git diff <headRef>..HEAD to confirm the repair addresses the recorded failure and remains in the final code. The cumulative target-to-HEAD diff alone does not establish that a repair followed validation. If headRef is missing, unavailable or not an ancestor of HEAD, or no repair can be established in that range, report the limitation and keep the relevant failed or incomplete check blocking completion. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. A failure confined to code this branch does not touch is not a reason to fail; mention it in the rationale. The address report is another agent's claim: accept a claimed repair only when the diff shows it in that post-validation range, and do not repeat its target-branch reproductions. If any ticket-required repair remains unmet on this branch, report complete: false.`;
+}
+
+/**
+ * Whether the validated commit is still in the history of the HEAD Verify
+ * starts from, as the backend established it before dispatch. A verifier left
+ * to check this itself has misread the answer, so the fact is stated.
+ */
+export interface ValidationAncestry {
+  headRef: string;
+  head: string;
+  isAncestor: boolean;
+}
+
+function validationAncestrySection(ancestry: ValidationAncestry | undefined): string {
+  if (!ancestry) return "";
+  return ancestry.isAncestor
+    ? `**Validated commit in history**: the backend confirmed that the validated commit \`${ancestry.headRef}\` is an ancestor of the captured HEAD \`${ancestry.head}\`. Use it as <headRef> below; the git merge-base --is-ancestor check is already done.`
+    : `**Validated commit not in history**: the backend confirmed that the validated commit \`${ancestry.headRef}\` is not an ancestor of the captured HEAD \`${ancestry.head}\`, so the branch was rewritten after validation and no repair after validation can be established. Apply the rule below for a headRef that is not an ancestor of HEAD; do not check the ancestry again.`;
 }
 
 /** Keeps a verbose address turn from crowding the ticket out of the verify prompt. */
@@ -750,6 +780,7 @@ export function verificationPrompt(
   targetBranch: string,
   worktree?: ReviewWorktreeSnapshot,
   addressReport?: VerificationAddressReport,
+  validationAncestry?: ValidationAncestry,
 ): string {
   const task = verificationTaskPrompt({
     task: pipeline.taskSnapshot,
@@ -758,6 +789,7 @@ export function verificationPrompt(
     targetBranch,
     worktree,
     addressReport,
+    validationAncestry,
   });
   return `${task}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
 }
@@ -775,6 +807,7 @@ export function verificationTaskPrompt(input: {
   targetBranch: string;
   worktree?: ReviewWorktreeSnapshot;
   addressReport?: VerificationAddressReport;
+  validationAncestry?: ValidationAncestry;
 }): string {
   const { task, notes, targetBranch, worktree, addressReport } = input;
   const recorded = recordedValidationSection(input.reviewPackage, "verification");
@@ -786,6 +819,7 @@ export function verificationTaskPrompt(input: {
     recorded || "**Recorded validation**: none is available for this round. Judge from the diff.",
     addressReportSection(addressReport),
     verificationCriteriaSection(task),
+    validationAncestrySection(input.validationAncestry),
     verificationFailureInstruction(targetBranch),
     worktree
       ? worktreeSnapshotSection(worktree, {

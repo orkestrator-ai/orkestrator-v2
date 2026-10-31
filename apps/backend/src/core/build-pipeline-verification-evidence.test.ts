@@ -39,15 +39,16 @@ async function withSupervisor(
     ctx: BuildPipelineContext,
     value: BuildPipeline,
   ) => Promise<void>,
+  invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> = async () => {
+    throw new Error("Unexpected command");
+  },
 ) {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "pipeline-verification-evidence-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   const ctx = new BuildPipelineContext(
     storage,
-    async () => {
-      throw new Error("Unexpected command");
-    },
+    invoke as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
     { autoAdvance: false },
   );
   const agents = new BuildPipelineAgents(ctx);
@@ -300,5 +301,86 @@ describe("verification address-report boundaries", () => {
         record.mockRestore();
       }
     });
+  });
+});
+
+describe("verification ancestry of the validated commit", () => {
+  const validated = "a".repeat(40);
+  const captured = "b".repeat(40);
+  const withPackage = (value: BuildPipeline) => {
+    value.reviewPackage = {
+      format: 2,
+      id: "package-1",
+      round: 1,
+      preparedAt: new Date(0).toISOString(),
+      targetBranch: "main",
+      baseRef: "c".repeat(40),
+      headRef: validated,
+      commit: null,
+      diffCommand: "git diff",
+      changedFiles: [],
+      validation: [],
+      uncommittedFiles: [],
+      limitations: [],
+    } as unknown as BuildPipeline["reviewPackage"];
+  };
+
+  test("states the backend's answer about the captured HEAD", async () => {
+    for (const isAncestor of [true, false]) {
+      const calls: unknown[] = [];
+      await withSupervisor(
+        async (supervisor, _ctx, value) => {
+          withPackage(value);
+          const { prompt } = await supervisor.promptFor(value, "verify", "claude", {
+            status: "clean",
+            head: captured,
+          });
+          expect(prompt).toContain(
+            isAncestor ? "**Validated commit in history**" : "**Validated commit not in history**",
+          );
+        },
+        async (command, args) => {
+          calls.push({ command, args });
+          return { isAncestor };
+        },
+      );
+      // Asked about the HEAD the baseline names, not whatever HEAD is live now.
+      expect(calls).toEqual([
+        {
+          command: "get_environment_commit_ancestry",
+          args: { environmentId: "env", ancestor: validated, descendant: captured },
+        },
+      ]);
+    }
+  });
+
+  test("needs no Git call when Verify starts at the validated commit", async () => {
+    await withSupervisor(async (supervisor, _ctx, value) => {
+      withPackage(value);
+      const { prompt } = await supervisor.promptFor(value, "verify", "claude", {
+        status: "clean",
+        head: validated,
+      });
+      expect(prompt).toContain("**Validated commit in history**");
+    });
+  });
+
+  test("leaves the check to the verifier when Git cannot answer", async () => {
+    for (const invoke of [
+      async () => ({ isAncestor: null }),
+      async () => {
+        throw new Error("container gone");
+      },
+    ]) {
+      await withSupervisor(async (supervisor, _ctx, value) => {
+        withPackage(value);
+        const { prompt } = await supervisor.promptFor(value, "verify", "claude", {
+          status: "clean",
+          head: captured,
+        });
+        expect(prompt).not.toContain("**Validated commit");
+        expect(prompt).toContain("git merge-base --is-ancestor <headRef> HEAD");
+      }, invoke);
+    }
   });
 });

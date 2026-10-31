@@ -219,24 +219,33 @@ description = "Run a command with bounded persistent logs"
 raw_args = true
 run = "bun scripts/run-logged.ts"
 
+[tasks."playwright:install"]
+description = "Download the Chromium builds the pinned Playwright needs; a no-op when they are already installed"
+# A new host, or a Playwright upgrade, otherwise fails every browser test with
+# "Executable doesn't exist". --no-remove keeps builds that worktrees on another
+# Playwright version still use; the shared cache is locked during a download.
+run = "bunx playwright install --no-remove --no-progress chromium"
+
 [tasks."test:browser"]
 description = "Run the component and public-site browser suites"
+depends = ["playwright:install"]
 run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
-depends = ["build:cli"]
+depends = ["build:cli", "playwright:install"]
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts"
 
 [tasks."test:agent:browser:isolated"]
 description = "Start a disposable profile, run all browser agent tests, then stop/reset it"
 raw_args = true
-depends = ["build:cli"]
+depends = ["build:cli", "playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts"
 
 [tasks."test:agent:design:isolated"]
 description = "One-shot real-stack design-canvas validation with disposable profile cleanup"
 raw_args = true
+depends = ["playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design"
 
 [tasks."test:cli:scenarios"]
@@ -247,6 +256,7 @@ run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker"]
 description = "Run the Docker agent browser fixture"
+depends = ["playwright:install"]
 env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'"
 

@@ -1130,6 +1130,47 @@ export function registerTerminalCommands(
       ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
     };
   });
+  /**
+   * Whether commit `ancestor` is `descendant` or one of its ancestors in an
+   * environment's repository. The build pipeline asks before Verify whether
+   * the validated commit survived Address, and states the answer.
+   *
+   * `isAncestor` is null when Git cannot say (an unknown commit, unrelated
+   * histories). The answer comes from `git merge-base` rather than
+   * `--is-ancestor`, whose nonzero exit means both "no" and "failed".
+   */
+  register("get_environment_commit_ancestry", async (args, context) => {
+    assertOnlyKeys(
+      asRecord(args, "args"),
+      ["environmentId", "ancestor", "descendant"],
+      "get_environment_commit_ancestry",
+    );
+    const commit = (value: unknown, name: string) => {
+      const id = asString(value, name).toLowerCase();
+      if (!/^[0-9a-f]{40,64}$/.test(id)) throw new Error(`${name} must be a full commit id`);
+      return id;
+    };
+    const ancestor = commit(args.ancestor, "ancestor");
+    const descendant = commit(args.descendant, "descendant");
+    const environment = await context.storage.getEnvironment(
+      asString(args.environmentId, "environmentId"),
+    );
+    if (!environment) throw new Error("Environment not found");
+    const runner = createEnvironmentCommandRunner(
+      environment,
+      context.runtime.environments.fence,
+      context.storage,
+    );
+    let mergeBase: string;
+    try {
+      mergeBase = (await runner("git", ["merge-base", ancestor, descendant], 30_000))
+        .trim()
+        .toLowerCase();
+    } catch {
+      return { isAncestor: null };
+    }
+    return { isAncestor: /^[0-9a-f]{40,64}$/.test(mergeBase) ? mergeBase === ancestor : null };
+  });
   register("get_file_tree", async ({ containerId, knownDigest, refresh }, context) => {
     const read = await context.runtime.diffStats.service.readTree({
       lookup: { containerId: asString(containerId, "containerId") },

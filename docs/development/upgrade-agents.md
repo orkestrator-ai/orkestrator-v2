@@ -233,6 +233,36 @@ every backend-only host, then restart the service.
   PATH is left alone. The container image sets the same two variables
   (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
+#### Bridges a backend-only host installs on demand
+
+The published package ships every bridge, but not every bridge's SDK. Claude,
+Codex and ACP (Grok) are bundled complete. Cursor's SDK loads code-split chunks
+at runtime and carries a per-platform native package, and Pi's closure is about
+175 MB, so the package ships those two bridges' own bundles plus a pinned
+manifest, lockfile and any repository patch under
+`resources/<bridge>/runtime/` (`packages/cli/scripts/bridges.ts`).
+
+The first time a Cursor or Pi bridge starts — a session, a model-catalogue
+probe (which a backend runs at startup for every enabled platform), Cursor
+sign-in — the backend runs `bun install --frozen-lockfile` into
+`<data-dir>/bridge-runtimes/<bridge>/<digest>/`
+(`apps/backend/src/core/bridge-runtime-install.ts`). That needs the npm registry
+(or bun's cache) once per release; the digest covers the bundle and its inputs,
+so an upgrade installs beside the previous runtime and then removes it. A
+failed install fails that start with `Could not install Cursor support: …`.
+
+The committed inputs live in `packages/cli/bridge-runtimes/<bridge>/`.
+Regenerate them after changing an on-demand bridge's SDK pin or a patch that
+targets its closure, and commit the result:
+
+```bash
+bun packages/cli/scripts/lock-bridge-runtimes.ts
+```
+
+`packages/cli/tests/cli.test.ts` fails when they drift from the bridge's
+`package.json` or the root `patchedDependencies`, and `mise run smoke:cli`
+installs them from the registry before a publish.
+
 ### Container environments
 
 `docker/Dockerfile` has one exact build argument per CLI-backed agent —
@@ -1166,7 +1196,12 @@ Dockerfile pins the same archive digests the manifest does.
 ### Procedure
 
 1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then
-   `bun install`.
+   `bun install`, then regenerate the standalone package's Pi runtime (see
+   [Bridges a backend-only host installs on demand](#bridges-a-backend-only-host-installs-on-demand)):
+
+   ```bash
+   bun packages/cli/scripts/lock-bridge-runtimes.ts
+   ```
 
    Pin all three SDK packages at the **CLI's** version even when npm has a newer
    patch for some of them: `pi-ai` and `pi-agent-core` sometimes publish an
@@ -1377,7 +1412,14 @@ trusting a green result.
    Confirm `bun.lock` resolves the intended version and note which
    `@cursor/sdk-<platform>` optional packages it brought in. There is no CLI
    pin, no `scripts/download-*.sh`, no manifest entry, and no Dockerfile `ARG`
-   to mirror — this step is the whole pin.
+   to mirror. The standalone package carries its own copy of the pin and the
+   patch registration; regenerate it once the patch for the new version is in
+   place (see
+   [Bridges a backend-only host installs on demand](#bridges-a-backend-only-host-installs-on-demand)):
+
+   ```bash
+   bun packages/cli/scripts/lock-bridge-runtimes.ts
+   ```
 2. Review the five compatibility files above against the new type definitions.
    Pay particular attention to `InteractionUpdate` variants and tool cases added
    upstream: both degrade silently by design.

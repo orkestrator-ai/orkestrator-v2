@@ -228,7 +228,7 @@ describe("a bridge that dies mid-turn", () => {
 });
 
 describe("request-scoped runtime stops", () => {
-  for (const replacement of ["new-request", "new-bridge"] as const) {
+  for (const replacement of ["new-request", "new-bridge", "new-bridge-read-fails"] as const) {
     test(`a ${replacement} crash within the stop window is a failure`, async () => {
       let state: "working" | "idle" = "working";
       const { provider } = createProviderStub("codex", { activity: async () => state });
@@ -250,6 +250,13 @@ describe("request-scoped runtime stops", () => {
               provider,
               "replacement-connection",
             );
+            if (replacement === "new-bridge-read-fails") {
+              provider.observeActivity = async () => {
+                throw new ProviderUnavailableError("Replacement disappeared");
+              };
+              await captureWarnings(() => service.reconcileAgentActivity());
+              collaborators(service).launches.forgetActivityGroup(`env-1\0codex`);
+            }
           }
           collaborators(service).providerRegistry.markBridgeAbsent(`env-1\0codex`);
           await service.reconcileAgentActivity();

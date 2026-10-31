@@ -937,6 +937,9 @@ export class NativeAgentLaunchActivityReconciler {
             });
             continue;
           }
+          // Retire a stop tied to an older provider before a failed read can
+          // evict this replacement and erase its cached connection identity.
+          this.runtimeStopPending(first);
           // Results are fenced against the provider actually read from: a
           // replacement installed from here on makes them inert.
           ticket = this.observations.withCurrentGeneration(ticket);

@@ -657,6 +657,30 @@ exit 91
   partial.window = window;
 
   const projectPath = await prepareFixtureRepository(profile, templateRoot);
+  // Compile the documentation's emitter before creating environments, so both
+  // local and container workspaces contain the source the real capture names.
+  const emitted = spawnSync(
+    "bun",
+    [path.join(packageRoot, "tests/source-hint-emitter-fixture.ts"), projectPath],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  expect(emitted.status, `${emitted.stdout}\n${emitted.stderr}`).toBe(0);
+  for (const args of [
+    ["add", "annotation-app", "orkestrator-source-babel-plugin.mjs"],
+    [
+      "-c",
+      "user.name=Annotation Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-m",
+      "Compile documented source hints for native capture",
+    ],
+    ["push", "origin", "HEAD"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: projectPath, encoding: "utf8" });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }
   const project = await invoke<{ id: string }>("add_project", {
     gitUrl: path.join(profile.fixtureDir, "origin.git"),
     localPath: projectPath,
@@ -1482,8 +1506,8 @@ async function captureAndReviewSourceHints(containerId: string | null = null): P
     const candidates = [
       {
         producer: "annotation-fixture",
-        path: "annotation-app/page.ts",
-        line: 120,
+        path: "annotation-app/GeneratedSave.tsx",
+        line: 2,
         component: "SettingsSave",
         verified: false,
       },
@@ -1522,7 +1546,7 @@ async function captureAndReviewSourceHints(containerId: string | null = null): P
     ]);
     // The reviewer sees what the agent is given, and what the backend's check found.
     await expect(s().window.locator(`${NOTES_PANEL} [data-source-candidates] li`)).toHaveText([
-      "annotation-app/page.ts:120 · SettingsSave · path found in workspace at capture",
+      "annotation-app/GeneratedSave.tsx:2 · SettingsSave · path found in workspace at capture",
       "annotation-app/MissingSettings.tsx:4 · Settings · path not confirmed",
     ]);
     await expect.poll(() => preview("readPendingCapture", descriptor.captureId)).toBeNull();

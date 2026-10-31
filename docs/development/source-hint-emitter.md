@@ -8,8 +8,9 @@ emits nothing keeps working as it does today, with no hints in its notes.
 The contract is in
 [web-page-annotations.md](../architecture/web-page-annotations.md#development-source-hints).
 The plugin below is run by
-`apps/desktop/tests/source-hint-emitter-doc.test.ts`, so a change to it here
-needs the normal code checks.
+`apps/desktop/tests/source-hint-emitter-doc.test.ts`; both Vite configurations
+are exercised by `source-hint-emitter-vite.integration.test.ts`. Changes to
+these snippets need the normal code checks.
 
 ## What a hint is
 
@@ -111,11 +112,26 @@ export default defineConfig(({ command }) => ({
 }));
 ```
 
-Older `@vitejs/plugin-react` versions take the plugin directly:
-`react({ babel: { plugins: command === "serve" ? [[orkestratorSource, { root }]] : [] } })`.
+Vite 7 with `@vitejs/plugin-react` 5 takes the plugin directly:
+
+```js
+// vite.legacy.config.js
+import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import orkestratorSource from "./orkestrator-source-babel-plugin.mjs";
+
+const root = fileURLToPath(new URL("../..", import.meta.url));
+
+export default defineConfig(({ command }) => ({
+  plugins: [react({ babel: { plugins: command === "serve" ? [[orkestratorSource, { root }]] : [] } })],
+}));
+```
 
 Other Babel setups add the same plugin entry to their development configuration.
-Only the Vite 8 setup above has been run.
+Both Vite setups above are tested with development transforms and production
+builds, including a production build with `NODE_ENV=development` to check the
+configuration gate independently of the plugin's gate.
 
 ## Projects without Babel
 

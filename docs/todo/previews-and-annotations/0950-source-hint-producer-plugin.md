@@ -15,7 +15,7 @@ Analysed 2026-10-31 against `main` at `931e5541`. First analysed 2026-10-30 at
    locations the agent gets. Status: done.
 3. **Live qualification**: a real desktop capture on a page that emits the
    convention, in a local worktree and in a container. Status: done on macOS
-   (results under Assumptions and decisions).
+   (results under Current state).
 
 ### 1. Reference emitter
 
@@ -109,7 +109,8 @@ container environment created on that profile.
 
 ## Current state
 
-- Local worktree: the Electron case captures the fixture's Save button with
+- Local worktree: the Electron case compiles the documented Babel emitter and
+  captures its rendered Save button with
   trusted input, saves through the real renderer, and reads back
   `[verified, not verified]`. The thread shows both rows.
 - Container: the same case on a `containerized` environment, opt-in through
@@ -120,20 +121,20 @@ container environment created on that profile.
 - `web-annotations-gateway.spec.ts` has a Docker fixture case that adds a symlink
   leaving `/workspace` and confirms it stays unverified, and that the web client
   shows the same list.
-- The emitter ran under real Vite 8: `@vitejs/plugin-react` 6 and
-  `@rolldown/plugin-babel` with the doc's config, in a scratch monorepo. Chromium
-  showed workspace-relative stamps on the elements with no console errors, and a
-  production build had none.
+- The documented configs have automated integration coverage under Vite 8 with
+  `@vitejs/plugin-react` 6 and `@rolldown/plugin-babel`, and Vite 7 with
+  `@vitejs/plugin-react` 5. Development transforms emit workspace-relative
+  stamps; production builds have none, even with `NODE_ENV=development`.
 
 ## Needs verification
 
 - These runs were on macOS with Docker Desktop. Linux and Windows hosts were not
   run.
-- The container and local captures used the fixture's hand-written attributes.
-  The Babel output was checked in Chromium and through the capture kit in
-  happy-dom, not through a desktop capture of a Vite page.
-- The webpack and Next.js setups in the doc were not run. The doc gives Vite's
-  config in full and only says other Babel setups add the same plugin entry.
+- The desktop captures use a real Babel transform and React render served as
+  fixture HTML. A live Vite server is covered separately by the integration
+  test; its page has not been captured through Electron.
+- Other Babel build integrations (such as webpack or Next.js) have not been
+  qualified; the doc gives only the two Vite configurations in full.
 
 ## Related
 
@@ -152,10 +153,11 @@ Chose the recommended option. The doc is the only copy of the plugin, and
 `apps/desktop/tests/source-hint-emitter-doc.test.ts` runs that exact text through
 real Babel, a React render and the capture kit, so it cannot quietly rot.
 
-### Task 1: `@babel/core` as a desktop dev dependency
+### Task 1: build tools as desktop dev dependencies
 
-The test needs real Babel, and the lockfile had none. It is a dev dependency of
-`apps/desktop` only, so nothing ships with it.
+The tests need real Babel and both supported Vite/plugin configurations. These
+are dev dependencies of `apps/desktop`; aliases keep Vite 7/plugin-react 5
+available alongside Vite 8/plugin-react 6. Nothing ships with them.
 
 ### Task 1: no SWC example
 

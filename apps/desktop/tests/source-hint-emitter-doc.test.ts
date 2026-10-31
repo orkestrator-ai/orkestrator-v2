@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { transformAsync } from "@babel/core";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createElement, Fragment, type ComponentType } from "react";
@@ -13,9 +13,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { WEB_ANNOTATION_SOURCE_ATTRIBUTES } from "@orkestrator/protocol/web-annotations";
 import { parseSourceHints } from "../electron/browser-preview-capture-parse";
 import { click, page, type Json } from "./browser-preview-page-harness";
+import { documentedSnippet } from "./source-hint-emitter-fixture";
 
-const DOC_PATH = path.resolve(import.meta.dir, "../../../docs/development/source-hint-emitter.md");
-const PLUGIN_FENCE = /```js\n(\/\/ orkestrator-source-babel-plugin\.mjs\n[\s\S]*?)```/;
 const WORKSPACE = "/workspace-root";
 
 const transpiler = new Bun.Transpiler({
@@ -31,9 +30,7 @@ let pluginFile = "";
 let directory = "";
 
 beforeAll(async () => {
-  const match = PLUGIN_FENCE.exec(await readFile(DOC_PATH, "utf8"));
-  if (!match) throw new Error("The doc no longer prints the plugin fence");
-  snippet = match[1]!;
+  snippet = await documentedSnippet("orkestrator-source-babel-plugin.mjs");
   directory = await mkdtemp(path.join(os.tmpdir(), "source-hint-emitter-"));
   pluginFile = path.join(directory, "orkestrator-source-babel-plugin.mjs");
   await writeFile(pluginFile, snippet);
@@ -193,6 +190,51 @@ const App = () => (
       expect(await emit(source, "src/App.tsx", { envName })).not.toContain("data-orkestrator");
     }
     expect(await emit(source, "src/App.tsx")).toContain("data-orkestrator-source");
+  });
+
+  test("a nested lowercase helper resolves to its enclosing component", async () => {
+    const App = component(
+      await emit(
+        `function Settings() {
+  function renderSave() { return <button id="save">Save</button>; }
+  return renderSave();
+}
+const App = Settings;`,
+        "src/Settings.tsx",
+      ),
+    );
+    expect(capture(renderToStaticMarkup(createElement(App)), "#save").sourceHints).toEqual([
+      {
+        producer: "data-orkestrator-source",
+        path: "src/Settings.tsx",
+        line: 2,
+        component: "Settings",
+        verified: false,
+      },
+    ]);
+  });
+
+  test("all-caps names and module-level elements have paths without component owners", async () => {
+    for (const source of [
+      `function SAVE() { return <button id="save">Save</button>; } const App = SAVE;`,
+      `const element = <button id="save">Save</button>; const App = () => element;`,
+    ]) {
+      const App = component(await emit(source, "src/App.tsx"));
+      expect(capture(renderToStaticMarkup(createElement(App)), "#save").sourceHints).toEqual([
+        { producer: "data-orkestrator-source", path: "src/App.tsx", line: 1, verified: false },
+      ]);
+    }
+  });
+
+  test("emits nothing when Babel has no filename", async () => {
+    const result = await transformAsync(`const App = () => <button />;`, {
+      babelrc: false,
+      configFile: false,
+      envName: "development",
+      parserOpts: { plugins: ["jsx"] },
+      plugins: [[pluginFile, { root: WORKSPACE }]],
+    });
+    expect(result!.code).not.toContain("data-orkestrator");
   });
 
   test("refuses paths the desktop capture would drop", async () => {

@@ -206,25 +206,23 @@ test.describe(`goal loop: ${platform}`, () => {
       label: string,
     ): Promise<Goal> {
       let goal: Goal | undefined;
-      await expect
-        .poll(
-          async () => {
-            goal = (await detail(identity)).goal;
-            return statuses.includes(goal?.status ?? "");
-          },
-          {
-            timeout: TURN_TIMEOUT_MS,
-            intervals: [2_000],
-            message: `${label}: never reached ${statuses.join(" or ")}; last ${JSON.stringify({
-              status: goal?.status,
-              reason: goal?.statusReason,
-              detail: goal?.statusDetail,
-              iterations: goal?.iterations,
-            })}`,
-          },
-        )
-        .toBe(true);
-      return goal!;
+      const deadline = Date.now() + TURN_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        goal = (await detail(identity)).goal;
+        if (statuses.includes(goal?.status ?? "")) return goal!;
+        await page.waitForTimeout(2_000);
+      }
+      const phase = (await projection(identity).catch(() => undefined))?.turn.phase;
+      throw new Error(
+        `${label}: never reached ${statuses.join(" or ")}; last ${JSON.stringify({
+          status: goal?.status,
+          reason: goal?.statusReason,
+          detail: goal?.statusDetail,
+          iterations: goal?.iterations,
+          report: goal?.lastReport?.status,
+          phase,
+        })}`,
+      );
     }
 
     const note = (name: string, goal: Goal, extra: Record<string, unknown> = {}) => {
@@ -402,7 +400,7 @@ test.describe(`goal loop: ${platform}`, () => {
     );
     await input.press("Enter");
     await expect(pill).toBeVisible();
-    await expect(input).toHaveValue("");
+    await expect(input).toHaveText("");
     await page.screenshot({ path: testInfo.outputPath("goal-running.png") });
 
     // A reload mid-goal renders from the snapshot.

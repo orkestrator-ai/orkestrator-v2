@@ -33,7 +33,7 @@ const platform = process.env.ORKESTRATOR_AGENT_TEST_GOAL_PLATFORM ?? "claude";
 const environmentKind = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT ?? "local";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_GOALS === "1";
 const TURN_TIMEOUT_MS = 300_000;
-/** `browser` runs the probe and browser cases; `extras` compaction and the verifier. */
+/** `browser`: UI/probe; `extras`: compact/verifier; `repairs`: scenarios and limits. */
 const only = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY;
 /**
  * Something slow for the agent to do. Grok's shell fails to spawn in Orkestrator
@@ -193,10 +193,18 @@ test.describe(`goal loop: ${platform}`, () => {
   test.afterAll(() => writeSummary());
 
   test("every scenario", async ({ page }) => {
-    test.skip(only !== undefined, `only the ${only} cases`);
+    test.skip(only !== undefined && only !== "repairs", `only the ${only} cases`);
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const scenarios = record.scenarios as Record<string, unknown>;
+    const failures: unknown[] = [];
+    const scenario = async (name: string, run: () => Promise<void>) => {
+      try {
+        await test.step(name, run);
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     let tabNumber = 0;
 
     const tab = async () =>
@@ -221,7 +229,12 @@ test.describe(`goal loop: ${platform}`, () => {
       const deadline = Date.now() + TURN_TIMEOUT_MS;
       while (Date.now() < deadline) {
         goal = (await detail(identity)).goal;
-        if (statuses.includes(goal?.status ?? "")) return goal!;
+        if (
+          goal &&
+          (statuses.includes(goal.status) ||
+            ["paused", "blocked", "limited", "claimed", "complete"].includes(goal.status))
+        )
+          return goal;
         await page.waitForTimeout(2_000);
       }
       const phase = (await projection(identity).catch(() => undefined))?.turn.phase;
@@ -267,7 +280,7 @@ test.describe(`goal loop: ${platform}`, () => {
       .map((row) => ({ name: row.name, executionKind: row.executionKind }));
     writeSummary();
 
-    await test.step("a passing check after several iterations ends complete", async () => {
+    await scenario("a passing check after several iterations ends complete", async () => {
       await command(
         first,
         `In this first turn, create the file goal-step-1.txt, then end your turn without calling report_goal. ` +
@@ -286,7 +299,7 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(workspace.read("goal-done.txt")).toBeDefined();
     });
 
-    await test.step("no check ends claimed, never complete", async () => {
+    await scenario("no check ends claimed, never complete", async () => {
       const identity = await tab();
       await command(identity, `Reply with one word, then ${report("done")}. --max-iterations 3`);
       const goal = await until(identity, ["claimed", "complete", "limited", "paused"], "no check");
@@ -294,11 +307,11 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(goal.status).toBe("claimed");
     });
 
-    await test.step("a check that never passes stops at the cap with its output", async () => {
+    await scenario("a check that never passes stops at the cap with its output", async () => {
       const identity = await tab();
       await command(
         identity,
-        `Do no other work: reply with one word, then ${report("done")}. Repeat that each time you are told to continue. --max-iterations 2 --check echo goal-check-output && false`,
+        `Your task is to reply with one word, then ${report("done")} for that response. Repeat on each continuation. The check is deliberately false to test the iteration cap; do not fix it or treat that expected failure as a blocker. --max-iterations 2 --check echo goal-check-output && false`,
       );
       const goal = await until(
         identity,
@@ -312,7 +325,7 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(goal.lastCheck?.outputTail).toContain("goal-check-output");
     });
 
-    await test.step("blocked waits for a person", async () => {
+    await scenario("blocked waits for a person", async () => {
       const identity = await tab();
       await command(
         identity,
@@ -323,7 +336,7 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(goal.status).toBe("blocked");
     });
 
-    await test.step("Stop pauses, no turn follows, and resume continues", async () => {
+    await scenario("Stop pauses, no turn follows, and resume continues", async () => {
       const identity = await tab();
       await command(
         identity,
@@ -352,7 +365,7 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(resumed.status).toBe("complete");
     });
 
-    await test.step("a user's queued prompt runs first and costs no iteration", async () => {
+    await scenario("a user's queued prompt runs first and costs no iteration", async () => {
       const identity = await tab();
       await command(
         identity,
@@ -377,16 +390,18 @@ test.describe(`goal loop: ${platform}`, () => {
       expect(workspace.read("goal-user-prompt.txt")).toBeDefined();
     });
 
-    await test.step("clear ends a running goal, and nothing more is sent", async () => {
+    await scenario("clear ends a running goal, and nothing more is sent", async () => {
       const identity = await tab();
       await command(identity, `Reply with one word and end your turn. --max-iterations 6`);
       await command(identity, "clear");
       expect((await detail(identity)).goal).toBeUndefined();
     });
+    if (failures.length > 0)
+      throw new AggregateError(failures, `${failures.length} live goal scenarios failed`);
   });
 
   test("Plan mode, unchanged workspaces and token limits", async ({ page }) => {
-    test.skip(only !== undefined, `only the ${only} cases`);
+    test.skip(only !== undefined && only !== "repairs", `only the ${only} cases`);
     const { invoke, environment, model, container } = await prepare(page);
     const scenarios = record.scenarios as Record<string, unknown>;
     const send = (identity: Awaited<ReturnType<typeof openTab>>, text: string) =>
@@ -450,7 +465,10 @@ test.describe(`goal loop: ${platform}`, () => {
   });
 
   test("a compaction between turns, and a verifier's verdict", async ({ page }) => {
-    test.skip(only === "browser", "run with the full suite, or alone as extras");
+    test.skip(
+      only === "browser" || only === "repairs",
+      "run with the full suite, or alone as extras",
+    );
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const send = (identity: Awaited<ReturnType<typeof openTab>>, text: string) =>
@@ -576,7 +594,7 @@ test.describe(`goal loop: ${platform}`, () => {
   });
 
   test("what the provider offers, and a live background task", async ({ page }) => {
-    test.skip(only === "extras", "only the extras");
+    test.skip(only === "extras" || only === "repairs", "only the extras");
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const identity = await openTab(invoke, environment, "goals-probe", container, model);
@@ -656,7 +674,7 @@ test.describe(`goal loop: ${platform}`, () => {
   test("the browser: set, watch from elsewhere, reload, pause and clear", async ({
     page,
   }, testInfo) => {
-    test.skip(only === "extras", "only the extras");
+    test.skip(only === "extras" || only === "repairs", "only the extras");
     page.setDefaultTimeout(30_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     const { invoke, environment, workspace, model, container, projectName, projectId } =

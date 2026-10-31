@@ -30,7 +30,7 @@ This file holds that qualification and the gaps the build left.
 3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open.
 4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link. Status: open (needs two nodes).
 5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: open.
-6. **PR follow gaps**: a reopened PR, and a PR tab that ends without opening a PR, wake nobody. Status: open.
+6. **PR follow gaps**: a reopened PR, a PR tab that ends without opening a PR, and Merge and Cleanup of a worker on another node wake nobody. Status: open.
 7. **"Checks failed" counts checks that are not required**: Status: open.
 8. **Separate committed and uncommitted diffs in `get_worker_changes`**: Status: open.
 
@@ -173,12 +173,20 @@ coordinator forks (`forkEnvironmentRecord` with `keepBuildPipeline: false`).
 
 **Problem.** A closed PR ends its follow, so a reopened PR is not reported. A
 PR tab that finishes without opening a PR sends no wake, so the coordinator
-waits for a `pr-opened` that never comes.
+waits for a `pr-opened` that never comes. Merge and Cleanup on another node
+deletes that node's worker record before the command node, which holds the
+follow, reads the merge, so the follow ends without `pr-merged`.
 
 **Context.** Both are recorded decisions of the build (coordinator.md,
 "Status wakes"). Ending the follow on close keeps the sweep's reads bounded.
 
-**Investigation.** Not measured how often either happens.
+**Investigation.** Not measured how often these happen. On this node the
+merge is kept: `deleteEnvironment` stores the worker's last PR reading on its
+follows (`captureFinalPullRequest`) before removing the record. If that write
+fails it is logged and the delete goes on, so the merge can still be missed.
+Nothing like it exists for a leaf's delete. Separately, when a review joins a
+follow that has already reported `pr-opened`, both have sent it; later states
+are reported once.
 
 **Decisions.**
 
@@ -190,6 +198,13 @@ waits for a `pr-opened` that never comes.
   - **Leave it; the coordinator can schedule a check.**
     - Pros: no code.
     - Cons: contradicts the "you will be woken" text `create_pr` now returns.
+- **Keep a remote merge?**
+  - **Have the leaf relay the final PR reading in its environment-deleted event (recommended).**
+    - Pros: the same capture as on this node; no extra round trip.
+    - Cons: a node-link event change, so older leaves keep the gap.
+  - **Poll the leaf for the PR before ending a follow whose worker vanished.**
+    - Pros: no protocol change.
+    - Cons: the record is already gone, so there is nothing to read.
 
 ### 7. "Checks failed" counts checks that are not required
 

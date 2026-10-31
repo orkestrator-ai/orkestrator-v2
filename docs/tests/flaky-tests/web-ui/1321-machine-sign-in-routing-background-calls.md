@@ -1,6 +1,6 @@
 # Settings sign-in routing receives background node calls
 
-- **ID:** 1317
+- **ID:** 1321
 - **Status:** open
 - **Date observed:** 2026-10-30
 - **Test:** `Settings sign-in controls deliver command node to their backend calls`

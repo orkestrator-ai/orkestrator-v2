@@ -132,3 +132,10 @@ timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name isolated-native-commands-existing -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit zero in 9.1 s. The passing runner removed its raw output.
 - **Evidence:** `/tmp/orkestrator-test-run.eeYqDS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed after completion). The same assertion already failed in preparation before these backend fixes.
 - **Assessment:** recurrence of the tracked intermittent failure. Shared-host contention remains a hypothesis; no renderer code, assertion, timeout or skip changed.
+
+The post-storage-repair exact `mise run test:full` rerun completed in 913.8 s
+including 204.5 s queued. The complete web group passed: 10,963 passed, 10
+skipped, zero failed, so this owner also passed in that aggregate. Other
+unchanged groups keep the full command non-green. Evidence:
+`/tmp/orkestrator-test-run.UVuLi8/` and
+`/tmp/orkestrator-test-run.sFiOj2/`.

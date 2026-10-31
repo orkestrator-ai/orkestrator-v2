@@ -24,3 +24,14 @@ run's artifacts.
 This is an intermittent deadline miss in a real Git and scan scenario.
 Shared-host contention is a hypothesis, not an established root cause. No
 assertion, timeout, skip, scan implementation or owning test changed.
+
+## Post-repair full rerun
+
+The exact `mise run test:full` command was rerun after repairing the new PR
+storage registry entry. It completed in 913.8 s including 204.5 s queued.
+This unchanged owner passed in that aggregate; the backend reported 14,591
+passed, 145 skipped and 31 failures confined to browser preview/rendering
+owners. The first aggregate had 14,586 passed, 145 skipped and 36 failed,
+including the subsequently repaired storage writer guard. Final evidence:
+`/tmp/orkestrator-test-run.UVuLi8/` and
+`/tmp/orkestrator-test-run.sFiOj2/`. The overall command remains non-green.

@@ -90,3 +90,10 @@ reported the existing projection-read failure (0722), the unchanged ACP
 child-limit assertion and existing DOM-diagnostic guard violations. Its root
 group finished with 3,650 passed, one skipped and one failed. None of those
 results makes the aggregate green.
+
+The post-storage-repair exact `mise run test:full` rerun completed in 913.8 s
+including 204.5 s queued. The web group passed in full (10,963 passed, 10
+skipped, zero failed), so the root-change approval owner also passed in this
+aggregate. Existing root, ACP and preview/rendering failures keep the command
+non-green. Evidence: `/tmp/orkestrator-test-run.UVuLi8/` and
+`/tmp/orkestrator-test-run.sFiOj2/`.

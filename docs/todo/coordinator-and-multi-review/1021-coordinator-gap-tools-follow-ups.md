@@ -245,7 +245,9 @@ before review).
 
 ## Current state
 
-All eight items from the review are built and pass the deterministic suite.
+All eight items from the review are built. Targeted coordinator regressions,
+the storage writer guard, backend and protocol typechecks, scoped formatting
+and lint, and the flake-index guard pass.
 A post-merge review found five integration bugs: a recurring PR state not
 waking again, a merged wake lost on merge and cleanup, a double-reported PR
 follow, a follow-filter race, and an account-switch timer that could be made
@@ -273,6 +275,28 @@ tab because a successful launch does not prove a PR was opened. Retained at
 most 1,000 terminal PR tombstones on the owning node so recovery also works
 when deletion events are missed; an event-only relay would not survive that
 loss. Existing action receipts provide bounded durable replay on both nodes.
+
+## Needs verification
+
+The 2026-10-31 review repairs are committed as `a77573f49` and `c4f91b183`.
+The latter registers retained terminal PR readings in `StorageFiles`, under
+the existing environment mutation lease; its guard and remote recovery tests
+pass. The exact required wide commands were rerun:
+
+| Command | Observed result |
+| --- | --- |
+| `mise run test:full` after the storage registry repair | Completed in 913.8 s including 204.5 s waiting for host admission. Backend: 14,591 passed, 145 skipped, 31 failed, all in unchanged browser preview/rendering owners. Web: 10,963 passed, 10 skipped, zero failed. Root: 3,650 passed, one skipped, one existing DOM-diagnostic assertion failed. Bridges retain the existing ACP child-limit assertion, which also fails alone. The command is non-green. |
+| `mise run test:browser` | Runner deadline at 30 minutes: 720 of 1,096 cases scheduled, 101 reported failures. Incomplete; the chained public-site suite did not start. |
+| `mise run test:agent:electron` | Two passed, 15 failed, 30 did not run. The same failure set occurred in preparation, including missing X server/display and desktop title expectations. |
+| `mise run test:agent:docker` | Four skipped, 14 failed. The required `orkestrator-v2:dev-45b60cc8059b` image and ready fixture profile are unavailable. |
+
+Final full-suite evidence is retained in `/tmp/orkestrator-test-run.UVuLi8/`
+and `/tmp/orkestrator-test-run.sFiOj2/`; browser evidence in
+`/tmp/orkestrator-test-run.iVjYqA/`, Electron in
+`/tmp/orkestrator-test-run.acMWj6/`, Docker in
+`/tmp/orkestrator-test-run.ykzZho/`. These failures do not certify the wide
+suites. No unrelated assertion, timeout or skip was changed. Live provider,
+GitHub and two-node qualification remain tasks 1–4.
 
 ## Related
 

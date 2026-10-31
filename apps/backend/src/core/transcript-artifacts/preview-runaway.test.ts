@@ -29,6 +29,7 @@ import {
   PREVIEW_WORKER_USER,
   resolveSeccompProfile,
 } from "./runtime.js";
+import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 const IMAGE = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE ?? DEFAULT_PREVIEW_WORKER_IMAGE;
@@ -225,6 +226,7 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
         mode === "process"
           ? new TranscriptPreviewRunner({
               isolation: "process",
+              scratchRoot: previewTestScratchRoot(),
               allowProcessInteractive: true,
               budgets,
               memoryLimitBytes: PROCESS_MEMORY_LIMIT,

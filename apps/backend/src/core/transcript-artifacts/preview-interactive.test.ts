@@ -20,6 +20,7 @@ import { buildInteractiveCsp, escapeInlineScript, inlineScriptHash } from "./int
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 import { isAlive, listProcesses } from "./preview-process-tree.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
+import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -60,6 +61,7 @@ beforeAll(() => {
   // the explicit opt-in (container isolation is the default for this kind).
   runner = new TranscriptPreviewRunner({
     isolation: "process",
+    scratchRoot: previewTestScratchRoot(),
     allowProcessInteractive: true,
     onWorkerExit: (report) => exits.push(report),
   });
@@ -235,6 +237,7 @@ describe("interactive preview in Chromium", () => {
       const local: Exit[] = [];
       const target = new TranscriptPreviewRunner({
         isolation: "process",
+        scratchRoot: previewTestScratchRoot(),
         allowProcessInteractive: true,
         // probeStepMs: the hung click waits out the same step deadline, only
         // sooner; the healthy calculator job afterwards still has ample time per step.

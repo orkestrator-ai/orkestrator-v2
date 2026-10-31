@@ -151,6 +151,13 @@ export interface PreviewRunnerOptions {
   executablePath?: () => string | undefined;
   /** Process mode: the worker command (defaults to this runtime + the worker entry). */
   workerCommand?: () => { command: string; args: string[] } | null;
+  /**
+   * Process mode: parent of each job's private scratch directory, which is the
+   * worker's TMPDIR (default: the OS temporary directory). Chromium makes its
+   * `SingletonSocket` two levels inside it, so the path must leave room under
+   * the 108-byte Unix socket limit.
+   */
+  scratchRoot?: string;
   container?: ContainerIsolationConfig;
   budgets?: Partial<PreviewBudgets>;
   admission?: Partial<PreviewAdmissionLimits>;
@@ -1008,7 +1015,12 @@ export class TranscriptPreviewRunner implements PreviewRunner {
       };
     }
     const command = this.workerCommand();
-    return command ? { isolation: "process", ...command } : null;
+    if (!command) return null;
+    return {
+      isolation: "process",
+      ...command,
+      ...(this.options.scratchRoot ? { scratchRoot: this.options.scratchRoot } : {}),
+    };
   }
 
   private deadlines(wallMs: number) {

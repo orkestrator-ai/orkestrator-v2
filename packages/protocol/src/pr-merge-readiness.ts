@@ -21,17 +21,19 @@
  *   or still running) is not ready: the shimmer stops on any failing check.
  * - `checkSummary`: the separately fetched check rollup, when the monitor has
  *   one. It can only veto: any failing or pending check means "not ready".
+ * - `viewerCanMerge`: whether the credential Orkestrator merges with has push,
+ *   maintain or admin on the repository. The monitor caches it per repository
+ *   and credential for an hour, because the PR lookup does not return it. Only
+ *   `false` vetoes: an unknown permission (cold cache, older backend) does not
+ *   hide the shimmer. Push access does not prove a ruleset lets this user merge.
  * - `fresh`: decided by the caller from the monitor's sync state, because only
- *   the caller knows whether its mirror is current.
- *
- * Not checked: whether the viewer may merge. The monitor's `gh` lookup does
- * not return the viewer's repository permission, and fetching it would add a
- * repository query to every poll. Orkestrator merges with the same credential
- * the monitor reads with, which in practice pushed the branch.
+ *   the caller knows whether its mirror is current. The monitor half of it is
+ *   {@link isPrReadingConfirmedByMonitor}, shared with the backend that relays
+ *   it to command nodes.
  */
 
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
-import type { PrCheckSummary, PrState } from "./pr-monitor.js";
+import type { PrCheckSummary, PrMonitorEnvironmentState, PrState } from "./pr-monitor.js";
 
 export const PR_MERGEABILITY_VALUES: readonly GitHubPullRequestMergeability[] = [
   "clean",
@@ -86,6 +88,8 @@ export interface PrMergeReadinessSignals {
   mergeability: GitHubPullRequestMergeability | null | undefined;
   /** Optional rollup; when present it must show every check passed. */
   checkSummary?: PrCheckSummary | null;
+  /** Only `false` vetoes; null or absent means unknown. */
+  viewerCanMerge?: boolean | null;
   /** The caller's mirror of these signals is current. */
   fresh: boolean;
 }
@@ -102,7 +106,9 @@ export type PrNotReadyReason =
   /** GitHub reports a non-required check failing or still running. */
   | "checks-not-passing"
   | "checks-failing"
-  | "checks-pending";
+  | "checks-pending"
+  /** Everything else is ready, but the merging credential lacks push access. */
+  | "no-merge-permission";
 
 export type PrMergeReadiness = { ready: true } | { ready: false; reason: PrNotReadyReason };
 
@@ -137,11 +143,61 @@ export function evaluatePrMergeReadiness(signals: PrMergeReadinessSignals): PrMe
     }
     if (checks.pending > 0) return { ready: false, reason: "checks-pending" };
   }
+  // Last, so conflicts and failing checks still read as such for a viewer who
+  // could not merge anyway.
+  if (signals.viewerCanMerge === false) return { ready: false, reason: "no-merge-permission" };
   return { ready: true };
 }
 
 export function isPrReadyToMerge(signals: PrMergeReadinessSignals): boolean {
   return evaluatePrMergeReadiness(signals).ready;
+}
+
+/**
+ * The monitor can only ask GitHub while it can run `gh`: a local worktree
+ * always, a container only while it runs. A stopped container's reading is
+ * whatever was true when it stopped.
+ */
+export function isPrMonitorPolled(
+  environmentType: string | null | undefined,
+  status: string | null | undefined,
+): boolean {
+  return environmentType === "local" || status === "running";
+}
+
+export interface PrMonitorConfirmationEnvironment {
+  prUrl?: string | null;
+  prState?: PrState | null;
+  hasMergeConflicts?: boolean | null;
+  environmentType?: string | null;
+  status?: string | null;
+}
+
+/**
+ * The monitor half of `fresh`: the monitor answered a check for this exact PR
+ * in its current lifetime (a pause clears that), the latest check did not
+ * fail, it agrees with the persisted reading, and it can still poll.
+ *
+ * The renderer adds its own mirror's sync state for this machine's rows. A
+ * leaf evaluates it against its own monitor and relays the result to command
+ * nodes as `prMonitorConfirmed`, so both apply one rule without comparing
+ * clocks across machines.
+ */
+export function isPrReadingConfirmedByMonitor(
+  environment: PrMonitorConfirmationEnvironment,
+  monitor: PrMonitorEnvironmentState | null | undefined,
+): boolean {
+  return (
+    monitor != null &&
+    monitor.prUrl != null &&
+    monitor.prUrl === (environment.prUrl ?? null) &&
+    monitor.prState === (environment.prState ?? null) &&
+    typeof environment.hasMergeConflicts === "boolean" &&
+    monitor.hasMergeConflicts === environment.hasMergeConflicts &&
+    monitor.consecutiveErrors === 0 &&
+    monitor.lastSuccessfulCheckAt != null &&
+    isPrMonitorPolled(environment.environmentType, environment.status)
+  );
 }
 
 /** Shown in tooltips and announced to assistive technology. */

@@ -29,3 +29,23 @@ mise run test:logged -- --name data-saving-owner -- bunx playwright test --confi
 This sequential rerun followed an invalid overlapping owner attempt; see
 [1319](../aggregate-validation-runs/1319-second-backend-one-host-0244-validation.md).
 No implementation, assertion, timeout or skip changed. The cause is unconfirmed.
+
+## Merge-readiness review — 2026-10-30
+
+Preparation's nine-worker `mise run test:logged -- --name browser -- mise run
+test:browser` repeated the mobile 60-second deadline (971 passed, 106 skipped,
+seven failed). A nine-worker six-owner diagnostic also repeated it (178 passed,
+eight failed in 126.2 s), with evidence in
+`orkestrator-test-run.XREdRM/browser-preparation-failures.log.gz`.
+
+The complete unchanged owner passed both viewports alone with one worker
+(51.9 s):
+
+```sh
+ORKESTRATOR_E2E_PORT=1457 mise run test:logged -- --name pr-review-DataSavingGateway-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/pr-review-DataSavingGateway-owner
+```
+
+The default fixture port belonged to another checkout; it was left alone. No
+gateway implementation, assertion, timeout or skip changed. This establishes
+intermittence; host contention remains a hypothesis. Aggregate follow-up is
+recorded in [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).

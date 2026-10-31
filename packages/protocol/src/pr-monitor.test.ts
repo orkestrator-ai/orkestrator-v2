@@ -59,6 +59,19 @@ describe("lastSuccessfulCheckAt", () => {
   });
 });
 
+describe("viewerCanMerge", () => {
+  test("is optional, nullable, and otherwise a boolean", () => {
+    const event = (value: unknown) => ({
+      environmentId: "env-1",
+      state: { ...state(), viewerCanMerge: value },
+    });
+    expect(isPrMonitorEvent(event(undefined))).toBe(true);
+    expect(isPrMonitorEvent(event(null))).toBe(true);
+    expect(isPrMonitorEvent(event(false))).toBe(true);
+    expect(isPrMonitorEvent(event("false"))).toBe(false);
+  });
+});
+
 describe("isPrMonitorMode", () => {
   test("accepts the three modes and rejects everything else", () => {
     expect(isPrMonitorMode("normal")).toBe(true);

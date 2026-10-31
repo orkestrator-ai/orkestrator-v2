@@ -192,3 +192,16 @@ mise run test:logged -- --name scheduling-fake-codex-owner -- bun test --cwd bri
 Aggregate evidence: `orkestrator-test-run.w2FXh0/bridges.log.gz` under the host
 temporary directory after aggregate finalization. No implementation,
 assertion, deadline or skip changed in this owner.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `mise run test`, at implementation commit `d639571b2`; workspace reservation six slots with two isolated Bun workers for web/desktop and four for backend, bridges reservation two slots with one worker per provider. The component browser suite also ran on the shared host. The aggregate waited about 658 seconds for capacity and exited 1 after 1461 seconds.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations`, `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts`, exceeded 5000 ms (5000.96 ms). The owning package reported 2313 passed, 53 skipped, one failed across 103 files.
+- **Complete unchanged owner rerun:** the following one-worker command passed (exit 0, 0.4 seconds logged). Multi-file commands ran the two complete owners sequentially with Bun isolation. Passing raw output was removed by the bounded logger.
+
+```sh
+mise run test:logged -- --name codex-timeout-isolated -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/bridges.log.gz`.
+- **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.

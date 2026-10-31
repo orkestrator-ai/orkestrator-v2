@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CARD_CLASS } from "./SettingsPageLayout";
 
 const RESEARCH_CHOICES: Array<{
   id: CoordinatorWebResearch;
@@ -77,7 +78,7 @@ export function CoordinatorWebResearchSettings({
       <div
         role="radiogroup"
         aria-label="Coordinator web research"
-        className="mt-3 gap-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40"
+        className={cn(SETTINGS_CARD_CLASS, "mt-3 gap-0 overflow-hidden")}
       >
         {RESEARCH_CHOICES.map((choice, index) => (
           <label

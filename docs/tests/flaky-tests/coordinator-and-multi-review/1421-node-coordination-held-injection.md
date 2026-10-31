@@ -1,6 +1,6 @@
 # Held remote Coordinator mail has not injected at the assertion
 
-- **ID:** 1319
+- **ID:** 1421
 - **Status:** open
 - **Date observed:** 2026-10-31
 - **Test:** `a command node's deliverNow on this leaf > node coordinator requests stay pending while held, until injection`

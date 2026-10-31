@@ -73,6 +73,8 @@ import {
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
+import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
@@ -1383,13 +1385,15 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         <div
           role="status"
           aria-live="polite"
-          className={
+          className={cn(
+            "mb-4 rounded-md border px-3 py-2 text-xs",
+            SETTINGS_PAGE_DEFAULT_WIDTH_CLASS,
             saveStatus.tone === "blocked"
-              ? "mb-4 rounded-md border border-amber-400/30 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300"
+              ? "border-amber-400/30 bg-amber-400/[0.06] text-amber-300"
               : saveStatus.tone === "pending"
-                ? "mb-4 rounded-md border border-border/60 bg-zinc-900/50 px-3 py-2 text-xs text-muted-foreground"
-                : "mb-4 rounded-md border border-emerald-500/20 bg-emerald-500/[0.04] px-3 py-2 text-xs text-emerald-400/90"
-          }
+                ? "border-border/60 bg-zinc-900/50 text-muted-foreground"
+                : "border-emerald-500/20 bg-emerald-500/[0.04] text-emerald-400/90",
+          )}
         >
           {saveStatus.text}
         </div>

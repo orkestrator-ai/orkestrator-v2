@@ -64,6 +64,7 @@ import {
   type CurrentSourceState,
   type RuntimeGenerations,
 } from "./evidence.js";
+import { ClaudeAccountCopies, type ClaudeAccountHomes } from "./claude-account-copies.js";
 import { ExternalEditWatch } from "./external-edit-watch.js";
 import {
   heldRuntimes,
@@ -173,6 +174,8 @@ export interface McpManagementServiceOptions {
   loadRollout?: () => Promise<unknown>;
   /** How long a write waits for another Orkestrator writer before `busy`. */
   lockWaitMs?: number;
+  /** Added Claude accounts, whose `.claude.json` copies the backend user's servers. */
+  claudeAccountHomes?: ClaudeAccountHomes;
 }
 
 interface Prepared {
@@ -230,6 +233,7 @@ export class McpManagementService {
   private readonly evidence: EvidenceScheduler;
   private readonly externalEdits: ExternalEditWatch;
   private readonly overlays: EnvironmentOverlays;
+  private readonly claudeAccounts: ClaudeAccountCopies;
 
   constructor(private readonly options: McpManagementServiceOptions) {
     const dir = path.join(options.dataDir, "mcp-management");
@@ -246,6 +250,11 @@ export class McpManagementService {
       this.now,
     );
     this.homes = resolveProviderHomes(options.env ?? process.env, options.home);
+    this.claudeAccounts = new ClaudeAccountCopies(
+      options.claudeAccountHomes,
+      options.env ?? process.env,
+      this.homes.home,
+    );
     this.overlays = new EnvironmentOverlays({
       dataDir: options.dataDir,
       store: this.store,
@@ -325,7 +334,9 @@ export class McpManagementService {
         this.options.listContainerDirectories,
       );
     }
-    return providerSources(target.provider, this.sourceContext(target.info));
+    const specs = await providerSources(target.provider, this.sourceContext(target.info));
+    if (target.provider === "claude") await this.claudeAccounts.note(specs);
+    return specs;
   }
 
   private sourceContext(info: ResolvedTarget["info"]) {
@@ -679,6 +690,8 @@ export class McpManagementService {
     if (locked.replayed) return this.result(locked.stored, true);
     const stored = locked.stored;
     this.catalogRevision += 1;
+    // Before apply: a CLI started from now on an added account reads the copy.
+    await this.claudeAccounts.refresh(spec);
     const applyBlock = this.gate.applyBlock(target.provider);
     if (mutation.applyIntent === "save-and-apply" && applyBlock) {
       // Saved; the gate only withholds the runtime step, and says so.
@@ -803,14 +816,23 @@ export class McpManagementService {
           definition = patched.definition;
           changedFields = patched.changed;
         }
+        intendedEntry =
+          target.provider === "codex" && operation.kind === "set-enabled"
+            ? { ...entry.raw, enabled: operation.enabled }
+            : cleanEntry(codec.encode(definition, entry.raw));
         fieldErrors.push(
           ...codec.validate(definition, entry.name, false),
           ...capabilityErrors(definition, capabilities),
-          ...projectSecretErrors(spec, entry.definition, definition),
+          // Codex's editor shows inherited fields too. Judge newly saved
+          // project secrets against the native row, not its merged user values.
+          ...projectSecretErrors(
+            spec,
+            target.provider === "codex" ? codec.decode(entry.raw!) : entry.definition,
+            target.provider === "codex" ? codec.decode(intendedEntry) : definition,
+          ),
         );
         entryName = entry.name;
         resultName = entry.name;
-        intendedEntry = cleanEntry(codec.encode(definition, entry.raw));
         edit = tomlDeepEqual(intendedEntry, entry.raw)
           ? null
           : { kind: "update", name: entry.name, previous: entry.raw!, entry: intendedEntry };

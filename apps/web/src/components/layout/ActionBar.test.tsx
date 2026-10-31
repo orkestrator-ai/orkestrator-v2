@@ -14,7 +14,6 @@ import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realSettings from "@/components/settings";
-import * as realDockerComponents from "@/components/docker";
 import * as realStores from "@/stores";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
@@ -54,7 +53,6 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
 const realTooltipSnapshot = { ...realTooltip };
 const realSettingsSnapshot = { ...realSettings };
-const realDockerComponentsSnapshot = { ...realDockerComponents };
 const realStoresSnapshot = { ...realStores };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
@@ -566,11 +564,6 @@ mock.module("@/components/settings", () => ({
     ) : null,
 }));
 
-mock.module("@/components/docker", () => ({
-  DockerStatsDialog: ({ open }: { open: boolean }) =>
-    open ? <div>Docker configuration dialog</div> : null,
-}));
-
 mock.module("@/stores", () => ({
   useConfigStore: <T,>(
     selector?: (state: {
@@ -852,7 +845,6 @@ afterAll(() => {
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/settings", () => realSettingsSnapshot);
-  mock.module("@/components/docker", () => realDockerComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
@@ -1087,12 +1079,12 @@ describe("ActionBar grid presentation", () => {
     try {
       render(<ActionBar presentation="grid" />);
 
-      fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
+      fireEvent.focus(screen.getByRole("button", { name: "New native agent tab" }));
       await act(async () => {
         jest.advanceTimersByTime(550);
       });
 
-      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
     } finally {
       jest.useRealTimers();
     }
@@ -1103,15 +1095,16 @@ describe("ActionBar grid presentation", () => {
     try {
       render(<ActionBar presentation="grid" />);
 
-      const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
+      const repositoryButton = screen.getByRole("button", { name: "Repository settings" });
       const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
-      fireEvent.mouseEnter(dockerButton.parentElement!);
+      fireEvent.mouseEnter(repositoryButton.parentElement!);
       fireEvent.mouseEnter(nativeButton);
       await act(async () => {
         jest.advanceTimersByTime(550);
       });
 
-      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      // Only the button's own label carries the text; no tooltip repeats it.
+      expect(screen.getAllByText("Repository settings")).toHaveLength(1);
       expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
     } finally {
       jest.useRealTimers();
@@ -1188,9 +1181,9 @@ describe("ActionBar grid presentation", () => {
     expect(toolbar).toBeTruthy();
     expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
 
-    const docker = screen.getByRole("button", { name: "Docker configuration" });
+    const repository = screen.getByRole("button", { name: "Repository settings" });
     const native = screen.getByRole("button", { name: "New native agent tab" });
-    expect(docker.lastElementChild?.textContent).toBe("Docker");
+    expect(repository.lastElementChild?.textContent).toBe("Repository settings");
     expect(native.lastElementChild?.textContent).toBe("New agent");
     expect(
       screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent,
@@ -2151,17 +2144,14 @@ describe("ActionBar editor and run commands", () => {
 });
 
 describe("ActionBar toolbar interactions", () => {
-  test("opens Docker, repository, and environment settings", async () => {
+  test("opens repository and environment settings", async () => {
     const asyncDialogOptions = { timeout: 10_000 };
     render(<ActionBar />);
 
     // Global settings render in `GlobalSettingsHost` (its own test), not here.
     expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(
-      await screen.findByText("Docker configuration dialog", undefined, asyncDialogOptions),
-    ).toBeTruthy();
+    // Docker is a section of the global settings, not a toolbar control.
+    expect(screen.queryByRole("button", { name: "Docker configuration" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
     expect(
@@ -2186,7 +2176,7 @@ describe("ActionBar toolbar interactions", () => {
     });
   }, 60_000);
 
-  test("closes Docker configuration and preserves local controls when Docker stops", async () => {
+  test("preserves local controls when Docker stops", async () => {
     const renderActionBar = (available: boolean) => (
       <DockerAvailabilityProvider available={available}>
         <ActionBar />
@@ -2194,18 +2184,12 @@ describe("ActionBar toolbar interactions", () => {
     );
     const view = render(renderActionBar(true));
 
-    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
-    expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
     view.rerender(renderActionBar(false));
 
-    expect(screen.queryByText("Docker configuration dialog") === null).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "Docker configuration" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
     expect(
       (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -2351,10 +2335,10 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
-    const docker = screen.getByRole("button", { name: "Docker configuration" });
+    const repository = screen.getByRole("button", { name: "Repository settings" });
     // "First toolbar item": the toggle precedes the other left-side controls.
     expect(
-      panelToggle.compareDocumentPosition(docker) & Node.DOCUMENT_POSITION_FOLLOWING,
+      panelToggle.compareDocumentPosition(repository) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(panelToggle);

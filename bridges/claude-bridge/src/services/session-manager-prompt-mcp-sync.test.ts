@@ -20,6 +20,11 @@ import {
   sendPrompt,
 } from "./session-manager-test-harness.js";
 import { sessionRuntimeHealthBody } from "../routes/runtime-health-body.js";
+import { setClaudeAccountHomeForTesting } from "./claude-home.js";
+import { clearJsonFileCache } from "./json-file-cache.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const stdio = (name: string, version = "1"): SdkMcpServersConfig[string] => ({
   type: "stdio",
@@ -429,5 +434,73 @@ describe("joining a running CLI after a removal", () => {
     other.call.push({ type: "result", subtype: "success" });
     other.call.finish();
     await Promise.all([firstPrompt, second, other.firstPrompt]);
+  });
+});
+
+describe("launching on an added Claude account", () => {
+  test("a server only the account's copy names is reported and refused from launch", async () => {
+    // The CLI reads the account's `.claude.json`; the bridge reads the host's.
+    const account = await mkdtemp(join(tmpdir(), "claude-bridge-account-home-"));
+    try {
+      await writeFile(
+        join(account, ".claude.json"),
+        JSON.stringify({
+          mcpServers: { keep: { command: "keep" }, extra: { command: "extra" } },
+        }),
+      );
+      setClaudeAccountHomeForTesting(account);
+      clearJsonFileCache();
+      const cli = fakeCli({ keep: stdio("keep") }, { files: ["extra"] });
+      queryControlOverrides.setMcpServers = cli.control.setMcpServers;
+      queryControlOverrides.mcpServerStatus = cli.control.mcpServerStatus;
+      mockGetMcpRuntimeConfig.mockImplementation(async () => ({
+        servers: { keep: stdio("keep") },
+        names: new Set(["keep"]),
+        revision: {
+          fingerprint: "f",
+          sources: { user: "absent", project: "absent" },
+          scope: "all",
+        },
+      }));
+      const { session, call, input, firstPrompt } = await releaseWithBackgroundWork("account");
+      const launched = sessionRuntimeHealthBody(session).mcpConfig as Record<string, unknown>;
+      expect(launched.staleServers).toEqual(["extra"]);
+      const hooks = (
+        call.options.hooks as { PreToolUse: Array<{ matcher?: string; hooks: HookCallback[] }> }
+      ).PreToolUse.flatMap((entry) => entry.hooks);
+      const decisions = await Promise.all(
+        hooks.map((hook) =>
+          hook(
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: "mcp__extra__probe",
+              tool_input: {},
+              tool_use_id: "t-1",
+            } as unknown as HookInput,
+            "t-1",
+            { signal: new AbortController().signal },
+          ),
+        ),
+      );
+      expect(
+        decisions.some(
+          (output) =>
+            (output as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+              ?.permissionDecision === "deny",
+        ),
+      ).toBe(true);
+      // The next turn joins the same CLI, which still runs it: still stale.
+      const second = sendPrompt(session.id, "next turn");
+      expect((await input.next()).done).toBe(false);
+      const joined = sessionRuntimeHealthBody(session).mcpConfig as Record<string, unknown>;
+      expect(joined.staleServers).toEqual(["extra"]);
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await Promise.all([firstPrompt, second]);
+    } finally {
+      setClaudeAccountHomeForTesting(undefined);
+      clearJsonFileCache();
+      await rm(account, { recursive: true, force: true });
+    }
   });
 });

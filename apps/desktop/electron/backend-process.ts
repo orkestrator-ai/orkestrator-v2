@@ -238,6 +238,17 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR;
+  // A development or agent-test profile runs from a source checkout, but its
+  // launcher's shell may descend from a production backend (the CLI shim sets
+  // NODE_ENV=production for `orkestrator serve`). Inherited, that value makes
+  // the backend look for packaged bridges under the resource root instead of
+  // `bridges/<name>`, and every local agent tab fails to connect.
+  if (
+    (runtime?.flavor === "development" || runtime?.flavor === "agent-test") &&
+    env.NODE_ENV === "production"
+  ) {
+    delete env.NODE_ENV;
+  }
   if (runtime?.flavor === "agent-test") {
     const allowed = new Set(runtime.credentialSources ?? []);
     const inherited = { ...parentEnv };

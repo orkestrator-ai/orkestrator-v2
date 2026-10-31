@@ -68,10 +68,8 @@ import {
   CursorAgentIcon,
   GrokBuildIcon,
   OpenCodeIcon,
-  DockerIcon,
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
-import { DockerStatsDialog } from "@/components/docker";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -224,7 +222,6 @@ interface ActionBarProps {
 
 export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const {
-    dockerAvailable,
     isGrid,
     selectedEnvironmentId,
     selectedProjectId,
@@ -246,8 +243,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     toggleSidebar,
     setRepoSettingsProjectId,
     openEnvironmentSettings,
-    dockerStatsOpen,
-    setDockerStatsOpen,
     isOpeningEditor,
     editorError,
     setEditorError,
@@ -710,22 +705,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </Button>
                 </ToolbarTooltipTrigger>
               )}
-
-              <ToolbarTooltipTrigger
-                tooltip={dockerAvailable ? "Docker configuration" : "Docker is not running"}
-              >
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setDockerStatsOpen(true)}
-                  aria-label="Docker configuration"
-                  disabled={!dockerAvailable}
-                >
-                  <DockerIcon className="h-4 w-4" />
-                  {isGrid && <span className="truncate text-xs">Docker</span>}
-                </Button>
-              </ToolbarTooltipTrigger>
 
               {(isGrid || repoName) && (
                 <ToolbarTooltipTrigger
@@ -1719,7 +1698,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         Settings Dialogs. Global settings open from the sidebar and ⌘, and
         render in `GlobalSettingsHost`, which `AppShell` mounts.
       */}
-      <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
       {repoSettingsProject && (
         <LazyLoadBoundary

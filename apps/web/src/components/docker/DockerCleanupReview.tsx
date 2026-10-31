@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { formatBytes } from "./docker-stats-format";
 
 export const CLEANUP_REASONS: Record<Exclude<CleanupClassification, "eligible">, string> = {
@@ -68,6 +69,7 @@ interface DockerCleanupReviewProps {
  * per-resource outcomes; partial success is reported as such.
  */
 export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCleanupReviewProps) {
+  const { machine } = useAccountMachine();
   const [preview, setPreview] = useState<CleanupPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -92,7 +94,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
     let cancelled = false;
     const load = async () => {
       try {
-        const next = await backend.previewDockerCleanup();
+        const next = await backend.previewDockerCleanup(machine);
         if (cancelled) return;
         setPreview(next);
         const eligibleKeys = next.rows
@@ -109,7 +111,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, machine]);
 
   const eligible = useMemo(
     () => preview?.rows.filter((row) => row.classification === "eligible") ?? [],
@@ -136,12 +138,15 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
     try {
       const chosen = eligible.filter((row) => selected.has(rowKey(row)));
       setResult(
-        await backend.executeDockerCleanup({
-          selectionToken: preview.selectionToken,
-          containerIds: chosen.filter((row) => row.kind === "container").map((row) => row.id),
-          volumeNames: chosen.filter((row) => row.kind === "volume").map((row) => row.id),
-          networkNames: chosen.filter((row) => row.kind === "network").map((row) => row.id),
-        }),
+        await backend.executeDockerCleanup(
+          {
+            selectionToken: preview.selectionToken,
+            containerIds: chosen.filter((row) => row.kind === "container").map((row) => row.id),
+            volumeNames: chosen.filter((row) => row.kind === "volume").map((row) => row.id),
+            networkNames: chosen.filter((row) => row.kind === "network").map((row) => row.id),
+          },
+          machine,
+        ),
       );
       onFinished();
     } catch (err) {

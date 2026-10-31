@@ -116,7 +116,11 @@ async function startServer(
       command: [process.execPath, PROBE, "--label", label, "--tag", tag, "--log", log],
     }),
     call: async (method, route, body) => {
+      // A request that reaches the server while its first instance boots can
+      // hang (seen on 1.19.4 and 1.19.5), so every call is bounded and the
+      // readiness loop below simply asks again.
       const response = await fetch(`${base}${route}?${query}`, {
+        signal: AbortSignal.timeout(15_000),
         method,
         ...(body ? { headers: { "content-type": "application/json" } } : {}),
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -142,7 +146,7 @@ async function startServer(
     stdio: "ignore",
   });
   children.push(child);
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   for (;;) {
     try {
       if ((await live.status()).includes(ready)) return live;

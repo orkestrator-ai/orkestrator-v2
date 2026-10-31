@@ -2,15 +2,17 @@
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Re-checked 2026-10-31
+against `main` at `931e5541`: tasks 1–3 still hold in code; tasks 4 and 5
+were acted on that day.
 
 ### Tasks
 
-1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: done in code (2026-10-28, [0730](0730-cli-tests-leak-probe-networks.md)): `cli.test.ts`'s development backend and every `test:cli:scenarios` backend, leaking on a graceful SIGTERM, not only a kill. Live attribution by owner needs a Linux host (see Assumptions and decisions).
+1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: done in code (2026-10-28, [0730](0730-cli-tests-leak-probe-networks.md)): `cli.test.ts`'s development backend and every `test:cli:scenarios` backend, leaking on a graceful SIGTERM, not only a kill. Confirmed live on Linux on 2026-10-31 (0730 task 1): neither harness probes now, and a SIGTERM'd probing backend leaves nothing.
 2. **Suite-level cleanup by owner label**: the leaking suite removes its probe networks in `afterAll`. Status: done another way (2026-10-28): both harnesses skip the boot check and a SIGTERM'd backend now removes its own probe network ([0730](0730-cli-tests-leak-probe-networks.md) tasks 2 and 3). No `afterAll` backstop was added; see Assumptions and decisions.
 3. **Owner reaper also removes networks**: `reapStaleProbes` removes the owner's unattached probe networks, not only containers. Status: done (2026-10-28).
-4. **Qualification: no new probe networks after a full run**: a full `mise run test` plus the live Docker suites leaves nothing new. Status: open; needs a Linux host (the check never probes on macOS).
-5. **Owner-agnostic sweep (open question)**: whether a sweep should offer to remove old unattached probe networks whatever their owner. Status: open.
+4. **Qualification: no new probe networks after a full run**: a full `mise run test` plus the live Docker suites leaves nothing new. Status: done (2026-10-31, beelink, Linux Engine 29.9.2); see Assumptions and decisions.
+5. **Owner-agnostic sweep (open question)**: whether a sweep should offer to remove old unattached probe networks whatever their owner. Status: done (2026-10-31): `disk:report` counts them and `--fix probe-networks` removes the unattached ones older than a day. Running it on omarchy-hp is the user's call.
 
 ### 1. Find the leaking run
 
@@ -169,10 +171,99 @@ Made 2026-10-28 while implementing this file together with
   Deterministic fake-runner cases cover these races and failure paths. Task 4's
   Linux qualification remains open.
 
+### Task 1: live attribution on Linux (2026-10-31)
+
+- **Done** through [0730](0730-cli-tests-leak-probe-networks.md) task 1 on
+  beelink (Linux, Docker Engine 29.9.2). Neither harness creates a probe
+  network now. A backend that does probe and is SIGTERM'd, whether straight
+  after `ready` or while its network exists, leaves nothing. A SIGKILL does
+  leak the network, and the owner's next boot reaps it.
+
+### Task 4: Linux qualification (2026-10-31)
+
+- **Chose:** the recommended label-list diff around `mise run test`,
+  `test:cli:scenarios` and the live suites on Linux. The host was beelink
+  (Arch Linux, rootful Docker Engine 29.9.2, ufw on), not omarchy-hp,
+  because that is where this worker ran. The tree was `main` at `931e5541`
+  plus this change, which touches only `scripts/` and docs, so the backend
+  under test is `main`'s.
+- **Measure:** `docker network ls --filter
+  label=orkestrator-resource-role=host-reachability-probe` and the same
+  filter on `docker ps -a`, recorded before and after each step. A
+  `docker events` recorder logged every network create and destroy for the
+  whole run, so a network that came and went between snapshots would still
+  show.
+- **Results (count before → after):**
+  - `cli.test.ts` alone (8 pass): 0 → 0.
+  - `mise run test:cli:scenarios` (9/9 scenarios pass): 0 → 0.
+  - `mise run test`, first run: 0 → 0 once settled. The after-snapshot
+    caught `ork-dd6fa3923113856a-…` mid-check. It was created at 02:38:42
+    and destroyed at 02:38:48 by its own check. The run failed one test,
+    `session-title-runners.test.ts` ("pinned Codex parser …"), because this
+    new worktree had no `binaries/codex`. After `mise run download:codex`,
+    the file passed alone (9/9). That is an environment gap, not a flake.
+  - `mise run test`, final run with this change: all four groups passed
+    (843 s), and the list stayed at 0 → 0.
+  - Live suites, `RUN_LIVE_DOCKER_TESTS=1` with a qualification image built
+    from this tree (`orkestrator-v2:qual-0241-53236ca5`), run one file at a
+    time: network (3 pass, 1 fail), readiness (8 pass, 1 fail), replacement
+    (12 pass), firewall (2 pass), qualification (8 pass), start-docker
+    (3 pass, 1 skip), MCP overlay (3 pass), data contracts (2 pass). The
+    label list was 0 after every file. One snapshot caught another owner's
+    check in flight, and it was gone 6 s later.
+  - The two failures are C22, the only live cases that build the probe
+    service themselves. Both failed because ufw on beelink drops container
+    traffic to any port except the one already admitted (45507), so the
+    check reports `blocked`. The readiness suite reports this itself as
+    `INCOMPLETE … cannot be qualified here`. Their checks still created and
+    removed their probe networks. The host firewall was not changed.
+- **Outside activity on the shared daemon:** while this ran, more than 40
+  other probe owners each created and removed one network within about 6 s.
+  Most were one-off owners, about one a minute, including while this run's
+  tests sat queued. The only backends running at the time were the
+  production instance and one other worker's dev profile, so these were most
+  likely other workers' short-lived backends. None leaked, which supports the
+  fix under real concurrent load.
+- **Cleanup:** this run removed nothing it had not created. Its own control
+  networks went through their backends, the reaper or the guarded sweep
+  check, and the label list ended at 0.
+
 ### Task 5: the owner-agnostic sweep
 
-- **Chose:** nothing; left open for the user, as asked. The host's existing
-  networks were not touched.
+- **2026-10-28:** nothing; left open for the user, as asked. The host's
+  existing networks were not touched.
+- **Chose (2026-10-31):** the recommended option. `mise run disk:report` has
+  a new `Docker host-reachability probe networks` row counting probe networks
+  of every owner and how many are unattached and over a day old.
+  `mise run disk:report -- --fix probe-networks` removes exactly those, and
+  nothing runs on its own. The code is in `scripts/probe-network-sweep.ts`.
+- **What counts as stale:** the probe role label, a name of the exact form
+  `ork-<16 hex>-reach-probe-net`, a readable creation time over 24 h ago, and
+  no container in any state. Anything Docker cannot answer about is kept.
+- **Why it is safe whatever the owner:** a probe network holds no data and
+  lives for one check. On beelink a check took 5–7 s from network create to
+  destroy, so a day-old network cannot belong to a running check. This
+  narrows the file's constraint ("only a provably dead owner") to a resource
+  that is single-use by design, which the recommended option argued for.
+- **Two findings from the live check on beelink:**
+  - `docker ps -a --filter network=<id>` misses a container that was created
+    but never started, because its endpoint has no network id until it
+    starts. `docker network rm` then succeeds, and the container cannot
+    start later. The sweep therefore filters by id *and* name (Docker ORs
+    them). Live, a created-only container kept the network, and once the
+    container was gone the network was removed.
+  - Removal is by network id, not name. The owner's next check removes and
+    recreates the same name, and that fresh network must never be the one
+    removed.
+- **Live check:** on networks this run created itself, with removal guarded
+  to their ids and the clock moved forward two days. A fresh network was
+  listed but not stale, then removed by id. A network with a created-only
+  container was kept.
+- **Not done:** the sweep has not been run on omarchy-hp, which held 29
+  pre-fix networks on 2026-10-30. That removes other owners' resources on
+  the user's machine, so it is the user's call:
+  `mise run disk:report` there, then `mise run disk:report -- --fix
+  probe-networks`.
 
 Seen on omarchy-hp while qualifying todo 0058 (retired on 2026-10-29).
 
@@ -212,6 +303,12 @@ Seen on omarchy-hp while qualifying todo 0058 (retired on 2026-10-29).
   known leak rather than a new source. They were not touched. Every live
   suite and the benchmark failed or could not create an environment network
   until they are removed, which task 5 or a hand removal has to decide.
+  The task 5 sweep (`mise run disk:report -- --fix probe-networks`) would
+  remove all 29, since they are unattached and more than a day old.
+- On 2026-10-31, on beelink (Linux, Engine 29.9.2), the daemon held no
+  probe networks before or after the task 4 qualification. More than 40
+  checks by other owners during the run all removed their networks within
+  seconds.
 
 ## Outstanding work
 
@@ -238,6 +335,8 @@ Items 1 to 3 are done (2026-10-28); see the Tasks list and
 
 ### Qualification
 
+Done 2026-10-31 on beelink (see Assumptions and decisions, task 4).
+
 - After a full `mise run test` plus the live Docker suites on a Linux host,
   `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe`
   lists nothing new.
@@ -246,13 +345,15 @@ Items 1 to 3 are done (2026-10-28); see the Tasks list and
 
 - Removing networks whose owner is not provably dead is unsafe on a shared
   daemon; only the creating run (by its owner label) or an owner's own reaper
-  may remove them.
+  may remove them. The one exception (task 5) is probe networks that are
+  unattached and over a day old, and only through the explicit
+  `disk:report -- --fix probe-networks`. They are single-use and hold no data.
 
 ## Open questions
 
-- Should a sweep (for example `mise run dev:prune` or `disk:report --fix`)
-  offer to remove unattached probe networks older than a day whatever their
-  owner?
+- Answered 2026-10-31 (task 5): yes, as the explicit
+  `mise run disk:report -- --fix probe-networks`; the report row only counts.
+- Whether to run that on omarchy-hp now is the user's call.
 
 ## Related
 

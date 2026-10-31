@@ -892,6 +892,8 @@ export class CoordinatorService {
     const probe = this.options.workerBackgroundWork;
     if (
       !delegation ||
+      // The coordinator stopped this turn itself: the end is the answer.
+      delegation.stopRequestedAt ||
       // Waiting on the user: the coordinator has to hear now, not in minutes.
       this.options.workerNeedsHuman?.(association.resourceId) ||
       !(
@@ -1185,8 +1187,13 @@ export class CoordinatorService {
           (environment?.name ??
             (remoteState && remoteState !== "unavailable" ? remoteState.name : undefined) ??
             association.resourceId) + (nodeName ? ` on ${nodeName}` : "");
-        const outcome =
-          delegation.state === "completed"
+        // A turn the coordinator stopped (stop_worker_turn) ends like any
+        // other; say who ended it, so it is not read as the worker finishing.
+        const stoppedByCoordinator =
+          delegation.state === "completed" && delegation.stopRequestedAt !== undefined;
+        const outcome = stoppedByCoordinator
+          ? "stopped"
+          : delegation.state === "completed"
             ? "finished"
             : delegation.state === "failed"
               ? "failed"
@@ -1225,7 +1232,9 @@ export class CoordinatorService {
               subject: `Worker ${label} ${outcome}`,
               body:
                 `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
-                `without sending a report.` +
+                (stoppedByCoordinator
+                  ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
+                  : `without sending a report.`) +
                 (backgroundWorkTimeoutMs !== undefined
                   ? ` Its turn ended while work it started in the background was still running, and none of it reported for ${backgroundWorkMinutes} ${backgroundWorkMinutes === 1 ? "minute" : "minutes"}; it may resume if that work reports.`
                   : "") +
@@ -1248,8 +1257,9 @@ export class CoordinatorService {
                   label,
                 },
                 state: delegation.state,
-                tone:
-                  delegation.state === "completed"
+                tone: stoppedByCoordinator
+                  ? "info"
+                  : delegation.state === "completed"
                     ? "success"
                     : delegation.state === "failed"
                       ? "failure"

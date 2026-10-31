@@ -452,6 +452,9 @@ export class ScheduledJobService {
         assertSelfTimerDelay(next.owner, next.action, next.trigger, now);
       } else if (input.startAt !== undefined) {
         throw new ScheduleInputError("startAt goes with everySeconds");
+      } else if (action && current.state !== "completed") {
+        // A new action can make the schedule a self-timer, with its delay limit.
+        assertSelfTimerDelay(next.owner, next.action, next.trigger, now);
       }
       if (retimed || input.timeZone !== undefined) {
         const slot = nextScheduleSlot(next.trigger, next.timeZone, now);

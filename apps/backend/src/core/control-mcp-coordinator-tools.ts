@@ -10,6 +10,7 @@ import {
 } from "./control-mcp-review-actions.js";
 import { registerAccountTools } from "./control-mcp-account-tools.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
+import { registerCoordinatorWorkerTurnTools } from "./control-mcp-coordinator-worker-turns.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
@@ -67,6 +68,7 @@ export function registerCoordinatorWorkflowTools(
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
+  registerCoordinatorWorkerTurnTools(server, invoke, coordinatorScope);
   registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,
@@ -570,7 +572,7 @@ export function registerCoordinatorWorkflowTools(
 function coordinatorScheduleBackend(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-): ScheduleToolBackend & { get(scheduleId: string): Promise<ScheduledJob> } {
+): Required<ScheduleToolBackend> {
   const ownConversation = async (): Promise<{ owner: ScheduleOwner; record: JsonRecord }> => {
     const snapshot = await invoke<unknown>("get_project_coordinator", {
       projectId: scope.projectId,
@@ -674,6 +676,24 @@ function coordinatorScheduleBackend(
       return invoke<{ scheduleId: string; deleted: boolean }>(
         "delete_scheduled_job",
         withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async pause(scheduleId) {
+      return invoke<ScheduledJob>(
+        "pause_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async resume(scheduleId) {
+      return invoke<ScheduledJob>(
+        "resume_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
+    },
+    async update(scheduleId, input) {
+      return invoke<ScheduledJob>(
+        "update_scheduled_job",
+        withScheduleActor({ ...input, scheduleId }, await owner()),
       );
     },
   };

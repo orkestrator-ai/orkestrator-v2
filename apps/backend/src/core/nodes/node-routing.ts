@@ -79,6 +79,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "custom_fix_coordinator_multi_review_action",
   "request_coordinator_root_changes",
   "apply_project_root_changes",
+  "stop_coordinator_worker_turn",
+  "list_coordinator_worker_commands",
+  "run_coordinator_worker_command",
   // An AGENTS.md proposal and its review belong to the coordinator's command
   // node; the read and the pull request run on the node owning the copy.
   "request_coordinator_agents_md_update",
@@ -125,6 +128,9 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "launch_controller_terminal",
       "open_controller_browser",
       "edit_controller_worker_tab",
+      "stop_controller_worker_turn",
+      "list_controller_worker_commands",
+      "run_controller_worker_command",
       "launch_controller_multi_review",
       "controller_multi_review_surface",
       "start_controller_multi_review",

@@ -159,7 +159,12 @@ The public CLI sends explicit intent: `session prompt` and `session start`
 carry `literal` only with `--literal` (otherwise the tab's typed default
 applies), and `session command` always carries `selected` with the binding
 revision the backend resolved at admission, so it is never re-resolved by
-name ([public-cli.md](public-cli.md#sessions-and-runs)).
+name ([public-cli.md](public-cli.md#sessions-and-runs)). A coordinator's
+`run_worker_command` resolves and dispatches through the same functions
+(`resolveSessionCommand`), so it is a selection with the same refusals; it
+also refuses `/steer` and does not list it, since `send_message` with
+`deliverNow` is the coordinator's way into a running turn
+([coordinator.md](coordinator.md#worker-surfaces)).
 
 ## Session actions and collisions
 

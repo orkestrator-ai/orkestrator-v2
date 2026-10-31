@@ -42,3 +42,20 @@ test("controller worker surfaces are node-link only, never workspace-grant acces
     expect(isWorkspaceExcludedCommand(command)).toBe(true);
   }
 });
+
+test("worker turn controls are node-link only on the leaf and never leave the command node", () => {
+  for (const command of [
+    "stop_controller_worker_turn",
+    "list_controller_worker_commands",
+    "run_controller_worker_command",
+  ]) {
+    expect(isNodeExcludedCommand(command)).toBe(false);
+    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+  }
+  for (const command of [
+    "stop_coordinator_worker_turn",
+    "list_coordinator_worker_commands",
+    "run_coordinator_worker_command",
+  ])
+    expect(isNodeExcludedCommand(command)).toBe(true);
+});

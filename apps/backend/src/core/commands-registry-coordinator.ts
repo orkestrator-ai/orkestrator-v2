@@ -17,6 +17,7 @@ import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
+import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import {
@@ -132,6 +133,7 @@ export function registerCoordinatorCommands(
 ): void {
   registerCoordinatorReviewActions(register, dependencies);
   registerCoordinatorSurfaceActions(register, dependencies);
+  registerCoordinatorWorkerTurnActions(register, dependencies);
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();

@@ -564,8 +564,9 @@ agents, models, defaults and base branch tip), `list_environments`,
 `send_prompt_to_tab`, `send_message`, `start_environment`,
 `stop_environment`, `get_repository_context`, the build pipeline tools,
 the Multi Review tools (custom fix and reviewer tabs included) and the worker
-surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab` and
-`create_pr` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
+surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab`,
+`create_pr`, `stop_worker_turn`, `list_worker_commands` and
+`run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
 the project's environments on the other nodes. The older `*_node_*` tools
 remain and use the same paths.
 

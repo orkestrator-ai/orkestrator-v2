@@ -34,6 +34,7 @@ import {
   textInput,
 } from "./input.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
+import { activeRunFor, stopSessionTurn } from "./session-turn-stop.js";
 import { providerCapabilities } from "./providers.js";
 import { resolveSession, sessionActivity, type ResolvedSession } from "./sessions.js";
 import type {
@@ -88,33 +89,6 @@ async function assertExpectedRun(
   return run;
 }
 
-async function activeRunFor(
-  context: PublicActionContext,
-  session: ResolvedSession,
-): Promise<PublicOperationRecord | null> {
-  const dispatched = session.record?.dispatchedRequestIds ?? [];
-  const active = await context.command.storage.publicOperations.listActivePublicOperations();
-  return (
-    active
-      .filter(
-        (record) =>
-          (record.action === "session.start" ||
-            record.action === "session.prompt" ||
-            record.action === "session.command" ||
-            record.action === "pr.create" ||
-            record.action === "pr.resolve") &&
-          record.resources.sessionId === session.sessionId &&
-          !!record.resources.dispatchRequestId &&
-          dispatched.includes(record.resources.dispatchRequestId),
-      )
-      .sort(
-        (a, b) =>
-          dispatched.indexOf(b.resources.dispatchRequestId!) -
-          dispatched.indexOf(a.resources.dispatchRequestId!),
-      )[0] ?? null
-  );
-}
-
 interface TargetInput {
   sessionId: string;
   environmentId: string;
@@ -150,32 +124,23 @@ const sessionStop: MutationActionHandler<TargetInput> = {
         tabId: session.tab.tabId,
       },
       async execute(operation) {
-        const run = expected ?? (await activeRunFor(context, session));
-        if (run) {
-          // The run settles as cancelled (not completed) once its turn ends.
-          await context.command.storage.publicOperations.updatePublicOperation(
-            run.operationId,
-            (current) =>
-              current.stopRequestedAt
-                ? null
-                : { ...current, stopRequestedAt: new Date(context.now()).toISOString() },
-          );
-          await operation.update({
-            resources: { dispatchRequestId: run.resources.dispatchRequestId },
-          });
-        }
-        await operation.update({ stage: "stopping" });
-        const projection = await context.invoke<NativeAgentSessionProjection | null>(
-          "stop_native_agent_session",
-          triple(session),
-        );
-        const phase = projection?.turn.phase;
+        const { run, phase, acknowledged } = await stopSessionTurn(context, session, {
+          run: expected,
+          onRun: async (run) => {
+            await operation.update({
+              resources: { dispatchRequestId: run.resources.dispatchRequestId },
+            });
+          },
+          beforeStop: async () => {
+            await operation.update({ stage: "stopping" });
+          },
+        });
         const result = {
           sessionId: session.sessionId,
           ...(run ? { runId: run.operationId } : {}),
-          turn: phase ?? "unknown",
+          turn: phase,
         };
-        if (phase === "idle" || phase === "error") {
+        if (acknowledged) {
           return { state: "succeeded", result: { ...result, acknowledged: true } };
         }
         return {

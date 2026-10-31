@@ -18,7 +18,7 @@ stalled workers" in one durable tool call and end its turn.
 | `apps/backend/src/core/scheduled-jobs/store.ts`, `layout.ts` | The `scheduled-jobs` database store, one row per schedule |
 | `apps/backend/src/core/scheduled-jobs/service.ts` | Timer loop, claims, execution with heartbeats, CRUD with visibility rules, lifecycle hooks |
 | `apps/backend/src/core/scheduled-jobs/executor.ts` | Runs a fire as its owner; refuses at creation what the owner could not do |
-| `apps/backend/src/core/scheduled-jobs/tools.ts` | `create_schedule`, `list_schedules`, `cancel_schedule` for agents and coordinators |
+| `apps/backend/src/core/scheduled-jobs/tools.ts` | `create_schedule`, `list_schedules`, `cancel_schedule` for agents and coordinators; `pause_schedule`, `resume_schedule`, `update_schedule` for coordinators |
 | `apps/backend/src/core/mcp-in-process.ts` | Calls one MCP tool of a scoped server in-process |
 | `apps/backend/src/core/public-api/actions-schedules.ts` | The `schedule.*` public actions (CLI, Control MCP operator credentials) |
 | `apps/backend/src/core/commands-registry-scheduled-jobs.ts` | Registry commands the UI and the coordinator tools call |
@@ -37,7 +37,8 @@ Schedules menu and actions use that same backend. While it is off:
   action (so `orkestrator schedule …` and operator Control MCP calls) is
   refused, the public actions with `capability-unavailable`.
 - Agents and coordinators are not offered `create_schedule`,
-  `list_schedules` or `cancel_schedule`.
+  `list_schedules` or `cancel_schedule`, and coordinators not
+  `pause_schedule`, `resume_schedule` or `update_schedule`.
 - The scheduler claims nothing (`ScheduledJobService` option `enabled`, read
   each tick). Stored schedules are kept. When it is turned back on, a missed
   fire runs or is skipped under the usual [missed-fire](#missed-fires) rules.
@@ -293,7 +294,10 @@ every fire:
 At creation the executor refuses what the owner could not run directly
 (`ScheduleAuthorityError`): a tool the owner's server does not list, a read,
 a schedule tool, an ungranted public action, input the action's own parser
-refuses. The fire-time check is the authoritative one.
+refuses. An update that replaces the action runs the same check against the
+owner's current scope, and a new action that makes the schedule a
+self-timer gets the self-timer delay limit even when the time is unchanged.
+The fire-time check is the authoritative one.
 
 Owners see and manage only their own schedules: a credential its own, an
 agent its environment's (sibling tabs already share the environment), a
@@ -319,10 +323,22 @@ since it always runs as the owner.
 - **Agents** (agent tools MCP, when messaging is enabled):
   `create_schedule`, `list_schedules`, `cancel_schedule`. Not on the bridges'
   auto-approve lists, so they follow the environment's approval policy.
-- **Coordinators** (Control MCP): the same three tools, under the new
-  coordinator capability `schedules`, granted to the main and side roles
+- **Coordinators** (Control MCP): the same three tools, plus
+  `pause_schedule`, `resume_schedule` and `update_schedule` (the coordinator
+  form of `schedule.pause`, `schedule.resume` and `schedule.update`), under
+  the coordinator capability `schedules`, granted to the main and side roles
   (`coordinatorRoleCapabilities`) and listed in
-  `COORDINATOR_CONTROL_TOOL_NAMES` so Pi and OpenCode admit them.
+  `COORDINATOR_CONTROL_TOOL_NAMES` so Pi and OpenCode admit them. Each acts
+  only on schedules the conversation may manage (above). `update_schedule`
+  takes the create fields it changes (`name`, one of `at`/`cron`/
+  `everyMinutes`, `startAt`, `timeZone`, `catchUpMinutes`, `action`); an
+  action goes through the same conversion as `create_schedule`, so
+  `remind_me` and `authorizeAccountSwitch` keep their rules (main only, a
+  user-started turn, one-shot). A self-timer that carries the user's
+  account-switch permission cannot be retimed or made repeating on its own:
+  the permission was given for that time, so the action has to be given again
+  with `authorizeAccountSwitch` in a user turn, or the timer cancelled and set
+  again.
 - **Operator MCP credentials**: the public actions below, as direct tools
   (`schedule_create`, …) and through `run_action`, under the new
   `schedules` capability (in `full` and `read-only`, not in `voice`).
@@ -450,6 +466,17 @@ Each decision lists the options, the choice and its trade-offs.
     backend's schedules across projects (operator schedules need not belong
     to a project). Con: a leaf node's schedules are managed from that node's
     own window or CLI.
+16. **Coordinator edits (pause, resume, update).** Options: only cancel and
+    re-create; the three edit tools for coordinators only; the same for
+    agents too. **Chosen: coordinators only.** A coordinator's schedule can
+    carry an account-switch permission, a resolved launch base and fire
+    history that a re-create would lose, and a coordinator postponing its own
+    wake is the common case. Agents keep the three original tools: their
+    schedules are mail and reminders, cheap to re-create, and a new agent tool
+    would join every bridge's approval surface. `update_schedule` has no
+    `expectedRevision`: the coordinator's views do not carry the revision.
+    Con: a coordinator and the user editing the same schedule at once resolve
+    last-writer-wins.
 
 ## Limits
 
@@ -484,7 +511,11 @@ executing at once per backend.
 - `apps/backend/src/core/scheduled-jobs/coordinator-schedules.test.ts`: the
   real Control MCP endpoint: a coordinator's "wake me at 03:12", a scheduled
   launch through its own `launch_environment`, side-agent refusal, listing
-  and cancelling.
+  and cancelling; pause and resume, an update re-checked as a creation (a
+  side agent refused a tool it cannot call, schedule tools and reads refused,
+  only the owner changing an action, the self-timer limit on a new action),
+  and a timer carrying the account-switch permission retimed only in a user
+  turn.
 - `apps/backend/src/core/coordinator-timers-and-accounts.test.ts`: self-timers
   over the real Control MCP endpoint (relative and absolute times and the
   zone reported, delivery to the main or side conversation, cancelling, a

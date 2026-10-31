@@ -348,7 +348,7 @@ interface PromptInput {
  * queue instead. Nothing ever turns a prompt into a steer.
  */
 export function assertSessionAcceptsPrompt(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   session: ResolvedSession,
   enqueue: boolean,
 ): void {
@@ -393,7 +393,7 @@ export function assertSessionAcceptsPrompt(
 
 /** Keep the conversation's own mode unless the caller chose one. */
 export function sessionPromptMode(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   session: ResolvedSession,
   requested: "plan" | "build" | undefined,
 ): "plan" | "build" | undefined {

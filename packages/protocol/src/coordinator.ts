@@ -280,6 +280,13 @@ export interface CoordinatorDelegation {
    * episode with its own notice.
    */
   waiting?: { since: string; notifiedAt?: string };
+  /**
+   * The coordinator stopped the worker's turn (`stop_worker_turn`) while this
+   * delegation was open. The turn end still settles it and wakes the
+   * coordinator once; the notice says the coordinator stopped it, and the
+   * bounded hold for background work is skipped.
+   */
+  stopRequestedAt?: string;
 }
 
 /** The last status a coordinator was sent for one workflow or worker. */
@@ -379,11 +386,13 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "list_schedules",
   "list_tabs",
   "list_tickets",
+  "list_worker_commands",
   "list_workflows",
   "open_multi_review",
   "open_multi_review_fix",
   "open_worker_browser",
   "pause_build_pipeline",
+  "pause_schedule",
   "propose_agents_md_update",
   "read_messages",
   "read_node_environment",
@@ -393,6 +402,8 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "request_project_on_node",
   "request_root_changes",
   "resume_build_pipeline",
+  "resume_schedule",
+  "run_worker_command",
   "send_message",
   "send_node_message",
   "send_prompt_to_node_tab",
@@ -403,8 +414,10 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "start_node_environment",
   "stop_environment",
   "stop_node_environment",
+  "stop_worker_turn",
   "switch_provider_account",
   "transfer_files",
+  "update_schedule",
   "update_ticket",
 ] as const);
 

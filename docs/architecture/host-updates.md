@@ -209,11 +209,19 @@ the service:
    It then prints the equivalent `--yes -- <serve args>` command and asks for
    confirmation. Passing any serve arguments, `--yes` or `--output json`
    skips the questions.
+
+   On Linux, tailscaled lets only root and its operator change Serve, and a
+   backend started with `--tailscale-serve` exits when it cannot. So when
+   `tailscale debug prefs` names no operator, or another user, the questions
+   show `sudo tailscale set --operator=<user>` and offer to run it. A dry run
+   and a scripted install only print it. It stays advice: a `tailscaled` running
+   as this user needs no operator, so nothing refuses to install.
 1. It installs the release.
 2. It points `current` at the release.
 3. It copies `bin/orkestrator-launcher.js` to `<dataDir>/backend/launcher.js`.
 4. It records the Bun running the command, and the serve arguments, in
-   `service.json`.
+   `service.json`. It also records the release it replaced, with the arguments
+   that release ran with, as `rollbackTarget`.
 5. It writes and loads the service unit:
    - macOS: a launchd LaunchAgent, `ai.orkestrator.backend[-<hash>]`, with
      `KeepAlive`.
@@ -223,12 +231,18 @@ the service:
    Logs go to `<dataDir>/backend/logs/service.log`. `--dry-run` shows the
    plan; `--skip-start` writes the unit without loading it.
 6. It waits (`--timeout`, default 3m; `0` skips it) for a new backend
-   generation to publish `backend-instance.json`, then prints the browser
-   address and the gateway token. The token appears only in human output on
-   this terminal. `--output json` reports `ready`, `browserUrl` and
-   `authFile`, never the token, and the backend still logs only the token
+   generation of the installed release to publish `backend-instance.json`, then
+   prints the browser address and the gateway token. The token appears only in
+   human output on this terminal. `--output json` reports `ready`, `browserUrl`
+   and `authFile`, never the token, and the backend still logs only the token
    file's path. A backend that is not ready in time does not fail the
    install; the command points at the log instead.
+
+   A release that has clearly failed does fail it, without waiting out the
+   timeout. That is when the launcher rolled it back, or when it exited before
+   readiness on two boots in a row and no rollback is coming. The error gives the
+   release the service is on now and the service log's last lines for the failed
+   boot (`readStartupFailure` and `startupLogExcerpt`).
 
 A service for a second data directory on a computer that already runs
 Orkestrator gets its own unit, but it still shares the user's HOME and binds
@@ -254,6 +268,11 @@ The launcher works like this:
    that, the launcher points `current` back at `previous` and records the
    rollback in `launcher-state.json`. A child still alive at its boot deadline is
    sent SIGTERM, then SIGKILL after a bounded grace period, before another boot.
+   Each failed boot is recorded as `bootFailure`, which readiness clears.
+   A restored release runs with `rollbackTarget`'s arguments when it names that
+   release, so an install that added a flag the old release rejects cannot leave
+   it failing on every boot. A self-update does not change the arguments, and
+   reaching the same version by a self-update uses the service's own.
 5. When the backend exits after `restart-requested`, the launcher starts the
    new `current` at once.
 6. SIGTERM and SIGINT are passed to the backend, and the launcher exits with

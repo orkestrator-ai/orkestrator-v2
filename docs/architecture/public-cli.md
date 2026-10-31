@@ -71,7 +71,10 @@ There is no port scan and no implicit production default. `--profile` and
 Once serving, the backend writes `<data dir>/backend-instance.json` (mode
 0600, atomic rename): installation ID, per-start generation, PID, endpoint,
 the **path** of the credential file (never the credential), data directory,
-app version and public schema version. It is removed on graceful shutdown if
+app version and public schema version. `controlMcp` (`running`, and `url`
+when known) names the Control MCP listener, which is ephemeral for every data
+directory but the default one; the backend rewrites the descriptor when that
+listener starts, stops or fails to bind. It is removed on graceful shutdown if
 it still describes that generation. A descriptor whose PID is gone is stale and
 is refused.
 

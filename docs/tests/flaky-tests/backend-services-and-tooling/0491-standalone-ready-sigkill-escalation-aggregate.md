@@ -93,3 +93,22 @@ same window. Consistent with the real-timer ordering race recorded above, now
 also seen in isolation on a heavily loaded host. Evidence:
 `orkestrator-test-run.2rpgar/` under the host temporary directory. No
 implementation, assertion, timeout or skip changed.
+
+## Capacity retry review — 2026-10-30
+
+Preparation's `mise run test` failed when the first signal assertion already included SIGKILL (94.27 ms).
+The backend reported 2 failures in the default aggregate with its normal
+concurrent groups. Evidence is `validation-05.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-197e8c94-de90-4cb9-9a1d-f52dd1d193c4/`.
+
+Both unchanged owners passed together with one isolated worker (exit 0, 3.3 s):
+
+```sh
+mise run test:logged -- --name preparation-backend-failures -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures
+```
+
+Consistent with the previously recorded real-timer scheduling sensitivity;
+no product code, assertions, timeouts, or skips in these owners changed.
+
+The exact default-suite command subsequently passed (exit 0, 160.5 s):
+`mise run test:logged -- --name capacity-review-default-tests -- mise run test`.

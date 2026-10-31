@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearTranscriptCache } from "../transcript-cache.js";
 import {
+  CODEX_SERVER_OVERLOADED_MESSAGE,
+  capacityRetryContinuationText,
+} from "../sessions/capacity-retry.js";
+import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
   replayedRowId,
@@ -122,6 +126,53 @@ describe("rollout rows", () => {
       ["assistant", "turn-1", [{ type: "status", severity: "error", content: refusal }]],
       ["user", "turn-2", [{ type: "text", content: "Again" }]],
       ["assistant", "turn-2", [{ type: "text", content: "OK" }]],
+    ]);
+  });
+
+  test("a capacity retry reloads as its retry card, never as a message the user typed", async () => {
+    await writeRollouts([
+      { timestamp: at(0), type: "session_meta", payload: { id: "steps", cwd: "/fixture" } },
+      { timestamp: at(0), type: "turn_context", payload: { turn_id: "turn-1" } },
+      message(1, "user", "Fix the findings"),
+      message(2, "assistant", "Looking at the first finding."),
+      {
+        timestamp: at(3),
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          turn_id: "turn-1",
+          error: {
+            message: CODEX_SERVER_OVERLOADED_MESSAGE,
+            codex_error_info: "server_overloaded",
+          },
+        },
+      },
+      { timestamp: at(4), type: "turn_context", payload: { turn_id: "turn-2" } },
+      message(5, "user", capacityRetryContinuationText(2, 5)),
+      message(6, "assistant", "Fixed."),
+      {
+        timestamp: at(7),
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-2" },
+      },
+    ]);
+
+    const rows = (await hydrateMessagesFromPersistedSession("steps")).messages;
+    expect(rows.map((row) => [row.role, row.turnId, row.parts])).toEqual([
+      ["user", "turn-1", [{ type: "text", content: "Fix the findings" }]],
+      [
+        "assistant",
+        "turn-1",
+        [
+          { type: "text", content: "Looking at the first finding." },
+          {
+            type: "retry",
+            content: "Model at capacity, retried automatically (attempt 2 of 5)",
+            toolState: "success",
+          },
+        ],
+      ],
+      ["assistant", "turn-2", [{ type: "text", content: "Fixed." }]],
     ]);
   });
 

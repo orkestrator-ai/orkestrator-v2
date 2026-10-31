@@ -15,6 +15,8 @@ afterEach(async () => {
 const tailscaleReady = {
   hasTailscaleAddress: () => true,
   findTailscaleCli: () => "/usr/bin/tailscale",
+  tailscaleOperatorNeeded: () => null,
+  grantTailscaleOperator: () => false,
 };
 const installCommand = ["bunx", "orkestrator", "service", "install", "--yes"];
 function scripted(answers: string[]) {

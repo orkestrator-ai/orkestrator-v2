@@ -675,3 +675,40 @@ Evidence: `orkestrator-test-run.g2Dbgd/browser.log.gz` and
 `orkestrator-test-run.aLrszZ/native-branch-owner.log.gz` in the host temporary
 directory. This is a persistent failure, not a newly classified flake. No
 native branch implementation, assertion, timeout or skip changed.
+
+
+## Coordinator timers/account review — 2026-10-30
+
+The exact required browser rerun reported 983 passed, 106 skipped and three
+failed (507.4 seconds logged):
+
+```sh
+mise run test:logged -- --name review-repaired-browser -- mise run test:browser
+```
+
+Both native branch-suggestion cases again expected `release/2.0` and received
+`rel`. The third failure was the desktop transcript find-convergence case
+tracked in [0767](../native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md).
+The complete unchanged native branch owner reproduced both failures (two
+passed, two failed; 23.4 seconds logged):
+
+```sh
+mise run test:logged -- --name native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+The public-site stage, blocked by the chained component failure, passed
+separately (exit 0, 10.5 seconds logged):
+
+```sh
+mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+Artifacts are `orkestrator-test-run.WutQx0/review-repaired-browser.log.gz`
+and `orkestrator-test-run.GCMoTz/native-branch-owner.log.gz` under the host
+temporary directory. No native branch implementation, assertion, deadline or
+skip changed. The backend-focused fixes, targeted regressions, backend types,
+formatting and scoped lint pass; the full default suite passes in 170 seconds.
+
+The complete unchanged streaming owner then passed alone (exit 0, 47.7 s),
+confirming the 0767 recurrence for this run. The native branch failures remain
+persistent; they are not newly classified flakes.

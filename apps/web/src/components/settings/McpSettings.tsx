@@ -48,6 +48,7 @@ import {
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import { useTimedCopyFeedback } from "@/hooks";
 import * as backend from "@/lib/backend";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import { cn } from "@/lib/utils";
 
 const PROFILE_TEXT: Record<ControlMcpProfile, { label: string; description: string }> = {
@@ -288,7 +289,16 @@ export function McpSettings() {
   );
 
   useEffect(() => {
-    void fetchSettings();
+    const controller = new AbortController();
+    // Subscribe before the snapshot, and refresh after any replay gap.
+    void listenAuthoritative("control-mcp-state-changed", fetchSettings, {
+      onResync: fetchSettings,
+      signal: controller.signal,
+      resyncOnSubscribe: true,
+    }).catch(() => {
+      if (!controller.signal.aborted) void fetchSettings();
+    });
+    return () => controller.abort();
   }, [fetchSettings]);
 
   const retry = useCallback(() => {

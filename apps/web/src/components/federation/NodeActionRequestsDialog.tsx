@@ -34,7 +34,9 @@ function targetLabel(request: NodeActionRequestView): string {
             ? `uncommitted changes to “${target.environmentName ?? target.environmentId}”`
             : request.kind === "update-agents-md"
               ? `the ## Orkestrator section of AGENTS.md on ${target.nodeName}`
-              : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
+              : request.kind === "switch-agent-account"
+                ? `the active ${target.platform === "codex" ? "Codex" : "Claude"} account on ${target.nodeName} to “${target.accountLabel ?? target.accountId}”`
+                : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
 }
@@ -46,13 +48,15 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "reveal-env-value": "Show a value in plain text",
   "apply-root-changes": "Apply",
   "update-agents-md": "Update",
+  "switch-agent-account": "Switch",
 };
 
 /**
  * A coordinator asked for something only the user may do (delete an
  * environment, create a project on a node, push project files, show a
  * secret value, copy the checkout's uncommitted changes into a worker, save
- * decisions to the project's AGENTS.md through a pull request).
+ * decisions to the project's AGENTS.md through a pull request, switch the
+ * active provider account on a machine).
  * Nothing happens until the user approves here; the dialog names every node
  * and environment involved.
  */
@@ -150,7 +154,9 @@ export function NodeActionRequestsDialog() {
             {request.reason ? ` Its reason: “${request.reason}”` : ""}
             {request.kind === "delete-environment"
               ? " Deleting removes the environment, its container, storage and recovery copies on that node. It cannot be undone."
-              : ""}
+              : request.kind === "switch-agent-account"
+                ? " New turns of every session of that provider on that machine run on, and are billed to, this account; a turn already running finishes on the current one. You can switch back in Settings."
+                : ""}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

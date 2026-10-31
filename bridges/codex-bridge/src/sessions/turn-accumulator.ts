@@ -18,8 +18,10 @@ import type {
   EngineEvent,
   EngineGeneration,
   EngineItem,
+  EngineTurnConfig,
   EngineTurnStatus,
 } from "../engine/types.js";
+import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import {
   resolveTranscriptToolOutputState,
@@ -151,6 +153,8 @@ export function unconfirmedTurnId(requestId: string): string {
 export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
+  /** Identity of the current provider attempt; requestId owns logical result credit. */
+  providerRequestId?: string;
   readonly expectsStructuredOutput: boolean;
   /** Assistant transcript row receiving newly introduced items in this turn. */
   assistantMessageId: string;
@@ -180,6 +184,13 @@ export class TurnAccumulator {
    * still see a turn it can continue.
    */
   stoppedByShutdown = false;
+  /**
+   * Set by prompt dispatch on a turn the bridge may continue after a model
+   * capacity refusal (`app-server-runtime-capacity-retry.ts`): what the
+   * continuation re-sends, and which attempt is running (1 is the prompt).
+   * A turn started any other way is never retried.
+   */
+  capacityRetry?: { config: EngineTurnConfig; outputSchema?: JsonSchema; attempt: number };
   error?: EngineError;
   finalDiff?: string;
   completedAt?: string;
@@ -606,6 +617,15 @@ export class TurnAccumulator {
     this.phase = status;
     if (error) this.error = error;
     this.completedAt = new Date().toISOString();
+    this.settleEndedAttempt();
+  }
+
+  /**
+   * The app-server turn behind this one ended, whatever comes next: nothing of
+   * it streams any more. `complete` settles it so; a capacity retry settles it
+   * the same way and keeps the turn running for its continuation.
+   */
+  settleEndedAttempt(): void {
     // Nothing more streams once the turn ends, whatever its status.
     this.interruptOpenAgentMessages();
     // An item that never settled renders differently once the turn is over (a
@@ -614,6 +634,17 @@ export class TurnAccumulator {
     for (const accumulator of this.items.values()) {
       if (!accumulator.completed && !accumulator.interrupted) this.touch(accumulator);
     }
+  }
+
+  /** Adds or updates the bridge's own retry card (`codex-item-types.ts` `RetryItem`). */
+  recordRetryCard(id: string, text: string, state: "pending" | "success" | "failure"): void {
+    this.onItemCompleted({ id, type: "retry", text, state });
+  }
+
+  /** The card's state, when this turn has one by that id. */
+  retryCardState(id: string): "pending" | "success" | "failure" | undefined {
+    const item = this.items.get(id)?.item;
+    return item?.type === "retry" ? item.state : undefined;
   }
 
   /**

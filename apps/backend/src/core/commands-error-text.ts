@@ -52,7 +52,7 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
 
 /** OpenSSH's refusal once no key it could use was accepted, as Git relays it. */
 export function isGitSshAuthenticationFailure(message: string): boolean {
-  return /permission denied \(publickey\)/i.test(message);
+  return /permission denied \((?:[^(),\s]+,\s*)*publickey(?:\s*,[^(),]+)*\)/i.test(message);
 }
 
 /**

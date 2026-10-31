@@ -13,7 +13,7 @@ function checkoutLocation(localPath: string): string {
   return `${localPath} on ${os.hostname()}`;
 }
 
-function checkoutAccessError(localPath: string, error: unknown): Error {
+export function checkoutAccessError(localPath: string, error: unknown): Error {
   const location = checkoutLocation(localPath);
   const code = (error as NodeJS.ErrnoException).code;
   if (code === "ENOENT" || code === "ENOTDIR") {
@@ -41,6 +41,9 @@ function checkoutGitError(localPath: string, error: unknown): Error {
     return new Error(`Git timed out reading the project's local checkout: ${location}`);
   }
   const message = error instanceof Error ? error.message : String(error);
+  if (/permission denied|operation not permitted|EACCES|EPERM/i.test(message)) {
+    return checkoutAccessError(localPath, { code: "EACCES" });
+  }
   if (/detected dubious ownership/i.test(message)) {
     return new Error(
       `Git refused the project's local checkout because another user owns it: ${location}. ` +
@@ -71,7 +74,9 @@ export async function resolveProjectGitRoot(
   }).catch((error: unknown) => {
     throw checkoutGitError(localPath, error);
   });
-  const root = await fs.realpath(result.stdout.trim());
+  const root = await fs.realpath(result.stdout.trim()).catch((error: unknown) => {
+    throw checkoutAccessError(localPath, error);
+  });
   if (path.normalize(root) !== path.normalize(requested)) {
     throw new Error(
       `The project's local checkout is a folder inside a Git repository, not its root: ${checkoutLocation(localPath)}. ` +

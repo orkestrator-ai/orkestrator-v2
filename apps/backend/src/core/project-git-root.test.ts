@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveProjectGitRoot } from "./project-git-root.js";
-import { runCommand } from "./shell.js";
+import * as shell from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
 
 const roots: string[] = [];
@@ -21,6 +22,7 @@ function storageWith(localPath: string | null): StorageService {
 }
 
 afterEach(async () => {
+  mock.restore();
   for (const root of roots.splice(0)) {
     await chmod(root, 0o700).catch(() => undefined);
     await rm(root, { recursive: true, force: true });
@@ -74,6 +76,70 @@ describe("resolveProjectGitRoot", () => {
     );
     await expect(failure).rejects.toThrow(`The repository root is ${root}.`);
   });
+
+  test.each([
+    [
+      new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+      "Git is not installed or available on PATH",
+    ],
+    [
+      new CommandFailedError("", { timedOut: true }),
+      "Git timed out reading the project's local checkout",
+    ],
+    [
+      new CommandFailedError("fatal: detected dubious ownership in repository", { exitCode: 128 }),
+      "Change the folder's owner, or add it to Git's safe.directory setting.",
+    ],
+    [
+      new CommandFailedError("fatal: cannot read config", { exitCode: 128 }),
+      "Could not read the project's local checkout",
+    ],
+  ])("classifies Git runner failure %s", async (failure, expected) => {
+    const root = await tempRoot();
+    const runner = spyOn(shell, "runCommand").mockRejectedValueOnce(failure);
+    const error = await resolveProjectGitRoot(storageWith(root), "project-1").catch(
+      (error: Error) => error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(expected);
+    expect((error as Error).message).toContain(os.hostname());
+    if (!failure.executableMissing) expect((error as Error).message).toContain(root);
+    expect(runner).toHaveBeenCalledWith("git", ["rev-parse", "--show-toplevel"], {
+      cwd: await realpath(root),
+      timeoutMs: 10_000,
+    });
+  });
+
+  test("classifies a root removed after Git reports its toplevel", async () => {
+    const root = await tempRoot();
+    spyOn(shell, "runCommand").mockImplementationOnce(async () => {
+      await rm(root, { recursive: true });
+      return { stdout: root + "\n", stderr: "" };
+    });
+    await expect(resolveProjectGitRoot(storageWith(root), "project-1")).rejects.toThrow(
+      `The project's local checkout does not exist: ${root} on ${os.hostname()}`,
+    );
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "classifies a permission failure from Git after realpath succeeds",
+    async () => {
+      const root = await tempRoot();
+      await runCommand("git", ["init", "-q", root]);
+      const run = shell.runCommand;
+      const canonicalRoot = await realpath(root);
+      const runner = spyOn(shell, "runCommand").mockImplementationOnce(async (...args) => {
+        // Revoke access after the resolver's first realpath, before spawning Git.
+        expect(args[2]?.cwd).toBe(canonicalRoot);
+        await chmod(root, 0o000);
+        return run(...args);
+      });
+      await expect(resolveProjectGitRoot(storageWith(root), "project-1")).rejects.toThrow(
+        `Orkestrator does not have permission to open the project's local checkout: ${root} on ${os.hostname()}`,
+      );
+      expect(runner).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test("still reports a project without a checkout", async () => {
     await expect(resolveProjectGitRoot(storageWith(null), "project-1")).rejects.toThrow(

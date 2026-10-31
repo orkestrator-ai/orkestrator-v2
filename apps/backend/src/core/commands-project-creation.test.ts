@@ -1,4 +1,4 @@
-import { describe, expect, jest, mock, test } from "bun:test";
+import { describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -565,38 +565,47 @@ describe("create_project_from_scratch", () => {
   );
 
   test.each([
-    ["git@github.com:acme/private.git", true],
-    ["git@example.invalid:acme/private.git", false],
+    ["git@github.com:acme/private.git", true, "publickey"],
+    ["git@github.com:acme/private.git", true, "publickey,password"],
+    ["git@example.invalid:acme/private.git", false, "password,publickey,keyboard-interactive"],
   ])(
     "add_project explains a refused SSH key instead of relaying Git's output (%s)",
-    async (gitUrl, offersHttps) => {
+    async (gitUrl, offersHttps, methods) => {
+      const hostname = "host-" + "x".repeat(58);
+      const hostnameSpy = spyOn(os, "hostname").mockReturnValue(hostname);
       const runCommand = mock(async () => {
         throw new CommandFailedError(
-          "Command failed: git clone\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+          `Command failed: git clone\ngit@github.com: Permission denied (${methods}).\nfatal: Could not read from remote repository.`,
           { exitCode: 128 },
         );
       });
 
-      await withProjectCreation(
-        runCommand,
-        async (_invoke, storage, root, _args, invokeCommand) => {
-          const error = await invokeCommand("add_project", {
-            gitUrl,
-            localPath: path.join(root, "clone-refused"),
-          }).catch((thrown: Error) => thrown);
+      try {
+        await withProjectCreation(
+          runCommand,
+          async (_invoke, storage, root, _args, invokeCommand) => {
+            const error = await invokeCommand("add_project", {
+              gitUrl,
+              localPath: path.join(root, "clone-refused"),
+            }).catch((thrown: Error) => thrown);
 
-          const { message } = error as Error;
-          expect(message).toContain(
-            `Could not clone the Git repository: SSH authentication failed on ${os.hostname()}.`,
-          );
-          expect(message).toContain("can't enter a key passphrase");
-          expect(message).not.toContain("Command failed");
-          expect(message.includes("gh auth setup-git")).toBe(offersHttps);
-          // A project copy relays only this much of the clone's error.
-          expect(message.length).toBeLessThanOrEqual(300);
-          expect(await storage.loadProjects()).toEqual([]);
-        },
-      );
+            const { message } = error as Error;
+            expect(message).toContain(
+              `Could not clone the Git repository: SSH authentication failed on ${hostname.slice(0, 47)}….`,
+            );
+            expect(message).toContain("can't enter a key passphrase");
+            expect(message).toContain("authorized key must be loaded in an SSH agent it can reach");
+            expect(message.includes("https:// URL.")).toBe(offersHttps);
+            expect(message).not.toContain("Command failed");
+            expect(message.includes("gh auth setup-git")).toBe(offersHttps);
+            // A project copy relays only this much of the clone's error.
+            expect(message.length).toBeLessThanOrEqual(300);
+            expect(await storage.loadProjects()).toEqual([]);
+          },
+        );
+      } finally {
+        hostnameSpy.mockRestore();
+      }
     },
   );
 

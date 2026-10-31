@@ -336,12 +336,14 @@ function cloneCommandFailureDetail(error: unknown, gitUrl: string): string {
     return "the clone timed out";
   }
   if (error instanceof Error && isGitSshAuthenticationFailure(error.message)) {
-    // Kept short: a project copy reports only the first 300 characters.
+    // Bound the host too: a project copy reports only the first 300 characters.
+    const hostname = os.hostname();
+    const hostLabel = hostname.length > 48 ? `${hostname.slice(0, 47)}…` : hostname;
     const https = parseGitHubRepositoryRemote(gitUrl).ok
       ? " Or run `gh auth setup-git` and add the project with its https:// URL."
       : "";
     return (
-      `SSH authentication failed on ${os.hostname()}. Orkestrator can't enter a key passphrase, ` +
+      `SSH authentication failed on ${hostLabel}. Orkestrator can't enter a key passphrase, ` +
       `so an authorized key must be loaded in an SSH agent it can reach.${https}`
     );
   }

@@ -20,6 +20,7 @@ import {
 } from "./environment-move-sessions.js";
 import type { Environment, WorktreeMoveRecord, WorktreeMoveSubmodule } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
+import { checkoutAccessError } from "./project-git-root.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
@@ -177,11 +178,9 @@ async function moveEnvironmentOnce(
   if (!projectPath) {
     throw new Error("This project has no local checkout configured, so the worktree can't move");
   }
-  if (!(await pathExists(projectPath))) {
-    throw new Error(
-      `The project's local checkout does not exist, so the worktree can't move: ${projectPath}`,
-    );
-  }
+  await fs.access(projectPath).catch((error: unknown) => {
+    throw checkoutAccessError(projectPath, error);
+  });
   const from = path.resolve(environment.worktreePath!);
   const fromStats = await fs.stat(from).catch(() => null);
   if (!fromStats?.isDirectory()) {

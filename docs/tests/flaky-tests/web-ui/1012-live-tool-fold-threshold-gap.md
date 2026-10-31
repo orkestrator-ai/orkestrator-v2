@@ -102,3 +102,13 @@ skipped, only the two native branch-picker cases failed), with evidence in
 `orkestrator-test-run.VyCqpD/browser.log.gz` under the host temporary directory.
 The host still ran other validation during the owner run; the cause remains
 unconfirmed. No group implementation, assertion, timeout or skip changed.
+
+
+## History-loading main merge — 2026-10-31
+
+History-loading main merge on 2026-10-31 repeated fold gaps of 9 px mobile and 15 px desktop; the complete unchanged folding owner passed in the one-worker five-owner rerun (1600).
+
+Exact commands, eight-worker aggregate counts, sequential one-worker results,
+failure details and retained evidence are in
+[1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
+No owning implementation, assertion, timeout or skip changed between runs.

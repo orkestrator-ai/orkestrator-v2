@@ -1,6 +1,6 @@
 # Firefox preview IPv6 navigation returns an empty response
 
-- **ID:** 1319
+- **ID:** 1411
 - **Status:** open
 - **Date observed:** 2026-10-30
 - **Test:** `[firefox] an IPv6-only service loads through its private origin`

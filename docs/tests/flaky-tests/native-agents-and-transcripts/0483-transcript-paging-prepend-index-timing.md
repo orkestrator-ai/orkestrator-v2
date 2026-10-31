@@ -49,3 +49,13 @@ The desktop native paging case saw prepend index 1 instead of an index greater t
 - **Complete unchanged owner:** `mise run test:logged -- --name paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/playwright/resume-paging-owner` passed (96.6 s logged).
 - **Aggregate command, workers, counts and evidence:** [hidden-resume review validation](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#hidden-resume-review-validation--2026-10-26). The backend used two Bun workers; the component suite used nine Playwright workers. Concurrent worktree validation was active.
 - **Assessment:** confirmed intermittent recurrence; no owning source, assertion, deadline or skip changed. The original aggregate remains failed; no root cause was established.
+
+
+## History-loading main merge — 2026-10-31
+
+History-loading main merge on 2026-10-31 repeated index 1 on both viewports and the desktop byte-bounded variant; the complete unchanged paging owner passed in the one-worker five-owner rerun (1600).
+
+Exact commands, eight-worker aggregate counts, sequential one-worker results,
+failure details and retained evidence are in
+[1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
+No owning implementation, assertion, timeout or skip changed between runs.

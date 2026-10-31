@@ -2368,6 +2368,14 @@ export interface NativeAgentToolDetails {
     after?: string;
     diff?: string;
   };
+  /**
+   * A settled tool call's whole input, behind the part's `toolArgsDetailRef`.
+   * The projection sends large file contents and replacement strings in
+   * `toolArgs` as short previews; this is the input they were cut from.
+   */
+  toolArgs?: Record<string, unknown>;
+  /** Finished reasoning behind a thinking part's `contentDetailRef`; its `content` is a preview. */
+  thinking?: string;
 }
 
 export interface NativeAgentControlUpdate {

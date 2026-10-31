@@ -2123,6 +2123,63 @@ describe("useNativeAgentSession progressive view", () => {
     ]);
   });
 
+  test("an automatic page is served from a direct cursor", async () => {
+    transcriptUpdates = [
+      () =>
+        truncatedTail("transcript-1", [message("m3"), message("m4")], {
+          historyCursor: "direct-before-m3",
+          historyPaging: "direct",
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [
+      () => ({ ...historyPage([message("m1"), message("m2")]), historyEpoch: "epoch-1" }),
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.canLoadEarlierAutomatically()).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlierMessages({ automatic: true });
+    });
+
+    expect(messagePageCalls).toEqual([{ before: "direct-before-m3" }]);
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+  });
+
+  test("an automatic page never mints a cursor through the joined snapshot", async () => {
+    transcriptUpdates = [() => truncatedTail("transcript-1", [message("m3"), message("m4")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    projectionUpdates = [
+      () =>
+        joinedSnapshot("joined-1", [message("m3"), message("m4")], {
+          historyCursor: "cursor-before-m3",
+          historyComplete: true,
+        }),
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+    expect(result.current.canLoadEarlierAutomatically()).toBe(false);
+
+    let page: unknown;
+    await act(async () => {
+      page = await result.current.loadEarlierMessages({ automatic: true });
+    });
+
+    // A whole-transcript read stays behind the button.
+    expect(page).toBeNull();
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(messagePageCalls).toEqual([]);
+  });
+
   test("steps past a direct page holding only rows already on screen", async () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m3"), message("m4")])];
     stateUpdates = [() => stateSnapshot("state-1")];

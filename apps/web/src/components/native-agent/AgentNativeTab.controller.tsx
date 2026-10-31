@@ -114,6 +114,7 @@ import {
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
+import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
@@ -449,7 +450,7 @@ export function SharedNativeAgentController({
   // its buttons disabled for the duration, instead of making the card vanish the
   // instant the user acts on it.
   const [isResolvingDispatch, setIsResolvingDispatch] = useState(false);
-  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [earlierRequest, setEarlierRequest] = useState<{ sessionKey: string } | null>(null);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
@@ -533,6 +534,7 @@ export function SharedNativeAgentController({
     refreshCommands,
     loadToolDetails,
     loadEarlierMessages,
+    canLoadEarlierAutomatically,
   } = useNativeAgentSession<NativeMessage>({
     platform,
     environmentId: data.environmentId,
@@ -1137,8 +1139,38 @@ export function SharedNativeAgentController({
     scrollToIndex,
   });
   // Load earlier messages keeps the reader on the row they were reading.
-  const loadEarlierPlace = useHeldTranscriptPlace();
+  const loadingEarlier = earlierRequest?.sessionKey === sessionKey;
+  const loadEarlierPlace = useHeldTranscriptPlace(sessionKey);
   useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
+  const loadEarlierAutomatically = useCallback(
+    async (scroller: HTMLElement | null) => {
+      // An opening page must leave live follow armed. History restoration
+      // owns navigation and would otherwise release follow at the live tail.
+      if (!scrollProps.controller.wantsFollow) {
+        loadEarlierPlace.hold(scroller, scrollProps.controller);
+      }
+      const request = { sessionKey };
+      setEarlierRequest(request);
+      try {
+        await loadEarlierMessages({ automatic: true });
+      } finally {
+        setEarlierRequest((current) => (current === request ? null : current));
+      }
+    },
+    [loadEarlierMessages, loadEarlierPlace, scrollProps.controller, sessionKey],
+  );
+  // Opens with a history page above the live window, and pages on as the
+  // reader nears the top, without the button.
+  const autoLoadEarlierSentinel = useAutoLoadEarlier({
+    sessionKey,
+    isActive,
+    settled: hasCompletedRead && transcriptAvailability === "current",
+    canLoadEarlier: canLoadEarlierHistory,
+    headId: projection?.messages[0]?.id,
+    loading: loadingEarlier,
+    available: canLoadEarlierAutomatically,
+    load: loadEarlierAutomatically,
+  });
   const turnRows = useMemo(() => withGoalTurnsAsPrompts(normalizedMessages), [normalizedMessages]);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
@@ -3813,7 +3845,7 @@ export function SharedNativeAgentController({
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
         showBytesNotice || showLoadEarlier || showOmittedNotice ? (
-          <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+          <div className="relative mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             {showBytesNotice ? (
               <span>
                 Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
@@ -3827,6 +3859,14 @@ export function SharedNativeAgentController({
               </span>
             ) : null}
             {showLoadEarlier ? (
+              // Out of flow, so it adds no gap to the header's layout.
+              <div
+                ref={autoLoadEarlierSentinel}
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-px"
+              />
+            ) : null}
+            {showLoadEarlier ? (
               <Button
                 type="button"
                 size="sm"
@@ -3837,14 +3877,17 @@ export function SharedNativeAgentController({
                     event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
                     scrollProps.controller,
                   );
-                  setLoadingEarlier(true);
+                  const request = { sessionKey };
+                  setEarlierRequest(request);
                   void loadEarlierMessages()
                     .catch((error) =>
                       toast.error(
                         error instanceof Error ? error.message : "Failed to load earlier messages",
                       ),
                     )
-                    .finally(() => setLoadingEarlier(false));
+                    .finally(() =>
+                      setEarlierRequest((current) => (current === request ? null : current)),
+                    );
                 }}
               >
                 {loadingEarlier ? "Loading…" : "Load earlier messages"}

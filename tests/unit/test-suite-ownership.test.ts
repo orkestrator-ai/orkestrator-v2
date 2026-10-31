@@ -260,6 +260,8 @@ describe("test suite ownership", () => {
       // Exercises backend normalization through the renderer's pipeline adapter.
       "tests/unit/lib/opencode-pipeline-transcript.test.ts",
       "tests/unit/migrate-copy.test.ts",
+      // Deferred backend references must survive the browser's normalization.
+      "tests/unit/native-agent-deferred-normalization.test.ts",
       "tests/unit/test-host-isolation.test.ts",
       "tests/unit/user-prompt-display-contract.test.ts",
       "tests/unit/workspace-setup-preserve.test.ts",

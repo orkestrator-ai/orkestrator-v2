@@ -153,6 +153,50 @@ export function cacheToolDetails(details: NativeAgentToolDetails): void {
 }
 
 /**
+ * The body behind one detail reference, fetched the first time `wanted` is
+ * true and shared through the browser cache. `details` is undefined while
+ * there is no reference, before it is wanted, and while it loads.
+ */
+export function useToolDetails(
+  detailRef: string | undefined,
+  wanted: boolean,
+): { details?: NativeAgentToolDetails; error?: string } {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const [loaded, setLoaded] = useState<{
+    ref: string;
+    details?: NativeAgentToolDetails;
+    error?: string;
+  } | null>(null);
+  const details = detailRef
+    ? (cachedToolDetails(detailRef) ?? (loaded?.ref === detailRef ? loaded.details : undefined))
+    : undefined;
+  const error = detailRef && loaded?.ref === detailRef ? loaded.error : undefined;
+
+  useEffect(() => {
+    if (!wanted || !detailRef || details || error || !loadToolDetails) return;
+    let cancelled = false;
+    void loadToolDetails(detailRef)
+      .then((result) => {
+        if (cancelled) return;
+        cacheToolDetails(result);
+        setLoaded({ ref: detailRef, details: result });
+      })
+      .catch((failure) => {
+        if (cancelled) return;
+        setLoaded({
+          ref: detailRef,
+          error: failure instanceof Error ? failure.message : "Tool details are unavailable",
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailRef, details, error, loadToolDetails, wanted]);
+
+  return { ...(details ? { details } : {}), ...(error ? { error } : {}) };
+}
+
+/**
  * A tool row's own result, fetched on first expansion when the projection has
  * moved it behind a detail reference.
  *

@@ -241,6 +241,30 @@ describe("held place with the scroll controller", () => {
     };
   }
 
+  test("changing session or unmounting releases only that session's scroll hold", () => {
+    const hook = renderHook(({ sessionKey }) => useHeldTranscriptPlace(sessionKey), {
+      initialProps: { sessionKey: "old" },
+    });
+    const oldPlace = hook.result.current;
+    oldPlace.resolve([text("old-row")]);
+    const oldController = fakeController([{ rowKey: "old-row", index: 0, offsetPx: 4 }]);
+    oldPlace.hold(null, oldController as never);
+    expect(oldController.holdingStructure).toBe(true);
+
+    hook.rerender({ sessionKey: "new" });
+    const newPlace = hook.result.current;
+    expect(newPlace).not.toBe(oldPlace);
+    expect(oldController.holdingStructure).toBe(false);
+    newPlace.resolve([text("new-row")]);
+    const newController = fakeController([{ rowKey: "new-row", index: 0, offsetPx: 8 }]);
+    newPlace.hold(null, newController as never);
+    // An old request's late cleanup cannot release the new session's hold.
+    oldPlace.release();
+    expect(newController.holdingStructure).toBe(true);
+    hook.unmount();
+    expect(newController.holdingStructure).toBe(false);
+  });
+
   test("a reader who moved while the page loaded is held where they are, not where they clicked", () => {
     const { hook, scrollToIndex } = setup([text("m52"), text("m53"), text("m54")]);
     const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 4 }]);

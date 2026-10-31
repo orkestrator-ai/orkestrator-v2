@@ -90,3 +90,35 @@ under the host temporary directory. No design cleanup implementation,
 assertion, timeout or skip changed. Asynchronous ledger removal remains a
 hypothesis. Other outcomes are in
 [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
+
+## Docker Settings probe repair — 2026-10-31
+
+After provisioning the missing pinned Codex binary, `NODE_ENV=test mise run test`
+failed the unchanged startup test at line 505 after 77.53 ms: profile deletion
+was observable while `2964482-2964484-0123abcd.json` remained in the ledger.
+The aggregate reserved six workspace worker slots (four backend file workers);
+the root, bridge and protocol groups passed, and the captured web summary had
+zero failures. Total duration was 719.7 s, including 453.3 s waiting for host
+capacity. Evidence: `/tmp/docker-fix-full-test.log` and
+`/tmp/orkestrator-test-run.kjM79q/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed alone on the Docker Settings branch (0.4 s)
+and on detached `origin/main` at `931e554171e86e1d640425b1839fc30d39a25970`
+(0.3 s), using independently installed dependencies:
+
+```sh
+NODE_ENV=test mise run test:logged -- --name docker-validation-backend-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1
+```
+
+Thirty further owner repeats on that main checkout passed in 2.8 s:
+
+```sh
+NODE_ENV=test mise run test:logged -- --name docker-main-ledger-repro -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --rerun-each=30
+```
+
+Logs: `/tmp/docker-fix-backend-owner.log`,
+`/tmp/docker-fix-main-backend-owner.log`, and
+`/tmp/docker-fix-main-ledger-repro.log`. This confirms aggregate-versus-isolated
+variance, not target-branch reproduction of the failure. No cleanup code,
+assertion, timeout or skip changed; asynchronous ledger removal remains a
+hypothesis.

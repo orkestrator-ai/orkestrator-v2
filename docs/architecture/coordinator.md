@@ -51,6 +51,11 @@ transcripts, attachments, and generated configuration live under application
 data. Opening Coordinator does not run project setup scripts, install
 dependencies, copy environment files, or load repository hooks.
 
+A control-MCP operator or the CLI addresses a conversation as a public session
+through this runtime ID; `apps/backend/src/core/public-api/sessions.ts` resolves
+it from the coordinator store, never by creating an environment or pane layout.
+See [control-mcp.md](control-mcp.md#coordinator-conversations).
+
 Unmounting the page or changing projects detaches the view only. Backend-owned
 sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without
@@ -62,9 +67,10 @@ Coordinator and deletes the isolated runtime, never the user's local repository.
 On a command node ([command-nodes.md](command-nodes.md)) a coordinator also
 works across the nodes that node controls:
 
-- `list_nodes` shows the connected nodes and whether each has a copy of this
-  project (matched by repository identity); `list_environments` lists the
-  project's environments on them as well.
+- `list_nodes` shows the connected nodes, whether each has a copy of this
+  project (matched by repository identity) and, for this machine and each
+  node, its OS and load (see [Choosing a machine](#choosing-a-machine));
+  `list_environments` lists the project's environments on them as well.
 - Every environment and workflow tool takes an optional `nodeId` and works
   on that node's copy with the same contract as here: launches, jobs,
   prompts and messages open delegations that wake this conversation once,
@@ -84,6 +90,68 @@ node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
 an agent on that node would. Its conversations are kept but hidden behind a
 warning in the project's Coordinator tab.
+
+### Choosing a machine
+
+A node the user names always wins. Otherwise a coordinator stays on its own
+node unless load or OS gives a clear reason to move; the context line
+(`coordinatorNodeContext`) says so, and placement stays its decision: nothing
+places work automatically. `list_nodes` gives it what it needs, under `machine`
+on `self` and on each node:
+
+```json
+{
+  "status": "ok",
+  "osFamily": "macos",
+  "os": "macOS 27.0",
+  "arch": "arm64",
+  "cpuCores": 18,
+  "totalRamGb": 64,
+  "latestSampleAgeSeconds": 12,
+  "load": [
+    { "window": "5m", "windowSeconds": 300, "coveredSeconds": 300, "cpuPercent": 21.4, "ramPercent": 58.2 },
+    { "window": "1h", "windowSeconds": 3600, "coveredSeconds": 3600, "cpuPercent": 18.9, "ramPercent": 57.6 },
+    { "window": "24h", "windowSeconds": 86400, "coveredSeconds": 7260, "cpuPercent": 17.3, "ramPercent": 55.1 }
+  ]
+}
+```
+
+- **Windows.** 5 minutes, 1 hour and 24 hours, named constants in
+  `packages/protocol/src/machine-load.ts`. A worker runs for hours, so a
+  one-minute figure is mostly noise. `os.loadavg()` is not the source: it is
+  zero on Windows, not a percentage, and stops at 15 minutes.
+- **Percentages.** Of the whole machine, so a 32-core box and a laptop compare.
+  CPU is the `os.cpus()` change between readings, a true average of the time
+  between them. RAM is a point reading from the title bar's cached reader:
+  `vm_stat` on a Mac (`os.freemem()` there counts cached files as used),
+  `os.freemem()` elsewhere (under Bun on Linux that is `MemAvailable`).
+- **Coverage.** `coveredSeconds` below `windowSeconds` means the average rests
+  on less history than its window, so a 24-hour figure from ten minutes reads
+  as ten minutes. Before the first reading the figures are `null`. A gap of more
+  than three intervals (a sleeping host) is no history, not a reading. Windows
+  end at the newest reading while sampling is on schedule, so a steady machine
+  reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
+- **Restarts.** History is in memory (`MachineLoadSampler`,
+  `apps/backend/src/core/machine-load.ts`) and starts empty on each start;
+  persisting it would add a database write on every machine all day for a
+  figure the coverage field already keeps honest. A bucket a minute for the
+  shorter windows and one every 15 minutes for the longest bound it to about
+  160 buckets, so the 24-hour edge is accurate to 15 minutes. Cost and cadence:
+  [recurring-work.md](recurring-work.md) B29.
+- **Machines that cannot answer.** One node never fails or holds up the call:
+  each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
+  `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
+  no figures. Reasons: `offline` (not connected, so not asked), `timeout`,
+  `older-version` (it answered that it has no `get_machine_load`) and `error`.
+  Last-known figures are never shown. `detail` is fixed wording, so a node's
+  error text does not reach the coordinator.
+- **Who sees it.** Read-only, for main coordinators and side agents
+  (`list_nodes` is under `discovery`). The answer is parsed down to the fields
+  above; no hostname, account, path or process detail crosses. The operator
+  `list_nodes` over `node.list` and the public action schema are unchanged. A
+  coordinator on a leaf gets its usual refusal from `list_nodes`.
+
+### Reaching a leaf's coordinator
 
 A command node's window reaching a leaf's project shows the leaf's
 coordinator directly when the sidebar is grouped by machine or project.
@@ -947,6 +1015,41 @@ fire runs the coordinator's own tool under its current scope, so read-only
 rules and project boundaries apply unchanged. Main schedules follow the next
 main conversation; a side agent's schedules end with it. See
 [scheduled-jobs.md](scheduled-jobs.md).
+
+### Self-timers and provider accounts
+
+`create_schedule` with action type `remind_me` is a **self-timer**: its body
+comes back to the conversation that set it (the main coordinator's address,
+or the side agent's own runtime id) as a reminder that starts a new turn, and
+one that fires mid-turn waits, like mail, until the turn ends. `at: "+2h"`
+and `at: "14:30"` are both accepted; absolute times are read in this
+machine's local zone (the user's) unless `timeZone` is given, and the result
+names the zone (`timeZoneUsed`) and the local time (`nextFireLocal`).
+
+For "check in 2 hours and switch accounts if the workers hit a usage limit"
+the main coordinator has three tools (capability `accounts`, plus
+`get_usage_limits` under `environments`; side agents get none):
+
+- `get_usage_limits` lists the agent tabs whose newest recorded turn failed
+  with a provider usage limit, and the active accounts' cached quota windows.
+  It reads storage and caches only.
+- `list_provider_accounts` lists the Claude and Codex logins on this machine
+  or another (`nodeId`), the active one per provider, and each one's plan
+  usage with `hasAllocationLeft`.
+- `switch_provider_account` changes the active login through
+  `set_active_agent_account`, the Settings switch, machine-wide. Without
+  permission it creates a `switch-agent-account` request the user approves
+  in the same dialog as `request_environment_deletion`. With the `scheduleId`
+  of a self-timer that carries the user's permission it switches at once.
+
+A self-timer carries that permission only when the main coordinator sets it
+with `authorizeAccountSwitch` in a turn the user started with their own
+message: the backend records each conversation's `lastTurnOrigin` (`user` or
+`mail`) at dispatch, and mail, status wakes and fired timers count as `mail`.
+The permission names the providers and any other machines, holds the user's
+words, and lasts two hours after the timer fires.
+[agent-accounts.md](agent-accounts.md#coordinator-switching) and
+[scheduled-jobs.md](scheduled-jobs.md#self-timers) have the details.
 
 ## Status wakes
 

@@ -86,6 +86,8 @@ function layout(title: string, route: string, state: FixtureState, body: string)
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="orkestrator-source-root" content="annotation-app">
+<meta name="orkestrator-source-producer" content="annotation-fixture">
 <title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
 <body data-fixture-marker="${FIXTURE_MARKER}" data-route="${escapeHtml(route)}" data-generation="${state.generation}">
 <header><strong>Fixture Cloud</strong><nav aria-label="Primary">${links}</nav></header>
@@ -96,7 +98,7 @@ function layout(title: string, route: string, state: FixtureState, body: string)
 
 function settingsSection(): string {
   const c = SETTINGS_COPY;
-  return `<section aria-labelledby="settings-heading">
+  return `<section aria-labelledby="settings-heading" data-orkestrator-source="MissingSettings.tsx:4" data-orkestrator-component="Settings">
 <h1 id="settings-heading">${escapeHtml(c.heading)}</h1>
 <form id="settings-form" onsubmit="return false">
   <fieldset><legend>Profile</legend>
@@ -115,7 +117,7 @@ function settingsSection(): string {
   </fieldset>
   <div class="actions" role="group" data-testid="actions">
     <button type="button" data-testid="cancel-settings">${escapeHtml(c.cancel)}</button>
-    <button type="submit" data-testid="${TEST_IDS.saveSettings}">${escapeHtml(c.save)}</button>
+    <button type="submit" data-testid="${TEST_IDS.saveSettings}" data-orkestrator-source="page.ts:120:5" data-orkestrator-component="SettingsSave">${escapeHtml(c.save)}</button>
   </div>
 </form>
 </section>`;

@@ -7,6 +7,7 @@ import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { z } from "zod";
 
+import { readNodeMachineLoad, readOwnMachineLoad } from "./control-mcp-machine-load.js";
 import {
   compactMessages,
   environmentSummary,
@@ -19,8 +20,9 @@ import {
 /**
  * Cross-node coordinator tools (docs/architecture/command-nodes.md,
  * "Coordinators"). A coordinator on a command node can:
- * - list the connected nodes and their environments for its project;
- * - create environments on a named node (its own node stays the default:
+ * - list the connected nodes, each machine's OS and load, and their
+ *   environments for its project;
+ * - create environments on another node (its own node stays the default:
  *   that is launch_environment);
  * - read an environment directly (state, tabs, transcript) and start, stop,
  *   prompt or message it;
@@ -209,6 +211,7 @@ export function registerNodeTools(
   server: McpServer,
   invoke: ControlMcpInvoker,
   scope: NodeToolScope,
+  options: { machineLoadTimeoutMs?: number } = {},
 ): void {
   const { status, ownRepository, nodeTarget, mailbox } = createNodeTargets(invoke, scope);
 
@@ -217,27 +220,39 @@ export function registerNodeTools(
     {
       title: "List connected nodes",
       description:
-        "This command node and the nodes it controls, with availability, mode and whether each has a copy of this project.",
+        "This command node and the nodes it controls, with availability, mode, whether each has a copy of this project, and in machine its OS, size and average CPU and RAM percent over 5 minutes, 1 hour and 24 hours. coveredSeconds below windowSeconds means that average rests on less history than its window. status unavailable means the load is unknown, not that the machine is idle.",
       inputSchema: z.object({}),
       annotations: READ,
     },
     async () => {
       const self = await status();
-      const [summaries, hint] = await Promise.all([
+      const [summaries, hint, ownMachine] = await Promise.all([
         invoke<NodeSummariesResult>("get_node_summaries"),
         ownRepository(),
+        readOwnMachineLoad(invoke),
       ]);
-      const nodes = summaries.nodes.map((node) => ({
-        nodeId: node.nodeId,
-        name: node.view.displayName,
-        available: node.available,
-        state: node.view.connection.state,
-        mode: node.view.connection.remoteMode ?? null,
-        hasProject: Boolean(
-          hint && node.projects.some((project) => project.repositoryHint === hint),
-        ),
-      }));
-      return result({ self: { nodeId: self.nodeId, mode: self.mode }, nodes, total: nodes.length });
+      const nodes = await Promise.all(
+        summaries.nodes.map(async (node) => ({
+          nodeId: node.nodeId,
+          name: node.view.displayName,
+          available: node.available,
+          state: node.view.connection.state,
+          mode: node.view.connection.remoteMode ?? null,
+          hasProject: Boolean(
+            hint && node.projects.some((project) => project.repositoryHint === hint),
+          ),
+          machine: await readNodeMachineLoad(
+            invoke,
+            { nodeId: node.nodeId, name: node.view.displayName, available: node.available },
+            options.machineLoadTimeoutMs,
+          ),
+        })),
+      );
+      return result({
+        self: { nodeId: self.nodeId, mode: self.mode, machine: ownMachine },
+        nodes,
+        total: nodes.length,
+      });
     },
   );
 
@@ -351,7 +366,7 @@ export function registerNodeTools(
     {
       title: "Launch an environment on a connected node",
       description:
-        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Use only when the user asks for another node. The worker reports back to you by mail.",
+        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Check list_nodes before placement. Stay on this node unless load or OS gives a clear reason to move, or the user requests another node. The worker reports back to you by mail.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         nodeId: nodeIdSchema,

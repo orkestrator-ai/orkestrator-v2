@@ -23,6 +23,7 @@ import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-add
 import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
+import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
   errorMessage,
   resumablePhase,
@@ -253,7 +254,7 @@ export class BuildPipelineRecovery {
       );
     }
     delete pipeline.reviewPackage;
-    delete pipeline.validationRun;
+    archiveValidationRun(pipeline);
     pipeline.iteration += 1;
     await this.stageSupervisor.startStage(pipeline, "fix", "fixing");
     await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);

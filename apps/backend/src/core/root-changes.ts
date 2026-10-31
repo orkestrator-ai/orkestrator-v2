@@ -5,6 +5,7 @@ import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces"
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
+import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
 import { runCommand, runCommandBuffer } from "./shell.js";
 import { containerExecArgs } from "./tmux-shared.js";
 
@@ -69,11 +70,10 @@ export interface RootChangesListing {
 export async function listRootChanges(root: string): Promise<RootChangesListing> {
   const env = { ...process.env, ...READ_ONLY_GIT_ENV };
   const [status, head] = await Promise.all([
-    runCommand("git", ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], {
-      cwd: root,
-      env,
-      timeoutMs: 30_000,
-    }),
+    runGitWithFsmonitorFallback(
+      ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"],
+      { cwd: root, env, timeoutMs: 30_000 },
+    ),
     runCommand("git", ["rev-parse", "--verify", "--quiet", "HEAD"], {
       cwd: root,
       env,

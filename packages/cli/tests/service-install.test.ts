@@ -1,11 +1,24 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import { createServer } from "node:net";
+import { GatewayContext } from "../../../apps/backend/src/gateway-context.js";
+import { GatewayLifecycle } from "../../../apps/backend/src/gateway-lifecycle.js";
 import os from "node:os";
-import { existsSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultDataDir } from "../../../apps/backend/src/data-dir.js";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../apps/backend/src/fixed-ports.js";
+import * as connection from "../src/client/service-connection.js";
+import { freeServicePort } from "../src/client/commands/service.js";
+import { parseOptions } from "../../../apps/backend/src/options.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
+
+const realAwaitServiceConnection = connection.awaitServiceConnection;
 
 const TOKEN = "install-fixture-token-0123456789";
 const ADDRESS = "http://100.64.0.10:4317";
@@ -17,11 +30,19 @@ afterEach(async () => {
 });
 
 async function fixture(
-  options: { publish?: boolean; tty?: boolean; credentialFailure?: boolean } = {},
+  options: {
+    publish?: boolean;
+    tty?: boolean;
+    credentialFailure?: boolean;
+    defaultDir?: boolean;
+    endpoints?: Array<{ role: string; url: string }>;
+  } = {},
 ) {
   const box = await createSandbox();
   boxes.push(box);
-  const dataDir = path.join(box.root, "data");
+  const dataDir = options.defaultDir
+    ? defaultDataDir(process.platform, box.env, box.root)
+    : path.join(box.root, "data");
   const bin = path.join(dataDir, "backend/releases/9.9.9/node_modules/orkestrator/bin");
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, "orkestrator.js"), "// fixture");
@@ -44,7 +65,7 @@ async function fixture(
           pid: process.pid,
           startedAt: new Date().toISOString(),
           url: ADDRESS,
-          endpoints: [],
+          endpoints: options.endpoints ?? [],
           authFile,
           dataDir,
           appVersion: "9.9.9",
@@ -137,6 +158,144 @@ test.each(["human", "json"])("deadline expiry reports not ready in %s output", a
   else expect(result.out).toContain("not reported ready yet");
 });
 
+function installedArgs(dataDir: string): string[] {
+  return JSON.parse(readFileSync(path.join(dataDir, "backend", "service.json"), "utf8")).args;
+}
+
+test("a second backend's Tailscale Serve keeps one port across reinstalls", async () => {
+  const f = await fixture();
+  const first = await f.run(["--", "--tailscale-serve"]);
+  expect(first.code).toBe(0);
+  expect(first.out).toContain("keeps a free port chosen at install");
+  const args = installedArgs(f.dataDir);
+  expect(args.slice(0, 2)).toEqual(["--tailscale-serve", "--port"]);
+  const port = Number(args[2]);
+  expect(port).toBeGreaterThan(0);
+  expect([DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT]).not.toContain(port);
+
+  expect((await f.run(["--", "--tailscale-serve"])).code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(args);
+});
+
+test("a second backend's own --port is kept and needs no note", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--tailscale-serve", "--port", "45000"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve", "--port", "45000"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test("a second backend without Serve is told its port moves, and stays unpinned", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--host", "100.64.0.10"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--host", "100.64.0.10"]);
+  expect(result.out).toContain("changes on each start");
+  expect(result.out).toContain("-- --port PORT");
+});
+
+test("the default data directory's Serve keeps the fixed port and no note", async () => {
+  const f = await fixture({ defaultDir: true });
+  const result = await f.run(["--", "--tailscale-serve"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test.each(["human", "json"])("%s output names the local listeners", async (output) => {
+  const local = "http://127.0.0.1:45001/";
+  const f = await fixture({
+    endpoints: [
+      { role: "control", url: "http://127.0.0.1:45002/" },
+      { role: "client", url: local },
+    ],
+  });
+  const result = await f.run(["--output", output, "--timeout", "10s"]);
+  expect(result.code).toBe(0);
+  if (output === "json") expect(JSON.parse(result.out).result.clientUrls).toEqual([local]);
+  else {
+    expect(result.out).toContain(local);
+    expect(result.out).not.toContain("45002");
+  }
+});
+
+/** A launcher that has already given up by the time the install starts waiting. */
+function launcherGaveUp(dataDir: string, state: () => Record<string, unknown>) {
+  const manager = childProcess.spawnSync as unknown as ReturnType<typeof spyOn>;
+  manager.mockImplementation((() => {
+    const root = path.join(dataDir, "backend");
+    const evidence = state();
+    const { installGeneration } = JSON.parse(readFileSync(path.join(root, "service.json"), "utf8"));
+    for (const key of ["bootFailure", "rollback"]) {
+      if (evidence[key]) Object.assign(evidence[key], { installGeneration });
+    }
+    writeFileSync(path.join(root, "launcher-state.json"), JSON.stringify(evidence));
+    writeFileSync(
+      path.join(root, "logs/service.log"),
+      [
+        "Checking pinned Orkestrator tools…",
+        "error: Unable to configure Tailscale Serve: Access denied: serve config denied",
+        "To not require root, use 'sudo tailscale set --operator=$USER' once.",
+        "[launcher] 2026-10-30T23:29:44.233Z 9.9.9 exited (code 1, signal none)",
+        "[launcher] 2026-10-30T23:29:46.000Z starting 2.23.0",
+      ].join("\n"),
+    );
+    return { status: 0, stdout: "", stderr: "", pid: 1, output: [null, "", ""], signal: null };
+  }) as unknown as typeof childProcess.spawnSync);
+}
+
+test("a release that fails to start ends the wait with what the service logged", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    lastReadyVersion: "9.9.9",
+    bootFailure: { version: "9.9.9", exits: 2, at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h"]);
+  expect(result.code).not.toBe(0);
+  expect(result.err).toContain("orkestrator@9.9.9 did not start");
+  expect(result.err).toContain("keeps retrying");
+  expect(result.err).toContain("Access denied: serve config denied");
+  expect(result.err).toContain("sudo tailscale set --operator");
+  expect(result.err).not.toContain("starting 2.23.0");
+  expect(result.err).toContain("service.log");
+  expect(result.out).not.toContain("The service is running");
+});
+
+test("a rollback names the release the service went back to", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    rollback: { failedVersion: "9.9.9", restoredVersion: "2.23.0", at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h", "--output", "json"]);
+  expect(result.code).not.toBe(0);
+  const error = JSON.parse(result.out).error;
+  expect(error.code).toBe("operation-failed");
+  expect(error.message).toContain("the service went back to 2.23.0");
+  expect(error.message).toContain("Access denied");
+});
+
+test("a reinstall records the replaced release and the arguments it ran with", async () => {
+  const f = await fixture();
+  const first = await f.run(["--skip-start", "--", "--tailscale-bin", "/old"]);
+  expect(first.code).toBe(0);
+  const releases = path.join(f.dataDir, "backend/releases");
+  await cp(path.join(releases, "9.9.9"), path.join(releases, "8.8.8"), { recursive: true });
+  await symlink(path.join(releases, "8.8.8"), path.join(f.dataDir, "backend/current.next"));
+  await rename(
+    path.join(f.dataDir, "backend/current.next"),
+    path.join(f.dataDir, "backend/current"),
+  );
+  const second = await f.run(["--skip-start", "--", "--loopback-client-port", "34125"]);
+  expect(second.code).toBe(0);
+  const config = JSON.parse(readFileSync(path.join(f.dataDir, "backend/service.json"), "utf8"));
+  expect(config.args).toEqual(["--loopback-client-port", "34125"]);
+  expect(config.rollbackTarget).toEqual({ version: "8.8.8", args: ["--tailscale-bin", "/old"] });
+});
+
 test("zero timeout skips observation and skip-start renders the load command", async () => {
   const f = await fixture();
   const result = await f.run(["--timeout", "0", "--output", "json"]);
@@ -176,3 +335,199 @@ test.each(["SIGINT", "SIGTERM"])(
     expect(result.out).not.toContain("not reported ready");
   },
 );
+
+test("same-version old launcher failures during manager reload do not fail a corrected reinstall", async () => {
+  const f = await fixture({ publish: false });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "linux" });
+  restores.push(() => Object.defineProperty(process, "platform", platform));
+  await symlink(
+    path.join(f.dataDir, "backend/releases/9.9.9"),
+    path.join(f.dataDir, "backend/current"),
+  );
+  const calls: string[][] = [];
+  f.manager.mockImplementation(((file: string, args: string[]) => {
+    calls.push([file, ...args]);
+    // The old launcher keeps writing its own install generation through enable.
+    writeFileSync(
+      path.join(f.dataDir, "backend/launcher-state.json"),
+      JSON.stringify({
+        version: 1,
+        lastReadyVersion: "9.9.9",
+        bootAttempts: {},
+        bootFailure: {
+          version: "9.9.9",
+          exits: 3,
+          at: new Date().toISOString(),
+          installGeneration: "old-install",
+        },
+      }),
+    );
+    return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+  }) as unknown as typeof childProcess.spawnSync);
+  let polls = 0;
+  // Exercise the real observation and failure reader without wall-clock sleeps.
+  const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
+    (dir, previous, options) =>
+      realAwaitServiceConnection(dir, previous, {
+        ...options,
+        sleep: async () => {
+          polls++;
+          if (polls < 2) return;
+          writeFileSync(
+            path.join(f.dataDir, "backend-instance.json"),
+            JSON.stringify({
+              version: 1,
+              type: "orkestrator-backend-instance",
+              installationId: "install-1",
+              generation: "replacement",
+              pid: process.pid,
+              startedAt: new Date().toISOString(),
+              url: ADDRESS,
+              endpoints: [],
+              authFile: f.authFile,
+              dataDir: f.dataDir,
+              appVersion: "9.9.9",
+              publicApiSchemaVersion: 1,
+            }),
+          );
+        },
+      }),
+  );
+  restores.push(() => wait.mockRestore());
+  const result = await f.run([
+    "--timeout",
+    "1h",
+    "--output",
+    "json",
+    "--",
+    "--host",
+    "100.64.0.10",
+  ]);
+  expect(calls.map((call) => call.slice(0, 3))).toEqual([
+    ["systemctl", "--user", "daemon-reload"],
+    ["systemctl", "--user", "enable"],
+    ["systemctl", "--user", "restart"],
+  ]);
+  expect(polls).toBe(2);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.out).result.ready).toBe(true);
+});
+
+test("install waits through exhausted boots until the launcher records rollback", async () => {
+  const f = await fixture({ publish: false });
+  await symlink(
+    path.join(f.dataDir, "backend/releases/2.23.0"),
+    path.join(f.dataDir, "backend/previous"),
+  );
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: { "9.9.9": 2 },
+    lastReadyVersion: "2.23.0",
+    bootFailure: { version: "9.9.9", exits: 2, at: new Date().toISOString() },
+  }));
+  let polls = 0;
+  const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
+    (dir, previous, options) =>
+      realAwaitServiceConnection(dir, previous, {
+        ...options,
+        sleep: async () => {
+          polls++;
+          if (polls < 2) return;
+          const stateFile = path.join(f.dataDir, "backend/launcher-state.json");
+          const state = JSON.parse(readFileSync(stateFile, "utf8"));
+          state.rollback = {
+            failedVersion: "9.9.9",
+            restoredVersion: "2.23.0",
+            at: new Date().toISOString(),
+            installGeneration: state.bootFailure.installGeneration,
+          };
+          writeFileSync(stateFile, JSON.stringify(state));
+        },
+      }),
+  );
+  restores.push(() => wait.mockRestore());
+  const result = await f.run(["--timeout", "1h", "--output", "json"]);
+  expect(polls).toBe(2);
+  expect(result.code).not.toBe(0);
+  expect(JSON.parse(result.out).error).toMatchObject({
+    code: "operation-failed",
+    message: expect.stringContaining("went back to 2.23.0"),
+  });
+});
+
+test.each(["0", "34121", "34122", "-1", "65536", "garbage", "045000"])(
+  "reinstall replaces an unsuitable saved Serve port %s",
+  async (saved) => {
+    const f = await fixture();
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const file = path.join(f.dataDir, "backend/service.json");
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    config.args = ["--tailscale-serve", "--port", saved];
+    writeFileSync(file, JSON.stringify(config));
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const args = installedArgs(f.dataDir);
+    const options = parseOptions(args, {});
+    expect(options.port).toBeGreaterThan(0);
+    expect([34121, 34122]).not.toContain(options.port);
+    expect(options.strictGatewayPort).toBe(true);
+  },
+);
+
+test("a pinned Serve service parses as strict and cannot silently fall back", async () => {
+  const f = await fixture();
+  expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+  const options = parseOptions(installedArgs(f.dataDir), {});
+  expect(options.strictGatewayPort).toBe(true);
+  const held = createServer();
+  await new Promise<void>((resolve, reject) => {
+    held.once("error", reject);
+    held.listen(options.port!, "127.0.0.1", resolve);
+  });
+  const ctx = new GatewayContext(
+    {
+      dataDir: f.dataDir,
+      rendererRoot: f.dataDir,
+      backend: { invoke: async () => null },
+      env: {},
+      strictPort: options.strictGatewayPort,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    },
+    {
+      gatewayCredentialMatches: () => false,
+      gatewayCredentialExpiresAt: () => null,
+      isOriginAllowed: () => false,
+    },
+  );
+  const lifecycle = new GatewayLifecycle(ctx, { handle: async () => {} });
+  const savedArgs = installedArgs(f.dataDir);
+  try {
+    await expect(
+      lifecycle.listenWithPortFallback("127.0.0.1", options.port!),
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+    expect(ctx.servers.size).toBe(0);
+    await new Promise<void>((resolve) => held.close(() => resolve()));
+    // Once the conflicting process exits, the retry uses the saved pin.
+    expect((await lifecycle.listenWithPortFallback("127.0.0.1", options.port!)).port).toBe(
+      options.port!,
+    );
+    expect(installedArgs(f.dataDir)).toEqual(savedArgs);
+  } finally {
+    if (held.listening) await new Promise<void>((resolve) => held.close(() => resolve()));
+    await lifecycle.stop();
+  }
+});
+
+test("service allocation retries zero and reserved fixed ports", async () => {
+  const ports = [0, 34121, 34122, 45000];
+  const calls: number[] = [];
+  expect(
+    await freeServicePort(async () => {
+      const port = ports.shift()!;
+      calls.push(port);
+      return port;
+    }),
+  ).toBe("45000");
+  expect(calls).toEqual([0, 34121, 34122, 45000]);
+  await expect(freeServicePort(async () => 34121)).rejects.toThrow("Unable to allocate");
+});

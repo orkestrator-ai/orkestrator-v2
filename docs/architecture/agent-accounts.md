@@ -598,6 +598,45 @@ token exists. This covers sign-ins Orkestrator is never told about, such as
 `claude auth login` in a terminal. A Codex coordinator with an inherited
 `CODEX_API_KEY` or `OPENAI_API_KEY` is not recorded as loginless.
 
+## Coordinator switching
+
+A main coordinator can list and switch accounts (Control MCP capability
+`accounts`; `control-mcp-account-tools.ts`), so "switch to an account with
+usage left when the workers hit their limit" needs no one at the keyboard
+when the user said so in advance.
+
+- `list_provider_accounts` calls `list_agent_accounts` and, per signed-in
+  account, `get_agent_account_usage` on this machine, or on another through
+  `invoke_on_node` (`nodeId`; a node needs no copy of the project, because
+  accounts belong to the machine). Each account reports its quota windows
+  with `remainingPercent`, `exhausted` and `hasAllocationLeft` (`true`,
+  `false`, or `"unknown"` when no current reading exists, which is common for
+  an idle Claude account whose access token lapsed).
+- `switch_provider_account` calls `set_active_agent_account`, the command the
+  Settings switch calls, so a coordinator switch is exactly a user switch:
+  machine-wide for that provider, idle sessions move on their next turn, a
+  running turn finishes on the old account, nothing restarts, and
+  `agent-accounts-changed` updates every open view. It never writes a
+  credential. The result says so (`scope: "machine"`, `effect`).
+- **Approval.** A switch changes which subscription pays, so by default it is
+  a `switch-agent-account` request (`nodes/node-action-requests.ts`) the user
+  approves in the coordinator-request dialog; its executor
+  (`nodes/node-account-switch.ts`) runs the same command, and the outcome is
+  mailed back to the coordinator. The one exception is a self-timer that
+  carries the user's permission ([scheduled-jobs.md](scheduled-jobs.md#self-timers)):
+  set with `authorizeAccountSwitch` in a turn the user started, naming the
+  providers and any other machines, and used within two hours of firing.
+- `get_usage_limits` (`agent-usage-limits.ts`, command
+  `get_project_usage_limits`) finds the tabs that need it. No provider reports
+  a usage limit as structured state, so it classifies each session's last
+  recorded turn error (`classifyUsageLimitError`: Claude's "hit your limit",
+  Codex's `usageLimitExceeded`, Grok's `USAGE_EXHAUSTED`, OpenCode's "limit
+  reached" retry) and adds the plan-usage cache's windows at 100 % that have
+  not reset. A tab stays listed until a later turn completes; after a switch
+  it needs a new prompt to run again.
+
+Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
+
 ## Machines
 
 Every machine (node) has its own registry, host logins, account directories

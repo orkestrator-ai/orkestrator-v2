@@ -109,6 +109,13 @@ and on a clean `dfedcd743` (origin/main) clone (22 pass). Evidence:
 under the host temporary directory. No implementation, assertion, wait,
 timeout or skip changed.
 
+## Storage test splits (0930) recurrence — 2026-10-30
+
+- **Original command:** `mise run test` on `todo-0930-storage-test-files-8ccf873101e6` at `d5091591d` (rebased as `559ba28af`), Bun 1.4.4 on the shared Linux host, load average about 20–33 (the run took 1,531 s).
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning` at 5,036.06 ms, over its 5,000 ms deadline.
+- **Isolated rerun:** `mise run test:logged -- --name agent-native-commands-alone -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed (7.0 s for the file).
+- **Assessment:** intermittent deadline miss under load; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1324](../aggregate-validation-runs/1324-storage-test-split-0930-validation.md).
+
 ## White pipe icon main merge — 2026-10-30
 
 - **Parents:** feature `12b47b2dd5d69bf33452af39c7dcde8fcea7b70d` and main `f32615affffe1e6b9f215ac8f6c9af509bf30567`; the only original conflict was `apps/web/src/components/environments/EnvironmentItem.tsx`.

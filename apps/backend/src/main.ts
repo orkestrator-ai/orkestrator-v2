@@ -13,9 +13,12 @@ import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdo
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { TailscaleServeManager } from "./tailscale-serve.js";
+import { createStandaloneServeOwnershipStore } from "./standalone-serve-ownership.js";
+import { logGatewayPortPolicy } from "./gateway-port-policy.js";
 import { startGatewayServices } from "./startup-services.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
-import { instanceEndpoints, publishInstanceDescriptor } from "./instance-descriptor.js";
+import { instanceEndpoints, liveInstanceIn } from "./instance-descriptor.js";
+import { createInstanceDescriptorPublication } from "./instance-descriptor-publication.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
 import path from "node:path";
@@ -65,6 +68,7 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // which already records this process's output.
 const standaloneLogging = installStandaloneBackendLogging(options);
 console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
+await logGatewayPortPolicy(options, process.env, console, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
@@ -156,6 +160,7 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
   managedWebClient,
   tailscaleServe: options.tailscaleServe,
   tailscaleServePort: options.tailscaleServePort,
+  standaloneServeOwnership: createStandaloneServeOwnershipStore(options.dataDir),
   createTailscaleServe: () => new TailscaleServeManager(options.tailscaleExecutable),
   logger: console,
 });
@@ -201,7 +206,32 @@ await previewPublication?.start().catch((error: unknown) => {
   );
 });
 
-let removeInstanceDescriptor: (() => Promise<void>) | null = null;
+let instanceIdentity: { installationId: string; generation: string; startedAt: string } | null =
+  null;
+const instancePublication = createInstanceDescriptorPublication({
+  subscribe: (listener) => backend.onControlMcpStateChange(listener),
+  snapshot: () => {
+    if (!instanceIdentity) return null;
+    const controlMcp = backend.getControlMcpEndpointState();
+    return {
+      ...instanceIdentity,
+      pid: process.pid,
+      url: info.url,
+      ...(info.browserUrl && info.browserUrl !== info.url ? { browserUrl: info.browserUrl } : {}),
+      endpoints: instanceEndpoints(gatewayInfo),
+      ...(controlMcp ? { controlMcp } : {}),
+      authFile: info.authFile,
+      dataDir: options.dataDir,
+      appVersion: APP_VERSION,
+      publicApiSchemaVersion: PUBLIC_API_SCHEMA_VERSION,
+    };
+  },
+  onError: (error) => {
+    console.warn(
+      `[Backend] Could not republish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  },
+});
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
   stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
@@ -210,7 +240,7 @@ const stop = createBackendShutdownHandler({
     await gateway.stop();
   },
   stopBackend: async () => {
-    await removeInstanceDescriptor?.().catch(() => undefined);
+    await instancePublication.close();
     await backend.shutdown();
   },
   warn: (message) => console.warn(message),
@@ -253,19 +283,12 @@ try {
     })
   ).result?.backend;
   if (identity?.installationId && identity.generation) {
-    removeInstanceDescriptor = await publishInstanceDescriptor({
+    instanceIdentity = {
       installationId: identity.installationId,
       generation: identity.generation,
-      pid: process.pid,
       startedAt: new Date().toISOString(),
-      url: info.url,
-      ...(info.browserUrl && info.browserUrl !== info.url ? { browserUrl: info.browserUrl } : {}),
-      endpoints: instanceEndpoints(gatewayInfo),
-      authFile: info.authFile,
-      dataDir: options.dataDir,
-      appVersion: APP_VERSION,
-      publicApiSchemaVersion: PUBLIC_API_SCHEMA_VERSION,
-    });
+    };
+    await instancePublication.refresh();
   }
 } catch (error) {
   console.warn(
@@ -294,7 +317,7 @@ process.stdout.write(
 );
 // The standalone launcher observes the descriptor, not stdout. A publication
 // failure must leave the update pending so its eventual rollback can fail it.
-if (!standaloneLayoutForService || removeInstanceDescriptor) {
+if (!standaloneLayoutForService || instancePublication.published) {
   backend.hostMaintenance.markReady();
   // Settle the previous process's job before the executor can observe it.
   // In particular, a stale requested job must never be dispatched again.

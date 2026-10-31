@@ -190,7 +190,7 @@ test("an ended agent turn discovers a pull request the agent created itself", as
   await withProbeHarness(
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,"baseRefName":"release/2.0","updatedAt":"2026-08-06T10:00:00Z"}]'
+printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,"baseRefName":"release/2.0","isCrossRepository":false,"updatedAt":"2026-08-06T10:00:00Z"}]'
 `,
     async ({ storage, invoke, events, ghLog }) => {
       const before = await storage.getEnvironment("env-1");

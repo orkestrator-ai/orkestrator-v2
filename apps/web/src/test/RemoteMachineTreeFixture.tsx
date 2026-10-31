@@ -50,9 +50,23 @@ function install() {
           order: index,
           status: "running",
           projectHome: id === "home",
-          // `?merge-ready`: "b" relays a clean persisted PR reading without monitor health.
+          // `?merge-ready`: "b" relays a clean persisted PR reading without
+          // monitor health; `?merge-ready=confirmed` adds the leaf's
+          // confirmation, and "c" then relays confirmed merge conflicts.
           ...(id === "b" && new URLSearchParams(location.search).has("merge-ready")
             ? { prState: "open", hasMergeConflicts: false, prMergeability: "clean" }
+            : {}),
+          ...(new URLSearchParams(location.search).get("merge-ready") === "confirmed"
+            ? id === "b"
+              ? { prMonitorConfirmed: true }
+              : id === "c"
+                ? {
+                    prState: "open",
+                    hasMergeConflicts: true,
+                    prMergeability: "dirty",
+                    prMonitorConfirmed: true,
+                  }
+                : {}
             : {}),
         },
         index,

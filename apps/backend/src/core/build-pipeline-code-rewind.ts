@@ -34,6 +34,7 @@ import { codeRewindRefComponent, type CodeRewindInspection } from "./workspace-c
 // The Git side is shared with graph runs' code rewinds (item 210).
 export {
   inspectCodeRewind,
+  readWorktreeStatus,
   resetWorktreeToCommit,
   type CodeRewindInspection,
   type EnvironmentGit,

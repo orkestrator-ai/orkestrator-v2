@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, symlink } from "node:fs/promises";
+import {
+  standaloneLayout,
+  releaseDirectory,
+  writeServiceConfig,
+} from "@orkestrator/protocol/node/standalone-service";
 import path from "node:path";
+import { defaultDataDir, isDefaultDataDir } from "../../../apps/backend/src/data-dir.js";
 import { serviceManagerCommands, serviceUnit } from "../src/client/service-units.js";
 import { createSandbox, type ClientSandbox } from "./support/client-harness.js";
 
@@ -47,6 +54,24 @@ describe("service units", () => {
       `ExecStart="${base.bun}" "${base.launcher}" "/data/with space"`,
     );
     expect(unit.contents).toContain("Restart=always");
+  });
+
+  test("retains default-port ownership when systemd lacks the shell's XDG_CONFIG_HOME", () => {
+    const env = { XDG_CONFIG_HOME: "/home/me/custom config" };
+    const dataDir = defaultDataDir("linux", env, base.home);
+    const unit = serviceUnit({ ...base, platform: "linux", env, dataDir, defaultDataDir: dataDir });
+    expect(unit.name).toBe("orkestrator-backend.service");
+    expect(unit.contents).toContain('Environment="XDG_CONFIG_HOME=/home/me/custom config"');
+    // Reconstruct only the unit's environment; the manager inherits no shell XDG value.
+    const installedEnv = Object.fromEntries(
+      [...unit.contents.matchAll(/^Environment="(XDG_CONFIG_HOME)=([^"\n]+)"$/gm)].map((match) => [
+        match[1]!,
+        match[2]!,
+      ]),
+    );
+    expect(isDefaultDataDir(dataDir, "linux", installedEnv, base.home)).toBe(true);
+    expect(isDefaultDataDir(dataDir, "linux", {}, base.home)).toBe(false);
+    expect(serviceUnit({ ...base, platform: "linux" }).contents).not.toContain("XDG_CONFIG_HOME=");
   });
 
   test("names the load, unload and status commands per manager", () => {
@@ -145,3 +170,30 @@ describe("orkestrator service", () => {
     });
   });
 });
+
+test.each(["1.0.0", "2.0.0"])(
+  "status reports effective arguments when previous is %s",
+  async (previous) => {
+    const box = await createSandbox();
+    sandboxes.push(box);
+    const dataDir = path.join(box.root, "data");
+    const layout = standaloneLayout(dataDir);
+    await mkdir(layout.root, { recursive: true });
+    await writeServiceConfig(layout, {
+      version: 1,
+      dataDir,
+      bun: process.execPath,
+      bunVersion: Bun.version,
+      args: ["--new-flag"],
+      rollbackTarget: { version: "1.0.0", args: ["--host", "100.64.0.1"] },
+      installedAt: "",
+    });
+    await symlink(releaseDirectory(layout, "1.0.0"), layout.current);
+    await symlink(releaseDirectory(layout, previous), layout.previous);
+    const result = await box.run(["service", "status", "--data-dir", dataDir, "--output", "json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out).result.args).toEqual(
+      previous === "1.0.0" ? ["--host", "100.64.0.1"] : ["--new-flag"],
+    );
+  },
+);

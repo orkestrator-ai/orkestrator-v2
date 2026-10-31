@@ -76,7 +76,7 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
-import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
+import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
@@ -140,7 +140,7 @@ import {
   syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { resolveGitHubToken } from "./github-credentials.js";
+import { resolveGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,
@@ -1059,10 +1059,10 @@ export async function reconcileContainerDelegationBase(
   if (currentHead === commit && currentBranch === environment.branch) return;
 
   const dirty = (
-    await execute(
-      "docker",
-      ["exec", containerId, "git", "-C", "/workspace", "status", "--porcelain"],
-      { timeoutMs: 30_000 },
+    await retryGitWithoutFsmonitorOnTimeout(["status", "--porcelain"], (args) =>
+      execute("docker", ["exec", containerId, "git", "-C", "/workspace", ...args], {
+        timeoutMs: 30_000,
+      }),
     )
   ).stdout.trim();
   if (dirty) {
@@ -1620,7 +1620,10 @@ export async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveGitHubToken(config.global);
-      await syncContainerGitHubCredential(containerId, githubToken);
+      await context.runtime.prMonitor.viewerPermissions.rotateScope(
+        `container:${containerId}`,
+        () => syncContainerGitHubCredential(containerId, githubToken),
+      );
     }
     await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);
     const hostEntryPort = environment.entryPort
@@ -2269,7 +2272,10 @@ export async function removeLocalWorktree(
   });
 }
 
-export async function deleteMergedEnvironmentRemoteBranch(environment: Environment): Promise<void> {
+export async function deleteMergedEnvironmentRemoteBranch(
+  environment: Environment,
+  gitHubConfig: GitHubCliConfigSource,
+): Promise<void> {
   if (isProjectHomeEnvironment(environment)) return;
   if (environment.prState !== "merged" || !environment.prUrl) return;
 
@@ -2277,7 +2283,7 @@ export async function deleteMergedEnvironmentRemoteBranch(environment: Environme
     if (!environment.worktreePath) return;
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
-      createLocalGhRunner(environment.worktreePath),
+      createLocalGhRunner(environment.worktreePath, gitHubConfig),
     );
     return;
   }

@@ -5,6 +5,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { agentAccountLoginProgress, cancelAgentAccountLogin } from "./agent-accounts.js";
+import { claudeLoginHandoff } from "./agent-accounts-containers.js";
+import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { OrkestratorBackend } from "./index.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -15,10 +18,13 @@ import type { PtyProcess } from "./pty.js";
 import type { StorageService } from "./storage.js";
 import type { DockerCleanupGrant } from "./docker-cleanup-grants.js";
 import type { CursorSdkLoginHandle } from "./cursor-sdk-bridge.js";
+import type { AgentAccountLoginHandle } from "./agent-accounts-login.js";
+import type { runCommand } from "./shell.js";
 import type { KanbanTask } from "./storage-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxSession } from "./tmux-session-manager.js";
 import type { ContainerUsageSnapshot } from "@orkestrator/protocol/container-resources";
+import type { OpenCodeProviderAuthSnapshot } from "@orkestrator/protocol/opencode-provider-auth";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 /**
@@ -559,6 +565,104 @@ describe("two BackendRuntimes in one process", () => {
     await observed;
   });
 
+  test("the GitHub CLI sign-in is per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const begin = held<AgentAccountLoginHandle>();
+    const starting = first.localServers.gitHubCliLogin.start(() => begin.promise);
+    expect(first.localServers.gitHubCliLogin.progress()).toMatchObject({ state: "pending" });
+    expect(second.localServers.gitHubCliLogin.progress()).toEqual({ state: "idle" });
+
+    const cancel = mock(() => undefined);
+    begin.resolve({
+      url: "https://github.com/login/device",
+      needsCode: false,
+      completion: held<void>().promise,
+      submitCode: () => undefined,
+      cancel,
+    });
+    await starting;
+    expect(second.localServers.gitHubCliLogin.cancel()).toEqual({ state: "idle" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(first.localServers.gitHubCliLogin.cancel()).toEqual({ state: "idle" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test("the OpenCode provider sign-in, login changes and list flight are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const firstLogin = first.localServers.openCodeProviderLogin;
+    const secondLogin = second.localServers.openCodeProviderLogin;
+
+    // A login change on one backend leaves the other free to make its own.
+    const release = firstLogin.reserveMutation();
+    expect(() => firstLogin.reserveMutation()).toThrow("Another OpenCode sign-in");
+    secondLogin.reserveMutation()();
+    release();
+
+    // Each backend asks its own server for the provider list.
+    const reads = { first: 0, second: 0 };
+    const listing = held<OpenCodeProviderAuthSnapshot>();
+    const read = (name: keyof typeof reads) => () => {
+      reads[name] += 1;
+      return listing.promise;
+    };
+    const flights = [
+      firstLogin.listProviders(read("first")),
+      firstLogin.listProviders(read("first")),
+      secondLogin.listProviders(read("second")),
+    ];
+    expect(reads).toEqual({ first: 1, second: 1 });
+    listing.resolve({ providers: [] } as unknown as OpenCodeProviderAuthSnapshot);
+    await Promise.all(flights);
+
+    // A sign-in on one backend is not progress on the other, nor can it cancel it.
+    const controller = new AbortController();
+    firstLogin.begin({
+      controller,
+      progress: { state: "pending", operationId: "operation-1", providerId: "openai" },
+    });
+    expect(firstLogin.progress()).toMatchObject({ state: "pending" });
+    expect(secondLogin.progress()).toEqual({ state: "idle" });
+    expect(secondLogin.cancel()).toEqual({ state: "idle" });
+    expect(controller.signal.aborted).toBe(false);
+    firstLogin.cancel();
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  test("each backend's gh runs follow its own selected credential", async () => {
+    const tokens: Array<string | undefined> = [];
+    const commands = createCommandRegistry({
+      projectCreation: {
+        runCommand: (async (
+          _command: string,
+          _args: string[],
+          options?: { env?: NodeJS.ProcessEnv },
+        ) => {
+          tokens.push(options?.env?.GH_TOKEN);
+          return { stdout: "octocat\n", stderr: "" };
+        }) as typeof runCommand,
+      },
+    });
+    const contextSelecting = (githubToken: string): CommandContext => ({
+      ...contextFor(createRuntime()),
+      storage: {
+        loadConfig: async () => ({ global: { useHostGitHubCredentials: false, githubToken } }),
+      } as unknown as StorageService,
+    });
+    const first = contextSelecting("first-pat");
+    const second = contextSelecting("second-pat");
+
+    await commands.get("list_github_clone_accounts")!({}, first);
+    expect(new Set(tokens)).toEqual(new Set(["first-pat"]));
+    tokens.length = 0;
+    await commands.get("list_github_clone_accounts")!({}, second);
+    expect(new Set(tokens)).toEqual(new Set(["second-pat"]));
+    tokens.length = 0;
+    await commands.get("list_github_clone_accounts")!({}, first);
+    expect(new Set(tokens)).toEqual(new Set(["first-pat"]));
+  });
+
   test("the Cursor SDK login and agent-account state are per backend", async () => {
     let refreshes = 0;
     const first = createRuntime({
@@ -589,6 +693,72 @@ describe("two BackendRuntimes in one process", () => {
     expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
     expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(false);
     expect(second.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
+
+    // Account mutations queue within one backend only.
+    const mutation = held<void>();
+    const holding = first.accounts.withMutation(() => mutation.promise);
+    let secondRan = false;
+    await second.accounts.withMutation(async () => {
+      secondRan = true;
+    });
+    expect(secondRan).toBe(true);
+    let firstQueued = false;
+    const queued = first.accounts.withMutation(async () => {
+      firstQueued = true;
+    });
+    await Promise.resolve();
+    expect(firstQueued).toBe(false);
+    mutation.resolve();
+    await Promise.all([holding, queued]);
+    expect(firstQueued).toBe(true);
+
+    // A sign-in on one backend is not progress on the other, nor can it cancel it.
+    const contexts = [contextFor(first), contextFor(second)] as const;
+    first.accounts.claimLogin({
+      operationId: "operation-1",
+      platform: "claude",
+      accountId: "account",
+      mode: "add",
+      state: "pending",
+    });
+    expect(agentAccountLoginProgress(contexts[0])).toMatchObject({ state: "pending" });
+    expect(agentAccountLoginProgress(contexts[1])).toEqual({ state: "idle" });
+    expect(cancelAgentAccountLogin(contexts[1])).toEqual({ state: "idle" });
+    expect(agentAccountLoginProgress(contexts[0])).toMatchObject({ state: "pending" });
+    expect(cancelAgentAccountLogin(contexts[0])).toEqual({ state: "idle" });
+
+    // Per-account usage, its generations and what was pushed into each container.
+    const cached = { expiresAt: 1, snapshot: {} as PlanUsageSnapshot };
+    first.accounts.cacheUsage("root:claude:account", cached);
+    first.accounts.bumpUsageGeneration("root:claude:generation");
+    first.accounts.rememberPushedClaudeLogin("container-1", "digest");
+    expect(first.accounts.cachedUsage("root:claude:account")).toBe(cached);
+    expect(second.accounts.cachedUsage("root:claude:account")).toBeUndefined();
+    expect(first.accounts.usageGeneration("root:claude:generation")).toBe(1);
+    expect(second.accounts.usageGeneration("root:claude:generation")).toBe(0);
+    expect(first.accounts.pushedClaudeLogin("container-1")).toBe("digest");
+    expect(second.accounts.pushedClaudeLogin("container-1")).toBeUndefined();
+
+    // The MCP refresh tokens one backend saw on the host are its own.
+    const credentials = JSON.stringify({
+      claudeAiOauth: { accessToken: "a", expiresAt: Date.now() + 3_600_000 },
+      mcpOAuth: { linear: { accessToken: "m", refreshToken: "seen-by-first" } },
+    });
+    const handedOver = JSON.parse(claudeLoginHandoff(first.accounts, credentials)!.payload);
+    expect(Object.keys(handedOver.hostMcpRefresh)).toEqual(["linear"]);
+    expect(second.accounts.hostMcpRefreshDigests.snapshot()).toEqual({});
+
+    // One backend's active account filters only its own session windows.
+    first.accounts.planUsage.setActiveAccount("claude", "account-on-first");
+    second.accounts.planUsage.setActiveAccount("claude", "account-on-second");
+    const report = { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 40 }] };
+    contextUsageWithPlanUsage(first.accounts.planUsage, "claude", report, "account-on-second");
+    expect(first.accounts.planUsage.cache.peek("claude")).toBeUndefined();
+    contextUsageWithPlanUsage(second.accounts.planUsage, "claude", report, "account-on-second");
+    expect(first.accounts.planUsage.cache.peek("claude")).toBeUndefined();
+    expect(second.accounts.planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(40);
+    first.accounts.readPlanUsage.invalidate("claude");
+    expect(second.accounts.planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(40);
 
     // The loaded store is per backend: the second reads the file afresh.
     const accountsRoot = await mkdtemp(path.join(tmpdir(), "ork-runtime-usage-"));

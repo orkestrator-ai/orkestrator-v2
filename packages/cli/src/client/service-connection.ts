@@ -1,3 +1,4 @@
+import { open } from "node:fs/promises";
 import path from "node:path";
 import {
   BACKEND_INSTANCE_DESCRIPTOR_FILE,
@@ -15,6 +16,8 @@ import { observe, ObservationStopped, throwIfInterrupted, type ObserveOptions } 
 export interface ServiceConnection {
   /** Browser listener (the Tailscale Serve URL with `--tailscale-serve`). */
   browserUrl: string | null;
+  /** Loopback client listeners, which name the local port behind any address. */
+  clientUrls: string[];
   authFile: string;
   token: string | null;
   credentialError?: string;
@@ -29,15 +32,68 @@ export async function currentDescriptorGeneration(dataDir: string): Promise<stri
   }
 }
 
+const LOG_EXCERPT_LINES = 20;
+const LOG_EXCERPT_MAX_LINE = 500;
+const LOG_EXCERPT_MAX_BYTES = 256 * 1024;
+
+/**
+ * What the service logged for `version`'s last failed boot, from `offset` on:
+ * the lines before the launcher reported its exit. Later lines belong to
+ * whatever the launcher started next.
+ */
+export async function startupLogExcerpt(
+  logFile: string,
+  offset: number,
+  version: string,
+): Promise<string[]> {
+  let text: string;
+  try {
+    const file = await open(logFile);
+    try {
+      const { size } = await file.stat();
+      const start = Math.max(offset, size - LOG_EXCERPT_MAX_BYTES);
+      const buffer = Buffer.alloc(Math.max(size - start, 0));
+      await file.read(buffer, 0, buffer.length, start);
+      text = buffer.toString("utf8");
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return [];
+  }
+  const lines = text.split("\n");
+  const exit = lines.findLastIndex((line) => line.includes(` ${version} exited (`));
+  // Persisted boot attempts can trigger rollback without another child exit.
+  // In that case stop at the rollback message (or the next release's start).
+  const rollback = lines.findIndex(
+    (line) =>
+      line.includes(` ${version} did not start after `) && line.includes("; rolling back to "),
+  );
+  const nextStart = lines.findIndex(
+    (line) => /^\[launcher\] \S+ starting /.test(line) && !line.endsWith(` starting ${version}`),
+  );
+  const end =
+    exit >= 0
+      ? exit
+      : Math.min(...[rollback, nextStart, lines.length].filter((index) => index >= 0));
+  return lines
+    .slice(0, end)
+    .filter((line) => line.trim() !== "")
+    .slice(-LOG_EXCERPT_LINES)
+    .map((line) => line.slice(0, LOG_EXCERPT_MAX_LINE));
+}
+
 /**
  * Waits for a backend generation other than `previousGeneration` to publish
  * its descriptor in `dataDir`, then reads its token. Returns null when none is
- * ready in time; the service keeps starting either way.
+ * ready in time; the service keeps starting either way. With `expectedVersion`,
+ * only that release counts: a rollback also publishes a new generation.
+ * `assertStarting` runs on each poll and may throw to stop waiting.
  */
 export async function awaitServiceConnection(
   dataDir: string,
   previousGeneration: string | null,
-  options: ObserveOptions,
+  options: ObserveOptions & { expectedVersion?: string; assertStarting?: () => Promise<void> },
 ): Promise<ServiceConnection | null> {
   const file = path.join(dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
   try {
@@ -47,11 +103,14 @@ export async function awaitServiceConnection(
         const fresh =
           value.generation !== previousGeneration &&
           path.resolve(value.dataDir) === path.resolve(dataDir) &&
+          (options.expectedVersion === undefined || value.appVersion === options.expectedVersion) &&
           processIsAlive(value.pid);
-        return fresh ? { done: true as const, value } : { done: false as const };
+        if (fresh) return { done: true as const, value };
       } catch {
-        return { done: false as const };
+        // Not published yet, or mid-replacement.
       }
+      await options.assertStarting?.();
+      return { done: false as const };
     }, options);
     const connection: ServiceConnection = {
       // Publishers omit browserUrl when it equals the primary URL. Loopback
@@ -63,6 +122,9 @@ export async function awaitServiceConnection(
         descriptor.endpoints?.some((endpoint) => endpoint.url === descriptor.url)
           ? null
           : descriptor.url),
+      clientUrls: (descriptor.endpoints ?? [])
+        .filter((endpoint) => endpoint.role === "client")
+        .map((endpoint) => endpoint.url),
       authFile: descriptor.authFile,
       token: null,
     };

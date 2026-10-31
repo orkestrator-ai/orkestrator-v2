@@ -26,11 +26,23 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { isGraphRunTerminal } from "@orkestrator/protocol/graphs/run";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 
 /** Runs `git` with `args` in the environment's worktree and returns stdout. */
 export type EnvironmentGit = (environmentId: string, args: string[]) => Promise<string>;
+
+/**
+ * `git status --porcelain --untracked-files=all` in the environment's worktree,
+ * retried once without the fsmonitor daemon after a timeout.
+ */
+export function readWorktreeStatus(git: EnvironmentGit, environmentId: string): Promise<string> {
+  return retryGitWithoutFsmonitorOnTimeout(
+    ["status", "--porcelain", "--untracked-files=all"],
+    (args) => git(environmentId, args),
+  );
+}
 
 const COMMIT_ID = /^[0-9a-f]{40,64}$/i;
 
@@ -139,7 +151,7 @@ export async function resetWorktreeToCommit(
   reset: { from: string; to: string; backupRef: string },
 ): Promise<void> {
   const head = (await git(environmentId, ["rev-parse", "HEAD"])).trim();
-  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
+  if ((await readWorktreeStatus(git, environmentId)).trim()) {
     throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
   }
   if (head === reset.to && head !== reset.from) {
@@ -167,7 +179,7 @@ export async function resetWorktreeToCommit(
   if ((await git(environmentId, ["rev-parse", "HEAD"])).trim() !== head) {
     throw new Error("The branch moved since the rewind was previewed.");
   }
-  if ((await git(environmentId, ["status", "--porcelain", "--untracked-files=all"])).trim()) {
+  if ((await readWorktreeStatus(git, environmentId)).trim()) {
     throw new Error("The worktree has uncommitted changes. Commit or discard them first.");
   }
   await git(environmentId, ["reset", "--hard", reset.to]);
@@ -180,7 +192,7 @@ export async function readWorktreeForRewind(
   maxPaths: number,
 ): Promise<{ head: string; paths: string[]; dirty: boolean }> {
   const head = (await git(environmentId, ["rev-parse", "HEAD"])).trim();
-  const status = await git(environmentId, ["status", "--porcelain", "--untracked-files=all"]);
+  const status = await readWorktreeStatus(git, environmentId);
   const lines = status.split("\n").filter((line) => line.trim().length > 0);
   return {
     head,

@@ -8,6 +8,7 @@ import {
   reviewSelection,
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
+import { registerAccountTools } from "./control-mcp-account-tools.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
@@ -32,11 +33,14 @@ import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
 import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
-import type {
-  ScheduleOwner,
-  ScheduledJob,
-  ScheduledJobSummary,
+import {
+  SCHEDULED_JOB_LIMITS,
+  type ScheduleAccountSwitchGrant,
+  type ScheduleOwner,
+  type ScheduledJob,
+  type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
+import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 
 /**
  * The tools only a coordinator credential has: repository context, workflow
@@ -71,9 +75,15 @@ export function registerCoordinatorWorkflowTools(
   };
   registerNodeTools(server, invoke, nodeToolScope);
   registerNodeFileTools(server, invoke, nodeToolScope);
-  registerScheduleTools(server, "coordinator", () =>
-    coordinatorScheduleBackend(invoke, coordinatorScope),
-  );
+  const schedules = coordinatorScheduleBackend(invoke, coordinatorScope);
+  registerScheduleTools(server, "coordinator", () => schedules);
+  registerAccountTools(server, {
+    invoke,
+    coordinatorScope,
+    onNode,
+    onNodeResult,
+    getSchedule: (scheduleId) => schedules.get(scheduleId),
+  });
   server.registerTool(
     "get_repository_context",
     {
@@ -560,8 +570,8 @@ export function registerCoordinatorWorkflowTools(
 function coordinatorScheduleBackend(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-): ScheduleToolBackend {
-  const owner = async (): Promise<ScheduleOwner> => {
+): ScheduleToolBackend & { get(scheduleId: string): Promise<ScheduledJob> } {
+  const ownConversation = async (): Promise<{ owner: ScheduleOwner; record: JsonRecord }> => {
     const snapshot = await invoke<unknown>("get_project_coordinator", {
       projectId: scope.projectId,
     });
@@ -581,14 +591,66 @@ function coordinatorScheduleBackend(
     }
     const role = conversation.role;
     return {
-      kind: "coordinator",
-      projectId: scope.projectId,
-      coordinatorId: scope.coordinatorId,
-      conversationId: scope.conversationId,
-      role,
+      owner: {
+        kind: "coordinator",
+        projectId: scope.projectId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        role,
+      },
+      record: conversation,
     };
   };
+  const owner = async (): Promise<ScheduleOwner> => (await ownConversation()).owner;
   return {
+    async selfTimer({ body, subject, authorize }) {
+      const { owner: self, record } = await ownConversation();
+      if (self.kind !== "coordinator") throw new Error("Only coordinators set self-timers");
+      let grant: ScheduleAccountSwitchGrant | undefined;
+      if (authorize) {
+        if (self.role !== "main") {
+          throw new Error(
+            "Only the main coordinator switches accounts; a side agent cannot carry that permission",
+          );
+        }
+        // The user's own word only: a turn started by mail, a workflow notice
+        // or another timer cannot mint a permission to change billing.
+        if (record.lastTurnOrigin !== "user") {
+          throw new Error(
+            "authorizeAccountSwitch is accepted only in a turn the user started with their own message. Set the timer without it; the switch will then ask the user to approve.",
+          );
+        }
+        grant = {
+          kind: "switch-agent-account",
+          platforms: [...new Set(authorize.platforms)],
+          ...(authorize.nodeIds?.length ? { nodeIds: [...new Set(authorize.nodeIds)] } : {}),
+          userInstruction: authorize.userInstruction.slice(
+            0,
+            SCHEDULED_JOB_LIMITS.userInstructionMaxChars,
+          ),
+          grantedIn: "user-turn",
+          grantedAt:
+            typeof record.lastTurnStartedAt === "string"
+              ? record.lastTurnStartedAt
+              : new Date().toISOString(),
+        };
+      }
+      return {
+        kind: "action",
+        action: "send_message",
+        input: {
+          // The main coordinator's address follows the main conversation; a
+          // side agent's reminder comes back to that side conversation.
+          toEnvironmentId:
+            self.role === "main"
+              ? COORDINATOR_MAIL_ADDRESS
+              : coordinatorRuntimeId(self.coordinatorId, self.conversationId),
+          ...(subject ? { subject } : {}),
+          body,
+          ...(grant ? { grant } : {}),
+        },
+      };
+    },
     async create(input, requestId) {
       return invoke<{ schedule: ScheduledJob; replayed: boolean }>(
         "create_scheduled_job",
@@ -601,6 +663,12 @@ function coordinatorScheduleBackend(
         withScheduleActor({}, await owner()),
       );
       return listed.schedules;
+    },
+    async get(scheduleId) {
+      return invoke<ScheduledJob>(
+        "get_scheduled_job",
+        withScheduleActor({ scheduleId }, await owner()),
+      );
     },
     async cancel(scheduleId) {
       return invoke<{ scheduleId: string; deleted: boolean }>(

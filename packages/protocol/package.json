@@ -6,6 +6,7 @@
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
+    "./agent-usage-limits": "./src/agent-usage-limits.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
     "./ticket-sections": "./src/ticket-sections.ts",
@@ -117,6 +118,7 @@
     "./node/host-test-scheduler": "./src/node/host-test-scheduler.ts",
     "./node/storage-database": "./src/node/storage-database.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
+    "./machine-load": "./src/machine-load.ts",
     "./macos-permissions": "./src/macos-permissions.ts",
     "./mcp-management": "./src/mcp-management.ts",
     "./model-id": "./src/model-id.ts",
@@ -159,6 +161,7 @@
     "./public-api-inputs": "./src/public-api-inputs.ts",
     "./public-api-inputs-build": "./src/public-api-inputs-build.ts",
     "./public-api-inputs-graph": "./src/public-api-inputs-graph.ts",
+    "./public-api-inputs-pr": "./src/public-api-inputs-pr.ts",
     "./public-api-resources": "./src/public-api-resources.ts",
     "./public-api-cli": "./src/public-api-cli.ts",
     "./public-api-wait": "./src/public-api-wait.ts",

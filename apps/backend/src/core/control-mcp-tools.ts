@@ -13,7 +13,9 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
+  coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -63,6 +65,7 @@ import {
   ControlMcpNodeError,
   operatorAddTicketComment,
   operatorAllNodes,
+  operatorCoordinatorLayout,
   operatorCreateTicket,
   operatorGetTicket,
   operatorLaunchEnvironment,
@@ -81,6 +84,7 @@ import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-t
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
+import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const MAX_PROMPT_LENGTH = 100_000;
@@ -149,6 +153,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
   ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
+  ...ACCOUNT_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -170,6 +175,7 @@ export function coordinatorRoleCapabilities(role: "main" | "side"): string[] {
         "graphs",
         "mail",
         "schedules",
+        "accounts",
       ];
 }
 
@@ -530,6 +536,9 @@ export async function createControlMcp(
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         // Side agents launch nothing, so the PR rule is the main coordinator's.
         (coordinatorScope?.capabilities.includes("environments") ? ` ${COORDINATOR_PR_RULE}` : "") +
+        (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
+          ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
+          : "") +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : "") +
         (operator ? ` ${OPERATOR_INSTRUCTIONS}` : ""),
     },
@@ -622,16 +631,35 @@ export async function createControlMcp(
   const environmentInvoker = async (
     nodeId: string | undefined,
     environmentId: string,
-  ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null; where: JsonRecord }> => {
+  ): Promise<{
+    inv: ControlMcpInvoker;
+    target: NodeTarget | null;
+    where: JsonRecord;
+    layout(): Promise<unknown>;
+  }> => {
+    const layoutOf = (inv: ControlMcpInvoker) => () =>
+      inv<unknown>("get_pane_layout", { environmentId });
     if (operator) {
       // An operator's nodeId names any machine; no project scope applies.
       const node = await operatorNode(operator, nodeId);
-      return { inv: node.invoke, target: null, where: node.tag };
+      return {
+        inv: node.invoke,
+        target: null,
+        where: node.tag,
+        layout: coordinatorIdFromRuntimeId(environmentId)
+          ? () => operatorCoordinatorLayout(node, environmentId)
+          : layoutOf(node.invoke),
+      };
     }
     const target = await onNode(nodeId);
-    if (!target) return { inv: invoke, target: null, where: {} };
+    if (!target) return { inv: invoke, target: null, where: {}, layout: layoutOf(invoke) };
     await target.environment(environmentId);
-    return { inv: target.invoke, target, where: onNodeResult(target) };
+    return {
+      inv: target.invoke,
+      target,
+      where: onNodeResult(target),
+      layout: layoutOf(target.invoke),
+    };
   };
 
   server.registerTool(
@@ -904,8 +932,12 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, nodeId }) => {
-      const { inv, where } = await environmentInvoker(nodeId, environmentId);
-      const layout = await inv<unknown>("get_pane_layout", { environmentId });
+      const { inv, where, layout: readLayout } = await environmentInvoker(nodeId, environmentId);
+      const layout = await readLayout();
+      // A fresh environment may have no layout yet; a bogus ID must not read as "no tabs".
+      if (!layout && !isRecord(await inv<unknown>("get_environment", { environmentId }))) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
       const tabs = paneTabs(layout);
       return toolResult({ environmentId, ...where, tabs, total: tabs.length });
     },
@@ -916,7 +948,7 @@ export async function createControlMcp(
     {
       title: "List agents",
       description:
-        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Includes per-environment counts. Read this instead of polling tabs one by one.",
+        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read this instead of polling tabs one by one.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         environmentId: z.string().trim().min(1).max(200).optional(),
@@ -974,10 +1006,14 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, nodeId }) => {
-      const { inv, where: node } = await environmentInvoker(nodeId, environmentId);
+      const {
+        inv,
+        where: node,
+        layout: readLayout,
+      } = await environmentInvoker(nodeId, environmentId);
       const where = { environmentId, tabId, ...node };
       const [layout, environment] = await Promise.all([
-        inv<unknown>("get_pane_layout", { environmentId }),
+        readLayout(),
         inv<unknown>("get_environment", { environmentId }),
       ]);
       const tab = paneTabs(layout).find((candidate) => candidate.id === tabId);
@@ -1022,9 +1058,9 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
-      const { inv, where } = await environmentInvoker(nodeId, environmentId);
+      const { inv, where, layout: readLayout } = await environmentInvoker(nodeId, environmentId);
       const [layout, environment] = await Promise.all([
-        inv<unknown>("get_pane_layout", { environmentId }),
+        readLayout(),
         inv<unknown>("get_environment", { environmentId }),
       ]);
       const native = nativeTab(layout, tabId);
@@ -1041,6 +1077,8 @@ export async function createControlMcp(
             tabId,
             ...where,
             agent: native.agent,
+            connection: "error",
+            error: "The transcript is unavailable right now",
             messages: [],
           });
         }
@@ -1053,6 +1091,10 @@ export async function createControlMcp(
           ...where,
           agent: native.agent,
           ...compact,
+          connection: projection.connection,
+          ...(isRecord(projection.turn) && projection.turn.error
+            ? { error: projection.turn.error }
+            : {}),
           messageWindow: projection.messageWindow,
           revision: projection.revision,
           generation: projection.generation,

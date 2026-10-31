@@ -87,6 +87,26 @@ test("another machine's clean PR stays plain without leaf monitor health", async
   );
 });
 
+test("another machine's rows shimmer once its own monitor vouches for the reading", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/remote-machine-tree?merge-ready=confirmed");
+
+  const ready = page.getByText("b", { exact: true });
+  await expect(ready).toHaveAttribute("data-merge-ready", "true");
+  expect((await paint(ready)).animationName).toBe("text-shimmer");
+  await expect(page.getByRole("button", { name: /^b, on Remote/ })).toHaveAccessibleDescription(
+    "Ready to merge",
+  );
+
+  const conflicted = page.getByText("c", { exact: true });
+  await expect(conflicted).toHaveAttribute("data-name-signal", "merge-conflicts");
+  await expect(page.getByRole("button", { name: /^c, on Remote/ })).toHaveAccessibleDescription(
+    "Merge conflicts to resolve",
+  );
+});
+
 test("remote waiting follows live activity, transport, container and deletion changes", async ({
   page,
 }) => {

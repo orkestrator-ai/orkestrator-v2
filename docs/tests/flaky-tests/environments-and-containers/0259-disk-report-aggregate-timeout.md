@@ -277,6 +277,29 @@ Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
 
+## Second backend on one host (0244) — 2026-10-30
+
+The aggregate repeated the five-second deadline with a null status under load
+average 45 to 77. Alone with `--parallel=1 --only-failures` the unchanged owner
+passed once (5.3 s) and timed out once (6.3 s) under the same load. Details in
+[1323](../aggregate-validation-runs/1323-second-backend-one-host-0244-validation.md).
+No implementation, assertion, deadline or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test` repeated the five-second timeout (5166.47 ms),
+with `report.status` null instead of zero and an error between tests. Root
+totals were 3,305 passed and one failed across 161 files (396.40 s). Evidence:
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-04.stdout.txt`. The unchanged complete owner passed with exit 0
+in 5.2 s:
+
+```sh
+mise run test:logged -- --name recorded-disk-report -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+The runner retained its summary in `orkestrator-test-run.8iIhnm` below the host
+temporary directory and removed passing output. Host contention remains an
+unconfirmed hypothesis; no owner implementation, assertion or timeout changed.
 
 ## Remote deliverNow review repair — 2026-10-30
 
@@ -303,3 +326,12 @@ mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests
 No implementation, assertion, timeout or skip changed. The exact repository
 command was rerun through `test:logged` as `review-default-suite`; its result
 is recorded in agent-engines todo 1020.
+
+## Coordinator public-session review recurrence — 2026-10-31
+
+- **Original command:** `mise run test` during review preparation, with the aggregate runner's default worker allocation. Root/support reported 3,308 passes, two failures across 3,310 tests in 161 files.
+- **Failure:** the checkout report exceeded its 5,000 ms deadline at 5,064.54 ms; `report.status` was null, producing an error between tests.
+- **Unchanged owner rerun:** `mise run test:logged -- --name recorded-root-failures -- bun test ./tests/unit/flaky-tests-index.test.ts ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed all disk-report cases; only the separate duplicate-case-number check failed (26 passes, one failure overall, 1.9 s). After correcting the duplicate registration, the exact owner command passed in 4.2 s.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-286a5434-af1f-4def-9d5c-99886a528e83/validation-04.stdout.txt`; isolated failing registration evidence: `orkestrator-test-run.8afWcx`. No disk-report implementation, deadline, skip or assertion changed.
+
+- **Exact aggregate rerun:** `mise run test` passed all four default-tier groups after these review fixes and pinned-toolchain preparation (754.0 s including 574.5 s waiting for the shared-host lease). Workspace, root/support, bridges and Codex protocol lockfile checks all passed; no failing owner was skipped or weakened.

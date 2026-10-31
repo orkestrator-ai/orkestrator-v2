@@ -4,7 +4,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { defaultToolchainBinDir } from "@orkestrator/toolchain/layout";
-import { assertSupportedPlatform, defaultDataDir } from "./data-dir.js";
+import { assertSupportedPlatform, defaultDataDir, isDefaultDataDir } from "./data-dir.js";
 import { parseGatewayCompressionMode, type GatewayCompressionMode } from "./gateway.js";
 
 export { assertSupportedPlatform, defaultDataDir };
@@ -95,6 +95,24 @@ function parseRuntimeFlavor(value: string | undefined): BackendOptions["runtimeF
   throw new Error(`Invalid --runtime-flavor value: ${value}`);
 }
 
+/**
+ * The gateway port of a backend `--port` and ORKESTRATOR_GATEWAY_PORT say nothing
+ * about: undefined leaves it the fixed default, 0 takes a free one.
+ *
+ * The same rule as `controlMcpPortOverride`. Only the default data directory's
+ * backend owns the fixed port; the test runner, agent-test backends and every
+ * other data directory (a second service, a hand-started `serve`) take a free
+ * one, so starting first cannot move the main install's address.
+ */
+function implicitGatewayPort(
+  runtimeFlavor: BackendOptions["runtimeFlavor"],
+  dataDir: string,
+  env: NodeJS.ProcessEnv,
+): 0 | undefined {
+  if (env.NODE_ENV === "test" || runtimeFlavor === "agent-test") return 0;
+  return isDefaultDataDir(dataDir, process.platform, env) ? undefined : 0;
+}
+
 function parseCredentialSources(value: string | undefined): BackendOptions["credentialSources"] {
   if (!value?.trim()) return [];
   const values = [
@@ -128,7 +146,7 @@ export function parseOptions(
       defaultDataDir(process.platform, env),
   );
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
-  const port = parsePortOption(portValue, "--port");
+  const explicitPort = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
   const loopbackClientPort = parsePortOption(
     valueAfter(args, "--loopback-client-port") ?? env.ORKESTRATOR_LOOPBACK_CLIENT_PORT,
@@ -176,7 +194,7 @@ export function parseOptions(
       valueAfter(args, "--renderer-dev-server-url") ?? env.ORKESTRATOR_RENDERER_DEV_SERVER_URL,
     host: valueAfter(args, "--host"),
     fallbackHost: valueAfter(args, "--fallback-host"),
-    port,
+    port: explicitPort ?? implicitGatewayPort(runtimeFlavor, dataDir, env),
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
     loopbackClientPort,

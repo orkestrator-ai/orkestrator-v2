@@ -10,7 +10,7 @@ import type { StorageService } from "./storage.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
-import type { PlanUsageReader } from "./plan-usage.js";
+import type { PlanUsageRead } from "./plan-usage.js";
 
 export type CommandRegistrar = (name: string, handler: CommandHandler) => void;
 
@@ -23,7 +23,7 @@ export type CommandRegistryOptions = {
     timeoutMs?: number;
   };
   modelCatalogRefresh?: typeof refreshHostModelCatalog;
-  planUsageReader?: PlanUsageReader;
+  planUsageReader?: PlanUsageRead;
   tabTeardown?: {
     peekBridge?: (
       environment: Environment,
@@ -56,7 +56,7 @@ export type RegistryDependencies = {
   runContainerFileCopyCommand: typeof runCommand;
   containerFileCopyTimeoutMs: number;
   refreshHostModelCatalog: typeof refreshHostModelCatalog;
-  planUsageReader: PlanUsageReader;
+  planUsageReader: PlanUsageRead;
   conditionalManifestSnapshot: <T>(
     args: Record<string, unknown>,
     storage: StorageService,

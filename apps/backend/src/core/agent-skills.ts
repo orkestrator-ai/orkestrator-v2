@@ -122,7 +122,8 @@ function clampDescription(value: string): string {
 /**
  * Test-only home override. `os.homedir()` ignores `$HOME` under Bun, so tests
  * that need a synthetic skills tree have no other way to redirect the roots.
- * Mirrors `setClaudeHomeForTesting` in the claude bridge.
+ * Mirrors `setClaudeHomeForTesting` in the claude bridge. A documented test-only
+ * seam: production's home is the process's (docs/architecture/backend-runtime.md).
  */
 let homeOverride: string | undefined;
 

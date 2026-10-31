@@ -10,6 +10,7 @@ import {
   pipelineSkipAction,
   type PipelineFlowModel,
 } from "./pipeline-flow";
+import { pipelineNodeView } from "./PipelineFlowGraph";
 import { pipelineFlowLayout } from "./pipeline-flow-layout";
 import { flowNodeHeight } from "@/components/flow-graph/flow-graph-model";
 import {
@@ -21,6 +22,8 @@ import {
   validationRun,
 } from "./pipeline-test-fixture";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
+import type { ValidationSummary } from "./pipeline-stage-groups";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
 
 const PANEL = [
   { agent: "claude" as const, model: "opus" },
@@ -1675,5 +1678,203 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
     expect(model.nodes.some((node) => node.superseded)).toBe(false);
     expect(model.columns.some((column) => column.superseded)).toBe(false);
     expect(model.edges.some((edge) => edge.route)).toBe(false);
+  });
+});
+
+describe("earlier passes' validation", () => {
+  const at = (seconds: number) => new Date(Date.parse(CREATED) + seconds * 1_000).toISOString();
+  const summary = (overrides: Partial<ValidationSummary> = {}): ValidationSummary => ({
+    runId: "validation-0",
+    iteration: 0,
+    status: "completed",
+    headRef: "b".repeat(40),
+    startedAt: at(110),
+    completedAt: at(140),
+    commands: [
+      { id: "test", command: "mise run test", status: "failed", exitCode: 1, durationMs: 20_000 },
+      { id: "lint", command: "mise run lint", status: "passed", exitCode: 0, durationMs: 5_000 },
+    ],
+    ...overrides,
+  });
+  const twoPasses = (overrides: Partial<BuildPipeline> = {}) =>
+    build({
+      phase: "reviewing",
+      iteration: 1,
+      currentSessionIndex: 5,
+      sessions: [
+        session("build", "build", 0),
+        session("fix", "prep-0", 60, { label: REVIEW_PACKAGE_SESSION_LABEL }),
+        session("review", "review-0", 200),
+        session("verify", "verify-0", 300),
+        session("fix", "fix-1", 400, { iteration: 1 }),
+        session("fix", "prep-1", 460, { iteration: 1, label: REVIEW_PACKAGE_SESSION_LABEL }),
+      ],
+      validationRun: validationRun({
+        id: "validation-1",
+        status: "running",
+        startedAt: at(520),
+        completedAt: undefined,
+      }),
+      validationHistory: [summary()],
+      ...overrides,
+    });
+
+  test("an older Prepare node keeps its own checks", () => {
+    const pipeline = twoPasses();
+    const model = pipelineFlowModel(pipeline);
+    const older = model.nodes.find((node) => node.id === "prep-0")!;
+    expect(older).toMatchObject({ hasValidation: true, state: "failed", completedAt: at(140) });
+    expect(older.validationRun?.id).toBe("validation-0");
+    expect(older.validationRun?.results.map((result) => result.status)).toEqual([
+      "failed",
+      "passed",
+    ]);
+    // Nothing is fetched or stopped for an archived run.
+    expect(older.validationRun?.results.every((result) => result.stdoutPath === null)).toBe(true);
+    const newest = model.nodes.find((node) => node.id === "prep-1")!;
+    expect(newest).toMatchObject({ hasValidation: true, state: "running" });
+    expect(newest.validationRun).toBeUndefined();
+    // Only the live run can be skipped.
+    expect(pipelineSkipAction(pipeline, older)).toBeNull();
+    expect(pipelineSkipAction(pipeline, newest)?.label).toBe("Skip validation");
+  });
+
+  test("a package written in the build turn gets a Prepare node of its own", () => {
+    const pipeline = twoPasses();
+    pipeline.sessions.splice(1, 1);
+    pipeline.currentSessionIndex = 4;
+    const model = pipelineFlowModel(pipeline);
+    const node = model.nodes.find((candidate) => candidate.id === "validation:validation-0")!;
+    expect(node).toMatchObject({ kind: "prepare", title: "Prepare", hasValidation: true });
+    expect(node.validationRun?.id).toBe("validation-0");
+    const kinds = model.columns.map((column) => column.kind);
+    expect(kinds.indexOf("prepare")).toBe(kinds.indexOf("build") + 1);
+  });
+
+  test.each(["reviewing", "verifying"] as const)(
+    "an archived replacement after %s stays on its live preparation",
+    (fromPhase) => {
+      const pipeline = twoPasses({
+        validationHistory: [summary({ runId: "replacement", startedAt: at(350) })],
+        rewinds: [
+          {
+            id: "restart-validation",
+            at: at(350),
+            fromPhase,
+            fromIteration: 0,
+            iteration: 0,
+            step: { kind: "validation", implementationPhase: "build" },
+            supersededSessions: 2,
+            replacementValidationRunId: "replacement",
+            validationRun: validationRun({ id: "original", startedAt: at(110) }),
+          },
+        ],
+      });
+      for (const entry of pipeline.sessions.slice(2, 4)) {
+        entry.supersededBy = "restart-validation";
+        entry.supersededAt = at(350);
+      }
+      for (const expandedAttempts of [new Set<string>(), new Set(["restart-validation"])]) {
+        const model = pipelineFlowModel(pipeline, null, { expandedAttempts });
+        expect(model.nodes.find((node) => node.id === "prep-0")).toMatchObject({
+          hasValidation: true,
+          state: "failed",
+          validationRun: { id: "replacement" },
+        });
+        expect(model.nodes.filter((node) => node.validationRun?.id === "replacement")).toHaveLength(
+          1,
+        );
+      }
+    },
+  );
+
+  test("an earlier Build-anchored failure cannot hide review startup failure", () => {
+    const model = pipelineFlowModel(
+      twoPasses({
+        phase: "failed",
+        error: "Settings unavailable",
+        failureContext: { phase: "reviewing", kind: "stage-transition" },
+        reviewers: PANEL,
+        sessions: [session("build", "build", 0)],
+        validationRun: undefined,
+      }),
+    );
+    expect(model.nodes.find((node) => node.id === "validation:validation-0")?.state).toBe("failed");
+    expect(model.nodes.find((node) => node.id.endsWith(":startup"))).toMatchObject({
+      kind: "review",
+      state: "failed",
+      error: "Settings unavailable",
+    });
+  });
+
+  test("archived node details and chips use its own run and retained skip marker", () => {
+    const pipeline = twoPasses({
+      sessions: [session("build", "build", 0), session("fix", "fix", 400, { iteration: 1 })],
+      validationHistory: [summary({ status: "cancelled", skipped: true })],
+    });
+    pipeline.validationRun!.plan.commands.push({
+      ...pipeline.validationRun!.plan.commands[0]!,
+      id: "extra",
+    });
+    const model = pipelineFlowModel(pipeline);
+    const node = model.nodes.find((candidate) => candidate.id === "validation:validation-0")!;
+    const view = pipelineNodeView({
+      node,
+      pipeline,
+      pullRequest: null,
+      now: Date.parse(at(600)),
+      canOpen: false,
+      onOpen: () => {},
+      contextMenu: null,
+      modelLabel: (_agent, model) => model ?? "",
+    });
+    expect(view.detail).toBe("2 checks");
+    expect(view.statusWord?.text).toBe("skipped");
+    expect(view.statusLabel).toBe("Skipped");
+    expect(view.validation).toEqual([
+      { id: "test", label: "test", status: "failed" },
+      { id: "lint", label: "lint", status: "passed" },
+    ]);
+  });
+
+  test("a run already shown live or on a rewind is not drawn twice", () => {
+    const pipeline = twoPasses({
+      validationHistory: [summary({ runId: "validation-1", startedAt: at(520) })],
+    });
+    const model = pipelineFlowModel(pipeline);
+    expect(model.nodes.filter((node) => node.validationRun).length).toBe(0);
+    expect(model.nodes.find((node) => node.id === "prep-0")?.hasValidation).toBeUndefined();
+  });
+
+  test("a superseded pass shows its checks only inside its previous attempt", () => {
+    const rewound = twoPasses();
+    for (const entry of rewound.sessions) {
+      entry.supersededBy = "rewind-1";
+      entry.supersededAt = at(600);
+    }
+    rewound.rewinds = [
+      {
+        id: "rewind-1",
+        at: at(600),
+        fromPhase: "reviewing",
+        fromIteration: 1,
+        iteration: 0,
+        step: { kind: "session", phase: "build" },
+        supersededSessions: rewound.sessions.length,
+      },
+    ];
+    rewound.sessions.push(session("build", "build-again", 610));
+    rewound.currentSessionIndex = rewound.sessions.length - 1;
+    rewound.iteration = 0;
+    rewound.phase = "building";
+    delete rewound.validationRun;
+    const collapsed = pipelineFlowModel(rewound);
+    expect(collapsed.nodes.some((node) => node.validationRun?.id === "validation-0")).toBe(false);
+    const expanded = pipelineFlowModel(rewound, null, { expandedAttempts: new Set(["rewind-1"]) });
+    expect(expanded.nodes.find((node) => node.id === "validation:validation-0")).toMatchObject({
+      superseded: true,
+      attemptId: "rewind-1",
+      state: "failed",
+    });
   });
 });

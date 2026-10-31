@@ -303,3 +303,12 @@ mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests
 No implementation, assertion, timeout or skip changed. The exact repository
 command was rerun through `test:logged` as `review-default-suite`; its result
 is recorded in agent-engines todo 1020.
+
+## Coordinator public-session review recurrence — 2026-10-31
+
+- **Original command:** `mise run test` during review preparation, with the aggregate runner's default worker allocation. Root/support reported 3,308 passes, two failures across 3,310 tests in 161 files.
+- **Failure:** the checkout report exceeded its 5,000 ms deadline at 5,064.54 ms; `report.status` was null, producing an error between tests.
+- **Unchanged owner rerun:** `mise run test:logged -- --name recorded-root-failures -- bun test ./tests/unit/flaky-tests-index.test.ts ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed all disk-report cases; only the separate duplicate-case-number check failed (26 passes, one failure overall, 1.9 s). After correcting the duplicate registration, the exact owner command passed in 4.2 s.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-286a5434-af1f-4def-9d5c-99886a528e83/validation-04.stdout.txt`; isolated failing registration evidence: `orkestrator-test-run.8afWcx`. No disk-report implementation, deadline, skip or assertion changed.
+
+- **Exact aggregate rerun:** `mise run test` passed all four default-tier groups after these review fixes and pinned-toolchain preparation (754.0 s including 574.5 s waiting for the shared-host lease). Workspace, root/support, bridges and Codex protocol lockfile checks all passed; no failing owner was skipped or weakened.

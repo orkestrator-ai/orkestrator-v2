@@ -18,7 +18,7 @@ import { debugLog } from "./logger.js";
 import { readFile } from "node:fs/promises";
 
 import { interactionKey } from "./session-manager-interaction-budget.js";
-import { isValidClaudeFormContent } from "./claude-elicitation-schema.js";
+import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
 import * as lifecycle from "./session-manager-lifecycle.js";
 import {
   claudeExecutableOptions,
@@ -192,7 +192,7 @@ export function respondToInteraction(
   if (
     response.action === "accept" &&
     request.kind === "mcp-form" &&
-    !isValidClaudeFormContent(request.schema, response.content)
+    !isValidMcpFormContent(request.schema, response.content)
   )
     return false;
   // Removed here rather than by the parking callback, which resumes a tick

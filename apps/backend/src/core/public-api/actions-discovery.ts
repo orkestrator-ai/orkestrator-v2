@@ -8,6 +8,7 @@ import {
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
 } from "@orkestrator/protocol/agent-settings";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   PUBLIC_ACTIONS,
@@ -108,7 +109,12 @@ export async function requireEnvironment(
 ): Promise<Environment> {
   const environment = await context.command.storage.getEnvironment(environmentId);
   if (!environment) {
-    throw new PublicActionError("not-found", `Environment not found: ${environmentId}`);
+    throw new PublicActionError(
+      "not-found",
+      coordinatorIdFromRuntimeId(environmentId)
+        ? `${environmentId} is a project Coordinator, not an environment; only session actions can target it`
+        : `Environment not found: ${environmentId}`,
+    );
   }
   return environment;
 }
@@ -297,7 +303,9 @@ const sessionList: ReadActionHandler<{ environmentId: string }> = {
     return { environmentId: requiredId(input, "environmentId") };
   },
   async run(input, context) {
-    await requireEnvironment(context, input.environmentId);
+    if (!coordinatorIdFromRuntimeId(input.environmentId)) {
+      await requireEnvironment(context, input.environmentId);
+    }
     const items = await listSessionSummaries(context, input.environmentId);
     return { result: { items, total: items.length } };
   },

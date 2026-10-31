@@ -250,6 +250,7 @@ export function registerCoordinatorCommands(
         }
       }
       const snapshot = await context.coordinators.closeConversation(id, conversation);
+      await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.storage.synchronizeAgentMailboxes();
       // A side agent's schedules end with it; the main's move to the next main.
       if (item.role === "side") {

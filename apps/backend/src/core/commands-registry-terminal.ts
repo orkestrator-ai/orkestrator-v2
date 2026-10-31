@@ -1106,7 +1106,11 @@ export function registerTerminalCommands(
     if (!environment) throw new Error("Environment not found");
     const wantFingerprint =
       fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
-    const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
+    const runner = createEnvironmentCommandRunner(
+      environment,
+      context.runtime.environments.fence,
+      context.storage,
+    );
     // The container image ships Node; a local worktree runs on the user's own
     // machine, where the backend's inherited PATH is whatever the OS handed
     // Electron and need not contain any Node at all. Use the same managed Bun

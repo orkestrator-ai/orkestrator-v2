@@ -36,8 +36,8 @@ interface FullscreenSettingsLayoutProps<TSection extends string = string> {
   headerActions?: React.ReactNode;
   /**
    * Leads the content header, e.g. the machine the section edits. The
-   * section's title moves to the right beside the actions; on a narrow
-   * screen this takes its own row under the header.
+   * page owns its section title; on a narrow screen this takes its own row
+   * under the header.
    */
   headerStart?: (activeSection: TSection | "") => React.ReactNode;
 }
@@ -229,16 +229,9 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                 {headerStartContent ? (
                   <div className="hidden min-w-0 flex-1 md:flex">{headerStartContent}</div>
                 ) : (
-                  <h2 className="hidden text-sm font-medium text-foreground md:block">
-                    {activeMenuItem?.label}
-                  </h2>
+                  <div className="hidden flex-1 md:block" />
                 )}
                 <div className="flex min-w-0 shrink-0 items-center gap-2">
-                  {headerStartContent ? (
-                    <h2 className="mr-2 hidden whitespace-nowrap text-sm font-medium text-foreground md:block">
-                      {activeMenuItem?.label}
-                    </h2>
-                  ) : null}
                   <div
                     data-slot="settings-header-actions"
                     className="flex min-w-0 items-center gap-2"

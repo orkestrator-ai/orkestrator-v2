@@ -155,7 +155,9 @@ export class NativeAgentTurnRecovery {
   /**
    * Whether a session takes part in recovery: its platform has a strategy and
    * it is interactive. Unattended workflows own their own turn lifecycle and
-   * remain excluded.
+   * remain excluded: a continuation here runs under a request id of its own,
+   * which would take the workflow's result tool away and read as its request
+   * having settled. An overload there is `OpenCodeCapacityRetry`'s.
    */
   appliesTo(session: { agent: BuildPipelineAgent; origin?: AgentInteractionOrigin }): boolean {
     return (

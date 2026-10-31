@@ -21,13 +21,13 @@ written; every other row is still module state on `main`.
 
 ### Tasks
 
-1. **Account state into `runtime.accounts`**: the `agent-accounts.ts`, `agent-accounts-containers.ts` and `plan-usage-cache.ts` rows, with their reset seams. Status: open.
-2. **GitHub CLI login and config source**: `github-cli-setup.ts` `activeLogin` and the `github-credentials.ts` config loader. Status: open.
-3. **OpenCode provider login**: `opencode-provider-login.ts` `current`, `mutation`, `listFlight`. Status: open.
-4. **OpenCode command journals and probe**: `opencode-command-changes.ts` `sharedProbe`, `journals`, `removedJournalDirectories`. Status: open.
-5. **Module-level test seams**: decide, per seam, construction option or documented seam. Status: open.
-6. **Possibly process-wide state**: decide and document the disk-scan bound, the macro check and mail id generation. Status: open.
-7. **Two-backend coverage and checks per move**: `backend-runtime.test.ts` covers each moved piece; the usual checks pass. Status: open (with each of 1 to 4).
+1. **Account state into `runtime.accounts`**: the `agent-accounts.ts`, `agent-accounts-containers.ts` and `plan-usage-cache.ts` rows, with their reset seams. Status: done.
+2. **GitHub CLI login and config source**: `github-cli-setup.ts` `activeLogin` and the `github-credentials.ts` config loader. Status: done.
+3. **OpenCode provider login**: `opencode-provider-login.ts` `current`, `mutation`, `listFlight`. Status: done.
+4. **OpenCode command journals and probe**: `opencode-command-changes.ts` `sharedProbe`, `journals`, `removedJournalDirectories`. Status: done.
+5. **Module-level test seams**: decide, per seam, construction option or documented seam. Status: done.
+6. **Possibly process-wide state**: decide and document the disk-scan bound, the macro check and mail id generation. Status: done.
+7. **Two-backend coverage and checks per move**: `backend-runtime.test.ts` covers each moved piece; the usual checks pass. Status: done.
 
 ### 1. Account state into `runtime.accounts`
 
@@ -328,56 +328,14 @@ backend" (`:562`), and "two OrkestratorBackends in one process (todo 0733)"
 
 ## Current state
 
-Per-backend state: logins, caches and chains that belong to one backend and
-should follow the 0011/0066/0133 pattern. Paths are under
-`apps/backend/src/core/`.
+Every row this file listed has moved or is documented; see Assumptions and
+decisions. The line references in the task subsections are from `79f3bc97` and
+have moved. Module state this file did not list is in
+[1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md).
 
-| Module | State | Likely owner |
-| --- | --- | --- |
-| `agent-accounts.ts` | `accountMutation` (`:68`, the account mutation chain), `activeLogin` (`:342`), `usageCache` (`:692`), `usageGenerations` (`:700`), and the `resetAgentAccountLoginForTests` seam (`:683`) | `runtime.accounts` (`AgentAccountsRuntime`) |
-| `agent-accounts-containers.ts` | `hostMcpRefreshDigests` (`:714`, with `resetHostMcpRefreshDigests`), `pushedClaudeLogins` (`:959`) | `runtime.accounts` |
-| `plan-usage-cache.ts` | `activeAccountIds` (`:150`, `setActivePlanUsageAccount`, `initializeActivePlanUsageAccount`) and `sharedPlanUsageCache` (`:149`, also behind `readPlanUsage` in `plan-usage.ts:1000`) | `runtime.accounts`, or a plan-usage class on `BackendRuntime` |
-| `github-cli-setup.ts` | `activeLogin` (`:84`, with `resetGitHubCliSetupForTests`) | `runtime.localServers` or a GitHub owner |
-| `opencode-provider-login.ts` | `current`, `mutation`, `listFlight` (`:264-266`), the `openCodeProviderLogin` singleton (`:511`) and `__testing.reset()` | `runtime.localServers` |
-| `opencode-command-changes.ts` | `sharedProbe` (`:110`), `journals`, `removedJournalDirectories` (`:123-124`) | `runtime.localServers` or a change-tracking owner; see task 4 |
-| `github-credentials.ts` | `loadGlobalConfig` (`:56`), set by `setGitHubCliConfigSource` from `index.ts:530` | a construction option or an argument |
-
-The container log service (`container-log-service.ts` `instance`) was in
-this table; it moved to `runtime.containerLogs` in
-[0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md),
-whose full-backend test (`backend-runtime.test.ts`, "two OrkestratorBackends
-in one process") is the pattern for the remaining rows.
-
-Test seams still at module level: `agent-skills.ts` `homeOverride`
-(`setAgentSkillsHomeForTesting`), `container-storage.ts`
-`testVolumeDriverOptions` (`setStorageVolumeOptionsForTest`). Decide whether
-each becomes a construction option or stays a documented test-only seam.
-`agent-test-cursor-credential.ts` `hostCursorCredential` was listed here too,
-but it is not a test seam: `main.ts:58` loads it once per process for
-agent-test profiles (task 5).
-
-Possibly process-wide (decide and document, as 0133 did):
-`disk-usage.ts` `running`/`waiting` (a concurrency bound on disk scans),
-`transcript-artifacts/interactive-modules.ts` `macroCheck`,
-`storage-agent-mail.ts` `lastIdTime`/`idSequence` (mail id generation).
-
-## Outstanding work
-
-### Code
-
-1. Decide, per possibly-process-wide entry above, whether it moves or stays;
-   record the choice next to the state.
-2. Move each per-backend row into its owner behind methods, with no
-   `set*`/`reset*` seams; tests construct the runtime with options instead.
-   The `agent-accounts*.ts` rows go together (they share the mutation chain
-   and usage cache).
-3. Extend `backend-runtime.test.ts` so the two-backend test covers each moved
-   piece.
-
-### Qualification
-
-- `mise run format:check`, `mise run lint`, `mise run typecheck`,
-  `mise run test` for each move.
+The container log service (`container-log-service.ts` `instance`) moved to
+`runtime.containerLogs` in
+[0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md).
 
 ## Constraints and rationale
 
@@ -388,13 +346,50 @@ backend per process, so none of this changes shipped behaviour.
 
 ## Needs verification
 
-None yet.
+None. Production runs one backend per process and this file changes no behaviour there; the two-backend cases in `backend-runtime.test.ts` are the proof.
 
 ## Assumptions and decisions
 
-None yet.
+Checked against `main` at `931e5541` before starting. Every row was still module state; only line numbers had moved, and `gitHubCliEnv` had grown to 12 production calls in 8 modules (`bug-report-service.ts` and `graph-system-environment.ts` joined).
+
+### Task 1: one owner, with the plan-usage cache as a field
+
+Followed the recommendation. `AgentAccountsRuntime` owns the mutation chain, the sign-in, per-account usage, its generations, container login pushes and the MCP digests. `runtime.accounts.planUsage` (`PlanUsageState`) holds the cache and active account, and `runtime.accounts.readPlanUsage` is the reader built over it. `readProjectUsageLimits` now requires its `planUsage` source, so the module default went with the singleton.
+
+### Task 1: session reports reach the cache through provider dependencies
+
+Followed the recommendation. `planUsage` is an optional member of `HttpBridgeProviderDependencies`, because tests and `createNativeAgentProvider(connection)` build providers with no backend behind them; such a provider only normalizes its reports. All production construction paths pass it: `NativeAgentService` (three sites), the build pipeline, Multi Review, the graph providers, feature planning and retired Looped Review cleanup. The non-native paths matter only for Cursor: their connections carry no `accountId`, so Claude and Codex reports were already filtered out there. They are wired anyway so behaviour stays identical.
+
+### Task 2: a sign-in slot, and storage as the config source
+
+Followed both recommendations. `GitHubCliLoginSlot` sits on `runtime.localServers`, shaped like `CursorSdkLoginSlot`. `gitHubCliEnv` takes a `GitHubCliConfigSource`, satisfied by `StorageService`, rather than a config value, so the config is still read per run. The parameter is required but may be `undefined`, which means the host login: the same result as the old unset loader, and each site has to state it. `detectEnvironmentPullRequest` reuses its existing optional `storage`, which both local callers pass; its container branch runs no host `gh`. `createGitEnvironmentCommandRunner` is the default for the three stores that only run Git, so they need no credential.
+
+### Task 3: state on a slot, not in the factory's closure
+
+Departed from the recommendation. `local-server-runtime.ts` cannot hold an instance of `createOpenCodeProviderLogin`: `opencode-provider-login.ts` imports `host-model-catalog-refresh.ts`, which imports `commands-containers.ts`, which imports `local-server-runtime.ts`, and `import/no-cycle` is a lint error. So `OpenCodeProviderLoginSlot` holds the three variables on `runtime.localServers`, the same shape as the Cursor and GitHub slots, and the factory reads it from the context at call time. The factory keeps its dependency overrides, and `submitCode` and `cancel` now take a context. `__testing.reset()` is gone. `openCodeProviderLogin` stays a module constant, holding only production dependencies.
+
+### Task 4: document, do not move
+
+Followed the recommendation. Read and confirmed: the probe orders snapshots per repository, and both journal maps are keyed by paths inside a data directory. All three are marked next to their declarations and in the table, including that the removed set grows by one entry per deleted OpenCode environment.
+
+### Task 5: keep two seams, document one snapshot
+
+Followed the three recommendations. `homeOverride` and `testVolumeDriverOptions` stay as documented test-only seams, and `hostCursorCredential` is documented as process-wide.
+
+### Task 6: all three stay process-wide
+
+Followed the recommendation for the disk-scan bound, the macro check and the mail id clock.
+
+### Task 7: no full-backend case for the GitHub config source
+
+Departed from the recommendation. It kept the full-backend case for the backend's own wiring, but task 2 removed that wiring, so `index.ts` sets nothing to prove. Instead a `BackendRuntime`-level case runs `list_github_clone_accounts` through one registry against two contexts and checks the `GH_TOKEN` each `gh` run gets. A full-backend case would also run the real host `gh`, because `OrkestratorBackend` has no seam for that command.
+
+### Follow-up: 1070
+
+The scan for this file's rows found about twenty more modules with unlisted module state. They were out of scope, so they are recorded unread in [1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md).
 
 ## Related
 
 - [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): moved the container log service row.
+- [1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md): module state this file did not list.
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

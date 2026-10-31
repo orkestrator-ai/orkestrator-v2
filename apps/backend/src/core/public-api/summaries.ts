@@ -8,7 +8,12 @@ import {
   type PublicSessionActivity,
   type PublicSessionSummary,
 } from "@orkestrator/protocol/public-api-resources";
-import type { Environment, PersistedNativeAgentSession, Project } from "../models.js";
+import type {
+  Environment,
+  NativeAgentJobCompletionAction,
+  PersistedNativeAgentSession,
+  Project,
+} from "../models.js";
 import { environmentSettingsRevision, projectRevision } from "./revisions.js";
 
 /**
@@ -98,6 +103,7 @@ export interface NativeTabInfo {
   agent: AgentPlatform;
   title: string | null;
   hasProviderSession: boolean;
+  jobCompletionAction?: NativeAgentJobCompletionAction;
 }
 
 /** Native-agent tabs of a backend-owned pane layout. */
@@ -117,6 +123,9 @@ export function nativeTabsOfLayout(layout: unknown): NativeTabInfo[] {
           agent: native.platform,
           title: typeof tab.displayTitle === "string" ? tab.displayTitle.slice(0, 200) : null,
           hasProviderSession: typeof native.sessionId === "string" && native.sessionId.length > 0,
+          ...(tab.jobCompletionAction === "refresh-pr-after-agent-completion"
+            ? { jobCompletionAction: tab.jobCompletionAction }
+            : {}),
         });
       }
       return;

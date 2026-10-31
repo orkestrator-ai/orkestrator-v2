@@ -84,7 +84,10 @@ export type BuildPipelineServiceOptions = {
   structuredResultDeadlineMs?: number;
   transcriptPersistIntervalMs?: number;
   /** Narrow production-provider seam used by deterministic backend tests. */
-  providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
+  providerDependencies?: Pick<
+    ProviderDependencies,
+    "openCodeClient" | "monitorRetryMs" | "planUsage"
+  >;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;
   resolveAgentToolConnection?: (

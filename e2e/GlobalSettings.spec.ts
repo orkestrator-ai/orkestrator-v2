@@ -52,3 +52,30 @@ test("disabled Cursor retains its browser sign-in controls", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Sign in with Cursor" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Cursor Agent sign-in" })).toHaveCount(0);
 });
+
+test("Session titles discloses where a first message goes and persists its choice", async ({
+  page,
+}) => {
+  await page.goto("/global-settings?section=platforms");
+  const policy = page.getByRole("combobox", { name: "Session titles" });
+  await expect(policy).toHaveText("Any signed-in login");
+  await expect(page.getByText("goes to OpenAI or Anthropic", { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  const stored = () =>
+    page.evaluate(() => {
+      const config = JSON.parse(localStorage.getItem("global-settings-config") ?? "{}");
+      return config.global?.sessionTitleGeneration ?? null;
+    });
+  await policy.click();
+  await page.getByRole("option", { name: "The session's own login only" }).click();
+  await expect.poll(stored).toBe("own-platform");
+  await page.reload();
+  await expect(policy).toHaveText("The session's own login only");
+
+  await policy.click();
+  await page.getByRole("option", { name: "Any signed-in login" }).click();
+  await expect.poll(stored).toBeNull();
+});

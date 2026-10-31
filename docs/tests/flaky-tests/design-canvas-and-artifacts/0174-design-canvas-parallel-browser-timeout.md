@@ -295,3 +295,13 @@ mise run test:logged -- --name design-and-layer-owners -- bunx playwright test -
 No assertion, timeout or skip changed. The cause remains unestablished; this
 case stays open. Aggregate counts and artifact paths are recorded in
 [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#uniform-app-shortcut-review-repairs--2026-10-28).
+
+## Design canvas reload: session history review — 2026-10-31
+
+The nine-worker component run (`mise run test:logged -- --name review-browser -- mise run test:browser`)
+repeated this owner's failure: 983 passed, 106 skipped and eleven failed overall.
+The complete unchanged owner passed in the subsequent one-worker, multi-owner
+run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
+This was a combined owner run, not a new standalone qualification. No assertion,
+deadline or implementation changed. Exact commands and evidence are recorded in
+[session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).

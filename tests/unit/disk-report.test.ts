@@ -9,13 +9,21 @@ import {
   claudeProjectDirectoryName,
   environmentCleanupLedgerRow,
   formatBytes,
+  formatProbeNetworkSweepSummary,
   formatReport,
   graphBranchWorktreeRow,
   legacyTurboArtifacts,
   previewPartitionRows,
+  probeNetworkRow,
   readEnvironments,
   temporaryBrowserRows,
 } from "../../scripts/disk-report";
+import {
+  listProbeNetworks,
+  removeStaleProbeNetworks,
+  staleProbeNetworks,
+  type DockerRun,
+} from "../../scripts/probe-network-sweep";
 import {
   closeEnvironmentCleanupStorage,
   environmentCleanupLedger,
@@ -369,5 +377,130 @@ describe("temporaryBrowserRows", () => {
     // Read-only: nothing was removed.
     for (const name of Object.keys(directories))
       expect(existsSync(path.join(root, name))).toBe(true);
+  });
+});
+
+describe("probe network sweep", () => {
+  const now = Date.parse("2026-10-31T12:00:00.000Z");
+  const hours = (count: number) => new Date(now - count * 3_600_000).toISOString();
+  const id = (digit: string) => digit.repeat(64);
+  // Name -> [id, created, containers in any state]. Missing values fail the command.
+  const daemon: Record<string, [string, string | null, number | null]> = {
+    "ork-0123456789abcdef-reach-probe-net": [id("a"), hours(72), 0],
+    "ork-1111111111111111-reach-probe-net": [id("b"), hours(48), 1],
+    "ork-2222222222222222-reach-probe-net": [id("c"), hours(1), 0],
+    "ork-3333333333333333-reach-probe-net": [id("d"), null, 0],
+    "ork-4444444444444444-reach-probe-net": [id("e"), hours(30), null],
+    "ork-5555555555555555-reach-probe-net": [id("f"), hours(26), 0],
+  };
+
+  function fakeDocker(refuse = new Set<string>()): { run: DockerRun; calls: string[][] } {
+    const calls: string[][] = [];
+    const byId = new Map(
+      Object.entries(daemon).map(([name, entry]) => [entry[0], [...entry, name] as const]),
+    );
+    const run: DockerRun = (command, args) => {
+      calls.push([command, ...args]);
+      const [verb, ...rest] = args;
+      if (verb === "network" && rest[0] === "ls") {
+        const lines = Object.entries(daemon).map(([name, [networkId]]) => `${networkId} ${name}`);
+        // A same-label network whose name is not a probe's: never touched.
+        lines.push(`${id("9")} ork-0123456789abcdef-env-net`);
+        return { status: 0, stdout: `${lines.join("\n")}\n` };
+      }
+      if (verb === "network" && rest[0] === "inspect") {
+        const created = byId.get(rest.at(-1)!)?.[1];
+        return created ? { status: 0, stdout: `${created}\n` } : { status: 1, stdout: "" };
+      }
+      if (verb === "ps") {
+        // Only the id-and-name query is answered; containers by id alone miss some.
+        const networks = rest
+          .filter((arg) => arg.startsWith("network="))
+          .map((arg) => arg.slice(8));
+        const entry = byId.get(networks[0]!);
+        const count = networks[1] === entry?.[3] ? entry?.[2] : undefined;
+        return count === null || count === undefined
+          ? { status: 1, stdout: "" }
+          : { status: 0, stdout: "c0ffee\n".repeat(count) };
+      }
+      if (verb === "network" && rest[0] === "rm")
+        return { status: refuse.has(rest[1]!) ? 1 : 0, stdout: "" };
+      return { status: 1, stdout: "" };
+    };
+    return { run, calls };
+  }
+
+  test("selects only unattached probe networks over a day old, keeping anything unknown", () => {
+    const { run, calls } = fakeDocker();
+    const networks = listProbeNetworks(run)!;
+    expect(networks.map((network) => network.name)).toEqual(Object.keys(daemon));
+    expect(staleProbeNetworks(networks, now).map((network) => network.name)).toEqual([
+      "ork-0123456789abcdef-reach-probe-net",
+      "ork-5555555555555555-reach-probe-net",
+    ]);
+    // Listing asks by role label, and containers in every state.
+    expect(calls[0]).toContain("label=orkestrator-resource-role=host-reachability-probe");
+    // A never-started container matches only the name, a started one the id.
+    expect(calls).toContainEqual([
+      "docker",
+      "ps",
+      "-aq",
+      "--filter",
+      `network=${id("a")}`,
+      "--filter",
+      "network=ork-0123456789abcdef-reach-probe-net",
+    ]);
+    // Read-only.
+    expect(calls.some((call) => call[2] === "rm")).toBe(false);
+  });
+
+  test("removes each stale network by id, one per call, past a refusal", () => {
+    const { run, calls } = fakeDocker(new Set([id("a")]));
+    const result = removeStaleProbeNetworks(run, now)!;
+    expect(result).toEqual({
+      removed: ["ork-5555555555555555-reach-probe-net"],
+      failed: ["ork-0123456789abcdef-reach-probe-net"],
+      kept: 2,
+      unknown: 2,
+    });
+    expect(formatProbeNetworkSweepSummary(result)).toBe(
+      "Removed 1 probe networks; kept 2 attached or at most a day old; kept 2 with unknown age or attachment (Docker could not describe).",
+    );
+    expect(calls.filter((call) => call[2] === "rm")).toEqual([
+      ["docker", "network", "rm", id("a")],
+      ["docker", "network", "rm", id("f")],
+    ]);
+  });
+
+  test.each([
+    ["2026-10-29 02:38:42.123456789 +0000 UTC", "2026-10-29T02:38:42.123Z"],
+    ["2026-10-29 08:08:42.123456789 +0530 IST", "2026-10-29T02:38:42.123Z"],
+    ["2026-10-28 19:38:42.1 -0700 PDT", "2026-10-29T02:38:42.100Z"],
+    ["2026-10-29 02:38:42 +0000 UTC", "2026-10-29T02:38:42.000Z"],
+    ["2026-10-29T02:38:42.123456789Z", "2026-10-29T02:38:42.123Z"],
+    ["unreadable", null],
+  ])("handles Docker creation timestamp %s", (created, expected) => {
+    const { run, calls } = fakeDocker();
+    const dockerRun: DockerRun = (command, args) =>
+      args[0] === "network" && args[1] === "inspect"
+        ? { status: 0, stdout: `${created}\n` }
+        : run(command, args);
+    expect(listProbeNetworks(dockerRun)![0]!.createdAt).toBe(
+      expected === null ? null : Date.parse(expected),
+    );
+    const result = removeStaleProbeNetworks(dockerRun, now)!;
+    expect(result.removed).toHaveLength(expected === null ? 0 : 4);
+    expect(result.unknown).toBe(expected === null ? 6 : 1);
+    expect(calls.filter((call) => call[2] === "rm")).toHaveLength(expected === null ? 0 : 4);
+  });
+
+  test("reports the backlog, and nothing when Docker cannot list networks", () => {
+    expect(probeNetworkRow(fakeDocker().run, now)).toMatchObject({
+      orphaned: "2 of 6 unattached and older than a day",
+      cleanup: "mise run disk:report -- --fix probe-networks",
+    });
+    const unavailable: DockerRun = () => ({ status: 1, stdout: "" });
+    expect(probeNetworkRow(unavailable, now)).toBeNull();
+    expect(removeStaleProbeNetworks(unavailable, now)).toBeNull();
   });
 });

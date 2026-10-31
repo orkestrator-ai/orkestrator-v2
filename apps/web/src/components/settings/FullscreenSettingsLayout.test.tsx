@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { useLayoutEffect } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { SettingsPageLayout } from "./SettingsPageLayout";
 import { FullscreenSettingsLayout, SettingsHeaderActions } from "./FullscreenSettingsLayout";
 import {
   DropdownMenu,
@@ -159,7 +160,7 @@ describe("FullscreenSettingsLayout", () => {
     expect(onOpenChange).toHaveBeenCalledTimes(2);
   });
 
-  test("a header lead takes the left and moves the section title beside the actions", () => {
+  test("a header lead leaves the section heading with its content", () => {
     render(
       <FullscreenSettingsLayout
         open
@@ -168,13 +169,15 @@ describe("FullscreenSettingsLayout", () => {
         menuItems={menuItems}
         headerStart={(section) => <span>machines for {section}</span>}
       >
-        {(section) => <div>section:{section}</div>}
+        {(section) => (
+          <SettingsPageLayout title={menuItems.find((item) => item.id === section)?.label} />
+        )}
       </FullscreenSettingsLayout>,
     );
 
     const title = screen.getByRole("heading", { name: "General" });
-    expect(title.closest('[data-slot="settings-header-actions"]') === null).toBe(true);
-    expect(title.nextElementSibling?.getAttribute("data-slot")).toBe("settings-header-actions");
+    expect(title.closest('[data-slot="settings-content-scrollport"]')).toBeTruthy();
+    expect(screen.getAllByRole("heading", { name: "General" })).toHaveLength(1);
     // Once in the desktop header and once in its own row on a narrow screen.
     expect(screen.getAllByText("machines for general")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: /Network/ }));

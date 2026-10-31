@@ -45,6 +45,7 @@ import { PROJECT_ICON_FILE_ACCEPT, projectIconFromFile } from "@/lib/project-ico
 import { ProjectIconImage } from "@/components/federation/MachineDot";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import { SettingsPageLayout } from "./SettingsPageLayout";
 
 interface RepositorySettingsProps {
   project: Project;
@@ -488,7 +489,7 @@ export function RepositorySettings({
     switch (section) {
       case "general":
         return (
-          <div className="max-w-2xl space-y-6">
+          <div className="space-y-6">
             <div className="grid gap-2">
               <Label htmlFor="projectName">Name</Label>
               <Input
@@ -639,7 +640,7 @@ export function RepositorySettings({
         );
       case "branches":
         return (
-          <div className="max-w-2xl space-y-6">
+          <div className="space-y-6">
             <div className="grid gap-2">
               <Label htmlFor="defaultBranch">Default Branch</Label>
               <Input
@@ -695,7 +696,7 @@ export function RepositorySettings({
         );
       case "ports":
         return (
-          <div className="max-w-2xl space-y-6">
+          <div className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="entryPort">Container Entry Port</Label>
               <Input
@@ -795,7 +796,7 @@ export function RepositorySettings({
         );
       case "files":
         return (
-          <div className="max-w-2xl space-y-4">
+          <div className="space-y-4">
             <p className="text-xs text-muted-foreground">
               Specify files from your local repository to copy into environments. Use relative paths
               from the project root.
@@ -881,7 +882,14 @@ export function RepositorySettings({
         </>
       }
     >
-      {renderRepoSection}
+      {(section) => (
+        <SettingsPageLayout
+          title={repoMenuItems.find((item) => item.id === section)?.label}
+          width={section === "defaults" ? "wide" : "default"}
+        >
+          {renderRepoSection(section)}
+        </SettingsPageLayout>
+      )}
     </FullscreenSettingsLayout>
   );
 }

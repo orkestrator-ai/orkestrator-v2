@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, PauseCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
 import {
@@ -12,6 +11,8 @@ import {
   type AgentMessagingSettings,
   type CoordinatorStatusWakeMode,
 } from "@orkestrator/protocol/agent-mail";
+import { SETTINGS_CARD_CLASS, SettingsPageLayout, SettingsRow } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 // One write after a burst of edits, matching the shared settings form.
 const MESSAGING_AUTO_SAVE_DEBOUNCE_MS = 400;
@@ -98,56 +99,60 @@ export function MessagingSettings() {
     );
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8 pb-8">
-      <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-400">
-          Agent coordination
-        </p>
-        <h2 className="mt-2 text-xl font-semibold">Messaging</h2>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Messages are stored by Orkestrator before delivery. Automatic delivery places untrusted
-          text into an idle agent’s context. Coordinator mail wakes recipients automatically. Peer
-          wake is opt-in; other mail follows the recipient’s delivery policy.
-        </p>
-      </div>
-      <div className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">
-        <SettingRow
+    <SettingsPageLayout
+      title="Messaging"
+      description="Messages are stored by Orkestrator before delivery. Automatic delivery places untrusted text into an idle agent’s context. Coordinator mail wakes recipients automatically. Peer wake is opt-in; other mail follows the recipient’s delivery policy."
+    >
+      <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
+        <SettingsRow
           label="Enable messaging"
+          htmlFor="messaging-enabled"
           description="Expose inbox and send tools to interactive agent tabs."
         >
           <Switch
+            id="messaging-enabled"
+            aria-label="Enable messaging"
             checked={settings.enabled}
             onCheckedChange={(enabled) => setSettings({ ...settings, enabled })}
           />
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Pause delivery"
+          htmlFor="messaging-paused"
           description="Keep accepting durable messages but stop automatic delivery."
         >
           <Switch
+            id="messaging-paused"
+            aria-label="Pause delivery"
             checked={settings.paused}
             onCheckedChange={(paused) => setSettings({ ...settings, paused })}
           />
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Allow cross-project messages"
+          htmlFor="messaging-allowCrossProject"
           description="Let agents discover and store messages outside their current project. They are never automatically delivered."
         >
           <Switch
+            id="messaging-allowCrossProject"
+            aria-label="Allow cross-project messages"
             checked={settings.allowCrossProject}
             onCheckedChange={(allowCrossProject) => setSettings({ ...settings, allowCrossProject })}
           />
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Wake peers"
+          htmlFor="messaging-wakePeers"
           description="Mail between agents in environments you created starts the recipient's next turn when it is idle. Coordinators and the workers they create always wake each other."
         >
           <Switch
+            id="messaging-wakePeers"
+            aria-label="Wake peers"
             checked={settings.wakePeers}
             onCheckedChange={(wakePeers) => setSettings({ ...settings, wakePeers })}
           />
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Unattended exchange budget"
           description="Messages two agents may trade automatically before delivery pauses. A coordinator request, your prompt to either agent, or Resume starts a new budget."
         >
@@ -174,8 +179,8 @@ export function MessagingSettings() {
             />
             <span className="text-xs text-muted-foreground">messages</span>
           </div>
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Hourly limit per pair"
           description="Most automatic messages two agents may exchange in an hour. Mail over the limit waits and is delivered as the hour passes."
         >
@@ -199,8 +204,8 @@ export function MessagingSettings() {
             />
             <span className="text-xs text-muted-foreground">per hour</span>
           </div>
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Coordinator status updates"
           description="Wake a coordinator when work it started changes state: a Multi Review ready or fixed, a build that ends or stops on an error, a stall, a worker waiting for input or approval. Updates that land together arrive as one wake."
         >
@@ -219,8 +224,8 @@ export function MessagingSettings() {
             <option value="settled">Decisions and problems</option>
             <option value="stages">Every build stage too</option>
           </select>
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Default automatic delivery"
           description="Idle delivery can start billable work, including a tab that has never received a prompt."
         >
@@ -238,8 +243,8 @@ export function MessagingSettings() {
             <option value="off">Off</option>
             <option value="idle">When idle</option>
           </select>
-        </SettingRow>
-        <SettingRow
+        </SettingsRow>
+        <SettingsRow
           label="Retention"
           description="Messages and delivery-status records older than this are removed, including unread mail for closed tabs."
         >
@@ -260,7 +265,7 @@ export function MessagingSettings() {
             />
             <span className="text-xs text-muted-foreground">days</span>
           </div>
-        </SettingRow>
+        </SettingsRow>
       </div>
       {settings.paused && (
         <div className="flex gap-3 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-4 text-sm">
@@ -271,26 +276,6 @@ export function MessagingSettings() {
           </p>
         </div>
       )}
-    </div>
-  );
-}
-
-function SettingRow({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-6 p-4">
-      <div>
-        <Label className="text-sm">{label}</Label>
-        <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">{description}</p>
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
+    </SettingsPageLayout>
   );
 }

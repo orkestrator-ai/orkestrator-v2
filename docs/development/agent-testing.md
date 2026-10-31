@@ -697,6 +697,49 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live client outage
+
+`e2e/agent-testing/client-outage.spec.ts` qualifies reconnect and freshness under
+real outages, with no credentials and no provider turns. Each client sits behind
+its own proxy inside the test (`client-outage-support.ts`), which can reset its
+connections, silence them with no error, or stop reading its terminal transport.
+The machine's network is untouched. It covers a dropped link on the shared
+`EventSource` and on the terminal WebSocket, a silent link, terminal recovery
+under real TCP backpressure, quiet safety reads, and a backend restart with direct
+(bearer) clients and with a real session, which lapses by design.
+
+It signals the profile's backend and starts its own replacement on the same data,
+port and token, so use a profile of its own. Electron's Local then reports the
+backend as stopped until you restart the profile, and it may show a dialog.
+Each case starts a replacement if no backend is listening, so the spec can run
+again on the same profile.
+
+```bash
+mise run dev:test --profile qa-outage --fixture --no-agent-credentials --agent-platforms codex
+# In a second terminal (about 13 minutes):
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-outage ORKESTRATOR_AGENT_TEST_LIVE_OUTAGE=1 \
+  mise run test:logged -- --name client-outage -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts client-outage.spec.ts --workers=1
+mise run dev:stop --profile qa-outage
+mise run dev:reset --profile qa-outage
+```
+
+Each case records content-free timings as an annotation in `results.json`. The
+Electron half (a remote backend really restarted, then a silent link) is
+`connection-outage-electron.spec.ts`, in `mise run test:agent:electron`. The Codex
+breaker against a real binary is gated separately, and needs only the pinned
+`codex`, which a profile's `data/toolchains/codex` holds if the host does not:
+
+```bash
+CODEX_PROTOCOL_BINARY=<pinned codex> RUN_LIVE_CODEX_APP_SERVER=1 \
+  mise run test:logged -- --name codex-breaker -- \
+  bun test bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts --parallel=1
+```
+
+The [recorded run](../todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md#live-qualification-record-2026-10-31)
+is in 0051.
+
 ### Live cold restart
 
 `e2e/agent-testing/cold-restart-live.spec.ts` stops and starts the whole

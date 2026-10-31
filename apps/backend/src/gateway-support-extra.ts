@@ -735,6 +735,8 @@ export class GzipEventClientWriter implements DrainAwareEventClientWriter {
 }
 
 export type GatewayEventClient = {
+  /** Asked for keepalives an `EventSource` can see, instead of SSE comments. */
+  keepaliveEvents?: boolean;
   /**
    * Event-name prefixes this client asked for, or `null` for "everything".
    *

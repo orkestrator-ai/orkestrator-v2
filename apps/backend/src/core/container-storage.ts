@@ -182,7 +182,8 @@ function labelsMatch(actual: Record<string, string>, expected: Record<string, st
 /**
  * Test seam for live failure injection (disk and inode exhaustion): driver
  * options for storage volumes created from now on. Not reachable from any
- * command; `null` restores Docker's defaults.
+ * command; `null` restores Docker's defaults. A documented test-only seam for one
+ * live test (docs/architecture/backend-runtime.md).
  */
 let testVolumeDriverOptions: string[] = [];
 

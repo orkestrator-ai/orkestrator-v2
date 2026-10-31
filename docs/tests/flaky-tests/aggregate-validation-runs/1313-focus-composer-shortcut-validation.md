@@ -69,3 +69,13 @@ streaming/folding/paging, launch-dialog and data-saving tests. These broad
 browser failures were not individually requalified or classified as new flakes;
 the targeted green results do not certify the full browser suite. No unrelated
 assertion, timeout, skip, or production code was changed to hide them.
+
+## Root-change approval: session history review — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`;
+  web used two isolated Bun workers alongside component-browser validation.
+- **Failure:** `root-change approval handles over-limit and still permits rejection` timed out at 5,125.50 ms. Web totals were 10,879 passed, ten skipped and two failed
+  across 720 files. The other web owner also passed separately.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-node-request-owner -- sh -c 'cd apps/web && bun test ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures'` passed, exit 0, in 7.3 seconds.
+- **Evidence:** `orkestrator-test-run.oNZxqS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory. No implementation, assertion or deadline changed.

@@ -23,6 +23,7 @@ export default defineConfig({
     "artifact-host-electron.spec.ts",
     "design-canvas-electron.spec.ts",
     "workspace-realm-electron.spec.ts",
+    "connection-outage-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

@@ -18,7 +18,7 @@ import {
   interactionExpiryMessage,
   registerInteractionDeadline,
 } from "./session-manager-interaction-holds.js";
-import { isSupportedClaudeForm } from "./claude-elicitation-schema.js";
+import { isSupportedMcpForm } from "@orkestrator/protocol/mcp-elicitation-form";
 import { eventEmitter } from "./event-emitter.js";
 import {
   INTERACTION_TIMEOUT_MS,
@@ -120,7 +120,7 @@ export async function answerClaudeElicitation(
   if (
     (request.mode === "url" && (!url || url !== request.url)) ||
     new TextEncoder().encode(schemaText).byteLength > AGENT_INTERACTION_LIMITS.maxTextLength ||
-    (schema !== undefined && !isSupportedClaudeForm(schema))
+    (schema !== undefined && !isSupportedMcpForm(schema))
   ) {
     appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
       type: "status",

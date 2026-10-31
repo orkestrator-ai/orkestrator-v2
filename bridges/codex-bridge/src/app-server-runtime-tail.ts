@@ -269,8 +269,14 @@ export class CodexRuntimeTail {
    * omits them, and the fallback skips both what app-server lists as archived
    * and rollouts under `archived_sessions`.
    */
-  async listSessions(): Promise<{
-    sessions: Array<{ id: string; title?: string; detail?: string; updatedAt: string }>;
+  async listSessions(options: { includeArchived?: boolean } = {}): Promise<{
+    sessions: Array<{
+      id: string;
+      title?: string;
+      detail?: string;
+      updatedAt: string;
+      archived?: true;
+    }>;
     cwd: string;
   }> {
     const cwd = getWorkingDirectory(this.ctx.options.cwd);
@@ -278,6 +284,8 @@ export class CodexRuntimeTail {
       string,
       { id: string; title?: string; detail?: string; updatedAt: string }
     >();
+    // Returned only when asked for; the ids in `archived` always filter the live list.
+    const archivedRows = new Map<string, { id: string; title?: string; updatedAt: string }>();
 
     try {
       const { threads } = await this.ctx.options.engine.listThreads({ cwd });
@@ -307,7 +315,15 @@ export class CodexRuntimeTail {
           onlyArchived: true,
           ...(cursor ? { cursor } : {}),
         });
-        for (const thread of page.threads) if (thread.id) archived.add(thread.id);
+        for (const thread of page.threads) {
+          if (!thread.id) continue;
+          archived.add(thread.id);
+          archivedRows.set(thread.id, {
+            id: thread.id,
+            title: thread.name ?? thread.preview ?? undefined,
+            updatedAt: thread.updatedAt ?? new Date(this.ctx.now()).toISOString(),
+          });
+        }
         cursor = page.nextCursor ?? undefined;
       } while (cursor);
     } catch {
@@ -335,6 +351,9 @@ export class CodexRuntimeTail {
     for (const meta of persisted) {
       if (isArchived(meta)) {
         merged.delete(meta.id);
+        if (!archivedRows.has(meta.id)) {
+          archivedRows.set(meta.id, { id: meta.id, title: meta.title, updatedAt: meta.updatedAt });
+        }
         continue;
       }
       const existing = merged.get(meta.id);
@@ -350,7 +369,7 @@ export class CodexRuntimeTail {
     try {
       const generated =
         generatedTitles ?? (await readPersistedSessionTitleEntries(this.ctx.options.codexHome));
-      for (const session of merged.values()) {
+      for (const session of [...merged.values(), ...archivedRows.values()]) {
         const entry = generated.get(session.id);
         if (entry) session.title = entry.title;
       }
@@ -358,10 +377,21 @@ export class CodexRuntimeTail {
       // Title index is optional.
     }
 
+    const byActivity = (a: { updatedAt: string }, b: { updatedAt: string }) =>
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     return {
-      sessions: [...merged.values()].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      ),
+      sessions: [
+        ...boundedResumeRows([...merged.values()].sort(byActivity)),
+        // Independent count and byte quotas preserve room for both lists.
+        ...(options.includeArchived
+          ? boundedResumeRows(
+              [...archivedRows.values()]
+                .filter((row) => !merged.has(row.id))
+                .sort(byActivity)
+                .map((row) => ({ ...row, archived: true as const })),
+            )
+          : []),
+      ],
       cwd,
     };
   }
@@ -420,4 +450,19 @@ export class CodexRuntimeTail {
       storage: this.lifecycle.getStorageStats(),
     };
   }
+}
+
+/** Each category fits comfortably inside half the backend's 2 MiB body limit. */
+function boundedResumeRows<T extends { id: string; title?: string }>(rows: T[]): T[] {
+  const result: T[] = [];
+  let remaining = 900 * 1024;
+  for (const row of rows) {
+    if (result.length >= 512) break;
+    const bounded = { ...row, title: row.title?.slice(0, 512) };
+    const bytes = Buffer.byteLength(JSON.stringify(bounded), "utf8") + 1;
+    if (bytes > remaining) continue;
+    remaining -= bytes;
+    result.push(bounded);
+  }
+  return result;
 }

@@ -19,7 +19,11 @@ Every agent tab in every environment, from the committed pane layouts:
 
 Plus every open coordinator conversation (`ownerKind: "coordinator"`, with
 `coordinatorRole`). Plain shells, browser and review/workflow tabs are not
-agent tabs.
+agent tabs. A coordinator's `environmentId` is its runtime ID, not an environment
+record.
+
+A native entry whose platform is chosen carries `sessionId`, the public session
+handle ([control-mcp.md](control-mcp.md#coordinator-conversations)).
 
 `state` is `working`, `waiting` (blocked on a person), `idle`, `stopped` (the
 environment, or the coordinator, is not running) or `unknown` (never observed).

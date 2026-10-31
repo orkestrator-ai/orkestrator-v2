@@ -16,3 +16,13 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 - **Disposition:** open.
 - **Evidence:** single observation, with nine workers. This is the `above` variant of the test that replaced [0721](0721-tool-fold-history-anchor.md).
 - **Next step:** the poll scrolls with mouse-wheel steps of 250 px and 100 ms waits. On recurrence, check whether wheel input was dropped or coalesced; setting `scrollTop` directly would remove that dependency.
+
+## Growing live tool group: session history review — 2026-10-31
+
+The nine-worker component run (`mise run test:logged -- --name review-browser -- mise run test:browser`)
+repeated this owner's failure: 983 passed, 106 skipped and eleven failed overall.
+The complete unchanged owner passed in the subsequent one-worker, multi-owner
+run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
+This was a combined owner run, not a new standalone qualification. No assertion,
+deadline or implementation changed. Exact commands and evidence are recorded in
+[session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).

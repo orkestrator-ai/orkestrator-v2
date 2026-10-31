@@ -97,6 +97,19 @@ test("known homes activate immediately and retain PR metadata through reconcilia
   expect(useEnvironmentStore.getState().environments[0]?.prUrl).toBe(home.prUrl);
 });
 
+test("a failure shows the backend's reason without Electron's invoke prefix", async () => {
+  ensureHome.mockRejectedValueOnce(
+    new Error("Error invoking remote method 'orkestrator:invoke': Error: checkout does not exist"),
+  );
+  const { result } = renderHook(() => useProjectHomeActivation());
+  act(() => useUIStore.getState().selectProject("project-1"));
+  await waitFor(() => expect(result.current.error).toBe("checkout does not exist"));
+  expect(mockToastError).toHaveBeenCalledWith(
+    "Could not open the project home",
+    expect.objectContaining({ description: "checkout does not exist" }),
+  );
+});
+
 test("failed Home creation replaces the spinner with a retryable error", async () => {
   ensureHome.mockRejectedValueOnce(new Error("checkout unavailable"));
   function Workspace() {

@@ -36,7 +36,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import { normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
-import { BackendHttpClient } from "./backend-process.js";
+import { BackendHttpClient, type BackendStreamState } from "./backend-process.js";
 import { savedMachineImportEntry } from "./command-node-migration.js";
 import { checkBackendRoute, connectionCheckError, type HelloOutcome } from "./backend-hello.js";
 import {
@@ -1536,7 +1536,7 @@ export class ConnectionManager {
   private handleStreamState(
     connectionId: string,
     client: BackendHttpClient,
-    state: "open" | "closed",
+    state: BackendStreamState,
   ): void {
     const remote = this.remoteConnections.get(connectionId);
     if (!remote || remote.client !== client) return;
@@ -1544,6 +1544,14 @@ export class ConnectionManager {
       if (remote.streamFailures > 0) remote.epoch = this.nextEpoch++;
       remote.streamFailures = 0;
       this.setStatus(connectionId, { transport: "connected", detail: undefined });
+      return;
+    }
+    if (state === "unauthorized") {
+      remote.streamFailures = 0;
+      this.setStatus(connectionId, {
+        transport: "authentication-required",
+        detail: "The gateway token was rejected. Enter the token again.",
+      });
       return;
     }
     remote.streamFailures += 1;

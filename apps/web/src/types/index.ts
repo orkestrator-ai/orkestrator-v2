@@ -588,6 +588,8 @@ export interface GlobalConfig {
   codexMaxConcurrentThreads?: number;
   /** Longest a Claude native background shell command may run, in hours. Absent is 2. */
   claudeBackgroundCommandLimitHours?: number;
+  /** Which agent logins may write session titles. Absent is `any-signed-in`. */
+  sessionTitleGeneration?: import("@orkestrator/protocol/session-title-generation").SessionTitleGenerationPolicy;
   /** Terminal appearance settings (font, size, colors) */
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */

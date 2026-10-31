@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { createNativeAgentProvider } from "./native-agent-provider.js";
@@ -12,6 +13,7 @@ function context(
   options: { activeCodex?: string } = {},
 ): CommandContext {
   return {
+    runtime: { accounts: new AgentAccountsRuntime() },
     runtimeFlavor: undefined,
     storage: {
       getEnvironment: async () =>

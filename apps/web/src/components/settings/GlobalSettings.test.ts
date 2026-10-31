@@ -87,6 +87,13 @@ describe("global settings synchronization", () => {
       globalFormSignature(current),
     );
     expect(storedCoreFields(current).claudeBackgroundCommandLimitHours).toBe(2);
+    expect(storedCoreFields(current).sessionTitleGeneration).toBe("any-signed-in");
+    expect(
+      storedCoreFields({ ...current, sessionTitleGeneration: "off" }).sessionTitleGeneration,
+    ).toBe("off");
+    expect(globalFormSignature({ ...current, sessionTitleGeneration: "own-platform" })).not.toBe(
+      globalFormSignature(current),
+    );
     expect(
       storedCoreFields({ ...current, claudeBackgroundCommandLimitHours: 24 })
         .claudeBackgroundCommandLimitHours,

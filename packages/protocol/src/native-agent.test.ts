@@ -138,6 +138,8 @@ describe("native agent capability table", () => {
       "command-approval",
       "file-approval",
       "permission",
+      "mcp-form",
+      "mcp-url",
     ]);
   });
 
@@ -202,13 +204,14 @@ describe("native agent capability table", () => {
     }
 
     for (const platform of ["cursor", "grok"] as const) {
-      // Both bridges read inline image content blocks; neither takes files.
+      // Both bridges read inline image content blocks; only Grok's ACP bridge
+      // takes files, as embedded-context `resource` blocks.
       expect(nativeAgentCapabilities(platform).attachments).toEqual({
-        files: false,
+        files: platform === "grok",
         images: true,
       });
       expect(nativeAgentCapabilities(platform).resume).toBe(true);
-      expect(nativeAgentCapabilities(platform).fork).toBe(false);
+      expect(nativeAgentCapabilities(platform).fork).toBe(platform === "grok");
       expect(nativeAgentCapabilities(platform).slashCommands).toBe(platform === "grok");
       expect(nativeAgentCapabilities(platform).backgroundTasks).toBe(false);
       // Cursor drives fast through an SDK model parameter, Grok through a
@@ -217,10 +220,11 @@ describe("native agent capability table", () => {
       // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
-      // Grok compacts through its own `/compact`, run by the ACP bridge.
+      // Grok compacts through its own `/compact`, run by the ACP bridge, and
+      // Cursor through the SDK's `agent.summarize()`.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
         platform === "cursor"
-          ? { goal: true, steer: true, rewindMessages: true }
+          ? { goal: true, steer: true, rewindMessages: true, compact: true, archive: true }
           : { compact: true, goal: true },
       );
     }

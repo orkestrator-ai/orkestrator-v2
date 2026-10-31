@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/agent-registry";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
+import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import type { CoordinatorsStorage, StorageService } from "./storage.js";
 
@@ -47,6 +48,21 @@ function tabPlatform(tab: Record<string, unknown>): AgentPlatform | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const platform = (data as Record<string, unknown>).platform;
   return isAgentPlatform(platform) ? platform : null;
+}
+
+function sessionHandle(
+  kind: AgentRegistryEntry["kind"],
+  agent: AgentPlatform | null,
+  environmentId: string,
+  tabId: string,
+): { sessionId?: string } {
+  if (kind !== "native" || !agent) return {};
+  try {
+    return { sessionId: encodePublicSessionId(environmentId, tabId) };
+  } catch {
+    // An id outside the handle's alphabet has no handle; the entry still lists.
+    return {};
+  }
 }
 
 /**
@@ -106,6 +122,7 @@ export class AgentRegistry {
             ownerKind: "environment",
             kind,
             agent,
+            ...sessionHandle(kind, agent, environment.id, tab.id),
             displayName: resolveTabDisplayName({
               tabType: String(tab.type),
               tabOrdinal,
@@ -137,6 +154,7 @@ export class AgentRegistry {
           ownerKind: "coordinator",
           kind: "native",
           agent,
+          ...sessionHandle("native", agent, environmentId, conversation.tabId),
           displayName: conversation.title,
           tabOrdinal: conversation.role === "side" ? (conversation.sideOrdinal ?? 0) + 1 : 1,
           state: ready

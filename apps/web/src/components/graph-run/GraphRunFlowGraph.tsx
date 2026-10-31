@@ -281,7 +281,14 @@ export function GraphRunFlowGraph({
   isActive?: boolean;
 }) {
   const [storedHeight, setStoredHeight] = useState<number | null>(null);
-  const nodes = model.nodes.map((node) => views.get(node.id)!);
+  // Separate agent steps are distinct stages; fan-out siblings share one column.
+  const stageOf = new Map(
+    model.columns.flatMap((column) => column.nodeIds.map((id) => [id, column.key] as const)),
+  );
+  const nodes = model.nodes.map((node) => ({
+    ...views.get(node.id)!,
+    stage: stageOf.get(node.id),
+  }));
   const edges: FlowGraphEdge[] = model.edges.map(({ untaken: _untaken, ...edge }) => edge);
   const stages: FlowStackStage[] = model.columns.map((column, index) => {
     const ids = new Set(column.nodeIds);

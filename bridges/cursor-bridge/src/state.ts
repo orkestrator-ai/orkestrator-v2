@@ -262,7 +262,7 @@ export interface SessionState {
   /** The SDK's own agent id. Stable across bridge restarts; what resume takes. */
   agentId?: string;
   /**
-   * Detached to adopt an MCP configuration change and not yet reattached. The
+   * Detached to adopt a configuration or model change and not yet reattached. The
    * next attach must resume `agentId` or fail; it may never quietly start a
    * new conversation. Persisted, because a restart does not change that.
    */

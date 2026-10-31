@@ -40,7 +40,6 @@ import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-se
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
-import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import {
@@ -66,6 +65,7 @@ import {
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { MachineLoadSampler } from "./machine-load.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
@@ -197,6 +197,7 @@ import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphRunAttention } from "./graph-run-attention.js";
+import { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
 import {
@@ -256,6 +257,8 @@ export class OrkestratorBackend {
   private readonly graphMock: GraphMockRuns;
   /** Waiting graph runs in the sidebar: activity and attention (item 208). */
   private readonly graphRunAttention: GraphRunAttention;
+  /** Working pipe branches in every sidebar, including other machines'. */
+  private readonly buildPipelineActivity: BuildPipelineActivity;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -296,6 +299,7 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
+  private readonly machineLoad = new MachineLoadSampler();
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
@@ -615,7 +619,6 @@ export class OrkestratorBackend {
     this.context = context;
     context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
     setManagedGitHubCli(context.pinnedGitHubCli);
-    setGitHubCliConfigSource(async () => (await storage.loadConfig()).global);
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
@@ -715,6 +718,7 @@ export class OrkestratorBackend {
         pickInheritedGlobalSettings((await storage.loadConfig()).global),
       onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
     });
+    context.machineLoad = this.machineLoad;
     context.nodes = this.nodes;
     // While a leaf, this node works with its command node's settings.
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
@@ -804,6 +808,7 @@ export class OrkestratorBackend {
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        planUsage: this.runtime.accounts.planUsage,
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
@@ -1168,6 +1173,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
@@ -1196,6 +1202,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         artifactDispatch,
@@ -1254,11 +1261,10 @@ export class OrkestratorBackend {
         workspaceHead: async (environment) => ({
           branch: environment.branch,
           headRef: (
-            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
-              "rev-parse",
-              "--verify",
-              "HEAD^{commit}",
-            ])
+            await createGraphEnvironmentShell(context.runtime.environments.fence, storage).git(
+              environment,
+              ["rev-parse", "--verify", "HEAD^{commit}"],
+            )
           ).trim(),
         }),
       }),
@@ -1297,9 +1303,10 @@ export class OrkestratorBackend {
       artifacts: graphArtifacts,
     });
     this.graphRunAttention = new GraphRunAttention(storage);
+    this.buildPipelineActivity = new BuildPipelineActivity(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
-    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
+    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence, storage);
     this.graphSystemExecutor = new GraphNodeSystemExecutor({
       storage,
       invoke: invokeCommand,
@@ -1337,6 +1344,7 @@ export class OrkestratorBackend {
       storage,
       invoke: invokeCommand,
       workflowResults: this.workflowResults,
+      providerDependencies: { planUsage: this.runtime.accounts.planUsage },
       agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
       toolResultsEnabled: (agent) => this.workflowResultRollout.allows(agent, "graph-output"),
@@ -1397,7 +1405,10 @@ export class OrkestratorBackend {
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
-      dependencies: { workflowResults: this.workflowResults },
+      dependencies: {
+        workflowResults: this.workflowResults,
+        planUsage: this.runtime.accounts.planUsage,
+      },
     });
     this.graphDescribe = new GraphDescribeService({
       storage,
@@ -1444,6 +1455,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        planUsage: this.runtime.accounts.planUsage,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
@@ -1780,6 +1792,7 @@ export class OrkestratorBackend {
       },
     });
     this.hostSuspendDetector.start();
+    this.machineLoad.start();
     // Containers hold Claude logins access-only; this hands them each host
     // renewal and renews the host login before it lapses.
     this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
@@ -1910,6 +1923,7 @@ export class OrkestratorBackend {
           if (!handler) throw new Error("Review bridge command is unavailable");
           return (await handler(args, this.context)) as T;
         },
+        this.runtime.accounts.planUsage,
       )
         .catch(() => {
           console.warn("[backend] Retired Looped Review cleanup remains pending");
@@ -1947,6 +1961,13 @@ export class OrkestratorBackend {
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
 
+    // Working pipelines light the sidebar again after a restart; runs in the background.
+    void this.buildPipelineActivity.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore build pipeline activity:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     // Waiting runs light the sidebar again after a restart; runs in the background.
     void this.graphRunAttention.start().catch((error: unknown) => {
       console.warn(
@@ -2583,6 +2604,7 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    this.machineLoad.stop();
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
     this.containerLoginFileWatcher?.stop();
@@ -2607,6 +2629,7 @@ export class OrkestratorBackend {
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
     this.graphRunAttention.stop();
+    this.buildPipelineActivity.stop();
     this.agentHumanPrompts.stop();
     // Non-recursive project-template watches: closing them never blocks.
     this.graphTemplates.shutdown();

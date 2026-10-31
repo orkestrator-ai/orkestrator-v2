@@ -1,3 +1,4 @@
+import type { CapacityRetryPolicy } from "@orkestrator/protocol/capacity-retry";
 import type {
   AgentPartInput,
   FilePartInput,
@@ -79,6 +80,8 @@ export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
   openCodeClientFactory?: typeof createOpencodeClient;
   openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
+  /** Test seam over the shared capacity backoff; unset fields keep the defaults. */
+  openCodeCapacityRetryPolicy?: Partial<CapacityRetryPolicy>;
   /** First reconnect delay of the event monitor; repeated failures back off from it. */
   monitorRetryMs?: number;
   /** Upper bound of the monitor's reconnect backoff. */

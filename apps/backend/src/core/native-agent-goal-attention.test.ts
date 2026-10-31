@@ -66,6 +66,7 @@ async function endTurn(
   provider: NativeAgentRuntimeProvider,
   finish: () => void,
   withGoal: NativeAgentGoal | undefined,
+  unwatched = false,
 ) {
   let reason: unknown;
   let unread: unknown;
@@ -90,7 +91,17 @@ async function endTurn(
         await service.goals.init();
         await service.goals.settled();
       }
-      await service.reconcileAgentActivity();
+      if (unwatched) {
+        // The durable aggregate outlived the backend that watched the turn.
+        await storage.setEnvironmentAgentActivity(
+          "env-1",
+          "working",
+          new Date().toISOString(),
+          "native-agent",
+        );
+      } else {
+        await service.reconcileAgentActivity();
+      }
       finish();
       await service.reconcileAgentActivity();
       const environment = await storage.getEnvironment("env-1");
@@ -193,6 +204,12 @@ describe("goal attention", () => {
     test(`${connection.agent}: a turn the goal will follow up rings nothing`, async () => {
       const { provider, finish } = bridge(connection, {});
       const { unread } = await endTurn(connection.agent, provider, finish, goal());
+      expect(unread).not.toBe(true);
+    });
+
+    test(`${connection.agent}: an unwatched goal turn end suppresses aggregate attention`, async () => {
+      const { provider, finish } = bridge(connection, {});
+      const { unread } = await endTurn(connection.agent, provider, finish, goal(), true);
       expect(unread).not.toBe(true);
     });
 

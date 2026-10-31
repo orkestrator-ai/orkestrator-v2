@@ -295,7 +295,11 @@ async function controlReviewValidationOnce(
   if (!environment) throw new Error("Review validation environment is unavailable");
   if (action === "start" && (environment.status !== "running" || environment.deletionRequestedAt))
     throw new Error("Review validation requires a running environment");
-  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
+  const runner = createEnvironmentCommandRunner(
+    environment,
+    context.runtime.environments.fence,
+    context.storage,
+  );
   if (action === "start")
     await ensureReviewPackageIsGitExcluded(
       environment,

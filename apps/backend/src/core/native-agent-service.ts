@@ -541,6 +541,15 @@ export class NativeAgentService {
     await this.launches.settleStoppedSessions(environmentId, sessions);
   }
 
+  /**
+   * The backend is about to stop this environment's bridges on purpose, so a
+   * sweep that finds one gone must not report its turn as failed
+   * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
+   */
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
+  }
+
   /** Whether the session's last turn was cut off by its runtime stopping. */
   sessionStoppedMidTurn(
     environmentId: string,
@@ -606,6 +615,7 @@ export class NativeAgentService {
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: options.planUsage,
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -1761,6 +1771,59 @@ export class NativeAgentService {
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
     return this.dispatchIntentInternal(input, false);
   }
+
+  /**
+   * Whether an existing tab's session can take another prompt, for a caller
+   * choosing between that tab and a new one. `busy` means the prompt has to wait
+   * in the durable queue. `unavailable` means it would not run there: no session,
+   * a tab being closed, a parked dispatch or queue, or a failed provider session
+   * (the queue parks a prompt behind a terminal error rather than sending it).
+   * Never creates a session; a read that fails answers `unavailable`.
+   */
+  async promptReadiness(
+    input: NativeAgentProjectionInput,
+  ): Promise<"idle" | "busy" | "unavailable"> {
+    try {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      if (hasPendingTabTeardown(environment, input.logicalSessionKey)) return "unavailable";
+      const resolved = await this.resolveProjectionSession(input);
+      if (!resolved) return "unavailable";
+      const { provider } = resolved;
+      let { session } = resolved;
+      if (session.pendingDispatch)
+        await this.settleAmbiguousDispatch(
+          input,
+          session.key,
+          session.pendingDispatch.requestId,
+          provider,
+        );
+      if (session.pendingSteer)
+        await this.settleAmbiguousSteer(
+          input,
+          session.key,
+          session.pendingSteer.requestId,
+          provider,
+        );
+      if (session.pendingDispatch || session.pendingSteer)
+        session = (await this.storage.getNativeAgentSession(session.key)) ?? session;
+      if (session.pendingDispatch || session.pendingSteer) return "unavailable";
+      const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
+      if (queue?.dispatchError) return "unavailable";
+      const { status } = await readProviderStatus(provider, session.providerSessionId);
+      await this.recordObservedTurnOutcome(session, status, undefined, provider);
+      if (status === "running" || status === "blocked") return "busy";
+      if (status !== "idle") return "unavailable";
+      // Sending past a backlog would overtake prompts the user queued first.
+      return queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0)
+        ? "busy"
+        : "idle";
+    } catch {
+      return "unavailable";
+    }
+  }
   private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
@@ -2208,7 +2271,7 @@ export class NativeAgentService {
   }
 
   listProjectionResumableSessions(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { includeArchived?: boolean },
   ): Promise<NativeAgentResumeEntry[]> {
     return this.sessionOperations.listProjectionResumableSessions(input);
   }
@@ -3231,7 +3294,11 @@ export class NativeAgentService {
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
-        input = { ...input, model: session.controls?.modelId ?? input.model };
+        input = {
+          ...input,
+          model: session.controls?.modelId ?? input.model,
+          reasoningEffort: input.reasoningEffort ?? session.controls?.reasoningId,
+        };
       }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {
@@ -3883,6 +3950,7 @@ export class NativeAgentService {
         provider = createNativeAgentProvider(connection, {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: this.options.planUsage,
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -3924,7 +3992,9 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, {});
+            provider = createNativeAgentProvider(connection, {
+              planUsage: this.options.planUsage,
+            });
             this.providerRegistry.cache(key, provider, identity);
           }
         }

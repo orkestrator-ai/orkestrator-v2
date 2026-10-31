@@ -36,6 +36,7 @@ import { applyBlockedReason, writeBlockedReason } from "./mcp-rollout";
 import { McpServerEditor, type McpEditorMode } from "./McpServerEditor";
 import { McpSourceList } from "./McpSourceList";
 import { useMcpSnapshot, useMcpTargets } from "./useMcpManagement";
+import { SettingsPageLayout } from "../SettingsPageLayout";
 
 const BACKEND_CONTEXT = "backend";
 
@@ -182,10 +183,12 @@ export function ProviderMcpSettings() {
 
   if (targetsState.status === "unsupported" || snapshotState.status === "unsupported") {
     return (
-      <div className="mx-auto max-w-3xl rounded-lg border border-white/10 p-5 text-sm text-muted-foreground">
-        This backend does not support managing MCP servers yet. Update the backend to edit provider
-        servers from here.
-      </div>
+      <SettingsPageLayout title="MCP servers for your agents">
+        <div className="rounded-lg border border-zinc-800 p-5 text-sm text-muted-foreground">
+          This backend does not support managing MCP servers yet. Update the backend to edit
+          provider servers from here.
+        </div>
+      </SettingsPageLayout>
     );
   }
 
@@ -198,12 +201,10 @@ export function ProviderMcpSettings() {
     current.sources.some((source) => source.writable && source.format !== "runtime");
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-8">
-      <div className="border-b border-white/10 pb-5">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          MCP servers for your agents
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+    <SettingsPageLayout
+      title="MCP servers for your agents"
+      description={
+        <>
           Add, edit and remove the MCP servers each agent platform connects to. Changes are written
           to the provider's own configuration files. To let another agent control Orkestrator, use{" "}
           <button
@@ -214,9 +215,9 @@ export function ProviderMcpSettings() {
             Control MCP
           </button>
           .
-        </p>
-      </div>
-
+        </>
+      }
+    >
       <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto] sm:items-end">
         <div className="space-y-1.5">
           <Label htmlFor="mcp-provider">Agent platform</Label>
@@ -437,6 +438,6 @@ export function ProviderMcpSettings() {
           run?.();
         }}
       />
-    </div>
+    </SettingsPageLayout>
   );
 }

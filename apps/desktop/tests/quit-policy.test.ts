@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
   handleStartupFailure,
   registerQuitReopenRelaunch,
@@ -261,5 +261,35 @@ describe("reopen during quit", () => {
     expect(calls).toEqual([]);
     handleStartupFailure({ ...options, isQuitting: () => false });
     expect(calls).toEqual(["report", "quit"]);
+  });
+
+  test("a report that waits on a dialog holds the quit until it is answered", async () => {
+    let answer!: () => void;
+    const quit = mock(() => undefined);
+    handleStartupFailure({
+      isQuitting: () => false,
+      error: new Error("failed"),
+      report: () =>
+        new Promise<void>((resolve) => {
+          answer = resolve;
+        }),
+      quit,
+    });
+    expect(quit).not.toHaveBeenCalled();
+    answer();
+    await Bun.sleep(0);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("a report that fails still quits", async () => {
+    const quit = mock(() => undefined);
+    handleStartupFailure({
+      isQuitting: () => false,
+      error: new Error("failed"),
+      report: () => Promise.reject(new Error("no dialog")),
+      quit,
+    });
+    await Bun.sleep(0);
+    expect(quit).toHaveBeenCalledTimes(1);
   });
 });

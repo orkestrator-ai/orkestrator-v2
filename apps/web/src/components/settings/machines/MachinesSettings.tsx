@@ -23,6 +23,7 @@ import { MachineStatusDot, errorText, formatMachineTime } from "./machine-ui";
 import { useMachines, type ConnectionsApi } from "./useMachines";
 import { useMaintenanceSummaries, type MaintenanceSummary } from "./useMaintenanceSummaries";
 import { MachineAgentAccountsSection } from "./MachineAgentAccountsSection";
+import { SETTINGS_CARD_CLASS, SettingsPageLayout } from "../SettingsPageLayout";
 
 /**
  * Every machine this client works with, in one list: the machine it is
@@ -80,21 +81,18 @@ export function MachinesSettings() {
   };
 
   return (
-    <div className="max-w-4xl space-y-6" data-testid="machines-settings">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">Machines</h3>
-          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            Every machine runs its own backend and keeps its own work. The machine you are connected
-            to reaches the others, so they show in one place.
-          </p>
-        </div>
+    <SettingsPageLayout
+      width="wide"
+      data-testid="machines-settings"
+      title="Machines"
+      description="Every machine runs its own backend and keeps its own work. The machine you are connected to reaches the others, so they show in one place."
+      actions={
         <Button type="button" onClick={() => setAdding(true)} className="w-fit gap-2">
           <Plus className="h-4 w-4" />
           Add machine
         </Button>
-      </div>
-
+      }
+    >
       {leaf && status ? (
         <div
           data-testid="leaf-mode-notice"
@@ -130,7 +128,7 @@ export function MachinesSettings() {
       ) : null}
 
       {nodesError && loaded ? (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-xs text-zinc-400">
+        <div className={cn(SETTINGS_CARD_CLASS, "px-4 py-3 text-xs text-zinc-400")}>
           Machine discovery is unavailable ({nodesError}). You can still manage this machine’s
           updates.
           <Button
@@ -258,7 +256,7 @@ export function MachinesSettings() {
           onSnapshot={record}
         />
       ) : null}
-    </div>
+    </SettingsPageLayout>
   );
 }
 

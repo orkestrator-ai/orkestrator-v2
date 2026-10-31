@@ -6,12 +6,16 @@ import { detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { createEnvironmentCommandRunner, createLocalGhRunner } from "./commands-review.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
-import { setGitHubCliConfigSource } from "./github-credentials.js";
+import type { GitHubCliConfigSource } from "./github-credentials.js";
+import type { StorageService } from "./storage.js";
 import type { AppConfig, Environment } from "./models.js";
 
 let root: string;
 let log: string;
 let global: Partial<AppConfig["global"]>;
+const gitHubConfig: GitHubCliConfigSource = {
+  loadConfig: async () => ({ global: global as AppConfig["global"] }),
+};
 const originalTokens = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN };
 const url = "https://github.com/acme/repo/pull/9";
 
@@ -38,14 +42,12 @@ esac
     { mode: 0o755 },
   );
   global = { useHostGitHubCredentials: false, githubToken: " selected_pat " };
-  setGitHubCliConfigSource(async () => global as AppConfig["global"]);
   setManagedGitHubCli(gh);
   process.env.GH_TOKEN = "inherited_wrong_identity";
   process.env.GITHUB_TOKEN = "another_wrong_identity";
 });
 
 afterEach(async () => {
-  setGitHubCliConfigSource(undefined);
   setManagedGitHubCli(undefined);
   for (const key of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
     if (originalTokens[key] === undefined) delete process.env[key];
@@ -66,7 +68,7 @@ async function detect() {
       prState: "open",
       hasMergeConflicts: false,
     },
-    { includeCheckSummary: true },
+    { includeCheckSummary: true, storage: gitHubConfig as StorageService },
   );
 }
 
@@ -78,12 +80,13 @@ function environmentRunner() {
       worktreePath: root,
     } as Environment,
     new EnvironmentMutationFence(),
+    gitHubConfig,
   );
 }
 
 test("PR detection/check queries and local review/merge/delete runners all use the selected PAT", async () => {
   expect(await detect()).toMatchObject({ state: "open", checkSummaryStatus: "succeeded" });
-  const gh = createLocalGhRunner(root);
+  const gh = createLocalGhRunner(root, gitHubConfig);
   await gh(["pr", "diff", url]);
   await gh(["pr", "merge", url, "--squash"]);
   await gh(["api", "--method", "DELETE", "repos/acme/repo/git/refs/heads/feature"]);
@@ -105,7 +108,7 @@ test("PR detection/check queries and local review/merge/delete runners all use t
 test("host PR/review runners ignore inherited and caller token overrides", async () => {
   global = { useHostGitHubCredentials: true, githubToken: "unused_pat" };
   expect(await detect()).toMatchObject({ state: "open", checkSummaryStatus: "succeeded" });
-  await createLocalGhRunner(root)(["pr", "merge", url, "--squash"]);
+  await createLocalGhRunner(root, gitHubConfig)(["pr", "merge", url, "--squash"]);
   await environmentRunner()("gh", ["pr", "diff", url], 10_000, {
     PATH: process.env.PATH,
     GH_TOKEN: "caller_token",
@@ -123,7 +126,7 @@ test.each([undefined, "", "   "])(
   async (githubToken) => {
     global = { useHostGitHubCredentials: false, githubToken };
     await expect(detect()).rejects.toThrow("personal access token is missing");
-    await expect(createLocalGhRunner(root)(["pr", "merge", url])).rejects.toThrow(
+    await expect(createLocalGhRunner(root, gitHubConfig)(["pr", "merge", url])).rejects.toThrow(
       "personal access token is missing",
     );
     await expect(environmentRunner()("gh", ["pr", "diff", url])).rejects.toThrow(

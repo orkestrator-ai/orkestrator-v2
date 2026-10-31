@@ -18,6 +18,7 @@ describe("agent activity vocabulary", () => {
       "native-agent",
       "multi-review",
       "graph-run",
+      "build-pipeline",
     ]);
   });
 });

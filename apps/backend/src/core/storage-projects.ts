@@ -1313,7 +1313,7 @@ export class ProjectsRepository {
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error(
-        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, or graph-run",
+        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, graph-run, or build-pipeline",
       );
     }
     if (

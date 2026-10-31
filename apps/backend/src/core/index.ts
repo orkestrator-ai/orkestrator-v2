@@ -194,6 +194,7 @@ import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphRunAttention } from "./graph-run-attention.js";
+import { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
 import {
@@ -251,6 +252,8 @@ export class OrkestratorBackend {
   private readonly graphMock: GraphMockRuns;
   /** Waiting graph runs in the sidebar: activity and attention (item 208). */
   private readonly graphRunAttention: GraphRunAttention;
+  /** Working pipe branches in every sidebar, including other machines'. */
+  private readonly buildPipelineActivity: BuildPipelineActivity;
   private readonly agentHumanPrompts: AgentHumanPromptMonitor;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
@@ -1245,6 +1248,7 @@ export class OrkestratorBackend {
       artifacts: graphArtifacts,
     });
     this.graphRunAttention = new GraphRunAttention(storage);
+    this.buildPipelineActivity = new BuildPipelineActivity(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
@@ -1879,6 +1883,13 @@ export class OrkestratorBackend {
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
 
+    // Working pipelines light the sidebar again after a restart; runs in the background.
+    void this.buildPipelineActivity.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to restore build pipeline activity:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     // Waiting runs light the sidebar again after a restart; runs in the background.
     void this.graphRunAttention.start().catch((error: unknown) => {
       console.warn(
@@ -2539,6 +2550,7 @@ export class OrkestratorBackend {
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
     this.graphRunAttention.stop();
+    this.buildPipelineActivity.stop();
     this.agentHumanPrompts.stop();
     // Non-recursive project-template watches: closing them never blocks.
     this.graphTemplates.shutdown();

@@ -1374,6 +1374,27 @@ export function isActiveBuildPhase(phase: BuildPhase): boolean {
   return phase !== "paused" && phase !== "complete" && phase !== "failed";
 }
 
+const SETUP_BUILD_PHASES = new Set<BuildPhase>([
+  "creating-environment",
+  "starting-environment",
+  "waiting-for-setup",
+]);
+
+/**
+ * True while a pipeline's agents are in flight: an active phase past setup
+ * with no stall warning. The sidebar paints the environment as working then,
+ * on every client and every machine that shows it.
+ */
+export function isWorkingBuildPipeline(
+  pipeline: Pick<BuildPipeline, "phase" | "stallWarning">,
+): boolean {
+  return (
+    isActiveBuildPhase(pipeline.phase) &&
+    !SETUP_BUILD_PHASES.has(pipeline.phase) &&
+    pipeline.stallWarning === undefined
+  );
+}
+
 const BUILD_PHASES = new Set<BuildPhase>([
   "creating-environment",
   "starting-environment",

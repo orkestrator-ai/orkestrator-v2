@@ -192,3 +192,11 @@ temporary directory, plus traces under
 fixes change no native picker, browser assertion, deadline or skip. Both
 failures reproduce alone and remain unresolved; they are not inferred to
 be load-only flakes.
+
+
+The final exact default-suite rerun also completed after installing the
+missing checkout-local pinned Codex binary: backend and web passed, as did
+root, bridges and the protocol lockfile. Its only remaining failure was the
+existing desktop log-flush timing case, whose complete unchanged owner
+passed alone. Exact counts, command and evidence are recorded in
+[0712](../electron-and-desktop/0712-application-logging-flush-deadline-under-load.md#project-checkout-review-validation--2026-10-31).

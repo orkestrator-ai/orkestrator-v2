@@ -1,3 +1,4 @@
+import type { BackendId } from "./federation.js";
 import { expect, test } from "bun:test";
 import {
   repositoryHint,
@@ -125,11 +126,64 @@ test("PR readiness signals travel without the PR URL and drop anything unrecogni
   }
 });
 
+test("a node's PR monitor health travels only as a confirmed flag and a known permission", () => {
+  const confirmed = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    prMonitorConfirmed: true,
+    prViewerCanMerge: false,
+  })!;
+  expect(confirmed).toMatchObject({ prMonitorConfirmed: true, prViewerCanMerge: false });
+
+  // An older node (no fields), an unconfirmed reading and junk all read as
+  // unconfirmed with an unknown permission.
+  for (const raw of [
+    {},
+    { prMonitorConfirmed: false, prViewerCanMerge: null },
+    { prMonitorConfirmed: "true", prViewerCanMerge: "no" },
+  ]) {
+    const environment = toNodeEnvironmentSummary("bk_test" as never, {
+      id: "e",
+      projectId: "p",
+      ...raw,
+    })!;
+    expect(Object.keys(environment)).not.toContain("prMonitorConfirmed");
+    expect(Object.keys(environment)).not.toContain("prViewerCanMerge");
+  }
+});
+
 test("a project's icon is carried only as a bounded raster data URL", () => {
   const icon = "data:image/png;base64,iVBORw0KGgo=";
   expect(toNodeProjectSummary("bk_test" as never, { id: "p", icon }, 0)?.icon).toBe(icon);
   for (const value of ["data:image/svg+xml;base64,PHN2Zz4=", "https://x/icon.png", 3, null]) {
     const project = toNodeProjectSummary("bk_test" as never, { id: "p", icon: value }, 0);
     expect(project && "icon" in project).toBe(false);
+  }
+});
+
+test("check summaries carry only validated counts", () => {
+  const raw = {
+    id: "e1",
+    projectId: "p1",
+    prCheckSummary: {
+      passed: 1,
+      total: 2,
+      pending: 1,
+      unexpected: "private data",
+    },
+  };
+  const summary = toNodeEnvironmentSummary("bk_leaf" as BackendId, raw)!;
+  expect(summary.prCheckSummary).toEqual({ passed: 1, total: 2, pending: 1 });
+  for (const prCheckSummary of [
+    {},
+    null,
+    [],
+    { passed: -1, total: 2, pending: 0 },
+    { passed: 2, total: 2, pending: 1 },
+    { passed: 1, total: Infinity, pending: 0 },
+  ]) {
+    expect(
+      toNodeEnvironmentSummary("bk_leaf" as BackendId, { ...raw, prCheckSummary })!,
+    ).not.toHaveProperty("prCheckSummary");
   }
 });

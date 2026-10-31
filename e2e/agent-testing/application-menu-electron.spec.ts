@@ -83,7 +83,7 @@ test("built application menu resolves native roles and dispatches callbacks", as
       items.some((item) => ["hide", "hideothers", "unhide", "zoom"].includes(item.role ?? "")),
     ).toBe(false);
     expect(items.find((item) => item.label === "Keyboard Shortcuts…")).toMatchObject({
-      accelerator: "CmdOrCtrl+Shift+K",
+      accelerator: "CmdOrCtrl+Shift+/",
       registerAccelerator: false,
     });
     expect(items.find((item) => item.label === "Settings…")).toMatchObject({

@@ -3184,7 +3184,7 @@ describe("PersistentTerminal", () => {
   });
 
   it.each(["metaKey", "ctrlKey"])(
-    "yields %s+Shift+K to the dialog without PTY input",
+    "yields %s+Shift+/ to the dialog without PTY input",
     async (modifier) => {
       render(
         <>
@@ -3206,7 +3206,8 @@ describe("PersistentTerminal", () => {
       await waitFor(() => expect(terminalKeyHandler).toBeDefined());
       writeMock.mockClear();
       const event = new KeyboardEvent("keydown", {
-        key: "K",
+        key: modifier === "ctrlKey" ? "?" : "/",
+        code: "Slash",
         shiftKey: true,
         [modifier]: true,
         bubbles: true,
@@ -3214,7 +3215,7 @@ describe("PersistentTerminal", () => {
       });
       const handled = terminalKeyHandler!(event);
       // xterm only emits input for keys its custom handler accepts.
-      if (handled) terminalInputHandler?.("\x0b");
+      if (handled) terminalInputHandler?.("\x1f");
       expect(handled).toBe(false);
       expect(event.defaultPrevented).toBe(false);
       fireEvent(window, event);

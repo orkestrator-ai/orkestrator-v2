@@ -116,6 +116,119 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Bounded readiness probe on omarchy-hp, and a blocked reference-host run (2026-10-30)
+
+Todos [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md)
+and [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+task 5. Host: omarchy-hp, the reference host (Linux x86_64, 12 CPUs, Docker
+Engine 29.9.1, rootful, host uid 1000). Image
+`orkestrator-v2:qual-0870-cd7bbe3e` (`sha256:52af95deb105…`, `main`
+`cd7bbe3e`), built with `docker/build.sh`. The change is backend-only, so
+one image serves both sides.
+
+**No benchmark or live-suite numbers.** The daemon's address pools were
+full: 29 unattached probe networks leaked on 2026-10-28, before #1419's fix
+(see [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+hold all 31 default ranges. They belong to other runs and were left alone, so:
+
+- the benchmark at `cd7bbe3e`, before the change, failed its first fresh
+  start at the network create (`resource-exhausted`) after 6 s;
+- the live readiness-fault suite, with the change, failed all 9 cases the
+  same way (0 pass), two of them after their 300 s waits;
+- each run's own cleanup removed its volumes, and nothing it created was
+  left.
+
+**What was measured instead.** Containers of the image on
+`--network none`, started and removed by a run label, with the backend's
+own probe functions:
+
+| Check | Before (one exec per 250 ms poll) | After (bounded in-container wait) |
+| --- | --- | --- |
+| Full-mode `docker start` to current-boot ready, 8 alternating rounds | median 364 ms (354 to 744), 2 execs (one round 3) | median 329 ms (264 to 343), 1 exec each |
+| Restricted boot without `NET_ADMIN` (firewall fails closed), 3 starts | not run | `failed firewall-failed` in 352 to 474 ms |
+| Stale ready record (another `pid1Start`), 1 s window | — | `pending` after 1.10 s: no early stop |
+| `docker restart -t 0` 300 ms into a 2 s window | — | exec ended 264 ms after the restart began (`unreachable`) |
+| `docker stop -t 0` 300 ms into a 2 s window | — | exec ended 127 ms after the stop began; the next wait reported `container-exited` in 58 ms |
+| Gateway firewall report written 700 ms into the wait (`applied`, `failed`, `applied`) | — | seen 16 to 47 ms after the write, 1 read each |
+
+This shows the probe script runs in the image's `sh`, sees a final state
+within one 50 ms check, and that a container stopping or restarting still
+ends the wait at once. It is not the C09 qualification, and it is not the
+benchmark: a full-mode boot with no network is far shorter than a
+restricted one behind a gateway, where the old wait took 6 or 7 polls.
+
+### Review follow-up on the same daemon (2026-10-30)
+
+The address-pool limit can be bypassed for qualification without deleting
+other runs' resources. A temporary `docker` pass-through on this run's PATH
+adds `--subnet 172.16.N.0/24` only to labelled `network create` calls
+(N increments under `flock`). Those ranges do not overlap
+the host routes or existing Docker networks. Docker's configured upstream
+DNS (`172.17.0.1`) did not answer unrestricted containers in an initial
+attempt on `10.253.N.0/24`; UFW admits that DNS port only from the usual
+Docker ranges. A control resolved GitHub through `1.1.1.1` and reached its
+HTTPS endpoint. The pass-through also adds `--dns 1.1.1.1` to this run's
+labelled container creates/runs, preserving explicit DNS and `container:`
+namespace joins. All other arguments go unchanged to `/usr/bin/docker`;
+the real daemon, entrypoints, firewall, backend lifecycle and assertions run
+normally, including the internal-network DNS fault. No host configuration
+changes. The suites remove their own labelled resources. This does not
+qualify automatic address allocation or the host's DNS forwarder, or repair
+the older leaked networks.
+
+UFW also admits only specific agent-tools TCP ports. C22 now accepts
+`ORKESTRATOR_QUALIFICATION_AGENT_TOOLS_PORT`, which seeds the real workflow
+result service's existing port preference in the scenario's private data
+directory. The test requires the server to bind that port and retains its
+authenticated reply and denied-port checks. Port 35723 was free and already
+admitted from `172.16.0.0/12`; the focused C22 rerun passed in 6.3 s. No host
+firewall rule was changed.
+
+The image is still `orkestrator-v2:qual-0870-cd7bbe3e`, full digest
+`sha256:52af95deb105b608aa9a178837f4c918224efd01d1e36e373633714e420bab33`,
+on Docker Engine 29.9.1, Linux amd64.
+
+With that temporary pass-through first on PATH, the live fault command is:
+
+```bash
+RUN_LIVE_DOCKER_TESTS=1 \
+ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:qual-0870-cd7bbe3e \
+ORKESTRATOR_QUALIFICATION_AGENT_TOOLS_PORT=35723 \
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=2400000 \
+mise run test:logged -- --name live-readiness -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/container-live-readiness.test.ts --parallel=1
+```
+
+The C09 command uses `./tests/container-live-qualification.test.ts
+--test-name-pattern C09` instead, with the same image and opt-in variables.
+
+- The full live readiness-fault suite passed all nine cases in one run
+  (205.7 s), with no skips: missing firewall, fail-closed gateway startup,
+  broken DNS, unwritable status directory, torn status timeout and recovery,
+  restart during launch, fail-closed firewall re-run, interrupted setup,
+  and the authenticated host-service reply. Cleanup reported no leftovers.
+- C09 in `container-live-qualification.test.ts`: four passed (9.5 s),
+  including two new cases synchronized with Docker's active `.ExecIDs`.
+  A stop or restart interrupts the pending 2 s exec; the stopped container
+  refuses readiness and the restarted one accepts only its new boot id.
+  The existing stale-record and stop/start cases also pass.
+- The live fault run exposed an outdated permission fixture: it had not
+  pinned the firewall to the runtime, so the derived image's permission
+  change failed its gateway instead. It now uses the same in-container
+  override as the other runtime fault fixtures. The complete permission
+  scenario passes alone (36.6 s), retaining every launch-refusal assertion.
+- Real-shell regressions now execute a pending probe clipped to a 200 ms
+  overall deadline and renew an expired 200 ms window into a second exec.
+  A gateway regression requires two early unfinished responses to consume
+  two `pollMs` intervals before the third, applied response.
+
+Todo 0870 task 2 is qualified on this Linux amd64 daemon. Other platforms
+and the repeated benchmark comparison remain outstanding; the Docker call
+budget is unchanged. The exact previously failed deterministic aggregate
+also passed all four groups (344.9 s); targeted format, lint, backend types
+and qualification-document guards passed.
+
 ## Benchmarks on Linux Engine CI, and the call and start-time misses (2026-10-28)
 
 Todo [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md).
@@ -200,7 +313,8 @@ the boot's readiness step, and it is quantised:
 - The start-time misses keep their targets, and their reason is recorded
   here. Removing the quantisation is todo
   [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md).
-  The reference-host run (0729 task 5) is still to do.
+  The reference-host run (0729 task 5) is still to do: the 2026-10-30
+  attempt was blocked by exhausted address pools (above).
 
 ## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
 

@@ -96,6 +96,7 @@ export interface ClaudeModelCatalogSnapshot {
 /** Content-free cause of an environment's unread badge; mirrors the backend model. */
 export type EnvironmentUnreadReason =
   | "agent_finished"
+  | "agent_failed"
   | "agent_ready"
   | "agent_waiting"
   | "agent_question"

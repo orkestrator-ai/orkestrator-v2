@@ -42,6 +42,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 type Status = {
   status: string;
@@ -169,6 +170,7 @@ async function restartProfile(logFile: string): Promise<Status> {
   const launcher = spawn("bun", args, {
     cwd: repositoryRoot,
     detached: true,
+    env: outlivingProcessEnv(),
     stdio: ["ignore", output, output],
   });
   launcher.unref();

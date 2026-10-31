@@ -194,3 +194,24 @@ Credentialed provider scenarios, dedicated Electron, Docker, CLI scenario and iO
 
 
 The complete component run finished with 744 passed, 102 skipped and 12 failed (978.1 s). Its desktop `e2e/VirtuosoFollow.spec.ts:57` case also missed `auto` (received `false`); the complete unchanged owner passed with one worker in 5.0 s: `ORKESTRATOR_E2E_PORT=62460 mise run test:logged -- --name codex-auth-owner-virtuosofollow -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1 --output output/playwright/codex-auth-owner-virtuosofollow`. KeyboardShortcuts, PaneBreakpoint and CloseRetention owners were not wholly green; their failures remain explicit in 0995 and are not treated as new isolated passes.
+
+
+## Failed-turn attention review repair — 2026-10-30
+
+The completion-reconciler implementation is `90fc74138`; no renderer or browser spec changed. Preparation had already failed both native branch-selection cases in `AgentLaunchDialog.spec.ts`. The first rerun refused another checkout's fixture server on port 1422; that server was left alone. The isolated-port rerun was:
+
+```sh
+ORKESTRATOR_E2E_PORT=15427 ORKESTRATOR_PUBLIC_E2E_PORT=15428 mise run test:logged -- --name failed-turn-browser-suite -- mise run test:browser
+```
+
+It finished with 965 passed, 106 skipped and 11 failed (exit 1, 1036.5 s, nine workers). The failures covered both AgentLaunchDialog branch-selection cases, both mobile AgentUsage cases, mobile DesignCanvas, both mobile EnvironmentSettingsDrawer cases, the mobile assigned-composer Meta+I shortcut, a mobile ToolGroupFold reduced-motion released-reader case, desktop TranscriptPaging before prose, and desktop VirtuosoFollow small-wheel release. The public-site portion of the chained command was not reached.
+
+Every failed owner was then run unchanged sequentially with one worker:
+
+```sh
+ORKESTRATOR_E2E_PORT=15427 mise run test:logged -- --name failed-turn-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/AgentUsage.spec.ts e2e/DesignCanvas.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts e2e/KeyboardShortcuts.spec.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7 s). All cases in AgentUsage, DesignCanvas, EnvironmentSettingsDrawer, KeyboardShortcuts, TranscriptPaging and VirtuosoFollow passed, confirming their aggregate failures were intermittent. Both AgentLaunchDialog native selection cases still returned `rel` instead of `release/2.0`; these remain unresolved, not newly classified flakes. The original ToolGroupFold released-reader case passed, but that owner failed its separate mobile waiting-group overflow-follow case (the existing 0747 record); the complete owner was not green.
+
+Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.

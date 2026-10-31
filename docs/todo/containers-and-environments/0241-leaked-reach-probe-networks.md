@@ -204,6 +204,14 @@ Seen on omarchy-hp while qualifying todo 0058 (retired on 2026-10-29).
   `ork-3b48ede1779a3e26`, `ork-2abb06b89c192705`, `ork-4bd4cb1fa5510280`,
   `ork-9b95783bb81bd7ab`, `ork-ce8a386c965921c8`, `ork-f842d66a53acec29`
   (each `-reach-probe-net`, bridge driver, no containers).
+- On 2026-10-30, while qualifying todo
+  [0870](0870-container-start-poll-quantisation.md), omarchy-hp's daemon
+  again held 29 unattached probe networks, all 31 default pools in use. All
+  were created on 2026-10-28 between 18:22 and 20:20 UTC, before the
+  shutdown fix (#1419) merged at 01:29 UTC on 2026-10-29, so they fit the
+  known leak rather than a new source. They were not touched. Every live
+  suite and the benchmark failed or could not create an environment network
+  until they are removed, which task 5 or a hand removal has to decide.
 
 ## Outstanding work
 

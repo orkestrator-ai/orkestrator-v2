@@ -427,7 +427,7 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
 
     // Native interception also covers the artifact's opaque child frame. The
     // artifact has no preload and needs no injected forwarding capability.
-    const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
+    const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`;
     await shellPage.frameLocator("#artifact").getByRole("button", { name: "Count 1" }).focus();
     await app.evaluate(({ BrowserWindow, webContents }, shellPrefix) => {
       const contents = webContents
@@ -439,8 +439,8 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
         process.platform === "darwin" ? "meta" : "control",
         "shift",
       ];
-      contents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
-      contents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+      contents.sendInputEvent({ type: "keyDown", keyCode: "/", modifiers });
+      contents.sendInputEvent({ type: "keyUp", keyCode: "/", modifiers });
     }, SHELL_PREFIX);
     await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
     await expect(window.getByRole("textbox", { name: "Search keyboard shortcuts" })).toBeFocused();

@@ -48,16 +48,18 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * The scenarios each platform runs, in run order. `read-only` holds the
  * coordinator's boundary; `async` and `family` drive real workers and mail;
  * `status` drives the status wakes of a Multi Review and of a worker held on
- * an approval; `peer` drives two ordinary environments' mail with Wake peers
- * on, and runs last because it is the one case that changes the messaging
- * defaults. Each writes its own summary, and the platform's verdict combines
- * them.
+ * an approval; `deliver-now` corrects a busy worker with `deliverNow` (and,
+ * on Claude, a tmux worker that cannot take it mid-turn); `peer` drives two
+ * ordinary environments' mail with Wake peers on, and runs last because it is
+ * the one case that changes the messaging defaults. Each writes its own
+ * summary, and the platform's verdict combines them.
  */
 export const COORDINATOR_LIVE_SCENARIOS = [
   "read-only",
   "async",
   "family",
   "status",
+  "deliver-now",
   "peer",
 ] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
@@ -730,6 +732,7 @@ export function isApprovalKind(kind: AgentInteractionKind): boolean {
 /** What a coordinator turn's projection carries that the harness reads. */
 export interface CoordinatorTurnProjection {
   turn: { phase: string; error?: string };
+  contextUsage?: { turns?: Array<{ turnId: string }> };
   messages: CoordinatorTranscriptMessage[];
   interactions?: Array<
     Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId" | "createdAt">

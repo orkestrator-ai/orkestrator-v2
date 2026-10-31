@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -1079,6 +1079,44 @@ exit 1
             context,
           ),
         ).rejects.toThrow("HTTP 403: Resource protected");
+      },
+    );
+  });
+
+  shimTest("a merge refused for permission clears the cached merge permission", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-permission-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const invalidate = spyOn(context.runtime.prMonitor, "invalidateViewerPermission");
+
+    await withFakeGh(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' 'gh: Must have write access to repository (HTTP 403)' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`,
+      async () => {
+        await expect(
+          commands.get("merge_environment_pr")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).rejects.toThrow("HTTP 403");
+        expect(invalidate).toHaveBeenCalledTimes(1);
+        expect(invalidate.mock.calls[0]?.[0]).toMatchObject({ id: environment.id });
       },
     );
   });

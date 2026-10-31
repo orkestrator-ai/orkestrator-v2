@@ -319,8 +319,9 @@ describe("acpContextUsage", () => {
   });
 
   test("omits Grok costUsdTicks", () => {
-    // Grok reports `costUsdTicks` without documenting the tick. A dollar figure
-    // derived from a guessed scale is indistinguishable from a correct one.
+    // Grok documents the tick for its own session stats, not for this ACP
+    // field. A dollar figure from an unproven scale or window (per turn or
+    // cumulative) is indistinguishable from a correct one.
     const usage = acpContextUsage({ totalTokens: 15_675 }, { updatedAt: UPDATED_AT });
     expect(usage).not.toBeNull();
     expect(usage).not.toHaveProperty("costUsd");

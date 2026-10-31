@@ -10,6 +10,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { newSessionState } from "../../../../../bridges/cursor-bridge/src/agent-session";
+import {
+  applyInteractionUpdate,
+  FAILED_COMPACTION_NOTE,
+} from "../../../../../bridges/cursor-bridge/src/translate";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -24,6 +29,45 @@ function part<T extends NativeMessagePart["type"]>(
 }
 
 describe("CompactionPart", () => {
+  test("shows an adapter's failed compaction before expanding its details", () => {
+    const state = newSessionState();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary-completed", failed: true });
+    const failedPart = state.messages
+      .flatMap((row) => row.parts)
+      .find((part) => part.type === "compaction")!;
+    expect(failedPart.content).toBe(FAILED_COMPACTION_NOTE);
+    render(<CompactionPart part={failedPart} expansionKey="failed-compaction" />);
+
+    expect(screen.getByText("Compaction failed")).toBeTruthy();
+    expect(screen.queryByText("Context compacted")).toBeNull();
+    expect(screen.queryByText(FAILED_COMPACTION_NOTE)).toBeNull();
+    fireEvent.click(screen.getByText("Show details"));
+    expect(screen.getByText(FAILED_COMPACTION_NOTE)).toBeTruthy();
+  });
+
+  test("shows a failed boundary even when the provider supplied no details", () => {
+    render(
+      <CompactionPart
+        part={part("compaction", { toolState: "failure" })}
+        expansionKey="empty-failure"
+      />,
+    );
+    expect(screen.getByText("Compaction failed")).toBeTruthy();
+    expect(screen.queryByText("Context compacted")).toBeNull();
+  });
+
+  test("does not claim a pending compaction has completed", () => {
+    render(
+      <CompactionPart
+        part={part("compaction", { toolState: "pending" })}
+        expansionKey="pending-compaction"
+      />,
+    );
+    expect(screen.getByText("Compacting context")).toBeTruthy();
+    expect(screen.queryByText("Context compacted")).toBeNull();
+  });
+
   test("shows the boundary even with no summary at all", () => {
     // The boundary itself is the information: the model no longer remembers
     // what is above it. Several providers report it without a summary.

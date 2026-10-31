@@ -132,3 +132,20 @@ both suggestion failures; its two manual-entry cases passed. Combined result:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.c9s5wV/review-browser-owners.log.gz`.
 The native picker remains an unrelated non-green limitation; the accessibility
 failure remains intermittent. Neither suite's assertions or skips changed.
+
+## Provider-upgrade review — 2026-10-30
+
+Preparation and the exact `mise run test:browser` repeat both failed the
+mobile `plans (h2)` attachment assertion after End. The latter run had
+981 passes, 106 skips and five failures (8.4 min); its evidence is
+`orkestrator-test-run.x5T4jf/review-browser-suite.log.gz` under the host
+temporary directory. The complete unchanged accessibility owner then passed
+alone (59.7 s), with one worker:
+
+```sh
+mise run test:logged -- --name review-browser-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1
+```
+
+No source, assertion, timeout or skip in this owner changed. The earlier
+combined picker/accessibility rerun had a different mobile keyboard-journey
+failure; it is not the isolated pass used for this classification.

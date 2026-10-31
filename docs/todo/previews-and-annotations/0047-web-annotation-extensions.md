@@ -24,8 +24,10 @@ Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
 5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
    (not started; the anchor script still marks both `unsupported`).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
-   open (depends on the go or no-go decision, task 1 of
-   [0046](0046-embedded-service-previews.md), still open on 2026-10-30).
+   open (depends on [0042](0042-service-preview-rollout.md) task 3 passing,
+   per the embedding deferral recorded by
+   [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
+   embedded host remains unimplemented).
 7. **Product extensions**: code item 6 (grouping, issue export, multi-user,
    generated summaries). Status: open (not started; split out per item when
    wanted).
@@ -206,13 +208,18 @@ backend-owned browser session; must never import cookies implicitly. Shares
 surfaces with 0046.
 
 **Investigation.** Capture is gated by `canCapture`
-(`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`). 0046
-has not started, so no embedded host for a bridge exists.
+(`apps/web/src/components/browser/annotations/AnnotationPanel.tsx:70`). On
+2026-10-30, 0046 task 1 decided to defer embedding until top-level Safari and
+iOS pass in [0042](0042-service-preview-rollout.md) task 3, which remains
+blocked on macOS Safari and iOS hardware. 0046's embedded surfaces remain
+unimplemented, so no embedded host for a bridge exists.
 
 **Decisions.**
 
 - **Which design to pursue?**
-  - **Wait for 0046's go or no-go, then design (recommended).**
+  - **Keep capture blocked under 0046's recorded deferral; revisit after
+    0042 task 3 passes (recommended).** The trusted-bridge option still needs
+    an implemented embedded host in 0046.
     - Pros: avoids designing a bridge for a surface that may never exist.
     - Cons: no non-desktop capture for the foreseeable future.
   - **Backend-owned browser session now.**
@@ -336,9 +343,18 @@ because the README rule is not to add new items to an existing file.
 Rechecked on 2026-10-30: no diff code exists and `ResultReview.tsx` still
 shows two images (task 2); nothing triggers an after-capture (task 3); the
 anchor script still marks iframe and shadow-root targets `unsupported`
-(task 5); 0046's go or no-go (its task 1) is still open (task 6); none of the
-product extensions has started (task 7). Their statuses now read `open`, as
-`AGENTS.md` asks, with the reason in brackets.
+(task 5); non-desktop capture follows 0046's recorded embedding deferral
+until 0042 task 3 passes (task 6); none of the product extensions has started
+(task 7). Their statuses now read `open`, as `AGENTS.md` asks, with the reason
+or dependency in brackets.
+
+### Task 6: retain the block under the recorded embedding deferral
+
+Updated 2026-10-30 to follow 0046 task 1's decision: revisit after 0042 task 3
+passes, with an implemented embedded host still required for a trusted bridge.
+Kept non-desktop capture blocked rather than choosing a backend-owned browser
+session, because the recorded deferral does not choose that separate-session
+design. The embedding go or no-go is no longer an outstanding decision.
 
 ## Current state
 

@@ -532,7 +532,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
         document.body.innerHTML = '<input aria-label="Preview editor">';
       });
       const editor = previewPage.getByRole("textbox", { name: "Preview editor" });
-      const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
+      const chord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`;
       try {
         for (const source of ["menu", "preview", "outside"] as const) {
           await editor.focus();
@@ -562,8 +562,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
                 process.platform === "darwin" ? "meta" : "control",
                 "shift",
               ];
-              contents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
-              contents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
+              contents.sendInputEvent({ type: "keyDown", keyCode: "/", modifiers });
+              contents.sendInputEvent({ type: "keyUp", keyCode: "/", modifiers });
             }, previewUrl);
           const dialog = realmPage.getByRole("dialog", { name: "Keyboard shortcuts" });
           await expect(dialog).toBeVisible();

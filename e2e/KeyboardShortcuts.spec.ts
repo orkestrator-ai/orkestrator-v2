@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-test("Cmd+Shift+K opens a searchable list of keyboard shortcuts", async ({ page }, testInfo) => {
+test("Cmd+Shift+/ opens a searchable list of keyboard shortcuts", async ({ page }, testInfo) => {
   await page.goto("/keyboard-shortcuts");
   await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
-  await page.keyboard.press("Meta+Shift+K");
+  await page.keyboard.press("Meta+Shift+Slash");
 
   const dialog = page.getByTestId("keyboard-shortcuts-dialog");
   await expect(dialog).toBeVisible();
@@ -39,10 +39,10 @@ for (const modifier of ["Meta", "Control"]) {
             ? page.getByRole("textbox", { name: "Composer" })
             : page.getByTestId("terminal").locator("textarea.xterm-helper-textarea");
         await input.focus();
-        await page.keyboard.press(`${modifier}+Shift+K`);
+        await page.keyboard.press(`${modifier}+Shift+Slash`);
         const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
         await expect(dialog).toBeVisible();
-        await page.keyboard.press(dismiss === "Escape" ? "Escape" : `${modifier}+Shift+K`);
+        await page.keyboard.press(dismiss === "Escape" ? "Escape" : `${modifier}+Shift+Slash`);
         await expect(dialog).toHaveCount(0);
         await expect(input).toBeFocused();
         await page.keyboard.type("resumed");
@@ -58,7 +58,7 @@ for (const modifier of ["Meta", "Control"]) {
     await page.goto("/fullscreen-settings");
     const settings = page.getByTestId("settings-content");
     await expect(settings).toBeVisible();
-    await page.keyboard.press(`${modifier}+Shift+K`);
+    await page.keyboard.press(`${modifier}+Shift+Slash`);
     const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveCSS("z-index", "80");
@@ -72,7 +72,9 @@ for (const modifier of ["Meta", "Control"]) {
     await expect(settings).toBeVisible();
   });
 
-  test(`${modifier} shortcut wins over Monaco Delete Line`, async ({ page }) => {
+  test(`${modifier} shortcuts chord opens over Monaco and leaves Shift+K to the editor`, async ({
+    page,
+  }) => {
     await page.goto("/monaco-runtime");
     const editor = page.getByTestId("monaco-runtime-editor");
     const input = editor.getByRole("textbox", { name: "Editor content" });
@@ -83,7 +85,7 @@ for (const modifier of ["Meta", "Control"]) {
     await input.focus();
     const value = page.getByTestId("monaco-runtime-value");
     const original = await value.textContent();
-    await page.keyboard.press(`${modifier}+Shift+K`);
+    await page.keyboard.press(`${modifier}+Shift+Slash`);
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
     await expect(value).toHaveText(original!);
     await page.keyboard.press("Escape");
@@ -91,6 +93,13 @@ for (const modifier of ["Meta", "Control"]) {
     await page.keyboard.type("x");
     await expect(value).toHaveText(`x${original}`);
     await expect(value).toContainText("const answer: number = 42;");
+
+    await page.keyboard.press(`${modifier}+Shift+K`);
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+    await expect(input).toBeFocused();
+    const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+    // Monaco binds Delete Line to Cmd+Shift+K on macOS and Ctrl+Shift+K elsewhere.
+    if (modifier === (mac ? "Meta" : "Control")) await expect(value).toHaveText("");
   });
 }
 
@@ -98,7 +107,7 @@ test("short viewport keeps the footer and final shortcut reachable", async ({ pa
   await page.setViewportSize({ width: 640, height: 400 });
   await page.goto("/keyboard-shortcuts");
   await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
-  await page.keyboard.press("Meta+Shift+K");
+  await page.keyboard.press("Meta+Shift+Slash");
   const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(dialog.getByText("Close", { exact: true })).toBeInViewport({ ratio: 1 });
   const last = dialog.locator("li").last();
@@ -117,10 +126,10 @@ for (const modifier of ["Meta", "Control"]) {
       .frameLocator('iframe[title="Design preview"]')
       .getByRole("textbox", { name: "Design input" });
     await input.fill("kept");
-    await page.keyboard.press(`${modifier}+Shift+K`);
+    await page.keyboard.press(`${modifier}+Shift+Slash`);
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Search keyboard shortcuts" })).toBeFocused();
-    await page.keyboard.press(`${modifier}+Shift+K`);
+    await page.keyboard.press(`${modifier}+Shift+Slash`);
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
     await expect(input).toHaveValue("kept");
   });
@@ -141,13 +150,13 @@ test("uncooperative cross-origin browser/service frames keep their keyboard even
   });
   const input = page.frameLocator('iframe[title="Service preview"]').getByRole("textbox");
   await input.fill("kept");
-  await page.keyboard.press("Control+Shift+K");
+  await page.keyboard.press("Control+Shift+Slash");
   // The browser's origin boundary prevents a parent from intercepting this
   // chord. This limitation is explicit; Electron handles it before dispatch.
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
   await expect(input).toHaveValue("kept");
   await page.getByRole("textbox", { name: "Composer" }).focus();
-  await page.keyboard.press("Control+Shift+K");
+  await page.keyboard.press("Control+Shift+Slash");
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
 });
 
@@ -172,7 +181,7 @@ test("outside pointer dismissal notifies desktop restoration once and returns ty
   });
   const composer = page.getByRole("textbox", { name: "Composer" });
   await composer.focus();
-  await page.keyboard.press("Meta+Shift+K");
+  await page.keyboard.press("Meta+Shift+Slash");
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
   await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 2, y: 2 } });
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
@@ -241,9 +250,9 @@ test.describe("⌘K search works wherever focus is", () => {
     await page.keyboard.press("Meta+K");
     await expect(requests(page)).toHaveText("1");
     await expect(composer).toHaveValue("draft");
-    // ⌘⇧K stays with the realm, which draws its own dialog.
+    // ⌘⇧/ stays with the realm, which draws its own dialog.
     await composer.focus();
-    await page.keyboard.press("Meta+Shift+K");
+    await page.keyboard.press("Meta+Shift+Slash");
     await expect(realm.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
     await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
   });
@@ -257,7 +266,7 @@ for (const modifier of ["Meta", "Control"]) {
       );
       if (surface === "shortcuts") {
         await expect(page.getByTestId("terminal").locator("textarea")).toBeAttached();
-        await page.keyboard.press("Meta+Shift+K");
+        await page.keyboard.press("Meta+Shift+Slash");
       }
       const underlying =
         surface === "settings"

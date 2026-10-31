@@ -36,6 +36,10 @@ export function CompactionPart({
   expansionKey: string;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+  const failed = part.toolState === "failure";
+  const pending = part.toolState === "pending";
+  const Icon = failed ? AlertTriangle : pending ? RefreshCw : Scissors;
+  const label = failed ? "Compaction failed" : pending ? "Compacting context" : "Context compacted";
   const summary = part.content.trim();
   const before = part.compactedTokensBefore ?? part.tokenCount;
   const detail =
@@ -43,8 +47,15 @@ export function CompactionPart({
 
   const header = (
     <div className="flex min-w-0 items-center gap-2">
-      <Scissors className="h-3 w-3 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 text-xs text-muted-foreground">Context compacted</span>
+      <Icon
+        className={cn("h-3 w-3 shrink-0", failed ? "text-destructive" : "text-muted-foreground")}
+        aria-hidden="true"
+      />
+      <span
+        className={cn("shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}
+      >
+        {label}
+      </span>
       {detail ? (
         <span className="truncate text-[10px] text-muted-foreground/70">{detail}</span>
       ) : null}
@@ -68,7 +79,13 @@ export function CompactionPart({
         <CollapsibleTrigger className="flex min-w-0 items-center gap-2 rounded px-1 py-0.5 hover:bg-elevated-hover">
           {header}
           <span className="shrink-0 text-[10px] text-muted-foreground/70">
-            {isOpen ? "Hide summary" : "Show summary"}
+            {failed
+              ? isOpen
+                ? "Hide details"
+                : "Show details"
+              : isOpen
+                ? "Hide summary"
+                : "Show summary"}
           </span>
         </CollapsibleTrigger>
         <div className="h-px flex-1 bg-border/60" />

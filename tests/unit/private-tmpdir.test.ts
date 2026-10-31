@@ -7,6 +7,7 @@ import {
   KEEP_PRIVATE_TMPDIR_ENV,
   PRIVATE_TMPDIR_ENV,
   PRIVATE_TMPDIR_PREFIX,
+  outlivingProcessEnv,
   privateTmpdirRoot,
 } from "../private-tmpdir";
 import { PARENT_TMPDIR_ENV } from "../temp-sweep";
@@ -279,5 +280,43 @@ describe("privateTmpdirRoot", () => {
     expect(privateTmpdirRoot("/tmp", "darwin")).toBe("/tmp");
     expect(privateTmpdirRoot("/tmp", "linux")).toBe("/tmp");
     expect(privateTmpdirRoot("/home/me/scratch/tmp", "linux")).toBe("/home/me/scratch/tmp");
+  });
+});
+
+describe("outlivingProcessEnv", () => {
+  test("hands a process that outlives the run the parent TMPDIR", () => {
+    const env = {
+      PATH: "/bin",
+      TMPDIR: "/tmp/ork-test-tmp-1-AbC123",
+      [PRIVATE_TMPDIR_ENV]: "/tmp/ork-test-tmp-1-AbC123",
+      [PARENT_TMPDIR_ENV]: "/var/tmp",
+    };
+    expect(outlivingProcessEnv(env)).toEqual({ PATH: "/bin", TMPDIR: "/var/tmp" });
+    // The caller's environment is left alone.
+    expect(env.TMPDIR).toBe("/tmp/ork-test-tmp-1-AbC123");
+  });
+
+  test("drops TMPDIR when the parent is unknown, so the default applies", () => {
+    const env = {
+      TMPDIR: "/tmp/ork-test-tmp-1-AbC123",
+      [PRIVATE_TMPDIR_ENV]: "/tmp/ork-test-tmp-1-AbC123",
+    };
+    expect(outlivingProcessEnv(env)).toEqual({});
+  });
+
+  test("keeps a TMPDIR the test pointed elsewhere", () => {
+    const env = {
+      TMPDIR: "/elsewhere",
+      [PRIVATE_TMPDIR_ENV]: "/tmp/ork-test-tmp-1-AbC123",
+      [PARENT_TMPDIR_ENV]: "/var/tmp",
+    };
+    expect(outlivingProcessEnv(env)).toEqual({ TMPDIR: "/elsewhere" });
+  });
+
+  test("changes nothing outside a private directory", () => {
+    expect(outlivingProcessEnv({ TMPDIR: "/tmp", HOME: "/h" })).toEqual({
+      TMPDIR: "/tmp",
+      HOME: "/h",
+    });
   });
 });

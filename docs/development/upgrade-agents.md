@@ -452,6 +452,22 @@ each failing and leaving the file untouched. A
 change there (a refresh before the window, or a rewritten file) needs
 `restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
 
+## Re-check capacity retries
+
+Each provider's retry rests on facts read from its pinned release
+([1010](../todo/agent-engines/1010-model-capacity-backoff-retry.md)). None of
+them breaks a build when it changes, so check them on a bump:
+
+- **Codex:** `CodexErrorInfo` for a new capacity code, and the two messages in
+  `sessions/capacity-retry.ts`.
+- **Claude:** `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` and `..._MAX_DELAY_MS`
+  still apply to overloads only and accept the values in `runtime-env.ts`.
+- **OpenCode:** a turn still ends with an `APIError` carrying `statusCode` once
+  OpenCode's own retries run out (`isOpenCodeCapacityError`).
+- **Grok:** the two overload sentences in `acp-prompt.ts`.
+- **Cursor:** whether the SDK now names a capacity error (task 4 is waiting on
+  this).
+
 ## Claude
 
 ### Where the SDK is used
@@ -1005,7 +1021,8 @@ the pinned binary's parser over the production argument shape.
      generated union is now an intersection, which the protocol test still
      reads.
    - `CodexErrorInfo` gained `modelNotFound` (0.165, never retried) and
-     `policyCapacityUnavailable`; both pass through `codexErrorInfoToCode`.
+     `policyCapacityUnavailable` (retried like `serverOverloaded`, see
+     `sessions/capacity-retry.ts`); both pass through `codexErrorInfoToCode`.
    - Idle threads with no subscriber unload after 60 s instead of 1800 s
      (`thread_unload_delay_secs`), so a thread the bridge has idle-detached is
      freed a minute later and its next attach is a cold resume from the

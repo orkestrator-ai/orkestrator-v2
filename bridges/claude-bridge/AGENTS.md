@@ -259,3 +259,14 @@ invariants keep it honest:
   also needs an explicit `required` sandbox decision: repository and ambient
   configuration can launch helpers even for `git diff` or `git status`, so
   hook-only turns use reading tools or delegate Git to a worker.
+
+## Overload retries
+
+Claude Code retries a 529 itself; the bridge adds no loop of its own. A session
+whose own policy is `pipeline` (Multi Review, build stages, graph nodes) runs
+with a longer backoff through `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` and
+`..._MAX_DELAY_MS` (`withUnattendedOverloadRetry`, `runtime-env.ts`). Read the
+session's policy, not the turn's: a read-only turn replaces the policy it runs
+under. Never set `CLAUDE_CODE_RETRY_WATCHDOG` or raise `CLAUDE_CODE_MAX_RETRIES`
+for this: both also wait out usage and rate limits. See
+[1010](../../docs/todo/agent-engines/1010-model-capacity-backoff-retry.md).

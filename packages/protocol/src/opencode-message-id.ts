@@ -236,7 +236,21 @@ export function resolveOpenCodeMessageId(
 ): string {
   const existing = findOpenCodeMessageId(entries, requestId);
   if (existing) return existing;
+  return nextOpenCodeMessageIdForRequest(entries, requestId, now, reservations);
+}
 
+/**
+ * A new message ID for a request, even when the request already has one: a turn
+ * continued under the same request after a provider refusal. Ordered like
+ * {@link resolveOpenCodeMessageId}. The shared marker is what keeps every
+ * attempt the same request's, and `findOpenCodeMessageId` reads the newest.
+ */
+export function nextOpenCodeMessageIdForRequest(
+  entries: readonly unknown[],
+  requestId: string,
+  now: number = Date.now(),
+  reservations: readonly string[] = [],
+): string {
   const marker = openCodeRequestMarker(requestId);
   const ids: string[] = [...reservations];
   for (const entry of entries) {
@@ -342,15 +356,17 @@ export class OpenCodeMessageIdCoordinator {
   ): string {
     const state = this.state(sessionId);
     for (const reservedRequestId of Array.from(state.reservations.keys())) {
-      if (findOpenCodeMessageId(entries, reservedRequestId)) {
+      const materialized = findOpenCodeMessageId(entries, reservedRequestId);
+      const reserved = state.reservations.get(reservedRequestId)!;
+      if (materialized && materialized >= reserved.messageId) {
         state.reservations.delete(reservedRequestId);
       }
     }
     const materialized = findOpenCodeMessageId(entries, requestId);
-    if (materialized) {
+    const reserved = state.reservations.get(requestId);
+    if (materialized && (!reserved || materialized >= reserved.messageId)) {
       return materialized;
     }
-    const reserved = state.reservations.get(requestId);
     if (reserved) {
       state.reservations.delete(requestId);
       state.reservations.set(requestId, reserved);
@@ -364,6 +380,22 @@ export class OpenCodeMessageIdCoordinator {
       requestId,
       now,
       [...state.reservations.values()].map(({ messageId }) => messageId),
+    );
+    state.reservations.set(requestId, { messageId, accepted: false });
+    return messageId;
+  }
+
+  /** Reserve a continuation under the same request marker until history catches up. */
+  next(sessionId: string, entries: readonly unknown[], requestId: string, now: number): string {
+    const state = this.state(sessionId);
+    if (!state.reservations.has(requestId) && state.reservations.size >= this.maximumReservations) {
+      throw new RangeError("OpenCode message-ID reservation capacity is exhausted");
+    }
+    const messageId = nextOpenCodeMessageIdForRequest(
+      entries,
+      requestId,
+      now,
+      [...state.reservations.values()].map((entry) => entry.messageId),
     );
     state.reservations.set(requestId, { messageId, accepted: false });
     return messageId;

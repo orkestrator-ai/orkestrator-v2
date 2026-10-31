@@ -1038,6 +1038,7 @@ export async function route(
       state.retryCancelledPromptSequence = state.promptSequence;
     }
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.wakeRetryWait?.();
     return json(response, 202, { accepted: true });
   }
   if (action === "close" && request.method === "POST") {

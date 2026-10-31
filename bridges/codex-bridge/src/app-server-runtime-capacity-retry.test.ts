@@ -14,6 +14,7 @@ import type { NormalizedPart } from "./messages/types.js";
 import {
   CAPACITY_RETRY_CANCELLED_TEXT,
   CAPACITY_RETRY_CONTINUATION_MARKER,
+  CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE,
   CODEX_SERVER_OVERLOADED_MESSAGE,
 } from "./sessions/capacity-retry.js";
 
@@ -116,6 +117,31 @@ describe("capacity retry", () => {
     ]);
     expect((await parts(h, sessionId)).some((part) => part.type === "status")).toBe(false);
     expect((await parts(h, sessionId)).some((part) => part.content === "Done")).toBe(true);
+  });
+
+  test("continues a turn refused for policy-restricted capacity", async () => {
+    const h = await harness(numberedTurns(), {
+      capacityRetry: FAST,
+      capacityRetryRandom: () => 1,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+
+    failTurn(h, "turn-1", {
+      message: CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE,
+      codexErrorInfo: "policyCapacityUnavailable",
+    });
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "running", phase: "running" });
+    expect(errors(h)).toEqual([]);
+
+    await h.child().waitForRequest("turn/start", 2);
+    await h.drain();
+    answer(h, "turn-2", "Done");
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle" });
+    expect(errors(h)).toEqual([]);
+    expect(turnStarts(h)).toHaveLength(2);
   });
 
   test("ends with the original error once retries are exhausted", async () => {

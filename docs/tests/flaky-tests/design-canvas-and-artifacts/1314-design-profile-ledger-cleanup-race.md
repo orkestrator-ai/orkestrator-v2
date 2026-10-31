@@ -25,6 +25,36 @@ Aggregate evidence: `orkestrator-test-run.cmmuTa/workspace-web-backend-desktop-w
 in the host temporary directory. Preparation evidence is
 `validation-04.stdout.txt` under `.orkestrator/review-artifacts/review-validation-a810480a-55a2-484a-b530-7dd5cb9588b2/`.
 
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test` repeated the remaining-ledger assertion at
+265.62 ms; backend totals were 11,266 passed, 87 skipped and two failed.
+Evidence: `.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-04.stdout.txt`. The unchanged complete owner passed
+with exit 0 in 1.8 s:
+
+```sh
+mise run test:logged -- --name recorded-backend-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Passing output was removed by the logged runner; its summary remains in
+`orkestrator-test-run.D8MNsY` below the host temporary directory. The cause
+remains unconfirmed; no owner implementation, assertion or timeout changed.
+
+The required exact aggregate rerun (`mise run test:logged -- --name
+repaired-unit-suite -- mise run test`) repeated the same assertion at 266.79 ms.
+The complete owner had passed alone earlier in this repair turn; no source in
+this owner changed. Evidence: `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory.
+
+## Occurrence 2026-10-30
+
+`mise run test` on the todo 0742 structured-tickets branch (a Kanban storage
+fix; nothing in `design/` changed) failed this test after 140.80 ms with the
+same symptom: the profile was gone and `48963-48966-0123abcd.json` was still in
+the ledger. The owner then passed alone three times in a row (27 pass each,
+`bun --cwd=apps/backend test ./src/core/design/browser-profiles.test.ts`).
+Aggregate evidence: `orkestrator-test-run.bzzSIG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the host temporary directory.
 
 ## Leaf-check readiness review — 2026-10-30
 

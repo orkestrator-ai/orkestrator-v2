@@ -1334,7 +1334,7 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
   try {
     let agent: Awaited<ReturnType<typeof ensureAgent>>;
     try {
-      agent = await ensureAgent(state, { atTurnStart: true });
+      agent = await ensureAgent(state, { atTurnStart: true, requireCurrentModel: true });
       assertSessionOpen(state);
       // The identity of an agent the attach may just have created is on disk
       // before it can start a run, as for a prompt.

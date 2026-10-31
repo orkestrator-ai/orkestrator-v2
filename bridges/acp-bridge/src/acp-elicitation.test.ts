@@ -4,9 +4,14 @@
  * answer shapes are the ones the real 1.0.67 binary forwarded to an MCP server.
  */
 import "./testing/unit-test-env.js";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, jest, test } from "bun:test";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import {
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+} from "@orkestrator/protocol/agent-interactions";
+import { denyPendingRequests } from "./acp-session-close.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   HttpError,
@@ -56,6 +61,7 @@ beforeEach(() => {
   responses = [];
   child = {
     respond: (id: number, result: unknown) => responses.push({ id, result }),
+    notify: () => undefined,
   } as AcpProcess;
   state = {
     id: "elicitation-route-test",
@@ -134,6 +140,96 @@ async function listed(): Promise<Array<Record<string, unknown>>> {
 }
 
 describe("Grok MCP elicitation", () => {
+  test("expiry cancels once and marks the owning turn", () => {
+    jest.useFakeTimers();
+    try {
+      parkForm();
+      const deadline = state.interactions.get(FORM_ID)!.deadline;
+      jest.advanceTimersByTime(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS);
+      expect(responses).toEqual([{ id: 7, result: { outcome: "cancel" } }]);
+      expect(state.interactions.size).toBe(0);
+      expect(deadline.settled).toBe(true);
+      expect(state.expiredRequestPromptSequence).toBe(state.promptSequence);
+      jest.advanceTimersByTime(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS);
+      expect(responses).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("cancelling the turn cancels every parked elicitation", async () => {
+    parkForm();
+    parkUrl();
+    const response = await nativeFetch(`${origin}/session/${state.id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(response.ok).toBe(true);
+    expect(responses).toEqual([
+      { id: 7, result: { outcome: "cancel" } },
+      { id: 8, result: { outcome: "cancel" } },
+    ]);
+    expect(state.interactions.size).toBe(0);
+  });
+
+  test("replacement cancels the old request and retires its deadline", async () => {
+    parkForm();
+    const old = state.interactions.get(FORM_ID)!.deadline;
+    parkGrokElicitation(state, child, 10, {
+      sessionId: VENDOR_SESSION,
+      toolCallId: FORM_ID,
+      mode: "url",
+      url: "https://example.com/new",
+    });
+    expect(old.settled).toBe(true);
+    expect(responses).toEqual([{ id: 7, result: { outcome: "cancel" } }]);
+    expect((await answer(FORM_ID, { action: "accept" })).status).toBe(200);
+    expect(responses).toEqual([
+      { id: 7, result: { outcome: "cancel" } },
+      { id: 10, result: { outcome: "accept" } },
+    ]);
+  });
+
+  test("at capacity a new request is cancelled while a replacement is allowed", () => {
+    for (let index = 0; index < AGENT_INTERACTION_LIMITS.maxPendingRequests; index += 1) {
+      parkGrokElicitation(state, child, index, {
+        sessionId: VENDOR_SESSION,
+        toolCallId: `call-${index}`,
+        mode: "form",
+        requestedSchema: NAME_SCHEMA,
+      });
+    }
+    parkForm();
+    expect(responses).toEqual([{ id: 7, result: { outcome: "cancel" } }]);
+    expect(state.interactions.size).toBe(AGENT_INTERACTION_LIMITS.maxPendingRequests);
+    parkGrokElicitation(state, child, 999, {
+      sessionId: VENDOR_SESSION,
+      toolCallId: "call-0",
+      mode: "form",
+      requestedSchema: NAME_SCHEMA,
+    });
+    expect(responses.at(-1)).toEqual({ id: 0, result: { outcome: "cancel" } });
+    state.interactions.get("call-0")!.respond({ outcome: "decline" });
+    expect(responses.at(-1)).toEqual({ id: 999, result: { outcome: "decline" } });
+  });
+
+  test.each(["close", "turn end"])(
+    "%s cancels parked MCP requests and settles their timers",
+    (reason) => {
+      parkForm();
+      parkUrl();
+      const deadlines = [...state.interactions.values()].map((entry) => entry.deadline);
+      if (reason === "close") denyPendingRequests(state);
+      else clearApprovals(state);
+      expect(responses).toEqual([
+        { id: 7, result: { outcome: "cancel" } },
+        { id: 8, result: { outcome: "cancel" } },
+      ]);
+      expect(state.interactions.size).toBe(0);
+      expect(deadlines.every((deadline) => deadline.settled)).toBe(true);
+    },
+  );
+
   test("publishes a form and a URL request for the card to render", async () => {
     parkForm();
     parkUrl();

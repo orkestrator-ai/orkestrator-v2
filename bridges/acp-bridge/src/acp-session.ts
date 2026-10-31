@@ -1226,7 +1226,13 @@ export function clearApprovals(state: SessionState): void {
 }
 
 export function clearInteractions(state: SessionState): void {
-  for (const interaction of state.interactions.values()) interaction.deadline.settle();
+  for (const interaction of Array.from(state.interactions.values())) {
+    if (interaction.kind === "mcp-form" || interaction.kind === "mcp-url") {
+      interaction.respond({ outcome: "cancel" });
+    } else {
+      interaction.deadline.settle();
+    }
+  }
   state.interactions.clear();
   syncPromptTurnClock(state);
 }
@@ -1438,7 +1444,8 @@ export function parkGrokElicitation(
     params.sessionId !== state.acpSessionId ||
     !toolCallId ||
     toolCallId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
-    state.interactions.size >= AGENT_INTERACTION_LIMITS.maxPendingRequests
+    (state.interactions.size >= AGENT_INTERACTION_LIMITS.maxPendingRequests &&
+      !state.interactions.has(toolCallId))
   ) {
     child.respond(requestId, { outcome: "cancel" });
     return;

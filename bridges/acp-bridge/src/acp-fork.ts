@@ -1,5 +1,7 @@
 import {
   HttpError,
+  MAX_SESSIONS,
+  activeSessionReservations,
   RPC_TIMEOUT_MS,
   isObject,
   provider,
@@ -55,7 +57,9 @@ export function forkPromptIndex(
   for (let row = messages.length - 1; row >= 0; row -= 1) {
     const message = messages[row]!;
     if (message.role !== "user") continue;
-    const text = message.content;
+    const text = normalizedPrompt(message.content);
+    // Attachment-only rows have no preview text to align with a rewind point.
+    if (!text) continue;
     const candidate = point >= 0 ? points[point] : undefined;
     if (candidate && previewMatches(text, candidate.preview)) {
       point -= 1;
@@ -115,6 +119,11 @@ export async function forkAcpSession(
   }
   if (!state.acpSessionId) throw new HttpError(409, "This session has nothing to fork yet");
 
+  // Refuse before the vendor creates a conversation. Adoption checks again
+  // because another session may claim the available slot while the fork runs.
+  if (activeSessionReservations() >= MAX_SESSIONS) {
+    throw new HttpError(429, "ACP session limit reached");
+  }
   state.dispatching = true;
   let newSessionId: unknown;
   try {
@@ -153,5 +162,10 @@ export async function forkAcpSession(
   if (typeof newSessionId !== "string" || !newSessionId) {
     throw new HttpError(502, `${provider} returned a malformed fork`);
   }
-  return adoptAcpSession(newSessionId, signal, undefined, state.policy);
+  try {
+    return await adoptAcpSession(newSessionId, signal, undefined, state.policy);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(502, `${provider} could not load the forked session`);
+  }
 }

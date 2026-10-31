@@ -712,3 +712,45 @@ formatting and scoped lint pass; the full default suite passes in 170 seconds.
 The complete unchanged streaming owner then passed alone (exit 0, 47.7 s),
 confirming the 0767 recurrence for this run. The native branch failures remain
 persistent; they are not newly classified flakes.
+
+## PR auto-merge review validation — 2026-10-31
+
+The exact recorded command, `mise run test:logged -- --name browser -- mise run
+test:browser`, completed with 982 passed, 106 skipped and eight failed using
+nine Playwright workers (634.1 s). The complete repository command, `mise run
+test`, passed all four groups after the checkout-local pinned Codex binary was
+installed. Auto-merge backend, monitor, launch, startup, and rendered ActionBar
+regressions and scoped static checks passed.
+
+The browser failures were in unchanged owners:
+
+- Mobile `PaneBreakpoint.spec.ts:98`: first visible transcript message 35 instead of 36.
+- Both viewports, `ToolGroupFold.spec.ts:442`: the appended group retained scrollTop 704 instead of zero.
+- Mobile `DataSavingGateway.spec.ts:18`: `gateway-state` was absent after reload.
+- Desktop `BackgroundTaskOutcome.spec.ts:18`: container Task outcome card focus timed out.
+- Desktop `KeyboardShortcuts.spec.ts:33`: two xterm helper textareas matched a strict locator.
+- Both viewports, `AgentLaunchDialog.spec.ts:18`: native branch selection retained `rel` instead of `release/2.0`.
+
+Evidence is `orkestrator-test-run.FPsNFB/browser.log.gz` below the host temporary
+directory. The complete unchanged native branch owner also failed alone with
+one worker (two passed, two failed, 23.6 s):
+
+```sh
+mise run test:logged -- --name native-datalist-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+Its evidence is `orkestrator-test-run.DXTVKS/native-datalist-isolated.log.gz`.
+The remaining five complete browser owners were rerun sequentially in one
+worker, without source, assertion, timeout, or skip changes:
+
+```sh
+mise run test:logged -- --name browser-failing-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts e2e/ToolGroupFold.spec.ts e2e/DataSavingGateway.spec.ts e2e/BackgroundTaskOutcome.spec.ts e2e/KeyboardShortcuts.spec.ts --workers=1
+```
+
+The complete five-owner rerun passed (exit 0, 277.1 s). This confirms the
+six non-native-picker aggregate failures were intermittent in this run. The
+native picker remains non-green in its separate unchanged owning-file run.
+No browser implementation, assertion, timeout, or skip changed. Shared-host
+load and concurrent fixture activity were observed, but no root cause was
+established. The failed aggregate prevented the chained public-site suite
+from starting; no public-site files changed.

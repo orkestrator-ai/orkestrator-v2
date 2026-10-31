@@ -7,9 +7,16 @@ forwarding ([architecture](../../architecture/keyboard-shortcuts.md)).
 
 Analysed 2026-10-28 against `main` at `79f3bc97`.
 
-Updated 2026-10-30 for the chord change in `19e8b4ce2`: the current shortcut
-is ⌘⇧/ / Ctrl+Shift+/. Dated evidence below records the chord tested at the
-time; it does not qualify the replacement chord.
+Updated 2026-10-30 for the chord change in `f32615aff` (#1449; the earlier
+text named its pre-squash commit `19e8b4ce2`): the current shortcut is ⌘⇧/ /
+Ctrl+Shift+/. Dated evidence below records the chord tested at the time; it
+does not qualify the replacement chord.
+
+Updated 2026-10-31 against `main` at `931e5541`, on a Linux host (Omarchy,
+Hyprland on Wayland) with a private Xvfb display. Task 4's causes are found and
+fixed on the branch, but the workflow has not yet run the fix. Task 5's packaged
+Linux matrix ran for the sidebar, terminal and Monaco and for the menu bar; the
+other surfaces were not set up (Current state).
 
 The Windows/Linux menu work, its decisions and the menu-navigation fix landed
 in `f0a09962` (#1405). They are listed as done. What is left is native
@@ -26,8 +33,8 @@ and with an interactive artifact.
 1. **Windows/Linux menu layout**: the conventional File, Edit, View, Window and Help layout, no macOS-only roles, no Super accelerators, and Close Tab with no key. Status: done.
 2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+/ stays accepted. Status: done (decided).
 3. **Menu keyboard navigation does not toggle**: choosing View › Keyboard Shortcuts… with Enter opens the dialog; only the chord toggles it. Status: done.
-4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: open (fails on both runners today).
-5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: open.
+4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: open (fixed on the branch; passes locally on Linux/Xvfb 35/35; needs the workflow's run on the pull request, and Windows is reasoned from its logs only).
+5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame, realm and Wayland not run).
 6. **Packaged macOS native qualification**: the matrix below, including the Cyrillic input source, on a packaged macOS build. Status: open (needs a macOS host).
 
 ### 1. Windows/Linux menu layout
@@ -70,6 +77,52 @@ and with an interactive artifact.
 - Linux: the resumed-typing step after the About panel closes fails. `expect(page.getByRole("textbox")).toHaveValue("a")` saw `""` (`e2e/agent-testing/application-menu-electron.spec.ts:208-209`). The menu-navigation and accelerator steps before it passed. The local Omarchy run passed this step, so the difference is the runner's display (no window manager under `xvfb-run`) or timing; the uploaded screenshot and error context have not been examined.
 - Windows: `closeElectronWithin` fails in its `finally` with "Could not enumerate Electron descendants". `electronProcessTree` runs `ps -axo pid=,ppid=` (`e2e/agent-testing/design-electron-cleanup.ts:16-17`), which Git Bash's `ps` on the runner does not support. Because the error is thrown from `finally`, it hides whether the menu assertions passed.
 
+Update 2026-10-31. Ten more runs have happened, 13 in all. Windows failed every
+time. Linux failed 9 times and passed 4 (40847845862, 40886618114,
+40983822524, 41004644462), every failure at the same resumed-typing step, so
+Linux is a flake ([1510](../../tests/flaky-tests/electron-and-desktop/1510-native-menu-keys-before-focus-moves.md)),
+not a display difference.
+
+- **Windows has a second failure behind the teardown one.** The trace in run
+  41004644462's artifact shows the first menu-navigation poll,
+  `expect.poll(events).toEqual(["shortcuts:open"])`, receiving `[]` for its
+  whole five seconds. The `finally` error then replaced it. The Windows input
+  sent `{F10}` to reach the menu bar. Electron's Windows and Linux menu bar is
+  the same views code, and it takes focus on a lone Alt released (the Linux
+  path sends `Alt_L`, which works); nothing in it handles F10, and SendKeys
+  cannot send a lone Alt. This is read from the logs and Electron's behaviour
+  on Linux; it has not been run on Windows.
+- **Linux: keys raced Electron's focus moves.** Reproduced on a private Xvfb
+  display here: the unchanged spec failed 2 of 25 runs, both at the first
+  menu-navigation poll, and 10 of 10 with xdotool's key delay at 0. The menu
+  bar takes focus only after the page has reported the lone Alt as unhandled
+  (a renderer round trip), so the following keys could reach the page. The CI
+  symptom, the lost `a` after the About panel, did not reproduce here. Its
+  screenshot shows the textbox focused with an empty value, which fits the same
+  kind of race: xdotool gives the window X focus and types at once, and
+  Chromium refocuses its web contents asynchronously. A window manager would
+  not remove that race.
+- **Fix on the branch** (`e2e/agent-testing/application-menu-electron.spec.ts`,
+  `native-menu-input.ts`, `design-electron-cleanup.ts`):
+  - the spec sends the lone Alt (`nativeMenuAlt`: `Alt_L` on Linux,
+    `keybd_event` VK_MENU down and up on Windows), waits until the page loses
+    focus to the menu bar, then sends the navigation keys;
+  - after the About panel closes, it gives the window native focus
+    (`nativeMenuFocus`), waits until the page reports focus, then types;
+  - `electronProcessTree` reads `Win32_Process` through PowerShell on Windows,
+    skipping a "child" created before its parent (a reused process id);
+  - the spec runs its body in `withCleanup`, so a teardown error is reported
+    with the failure it follows instead of replacing it;
+  - `nativeMenuWindows` skips a menu popup destroyed between `xdotool search`
+    and `getwindowname` (the zero-delay stress run hit it);
+  - the display-only check now presses Ctrl+Shift+/ instead of the retired
+    Ctrl+Shift+K;
+  - the workflow also triggers on `design-electron-cleanup.ts` and
+    `e2e/process-cleanup.ts`.
+- **Local result after the fix:** 35 of 35 runs passed on Linux/Xvfb, 20 of
+  them with xdotool's key delay at 0. `electron-cleanup.spec.ts` (the other
+  user of `electronProcessTree`) passed.
+
 **Decisions.**
 
 - **How to enumerate the Electron process tree on Windows?**
@@ -100,7 +153,9 @@ and with an interactive artifact.
 
 **Context.** The rows are under Outstanding work. The 2026-10-28 decision "Native qualification stays open" ruled out packaging and driving the app on this host then. `mise run package:linux` runs `bunx electron-builder --linux --dir` and then `bun scripts/install-packaged-app-linux.ts`, which installs into the desktop (`mise.toml:391-399`). A packaged app's backend defaults to gateway port 34121 (`apps/desktop/electron/backend-process.ts:720`), the live instance's port. `ORKESTRATOR_RUNTIME_PROFILE_FILE` is honoured in packaged builds too (`apps/desktop/electron/main.ts:194`) and moves the data directory and ports, but it also replaces the product name with the profile's title (`:196-198`), which changes what the About panel shows.
 
-**Investigation.** Not started. The two full-app Electron scenarios (`electron-main.spec.ts`, `workspace-realm-electron.spec.ts`) timed out at renderer startup on Xvfb on this host on 2026-10-28 (Current state), before any shortcut assertion. A packaged app on the same display may hit the same startup failure. The Linux menu-bar row is already partly covered by the fixture: Quit/Ctrl+Q, the Help › About role and menu navigation. The fixture's About panel showed "About electron" with no version, because the app sets no `setAboutPanelOptions` (none in `apps/desktop/electron`) and the fixture is not packaged.
+**Investigation.** The two full-app Electron scenarios (`electron-main.spec.ts`, `workspace-realm-electron.spec.ts`) timed out at renderer startup on Xvfb on this host on 2026-10-28 (Current state), before any shortcut assertion. A packaged app on the same display may hit the same startup failure.
+
+Update 2026-10-31: run on a packaged build of `931e5541`; results and setup are under "Packaged Linux qualification (2026-10-31)" in Current state. The packaged app started normally on Xvfb. Its document title is always "Orkestrator AI" because the packaged web bundle has no build-time `VITE_ORKESTRATOR_PROFILE` (`apps/web/src/renderer-entry.tsx:9-13`), so a check that waits for the profile's title, as the development specs do, times out against a packaged build without anything being wrong. The runtime profile did not change the About panel: GTK showed the executable name either way. The Linux menu-bar row is already partly covered by the fixture: Quit/Ctrl+Q, the Help › About role and menu navigation. The fixture's About panel showed "About electron" with no version, because the app sets no `setAboutPanelOptions` (none in `apps/desktop/electron`) and the fixture is not packaged.
 
 **Decisions.**
 
@@ -273,13 +328,87 @@ because `electronProcessTree` runs `ps -axo`
 (`e2e/agent-testing/design-electron-cleanup.ts:16-17`). So the workflow has
 produced no passing evidence yet; see task 4.
 
+### Packaged Linux qualification (2026-10-31)
+
+**Setup.** Arch Linux (Omarchy), kernel 7.1.8, x86_64. Packaged commit
+`931e5541` (2.34.4-beta, Electron 45.0.0), built with `mise run download:bun`,
+`mise run build:all` and `bunx electron-builder --linux --dir` into a temporary
+directory; the install step was not run. The app ran on a private Xvfb display
+(X11, no window manager, US layout), with a disposable `HOME`, a private
+runtime directory, a private D-Bus session that can activate no service,
+`--password-store=basic` and an `agent-test` runtime profile on reserved
+loopback ports (never 34121 or 34122). Xvfb and xdotool were unpacked from
+Arch's packages into `/tmp`, checksums verified against pacman's sync
+database; nothing was installed. Input was XTEST through xdotool, using the
+helpers in `e2e/agent-testing/native-menu-input.ts`. The project was the
+`test-fixtures/agent-project` fixture with one local environment, shown as a
+plain shell next to `server.ts` in Monaco. The driving spec was a scratch file
+under the git-ignored `output/agent-testing/packaged-linux/`; it is not
+committed.
+
+Each row is a separate native press. "Resumed" is native typing after the
+dialog closed. Runs 3 and 5 to 7 passed every row. Run 4 failed one row
+because the Docker-reachability dialog (no container gateway in a test
+profile) opened by itself mid-row; the harness now dismisses it before the
+rows start. Runs 1 and 2 failed rows on harness bugs (a wrong search-input
+locator and a quit timer); those were fixed and are not counted.
+
+| Check | Surface | Result | Resumed typing |
+| --- | --- | --- | --- |
+| Ctrl+Shift+/ opens, a separate press closes; search focused while open | Sidebar (environment entry) | Pass | Focus back on the entry |
+| Same | Terminal (plain shell) | Pass | `touch resumed-terminal` reached the shell |
+| Same | Monaco (`server.ts`) | Pass | `Z` typed at line 1 |
+| Ctrl+Shift+/ opens, Escape closes | Sidebar | Pass | Focus back on the entry |
+| Ctrl+Shift+K does not open the dialog | Sidebar | Pass (expected since #1449) | — |
+| Ctrl+Shift+K deletes the line, no dialog | Monaco | Pass | Typing stayed in the editor |
+| Ctrl+K opens search, which takes typing | Sidebar | Pass | `rea` in the search |
+| Ctrl+K opens search, which takes typing | Monaco | Pass | `rea` in the search |
+| Ctrl+K reaches the shell (kill-line), no search | Terminal | Pass | `echo abc > ctrl-k.txtXYZ`, three Lefts, Ctrl+K, Enter wrote `abc` |
+| Menu bar is File, Edit, View, Window, Help; no Hide, Hide Others, Show All or Zoom | Menu bar | Pass | — |
+| View › Keyboard Shortcuts… shows `Ctrl+Shift+/` | Menu bar | Pass (seen in the open View menu) | — |
+| Alt, Right, Right, Down, End, Enter opens the dialog | Menu bar | Pass | Search focused |
+| Repeating it keeps the dialog open | Menu bar | Pass | Search still focused |
+| One Ctrl+Shift+/ press then closes it, exactly once | Menu bar | Pass | — |
+| File › Close Tab has no key | Menu bar | Pass | — |
+| Super+H does nothing in Orkestrator | Window | Pass (still visible, not minimised, one window) | — |
+| Help › About opens Electron's panel | Menu bar | Pass; see below | — |
+| File › Quit (Ctrl+Q) quits | Window | Pass (process exited) | — |
+| Ctrl+Shift+/ | Composer | Not run (needs an agent tab; no provider turn was allowed) | — |
+| Ctrl+Shift+/, View › Keyboard Shortcuts… and dismissal | Browser/service preview | Not run (no service started) | — |
+| Ctrl+Shift+/ and Ctrl+K | Interactive artifact, design frame, workspace realm | Not run (not set up) | — |
+| Any row | Wayland | Not run (driving Wayland input here would use the user's live session) | — |
+
+Window › shows the window's own entry. Help holds only About: Check for
+Updates… is absent from an unpacked build that cannot update itself. The About
+panel was titled **About orkestrator-v2**. It showed the executable name, a
+missing-image icon, Credits, License and Close, with no product name and no
+version, even though the runtime profile had renamed the app; follow-up
+[1150](1150-linux-about-panel-metadata.md).
+
+**The user's Ctrl+Shift+K report.** Ctrl+Shift+K no longer opens the dialog on
+any platform, by design: `f32615aff` (#1449) moved the shortcut to
+⌘⇧/ / Ctrl+Shift+/ because some Macs never deliver ⌘⇧K or Ctrl+Shift+K to an
+app, and released Shift+K to the focused surface (Monaco's Delete Line). On
+packaged Linux, Ctrl+Shift+/ works from every surface tried, and Ctrl+Shift+K
+reaches Monaco. The Xvfb run bypasses the user's compositor and input method.
+Their configuration, read but not exercised, shows nothing that would take
+either chord first: Hyprland binds K and `/` only with Super, and fcitx5's own
+configuration binds neither (its clipboard keys are cleared; global hotkeys
+are at their defaults). No code change was made. The dialog's footer, the catalogue and the
+View menu already show the new chord.
+
 ## Outstanding work
 
 ### Qualification
 
 Automated Electron checks use Chromium input, which exercises
 `before-input-event` but does not qualify the OS's native key-equivalent pass.
-Record these checks on packaged macOS and Linux builds:
+Record these checks on packaged macOS and Linux builds. On Linux (X11), the
+sidebar, terminal and Monaco rows, the Ctrl+K rows for those surfaces and the
+whole menu-bar row passed on 2026-10-31 (Current state). Still open on Linux:
+the composer, browser/service preview, interactive artifact, design frame and
+workspace-realm surfaces, the preview-origin rows, and any Wayland run. macOS
+is open in full.
 
 - ⌘⇧/ / Ctrl+Shift+/ with focus in the sidebar, composer, terminal, Monaco,
   browser/service preview, interactive artifact, design frame and workspace
@@ -386,6 +515,9 @@ source-checked bridge; desktop intercepts all these surfaces in native input.
 
 ### Native qualification stays open
 
+Superseded for Linux on 2026-10-31 by "Task 5: packaged Linux run on an
+isolated X11 session" below; it still holds for macOS.
+
 - **Options.** (a) Package and drive the Linux app here. (b) Keep the native
   matrix open and add Linux-specific rows.
 - **Choice: (b).**
@@ -397,8 +529,124 @@ source-checked bridge; desktop intercepts all these surfaces in native input.
 - **Cons.** The packaged macOS/Linux key-equivalent behaviour remains
   unqualified.
 
+### Task 4: wait for Electron's focus moves instead of adding a window manager
+
+- **Options.** (a) Start a window manager such as openbox in the Linux job, as
+  the recommended option suggested if the cause was the missing window
+  manager. (b) Wait in the spec for the focus change each key depends on: the
+  page losing focus to the menu bar after a lone Alt, and the page regaining
+  focus after the window regains native focus. (c) Focus the textbox
+  explicitly before typing. (d) `continue-on-error`.
+- **Choice: (b).**
+- **Why.** The local reproduction showed a race between xdotool and
+  Electron's own focus handoff, with no window manager involved: zero key
+  delay failed 10 of 10 runs, and the waits made 35 of 35 pass. A window
+  manager would not have closed that race. (b) keeps the strict assertions:
+  the textbox is never focused by the test, so the step still proves that the
+  page keeps its focused element and takes typing again after the native
+  dialog.
+- **Pros.** No new package in the job; same code path on Windows; the failure,
+  if it recurs, says which focus move did not happen.
+- **Cons.** Without a window manager, the test still gives the window native
+  focus itself after the About panel (as before), so "focus returns by itself"
+  is proved at the page level, not at the window-manager level. The CI symptom
+  was not reproduced locally, so its fix is inferred until the workflow runs.
+
+### Task 4: lone Alt on Windows through `keybd_event`
+
+- **Options.** (a) Keep SendKeys `{F10}`. (b) Send VK_MENU down and up with
+  `keybd_event`, then SendKeys for the rest. (c) Use Alt+mnemonic (`%v`).
+- **Choice: (b).**
+- **Why.** The Windows trace shows the menu never opened with `{F10}`.
+  Electron's Windows/Linux menu bar is the same views code, and a lone Alt is
+  what opens it on Linux. SendKeys cannot send a lone Alt. The labels have no
+  `&` mnemonics, so (c) would need a menu change.
+- **Pros.** Windows and Linux press the same keys.
+- **Cons.** Unverified until the Windows job runs; `keybd_event` is a
+  deprecated (though supported) API, and `SendInput` would be the modern
+  equivalent.
+
+### Task 4: Windows process tree from `Win32_Process`
+
+- **Options.** As listed under task 4: (a) PowerShell `Get-CimInstance
+  Win32_Process`, (b) skip the snapshot on Windows, (c) drop Windows.
+- **Choice: (a), the recommended option,** with one addition: a process whose
+  creation time is earlier than its listed parent's is not treated as a child,
+  because Windows keeps a dead parent's id on its children and reuses ids.
+- **Why.** It keeps exact-descendant cleanup on every platform. Without the
+  creation-time check, a reused id could make teardown kill an unrelated
+  process on the runner.
+- **Pros.** Every Electron spec's teardown works on Windows.
+- **Cons.** One more PowerShell start per teardown on Windows; not run on
+  Windows here.
+
+### Task 4: teardown errors no longer hide test failures
+
+- **Options.** (a) Keep `try`/`finally`, where a teardown error replaces the
+  test's failure. (b) Run the body through the existing `withCleanup`
+  (`e2e/process-cleanup.ts`), which reports both. (c) Swallow teardown
+  errors, as several other specs do.
+- **Choice: (b).**
+- **Why.** (a) is how the Windows menu failure stayed hidden for 13 runs. (c)
+  would hide a real cleanup failure.
+- **Pros.** Both failures appear in one report.
+- **Cons.** None found; the spec body is re-indented.
+
+### Task 5: packaged Linux run on an isolated X11 session
+
+- **Options.** The recommended option (unpacked build, isolated Xvfb with a
+  window manager, disposable `HOME`, runtime profile, XTEST), or a person on a
+  spare Linux machine.
+- **Choice: the recommended option, without the window manager,** plus a
+  private runtime directory and a private D-Bus session that can activate no
+  service.
+- **Why.** No row needed a window manager: native focus was given to the
+  window directly, as the menu spec does. The D-Bus isolation was added after
+  the first attempt: that attempt used a private bus that still inherited
+  `WAYLAND_DISPLAY`, and when the app asked for the desktop portal,
+  `xdg-desktop-portal-hyprland` started on that bus and connected to the
+  user's Hyprland session until the bus closed. It sent no input and nothing
+  was left running (checked by bus address), but later runs prevented it.
+- **Pros.** A real packaged build with native input, without touching the
+  user's session, data, keyring or the live ports.
+- **Cons.** X11 only; no Wayland focus, IME or window-manager behaviour; the
+  About row ran with a runtime profile (it made no difference to the panel).
+
+### Task 5: the packaged run's driver stays uncommitted
+
+- **Options.** (a) Commit it as an opt-in spec (for example
+  `e2e/agent-testing/packaged-linux-shortcuts.spec.ts`, run when a packaged
+  app path is given). (b) Keep it as a scratch file and record the method and
+  results here.
+- **Choice: (b).**
+- **Why.** It needs a packaged build, Xvfb and xdotool that neither CI nor the
+  default suites provide, and it covers only the surfaces this run could set
+  up. Committing it would add a spec that never runs.
+- **Pros.** No unmaintained test in the repository.
+- **Cons.** The next Linux qualification has to rebuild the driver from this
+  description. (a) would be worth it if packaged Linux qualification becomes
+  routine (for example a release check).
+
+### Ctrl+Shift+K report: no change
+
+- **Options.** (a) Keep Ctrl+Shift+/ as the only chord, as #1449 decided.
+  (b) Accept Ctrl+Shift+K as a second, unlisted chord outside macOS.
+- **Choice: (a).**
+- **Why.** The report matches the intended behaviour since #1449: Ctrl+Shift+K
+  was retired, and Shift+K went back to the focused surface (Monaco's Delete
+  Line, which the packaged run confirmed). Ctrl+Shift+/ works on every surface
+  tried.
+- **Pros.** One chord per platform; Monaco keeps Delete Line.
+- **Cons.** Users with Ctrl+Shift+K in muscle memory get no dialog and no
+  hint. If that matters, (b) restores it outside macOS at the cost of taking
+  Delete Line from Monaco again.
+
 ## Related
 
 - [Keyboard shortcuts](../../architecture/keyboard-shortcuts.md) (living doc).
 - [1295](../../tests/flaky-tests/aggregate-validation-runs/1295-keyboard-shortcuts-windows-linux-validation.md)
   (the branch's aggregate validation run).
+- [1510](../../tests/flaky-tests/electron-and-desktop/1510-native-menu-keys-before-focus-moves.md)
+  (the native menu spec's focus race).
+- [1150](1150-linux-about-panel-metadata.md) (the Linux About panel's missing
+  name, version and icon).

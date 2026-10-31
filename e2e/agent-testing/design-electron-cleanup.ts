@@ -13,17 +13,57 @@ export function electronProcessTree(app: Pick<ElectronApplication, "process">): 
     return [];
   }
   if (!root) return [];
-  const processes = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
-  if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");
-  const rows = processes.stdout.split("\n").map((line) => line.trim().split(/\s+/).map(Number));
+  const rows = processTable();
+  const started = new Map(rows.map(([pid, , start]) => [pid, start]));
   const pids = [root];
   for (let index = 0; index < pids.length; index++) {
-    for (const [pid, parent] of rows) {
-      if (parent === pids[index] && pid && !pids.includes(pid)) pids.push(pid);
+    for (const [pid, parent, start] of rows) {
+      if (parent !== pids[index] || !pid || pids.includes(pid)) continue;
+      // Windows keeps a dead parent's id on its children, and reuses ids: a
+      // process older than its parent belonged to an earlier owner of the id.
+      const parentStart = started.get(parent);
+      if (start !== undefined && parentStart !== undefined && start < parentStart) continue;
+      pids.push(pid);
     }
     if (pids.length > 512) throw new Error("Electron process tree exceeds cleanup bound");
   }
   return pids;
+}
+
+/** `[pid, ppid, start]` rows; the start time is only read on Windows. */
+function processTable(): [number, number, number?][] {
+  if (process.platform !== "win32") {
+    const processes = spawnSync("ps", ["-axo", "pid=,ppid="], {
+      encoding: "utf8",
+    });
+    if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");
+    return processes.stdout.split("\n").map((line) => {
+      const [pid, parent] = line.trim().split(/\s+/).map(Number);
+      return [pid!, parent!];
+    });
+  }
+  // Git Bash's ps has no -o; read the parent links from WMI instead.
+  const processes = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      // The System Idle Process has no creation date.
+      "$ProgressPreference = 'SilentlyContinue'; Get-CimInstance Win32_Process | ForEach-Object { " +
+        "$start = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }; " +
+        '"$($_.ProcessId) $($_.ParentProcessId) $start" }',
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");
+  return processes.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [pid, parent, start] = line.trim().split(/\s+/).map(Number);
+      return [pid!, parent!, start];
+    });
 }
 
 async function bounded(work: Promise<unknown>, timeoutMs: number) {

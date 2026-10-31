@@ -8,9 +8,11 @@ on:
       - apps/desktop/package.json
       - packages/protocol/src/keyboard-shortcuts.ts
       - e2e/agent-testing/application-menu-electron.spec.ts
+      - e2e/agent-testing/design-electron-cleanup.ts
       - e2e/agent-testing/native-menu-input.ts
       - e2e/agent-testing/playwright.electron.config.ts
       - e2e/fixtures/application-menu-electron.ts
+      - e2e/process-cleanup.ts
       - bun.lock
   workflow_dispatch:
 

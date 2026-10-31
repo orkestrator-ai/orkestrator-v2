@@ -43,16 +43,21 @@ export function nativeMenuWindows(pid: number): NativeWindow[] {
     .trim()
     .split(/\s+/)
     .filter(Boolean)
-    .map((id) => ({
-      id,
-      title: execFileSync("xdotool", ["getwindowname", id], {
+    .flatMap((id) => {
+      const name = spawnSync("xdotool", ["getwindowname", id], {
         encoding: "utf8",
         timeout: 10_000,
-      }).trim(),
-    }));
+      });
+      if (name.error) throw name.error;
+      // A closing menu popup can be destroyed between search and this read.
+      if (name.status !== 0 && name.stderr.includes("BadWindow")) return [];
+      if (name.status !== 0) throw new Error(name.stderr);
+      return [{ id, title: name.stdout.trim() }];
+    });
 }
 
-export function nativeMenuKeys(window: NativeWindow, linux: string[], windows: string): void {
+/** Bring the owned window to the foreground, then run `input` against it. */
+function nativeMenuInput(window: NativeWindow, linux: string[], windows: string): void {
   if (!/^\d+$/.test(window.id)) throw new Error("Invalid owned native window handle");
   if (process.platform === "win32") {
     powershell(`
@@ -63,29 +68,54 @@ export function nativeMenuKeys(window: NativeWindow, linux: string[], windows: s
       public class MenuInput {
         [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
       }
 '@
       [void][MenuInput]::SetForegroundWindow([IntPtr]${window.id})
       if ([MenuInput]::GetForegroundWindow() -ne [IntPtr]${window.id}) {
         throw 'The owned Electron window did not gain native focus'
       }
-      [System.Windows.Forms.SendKeys]::SendWait('${windows}')
+      ${windows}
     `);
     return;
   }
-  execFileSync(
-    "xdotool",
-    ["windowfocus", "--sync", window.id, "key", "--clearmodifiers", ...linux],
-    {
-      timeout: 10_000,
-    },
+  execFileSync("xdotool", ["windowfocus", "--sync", window.id, ...linux], {
+    timeout: 10_000,
+  });
+}
+
+/** Give the owned window native focus, as a window manager would. */
+export function nativeMenuFocus(window: NativeWindow): void {
+  nativeMenuInput(window, [], "");
+}
+
+export function nativeMenuKeys(window: NativeWindow, linux: string[], windows: string): void {
+  nativeMenuInput(
+    window,
+    ["key", "--clearmodifiers", ...linux],
+    `[System.Windows.Forms.SendKeys]::SendWait('${windows}')`,
+  );
+}
+
+/**
+ * Press and release Alt alone, which Electron's Windows and Linux menu bar
+ * takes as a request for keyboard focus. SendKeys cannot send a lone Alt.
+ */
+export function nativeMenuAlt(window: NativeWindow): void {
+  nativeMenuInput(
+    window,
+    ["key", "--clearmodifiers", "Alt_L"],
+    `[MenuInput]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+      [MenuInput]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)`,
   );
 }
 
 export function nativeMenuScreenshot(window: NativeWindow): Buffer {
   if (!/^\d+$/.test(window.id)) throw new Error("Invalid owned native window handle");
   if (process.platform !== "win32") {
-    return execFileSync("import", ["-window", window.id, "png:-"], { timeout: 10_000 });
+    return execFileSync("import", ["-window", window.id, "png:-"], {
+      timeout: 10_000,
+    });
   }
   const screenshot = powershell(`
     Add-Type -AssemblyName System.Drawing

@@ -9,6 +9,28 @@ function rect(top: number, height: number): ClientRect {
 
 const FOLDER = projectFolderDragId("Angela");
 
+function shiftsFor(
+  tree: ReturnType<typeof buildProjectTree<{ id: string; folder?: string }>>,
+  items: string[],
+  rects: ClientRect[],
+  options?: { crossFolderMoves?: boolean },
+) {
+  const strategy = projectTreeSortingStrategy(tree, items, options);
+  return (active: string, over: string) =>
+    Object.fromEntries(
+      items.map((id, index) => [
+        id,
+        strategy({
+          activeIndex: items.indexOf(active),
+          overIndex: items.indexOf(over),
+          index,
+          rects,
+          activeNodeRect: null,
+        })?.y,
+      ]),
+    );
+}
+
 /**
  * `a` and `b` at the root around folder Angela (`m1`, `m2`), then `c`. Rows
  * are 30px; the folder's node is its 30px heading plus both members, so its
@@ -32,21 +54,8 @@ function sidebar(options?: { crossFolderMoves?: boolean }) {
     rect(120, 30),
     rect(150, 30),
   ];
-  const strategy = projectTreeSortingStrategy(tree, items, options);
   /** Each row's own vertical transform while `active` is over `over`. */
-  return (active: string, over: string) =>
-    Object.fromEntries(
-      items.map((id, index) => [
-        id,
-        strategy({
-          activeIndex: items.indexOf(active),
-          overIndex: items.indexOf(over),
-          index,
-          rects,
-          activeNodeRect: null,
-        })?.y,
-      ]),
-    );
+  return shiftsFor(tree, items, rects, options);
 }
 
 describe("projectTreeSortingStrategy", () => {
@@ -91,6 +100,73 @@ describe("projectTreeSortingStrategy", () => {
     const shifts = sidebar()(FOLDER, "m1");
     expect(Object.values(shifts).every((y) => y === 0)).toBe(true);
   });
+
+  for (const sourceCollapsed of [false, true]) {
+    for (const targetCollapsed of [false, true]) {
+      test(`a ${sourceCollapsed ? "collapsed" : "expanded"} folder swaps with a ${targetCollapsed ? "collapsed" : "expanded"} folder as whole blocks`, () => {
+        const target = projectFolderDragId("Target");
+        const tree = buildProjectTree([
+          { id: "a" },
+          { id: "m1", folder: "Angela" },
+          { id: "m2", folder: "Angela" },
+          { id: "n1", folder: "Target" },
+          { id: "b" },
+        ]);
+        const collapsed = [
+          ...(sourceCollapsed ? ["Angela"] : []),
+          ...(targetCollapsed ? ["Target"] : []),
+        ];
+        const items = projectSortableIds(tree, collapsed);
+        expect(items).toEqual([
+          "a",
+          FOLDER,
+          ...(sourceCollapsed ? [] : ["m1", "m2"]),
+          target,
+          ...(targetCollapsed ? [] : ["n1"]),
+          "b",
+        ]);
+        const sourceHeight = sourceCollapsed ? 30 : 90;
+        const targetHeight = targetCollapsed ? 30 : 60;
+        const targetTop = 30 + sourceHeight;
+        const rects = [
+          rect(0, 30),
+          rect(30, sourceHeight),
+          ...(sourceCollapsed ? [] : [rect(60, 30), rect(90, 30)]),
+          rect(targetTop, targetHeight),
+          ...(targetCollapsed ? [] : [rect(targetTop + 30, 30)]),
+          rect(targetTop + targetHeight, 30),
+        ];
+        const shifts = shiftsFor(tree, items, rects);
+        const members = {
+          ...(sourceCollapsed ? {} : { m1: 0, m2: 0 }),
+          ...(targetCollapsed ? {} : { n1: 0 }),
+        };
+        expect(shifts(FOLDER, target)).toEqual({
+          a: 0,
+          [FOLDER]: targetHeight,
+          [target]: -sourceHeight,
+          ...members,
+          b: 0,
+        });
+        expect(shifts(target, FOLDER)).toEqual({
+          a: 0,
+          [FOLDER]: targetHeight,
+          [target]: -sourceHeight,
+          ...members,
+          b: 0,
+        });
+        // Hidden members must not contribute height when the next root row
+        // crosses both folders, and visible members must not shift twice.
+        expect(shifts("a", "b")).toEqual({
+          a: sourceHeight + targetHeight + 30,
+          [FOLDER]: -30,
+          [target]: -30,
+          ...members,
+          b: -30,
+        });
+      });
+    }
+  }
 
   test("without cross-folder moves only siblings shift", () => {
     const shifts = sidebar({ crossFolderMoves: false })("b", "m2");

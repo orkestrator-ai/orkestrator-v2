@@ -1285,6 +1285,20 @@ exit 1
         ...task,
         comments: [{ id: "comment-1", text, createdAt: new Date(0).toISOString() }],
       }));
+      // A coordinator following this PR keeps its merged state before the record goes.
+      const captured: Array<{ prState: unknown; present: boolean }> = [];
+      Object.assign(context, {
+        coordinators: {
+          statusWakes: {
+            captureFinalPullRequest: mock(async (final: Environment) => {
+              captured.push({
+                prState: final.prState,
+                present: Boolean(await context.storage.getEnvironment(final.id)),
+              });
+            }),
+          },
+        },
+      });
 
       await withFakeGh(
         `#!/bin/sh
@@ -1337,6 +1351,8 @@ exit 1
               hasMergeConflicts: false,
             }),
           );
+          expect(captured).toEqual([{ prState: "merged", present: true }]);
+          expect(await context.storage.getEnvironment(environment.id)).toBeNull();
           expect(context.storage.kanban.updateKanbanTask).toHaveBeenCalledWith(task.id, {
             status: "review",
           });

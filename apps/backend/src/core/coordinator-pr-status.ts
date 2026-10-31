@@ -140,6 +140,32 @@ export function coordinatorPrFields(reading: CoordinatorPrReading): JsonRecord {
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /**
+ * A `pull-request` association's follow for `list_workflows`: what started
+ * it, the PR, whether it is still followed, the last state reported (the
+ * state part of its status key) and a Resolve tab's progress. Content-free.
+ */
+export function pullRequestFollowSummary(association: JsonRecord): JsonRecord {
+  const follow = isRecord(association.pullRequest) ? association.pullRequest : {};
+  const notice = isRecord(association.statusNotice) ? association.statusNotice : null;
+  const key = notice && typeof notice.key === "string" ? notice.key : null;
+  const resolve = isRecord(follow.resolve) ? follow.resolve : null;
+  return {
+    source: follow.source ?? null,
+    prUrl: typeof follow.prUrl === "string" ? follow.prUrl : null,
+    following: !association.terminalNotifiedAt,
+    lastReportedState: key ? `pr-${key.slice(0, key.indexOf(":"))}` : null,
+    ...(resolve && typeof resolve.tabId === "string"
+      ? {
+          resolve: {
+            tabId: resolve.tabId,
+            state: resolve.notifiedAt ? "reported" : resolve.finishedAt ? "finished" : "running",
+          },
+        }
+      : {}),
+  };
+}
+
+/**
  * This node's monitor health for the listed rows that have a pull request,
  * in one read (`get_environment_pr_health`). Empty when it cannot be read: a
  * row then reports its PR fields but is never "ready to merge".

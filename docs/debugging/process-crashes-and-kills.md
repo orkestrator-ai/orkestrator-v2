@@ -184,7 +184,7 @@ which its runtime removes the moment the main process exits.
 | 00:58:57 | Local backend SIGKILLed | Unknown sender. Two full `mise run test` suites and a qualification service install were running inside the app. | Audit trail (section 3) set up to catch the next one |
 | 00:58:57 → 09:05:37 | App frozen for 8 hours | `dialog.showErrorBox` blocks Electron's main process on Linux until answered | Replaced with a non-blocking dialog that offers Restart |
 | 09:05:47 | SIGTRAP after Restart | `app.relaunch()` restarted the vanished mount path | `relaunch.ts` restarts from `$APPIMAGE` |
-| 09:07 | Control MCP failed: port 34122 in use | A qualification service (`orkestrator-backend-<hash>.service`) left running for 8 hours held it | `agent-test` backends now use an ephemeral control MCP port |
+| 09:07 | Control MCP failed: port 34122 in use | A qualification service (`orkestrator-backend-<hash>.service`) left running for 8 hours held it | `agent-test` backends, and every backend whose data directory is not the default, now use an ephemeral control MCP port; a taken fixed port is retried ([0244](../todo/cross-cutting/0244-second-backend-on-one-host.md)) |
 | 09:11:12 | SIGBUS on quit | Network-service child outlived the main process | Documented; harmless |
 | 09:24:40 | Main window white | Renderer `reason=killed`, sender unknown, again during a test suite | Window now reloads itself (`renderer-recovery.ts`, at most 3 times a minute) |
 | 09:25:52 | Playwright Chromium SIGSEGV | A test's headless browser (null-pointer read in Chromium) | Unrelated to the white window |

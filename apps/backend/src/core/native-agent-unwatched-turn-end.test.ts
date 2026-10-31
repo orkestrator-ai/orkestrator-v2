@@ -199,7 +199,7 @@ describe("a bridge that dies mid-turn", () => {
         async ({ storage, service }) => {
           await adopt(storage, "codex", { requestId: "req-1" });
           await service.reconcileAgentActivity();
-          service.runtimeStopRequested("env-1");
+          await service.runtimeStopRequested("env-1");
           now += RUNTIME_STOP_REQUEST_WINDOW_MS;
           await bridge.die();
           await sweepPastBackoff(service, "codex", (to) => {
@@ -227,6 +227,59 @@ describe("a bridge that dies mid-turn", () => {
   });
 });
 
+describe("request-scoped runtime stops", () => {
+  for (const replacement of ["new-request", "new-bridge"] as const) {
+    test(`a ${replacement} crash within the stop window is a failure`, async () => {
+      let state: "working" | "idle" = "working";
+      const { provider } = createProviderStub("codex", { activity: async () => state });
+      await withService(
+        { prefix: "ork-stop-replacement-", provider: async () => provider },
+        async ({ storage, service }) => {
+          await adopt(storage, "codex", { requestId: "req-1" });
+          await service.reconcileAgentActivity();
+          await service.runtimeStopRequested("env-1");
+          if (replacement === "new-request") {
+            state = "idle";
+            await service.reconcileAgentActivity();
+            await storage.dispatchNativeAgentPromptOnce(key("codex"), "req-2", async () => {});
+            state = "working";
+            await service.reconcileAgentActivity();
+          } else {
+            collaborators(service).providerRegistry.cache(
+              `env-1\0codex`,
+              provider,
+              "replacement-connection",
+            );
+          }
+          collaborators(service).providerRegistry.markBridgeAbsent(`env-1\0codex`);
+          await service.reconcileAgentActivity();
+          expect((await storage.getEnvironment("env-1"))?.unreadReason).toBe("agent_failed");
+        },
+      );
+    });
+  }
+
+  test("stopping one provider does not exempt a sibling provider crash", async () => {
+    const { provider: claude } = createProviderStub("claude", { activity: async () => "working" });
+    const { provider: codex } = createProviderStub("codex", { activity: async () => "working" });
+    await withService(
+      {
+        prefix: "ork-stop-sibling-",
+        provider: async (input) => (input.agent === "claude" ? claude : codex),
+      },
+      async ({ storage, service }) => {
+        await adopt(storage, "claude", { requestId: "req-claude" });
+        await adopt(storage, "codex", { requestId: "req-codex" });
+        await service.reconcileAgentActivity();
+        await service.runtimeStopRequested("env-1", "claude");
+        collaborators(service).providerRegistry.markBridgeAbsent(`env-1\0codex`);
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.unreadReason).toBe("agent_failed");
+      },
+    );
+  });
+});
+
 describe("a bridge replaced under a watched turn", () => {
   for (const [dispatch, reason] of [
     ["lost", "agent_failed"],
@@ -247,6 +300,33 @@ describe("a bridge replaced under a watched turn", () => {
           await bridge.die();
         },
       );
+    });
+  }
+
+  for (const persistedOutcome of [false, true]) {
+    test(`claude: a successful restored claim stays finished (outcome=${persistedOutcome})`, async () => {
+      const bridge = fakeBridge("claude");
+      try {
+        await withService(
+          { prefix: "ork-claude-restored-success-", invoke: bridge.invoke },
+          async ({ storage, service }) => {
+            await adopt(storage, "claude", { requestId: "req-1" });
+            await service.reconcileAgentActivity();
+            if (persistedOutcome)
+              await storage.recordNativeAgentTurnOutcome(key("claude"), "provider-tab-1", {
+                requestId: "req-1",
+                outcome: "completed",
+                observedAt: new Date().toISOString(),
+              });
+            bridge.answer({ activity: "idle" });
+            bridge.answerDispatch("lost");
+            await service.reconcileAgentActivity();
+            expect((await storage.getEnvironment("env-1"))?.unreadReason).toBe("agent_finished");
+          },
+        );
+      } finally {
+        await bridge.die();
+      }
     });
   }
 
@@ -567,6 +647,182 @@ describe("a backend restart across a turn", () => {
     expect(reasons).toEqual(["agent_failed"]);
   });
 
+  test("a dispatch without an active checkpoint is not proof of an unfinished turn", async () => {
+    const { provider } = createProviderStub("codex");
+    await withService(
+      { prefix: "ork-restart-no-proof-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "codex", { requestId: "req-1" });
+        await storage.setEnvironmentAgentActivity(
+          "env-1",
+          "working",
+          new Date().toISOString(),
+          "native-agent",
+        );
+        await service.shutdown();
+        const restarted = new NativeAgentService(
+          storage,
+          async () => {
+            throw new Error("Unexpected command");
+          },
+          { provider: async () => provider },
+        );
+        try {
+          collaborators(restarted).providerRegistry.markBridgeAbsent(`env-1\0codex`);
+          await restarted.reconcileAgentActivity();
+          expect((await storage.getEnvironment("env-1"))?.unreadReason).toBe("agent_finished");
+        } finally {
+          await restarted.shutdown();
+        }
+      },
+    );
+  });
+
+  test("an acknowledged failure is not replayed while a sibling works, across repeated restarts", async () => {
+    let failed = false;
+    const { provider } = createProviderStub("codex");
+    provider.observeActivity = async (id) =>
+      failed && id === "provider-tab-1"
+        ? { state: "idle", turnFailed: true }
+        : { state: "working" };
+    await withService(
+      { prefix: "ork-stale-sibling-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "codex", { requestId: "req-1" });
+        await adopt(storage, "codex", { tab: "tab-2", requestId: "req-2" });
+        await service.reconcileAgentActivity();
+        failed = true;
+        await service.reconcileAgentActivity();
+        const token = (await storage.getEnvironment("env-1"))?.agentSessionCompletedAt;
+        expect(token).toBeDefined();
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.shutdown();
+        for (let restart = 0; restart < 3; restart++) {
+          const restarted = new NativeAgentService(
+            storage,
+            async () => {
+              throw new Error("Unexpected command");
+            },
+            { provider: async () => provider },
+          );
+          try {
+            await restarted.reconcileAgentActivity();
+            await restarted.reconcileAgentActivity();
+            expect(await storage.getEnvironment("env-1")).toMatchObject({
+              agentActivityState: "working",
+              hasUnreadWork: false,
+              agentSessionCompletedAt: token,
+            });
+          } finally {
+            await restarted.shutdown();
+          }
+        }
+      },
+    );
+  });
+
+  for (const missing of ["bridge", "session"] as const) {
+    test(`a released root is settled across restart with a missing ${missing}`, async () => {
+      let gone = false;
+      const { provider } = createProviderStub("claude");
+      provider.observeActivity = async () =>
+        gone
+          ? { state: "missing" }
+          : {
+              state: "working",
+              readyForInput: true,
+              completionPending: false,
+            };
+      await withService(
+        { prefix: "ork-released-restart-", provider: async () => provider },
+        async ({ storage, service }) => {
+          await adopt(storage, "claude", { requestId: "req-1" });
+          await service.reconcileAgentActivity();
+          expect(
+            (await storage.getNativeAgentSession(key("claude")))?.turnOutcomes,
+          ).toBeUndefined();
+          await storage.setEnvironmentUnread("env-1", false);
+          const token = (await storage.getEnvironment("env-1"))?.agentSessionCompletedAt;
+          await service.shutdown();
+          gone = true;
+          const restarted = new NativeAgentService(
+            storage,
+            async () => {
+              throw new Error("Unexpected command");
+            },
+            { provider: async () => provider },
+          );
+          try {
+            if (missing === "bridge")
+              collaborators(restarted).providerRegistry.markBridgeAbsent(`env-1\0claude`);
+            await restarted.reconcileAgentActivity();
+            await restarted.reconcileAgentActivity();
+            expect(await storage.getEnvironment("env-1")).toMatchObject({ hasUnreadWork: false });
+            expect((await storage.getEnvironment("env-1"))?.agentSessionCompletedAt).toBe(token);
+          } finally {
+            await restarted.shutdown();
+          }
+        },
+      );
+    });
+  }
+
+  test("failure attention survives a sibling outcome retry before the aggregate commits", async () => {
+    let now = Date.now();
+    let ended = false;
+    let readable = false;
+    const { provider: failed } = createProviderStub("codex");
+    failed.observeActivity = async () =>
+      ended ? { state: "idle", turnFailed: true } : { state: "working" };
+    const { provider: sibling } = createProviderStub("opencode", {
+      activity: async () => (ended ? "idle" : "working"),
+    });
+    sibling.turnTerminalError = async () => {
+      if (!readable) throw new ProviderUnavailableError("Outcome settling");
+      return null;
+    };
+    const resolve = async (input: { agent: BuildPipelineAgent }) =>
+      input.agent === "codex" ? failed : sibling;
+    await captureWarnings(() =>
+      withService(
+        { prefix: "ork-sibling-retry-", provider: resolve, now: () => now },
+        async ({ storage, service }) => {
+          await adopt(storage, "codex", { requestId: "req-failed" });
+          await adopt(storage, "opencode", { requestId: "req-sibling" });
+          await service.reconcileAgentActivity();
+          await service.shutdown();
+          ended = true;
+          const restarted = new NativeAgentService(
+            storage,
+            async () => {
+              throw new Error("Unexpected command");
+            },
+            { provider: resolve, now: () => now },
+          );
+          try {
+            await restarted.reconcileAgentActivity();
+            expect(await storage.getEnvironment("env-1")).toMatchObject({
+              agentActivityState: "working",
+              unreadReason: "agent_failed",
+            });
+            now = collaborators(restarted)
+              .launches.forTesting()
+              .activityRetryAt.get(`env-1\0opencode`)!;
+            readable = true;
+            await restarted.reconcileAgentActivity();
+            await restarted.reconcileAgentActivity();
+            expect(await storage.getEnvironment("env-1")).toMatchObject({
+              agentActivityState: "idle",
+              unreadReason: "agent_failed",
+            });
+          } finally {
+            await restarted.shutdown();
+          }
+        },
+      ),
+    );
+  });
+
   describe("with its bridge gone", () => {
     /** The turn ran on the first service; the restarted one finds no bridge. */
     async function restartWithoutBridge(
@@ -586,7 +842,7 @@ describe("a backend restart across a turn", () => {
           await prepare(storage);
           const restarted = new NativeAgentService(storage, bridge.invoke, {});
           try {
-            if (options.stopRequested) restarted.runtimeStopRequested("env-1");
+            if (options.stopRequested) await restarted.runtimeStopRequested("env-1");
             const completions = spyOn(storage, "recordEnvironmentSessionCompletion");
             await restarted.reconcileAgentActivity();
             await restarted.reconcileAgentActivity();

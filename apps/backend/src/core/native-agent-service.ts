@@ -484,8 +484,8 @@ export class NativeAgentService {
    * sweep that finds one gone must not report its turn as failed
    * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
    */
-  runtimeStopRequested(environmentId: string): void {
-    this.launches.runtimeStopRequested(environmentId);
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
   }
 
   /** Whether the session's last turn was cut off by its runtime stopping. */

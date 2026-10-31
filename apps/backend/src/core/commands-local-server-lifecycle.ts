@@ -161,7 +161,7 @@ export async function stopLocalServerUnlocked(
   }
   const child = localServers.process(key);
   if (child) {
-    context.nativeAgents?.runtimeStopRequested(environmentId);
+    await context.nativeAgents?.runtimeStopRequested(environmentId, kind);
     await localServers.terminate(key, child, "stop requested");
   }
   const { port, pid } = localServerFields(kind);

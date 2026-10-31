@@ -120,7 +120,7 @@ Made 2026-10-31 against `main` at `931e5541`. Every path that could ring `agent_
 | --- | --- | --- |
 | Bridge dies, next read fails, then no bridge is found | `agent_finished` from the session edge | `agent_failed` |
 | Backend restart, bridge survives, turn failed meanwhile | `agent_finished` from the aggregate | `agent_failed` from the session's first answer |
-| Backend restart, bridge gone (the usual local case: bridges exit with their backend) | `agent_finished` from the aggregate | `agent_failed` when the latest dispatched turn has no recorded end |
+| Backend restart, bridge gone (the usual local case: bridges exit with their backend) | `agent_finished` from the aggregate | `agent_failed` only with a durable active-request checkpoint and no recorded end |
 | Bridge replaced before the next sweep, restored session reads idle | `agent_finished` from the session edge | `agent_failed` from the bridge's own report (below) |
 | Backend restart, bridge proves the session gone | `agent_finished` from the aggregate | `agent_failed` |
 | Runtime stopped across a restart | Nothing: storage clears activity when it records a stop | Nothing (pinned by a test) |
@@ -135,26 +135,26 @@ What each provider reports after its own restart:
 
 ### Task 3: what the restart fallback says
 
-- **Chose:** a variant of the recommended option. It uses the same evidence but rings from the session rather than through a new `setEnvironmentAgentActivity` option. Where the durable `native-agent` source says `working` and has done since before this process, a session's first idle answer asks `readTurnFailed`. A "yes" records `agent_failed` through `recordEnvironmentSessionCompletion`, which also turns the aggregate fallback off for that sweep. A "no" stays quiet and the fallback rings `agent_finished` as before.
+- **Chose:** a variant of the recommended option. It uses the same evidence but rings from the session rather than through a new `setEnvironmentAgentActivity` option. Where the durable `native-agent` source says `working` and has done since before this process, a session's first idle answer asks `readTurnFailed`. A "yes" records `agent_failed` through `recordEnvironmentSessionCompletion`, which also turns the aggregate fallback off until its activity commit succeeds. A "no" stays quiet and the fallback rings `agent_finished` as before.
 - **Why:** passing answers to the storage call only helps when the aggregate goes idle in that same sweep. A sibling tab still working would keep it `working`, and by the time it went idle the failed session's answer would be gone. The session ring has no such gap, and the `attentionRecorded` path it needs already existed.
 - **Bound on the evidence:** `unwatchedWorkingEnvironments` holds an environment only from its first sweep in this process until each of its sessions has answered, so a tab opened later inherits nothing. A durably idle environment rings nothing, however stale the bridge's `turnFailed`. Each session's first answer there costs at most two no-touch reads (the turn outcome and the dispatch status), once per restart. An unreadable outcome backs the group off and withholds the environment, as on a watched edge, so the turn is not announced as finished in the meantime.
 
 ### Task 3: what a bridge lost mid-turn says
 
 - **Chose:** the recommended option, `agent_failed`, for a session seen `working` whose bridge is gone. A turn already released to background work has no edge and rings nothing, as before.
-- **Across a restart** there is no per-session state, so the session must also have a latest dispatched request with no recorded outcome and no recorded stop. An environment whose session has neither falls back to `agent_finished`.
-- **A session the bridge proves gone** counts the same way, because its turn cannot have finished.
+- **Across a restart** the latest request must have a durable `activityTurn` checkpoint saying it was active, with no recorded outcome or stop. Missing outcomes alone prove nothing. The sweep checkpoints idle and released roots as settled even when background work keeps their environment working; those roots ring nothing when their bridge disappears. Legacy requests without a checkpoint retain the aggregate completion fallback.
+- **A session the bridge proves gone** uses the same active-request evidence.
 
 ### Task 3: telling a deliberate stop from a crash
 
-- **Chose:** two checks, because the analysis's worry was real: `settleStoppedSessions` runs after a stop takes effect, so a sweep can find the bridge gone first. `runtimeStopRequested` is called before `stopLocalServerUnlocked` terminates a bridge (environment stop, move, delete, single-bridge stop) and before a container stop or rebuild. For `RUNTIME_STOP_REQUEST_WINDOW_MS` (two minutes) a missing bridge keeps `agent_finished`. A stop the user asked for is read from `interruptedRequestIds`, so stopping a turn and then losing the bridge is not a failure.
+- **Chose:** two checks, because the analysis's worry was real: `settleStoppedSessions` runs after a stop takes effect, so a sweep can find the bridge gone first. `runtimeStopRequested` is called before `stopLocalServerUnlocked` terminates a bridge (environment stop, move, delete, single-bridge stop) and before a container stop or rebuild. The hook is awaited before stopping. For `RUNTIME_STOP_REQUEST_WINDOW_MS` (two minutes), only the captured requests and provider generation are exempt. A single-bridge stop names its provider. Settled stops, new dispatches and replacement bridges retire the exemption. A stop the user asked for is read from `interruptedRequestIds`, so stopping a turn and then losing the bridge is not a failure.
 - **Why not a stop fence that withholds the group:** it would need clearing on every failure path, and keeping the bell an old stop already rang is no regression.
 
 ### Task 3: the `lost` read
 
-- **Chose:** on a turn-end edge with no `turnFailed` and no terminal error, ask `dispatchStatus` for the latest request and treat `lost` as a turn cut short. A failed read, or any other answer, changes nothing and does not back the group off. Skipped for OpenCode, which never answers `lost` and would pay a transcript read.
+- **Chose:** on a turn-end edge with no `turnFailed` and no terminal error, ask `dispatchStatus` for the latest request and treat `lost` as a turn cut short. A failed read, or any other answer, changes nothing and does not back the group off. Limited to Codex, Cursor, Grok and Pi. OpenCode never answers `lost` and would pay a transcript read; Claude's restored claims include completed requests. A durable completed outcome takes precedence over a lost claim.
 - **Why not compare bridge connection identities:** a container bridge can come back on the same port, and the identity is in memory, so it says nothing after a backend restart. `lost` is durable and the bridge's own statement.
-- **Known looseness:** Claude answers `lost` for any id restored from an earlier process, including a finished one. It only matters where a Claude bridge restarted and the durable source says `working` while another platform's tab held the turn. Such a bell says "failed" for a session whose turn finished, and the tab shows the truth.
+- **Replay protection:** request completion keys are persisted atomically with the completion token and unread badge. Activity checkpoints exclude already settled requests from restart recovery, so an acknowledged failure cannot re-light the badge while a sibling keeps working, including across repeated restarts. Pending session attention survives retry sweeps and unread failure attention restores its aggregate suppression after another backend restart.
 
 ## Needs verification
 

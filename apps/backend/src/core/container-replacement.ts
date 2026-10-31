@@ -607,7 +607,7 @@ export async function quiesceRuntime(
   await stopEnvironmentReviewValidation(environmentId, context);
   await stopEnvironmentExecWorkers(environmentId, context);
   context.previews?.registry.beforeEnvironmentTargetChange(environmentId);
-  context.nativeAgents?.runtimeStopRequested(environmentId);
+  await context.nativeAgents?.runtimeStopRequested(environmentId);
   const capabilities = await imageCapabilities(imageId, context);
   const drain = await withEnvironmentDraining(environmentId, containerId, async () => {
     const result = capabilities?.["graceful-shutdown"]

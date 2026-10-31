@@ -62,8 +62,8 @@ import { queueString } from "./native-agent-queue-message.js";
 
 /**
  * How long after a requested stop a missing bridge is put down to that stop.
- * Longer than a drain and `docker stop` take, short enough that a later crash
- * of the bridge that replaced it is not excused.
+ * Longer than a drain and `docker stop` take. Exemptions also name the stopped
+ * requests and bridge generation, so a replacement never inherits this window.
  */
 export const RUNTIME_STOP_REQUEST_WINDOW_MS = 2 * 60_000;
 
@@ -166,7 +166,17 @@ export class NativeAgentLaunchActivityReconciler {
    */
   private readonly unwatchedWorkingEnvironments = new Set<string>();
   /** Until when a bridge going away is a stop someone asked for, not a crash. */
-  private readonly runtimeStopRequests = new Map<string, number>();
+  private readonly runtimeStopRequests = new Map<
+    string,
+    {
+      until: number;
+      connection?: string;
+      provider?: NativeAgentRuntimeProvider;
+      requests: Map<string, { providerSessionId: string; requestId?: string }>;
+    }
+  >();
+  /** Exact attention already written while an aggregate commit is withheld. */
+  private readonly pendingAttentionEnvironments = new Set<string>();
   private activityScan: Promise<void> | null = null;
   /** Number of the latest sweep started; demands compare against it. */
   private activityScanNumber = 0;
@@ -200,6 +210,9 @@ export class NativeAgentLaunchActivityReconciler {
    * of a dispatch (`working`) or a confirmed idle provider before a move.
    */
   recordObservedActivity(sessionKey: string, activity: ObservedSessionActivity): void {
+    if (activity.state === "working") {
+      for (const stop of this.runtimeStopRequests.values()) stop.requests.delete(sessionKey);
+    }
     this.observedSessionActivity.set(sessionKey, activity);
   }
 
@@ -209,16 +222,49 @@ export class NativeAgentLaunchActivityReconciler {
    * commits. It only keeps the sweep from reading that as a crash; a stop that
    * leaves the bridge running changes nothing and the window just lapses.
    */
-  runtimeStopRequested(environmentId: string): void {
-    this.runtimeStopRequests.set(environmentId, this.host.now() + RUNTIME_STOP_REQUEST_WINDOW_MS);
+  async runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    const sessions = await this.storage.listNativeAgentSessions();
+    const requestedGroups = new Set<string>();
+    for (const session of sessions) {
+      if (session.environmentId !== environmentId || (agent && session.agent !== agent)) continue;
+      const groupKey = `${environmentId}\0${session.agent}`;
+      let stop = this.runtimeStopRequests.get(groupKey);
+      if (!requestedGroups.has(groupKey)) {
+        requestedGroups.add(groupKey);
+        stop = {
+          until: this.host.now() + RUNTIME_STOP_REQUEST_WINDOW_MS,
+          connection: this.providerRegistry.connectionIdentity(groupKey),
+          provider: this.providerRegistry.cached(groupKey),
+          requests: new Map(),
+        };
+        this.runtimeStopRequests.set(groupKey, stop);
+      }
+      stop!.requests.set(session.key, {
+        providerSessionId: session.providerSessionId,
+        requestId: latestRequestId(session),
+      });
+    }
   }
 
-  private runtimeStopPending(environmentId: string): boolean {
-    const until = this.runtimeStopRequests.get(environmentId);
-    if (until === undefined) return false;
-    if (until > this.host.now()) return true;
-    this.runtimeStopRequests.delete(environmentId);
-    return false;
+  private runtimeStopPending(session: PersistedNativeAgentSession): boolean {
+    const groupKey = `${session.environmentId}\0${session.agent}`;
+    const stop = this.runtimeStopRequests.get(groupKey);
+    if (!stop) return false;
+    const connection = this.providerRegistry.connectionIdentity(groupKey);
+    if (
+      stop.until <= this.host.now() ||
+      (connection !== undefined && connection !== stop.connection) ||
+      (this.providerRegistry.cached(groupKey) !== undefined &&
+        this.providerRegistry.cached(groupKey) !== stop.provider)
+    ) {
+      this.runtimeStopRequests.delete(groupKey);
+      return false;
+    }
+    const request = stop.requests.get(session.key);
+    return (
+      request?.providerSessionId === session.providerSessionId &&
+      request.requestId === latestRequestId(session)
+    );
   }
 
   /**
@@ -233,12 +279,18 @@ export class NativeAgentLaunchActivityReconciler {
     unwatchedWorking: boolean,
   ): () => Promise<boolean> {
     return async () => {
-      if (this.runtimeStopPending(session.environmentId)) return false;
       const observed = this.observedSessionActivity.get(session.key);
       // The stop's write may be newer than the sweep's session list.
       const current = (await this.storage.getNativeAgentSession(session.key)) ?? session;
+      if (this.runtimeStopPending(current)) return false;
       if (observed?.providerSessionId === session.providerSessionId && observed.state === "working")
-        return !latestTurnStopped(current);
+        return (
+          !latestTurnStopped(current) &&
+          !current.turnOutcomes?.some(
+            (entry) =>
+              entry.requestId === latestRequestId(current) && entry.outcome === "completed",
+          )
+        );
       return observed === undefined && unwatchedWorking && hasUnsettledTurn(current);
     };
   }
@@ -400,6 +452,9 @@ export class NativeAgentLaunchActivityReconciler {
     environmentId: string,
     sessions: readonly PersistedNativeAgentSession[],
   ): Promise<void> {
+    for (const groupKey of this.runtimeStopRequests.keys()) {
+      if (groupKey.startsWith(`${environmentId}\0`)) this.runtimeStopRequests.delete(groupKey);
+    }
     this.stopEpochs.set(environmentId, (this.stopEpochs.get(environmentId) ?? 0) + 1);
     this.observations.replaceEnvironmentGenerations(environmentId);
     const interruptions: Promise<unknown>[] = [];
@@ -692,7 +747,8 @@ export class NativeAgentLaunchActivityReconciler {
       if (!environmentsById.has(session.environmentId)) continue;
       if (
         this.observedSessionActivity.get(session.key)?.providerSessionId !==
-        session.providerSessionId
+          session.providerSessionId &&
+        !activityTurnSettled(session)
       ) {
         environmentsWithUnknownSessions.add(session.environmentId);
       }
@@ -704,6 +760,7 @@ export class NativeAgentLaunchActivityReconciler {
       if (!environmentsById.has(environmentId)) {
         this.sweptEnvironments.delete(environmentId);
         this.unwatchedWorkingEnvironments.delete(environmentId);
+        this.pendingAttentionEnvironments.delete(environmentId);
       }
     }
     for (const environment of environments) {
@@ -711,6 +768,9 @@ export class NativeAgentLaunchActivityReconciler {
         this.sweptEnvironments.add(environment.id);
         if (environment.agentActivitySources?.["native-agent"]?.state === "working") {
           this.unwatchedWorkingEnvironments.add(environment.id);
+          if (environment.hasUnreadWork && environment.unreadReason === "agent_failed") {
+            this.pendingAttentionEnvironments.add(environment.id);
+          }
         }
       }
     }
@@ -720,7 +780,7 @@ export class NativeAgentLaunchActivityReconciler {
       Record<string, { state: AgentActivityState; updatedAt: string }>
     >();
     const completionCandidates = new Set<string>();
-    const attentionRecordedEnvironments = new Set<string>();
+    const attentionRecordedEnvironments = this.pendingAttentionEnvironments;
     // A stale stopped snapshot must not publish an idle environment aggregate either.
     const failedEnvironments = new Set(staleStoppedEnvironments);
     const groups = new Map<string, PersistedNativeAgentSession[]>();
@@ -907,12 +967,13 @@ export class NativeAgentLaunchActivityReconciler {
                   unwatchedWorking &&
                   !this.observedSessionActivity.has(session.key) &&
                   hasUnsettledTurn(session) &&
-                  !this.runtimeStopPending(session.environmentId)
+                  !this.runtimeStopPending(session)
                 ) {
                   await this.storage.recordEnvironmentSessionCompletion(
                     session.environmentId,
                     new Date(this.host.now()).toISOString(),
                     "agent_failed",
+                    completionKey(session),
                   );
                   attentionRecordedEnvironments.add(session.environmentId);
                 }
@@ -967,6 +1028,10 @@ export class NativeAgentLaunchActivityReconciler {
                   observedActivity === "waiting" ||
                   (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
                 readTurnFailed: async () => {
+                  const outcome = session.turnOutcomes?.find(
+                    (entry) => entry.requestId === latestRequestId(session),
+                  );
+                  if (outcome) return outcome.outcome === "failed";
                   if (observation?.turnFailed === true) return true;
                   try {
                     return (
@@ -1085,7 +1150,10 @@ export class NativeAgentLaunchActivityReconciler {
           },
         )
         .then(() => {
-          if (desiredState !== "working") this.unwatchedWorkingEnvironments.delete(environment.id);
+          if (desiredState !== "working") {
+            this.unwatchedWorkingEnvironments.delete(environment.id);
+            this.pendingAttentionEnvironments.delete(environment.id);
+          }
         })
         .catch((error) => {
           console.warn(
@@ -1268,7 +1336,10 @@ export class NativeAgentLaunchActivityReconciler {
         (state === "idle" || releasedCompletion) &&
         !previousReleasedCompletion &&
         (previous === "working" ||
-          (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)));
+          (state === "idle" &&
+            observed === undefined &&
+            countUnknownIdleAsCompletion &&
+            !activityTurnSettled(session))));
     // PR reconciliation retains its narrower historical completion contract:
     // a parked waiting turn needs the user's attention, but it has not ended.
     //
@@ -1280,13 +1351,15 @@ export class NativeAgentLaunchActivityReconciler {
     // provider session, which is what keeps a rotation from inheriting an edge.
     const completed =
       state === "idle" &&
-      (previous === "working" || (observed === undefined && countUnknownIdleAsCompletion));
+      (previous === "working" ||
+        (observed === undefined && countUnknownIdleAsCompletion && !activityTurnSettled(session)));
     // Persist the exact session edge before advancing the in-memory observation.
     // If storage fails, the provider group backs off and the next scan still
     // sees `previous === "working"`, so the durable completion is retried.
     const unwatchedTurnEnd =
       !durableAttentionEdge &&
       unwatchedWorking &&
+      !activityTurnSettled(session) &&
       state === "idle" &&
       observed === undefined &&
       completionPending !== true;
@@ -1305,12 +1378,28 @@ export class NativeAgentLaunchActivityReconciler {
           session.environmentId,
           new Date(this.host.now()).toISOString(),
           reason,
+          state === "waiting" ? undefined : completionKey(session),
         );
         attentionRecorded = true;
       }
     }
     if (stillApplicable && !stillApplicable())
       return { completed: false, attentionRecorded: false };
+    const turnState =
+      (state === "idle" && completionPending !== true) || releasedCompletion ? "settled" : "active";
+    if (
+      session.activityTurn?.providerSessionId !== session.providerSessionId ||
+      session.activityTurn.requestId !== latestRequestId(session) ||
+      session.activityTurn.state !== turnState
+    ) {
+      await this.storage.recordNativeAgentActivityTurn(session, turnState);
+    }
+    if (stillApplicable && !stillApplicable()) return { completed: false, attentionRecorded };
+    if (state === "idle" || releasedCompletion) {
+      this.runtimeStopRequests
+        .get(`${session.environmentId}\0${session.agent}`)
+        ?.requests.delete(session.key);
+    }
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
@@ -1919,13 +2008,26 @@ async function readTurnTerminalFailure(
  * with no error, so this is the only trace. Best effort: every other answer,
  * and a failed read, leaves the turn reported as it would have been. OpenCode
  * has no such journal: it never answers `lost`, and asking reads its transcript.
+ * Claude's restored dispatch claims also include successfully completed turns;
+ * only its explicit interruption evidence can prove that a turn failed.
  */
 async function readTurnLost(
   provider: NativeAgentRuntimeProvider,
   session: PersistedNativeAgentSession,
 ): Promise<boolean> {
   const requestId = session.dispatchedRequestIds?.at(-1);
-  if (session.agent === "opencode" || !requestId || !provider.dispatchStatus) return false;
+  if (
+    !["codex", "cursor", "grok", "pi"].includes(session.agent) ||
+    !requestId ||
+    !provider.dispatchStatus
+  )
+    return false;
+  if (
+    session.turnOutcomes?.some(
+      (outcome) => outcome.requestId === requestId && outcome.outcome === "completed",
+    )
+  )
+    return false;
   if (latestTurnStopped(session)) return false;
   const status = await provider
     .dispatchStatus(session.providerSessionId, requestId)
@@ -1943,12 +2045,30 @@ function latestTurnStopped(session: PersistedNativeAgentSession): boolean {
   return requestId !== undefined && session.interruptedRequestIds?.includes(requestId) === true;
 }
 
-/** The session's latest turn was dispatched, and nothing durable says it ended. */
+/** Positive durable activity evidence, rather than a missing outcome, proves a running turn. */
 function hasUnsettledTurn(session: PersistedNativeAgentSession): boolean {
   const requestId = latestRequestId(session);
   return (
     requestId !== undefined &&
+    session.activityTurn?.state === "active" &&
+    session.activityTurn.providerSessionId === session.providerSessionId &&
+    session.activityTurn.requestId === requestId &&
     !latestTurnStopped(session) &&
     !session.turnOutcomes?.some((outcome) => outcome.requestId === requestId)
   );
+}
+
+function activityTurnSettled(session: PersistedNativeAgentSession): boolean {
+  return (
+    session.activityTurn?.state === "settled" &&
+    session.activityTurn.providerSessionId === session.providerSessionId &&
+    session.activityTurn.requestId === latestRequestId(session)
+  );
+}
+
+function completionKey(session: PersistedNativeAgentSession): string | undefined {
+  const requestId = latestRequestId(session);
+  return requestId
+    ? JSON.stringify(["native-turn", session.key, session.providerSessionId, requestId])
+    : undefined;
 }

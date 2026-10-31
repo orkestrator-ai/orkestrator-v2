@@ -224,6 +224,7 @@ import {
   createStartupPromptPreviewMessage,
   INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
   nextStartupPromptPreviewState,
+  startupPromptPreviewMessageId,
 } from "./startup-prompt-preview";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
@@ -841,6 +842,10 @@ export function SharedNativeAgentController({
     backendOwned: backendOwnsStartupPrompt,
     tabInitialPrompt: initialPrompt,
     hasAuthoritativeMessages: visibleAuthoritativeMessageIds.size > 0,
+    hasAuthoritativeUserMessage: normalizedMessages.some(
+      (message) => message.role === "user" && !isClientOnlyNativeMessage(message),
+    ),
+    sendFailed: sendError !== null,
     launchFailed:
       environment?.startupAgentSession?.status === "error" &&
       environment.pendingAgentLaunch !== true,
@@ -932,8 +937,12 @@ export function SharedNativeAgentController({
    * boundary for a provisional prompt is expressed in the same raw ids.
    */
   const visibleDisplayMessageIds = useMemo(
-    () => displayMessages.map((message) => message.id),
-    [displayMessages],
+    () =>
+      displayMessages
+        // The preview disappears on submission, so it cannot anchor its replacement.
+        .filter((message) => message.id !== startupPromptPreviewMessageId(sessionKey))
+        .map((message) => message.id),
+    [displayMessages, sessionKey],
   );
   /*
    * Tasks the transcript cannot show: the launch fell outside the loaded
@@ -2911,8 +2920,13 @@ export function SharedNativeAgentController({
   // layout centered until the provider accepts it prevents a fast terminal
   // rejection (authentication in particular) from sending the dock to the
   // bottom and immediately animating it back again.
+  // Once the opening preview has shown the transcript, keep it visible while
+  // its submitted replacement waits for provider acceptance.
   const onlyOptimisticFirstPrompt =
-    messages.length === 1 && messages[0]?.id === `optimistic-native:${sessionKey}`;
+    !startupPromptState.preview &&
+    !startupPromptState.retired &&
+    messages.length === 1 &&
+    messages[0]?.id === `optimistic-native:${sessionKey}`;
   const composerCentered =
     (messages.length === 0 || onlyOptimisticFirstPrompt) &&
     !isProviderTurnActive &&

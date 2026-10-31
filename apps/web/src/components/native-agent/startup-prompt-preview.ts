@@ -13,7 +13,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
  * tab opens; the wait that remains is the wait for the first response.
  *
  * It is presentation only: it never sends anything, and it retires as soon as
- * the transcript has an authoritative row of its own.
+ * the transcript echoes the opening user prompt.
  */
 export interface StartupPromptPreview {
   text: string;
@@ -44,8 +44,12 @@ export interface StartupPromptPreviewInput {
   backendOwned: boolean;
   /** The tab's own pending prompt; its removal means the tab consumed it. */
   tabInitialPrompt: string | undefined;
-  /** The transcript has a row from the provider, so the preview is redundant. */
+  /** Suppress a new preview when an existing conversation is already loaded. */
   hasAuthoritativeMessages: boolean;
+  /** An authoritative user row can replace a preview that is already on screen. */
+  hasAuthoritativeUserMessage: boolean;
+  /** A tab-owned opening send failed; the composer now owns the restored draft. */
+  sendFailed: boolean;
   /** The backend gave up on the startup launch; the prompt will not be sent. */
   launchFailed: boolean;
 }
@@ -72,12 +76,18 @@ export function nextStartupPromptPreviewState(
   if (state.retired) return state;
   const { preview } = state;
   if (preview) {
-    const consumed = preview.backendOwned ? input.launchFailed : !input.tabInitialPrompt?.trim();
-    if (input.hasAuthoritativeMessages || consumed) return { preview: null, retired: true };
+    const consumed = preview.backendOwned
+      ? input.launchFailed
+      : input.sendFailed || !input.tabInitialPrompt?.trim();
+    if (input.hasAuthoritativeUserMessage || consumed) return { preview: null, retired: true };
     return state;
   }
   // A transcript that already has rows is a conversation, not an opening.
-  if (input.hasAuthoritativeMessages || (input.backendOwned && input.launchFailed)) return state;
+  if (
+    input.hasAuthoritativeMessages ||
+    (input.backendOwned ? input.launchFailed : input.sendFailed)
+  )
+    return state;
   const text = startupPromptDisplayText(input.source);
   if (!text) return state;
   return {

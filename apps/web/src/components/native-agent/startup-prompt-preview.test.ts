@@ -22,6 +22,8 @@ function input(overrides: Partial<StartupPromptPreviewInput> = {}): StartupPromp
     backendOwned: false,
     tabInitialPrompt: "Fix the login bug",
     hasAuthoritativeMessages: false,
+    hasAuthoritativeUserMessage: false,
+    sendFailed: false,
     launchFailed: false,
     ...overrides,
   };
@@ -54,7 +56,7 @@ describe("nextStartupPromptPreviewState", () => {
     ).toBe(initial);
   });
 
-  test("retires once the transcript has a row of its own, and never returns", () => {
+  test("retires once the transcript has a user echo, and never returns", () => {
     const shown = nextStartupPromptPreviewState(
       INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
       input(),
@@ -62,7 +64,7 @@ describe("nextStartupPromptPreviewState", () => {
     );
     const retired = nextStartupPromptPreviewState(
       shown,
-      input({ hasAuthoritativeMessages: true }),
+      input({ hasAuthoritativeMessages: true, hasAuthoritativeUserMessage: true }),
       clock,
     );
     expect(retired).toEqual({ preview: null, retired: true });
@@ -101,8 +103,50 @@ describe("nextStartupPromptPreviewState", () => {
       ),
     ).toBe(shown);
     expect(
-      nextStartupPromptPreviewState(shown, { ...backend, hasAuthoritativeMessages: true }, clock)
-        .preview,
+      nextStartupPromptPreviewState(
+        shown,
+        { ...backend, hasAuthoritativeMessages: true, hasAuthoritativeUserMessage: true },
+        clock,
+      ).preview,
+    ).toBeNull();
+  });
+
+  test("keeps a latched backend preview through assistant-only updates", () => {
+    const backend = input({ backendOwned: true, tabInitialPrompt: undefined });
+    const shown = nextStartupPromptPreviewState(
+      INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
+      backend,
+      clock,
+    );
+    expect(
+      nextStartupPromptPreviewState(
+        shown,
+        {
+          ...backend,
+          source: undefined,
+          backendOwned: false,
+          hasAuthoritativeMessages: true,
+        },
+        clock,
+      ),
+    ).toBe(shown);
+  });
+
+  test("a failed tab send retires the preview even while initialPrompt remains", () => {
+    const shown = nextStartupPromptPreviewState(
+      INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
+      input(),
+      clock,
+    );
+    const retired = nextStartupPromptPreviewState(shown, input({ sendFailed: true }), clock);
+    expect(retired).toEqual({ preview: null, retired: true });
+    expect(nextStartupPromptPreviewState(retired, input(), clock)).toBe(retired);
+    expect(
+      nextStartupPromptPreviewState(
+        INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
+        input({ sendFailed: true }),
+        clock,
+      ).preview,
     ).toBeNull();
   });
 

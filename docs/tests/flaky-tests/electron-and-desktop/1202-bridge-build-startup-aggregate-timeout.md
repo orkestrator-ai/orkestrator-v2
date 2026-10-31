@@ -93,3 +93,16 @@ Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop
 below the host temporary directory. Passing output was removed by the runner.
 No owner implementation, assertion, timeout or skip changed; the cause remains
 unconfirmed.
+
+
+## Goal review repair — 2026-10-31
+
+The full `mise run test` rerun repeated the successful-start timeout at
+15,010.34 ms. The complete unchanged owner passed alone in 0.9 s:
+
+```sh
+mise run test:logged -- --name goal-bridge-owner -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.Zau4wx/review-tests.log.gz` in the host temporary
+directory. No assertion, timeout or skip changed; the cause remains unconfirmed.

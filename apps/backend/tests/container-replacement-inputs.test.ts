@@ -115,6 +115,7 @@ case "$1" in
     esac ;;
   exec)
     case "$*" in
+      *list-goal-checks*) cat >/dev/null; printf '[]\\n' ;;
       *boot-status.json*) printf '{"version":1,"pid1Start":"123","bootId":"abcdef12","phase":"ready"}\\n123\\n' ;;
     esac ;;
 esac

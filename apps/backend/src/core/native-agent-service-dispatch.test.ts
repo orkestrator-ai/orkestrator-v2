@@ -2805,6 +2805,22 @@ describe("NativeAgentService", () => {
         { prefix: "orkestrator-native-drain-goal-turn-", provider: async () => stub.provider },
         async ({ storage, service }) => {
           const queueKey = "codex\u0000env-env-1:tab-1";
+          const session = await service.ensureSession({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:tab-1",
+          });
+          await storage.updateNativeAgentGoal(session.key, () => ({
+            goalId: "g1",
+            objective: "Keep going",
+            status: "active",
+            providerSessionId: session.providerSessionId,
+            iterations: 2,
+            maxIterations: 5,
+            noProgressStreak: 0,
+            setAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          }));
           await storage.savePromptQueue(queueKey, "env-1", [
             {
               id: "goal:g1:1",

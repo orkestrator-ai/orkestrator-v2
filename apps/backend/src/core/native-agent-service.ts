@@ -3411,7 +3411,9 @@ export class NativeAgentService {
                   images: input.images,
                   attachments: input.attachments,
                   schema: input.schema,
-                  mode: input.mode,
+                  // Resolve inheritance under the session lease: Claude's
+                  // permission payload treats an omitted mode as Build.
+                  mode: input.mode ?? durable.controls?.mode,
                   fastMode: input.fastMode,
                   subAgent: input.subAgent,
                   executionAgent: preparation.executionAgent ?? input.executionAgent,

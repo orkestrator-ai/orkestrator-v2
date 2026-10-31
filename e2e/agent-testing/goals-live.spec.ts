@@ -328,7 +328,7 @@ test.describe(`goal loop: ${platform}`, () => {
       const identity = await tab();
       await command(
         identity,
-        `${slowStep(120)}, then create goal-resumed.txt and ${report("done")}. --max-iterations 4 --check test -f goal-resumed.txt`,
+        `On carrier iteration 0 only, ${slowStep(120)}. On every later carrier iteration, skip the delay. Then create goal-resumed.txt and ${report("done")}. --max-iterations 4 --check test -f goal-resumed.txt`,
       );
       await expect
         .poll(async () => (await projection(identity)).turn.phase, {

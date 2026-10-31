@@ -1,3 +1,4 @@
+import { bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
@@ -17,6 +18,7 @@ import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent
 import { StorageService } from "./storage.js";
 import { launchInternals, queueInternals } from "./native-agent-service-test-collaborators.js";
 import {
+  claudeConnection,
   openCodeActivityProvider,
   openCodeFake,
   waitUntil,
@@ -993,7 +995,11 @@ test.each(AGENT_PLATFORMS)(
         await service.drainPromptQueueForSession({ agent, logicalSessionKey });
         await waitForCondition(() => stub.send.mock.calls.length === turn);
         const options = stub.send.mock.calls[turn - 1]![2];
-        expect(options.mode).toBeUndefined();
+        expect(options.mode).toBe("plan");
+        if (agent === "claude")
+          expect(
+            bridgePromptBody("claude", claudeConnection, "goal", options, []).permissionMode,
+          ).toBe("plan");
         expect((await storage.getNativeAgentSession(session.key))?.controls?.mode).toBe("plan");
         await storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
           requestId: options.requestId!,

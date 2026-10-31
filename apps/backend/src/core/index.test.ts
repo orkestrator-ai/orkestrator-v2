@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
+import { defaultDataDir } from "../data-dir.js";
 import { OrkestratorBackend } from "./index.js";
 import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
 import type { BackendActivityJob } from "./backend-activity-jobs.js";
@@ -653,7 +654,7 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   }
 });
 
-test("does not publish the persistent control MCP until backend recovery completes", async () => {
+test("starts Control MCP after recovery and re-reserves preview ports on late success until shutdown", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-control-ready-"));
   let releaseNativeInit!: () => void;
   let markNativeInitStarted!: () => void;
@@ -663,8 +664,15 @@ test("does not publish the persistent control MCP until backend recovery complet
   const nativeInitStarted = new Promise<void>((resolve) => {
     markNativeInitStarted = resolve;
   });
+  let stateChanged: () => void = () => undefined;
+  let info: { url: string; descriptorFile: string } | null = null;
+  const emit = mock((_event: string, _payload: unknown) => undefined);
   const controlMcp = {
-    getInfo: mock(() => null),
+    onStateChange: (listener: () => void) => {
+      stateChanged = listener;
+      return () => undefined;
+    },
+    getInfo: mock(() => info),
     getSettings: mock(() => ({
       enabled: true,
       running: false,
@@ -697,7 +705,7 @@ test("does not publish the persistent control MCP until backend recovery complet
     toolchainBinDir: "",
     appRoot: "",
     resourceRoot: "",
-    emit: () => undefined,
+    emit,
     agentTools: fakeAgentTools(),
     controlMcp,
     startupReapers: {
@@ -721,6 +729,22 @@ test("does not publish the persistent control MCP until backend recovery complet
     releaseNativeInit();
     await initialization;
     expect(controlMcp.start).toHaveBeenCalledTimes(1);
+    const reserve = spyOn(backend.previews!, "reservePorts");
+    try {
+      info = { url: "http://127.0.0.1:45001/mcp", descriptorFile: "unused" };
+      stateChanged();
+      expect(reserve).toHaveBeenCalledWith("backend", [45001]);
+      expect(emit).toHaveBeenCalledWith("control-mcp-state-changed", {});
+      reserve.mockClear();
+      emit.mockClear();
+      const stopping = backend.shutdown();
+      stateChanged();
+      expect(reserve).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+      await stopping;
+    } finally {
+      reserve.mockRestore();
+    }
   } finally {
     releaseNativeInit();
     await backend.shutdown().catch(() => undefined);
@@ -2069,5 +2093,49 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  }
+});
+
+test("the backend constructor gives only its default data directory the fixed Control MCP port", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-port-owner-"));
+  const home = spyOn(os, "homedir").mockReturnValue(root);
+  const saved = {
+    NODE_ENV: process.env.NODE_ENV,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    ORKESTRATOR_CONTROL_MCP_PORT: process.env.ORKESTRATOR_CONTROL_MCP_PORT,
+  };
+  const backends: OrkestratorBackend[] = [];
+  try {
+    process.env.NODE_ENV = "production";
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    delete process.env.ORKESTRATOR_CONTROL_MCP_PORT;
+    for (const dataDir of [defaultDataDir(), path.join(root, "second")]) {
+      backends.push(
+        new OrkestratorBackend({
+          dataDir,
+          toolchainBinDir: "",
+          appRoot: "",
+          resourceRoot: "",
+          emit: () => undefined,
+          agentTools: fakeAgentTools(),
+          transcriptArtifactRuntime: false,
+          runtimeFlavor: "production",
+        }),
+      );
+    }
+    // Inspect the constructor's real server without binding the production fixed port.
+    expect(backends[0]!.getControlMcpEndpointState()).toEqual({
+      running: false,
+      url: "http://127.0.0.1:34122/mcp",
+    });
+    expect(backends[1]!.getControlMcpEndpointState()).toEqual({ running: false });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    home.mockRestore();
+    for (const backend of backends) await backend.shutdown();
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

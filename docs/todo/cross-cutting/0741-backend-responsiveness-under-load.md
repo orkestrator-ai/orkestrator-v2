@@ -347,14 +347,17 @@ is 1.2 MiB today and may grow to its 32 MiB limit.
 
 ### 6. Qualify under load with the new stall log
 
-**Goal.** Tell backend stalls apart from host CPU starvation and the Codex
-side when MCP handshakes or mail calls time out under heavy load. A stall
-longer than the 15 s budget of 0734 means backend work. A handshake timeout
-with no stall around it points at host CPU or the Codex side.
+**Goal.** Determine why MCP handshakes or mail calls time out under heavy
+load. A timer-lateness log shows that the backend event loop did not run
+promptly, with cause unresolved. Backend work, host CPU starvation and
+suspension can all delay the timer. No covering stall is inconclusive:
+cumulative backend work can exhaust the 15 s budget of 0734 without one
+covering timer delay.
 
 **How to run it.** Run it on the production install on a normal working day,
-not from an agent worktree: the run *is* the real workload, and it only reads
-logs and one metrics endpoint.
+not from an agent worktree: the run *is* the real workload. Collect logs,
+metrics, process CPU or profiling data, and host scheduling and sleep/wake
+diagnostics.
 
 1. Install a build that contains tasks 1, 2, 3 and 5, and note the backend's
    start time.
@@ -363,6 +366,9 @@ logs and one metrics endpoint.
    (18 on arktech-mini). Record start and end times in UTC, with `uptime`
    every minute (`while :; do date -u; uptime; sleep 60; done > load.txt`).
 3. During and after the run, collect:
+   - timestamped backend process CPU samples or a CPU profile, host
+     scheduling evidence, and host sleep/wake records; load averages alone
+     cannot distinguish backend CPU work from CPU starvation or suspension;
    - stall lines:
      `grep -h "\[Backend\] Event loop stalled" "$HOME/Library/Application Support/orkestrator-v2/logs/orkestrator-ai-$(date -u +%F).log"`;
    - dropped-console markers: `grep -h "\[Backend\] Dropped" <same file>`;
@@ -377,12 +383,15 @@ logs and one metrics endpoint.
      `check_inbox`).
 4. Line the times up. For each handshake or mail timeout, look for a
    `stalled for N ms, ending T` line whose window covers it.
-   - A stall that covers it means backend work. Take a CPU profile of the
-     next run (`bun --cpu-prof` on a standalone backend in a disposable
-     `dev:test` profile with the same fixture shape, or the metrics' last
-     stalls) and pick up the design note below or the `tools/list` cache.
-   - A timeout with no stall around it means the host or the Codex side.
-     Record the load average at that minute.
+   - A covering stall establishes delayed event-loop execution, not its
+     cause. Correlate process CPU or profiling data with host scheduling
+     and sleep/wake evidence before choosing the design note below or the
+     `tools/list` cache. The metrics' last stalls are timer delays, not CPU
+     profiles.
+   - No covering stall does not exclude backend work or establish a host
+     or Codex cause. Examine the same correlated evidence and record the
+     load average at that minute. If evidence is missing, leave the cause
+     unresolved.
 5. Record the evidence here with *measured* and *inferred* labels, and set
    this task's status.
 
@@ -395,14 +404,22 @@ forward tool calls that need storage to the main thread over a message port.
 directory pushed by the main thread) would then answer even while the main
 loop is busy. Mail and Kanban tool calls would still wait for the main thread
 because storage is single-owner, so this helps handshakes, not mail
-latency. It is not worth the added IPC surface until a stall log shows the
-main loop, not the host, is the bottleneck.
+latency. Adopt the added IPC surface only when correlated process CPU or
+profiling data and host scheduling or sleep evidence establish unrelated
+backend work as the bottleneck.
 
 ## Assumptions and decisions
 
 No decision in this file was marked **(recommended)**. Where a task had a
 **Next step**, that was taken as the recommendation. Each choice below says
 where the work followed it and where the findings argued against it.
+
+### Task 6: separate timer delay from its cause
+
+Aligned this procedure with 0734: a covering timer delay establishes late
+event-loop execution, while process CPU or profiling data and host
+scheduling or sleep evidence are required to attribute it. No covering
+stall is inconclusive, so task 6 remains open pending live evidence.
 
 ### Task 5: a revision-keyed read model, not per-mailbox row reads
 

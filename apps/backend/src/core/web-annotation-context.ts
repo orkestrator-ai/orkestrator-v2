@@ -16,6 +16,7 @@ import {
   type WebAnnotation,
   type WebAnnotationAsset,
   type WebAnnotationAssetStageResult,
+  type WebAnnotationFileCheck,
   type WebAnnotationOperationReceipt,
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
@@ -235,6 +236,33 @@ export class WebAnnotationContext {
     const environment = await this.options.storage.getEnvironment(environmentId);
     if (!environment || environment.deletionRequestedAt) return null;
     return environment;
+  }
+
+  /**
+   * Workspace containment/existence of repository-relative paths, through the
+   * dispatch port (outside the write queue). Undefined when no check is wired,
+   * the environment is gone, or the check fails.
+   */
+  async checkWorkspacePaths(
+    environmentId: string,
+    paths: readonly string[],
+  ): Promise<WebAnnotationFileCheck[] | undefined> {
+    const check = this.options.dispatch?.checkWorkspacePaths;
+    if (paths.length === 0 || !check) return undefined;
+    const environment = await this.hostEnvironment(environmentId).catch(() => null);
+    if (!environment) return undefined;
+    return check
+      .call(
+        this.options.dispatch,
+        {
+          id: environment.id,
+          environmentType: environment.environmentType,
+          ...(environment.worktreePath ? { worktreePath: environment.worktreePath } : {}),
+          ...(environment.containerId ? { containerId: environment.containerId } : {}),
+        },
+        paths,
+      )
+      .catch(() => undefined);
   }
 
   lookupReceipt(

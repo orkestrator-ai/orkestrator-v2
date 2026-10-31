@@ -62,6 +62,13 @@ export interface SessionActivityObservation {
   /** Cursor: the session is being permanently closed. */
   closing?: boolean;
   /**
+   * The session's latest turn ended on the provider's terminal error (its
+   * status is `error`), not on an answer or a stop the user asked for. Sent
+   * only when true; read on a turn-end edge so the unread bell can tell a
+   * failure from finished work. Absent from bridges that predate it.
+   */
+  turnFailed?: true;
+  /**
    * Opaque, content-free revision of what the session view shows beyond its
    * activity (transcript, background tasks). Equal values mean nothing a view
    * renders changed; the backend announces a change on an idle session.
@@ -114,11 +121,12 @@ export function parseSessionActivityObservation(
 ): SessionActivityObservation | undefined {
   if (!isRecord(value)) return undefined;
   const { activity, readyForInput, completionPending, asyncQuestionItemIds, closing } = value;
-  const { contentRevision } = value;
+  const { contentRevision, turnFailed } = value;
   if (typeof activity !== "string" || !SESSION_ACTIVITY_STATES.has(activity)) return undefined;
   if (readyForInput !== undefined && typeof readyForInput !== "boolean") return undefined;
   if (completionPending !== undefined && typeof completionPending !== "boolean") return undefined;
   if (closing !== undefined && typeof closing !== "boolean") return undefined;
+  if (turnFailed !== undefined && typeof turnFailed !== "boolean") return undefined;
   if (contentRevision !== undefined && !isContentRevision(contentRevision)) return undefined;
   let itemIds: string[] | undefined;
   if (asyncQuestionItemIds !== undefined) {
@@ -142,6 +150,7 @@ export function parseSessionActivityObservation(
     ...(completionPending !== undefined ? { completionPending } : {}),
     ...(itemIds !== undefined ? { asyncQuestionItemIds: itemIds } : {}),
     ...(closing !== undefined ? { closing } : {}),
+    ...(turnFailed === true ? { turnFailed } : {}),
     ...(contentRevision !== undefined ? { contentRevision: contentRevision as string } : {}),
   };
 }

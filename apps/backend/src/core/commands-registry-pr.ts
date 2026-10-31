@@ -1,5 +1,8 @@
 import { projectHomePrTarget } from "./commands-pr-monitor.js";
-import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
+import {
+  isProjectHomeEnvironment,
+  reconcileProjectHomeEnvironment,
+} from "./project-home-environment.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   isReviewPackageReference,
@@ -226,16 +229,30 @@ export function registerPullRequestCommands(
   register(
     "merge_environment_pr",
     async (
-      { environmentId, method, deleteBranch, cleanupAfterMerge },
+      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha, expectedPrUrl },
       context,
     ): Promise<MergeEnvironmentPrResult> => {
       const id = asString(environmentId, "environmentId");
+      if (
+        expectedHeadSha !== undefined &&
+        !/^[0-9a-f]{40}$/i.test(asString(expectedHeadSha, "expectedHeadSha"))
+      ) {
+        throw new Error("expectedHeadSha must be a full commit SHA");
+      }
       const environment = await context.storage.getEnvironment(id);
       if (!environment) throw new Error(`Environment not found: ${id}`);
 
       const requestedCleanup = asBoolean(cleanupAfterMerge, false);
       const cleanupRequested =
         requestedCleanup || Boolean(environment.cleanupAfterMergeRequestedAt);
+      if (
+        expectedPrUrl !== undefined &&
+        (environment.prUrl !== asString(expectedPrUrl, "expectedPrUrl") ||
+          cleanupRequested !== requestedCleanup ||
+          (isProjectHomeEnvironment(environment) && asBoolean(deleteBranch, true)))
+      ) {
+        throw new Error("The pull request or merge effects changed; confirm the merge again");
+      }
       if (requestedCleanup) {
         await context.storage.updateEnvironment(id, {
           cleanupAfterMergeRequestedAt: new Date().toISOString(),
@@ -325,6 +342,7 @@ export function registerPullRequestCommands(
               };
             }
           },
+          expectedHeadSha as string | undefined,
         );
       } catch (error) {
         if (cleanupRequested) {

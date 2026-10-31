@@ -84,8 +84,9 @@ function parseUsdCost(value: Record<string, unknown>): number | undefined {
   const cost = isObject(value.cost) ? value.cost : undefined;
   if (!cost) return undefined;
   const currency = typeof cost.currency === "string" ? cost.currency.trim().toUpperCase() : "";
-  // Grok's `costUsdTicks` has no documented scale, so a missing currency is
-  // not treated as USD. Only an explicit dollar amount is safe to show.
+  // A missing currency is not treated as USD, and Grok's `costUsdTicks` is not
+  // converted (see `acpContextUsage`). Only an explicit dollar amount is safe
+  // to show.
   if (currency !== "USD") return undefined;
   return money(cost.amount);
 }
@@ -151,8 +152,10 @@ export function parseAcpTurnUsage(value: unknown): AcpTurnUsage | null {
  * Occupancy prefers ACP `usage_update.used` when present. Otherwise the turn's
  * token total is the closest thing Grok offers: an agent's input already
  * contains the whole conversation. Cost is taken only from an explicit USD
- * `usage_update.cost`; Grok's `costUsdTicks` is still ignored because the tick
- * is undocumented.
+ * `usage_update.cost`. Grok's `costUsdTicks` is still ignored: Grok documents
+ * 10^10 ticks per USD for its own session stats (1.0.67 and 1.0.70), but
+ * whether the ACP field is that quantity, and per turn or cumulative, needs a
+ * billed check (docs/todo/agent-engines/0007, task 11).
  */
 export function acpContextUsage(
   usage: AcpTurnUsage,

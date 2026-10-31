@@ -1,3 +1,7 @@
+import {
+  CODEX_SERVER_OVERLOADED_MESSAGE,
+  capacityRetriesExhaustedError,
+} from "../../../../bridges/codex-bridge/src/sessions/capacity-retry.js";
 import { multiReviewStatus } from "./coordinator-status-wakes.js";
 import { multiReviewAutomation } from "./control-workflow-summary.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
@@ -5202,6 +5206,78 @@ for (const kind of ["prepare", "fix"] as const) {
     );
   }
 }
+
+/*
+ * The Codex bridge continues a turn the model refused for capacity
+ * (`bridges/codex-bridge/src/app-server-runtime-capacity-retry.ts`). It keeps
+ * the session `running` until the last attempt ends, and a result submitted
+ * during a continuation lands under the original request's key. So an
+ * unattended Fix keeps waiting and completes; only a refusal that outlasts
+ * the retries fails it, with the bridge's exhausted message.
+ */
+test.each(["recovers", "exhausted"] as const)(
+  "an unattended Fix survives a Codex capacity retry (%s)",
+  async (outcome) => {
+    const provider = new Provider(false);
+    provider.statusValue = "running";
+    const environmentId = `env-fix-capacity-${outcome}`;
+    await withService(
+      environmentId,
+      provider,
+      async (context) => {
+        const { service, snapshot, workflowResults } = context;
+        const first = await startFollowUpStep("fix", context, environmentId, true);
+        const sessionId = first.fixSession!.providerSessionId;
+        const requestId = first.activeRequest!.requestId;
+        // The bridge's backoff and its continuation: every pass reads running.
+        for (let pass = 0; pass < 3; pass += 1) await service.advanceNow(first.id);
+        expect(await snapshot(first.id)).toMatchObject({
+          phase: "fixing",
+          activeRequest: { requestId, state: "sent" },
+        });
+        if (outcome === "exhausted") {
+          const exhausted = capacityRetriesExhaustedError(
+            { message: CODEX_SERVER_OVERLOADED_MESSAGE, code: "serverOverloaded" },
+            5,
+          ).message;
+          provider.sessionFailures.set(sessionId, exhausted);
+          await service.advanceNow(first.id);
+          expect(await snapshot(first.id)).toMatchObject({
+            phase: "failed",
+            error: `The fix session failed: ${exhausted}`,
+          });
+          expect(provider.sends.size).toBe(1);
+          return;
+        }
+        expect(
+          await workflowResults!.submit(
+            { environmentId, projectId: "project-1" },
+            requestId,
+            completedFix,
+          ),
+        ).toMatchObject({ ok: true });
+        provider.statusValue = "idle";
+        await service.advanceNow(first.id);
+        const finished = (await snapshot(first.id))!;
+        expect(finished.phase).toBe("completed");
+        expect(finished.fixResult).toBeDefined();
+        // No hand-typed "Please continue": the step sent its prompt once.
+        expect(provider.sends.size).toBe(1);
+      },
+      {
+        toolMode: true,
+        invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+          if (command === "start_review_validation")
+            return {
+              ...(args!.run as ReviewValidationRun),
+              status: "completed",
+            } as T;
+          return stableReviewInvoker<T>(command, args);
+        },
+      },
+    );
+  },
+);
 
 test("Fix gets one result reminder in its existing session and fails after a second miss", async () => {
   const provider = new Provider(false);

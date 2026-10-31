@@ -49,6 +49,15 @@ a transcript.
   back, so the whole history is on the line. Sessions a restart superseded
   are one greyed "Previous attempt" node instead (see
   [Restarting a step](#restarting-a-step)); live numbering skips them.
+- **Earlier validation.** The record's `validationRun` is only the current
+  pass's. When a failed Verify starts the next round, or a review retry
+  prepares a new package, the old run's summary moves to `validationHistory`
+  (newest 20: per command its status, exit code and duration, no output).
+  Each summary sits on the Prepare node of the session that planned it (the
+  newest session started before the run), or on a Prepare node of its own
+  after a Build that wrote the plan; inside an expanded "Previous attempt"
+  when that session was superseded. Its Tests view is read-only and has no
+  command output.
 - **Ahead.** Steps the pipeline will definitely reach are drawn faded
   (`placeholder`): Build, Prepare (fan-out or a configured preparation model),
   the reviewers or Review, Consolidation (fan-out), Verify, Ship and the PR.

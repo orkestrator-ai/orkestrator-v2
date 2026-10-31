@@ -79,4 +79,4 @@
 - **Original command:** `mise run test` on `todo-0930-storage-test-files-8ccf873101e6` at `dda88f007` (rebased as `b64a2b224`), Bun 1.4.4 on the shared Linux host, load average about 19–24.
 - **Failure:** expected `idle`, received `recovering` at line 170 after the cold restart (988.01 ms), the same mismatch as case 1313.
 - **Isolated rerun:** `mise run test:logged -- --name codex-subagent-alone -- bun --cwd=apps/backend test tests/codex-subagent-cards.test.ts` passed (4.0 s).
-- **Assessment:** intermittent recurrence; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1316](../aggregate-validation-runs/1316-storage-test-split-0930-validation.md).
+- **Assessment:** intermittent recurrence; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1324](../aggregate-validation-runs/1324-storage-test-split-0930-validation.md).

@@ -36,6 +36,7 @@ import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server
 
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
 import type { CodexChangeEvidence } from "./change-evidence.js";
+import type { CapacityRetryPolicy } from "./sessions/capacity-retry.js";
 
 import { setHydrateMessagesFromPersistedSessionGateForTesting } from "./history/rollout.js";
 
@@ -284,6 +285,8 @@ export async function harness(
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
     initialPromptRetryDelayMs?: number;
+    capacityRetry?: Partial<CapacityRetryPolicy>;
+    capacityRetryRandom?: () => number;
     dispatchJournalMaxRecords?: number;
     dispatchJournalMaxBytes?: number;
     skillRefreshDebounceMs?: number;
@@ -377,6 +380,8 @@ export async function harness(
     ...(options.initialPromptRetryDelayMs !== undefined
       ? { initialPromptRetryDelayMs: options.initialPromptRetryDelayMs }
       : {}),
+    ...(options.capacityRetry ? { capacityRetry: options.capacityRetry } : {}),
+    ...(options.capacityRetryRandom ? { capacityRetryRandom: options.capacityRetryRandom } : {}),
     ...(options.dispatchJournalMaxRecords !== undefined
       ? { dispatchJournalMaxRecords: options.dispatchJournalMaxRecords }
       : {}),

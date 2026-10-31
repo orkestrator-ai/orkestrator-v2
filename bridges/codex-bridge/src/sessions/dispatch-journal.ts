@@ -44,6 +44,8 @@ export type DispatchTerminalStatus = "completed" | "interrupted" | "failed";
 export interface PromptDispatchRecord {
   /** The browser's stable per-prompt id, used as `clientUserMessageId`. */
   requestId: string;
+  /** Current provider attempt, distinct from the logical request id. */
+  providerRequestId?: string;
   bridgeSessionId: string;
   /** Null when the thread had not been created yet at prepare time. */
   threadId: string | null;
@@ -170,6 +172,7 @@ function isPersistedRecord(value: unknown): value is PromptDispatchRecord {
     typeof record.bridgeSessionId !== "string" ||
     (record.threadId !== null && typeof record.threadId !== "string") ||
     !isOptionalString(record.turnId) ||
+    !isOptionalString(record.providerRequestId) ||
     !DISPATCH_STATES.has(record.state as DispatchState) ||
     !isTimestamp(record.createdAt) ||
     !isTimestamp(record.updatedAt) ||
@@ -472,6 +475,22 @@ export class DispatchJournal {
     return record;
   }
 
+  /** Persist recovery identity before a continuation can reach the provider. */
+  async markContinuation(requestId: string, providerRequestId: string): Promise<void> {
+    if (this.integrityError) throw new DispatchJournalIntegrityError(this.integrityError);
+    const existing = this.records.get(requestId);
+    if (!existing || existing.quarantined) {
+      throw new DispatchJournalIntegrityError(`Dispatch ${requestId} is unavailable`);
+    }
+    this.records.set(requestId, {
+      ...existing,
+      providerRequestId,
+      updatedAt: new Date(this.now()).toISOString(),
+      sequence: ++this.nextSequence,
+    });
+    await this.flush({ failClosed: true });
+  }
+
   /** Written immediately *after* a successful `turn/start` response. */
   async markAccepted(
     requestId: string,
@@ -485,6 +504,7 @@ export class DispatchJournal {
     const timestamp = new Date(this.now()).toISOString();
     this.records.set(requestId, {
       requestId,
+      providerRequestId: existing?.providerRequestId,
       bridgeSessionId: existing?.bridgeSessionId ?? "",
       threadId: options.threadId,
       turnId: options.turnId,
@@ -507,6 +527,7 @@ export class DispatchJournal {
     const timestamp = new Date(this.now()).toISOString();
     this.records.set(requestId, {
       requestId,
+      providerRequestId: existing?.providerRequestId,
       bridgeSessionId: existing?.bridgeSessionId ?? "",
       threadId: options.threadId ?? existing?.threadId ?? null,
       turnId: options.turnId ?? existing?.turnId,
@@ -529,6 +550,7 @@ export class DispatchJournal {
     const timestamp = new Date(this.now()).toISOString();
     this.records.set(requestId, {
       requestId,
+      providerRequestId: existing?.providerRequestId,
       bridgeSessionId: existing?.bridgeSessionId ?? "",
       threadId: existing?.threadId ?? null,
       state: "retryable",
@@ -882,6 +904,9 @@ export interface ReconciliationOutcome {
    * - `absent`   — no user message with this id was ever persisted
    */
   result: "attach" | "terminal" | "absent";
+  /** Authoritative renderable state from the same thread/read. */
+  items?: import("../engine/types.js").EngineItem[];
+  error?: import("../engine/types.js").EngineError;
   turnId?: string;
   status?: DispatchTerminalStatus;
   /** Renderable item ids which app-server ordered before the matched user message. */

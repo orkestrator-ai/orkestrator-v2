@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
-import { runCommand } from "../shell.js";
+import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
@@ -349,8 +349,9 @@ export class NodeFiles {
     const details: Record<string, unknown> = { environmentId: input.environmentId };
     if (input.include.includes("diff")) {
       const root = await this.root({ environmentId: input.environmentId });
+      // Each read scans the working tree, so each retries without the fsmonitor daemon.
       const git = async (args: string[], limit: number) => {
-        const { stdout: text } = await runCommand("git", ["-C", root, ...args], {
+        const { stdout: text } = await runGitWithFsmonitorFallback(["-C", root, ...args], {
           timeoutMs: 20_000,
         });
         return { text: text.slice(0, limit), truncated: text.length > limit };

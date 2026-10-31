@@ -6163,6 +6163,7 @@ describe("pr monitor commands", () => {
       state: "OPEN",
       mergeable: "CONFLICTING",
       baseRefName: "release/2.0",
+      isCrossRepository: false,
     };
     for (const knownPrUrl of [null, metadata.url]) {
       const request = { args: [], shellCommand: "", branch: "feature", knownPrUrl };
@@ -6201,7 +6202,7 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+      "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
     expect(discovery.shellCommand).not.toContain("statusCheckRollup");

@@ -901,16 +901,29 @@ Decisions:
 
 - **Coordinator-only.** Worker `send_message` and `reply_message` have no
   `deliverNow`, and `sendAgentMail` ignores `steer` for any sender that is not
-  a coordinator: a worker steering its coordinator would bypass the
+  a coordinator (on this node, or a command node's coordinator whose mail the
+  node link delivered): a worker steering its coordinator would bypass the
   delegation hold.
 - **Never into a coordinator conversation.** Main ↔ side mail ignores the
   flag. Scheduled mail reports `queued until idle`; bounced, stored or
   budget-held mail reports `not queued`, so a side agent cannot cut into the
   main's turn with the user.
-- **Not across a node link yet.** Mail routed to another node reports
-  `unsupported, queued` only for scheduled pending mail. Stored, bounced and
-  budget-held mail reports `not queued`, with the leaf's placement and reason.
-  Live qualification and the node link are in
+- **Across a node link, through a leaf that advertises it.** For mail to a
+  worker on another node (`send_message` with `nodeId`, or a reply to mail
+  from one), `send_coordinator_node_mail` adds `steer: true` to
+  `deliver_node_mail` only when that leaf's hello advertises
+  `node-mail-steer`. The leaf marks the pending entry as a local coordinator's
+  would be, runs the same single delivery pass (`settleCoordinatorDeliverNow`),
+  and answers with its own `deliverNow`, `deliverNowNote`, post-drain
+  placement and `injectedVia`; its mutes, budgets and steer eligibility
+  decide. Mail already injected by that pass still opens or joins the
+  delegation. An older leaf would refuse the unknown field and the whole
+  message, so it is sent nothing new and the result is worked out here:
+  `unsupported, queued` for scheduled pending mail, `not queued` with the
+  leaf's placement and reason otherwise. A lost answer is the ordinary
+  outcome-unknown error with no `deliverNow` claim; retrying the same
+  `requestId` replays on the leaf. `send_node_message` has no `deliverNow`.
+  Live qualification is in
   [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
 
 `list_agents` (discovery) returns every agent tab in the project and what each
@@ -934,6 +947,41 @@ fire runs the coordinator's own tool under its current scope, so read-only
 rules and project boundaries apply unchanged. Main schedules follow the next
 main conversation; a side agent's schedules end with it. See
 [scheduled-jobs.md](scheduled-jobs.md).
+
+### Self-timers and provider accounts
+
+`create_schedule` with action type `remind_me` is a **self-timer**: its body
+comes back to the conversation that set it (the main coordinator's address,
+or the side agent's own runtime id) as a reminder that starts a new turn, and
+one that fires mid-turn waits, like mail, until the turn ends. `at: "+2h"`
+and `at: "14:30"` are both accepted; absolute times are read in this
+machine's local zone (the user's) unless `timeZone` is given, and the result
+names the zone (`timeZoneUsed`) and the local time (`nextFireLocal`).
+
+For "check in 2 hours and switch accounts if the workers hit a usage limit"
+the main coordinator has three tools (capability `accounts`, plus
+`get_usage_limits` under `environments`; side agents get none):
+
+- `get_usage_limits` lists the agent tabs whose newest recorded turn failed
+  with a provider usage limit, and the active accounts' cached quota windows.
+  It reads storage and caches only.
+- `list_provider_accounts` lists the Claude and Codex logins on this machine
+  or another (`nodeId`), the active one per provider, and each one's plan
+  usage with `hasAllocationLeft`.
+- `switch_provider_account` changes the active login through
+  `set_active_agent_account`, the Settings switch, machine-wide. Without
+  permission it creates a `switch-agent-account` request the user approves
+  in the same dialog as `request_environment_deletion`. With the `scheduleId`
+  of a self-timer that carries the user's permission it switches at once.
+
+A self-timer carries that permission only when the main coordinator sets it
+with `authorizeAccountSwitch` in a turn the user started with their own
+message: the backend records each conversation's `lastTurnOrigin` (`user` or
+`mail`) at dispatch, and mail, status wakes and fired timers count as `mail`.
+The permission names the providers and any other machines, holds the user's
+words, and lasts two hours after the timer fires.
+[agent-accounts.md](agent-accounts.md#coordinator-switching) and
+[scheduled-jobs.md](scheduled-jobs.md#self-timers) have the details.
 
 ## Status wakes
 
@@ -1270,8 +1318,25 @@ environment of the bound project: the backend command
 (`coordinator-surface-actions.ts`) revalidates the credential's scope and
 refuses the project home, the checkout the coordinator may only read. Side
 agents have none of them (their capabilities are `discovery`, `mail` and
-`schedules`). `create_pr` accepts `nodeId` to publish on a connected node.
-The other surfaces act on this node only; their `nodeId` variants are in
+`schedules`).
+
+`launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
+`custom_fix_multi_review` and `open_multi_review` (with or without
+`reviewerId`) also take `nodeId` for a worker on a connected node. The
+receipt, and any adoption of the review, stay on the command node; the node
+that owns the worker checks its project and refuses its checkout, then runs
+the work through a controller command (`launch_controller_terminal`,
+`open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
+or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
+in `commands-registry-controller-workflows.ts`). Those are node-link only,
+never reachable with a workspace grant. Job, tab and navigation IDs on that
+node derive from the command node's receipt key. So when the node link loses
+an answer, the tool returns outcome-unknown and asks for a retry with the same
+`requestId`, and the retry reattaches to what the first attempt made; nothing
+is resent automatically. A remote custom fix that is already past its handoff
+when the retry arrives is reported, with its Fix tab, rather than refused as
+not ready. A node from before these commands answers "update that node".
+`request_root_changes` stays on this node; see
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
 
 | Tool | What it does | Retry with the same `requestId` | What the user sees and can undo |

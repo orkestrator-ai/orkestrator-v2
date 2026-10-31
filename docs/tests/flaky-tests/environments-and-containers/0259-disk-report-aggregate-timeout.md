@@ -276,3 +276,53 @@ mise run test:logged -- --name preparation-disk-owner -- bun test ./tests/unit/d
 Preparation evidence: `validation-04.stdout.txt` in
 `.orkestrator/review-artifacts/review-validation-ad2356ce-9b58-4c2c-9646-2ee2f31dec55/`.
 No implementation, assertion, deadline or skip changed in this owner.
+
+## Second backend on one host (0244) — 2026-10-30
+
+The aggregate repeated the five-second deadline with a null status under load
+average 45 to 77. Alone with `--parallel=1 --only-failures` the unchanged owner
+passed once (5.3 s) and timed out once (6.3 s) under the same load. Details in
+[1323](../aggregate-validation-runs/1323-second-backend-one-host-0244-validation.md).
+No implementation, assertion, deadline or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+Preparation's `mise run test` repeated the five-second timeout (5166.47 ms),
+with `report.status` null instead of zero and an error between tests. Root
+totals were 3,305 passed and one failed across 161 files (396.40 s). Evidence:
+`.orkestrator/review-artifacts/review-validation-273917ca-9984-4108-8435-62e870238e79/validation-04.stdout.txt`. The unchanged complete owner passed with exit 0
+in 5.2 s:
+
+```sh
+mise run test:logged -- --name recorded-disk-report -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+The runner retained its summary in `orkestrator-test-run.8iIhnm` below the host
+temporary directory and removed passing output. Host contention remains an
+unconfirmed hypothesis; no owner implementation, assertion or timeout changed.
+
+## Remote deliverNow review repair — 2026-10-30
+
+- **Original command:** `mise run test:logged -- --name review-retry-default -- mise run test`, retrying preparation's incomplete `mise run test` on `todo-0740-deliver-now-qualification-447a36f318c3`.
+- **Worker configuration:** workspace/root/bridge/protocol reservations 6/1/2/1; Bun 1.4.4, root `--parallel=1`.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` timed out at 5038.22 ms (5000 ms limit). The subprocess status was null at line 123, also reported as an error between tests.
+- **Suite counts:** root/support 3,305 passed, one failed, one error across 3,306 tests in 161 files (149.95 s). Workspace, bridges and protocol-lockfile groups passed; the aggregate exited 1 after 233.1 s.
+- **Complete unchanged owner:** `mise run test:logged -- --name disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed (exit 0, 4.1 s).
+- **Evidence:** aggregate `orkestrator-test-run.rrqNht/root-and-agent-support-tests.log.gz`; enclosing wrapper `orkestrator-test-run.sXKBik/review-retry-default.log.gz`, under the host temporary directory.
+- **Assessment:** recurrence of the known timing failure; isolation passed without changing the disk-report code, assertions or deadline. The aggregate remains non-green.
+
+## Provider-upgrade review — 2026-10-30
+
+Preparation's `mise run test` repeated the isolated-checkout deadline at
+5043.93 ms, with a between-test error (`Expected: 0`). Evidence is
+`validation-07.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-423e9f4a-bbd6-4609-970f-0581a2493d67/`.
+The complete unchanged owner passed alone (exit 0, 3.2 s):
+
+```sh
+mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+No implementation, assertion, timeout or skip changed. The exact repository
+command was rerun through `test:logged` as `review-default-suite`; its result
+is recorded in agent-engines todo 1020.

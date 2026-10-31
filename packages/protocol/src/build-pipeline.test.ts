@@ -29,6 +29,8 @@ import {
   type BuildStepKey,
   type PipelineSessionPhase,
   MAX_PIPELINE_ROUND_REVIEW_REPORTS,
+  MAX_PIPELINE_VALIDATION_HISTORY,
+  MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 import {
@@ -1920,6 +1922,58 @@ describe("build pipeline protocol", () => {
       isBuildPipeline({
         ...snapshot(),
         roundReviewReports: [{ iteration: 0, sessionKey: "review-0", report: {} }],
+      }),
+    ).toBe(false);
+
+    // Earlier forward passes' validation summaries.
+    const summary = (runId: string) => ({
+      runId,
+      iteration: 0,
+      status: "completed" as const,
+      headRef: "a".repeat(40),
+      startedAt: "2026-07-29T00:00:00.000Z",
+      completedAt: "2026-07-29T00:01:00.000Z",
+      commands: [
+        { id: "test", command: "bun test", status: "failed", exitCode: 1, durationMs: 1000 },
+      ],
+    });
+    const history = (count: number) =>
+      Array.from({ length: count }, (_, index) => summary(`run-${index}`));
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        validationHistory: history(MAX_PIPELINE_VALIDATION_HISTORY),
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        validationHistory: history(MAX_PIPELINE_VALIDATION_HISTORY + 1),
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        validationHistory: [{ ...summary("run-0"), status: "running" }],
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        validationHistory: [
+          {
+            ...summary("run-0"),
+            commands: [
+              {
+                id: "test",
+                command: "x".repeat(MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH + 1),
+                status: "passed",
+                exitCode: 0,
+                durationMs: 1,
+              },
+            ],
+          },
+        ],
       }),
     ).toBe(false);
 

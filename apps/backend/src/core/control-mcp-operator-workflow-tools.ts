@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { PUBLIC_PR_MERGE_METHODS } from "@orkestrator/protocol/public-api-inputs-pr";
 import { z } from "zod";
 import { onNode, type ControlMcpCaller } from "./control-mcp-caller.js";
 import { operatorAction, operatorListNodes } from "./control-mcp-operator-tools.js";
@@ -13,7 +14,7 @@ import { nodeIdField, readAnnotations } from "./control-mcp-tool-support.js";
 /**
  * Workflow tools for operator credentials, under the names a coordinator
  * already knows (`launch_multi_review`, `get_multi_review`, …), plus the
- * action bar's Create PR and Resolve Conflicts buttons and `list_nodes`.
+ * action bar's Create PR, Resolve Conflicts and Merge buttons and `list_nodes`.
  * Each is one public action (`review.*`, `pr.*`, `node.list`) under the
  * credential's authority, so its request key, receipt and error codes are
  * the CLI's, and `nodeId` runs it on a leaf node. `control-mcp-tools.ts`
@@ -185,7 +186,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
       "create_pr",
       "pr.create",
       "Create a pull request (PR tab)",
-      "The Create PR button: a PR agent tab that commits, pushes and opens a pull request against targetBranch (default: the project's PR base branch). It never merges. Refused when the environment already has a PR.",
+      "The Create PR button: a PR agent tab that commits, pushes and opens a pull request against targetBranch (default: the project's PR base branch). It never merges (merge_pr does). Refused when the environment already has a PR.",
     ],
     [
       "resolve_conflicts",
@@ -221,4 +222,50 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
         operatorAction(onNode(caller, nodeId), action, input, key, confirmToken),
     );
   }
+
+  server.registerTool(
+    "merge_pr",
+    {
+      title: "Merge a pull request",
+      description:
+        "The Merge and Merge and Cleanup buttons (merge_environment_pr): merge the environment's pull request into its target branch. It cannot be undone, so the first call returns confirmation-required with a description: show it to the user, then repeat the call with confirmToken. A merge GitHub has accepted but not finished is a running receipt; follow it with run_status.",
+      inputSchema: z
+        .object({
+          requestId,
+          environmentId: z.string().trim().min(1).max(200),
+          method: z
+            .enum(PUBLIC_PR_MERGE_METHODS)
+            .optional()
+            .describe("How to merge (default squash, as on the button)."),
+          deleteBranch: z
+            .boolean()
+            .optional()
+            .describe("Delete the head branch after merging (default true)."),
+          cleanup: z
+            .boolean()
+            .optional()
+            .describe(
+              "Merge and Cleanup: also delete this environment and its worktree once the merge is confirmed. Cannot be combined with deleteBranch false.",
+            ),
+          expectedHeadSha: z
+            .string()
+            .trim()
+            .length(40)
+            .optional()
+            .describe("headSha from pr_get. The merge is refused if the branch has moved since."),
+          confirmToken: z
+            .string()
+            .trim()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe("confirmToken from a confirmation-required result, after the user agreed."),
+          nodeId: nodeIdField,
+        })
+        .strict(),
+      annotations: { ...WRITE, destructiveHint: true },
+    },
+    async ({ requestId: key, nodeId, confirmToken, ...input }) =>
+      operatorAction(onNode(caller, nodeId), "pr.merge", input, key, confirmToken),
+  );
 }

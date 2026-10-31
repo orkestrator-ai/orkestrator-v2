@@ -71,6 +71,8 @@ describe("Codex app-server configuration", () => {
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
       // Tools stay out of thread history, on every bridge (codex 0.164).
       "features.incremental_tools": "false",
+      // No goal tools: Orkestrator has no goal surface (codex 0.166).
+      "features.goals": "false",
     });
     // Native sessions must inherit Codex's default (flag off) so 2025-era
     // HTTP MCP servers such as Paper.design can complete initialize.
@@ -86,6 +88,7 @@ describe("Codex app-server configuration", () => {
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
       "features.incremental_tools": "false",
+      "features.goals": "false",
     });
   });
 

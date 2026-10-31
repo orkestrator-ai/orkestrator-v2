@@ -20,6 +20,7 @@ import {
   type WebAnnotationOperationReceipt,
   type WebAnnotationResultCaptureMetadata,
 } from "@orkestrator/protocol/web-annotations";
+import { getWebAnnotationCache } from "@/stores/webAnnotationStore";
 import { captureIntent, type CaptureIntent } from "./capture-intents";
 import { captureOperationIds, pngBase64FromDataUrl, webAnnotationCommand } from "./client";
 
@@ -99,6 +100,24 @@ export function resultCaptureMetadata(
       ? { masks: meta.masks.map((mask) => ({ source: mask.source, rect: mask.rect })) }
       : {}),
   };
+}
+
+/**
+ * Development source hints go only to a backend that advertises
+ * `operations.sourceHints`, which checks each path before marking it
+ * verified. Any other backend gets the capture without them.
+ */
+export function withAdvertisedSourceHints(
+  capture: WebAnnotationCaptureInput,
+  advertised: boolean,
+): WebAnnotationCaptureInput {
+  if (advertised || !capture.evidence?.sourceHints) return capture;
+  const { sourceHints: _omitted, ...evidence } = capture.evidence;
+  return { ...capture, evidence };
+}
+
+function sourceHintsAdvertised(environmentId: string): boolean {
+  return getWebAnnotationCache(environmentId).capabilities?.operations.sourceHints === true;
 }
 
 /** Durably note the receipt, then clear the spool record (both idempotent). */
@@ -188,7 +207,7 @@ export async function commitPendingCapture({
         ? { ...record.capture.target, imageRect: record.regionCrop.sourceRect }
         : record.capture.target;
     const captureInput: WebAnnotationCaptureInput = {
-      ...record.capture,
+      ...withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId)),
       target,
       assetIds,
       redaction: mergedRedaction(record.capture, localRedaction, Boolean(record.imageDataUrl)),

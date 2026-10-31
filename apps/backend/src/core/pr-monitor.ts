@@ -123,6 +123,12 @@ export interface PrDetection {
   checkSummary: PrCheckSummary | null;
   /** Distinguishes a throttled/irrelevant query from an attempted query failure. */
   checkSummaryStatus: "skipped" | "succeeded" | "failed";
+  /**
+   * Cached merge permission of the credential this environment merges with
+   * (`pr-viewer-permission.ts`). Null when unknown; absent when this
+   * observation did not look (a repair, or a terminal PR).
+   */
+  viewerCanMerge?: boolean | null;
 }
 
 export interface PrMonitorDetectionOptions {
@@ -257,6 +263,8 @@ interface PrMonitorEntry {
   checkSummary: PrCheckSummary | null;
   /** Last completed rollup-query attempt; limits GitHub traffic independently of PR polling. */
   lastCheckSummaryAt: number | null;
+  /** Merge permission for the open PR's repository; null when unknown. */
+  viewerCanMerge: boolean | null;
   /** Last emitted state; suppresses byte-identical events. */
   lastEmitted?: PrMonitorEnvironmentState;
   /** ISO time of the last detection GitHub answered (distinct from `lastCheckAt`). */
@@ -646,6 +654,7 @@ export class PrMonitorService {
         target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
       checkSummary: null,
       lastCheckSummaryAt: null,
+      viewerCanMerge: null,
       lastSuccessfulCheckAt: null,
       phase: "idle",
       wake: behaviour.wake ?? null,
@@ -1298,6 +1307,14 @@ export class PrMonitorService {
       entry.checkSummary =
         detection.checkSummary && detection.checkSummary.total > 0 ? detection.checkSummary : null;
     }
+    // Like the rollup, the permission belongs to one open PR. An observation
+    // that did not look keeps the last answer for the same PR.
+    if (detection.url !== previous.prUrl || detection.state !== "open") {
+      entry.viewerCanMerge = null;
+    }
+    if (detection.state === "open" && detection.viewerCanMerge !== undefined) {
+      entry.viewerCanMerge = detection.viewerCanMerge;
+    }
     return transition;
   }
 
@@ -1310,6 +1327,7 @@ export class PrMonitorService {
       entry.persistencePending = false;
       entry.observedPr = null;
       entry.checkSummary = null;
+      entry.viewerCanMerge = null;
       return;
     }
     // After a merge with --delete-branch the environment checks out the base
@@ -1330,6 +1348,7 @@ export class PrMonitorService {
       entry.persistencePending = false;
       entry.observedPr = null;
       entry.checkSummary = null;
+      entry.viewerCanMerge = null;
     } catch (error) {
       entry.persistencePending = true;
       entry.consecutiveErrors += 1;
@@ -1511,6 +1530,7 @@ export class PrMonitorService {
       hasMergeConflicts: entry.target.hasMergeConflicts,
       checkSummary: entry.checkSummary,
       lastSuccessfulCheckAt: entry.lastSuccessfulCheckAt,
+      viewerCanMerge: entry.viewerCanMerge,
     };
   }
 
@@ -1520,10 +1540,12 @@ export class PrMonitorService {
       entry.target.prUrl !== target.prUrl ||
       target.prState === "merged" ||
       target.prState === "closed";
-    const summaryChanged = shouldClearSummary && entry.checkSummary !== null;
+    const summaryChanged =
+      shouldClearSummary && (entry.checkSummary !== null || entry.viewerCanMerge !== null);
     if (shouldClearSummary) {
       entry.checkSummary = null;
       entry.lastCheckSummaryAt = null;
+      entry.viewerCanMerge = null;
     }
     if (changed) {
       // A summary belongs to one open immutable PR URL. Keep it through
@@ -1656,6 +1678,7 @@ function isSameObservableState(
     a.prUrl === b.prUrl &&
     a.prState === b.prState &&
     a.hasMergeConflicts === b.hasMergeConflicts &&
-    isSameCheckSummary(a.checkSummary, b.checkSummary)
+    isSameCheckSummary(a.checkSummary, b.checkSummary) &&
+    (a.viewerCanMerge ?? null) === (b.viewerCanMerge ?? null)
   );
 }

@@ -1504,13 +1504,22 @@ export class CodexRuntimeSessions {
     activity: "idle" | "working" | "waiting" | "missing";
     asyncQuestionItemIds?: string[];
     contentRevision?: string;
+    turnFailed?: true;
   } {
     const activity = this.getActivity(sessionId);
     if (activity === "missing") return { activity };
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return { activity: "missing" };
+    // How the latest turn ended, for the backend's turn-end bell: the same
+    // `failed` phase `getStatus` reports as `error`. A turn the user
+    // interrupted settles to idle, so it never sets this.
+    const turnFailed =
+      activity === "idle" &&
+      (this.ctx.registry.getThreadForSession(sessionId)?.phase ??
+        (session.restartFailure ? "failed" : "idle")) === "failed";
     return {
       activity,
+      ...(turnFailed ? { turnFailed: true as const } : {}),
       ...(session.asyncQuestionItemIds.length > 0
         ? { asyncQuestionItemIds: [...session.asyncQuestionItemIds] }
         : {}),
@@ -1599,9 +1608,11 @@ export class CodexRuntimeSessions {
     // Last tab: stop the turn before detaching. DELETE used to only
     // unsubscribe, so Codex kept editing the worktree after the UI closed.
     if (context && turn && context.bridgeSessionIds.size === 1) {
-      await this.ctx.options.engine
-        .interruptTurn(context.engineHandle, turn.turnId)
-        .catch(() => undefined);
+      if (!(await this.lifecycle.capacityRetry.cancelForClose(context, turn))) {
+        await this.ctx.options.engine
+          .interruptTurn(context.engineHandle, turn.turnId)
+          .catch(() => undefined);
+      }
     }
 
     this.retiredSessions.add(session);

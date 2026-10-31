@@ -228,10 +228,19 @@ The complete unchanged owner passed both viewport cases with one worker (82.0 s)
 ORKESTRATOR_E2E_PORT=14492 mise run test:logged -- --name recovery-attachments-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/playwright/recovery-attachments
 ```
 
-The broad run's evidence is `/tmp/orkestrator-test-run.utMrMj/browser.log` (compressed
-to `browser.log.gz` at completion). This confirms an intermittent attachment-owner
-failure; it does not classify the broad run's other failures as flakes. A separate
+The broad component run completed with 809 passed, 106 skipped and 177 failed
+(25.8 minutes, exit 1); the chained public-site suite was not reached. Its evidence
+is `/tmp/orkestrator-test-run.utMrMj/browser.log.gz`. This confirms an intermittent
+attachment-owner failure; it does not classify the broad run's other failures as
+flakes. A separate
 one-worker `NativeHeldSend.spec.ts` rerun failed before fixture controls appeared,
 including a Vite dynamic-import fetch failure; that owner remains non-green
 (`/tmp/orkestrator-test-run.i7n9E6/recovery-held-send-browser.log.gz`). No assertion,
 timeout, or implementation in either browser owner changed.
+
+The final stable-source rerun of `mise run test:logged -- --name recovery-default -- mise run test`
+passed all four default-tier groups (681.2 s including an approximately 414 s
+admission wait). The complete controller owner, the eight-file focused renderer
+and store check, web typechecking, affected-file lint, and repository formatting
+also passed. No source, assertion, timeout, or skip changed after those focused
+checks; the subsequent changes only recorded this evidence.

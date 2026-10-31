@@ -563,6 +563,7 @@ body[data-orkestrator-dev-profile]::before {
 .agent-thinking-shimmer {
   --text-shimmer-base: currentColor;
   --text-shimmer-highlight: var(--color-foreground);
+  --text-shimmer-duration: 1.8s;
   -webkit-text-fill-color: transparent;
   background-image: linear-gradient(
     100deg,
@@ -576,7 +577,7 @@ body[data-orkestrator-dev-profile]::before {
   background-size: 250% 100%;
   background-clip: text;
   -webkit-background-clip: text;
-  animation: text-shimmer 1.8s linear infinite;
+  animation: text-shimmer var(--text-shimmer-duration) linear infinite;
 }
 
 /* A child that sets its own colour (a token count) draws in it, unswept. */
@@ -594,8 +595,16 @@ body[data-orkestrator-dev-profile]::before {
  * Muted rows get a lighter band, as the thinking status does; the selected
  * row's name is already foreground, so the band is tinted towards the signal's
  * colour rather than being an invisible foreground-on-foreground sweep. All
- * stay well above the name's current contrast on the dark surfaces.
+ * stay well above the name's current contrast on the dark surfaces. The names
+ * sweep more slowly than the thinking status: they can sit in the sidebar for
+ * a long time, so the band should read as a calm cue rather than activity.
  */
+.merge-ready-name,
+.merge-conflicts-name,
+.needs-answer-name {
+  --text-shimmer-duration: 5s;
+}
+
 .merge-ready-name {
   --text-shimmer-highlight: color-mix(in oklab, var(--color-success) 75%, white);
 }

@@ -29,6 +29,10 @@ export class StorageFiles {
     return this.file("environments.json");
   }
 
+  environmentFinalPrFile(): string {
+    return this.file("environment-final-pr.json");
+  }
+
   configFile(): string {
     return this.file("config.json");
   }

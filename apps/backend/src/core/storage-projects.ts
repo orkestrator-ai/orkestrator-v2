@@ -690,7 +690,7 @@ export class ProjectsRepository {
         prState: "merged" | "closed";
         finalPrState: true;
       }>
-    >(this.context.file("environment-final-pr.json"), () => []);
+    >(this.files.environmentFinalPrFile(), () => []);
     return rows.find((row) => row.id === environmentId) ?? null;
   }
 
@@ -708,7 +708,7 @@ export class ProjectsRepository {
         throw new Error(`Environment not found: ${environmentId}`);
       }
       if (removed?.prUrl && (removed.prState === "merged" || removed.prState === "closed")) {
-        const file = this.context.file("environment-final-pr.json");
+        const file = this.files.environmentFinalPrFile();
         const rows = await this.context.loadJson<Array<Record<string, unknown>>>(file, () => []);
         const final = {
           id: removed.id,

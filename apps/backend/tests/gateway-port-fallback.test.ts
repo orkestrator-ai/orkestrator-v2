@@ -23,7 +23,12 @@ afterEach(async () => {
 });
 
 async function createLifecycle(
-  options: { env?: NodeJS.ProcessEnv; loopbackClientPort?: number; strictPort?: boolean } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    loopbackClientPort?: number;
+    strictPort?: boolean;
+    port?: number;
+  } = {},
 ) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-gateway-port-fallback-"));
   directories.push(dataDir);
@@ -31,6 +36,9 @@ async function createLifecycle(
     {
       dataDir,
       rendererRoot: dataDir,
+      bindAddress: "127.0.0.1",
+      allowNonTailscaleBind: true,
+      port: options.port,
       backend: { invoke: async () => null },
       env: options.env ?? {},
       loopbackClientPort: options.loopbackClientPort,
@@ -150,5 +158,95 @@ describe("gateway port fallback", () => {
     const listener = await lifecycle.listenWithPortFallback("127.0.0.1", held);
     expect(listener.port).not.toBe(held);
     expect(listener.port).not.toBe(held + 1);
+  });
+});
+
+describe("ephemeral fixed-port exclusion", () => {
+  test.each([0, 65535])(
+    "port %s allocation releases reserved listeners before publication",
+    async (preferred) => {
+      const http = await import("node:http");
+      const realCreateServer = http.createServer;
+      const offered = [DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT, 45000];
+      const allocations: Array<ReturnType<typeof realCreateServer>> = [];
+      const closed: number[] = [];
+      // All actual binds use ephemeral ports. Only address reporting is injected,
+      // so this never binds the production fixed ports during qualification.
+      const factory = spyOn(http, "createServer").mockImplementation(((
+        ...args: Parameters<typeof realCreateServer>
+      ) => {
+        const server = realCreateServer(...args);
+        allocations.push(server);
+        const realAddress = server.address.bind(server);
+        spyOn(server, "address").mockImplementation(() => ({
+          ...(realAddress() as { address: string; family: string; port: number }),
+          port: offered.shift()!,
+        }));
+        server.on("close", () => closed.push(1));
+        return server;
+      }) as typeof realCreateServer);
+      const lifecycle = await createLifecycle();
+      // Exhaust nearby fallback without touching any fixed port.
+      const realListen = lifecycle.listen.bind(lifecycle);
+      const listen = spyOn(lifecycle, "listen").mockImplementation((address, port, kind) => {
+        if (port !== 0) throw Object.assign(new Error("taken"), { code: "EADDRINUSE" });
+        return realListen(address, port, kind);
+      });
+      try {
+        const result = await lifecycle.listenWithPortFallback("127.0.0.1", preferred);
+        expect(result.port).toBe(45000);
+        expect(closed).toHaveLength(2);
+        expect(allocations).toHaveLength(1);
+      } finally {
+        listen.mockRestore();
+        factory.mockRestore();
+      }
+    },
+  );
+
+  test("secondary-before-main startup leaves the fixed gateway request available", async () => {
+    const http = await import("node:http");
+    const realCreateServer = http.createServer;
+    const offered = [DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT, 45000];
+    const requests: number[] = [];
+    const logicalBindings = new Set<number>();
+    const factory = spyOn(http, "createServer").mockImplementation(((
+      ...args: Parameters<typeof realCreateServer>
+    ) => {
+      const server = realCreateServer(...args);
+      const realListen = server.listen.bind(server);
+      const realAddress = server.address.bind(server);
+      let resolvedPort = 0;
+      spyOn(server, "listen").mockImplementation(((
+        port: number,
+        host: string,
+        callback: () => void,
+      ) => {
+        requests.push(port);
+        resolvedPort = port || offered.shift()!;
+        if (logicalBindings.has(resolvedPort))
+          throw Object.assign(new Error("in use"), { code: "EADDRINUSE" });
+        logicalBindings.add(resolvedPort);
+        // Only ephemeral real sockets: the logical fixed ports are simulated.
+        return realListen(0, host, callback);
+      }) as typeof server.listen);
+      spyOn(server, "address").mockImplementation(() => ({
+        ...(realAddress() as { address: string; family: string; port: number }),
+        port: resolvedPort,
+      }));
+      server.on("close", () => logicalBindings.delete(resolvedPort));
+      return server;
+    }) as typeof realCreateServer);
+    try {
+      const secondary = await createLifecycle({ port: 0 });
+      expect((await secondary.start())?.port).toBe(45000);
+      expect(logicalBindings.has(DEFAULT_GATEWAY_PORT)).toBe(false);
+      expect(logicalBindings.has(DEFAULT_CONTROL_MCP_PORT)).toBe(false);
+      const main = await createLifecycle({ port: DEFAULT_GATEWAY_PORT });
+      expect((await main.start())?.port).toBe(DEFAULT_GATEWAY_PORT);
+      expect(requests).toEqual([0, 0, 0, DEFAULT_GATEWAY_PORT]);
+    } finally {
+      factory.mockRestore();
+    }
   });
 });

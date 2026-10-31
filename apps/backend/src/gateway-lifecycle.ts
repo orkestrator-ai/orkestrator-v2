@@ -250,22 +250,37 @@ export class GatewayLifecycle {
       }
     });
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(port, bindAddress, () => {
-          server.off("error", reject);
-          resolve();
+    let resolvedPort = port;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(port, bindAddress, () => {
+            server.off("error", reject);
+            resolve();
+          });
         });
+      } catch (error) {
+        server.close();
+        throw error;
+      }
+      const address = server.address();
+      resolvedPort = typeof address === "object" && address ? address.port : port;
+      // Linux's ephemeral range can include our fixed ports. Check every
+      // port-0 browser bind, including the last resort after nearby fallback.
+      if (
+        port !== 0 ||
+        listenerKind !== "browser" ||
+        !this.fallbackSkippedPorts().has(resolvedPort)
+      ) {
+        break;
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
       });
-    } catch (error) {
-      server.close();
-      throw error;
+      if (attempt >= 31) throw new Error("Unable to allocate an unreserved gateway port");
     }
-
     this.ctx.servers.add(server);
-    const address = server.address();
-    const resolvedPort = typeof address === "object" && address ? address.port : port;
     return {
       bindAddress,
       port: resolvedPort,

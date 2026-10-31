@@ -13,11 +13,12 @@ import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdo
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { TailscaleServeManager } from "./tailscale-serve.js";
+import { createStandaloneServeOwnershipStore } from "./standalone-serve-ownership.js";
+import { logGatewayPortPolicy } from "./gateway-port-policy.js";
 import { startGatewayServices } from "./startup-services.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { instanceEndpoints, liveInstanceIn } from "./instance-descriptor.js";
 import { createInstanceDescriptorPublication } from "./instance-descriptor-publication.js";
-import { defaultDataDir, isDefaultDataDir } from "./data-dir.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
 import path from "node:path";
@@ -67,29 +68,7 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // which already records this process's output.
 const standaloneLogging = installStandaloneBackendLogging(options);
 console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
-// A second backend on this host (another data directory) already keeps off the
-// fixed ports; say so when the main install is running beside it.
-if (!isDefaultDataDir(options.dataDir)) {
-  const main = await liveInstanceIn(defaultDataDir(process.platform, process.env));
-  if (main) {
-    const gatewayPort = options.port
-      ? `asks for gateway port ${options.port}`
-      : "takes a free gateway port";
-    const port = process.env.ORKESTRATOR_CONTROL_MCP_PORT?.trim()
-      ? "uses ORKESTRATOR_CONTROL_MCP_PORT for its Control MCP"
-      : "leaves the fixed Control MCP port to it";
-    console.info(
-      `[Backend] Another backend (pid ${main.pid}) serves the default data directory; this one serves ${options.dataDir}, ${gatewayPort} and ${port}.`,
-    );
-  }
-}
-// Tailscale Serve keeps proxying to the old port after an unclean exit, and the
-// next start refuses to replace a target it cannot recognise as its own.
-if (options.tailscaleServe && options.port === 0) {
-  console.warn(
-    "[Backend] --tailscale-serve on a free gateway port: after an unclean exit the next start refuses the stale Serve target. Pass --port to keep one port.",
-  );
-}
+await logGatewayPortPolicy(options, process.env, console, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
@@ -181,6 +160,7 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
   managedWebClient,
   tailscaleServe: options.tailscaleServe,
   tailscaleServePort: options.tailscaleServePort,
+  standaloneServeOwnership: createStandaloneServeOwnershipStore(options.dataDir),
   createTailscaleServe: () => new TailscaleServeManager(options.tailscaleExecutable),
   logger: console,
 });

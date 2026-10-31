@@ -1,5 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import { createServer } from "node:net";
+import { GatewayContext } from "../../../apps/backend/src/gateway-context.js";
+import { GatewayLifecycle } from "../../../apps/backend/src/gateway-lifecycle.js";
 import os from "node:os";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
@@ -10,6 +13,8 @@ import {
   DEFAULT_GATEWAY_PORT,
 } from "../../../apps/backend/src/fixed-ports.js";
 import * as connection from "../src/client/service-connection.js";
+import { freeServicePort } from "../src/client/commands/service.js";
+import { parseOptions } from "../../../apps/backend/src/options.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
 
@@ -449,4 +454,80 @@ test("install waits through exhausted boots until the launcher records rollback"
     code: "operation-failed",
     message: expect.stringContaining("went back to 2.23.0"),
   });
+});
+
+test.each(["0", "34121", "34122", "-1", "65536", "garbage", "045000"])(
+  "reinstall replaces an unsuitable saved Serve port %s",
+  async (saved) => {
+    const f = await fixture();
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const file = path.join(f.dataDir, "backend/service.json");
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    config.args = ["--tailscale-serve", "--port", saved];
+    writeFileSync(file, JSON.stringify(config));
+    expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+    const args = installedArgs(f.dataDir);
+    const options = parseOptions(args, {});
+    expect(options.port).toBeGreaterThan(0);
+    expect([34121, 34122]).not.toContain(options.port);
+    expect(options.strictGatewayPort).toBe(true);
+  },
+);
+
+test("a pinned Serve service parses as strict and cannot silently fall back", async () => {
+  const f = await fixture();
+  expect((await f.run(["--skip-start", "--", "--tailscale-serve"])).code).toBe(0);
+  const options = parseOptions(installedArgs(f.dataDir), {});
+  expect(options.strictGatewayPort).toBe(true);
+  const held = createServer();
+  await new Promise<void>((resolve, reject) => {
+    held.once("error", reject);
+    held.listen(options.port!, "127.0.0.1", resolve);
+  });
+  const ctx = new GatewayContext(
+    {
+      dataDir: f.dataDir,
+      rendererRoot: f.dataDir,
+      backend: { invoke: async () => null },
+      env: {},
+      strictPort: options.strictGatewayPort,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    },
+    {
+      gatewayCredentialMatches: () => false,
+      gatewayCredentialExpiresAt: () => null,
+      isOriginAllowed: () => false,
+    },
+  );
+  const lifecycle = new GatewayLifecycle(ctx, { handle: async () => {} });
+  const savedArgs = installedArgs(f.dataDir);
+  try {
+    await expect(
+      lifecycle.listenWithPortFallback("127.0.0.1", options.port!),
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+    expect(ctx.servers.size).toBe(0);
+    await new Promise<void>((resolve) => held.close(() => resolve()));
+    // Once the conflicting process exits, the retry uses the saved pin.
+    expect((await lifecycle.listenWithPortFallback("127.0.0.1", options.port!)).port).toBe(
+      options.port!,
+    );
+    expect(installedArgs(f.dataDir)).toEqual(savedArgs);
+  } finally {
+    if (held.listening) await new Promise<void>((resolve) => held.close(() => resolve()));
+    await lifecycle.stop();
+  }
+});
+
+test("service allocation retries zero and reserved fixed ports", async () => {
+  const ports = [0, 34121, 34122, 45000];
+  const calls: number[] = [];
+  expect(
+    await freeServicePort(async () => {
+      const port = ports.shift()!;
+      calls.push(port);
+      return port;
+    }),
+  ).toBe("45000");
+  expect(calls).toEqual([0, 34121, 34122, 45000]);
+  await expect(freeServicePort(async () => 34121)).rejects.toThrow("Unable to allocate");
 });

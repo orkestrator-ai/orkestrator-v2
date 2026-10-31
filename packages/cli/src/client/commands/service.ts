@@ -115,20 +115,36 @@ async function startupFailedError(
 }
 
 /** A free loopback port to keep across restarts; the OS may offer a fixed one on Linux. */
-async function freeServicePort(): Promise<string> {
-  for (;;) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const probe = createServer();
-      probe.once("error", reject);
-      probe.listen(0, "127.0.0.1", () => {
-        const address = probe.address();
-        probe.close(() => resolve(typeof address === "object" && address ? address.port : 0));
-      });
-    });
-    if (port !== 0 && port !== DEFAULT_GATEWAY_PORT && port !== DEFAULT_CONTROL_MCP_PORT) {
-      return String(port);
-    }
+export async function freeServicePort(allocate = probeServicePort): Promise<string> {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const port = await allocate();
+    if (validServicePort(String(port))) return String(port);
   }
+  throw new Error("Unable to allocate an unreserved service port");
+}
+
+function validServicePort(value: string | undefined): string | undefined {
+  const port = Number(value);
+  return value !== undefined &&
+    String(port) === value &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port <= 65535 &&
+    port !== DEFAULT_GATEWAY_PORT &&
+    port !== DEFAULT_CONTROL_MCP_PORT
+    ? value
+    : undefined;
+}
+
+async function probeServicePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      probe.close(() => resolve(typeof address === "object" && address ? address.port : 0));
+    });
+  });
 }
 
 /** The `--port` value in serve arguments, if any. */
@@ -168,7 +184,7 @@ export const serviceCommands: CommandSpec[] = [
       "Only the default data directory's backend uses the fixed gateway port. With another",
       "--data-dir and no `--port`, the backend takes a free port that changes on each start,",
       "so pass `-- --port PORT` for a stable address. --tailscale-serve gets a free port",
-      "chosen once, here, because Tailscale Serve needs its target to outlive a crash.",
+      "chosen once, here, with strict binding so it cannot move to a fallback port.",
       "On Linux, run `loginctl enable-linger $USER` so the service runs without a login.",
       "",
       "Once the service is running, the address it serves and its gateway token are printed.",
@@ -252,9 +268,9 @@ export const serviceCommands: CommandSpec[] = [
       const bun = process.execPath;
       const bunVersion = typeof Bun === "undefined" ? "" : Bun.version;
       const { service, layout, unit } = await unitFor(context, dataDir, bun);
-      // An unclean exit leaves Tailscale Serve proxying to the old port, and the
-      // next start only adopts a target on its own port, so a Serve backend needs
-      // the same port every time. A reinstall keeps the one it has.
+      // Keep the chosen Serve target stable. Strict binding prevents a startup
+      // race from moving it to an unrecorded fallback. Durable backend ownership
+      // separately recovers older units and an intentional port change.
       const pinsPort =
         secondBackend &&
         requestedArgs.includes("--tailscale-serve") &&
@@ -264,7 +280,9 @@ export const serviceCommands: CommandSpec[] = [
           ? [
               ...requestedArgs,
               "--port",
-              portArgument(service.readServiceConfig(layout)?.args) ?? (await freeServicePort()),
+              validServicePort(portArgument(service.readServiceConfig(layout)?.args)) ??
+                (await freeServicePort()),
+              "--strict-gateway-port",
             ]
           : requestedArgs;
       const portNote = pinsPort

@@ -36,9 +36,9 @@ A free port also breaks Tailscale Serve across an unclean exit. Serve keeps prox
     - Pros: no change.
     - Cons: the main install's address changes depending on start order, and task 2's collision stays reachable.
 - **How does a second backend keep Tailscale Serve working across an unclean exit?**
-  - **`service install` writes a free `--port` chosen at install, and a reinstall keeps it; a hand-started `serve` or older unit logs a warning (recommended, implemented).**
-    - Pros: small; new installs always come back after a crash; no new state file.
-    - Cons: units written by older CLIs and hand-started backends can still refuse to start after an unclean exit, until they get `--port`.
+  - **`service install` writes a free strict `--port`; standalone Serve persists ownership and recovers an old target when the bound port changes (implemented).**
+    - Pros: covers new installs, older units and hand-started backends; foreign targets remain conflicts.
+    - Cons: an older unit needs its last successful descriptor for the first migration; missing ownership evidence requires host-side inspection.
   - **The backend remembers its free port in the data directory and asks for it again.**
     - Pros: covers every start, and gives every second backend a stable address, including remote ones.
     - Cons: a new state file and more startup logic, and the port can still be taken at the next start.
@@ -56,7 +56,7 @@ A free port also breaks Tailscale Serve across an unclean exit. Serve keeps prox
     - Pros: no change.
     - Cons: `mise run dev` started first still moves the installed app's gateway.
 - **What should existing second services do when they update?**
-  - **Nothing: they move to a free port, and release notes say to add `--port` (recommended; the release note is not written).**
+  - **Direct tailnet services move to a free port; the [pending release note](../../development/releasing.md#pending-release-note-gateway-port-migration) explains the explicit `--port` migration (implemented; publication and VM qualification remain open).**
     - Pros: one rule for every backend; no rewriting of service config.
     - Cons: a remote client saved on `:34121` loses that service after it updates, and has to be reconnected by someone with access to the host.
   - **The launcher adds `--port 34121` to existing second services on update.**
@@ -70,12 +70,12 @@ A free port also breaks Tailscale Serve across an unclean exit. Serve keeps prox
     - Pros: fixes the setup flow for that population.
     - Cons: one more question, for a rare setup.
 - **Should a backend refuse a free port the OS happens to pick on 34121 or 34122?**
-  - **No, only the port `service install` writes is checked (recommended, implemented).**
-    - Pros: no new retry path. The chance is about 2 in 28,000 per start, on Linux only, and an unwritten free port does not last past that start.
-    - Cons: on Linux, a second backend can very rarely hold a fixed port until its next restart.
-  - **Close and retry in the gateway's listener.**
-    - Pros: closes it for the gateway.
-    - Cons: the Control MCP and other free-port listeners have the same gap, so it would not close it overall.
+  - **Close and retry in every port-0 browser bind, including final fallback (implemented).**
+    - Pros: OS allocation cannot occupy either fixed gateway reservation.
+    - Cons: retries are bounded and fail startup if no unreserved port is allocated.
+  - **Check only the port written by `service install` (rejected).**
+    - Pros: smaller change.
+    - Cons: implicit gateways and final fallback could still take a reserved fixed port.
 
 ### 2. Stop the desktop's gateway falling back onto 34122
 
@@ -143,7 +143,7 @@ Only the tailnet choice asks for a port. That is the one choice where a client d
 
 ### Tailscale Serve keeps one port (task 1)
 
-This goes beyond the file's recommendation, for the reason under task 1's Investigation: a free port would stop a Serve service coming back after a crash. Dry runs show the unchanged arguments and the note, because the port is only chosen on a real install.
+New auto-pinned installs use `--strict-gateway-port`, so a bind conflict cannot move publication away from the saved pin. Reinstalls validate saved pins. Standalone Serve writes `standalone-serve.json` before publishing, safely replaces only a matching owned tailnet root when the port changes, and migrates older units from their last successful instance descriptor. Other paths survive and foreign roots or Funnel remain conflicts. Dry runs show the unchanged arguments and note because allocation happens only on installation.
 
 ### `mise run dev` takes a free port (task 1)
 
@@ -158,6 +158,9 @@ This also goes beyond the file. `desktopGatewayPort` in `backend-process.ts` kee
 `apps/backend/src/fixed-ports.ts` holds both constants, so the gateway does not import the Control MCP server and the standalone CLI imports neither.
 
 ## Outstanding work
+
+- Publish the [written migration note](../../development/releasing.md#pending-release-note-gateway-port-migration) with the next release. Qualify both a sole custom-data-directory tailnet service and a secondary one installed without `--port`: update, reconnect from host-side access using `-- --port PORT`, then confirm the saved remote connection works.
+- Qualify an existing no-port Serve unit across update and SIGKILL with its old descriptor retained, including a subsequent reinstall with a new pin. Confirm its HTTPS URL remains available and a foreign root is never replaced.
 
 Run task 3 in a disposable Linux VM, never on a machine someone works on, with the new build and alongside 0244 task 5:
 

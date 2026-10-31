@@ -1,3 +1,4 @@
+import { parseOptions } from "../../../apps/backend/src/options.js";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import os from "node:os";
@@ -101,6 +102,17 @@ describe("service setup questions", () => {
     expect(asked.filter((prompt) => prompt.includes("Gateway port"))).toHaveLength(5);
     expect(io.err.join("")).toContain("stay with the main install");
     expect(io.err.join("")).toContain("service install --yes -- --port 45000");
+  });
+
+  test("leading-zero setup ports are normalized for backend startup", async () => {
+    const { io } = scripted(["2", "045000", "n", "y"]);
+    const args = await askServeArguments(io, {
+      installCommand,
+      probe: tailscaleReady,
+      secondBackend: true,
+    });
+    expect(args).toEqual(["--port", "45000"]);
+    expect(parseOptions(args, {}).port).toBe(45000);
   });
 
   test("a second backend can keep a free port", async () => {

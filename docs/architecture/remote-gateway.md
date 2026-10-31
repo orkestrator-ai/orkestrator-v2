@@ -14,7 +14,8 @@ running Orkestrator.
 
 - `mise run dev` starts Electron, which supervises one backend. Electron uses
   an ephemeral loopback control listener. Authenticated browsers use a
-  separate Tailscale listener on port `34121` (or a local-only fallback).
+  separate browser listener on an OS-assigned free port; the bound URL is
+  logged (with a local-only fallback when Tailscale is unavailable).
   Losing Tailscale or a browser-port conflict does not take down the desktop
   control channel.
 - `mise run start:web` builds and starts the backend without Electron. The
@@ -144,19 +145,31 @@ A second backend that remote clients reach needs a stable address, so give it
 install` prints them. The questions in `service install` offer a port for the
 tailnet address.
 
-Tailscale Serve needs its target port to survive a restart: after an unclean exit
-the Serve configuration still proxies to the old port, and the next start only
-adopts a target on its own port (`TailscaleServeConflictError` otherwise). So
-`service install --data-dir <other> -- --tailscale-serve` without `--port` writes
-a free port chosen at install, and a reinstall keeps it. A hand-started `serve`
-or an older unit with `--tailscale-serve` on a free port logs a warning at
-startup, and needs `--port` to avoid that failure.
+`service install --data-dir <other> -- --tailscale-serve` without `--port`
+writes a free port chosen at install and `--strict-gateway-port`. Reinstalling
+keeps a valid nonreserved pin; saved zero, fixed or invalid ports are replaced.
+If the pin becomes occupied, startup fails without publishing another target.
 
-If the port is taken, the gateway tries the next 20 ports and then a free one,
-unless `--strict-gateway-port` is set. The walk never lands on `34121`, `34122`,
-`ORKESTRATOR_CONTROL_MCP_PORT` or the loopback client port, even when they are
-free. Those ports belong to another listener, which may not have bound yet. A port
-asked for by name is still tried first.
+Standalone Serve also records ownership atomically in
+`<data-dir>/standalone-serve.json` before publishing its root proxy. Older units
+and hand-started backends can therefore recover their owned root when a free
+port or fallback changes across restarts. On the first update, ownership is
+recovered from the last successful `backend-instance.json` (the loopback primary
+URL and HTTPS browser URL). Only the matching tailnet-only root is replaced;
+other paths survive, and foreign roots and Funnel configurations remain
+conflicts. Keep these files when repairing a service. An old service with no
+usable ownership evidence needs host-side inspection of its Serve configuration
+before removing its stale root; reinstalling with a port alone cannot prove
+ownership of an unknown target.
+
+If a non-strict port is taken, the gateway tries the next 20 ports and then a
+free one. The walk skips `34121`, `34122`, `ORKESTRATOR_CONTROL_MCP_PORT` and the
+loopback client port. Every OS-assigned browser port is also checked against
+these reservations and released and retried if reserved. A port asked for by
+name is still tried first.
+
+See the [pending release migration note](../development/releasing.md#pending-release-note-gateway-port-migration)
+for existing services that remote clients reach directly over the tailnet.
 
 ## Compression and terminal transport
 

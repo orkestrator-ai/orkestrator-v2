@@ -127,7 +127,7 @@ async function askGatewayPort(io: ClientIo): Promise<string | null> {
       port !== DEFAULT_GATEWAY_PORT &&
       port !== DEFAULT_CONTROL_MCP_PORT
     ) {
-      return answer;
+      return String(port);
     }
     io.stderr(
       `Enter a port from 1 to 65535, other than ${DEFAULT_GATEWAY_PORT} and ${DEFAULT_CONTROL_MCP_PORT}.\n`,

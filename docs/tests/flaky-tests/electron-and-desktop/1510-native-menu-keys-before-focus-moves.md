@@ -10,4 +10,28 @@
 - **Local reproduction:** on Arch (Omarchy) with a private Xvfb display and no window manager, the unchanged spec failed 2 of 25 runs, both at the first menu-navigation step (`expect.poll(events).toEqual(["shortcuts:open"])` received `[]`). With xdotool's key delay set to 0, it failed 10 of 10 runs at that step. The CI symptom (resumed typing) did not reproduce here.
 - **Cause:** confirmed locally for menu navigation: Electron's Windows/Linux menu bar takes keyboard focus only after the page reports a lone Alt as unhandled, which is a renderer round trip, so the keys xdotool sent after Alt (Right, Right, Down, End, Return) could reach the page first. Inferred, not reproduced, for the CI step: the `a` was sent as soon as xdotool had given the window X focus, and Chromium activates the window and refocuses its web contents asynchronously after the focus event, so a key processed in between has no focused view. The screenshot (textbox focused afterwards) fits that.
 - **Fix:** the spec waits for each focus move before sending the next keys: the page loses focus after the lone Alt, and regains it after the window regains native focus following the About panel. No assertion was loosened. `nativeMenuWindows` also skips a menu popup destroyed between `xdotool search` and `getwindowname`; the zero-delay stress run exposed that.
-- **Verification:** 35 of 35 local runs passed after the fix, including 20 with xdotool's key delay at 0. The workflow has not run the fix yet, so the CI step is not yet shown fixed; reopen this case if the Linux job fails there again.
+- **Initial verification:** 35 of 35 local runs passed after the fix, including 20 with xdotool's key delay at 0. The workflow had not run that fix yet.
+
+## Review qualification, 2026-10-31
+
+[Run 41219984351](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41219984351)
+tested `032b92456422f66e1ab4a324f54e5b1dc241e64d`, with one worker,
+`ORKESTRATOR_NATIVE_MENU_INPUT=1`, `--repeat-each=5 --retries=0`, and both
+`application-menu-electron.spec.ts` and `electron-cleanup.spec.ts`.
+The local Linux/Xvfb run passed all ten cases in 15.7 s. The Ubuntu runner
+passed nine of ten in 18.5 s; the first menu iteration lost the `a` after About
+again, even after `webContents.isFocused()` returned true. All five cleanup
+iterations passed. The failed run's [Linux artifact](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41219984351/artifacts/13050125215)
+retains the trace and screenshot.
+
+The spec now also observes the textbox's DOM focus before sending the single
+native `a`. This checks Chromium's restoration of the active element after
+native-view focus; it does not call the textbox's `focus()` or retry typing.
+Windows must regain native-view focus without an explicit foreground request;
+Linux/Xvfb still supplies the native-window focus a window manager would give.
+
+The workflow also runs deterministic Windows process-table cases on both
+platforms, and five real blocked-shutdown cleanup iterations. The cleanup
+fixture uses Electron in Node mode instead of the Unix-only `sleep` command.
+Successful menu runs attach the observed events, dismissal, page focus and
+textbox value; cleanup runs attach the owned process tree and stopped helper.

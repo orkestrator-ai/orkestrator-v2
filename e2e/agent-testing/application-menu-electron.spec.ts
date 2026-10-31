@@ -235,6 +235,9 @@ test("built application menu resolves native roles and dispatches callbacks", as
     // the test does; the page must then take keys without being refocused.
     if (process.platform === "linux") nativeMenuFocus(main!);
     await expect.poll(pageFocused).toBe(true);
+    // The native view can report focus before Chromium restores the document's
+    // active element. Observe that restoration without focusing the input.
+    await expect(page.getByRole("textbox")).toBeFocused();
     nativeMenuKeys(main!, ["a"], "a");
     await expect(page.getByRole("textbox")).toHaveValue("a");
     await test.info().attach("native-input-results", {

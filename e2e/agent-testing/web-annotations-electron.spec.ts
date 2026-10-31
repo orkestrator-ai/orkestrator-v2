@@ -1478,6 +1478,14 @@ async function restoreDirectPreview(): Promise<void> {
 
 /** Keyboard activation of a renderer control: focus it, then Enter. No pointer. */
 async function pressControl(locator: ReturnType<Page["locator"]>, key = "Enter"): Promise<void> {
+  // A locator can set the DOM activeElement while the native preview still
+  // owns keyboard focus. Return it to the host before activating its control.
+  await s().app.evaluate(({ app, BrowserWindow }) => {
+    const host = BrowserWindow.getAllWindows()[0]!;
+    if (process.platform === "darwin") app.focus({ steal: true });
+    host.focus();
+    host.webContents.focus();
+  });
   await locator.focus();
   await expect(locator).toBeFocused();
   await s().window.keyboard.press(key);

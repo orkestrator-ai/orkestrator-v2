@@ -38,7 +38,7 @@ const TURN_TIMEOUT_MS = 300_000;
  */
 function slowStep(seconds: number): string {
   return platform === "grok"
-    ? `Write out every whole number from 1 to ${seconds * 30} in words, separated by commas`
+    ? `Write out every whole number from 1 to ${seconds * 3} in words, separated by commas`
     : `Run the shell command "sleep ${seconds}"`;
 }
 
@@ -498,12 +498,17 @@ test.describe(`goal loop: ${platform}`, () => {
     // Away from the tab, the loop keeps going with nothing mounted.
     await open(other.name);
     await expect(page.getByTestId("goal-pill")).toHaveCount(0);
-    await expect
-      .poll(async () => (await detail()).goal?.status, {
-        timeout: TURN_TIMEOUT_MS,
-        intervals: [2_000],
-      })
-      .toBe("complete");
+    let ended: Goal | undefined;
+    const endBy = Date.now() + TURN_TIMEOUT_MS;
+    while (Date.now() < endBy) {
+      ended = (await detail()).goal;
+      if (ended && !["active", "checking"].includes(ended.status)) break;
+      await page.waitForTimeout(2_000);
+    }
+    expect(
+      { status: ended?.status, reason: ended?.statusReason, detail: ended?.statusDetail },
+      "the goal set in the browser",
+    ).toEqual({ status: "complete", reason: "check-passed", detail: undefined });
     expect(workspace.read("goal-ui-2.txt")).toBeDefined();
 
     // Back on the tab: the ended state, tiles rather than user bubbles.

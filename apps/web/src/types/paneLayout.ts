@@ -286,6 +286,11 @@ export interface TabInfo {
   displayTitle?: string;
   /** True when the tab was launched from the review workflow. */
   isReviewTab?: boolean;
+  /**
+   * Backend-recorded job this tab runs. Identifies the Resolve tab the action
+   * bar reuses, because `displayTitle` can be renamed to anything.
+   */
+  jobCompletionAction?: "refresh-pr-after-agent-completion";
   /** Presentation-only: structured result datasets are not transcript commentary. */
   hideStructuredOutput?: boolean;
   /**

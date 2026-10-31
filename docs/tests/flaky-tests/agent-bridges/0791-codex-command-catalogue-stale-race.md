@@ -302,6 +302,22 @@ mise run test:logged -- --name catalogue-isolated -- bun test --cwd bridges/code
 No bridge implementation, assertion, or timeout changed. This confirms the
 existing intermittence; the cause remains unproven.
 
+## Resolve button tab reuse validation, 2026-10-31
+
+`mise run test` failed the two-pre-plugin-answer stale/ready assertion
+(`codex-command-catalogue.test.ts:273`, expected `stale`, received `ready`) at
+97.17 ms. Codex reported 2,313 passed and one failed; the suite took 715.6 s, about
+four times an earlier run on the same machine (182 s), so the host was under load.
+The change under test edits no bridge file. Log:
+`orkestrator-test-run.xfpUnw/bridges.log.gz` below the host temporary directory.
+The owning file then passed five of five runs alone (30 passed each):
+
+```sh
+bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts
+```
+
+No bridge source, assertion or timeout changed.
+
 ## Project checkout review validation, 2026-10-31
 
 `mise run test:logged -- --name review-default-rerun -- mise run test`

@@ -172,6 +172,7 @@ describe("pane layout persistence", () => {
         initialReasoningEffort: "xhigh",
         initialExecutionProfileId: "plan",
         hideStructuredOutput: true,
+        jobCompletionAction: "refresh-pr-after-agent-completion",
         initialCommands: ["do not persist"],
         nativeAgentData: {
           environmentId: "env-1",
@@ -214,6 +215,7 @@ describe("pane layout persistence", () => {
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
     expect(rehydratedTab?.initialExecutionProfileId).toBe("plan");
     expect(rehydratedTab?.hideStructuredOutput).toBe(true);
+    expect(rehydratedTab?.jobCompletionAction).toBe("refresh-pr-after-agent-completion");
     expect(rehydratedTab?.initialPrompt).toBeUndefined();
     expect(rehydratedTab?.agentHandoffId).toBe("handoff-1");
     expect(rehydratedTab?.consumedAgentHandoffId).toBe("handoff-consumed");

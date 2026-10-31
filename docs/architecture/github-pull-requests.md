@@ -88,6 +88,49 @@ monitor (`requestPrMonitorRefresh`) to re-check every environment whose stored
 `prUrl` is the same pull request. This is detached and best effort; it never
 delays or fails the GitHub action.
 
+## The Resolve button
+
+The action bar's Resolve button, its configure dialog and the `⌘⇧U` shortcut all
+call `launch_native_agent_job` with `tabReuse`. The backend, not the renderer,
+chooses the tab (`native-agent-job-tab-reuse.ts`), because it owns the layout, the
+session and the queue:
+
+- A Resolve tab is one whose job recorded the completion action. Every job launch
+  with a `completionAction` writes it to the tab as `jobCompletionAction`. A title
+  is not evidence: tabs can be renamed, and any tab can be called "Resolve".
+- Of several, the session updated last is the one considered. If it cannot take a
+  prompt, the button opens a new tab; it does not fall back to an older one.
+- An idle tab gets the prompt straight away, under the same exactly-once dispatch
+  as a new launch. A provider refusal opens a new tab. An `unknown` outcome does
+  not, because the prompt may be running.
+- A running or blocked tab, or one with prompts already waiting, gets it through
+  the durable prompt queue, so it runs when that work ends and overtakes nothing.
+  It never steers or interrupts. A second plain press adds nothing while an
+  identical prompt still waits. A draft in that tab's composer holds the queue, as
+  it does for any queued prompt.
+- `NativeAgentService.promptReadiness` answers `unavailable` for a missing
+  session, a tab being closed, a parked dispatch or queue, and a failed provider
+  session. All of them open a new tab.
+- A plain press (`any-agent`) keeps the tab's own agent and model. The dialog
+  (`same-agent`) only reuses a tab on the agent it chose, and sends its model,
+  reasoning and speed with the prompt, as the composer's picker does. A different
+  agent opens a new tab, because a conversation cannot change provider.
+- The tab limit stops Resolve only when no Resolve tab is open. If the open one
+  turns out unusable on a full tab bar, the new tab is refused with the limit error.
+
+The PR refresh needs nothing specific to reuse. Arming is per environment and
+stays armed while GitHub reports conflicts, and an accepted dispatch records
+`working`, so the turn that follows has its own completion edge whether it came
+from a new tab, a resend or the queue. A queued prompt can run after the turn
+before it already cleared the conflicts. That disarms the refresh, and only the
+regular PR poll sees the extra turn, which is fine because there is no stale
+conflict state left to clear.
+
+`pr.resolve` and `resolve_conflicts` do not pass `tabReuse`: their receipt names a
+new tab and a run, so they always open one. They still record the marker, so the
+button can reuse a tab they opened. Tabs opened before the marker existed have
+none, so the next press opens one more tab and reuses that from then on.
+
 ## Ready to merge
 
 An environment whose pull request waits only for the user to merge it has a

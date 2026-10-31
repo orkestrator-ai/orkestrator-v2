@@ -16,6 +16,11 @@ import {
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
 import { assertValidPromptAttachments } from "./prompt-attachments.js";
+import {
+  isNativeAgentJobTabReuse,
+  resendToOpenJobTab,
+  jobPromptFingerprint,
+} from "./native-agent-job-tab-reuse.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -34,6 +39,21 @@ async function launchNativeAgentJob(
     validateModelCatalog: boolean;
     allowCompletionAction: boolean;
   },
+): Promise<Record<string, unknown>> {
+  if (args.tabReuse && options.allowCompletionAction) {
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    return context.storage.withNativeAgentJobLaunch(environmentId, () =>
+      launchNativeAgentJobInternal(args, context, dependencies, options),
+    );
+  }
+  return launchNativeAgentJobInternal(args, context, dependencies, options);
+}
+
+async function launchNativeAgentJobInternal(
+  args: Record<string, unknown>,
+  context: CommandContext,
+  dependencies: RegistryDependencies,
+  options: { validateModelCatalog: boolean; allowCompletionAction: boolean },
 ): Promise<Record<string, unknown>> {
   if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
   const environmentId = asNonBlankString(args.environmentId, "environmentId");
@@ -75,6 +95,15 @@ async function launchNativeAgentJob(
     throw new Error("literal must be true when given");
   }
   const literal = args.literal === true;
+  const tabReuse = options.allowCompletionAction ? args.tabReuse : undefined;
+  if (tabReuse !== undefined && !isNativeAgentJobTabReuse(tabReuse)) {
+    throw new Error("tabReuse is invalid");
+  }
+  // The marker that finds the tab is the completion action; the resend carries
+  // the prompt alone, so a launch asking for more than that is refused.
+  if (tabReuse && (!completionAction || literal || args.attachments !== undefined)) {
+    throw new Error("tabReuse needs a completionAction and a plain prompt");
+  }
   // Already staged in the workspace by the caller; validated, never written here.
   const attachments =
     args.attachments === undefined
@@ -175,10 +204,15 @@ async function launchNativeAgentJob(
   );
 
   let armedAt: string | null = null;
+  let previousArmedAt: string | undefined;
   const rollBackCompletionAction = async (): Promise<void> => {
     if (!armedAt) return;
     try {
-      await context.storage.disarmPrRecheckAfterAgentCompletion(environmentId, armedAt);
+      await context.storage.disarmPrRecheckAfterAgentCompletion(
+        environmentId,
+        armedAt,
+        previousArmedAt,
+      );
     } catch (error) {
       console.warn(
         `[native-agent-job] Failed to roll back PR refresh for ${environmentId}:`,
@@ -194,6 +228,7 @@ async function launchNativeAgentJob(
       ...(autoMergePrUrl ? { autoMergePrUrl, autoMergeEnabledAt, requestId } : {}),
     });
     armedAt = armed.armedAt;
+    previousArmedAt = armed.previousArmedAt;
     if (!armedAt && autoMergePrUrl) return { status: "skipped" };
     if (autoMergePrUrl && armed.environment.autoMergeResolveRequestId)
       requestId = armed.environment.autoMergeResolveRequestId;
@@ -221,12 +256,43 @@ async function launchNativeAgentJob(
   };
   let dispatchStarted = false;
 
+  const completionActionResult = completionAction
+    ? {
+        completionActionArmed: armedAt !== null,
+        ...(!armedAt
+          ? {
+              warning: "Conflict resolution started, but automatic PR refresh was not scheduled.",
+            }
+          : {}),
+      }
+    : {};
+
   try {
     if (!(await authorized())) {
       await rollBackCompletionAction();
       return { status: "skipped" };
     }
     const jobId = jobIdFor(environmentId, requestId);
+    if (tabReuse && completionAction) {
+      const resent = await resendToOpenJobTab(context, {
+        environmentId,
+        requestId,
+        completionAction,
+        tabReuse,
+        agent,
+        enabledAgents: enabled,
+        prompt,
+        mode: conversationMode,
+        selection: {
+          ...(explicitModel ? { model: explicitModel } : {}),
+          ...(explicitReasoningEffort ? { reasoningEffort: explicitReasoningEffort } : {}),
+          ...(typeof args.fastMode === "boolean" && typeof fastMode === "boolean"
+            ? { fastMode }
+            : {}),
+        },
+      });
+      if (resent) return { jobId, environmentId, ...resent, ...completionActionResult };
+    }
     const tabId = `agent-job-${jobId}`;
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     await context.storage.ensureNativeAgentJobTab({
@@ -235,6 +301,7 @@ async function launchNativeAgentJob(
       agent,
       title,
       activate: args.activateTab === true,
+      ...(completionAction ? { completionAction } : {}),
     });
     const session = await context.nativeAgents.ensureSession({
       environmentId,
@@ -256,6 +323,26 @@ async function launchNativeAgentJob(
       providerSessionId: session.providerSessionId,
       title,
     });
+    const jobQueueKey = `${agent}\0${logicalSessionKey}`;
+    if (tabReuse) {
+      await context.storage.reserveNativeAgentJobRequest(jobQueueKey, environmentId, {
+        requestId,
+        fingerprint: jobPromptFingerprint(
+          prompt,
+          conversationMode,
+          tabReuse === "same-agent"
+            ? {
+                ...(explicitModel ? { model: explicitModel } : {}),
+                ...(explicitReasoningEffort ? { reasoningEffort: explicitReasoningEffort } : {}),
+                ...(typeof args.fastMode === "boolean" && typeof fastMode === "boolean"
+                  ? { fastMode }
+                  : {}),
+              }
+            : {},
+        ),
+        status: "unknown",
+      });
+    }
     if (!(await authorized())) {
       await rollBackCompletionAction();
       return { status: "skipped" };
@@ -278,6 +365,8 @@ async function launchNativeAgentJob(
       ...(attachments?.length ? { attachments } : {}),
       ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
     });
+    if (tabReuse)
+      await context.storage.settleNativeAgentJobRequest(jobQueueKey, requestId, outcome.outcome);
     if (outcome.outcome === "rejected") await rollBackCompletionAction();
     return {
       jobId,
@@ -293,17 +382,7 @@ async function launchNativeAgentJob(
             : "rejected",
       ...(outcome.outcome === "rejected" ? { error: outcome.error } : {}),
       ...(outcome.outcome === "unknown" && outcome.error ? { error: outcome.error } : {}),
-      ...(completionAction
-        ? {
-            completionActionArmed: armedAt !== null,
-            ...(!armedAt
-              ? {
-                  warning:
-                    "Conflict resolution started, but automatic PR refresh was not scheduled.",
-                }
-              : {}),
-          }
-        : {}),
+      ...completionActionResult,
     };
   } catch (error) {
     // A thrown dispatch can have reached the provider. Retain ownership; never duplicate it.

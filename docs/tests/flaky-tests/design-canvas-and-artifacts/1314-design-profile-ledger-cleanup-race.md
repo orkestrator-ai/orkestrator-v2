@@ -91,6 +91,31 @@ assertion, timeout or skip changed. Asynchronous ledger removal remains a
 hypothesis. Other outcomes are in
 [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
 
+
+## Resolve tab reuse review — 2026-10-31
+
+The final exact `mise run test` rerun against the committed Resolve repairs
+(`527d6edab`) repeated this assertion at `browser-profiles.test.ts:505` after
+224.54 ms: the profile was gone, but one JSON ledger entry remained. Backend
+totals were 11,712 passed and this one failure. Every other package and the
+root, bridge and protocol groups passed. The new Resolve command, queue,
+retry and completion regressions passed in this aggregate run.
+
+The complete unchanged owner passed alone with one worker (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name design-profile-owner -- bun test --cwd apps/backend src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.V7Etln/review-default-final.log.gz` and
+`orkestrator-test-run.8wPYnM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The run spent about 1,116 seconds waiting for host admission and finished in
+1,529.4 seconds. No design cleanup source, assertion, timeout or skip changed;
+the root cause of this existing intermittent case remains unestablished.
+Browser validation limits for the same repair are recorded in
+[0382](../web-ui/0382-component-browser-parallel-load.md).
+
 ## Hidden flow graph review — 2026-10-31
 
 The required exact `mise run test` rerun repeated this assertion after 261.25 ms.

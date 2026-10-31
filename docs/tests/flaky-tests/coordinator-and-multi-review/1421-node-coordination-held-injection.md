@@ -13,3 +13,25 @@
 - **Hypothesis:** asynchronous mail delivery had not settled under aggregate contention; root cause remains unconfirmed. No assertion, deadline or skip changed.
 
 - **Exact aggregate rerun:** `mise run test` passed all four default-tier groups after these review fixes and pinned-toolchain preparation (754.0 s including 574.5 s waiting for the shared-host lease). Workspace, root/support, bridges and Codex protocol lockfile checks all passed; no failing owner was skipped or weakened.
+
+## Main merge validation — 2026-10-31
+
+The third main-merge pass ran `mise run test:logged -- --name merge-pass3-default -- mise run test`.
+The default aggregate failed only this unchanged case at line 348 after 109.57 ms:
+the mail record still had `placement: pending-inject` when `injected` was expected.
+The backend used four isolated file workers and reported 11,922 passed, 103 skipped
+and one failed across 812 files (108.24 s). Every other workspace package and the
+root, bridge and protocol groups passed. The logged aggregate took 356.9 s,
+including about 172.1 s waiting for the shared-host scheduler.
+
+The complete unchanged owner then passed (exit 0, 2.3 s):
+
+```sh
+mise run test:logged -- --name merge-pass3-node-coordination -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures
+```
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.mlceSU/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `orkestrator-test-run.th3zhT/merge-pass3-default.log.gz`.
+This repeats the existing asynchronous delivery symptom; no new cause was
+established and no owning source, assertion, deadline or skip changed.

@@ -261,7 +261,9 @@ Operator credentials also get, under the names a coordinator already uses:
   default) through `session.start`'s job path, so it is a run with a receipt
   that `run_status` follows. `create_pr` is refused while the environment has a
   PR and starts PR monitoring; `resolve_conflicts` refreshes the PR when it
-  finishes. Neither merges.
+  finishes. Neither merges. Only the button reuses an open Resolve tab
+  ([github-pull-requests.md](github-pull-requests.md#the-resolve-button));
+  `resolve_conflicts` always opens a tab, so its receipt names that tab's run.
 - `merge_pr` (`pr.merge`): the action bar's Merge and Merge and Cleanup buttons,
   over `merge_environment_pr`, with a confirm token on every call. It takes the
   same arguments as the direct tool `pr_merge`; see

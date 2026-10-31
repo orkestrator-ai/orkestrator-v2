@@ -180,6 +180,9 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     id,
     displayTitle: optionalString(value.displayTitle),
     isReviewTab: optionalBoolean(value.isReviewTab),
+    ...(value.jobCompletionAction === "refresh-pr-after-agent-completion"
+      ? { jobCompletionAction: "refresh-pr-after-agent-completion" as const }
+      : {}),
     ...(typeof value.hideStructuredOutput === "boolean"
       ? { hideStructuredOutput: value.hideStructuredOutput }
       : {}),

@@ -543,6 +543,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Workflow launches publish their own durable tab and start in the backend.
   // They must not depend on the active environment's renderer tab factory.
   const canLaunchBackendJob = Boolean(selectedEnvironmentId && tabCount < MAX_TABS);
+  // A resend needs no new tab, so a full tab bar only stops Resolve when there
+  // is no Resolve tab to send to. The backend decides whether that tab can
+  // still take the prompt, and reports the tab limit if it has to open another.
+  const hasOpenResolveTab = usePaneLayoutStore((state) => {
+    const pane = selectedEnvironmentId ? state.environments.get(selectedEnvironmentId) : undefined;
+    return Boolean(
+      pane &&
+      getAllLeaves(pane.root).some((leaf) =>
+        leaf.tabs.some((tab) => tab.jobCompletionAction === "refresh-pr-after-agent-completion"),
+      ),
+    );
+  });
+  const canLaunchResolve =
+    canLaunchBackendJob || Boolean(selectedEnvironmentId && hasOpenResolveTab);
   const editorUnavailableOnRemoteConnection = isRemoteGatewayConnection();
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
@@ -1426,6 +1440,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     tabCount,
     canCreateTab,
     canLaunchBackendJob,
+    canLaunchResolve,
     editorUnavailableOnRemoteConnection,
     canOpenEditor,
     handleOpenInEditor,
@@ -1752,7 +1767,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       if (
         !operationEnvironmentId ||
         !selectedProjectId ||
-        tabCount >= MAX_TABS ||
+        !canLaunchResolve ||
         resolveLaunchEnvironmentIdRef.current !== null
       )
         return { ok: false, message: null };
@@ -1802,6 +1817,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           title: "Resolve",
           conversationMode: "build",
           completionAction: "refresh-pr-after-agent-completion",
+          // A plain press keeps whatever the open tab runs; the dialog's agent
+          // and model are an explicit choice the backend has to honour.
+          tabReuse: agentOverride || launchOptions ? "same-agent" : "any-agent",
           activateTab: true,
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
@@ -1815,6 +1833,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           toast.info("Conflict resolution is reconciling", {
             description:
               "The backend owns the launch and will recover its status without keeping this environment open.",
+          });
+        }
+        if (result.queued) {
+          toast.info("Conflict resolution is queued", {
+            description: "The Resolve tab runs it when its current work ends.",
           });
         }
         if (result.completionActionArmed === false) {
@@ -1837,6 +1860,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [
       activateLaunchedTab,
       actionDefaultFor,
+      canLaunchResolve,
       config.repositories,
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
@@ -1844,7 +1868,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironment?.prBaseBranch,
       selectedEnvironmentId,
       selectedProjectId,
-      tabCount,
     ],
   );
 
@@ -1853,7 +1876,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // An unknown mergeability (null) still allows configuring a resolve: GitHub
   // can take a while to compute it, and the user may already know it conflicts.
   const canConfigureResolve = Boolean(
-    tabCount < MAX_TABS &&
+    canLaunchResolve &&
     isRunning &&
     hasPR &&
     !isPRFinished &&
@@ -1961,7 +1984,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         ? "This pull request no longer has merge conflicts to resolve."
         : !isRunning
           ? "The environment is no longer running."
-          : tabCount >= MAX_TABS
+          : !canLaunchResolve
             ? "The maximum number of tabs has been reached."
             : null;
 
@@ -2227,6 +2250,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     isSelectedEnvironmentDeleting,
     canCreateTab,
     canLaunchBackendJob,
+    canLaunchResolve,
     editorUnavailableOnRemoteConnection,
     canOpenEditor,
     environmentPortAddress,

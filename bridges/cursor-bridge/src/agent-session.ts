@@ -161,7 +161,7 @@ export async function createSession(
  */
 export async function ensureAgent(
   state: SessionState,
-  options: { atTurnStart?: boolean } = {},
+  options: { atTurnStart?: boolean; requireCurrentModel?: boolean } = {},
 ): Promise<SDKAgent> {
   // A closing session attaches nothing. Checked here rather than at each
   // route so no future caller can forget it.
@@ -211,6 +211,16 @@ export async function ensureAgent(
       retireMcpObservations(state);
       await detachAgent(state);
     }
+  }
+  // summarize() has no model override and SDKAgent.model is read-only. Resume
+  // the same saved conversation with the current selection before compaction.
+  if (
+    options.requireCurrentModel &&
+    state.agent &&
+    JSON.stringify(state.agent.model) !== JSON.stringify(modelSelection(state.composer))
+  ) {
+    markConfigResumePending(state, true);
+    await detachAgent(state);
   }
   assertSessionOpen(state);
   if (state.agent) return state.agent;
@@ -574,7 +584,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
         if (error instanceof SessionClosedError) throw error;
         if (state.configResumePending) {
           throw new Error(
-            "Cursor could not reopen this conversation with the updated MCP configuration. The conversation was kept; retry, or start a new session to use the new servers.",
+            "Cursor could not reopen this conversation with the updated configuration. The conversation was kept; retry with the current settings.",
             { cause: error },
           );
         }

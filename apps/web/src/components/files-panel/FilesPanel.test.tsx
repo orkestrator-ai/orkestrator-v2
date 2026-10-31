@@ -3,14 +3,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as realBackend from "@/lib/backend";
 import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
 import { TerminalProvider } from "@/contexts/TerminalContext";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
 
 const originalBackend = { ...realBackend };
+let rejectHome: (error: Error) => void;
 let resolveHome: (home: Environment) => void;
 const ensureHome = mock(
   () =>
-    new Promise<Environment>((resolve) => {
+    new Promise<Environment>((resolve, reject) => {
       resolveHome = resolve;
+      rejectHome = reject;
     }),
 );
 mock.module("@/lib/backend", () => ({
@@ -22,6 +25,7 @@ const { resetReadCoordinatorForTests } = await import("@/lib/read-coordinator");
 
 beforeEach(() => {
   ensureHome.mockClear();
+  mockToastError.mockClear();
   useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
   useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
   useEnvironmentStore.setState({ environments: [] });
@@ -131,4 +135,32 @@ test("shows delayed announcements and a container's remote freshness without hid
   } finally {
     useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
   }
+});
+
+test("a failed board file open strips Electron's invoke prefix from its toast", async () => {
+  render(
+    <TerminalProvider>
+      <FilesPanel />
+    </TerminalProvider>,
+  );
+  act(() =>
+    useFilesPanelStore.setState({
+      fileTree: [{ name: "first.txt", path: "first.txt", isDirectory: false }],
+    }),
+  );
+  fireEvent.click(screen.getByText("first.txt"));
+  await act(async () =>
+    rejectHome(
+      new Error(
+        "Error invoking remote method 'orkestrator:invoke': Error: checkout does not exist",
+      ),
+    ),
+  );
+  await waitFor(() =>
+    expect(mockToastError).toHaveBeenCalledWith("Could not open the project home", {
+      description: "checkout does not exist",
+    }),
+  );
+  expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+  expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
 });

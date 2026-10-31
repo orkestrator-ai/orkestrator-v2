@@ -22,6 +22,7 @@ import { NativeMessage as NativeMessageView } from "@/components/chat/NativeMess
 import { ToolDetailLoaderContext } from "@/components/chat/NativeMessage.shared";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as backend from "@/lib/backend";
@@ -217,6 +218,7 @@ function TranscriptTailLog({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  const isHidden = useScrollOffsetAcrossHide(scrollRef);
 
   useEffect(() => {
     following.current = true;
@@ -248,6 +250,7 @@ function TranscriptTailLog({
       aria-live="off"
       tabIndex={0}
       onScroll={(event) => {
+        if (isHidden()) return;
         const element = event.currentTarget;
         following.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;

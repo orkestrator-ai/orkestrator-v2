@@ -350,7 +350,7 @@ async function fileBugReportOnce(
   if (!(await resolveGitHubToken(config.global))) {
     return browserFallback(title, body, "GitHub CLI is not signed in on this host");
   }
-  const env = await gitHubCliEnv();
+  const env = await gitHubCliEnv(context.storage);
   // Persist before launching gh. Even a backend crash or lost response must
   // leave a fence against a second public issue. Only recording a known URL
   // resolves an uncertain attempt.

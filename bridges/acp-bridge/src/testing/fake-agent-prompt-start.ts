@@ -308,6 +308,12 @@ export function handlePromptStart(message: JsonObject): boolean {
       return true;
     }
     if (prompt.startsWith("DIRECT:")) {
+      if (process.env.FAKE_ACP_FORK_TURNS_FILE) {
+        appendFileSync(
+          process.env.FAKE_ACP_FORK_TURNS_FILE,
+          `${JSON.stringify({ prompt, answer: prompt.slice("DIRECT:".length) })}\n`,
+        );
+      }
       write({
         jsonrpc: "2.0",
         method: "session/update",

@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
@@ -400,6 +401,10 @@ export function MergedProjectList({
               ],
         )
       : projectSortableIds(tree, [], isFolderCollapsed);
+  // A repository's members reorder only among themselves.
+  const sortingStrategy = projectTreeSortingStrategy(tree, sortableIds, {
+    crossFolderMoves: mode === "project",
+  });
   const isProjectDrag = (id: string) => parseProjectFolderDragId(id) !== null || projectIds.has(id);
   const apply = (arrangement: ProjectArrangement | null) => {
     const update =
@@ -554,7 +559,7 @@ export function MergedProjectList({
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingProject(false)}
       >
-        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        <SortableContext items={sortableIds} strategy={sortingStrategy}>
           {tree.map(renderEntry)}
           <SidebarRootDropZone active={draggingProject && mode === "project"} />
         </SortableContext>

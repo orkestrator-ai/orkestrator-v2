@@ -8,11 +8,13 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Retire the legacy close fallback**: remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from `closeBridgeSessionRetaining`. Status: open (unblocked by 0034).
+1. **Retire the legacy close fallback**: remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from `closeBridgeSessionRetaining`. Status: done (2026-10-31).
 2. **Live Cursor close retention**: rerun `close-retention-live.spec.ts` for Cursor and fix the missing first prompt after resume. Status: open (failed 2026-10-23).
 3. **Cursor resume row titles**: check what a real Cursor resume row shows; title rows from the summary if every row reads "Orkestrator". Status: open (needs the task 2 run).
 
 ### 1. Retire the legacy close fallback
+
+Done 2026-10-31 on `main` at `931e5541`; see "Assumptions and decisions". The analysis below is kept for the decisions it records.
 
 **Problem.** The backend still carries a compatibility path for bridges that predate `POST /session/:id/close`. It is dead weight inside the support window and a place where a destructive `DELETE` can still be sent.
 
@@ -96,10 +98,9 @@ permanent browser spec for Cursor, Pi, OpenCode and Grok, and since
 2026-10-23 so are the lifecycle faults that spec could not reach before:
 persistence shedding, steer saturation, a dead generation, an old Claude
 bridge and a stop during Pi's startup. Pi's live close retention passed on
-2026-10-23. What is left is the live Cursor run (whose resumed transcript
-lost the first prompt on 2026-10-23), the legacy close fallback (unblocked by
-0034's support window on 2026-10-24) and one live check of Cursor's resume
-rows.
+2026-10-23, and the legacy close fallback was retired on 2026-10-31. What is
+left is the live Cursor run (whose resumed transcript lost the first prompt on
+2026-10-23) and one live check of Cursor's resume rows.
 
 ## Current state
 
@@ -112,12 +113,11 @@ rows.
     (`commands-registry-teardown.ts`) and `HttpBridgeProvider.closeSession`
     both call `closeBridgeSessionRetaining`
     (`apps/backend/src/core/bridge-session-close.ts`).
-  - A 404 or 405 from the close route means the bridge predates it. The
-    legacy `DELETE` fallback is used only where `LEGACY_DELETE_RETAINS_HISTORY`
-    is `true`. Claude is `false`, so an old Claude bridge raises
-    `BridgeCloseUnsupportedError`, which carries
-    `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`. The renderer then shows the
-    restart notice (`apps/web/src/lib/tab-teardown-notice.ts`).
+  - A 404 or 405 from the close route means the bridge predates it. On every
+    platform that raises `BridgeCloseUnsupportedError`, which carries
+    `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`, and no `DELETE` is sent. The
+    renderer then shows the restart notice
+    (`apps/web/src/lib/tab-teardown-notice.ts`).
   - OpenCode closes through `apps/backend/src/core/opencode-session-close.ts`
     and `OpenCodeProvider.closeSession`, never `session.delete`.
   - Since #964 the ACP bridge sends `session/close` when the agent advertises
@@ -328,21 +328,11 @@ rows.
 
 ### Code
 
-1. **Retire the legacy close fallback** (unblocked 2026-10-24). Remove the
-   `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
-   `closeBridgeSessionRetaining`, and the `bridge-upgrade-required` path, once
-   no supported bridge predates `POST /session/:id/close`. That is true now:
-   the support window
-   ([`version-compatibility.md`](../../architecture/version-compatibility.md),
-   decided in todo 0034, retired on 2026-10-29)
-   covers published releases from v2.21.0, and every bridge in v2.21.0 has
-   the close route (#853, 2026-09-26). Only unpublished source builds predate
-   it. Before removing, read the `bridge-close.legacy-delete` and
-   `bridge-close.upgrade-required` counters (`get_compatibility_path_usage`)
-   on the machines you can reach. After removal a 404 or 405 from the close
-   route must still never mean "already closed": report it as an old bridge
-   that needs a restart, without a DELETE. Delete the browser-suite restart
-   notice test with the path.
+1. **Retire the legacy close fallback.** Done 2026-10-31: the `DELETE` fallback,
+   `LEGACY_DELETE_RETAINS_HISTORY` and the `bridge-close.legacy-delete` counter
+   are gone. A 404 or 405 from the close route is reported as an old bridge
+   that needs a restart. The `bridge-upgrade-required` path and its browser test
+   stay, as decided under Task analysis.
 
 ### Qualification
 
@@ -502,9 +492,8 @@ Live items need provider credentials; batch them with
 - **`provider.closeSession`, not the teardown's raw bridge request.** The
   resume has already resolved the provider and reached the bridge, so there
   is no bridge to avoid starting. `HttpBridgeProvider.closeSession` calls
-  `closeBridgeSessionRetaining` like teardown, so the legacy-DELETE and
-  Claude upgrade rules are the same. OpenCode's `closeSession` runs its own
-  retaining close.
+  `closeBridgeSessionRetaining` like teardown, so the old-bridge rule is the
+  same. OpenCode's `closeSession` runs its own retaining close.
 - Which records survive a bridge or backend restart, and who owns each, is in
   [agent-engines.md → What survives a restart](../../architecture/agent-engines.md#what-survives-a-restart).
 - Every caller of close and its intended retention is in
@@ -592,15 +581,33 @@ bounded-state occupancy in `/runtime-health`) are decided below.
   another (seconds each) instead of together. A coordinator's MCP wait is
   outside the lock, so it does not lengthen anyone else's start.
 
-### The legacy close fallback is not retired (Code item 1)
+### The legacy close fallback is retired; the restart notice stays (Code item 1, 2026-10-31)
 
-- **Choice:** keep it. Retiring needs a support window that 0034 has not
-  agreed; removing it now would turn an old Claude bridge's 404 into a
-  failure with no notice, or worse, tempt a DELETE.
-- **Update 2026-10-24:** 0034 set the window (published releases from
-  v2.21.0 today), and every bridge in v2.21.0 has the close route, so the
-  item is unblocked. It stays open for this file's owner; the usage counters
-  added by 0034 give the evidence to check first.
+- **Does the window allow it?** Yes. The Backend → bridges rule covers every
+  bridge in the window, whose floor is v2.21.0. Checked at the tags v2.21.0,
+  v2.21.1, v2.22.3, v2.23.0, v2.26.2-beta, v2.29.0-beta and v2.34.4-beta: all
+  five bridges serve the route. At v2.21.0 each also answers an unknown session
+  in band (200 `{ closed: true, missing: true }`), so no in-window bridge can
+  answer 404 for a session that has merely gone.
+- **Options for a 404 or 405.** (a) The restart notice on every platform, as
+  Claude had. (b) A generic pending error, removing the notice too.
+- **Choice: (a).** Pros: no close path can send a `DELETE`, and a user on an old
+  source build gets an action to take. Cons: the marker, the notice and one
+  browser test stay, so less code goes than the item implied, and an old
+  source-build Codex, Cursor, Grok or Pi bridge now holds its close pending until
+  restarted instead of closing through `DELETE`. An old container image needs a
+  rebuild, not only the restart the notice names; that is the existing wording
+  for Claude and is outside the window.
+- **The counter stays with the notice.** `bridge-close.upgrade-required` keeps
+  counting, as `slash-catalogue.outdated-bridge` did after its routes retired.
+  The register row moved to Retired.
+- **Counter reading.** On mbp3 only, from the production database opened
+  read-only on 2026-10-31 (app v2.34.4-beta, running since 2026-10-29): there is
+  no `compatibility-path-usage` store at all, so neither close counter has ever
+  been recorded there. No other machine was read. As the analysis warned, this
+  is weak evidence, so the removal rests on the window.
+- **`BridgeCloseResult.via` removed.** No caller read it, and it could only
+  have one value.
 
 ### Pi startup interrupt is proved in the browser suite (Qualification item 2)
 

@@ -27,7 +27,7 @@ const FIELD_KEYS = new Set([
   "maximum",
 ]);
 
-export function isSupportedClaudeForm(schema: unknown): schema is Record<string, unknown> {
+export function isSupportedMcpForm(schema: unknown): schema is Record<string, unknown> {
   if (
     !record(schema) ||
     schema.type !== "object" ||
@@ -70,8 +70,8 @@ export function isSupportedClaudeForm(schema: unknown): schema is Record<string,
   });
 }
 
-export function isValidClaudeFormContent(schema: unknown, content: unknown): boolean {
-  if (!isSupportedClaudeForm(schema) || !record(content)) return false;
+export function isValidMcpFormContent(schema: unknown, content: unknown): boolean {
+  if (!isSupportedMcpForm(schema) || !record(content)) return false;
   const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
   if ((schema.required as string[] | undefined)?.some((key) => !Object.hasOwn(content, key)))
     return false;

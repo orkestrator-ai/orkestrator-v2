@@ -86,8 +86,10 @@ export class CursorSdkLoginSlot {
 
   cancel(): void {
     if (this.startup) {
-      this.startup.cancelled = true;
-      this.startup.controller.abort();
+      const startup = this.startup;
+      this.startup = undefined;
+      startup.cancelled = true;
+      startup.controller.abort();
     }
     this.active?.handle.cancel();
     this.active = undefined;

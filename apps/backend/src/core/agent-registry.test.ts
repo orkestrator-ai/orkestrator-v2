@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { describeAgentRegistrySummary } from "@orkestrator/protocol/agent-registry";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { AgentRegistry } from "./agent-registry.js";
 import { StorageService } from "./storage.js";
 
@@ -146,6 +147,10 @@ describe("AgentRegistry", () => {
       expect(snapshot.entries.find((entry) => entry.ownerKind === "coordinator")).toMatchObject({
         coordinatorRole: "main",
         agent: "codex",
+        sessionId: encodePublicSessionId(
+          coordinatorRuntimeId("coordinator-1", "main"),
+          "coordinator-main",
+        ),
       });
 
       const one = await registry.snapshot({ environmentId: "stopped-env" });

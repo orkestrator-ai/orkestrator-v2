@@ -782,9 +782,24 @@ test("quiescing for rebuild or recovery-copy restore settles agents only after r
     expect(environmentId).toBe("env-lifecycle");
     expect(calls).toContain("stop source-container");
   });
-  context.nativeAgents = { environmentRuntimeStopped: stopped } as unknown as NonNullable<
-    typeof context.nativeAgents
-  >;
+  let enterStop!: () => void;
+  let releaseStop!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enterStop = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    releaseStop = resolve;
+  });
+  const requested = mock(async (environmentId: string, agent?: string) => {
+    expect(environmentId).toBe("env-lifecycle");
+    expect(agent).toBeUndefined();
+    enterStop();
+    await gate;
+  });
+  context.nativeAgents = {
+    runtimeStopRequested: requested,
+    environmentRuntimeStopped: stopped,
+  } as unknown as NonNullable<typeof context.nativeAgents>;
   await withDockerScript(
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -797,9 +812,15 @@ exit 0
         expect(environmentId).toBe("env-lifecycle");
         expect(calls).toContain("stop source-container");
       });
-      expect(await quiesceRuntime("env-lifecycle", "source-container", undefined, context)).toEqual(
-        { forced: false },
-      );
+      const stopping = quiesceRuntime("env-lifecycle", "source-container", undefined, context);
+      await entered;
+      try {
+        expect(await log.read()).not.toContain("stop source-container");
+      } finally {
+        releaseStop();
+      }
+      expect(await stopping).toEqual({ forced: false });
+      expect(requested).toHaveBeenCalledTimes(1);
       expect(stopped).toHaveBeenCalledTimes(1);
     },
   );

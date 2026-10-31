@@ -370,29 +370,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     };
     const kind = request.kind;
     if (kind === "mcp-form" || kind === "mcp-url") {
-      const server = truncatedText(request.serverName, "An MCP server", 256);
-      const url = kind === "mcp-url" ? nonEmptyString(request.url) : null;
-      if (kind === "mcp-url" && !url) {
-        throw new ProviderUnavailableError("Claude returned a malformed URL elicitation");
-      }
-      return this.interactionRequest(sessionId, providerRequestId, "interaction", request, {
-        kind,
-        presentation: {
-          title: nonEmptyString(request.title)
-            ? truncatedText(request.title, server, 256)
-            : kind === "mcp-form"
-              ? `${server} needs input`
-              : `Sign in to ${server}`,
-          body: nonEmptyString(request.message)
-            ? truncatedText(request.message, "MCP request")
-            : undefined,
-          questions: kind === "mcp-form" ? [this.mapMcpForm(request.schema)] : [],
-          url: url === null ? undefined : boundedText(url, "MCP URL"),
-          confirmLabel: "Continue",
-          declineLabel: "Decline",
-        },
-        ...timing,
-      });
+      return this.mapServerElicitation(sessionId, providerRequestId, request, kind, timing);
     }
     if (kind !== "command-approval" && kind !== "file-approval" && kind !== "permission") {
       throw new ProviderUnavailableError("Claude returned an unknown interaction kind");
@@ -681,6 +659,14 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     ) {
       throw new ProviderUnavailableError("Grok returned a malformed interaction");
     }
+    if (request.kind === "mcp-form" || request.kind === "mcp-url") {
+      return this.mapServerElicitation(sessionId, providerRequestId, request, request.kind, {
+        createdAt: requestedAt as number,
+        updatedAt: requestedAt as number,
+        expiresAt: expiresAt as number,
+        blocking: true,
+      });
+    }
     if (request.kind === "plan-approval") {
       const rawPlan = typeof request.plan === "string" ? request.plan : "";
       const truncated = request.planTruncated === true;
@@ -810,6 +796,39 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       updatedAt: requestedAt as number,
       blocking: isBlocking as boolean,
       ...(expiresAt === undefined ? {} : { expiresAt: expiresAt as number }),
+    });
+  }
+
+  /** An MCP elicitation as Claude and Grok report it: the server's own name and words. */
+  private mapServerElicitation(
+    sessionId: string,
+    providerRequestId: string,
+    request: Record<string, unknown>,
+    kind: "mcp-form" | "mcp-url",
+    timing: { createdAt: number; updatedAt: number; expiresAt: number; blocking: boolean },
+  ): AgentInteractionRequest {
+    const server = truncatedText(request.serverName, "An MCP server", 256);
+    const url = kind === "mcp-url" ? nonEmptyString(request.url) : null;
+    if (kind === "mcp-url" && !url) {
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed URL elicitation`);
+    }
+    return this.interactionRequest(sessionId, providerRequestId, "interaction", request, {
+      kind,
+      presentation: {
+        title: nonEmptyString(request.title)
+          ? truncatedText(request.title, server, 256)
+          : kind === "mcp-form"
+            ? `${server} needs input`
+            : `Sign in to ${server}`,
+        body: nonEmptyString(request.message)
+          ? truncatedText(request.message, "MCP request")
+          : undefined,
+        questions: kind === "mcp-form" ? [this.mapMcpForm(request.schema)] : [],
+        url: url === null ? undefined : boundedText(url, "MCP URL"),
+        confirmLabel: "Continue",
+        declineLabel: "Decline",
+      },
+      ...timing,
     });
   }
 
@@ -1231,6 +1250,28 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       // nothing here could honour "for the session".
       if (resolution.action === "approve-for-session") {
         throw new ProviderUnavailableError("Claude approvals cannot be granted for the session");
+      }
+      return {
+        path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,
+        method: "POST",
+        body: JSON.stringify({
+          action:
+            resolution.action === "answer"
+              ? "accept"
+              : resolution.action === "cancel"
+                ? "cancel"
+                : "decline",
+          ...(resolution.action === "answer" && request.kind === "mcp-form"
+            ? { content: mcpFormContent(resolution) }
+            : {}),
+        }),
+      };
+    }
+
+    if (this.agent === "grok" && (request.kind === "mcp-form" || request.kind === "mcp-url")) {
+      // MCP has no way to remember an answer: nothing could honour "for the session".
+      if (resolution.action === "approve-for-session") {
+        throw new ProviderUnavailableError("MCP requests cannot be granted for the session");
       }
       return {
         path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,

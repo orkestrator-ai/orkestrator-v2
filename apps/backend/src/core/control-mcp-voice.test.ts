@@ -5,7 +5,8 @@ import { PUBLIC_ACTIONS } from "@orkestrator/protocol/public-api";
 import { PUBLIC_ACTION_INPUTS } from "@orkestrator/protocol/public-api-inputs";
 import { DIRECT_TOOL_ACTIONS, directToolName } from "./control-mcp-direct-tools.js";
 import { GATEWAY_TOOL_NAMES } from "./control-mcp-gateway.js";
-import { OPERATOR_TOOL_ACTIONS } from "./control-mcp-operator-tools.js";
+import { seedCoordinator } from "./public-api/test-coordinator.js";
+import { ControlMcpNodeError, OPERATOR_TOOL_ACTIONS } from "./control-mcp-operator-tools.js";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
 import { VOICE_CORE_TOOL_NAMES, VOICE_TOOL_ACTIONS } from "./control-mcp-voice.js";
 import { cleanupSessionHarnesses, setActivity } from "./public-api/test-provider.js";
@@ -543,6 +544,116 @@ describe("Control MCP voice core", () => {
       counts: { environments: { running: 21 }, sessions: { scanned: 2 } },
     });
   });
+
+  test("Coordinator discovery supports main and side aliases and exact project/environment scopes", async () => {
+    const harness = await open();
+    const { environmentId, sessionId } = await seedCoordinator(harness);
+    await harness.harness.storage.updateProject(harness.projectId, { name: "Atlas" });
+    const workspace = await harness.harness.storage.coordinators.getCoordinatorWorkspace(
+      harness.projectId,
+    );
+    await harness.harness.storage.coordinators.mutateCoordinatorWorkspace(
+      harness.projectId,
+      (current) => ({
+        ...current!,
+        conversations: [
+          ...current!.conversations,
+          {
+            ...workspace!.conversations[0]!,
+            id: "side",
+            tabId: "coordinator-side",
+            logicalSessionKey: "env-coordinator:coordinator-1:side:coordinator-side",
+            role: "side",
+            sideOrdinal: 1,
+            title: "Coordinator 2",
+          },
+        ],
+      }),
+    );
+    const voice = await harness.credential("voice");
+    for (const query of ["coordinator", "Atlas coordinator"]) {
+      for (const kind of [undefined, "session"]) {
+        const response = structured(
+          await harness.call(voice.token, "resolve_target", {
+            query,
+            ...(kind ? { kind } : {}),
+            projectId: harness.projectId,
+            environmentId,
+          }),
+        );
+        expect(response).toMatchObject({
+          ok: true,
+          result: { target: { id: sessionId, environmentId, projectId: harness.projectId } },
+        });
+      }
+    }
+    const side = structured(
+      await harness.call(voice.token, "resolve_target", {
+        query: "Atlas coordinator 2",
+        kind: "session",
+      }),
+    );
+    expect(side.result?.target).toMatchObject({ environmentId: "coordinator:coordinator-1:side" });
+    for (const scope of [{ projectId: "other" }, { environmentId: "other" }]) {
+      const response = structured(
+        await harness.call(voice.token, "resolve_target", {
+          query: "coordinator",
+          kind: "session",
+          ...scope,
+        }),
+      );
+      expect(response.ok).toBe(false);
+    }
+  });
+
+  test("Coordinator discovery degrades when optional reads are not permitted", async () => {
+    const harness = await open();
+    const { sessionId } = await seedCoordinator(harness);
+    const withoutProjects = await harness.credential("voice", {
+      deniedActions: ["project.list", "node.list"],
+    });
+    const response = structured(
+      await harness.call(withoutProjects.token, "resolve_target", {
+        query: "coordinator",
+        kind: "session",
+      }),
+    );
+    expect(response).toMatchObject({ ok: true, result: { target: { id: sessionId } } });
+    const withoutSessions = await harness.credential("voice", { deniedActions: ["session.list"] });
+    harness.harness.commands.set("get_agent_registry", async () => {
+      throw new Error("Must not discover without session permission");
+    });
+    await harness.harness.storage.updateProject(harness.projectId, { name: "Atlas" });
+    const project = structured(
+      await harness.call(withoutSessions.token, "resolve_target", { query: "Atlas" }),
+    );
+    expect(project.ok).toBe(true);
+  });
+
+  for (const code of [undefined, "node-outcome-unknown"]) {
+    test(`Coordinator registry failures return an envelope and spoken response (${code ?? "generic"})`, async () => {
+      const harness = await open();
+      await seedCoordinator(harness);
+      const voice = await harness.credential("voice");
+      harness.harness.commands.set("get_agent_registry", async () => {
+        throw code
+          ? new ControlMcpNodeError(code, "Routed read lost")
+          : new Error("Registry unavailable");
+      });
+      for (const kind of [undefined, "session"]) {
+        const response = await harness.call(voice.token, "resolve_target", {
+          query: "coordinator",
+          ...(kind ? { kind } : {}),
+        });
+        expect(response.isError).toBe(true);
+        expect(structured(response)).toMatchObject({
+          ok: false,
+          error: { code: code ?? "node-unavailable" },
+        });
+        expect(response.content?.[0]?.text).toContain("Coordinator discovery is unavailable");
+      }
+    });
+  }
 
   test("resolve_target never guesses", async () => {
     const harness = await open();

@@ -8,7 +8,49 @@ import {
 
 describe("nativeComposeStore", () => {
   beforeEach(() => {
-    useNativeComposeStore.setState({ drafts: new Map() });
+    useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
+  });
+
+  test("ordinary draft clearing retains a replay, permanent session cleanup releases it", () => {
+    const key = "env-env-1:tab-image";
+    const sent = {
+      providerSessionId: "session-a",
+      prompt: "image prompt",
+      draft: { text: "image prompt", mentions: [], annotations: [] },
+      attachments: [
+        {
+          id: "image",
+          type: "image" as const,
+          path: "/image.png",
+          name: "image.png",
+          previewUrl: "data:image/png;base64,cG5n",
+        },
+      ],
+      priorMessageIds: new Set(["old-row"]),
+    };
+    const store = useNativeComposeStore.getState();
+    store.updateDraft(key, { text: sent.prompt, attachments: sent.attachments });
+    store.recordSentPrompt(key, sent);
+    store.clearDraft(key);
+    expect(useNativeComposeStore.getState().sentPrompts.get(key)).toBe(sent);
+    expect(useNativeComposeStore.getState().drafts.has(key)).toBe(false);
+    store.clearSession(key);
+    expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
+  });
+
+  test("environment cleanup releases all retained prompts without affecting other environments", () => {
+    const store = useNativeComposeStore.getState();
+    for (const key of ["env-env-1:tab-a", "env-env-1:tab-b", "env-env-2:tab-c"]) {
+      store.recordSentPrompt(key, {
+        providerSessionId: key,
+        prompt: key,
+        draft: { text: key, mentions: [], annotations: [] },
+        attachments: [],
+        priorMessageIds: new Set(),
+      });
+    }
+    store.clearSentPromptsForEnvironment("env-1");
+    expect([...useNativeComposeStore.getState().sentPrompts.keys()]).toEqual(["env-env-2:tab-c"]);
   });
 
   test("held sends survive in memory without persisting send intent across a restart", () => {
@@ -330,7 +372,7 @@ describe("nativeComposeStore", () => {
       const metadata = nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey);
       expect(metadata).toMatchObject({ commandSelection: selection });
 
-      useNativeComposeStore.setState({ drafts: new Map() });
+      useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
       const persistence = nativeComposePersistenceStore.getState();
       persistence.setDraftText(sessionKey, "/review x");
       persistence.setDraftMetadata?.(sessionKey, metadata);

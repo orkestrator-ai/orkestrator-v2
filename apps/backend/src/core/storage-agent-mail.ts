@@ -78,6 +78,11 @@ function sendFingerprint(input: AgentMailSendInput): string {
     .digest("hex");
 }
 
+/**
+ * Process-wide on purpose: one clock orders ids across every repository in the
+ * process, so two on one database cannot interleave within a millisecond
+ * (docs/architecture/backend-runtime.md).
+ */
 let lastIdTime = 0;
 
 let idSequence = 0;

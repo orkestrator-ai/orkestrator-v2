@@ -25,7 +25,6 @@ import {
   readCodexAuthFile,
 } from "./agent-accounts-homes.js";
 import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts-login.js";
-import { initializeActivePlanUsageAccount } from "./plan-usage-cache.js";
 import { runCommand } from "./shell.js";
 
 /** The account a platform's launches use: the host login, or an added account's directory. */
@@ -47,7 +46,10 @@ export async function resolveActiveAgentAccount(
 ): Promise<ResolvedAgentAccount> {
   const store = await context.storage.agentAccounts.loadAgentAccounts();
   const accountId = store.active[platform];
-  initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
+  context.runtime.accounts.planUsage.initializeActiveAccount(
+    platform,
+    accountId ?? DEFAULT_AGENT_ACCOUNT_ID,
+  );
   const loginGeneration = store.loginGeneration?.[platform];
   return {
     accountId: accountId ?? DEFAULT_AGENT_ACCOUNT_ID,

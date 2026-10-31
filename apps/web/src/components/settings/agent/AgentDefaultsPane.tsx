@@ -59,6 +59,7 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { INHERIT } from "./InheritedValue";
+import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "../SettingsPageLayout";
 
 const ACTION_DEFINITIONS: Record<
   ActionDefaultKey,
@@ -229,15 +230,12 @@ export function AgentDefaultsPane({
   };
 
   return (
-    <div className="@container max-w-5xl space-y-8">
+    <div className="@container space-y-8">
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Default agent</h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The agent {scopeLabel} launches when nothing more specific names one.
-            {canInherit && " Leave on Inherit to follow the level above."}
-          </p>
-        </div>
+        <SettingsSectionHeader title="Default agent">
+          The agent {scopeLabel} launches when nothing more specific names one.
+          {canInherit && " Leave on Inherit to follow the level above."}
+        </SettingsSectionHeader>
         <div
           role="radiogroup"
           aria-label="Default agent"
@@ -288,14 +286,11 @@ export function AgentDefaultsPane({
       </div>
 
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Default model</h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The model {AGENT_PLATFORM_LABELS[effectiveAgent]} starts on. This is the same setting as
-            the one on the {AGENT_PLATFORM_LABELS[effectiveAgent]} tab — changing either changes
-            both. Other platforms keep their own.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Default model">
+          The model {AGENT_PLATFORM_LABELS[effectiveAgent]} starts on. This is the same setting as
+          the one on the {AGENT_PLATFORM_LABELS[effectiveAgent]} tab — changing either changes both.
+          Other platforms keep their own.
+        </SettingsSectionHeader>
         {models.length > 0 ? (
           <AgentModelPicker
             id="agent-default-model"
@@ -493,7 +488,7 @@ export function AgentDefaultsPane({
             return (
               <div
                 key={key}
-                className="flex h-full min-w-0 flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3"
+                className={cn(SETTINGS_CARD_CLASS, "flex h-full min-w-0 flex-col gap-2 p-3")}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 space-y-1">

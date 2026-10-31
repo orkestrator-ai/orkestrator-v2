@@ -8,6 +8,7 @@ import type { AppConfig } from "@/types";
 import { Button } from "@/components/ui/button";
 import { isWindowMachine } from "./account-machine";
 import { errorText } from "./machines/machine-ui";
+import { SettingsPageLayout } from "./SettingsPageLayout";
 
 interface SettingsConfigValue {
   config: AppConfig;
@@ -78,7 +79,7 @@ function RemoteMachineConfig({
 
   if (error) {
     return (
-      <div role="alert" className="max-w-2xl space-y-2 text-sm text-red-400">
+      <SettingsPageLayout role="alert" className="space-y-2 text-sm text-red-400">
         <p>This machine's settings could not be read: {error}</p>
         <Button
           type="button"
@@ -91,7 +92,7 @@ function RemoteMachineConfig({
         >
           Retry
         </Button>
-      </div>
+      </SettingsPageLayout>
     );
   }
   if (!value) {

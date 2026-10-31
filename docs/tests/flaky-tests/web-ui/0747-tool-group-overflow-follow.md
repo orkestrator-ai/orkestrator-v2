@@ -272,3 +272,19 @@ mise run test:logged -- --name review-browser-tool-group-owner -- bunx playwrigh
 
 No source, assertion, timeout or skip changed. The root cause remains
 unestablished; this is the existing intermittent overflow-follow case.
+
+
+## Resolve tab reuse review — 2026-10-31
+
+Preparation repeated the mobile scrollTop 704-versus-zero assertion at
+`ToolGroupFold.spec.ts:471`. The exact browser-suite repeat passed this case
+but failed the separate fold-threshold case (1012). The complete unchanged
+ToolGroupFold owner was then included in the one-worker preparation-owner
+rerun and again failed this mobile waiting-group case; all its other cases
+passed. This recurrence remains unresolved and was not hidden by changing
+source, assertions, deadlines or skips.
+
+The combined three-owner rerun finished with 50 passed, one skipped and three
+failed in 180.2 s (the other two failures were native branch selection).
+Command and evidence are recorded in the 2026-10-31 Resolve entry in
+[0382](0382-component-browser-parallel-load.md).

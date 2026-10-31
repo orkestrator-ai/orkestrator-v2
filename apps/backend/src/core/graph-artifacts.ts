@@ -49,7 +49,7 @@ import {
   CONTAINER_PINNED_ATTACHMENT_WRITE,
 } from "./commands-files.js";
 import {
-  createEnvironmentCommandRunner,
+  createGitEnvironmentCommandRunner,
   ensureWorkspaceArtifactIsGitExcluded,
   waitForContainerReviewPackageWrite,
   type EnvironmentCommandRunner,
@@ -166,7 +166,7 @@ export class GraphArtifactStore {
   >();
 
   constructor(private readonly dependencies: GraphArtifactStoreDependencies) {
-    this.createRunner = dependencies.createRunner ?? createEnvironmentCommandRunner;
+    this.createRunner = dependencies.createRunner ?? createGitEnvironmentCommandRunner;
     this.spawn = dependencies.spawn ?? spawnCommand;
     this.now = dependencies.now ?? (() => new Date());
   }
@@ -643,7 +643,7 @@ export async function removeEnvironmentGraphArtifactFiles(
     if (environment.environmentType !== "local" && environment.status !== "running") {
       return { removed: 0, failed: 0 };
     }
-    const runner = (dependencies.createRunner ?? createEnvironmentCommandRunner)(
+    const runner = (dependencies.createRunner ?? createGitEnvironmentCommandRunner)(
       environment,
       dependencies.fence,
     );

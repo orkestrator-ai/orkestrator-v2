@@ -136,9 +136,23 @@ describe("service connection", () => {
     const authFile = await publish(dataDir);
     expect(await awaitServiceConnection(dataDir, "gen-1", instant())).toEqual({
       browserUrl: "https://host.tailnet.ts.net",
+      clientUrls: [],
       authFile,
       token: TOKEN,
     });
+  });
+
+  test("lists only the client listeners, which name the local port", async () => {
+    const dataDir = await dataDirectory();
+    await publish(dataDir, {
+      endpoints: [
+        { role: "control", url: "http://127.0.0.1:40000" },
+        { role: "client", url: "http://127.0.0.1:40001" },
+      ],
+    });
+    expect((await awaitServiceConnection(dataDir, null, instant()))?.clientUrls).toEqual([
+      "http://127.0.0.1:40001",
+    ]);
   });
 
   test("ignores the generation that was running before the install", async () => {

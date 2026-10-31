@@ -619,6 +619,22 @@ export type AcpInteractionState =
         options: Array<{ id: string; label: string; description?: string }>;
       }>;
       respond(result: JsonObject): void;
+    })
+  | (ParkedDeadline & {
+      id: string;
+      kind: "mcp-form";
+      serverName: string;
+      message: string;
+      schema: JsonObject;
+      respond(result: JsonObject): void;
+    })
+  | (ParkedDeadline & {
+      id: string;
+      kind: "mcp-url";
+      serverName: string;
+      message: string;
+      url: string;
+      respond(result: JsonObject): void;
     });
 
 export interface PersistedSession {

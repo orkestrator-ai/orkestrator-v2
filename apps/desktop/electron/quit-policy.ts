@@ -90,11 +90,13 @@ export function registerQuitReopenRelaunch(options: {
 export function handleStartupFailure(options: {
   isQuitting(): boolean;
   error: unknown;
-  report(error: unknown): void;
+  /** May return a promise: the quit then waits for the failure to be answered. */
+  report(error: unknown): void | Promise<void>;
   recover?(): boolean;
   quit(): void;
 }): void {
   if (options.isQuitting() || options.recover?.()) return;
-  options.report(options.error);
-  options.quit();
+  const reported = options.report(options.error);
+  if (reported) void reported.catch(() => undefined).finally(() => options.quit());
+  else options.quit();
 }

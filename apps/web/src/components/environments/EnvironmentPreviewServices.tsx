@@ -75,7 +75,7 @@ export function EnvironmentPreviewServices({
   };
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
           Browser tabs remember the service, not a host port, so they follow it when a container is

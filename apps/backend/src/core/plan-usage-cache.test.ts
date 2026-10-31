@@ -1,26 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   CACHE_TTL_MS,
   contextUsageWithPlanUsage,
   createPlanUsageCache,
   okSnapshot,
-  sharedPlanUsageCache,
-  setActivePlanUsageAccount,
+  PlanUsageState,
 } from "./plan-usage-cache.js";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
 import { claudePlanWindows } from "./plan-usage.js";
 
-// `contextUsageWithPlanUsage` always writes the process-wide singleton, which
-// the HTTP bridge suites also read. Reset it around every test so a cached
-// window from one test cannot be observed by another.
-beforeEach(() => {
-  sharedPlanUsageCache.clear();
-  setActivePlanUsageAccount("claude", "default");
-  setActivePlanUsageAccount("codex", "default");
-});
+let planUsage: PlanUsageState;
 
-afterEach(() => {
-  sharedPlanUsageCache.clear();
+beforeEach(() => {
+  planUsage = new PlanUsageState();
 });
 
 describe("createPlanUsageCache", () => {
@@ -146,19 +138,19 @@ describe("contextUsageWithPlanUsage", () => {
       seven_day: { utilization: 20 },
       seven_day_opus: { utilization: 30 },
     });
-    sharedPlanUsageCache.store(
+    planUsage.cache.store(
       "claude",
       okSnapshot("claude", windows, new Date(0).toISOString()),
       CACHE_TTL_MS,
     );
-    contextUsageWithPlanUsage("claude", {
+    contextUsageWithPlanUsage(planUsage, "claude", {
       usedTokens: 1,
       rateLimits: ["session", "weekly_all", "weekly_scoped"].map((kind, index) => ({
         label: claudePlanWindowFromKind(kind, "Opus")!.label,
         usedPercent: 40 + index,
       })),
     });
-    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual(
+    expect(planUsage.cache.peek("claude")?.windows).toEqual(
       windows.map((row, index) => ({
         ...row,
         usedPercent: 40 + index,
@@ -167,66 +159,68 @@ describe("contextUsageWithPlanUsage", () => {
   });
 
   test("uses slug identities for unknown labels, including an empty slug", () => {
-    contextUsageWithPlanUsage("claude", {
+    contextUsageWithPlanUsage(planUsage, "claude", {
       usedTokens: 1,
       rateLimits: [
         { label: " New Quota! ", usedPercent: 5 },
         { label: "???", usedPercent: 6 },
       ],
     });
-    expect(sharedPlanUsageCache.peek("claude")?.windows.map((row) => row.window)).toEqual([
+    expect(planUsage.cache.peek("claude")?.windows.map((row) => row.window)).toEqual([
       "new-quota",
       "window",
     ]);
   });
   test("an old bridge cannot report quota into the newly active account", () => {
-    setActivePlanUsageAccount("claude", "account-b");
+    planUsage.setActiveAccount("claude", "account-b");
     contextUsageWithPlanUsage(
+      planUsage,
       "claude",
       { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 95 }] },
       "account-a",
     );
-    expect(sharedPlanUsageCache.peek("claude")).toBeUndefined();
+    expect(planUsage.cache.peek("claude")).toBeUndefined();
     contextUsageWithPlanUsage(
+      planUsage,
       "claude",
       { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 5 }] },
       "account-b",
     );
-    expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.usedPercent).toBe(5);
-    setActivePlanUsageAccount("claude", "default");
+    expect(planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(5);
+    planUsage.setActiveAccount("claude", "default");
   });
   test("keeps a Codex session's account rows and returns the usage unchanged", () => {
-    const usage = contextUsageWithPlanUsage("codex", {
+    const usage = contextUsageWithPlanUsage(planUsage, "codex", {
       usedTokens: 10,
       account: [{ window: "primary", label: "Usage limit", usedPercent: 44 }],
     });
     expect(usage?.usedTokens).toBe(10);
-    expect(sharedPlanUsageCache.peek("codex")?.windows).toEqual([
+    expect(planUsage.cache.peek("codex")?.windows).toEqual([
       { window: "primary", label: "Usage limit", usedPercent: 44 },
     ]);
   });
 
   test("reads Claude's plan windows from the rate limits a session reports", () => {
-    contextUsageWithPlanUsage("claude", {
+    contextUsageWithPlanUsage(planUsage, "claude", {
       usedTokens: 10,
       rateLimits: [{ label: "5-hour limit", usedPercent: 21, windowMinutes: 300 }],
     });
-    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual([
+    expect(planUsage.cache.peek("claude")?.windows).toEqual([
       { window: "five_hour", label: "5-hour limit", usedPercent: 21, windowMinutes: 300 },
     ]);
   });
 
   test("maps a Claude session label onto the id the OAuth read emits", () => {
-    contextUsageWithPlanUsage("claude", {
+    contextUsageWithPlanUsage(planUsage, "claude", {
       usedTokens: 1,
       rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
     });
-    expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.window).toBe("seven_day");
+    expect(planUsage.cache.peek("claude")?.windows[0]?.window).toBe("seven_day");
   });
 
   test("folds an older bridge's Claude labels into the canonical rows", () => {
     const sharedWindow = "2026-10-06T10:00:00.000Z";
-    sharedPlanUsageCache.store(
+    planUsage.cache.store(
       "claude",
       okSnapshot(
         "claude",
@@ -239,7 +233,7 @@ describe("contextUsageWithPlanUsage", () => {
       ),
       60_000,
     );
-    contextUsageWithPlanUsage("claude", {
+    contextUsageWithPlanUsage(planUsage, "claude", {
       usedTokens: 1,
       rateLimits: [
         { label: "Five Hour", usedPercent: 11 },
@@ -247,7 +241,7 @@ describe("contextUsageWithPlanUsage", () => {
         { label: "Weekly (Fable)", usedPercent: 1 },
       ],
     });
-    expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual([
+    expect(planUsage.cache.peek("claude")?.windows).toEqual([
       { window: "five_hour", label: "5-hour limit", usedPercent: 11, windowMinutes: 300 },
       {
         window: "seven_day",
@@ -266,15 +260,15 @@ describe("contextUsageWithPlanUsage", () => {
   });
 
   test("does not apply Claude's ids to another platform's rate limits", () => {
-    contextUsageWithPlanUsage("codex", {
+    contextUsageWithPlanUsage(planUsage, "codex", {
       usedTokens: 1,
       rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
     });
-    expect(sharedPlanUsageCache.peek("codex")?.windows[0]?.window).toBe("weekly-limit");
+    expect(planUsage.cache.peek("codex")?.windows[0]?.window).toBe("weekly-limit");
   });
 
   test("leaves the cache alone for a payload with no quota in it", () => {
-    contextUsageWithPlanUsage("pi", { usedTokens: 10 });
-    expect(sharedPlanUsageCache.peek("pi" as "claude")).toBeUndefined();
+    contextUsageWithPlanUsage(planUsage, "pi", { usedTokens: 10 });
+    expect(planUsage.cache.peek("pi" as "claude")).toBeUndefined();
   });
 });

@@ -1,31 +1,33 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { agentAccountLoginProgress, resetAgentAccountLoginForTests } from "./agent-accounts.js";
+import { agentAccountLoginProgress } from "./agent-accounts.js";
+import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 
 import * as cursorBridge from "./cursor-sdk-bridge.js";
 
 const command = createCommandRegistry().get("start_agent_account_login")!;
-afterEach(resetAgentAccountLoginForTests);
 
 describe("account login argument validation", () => {
   test.each([null, 0, 1, "true", "false", {}, []])(
     "rejects non-boolean reauthenticate %j",
     async (reauthenticate) => {
       const loadAgentAccounts = mock(async () => ({ version: 1, accounts: [], active: {} }));
-      await expect(
-        command({ platform: "claude", reauthenticate }, {
-          storage: {
-            agentAccounts: {
-              loadAgentAccounts,
-            },
+      const context = {
+        storage: {
+          agentAccounts: {
+            loadAgentAccounts,
           },
-        } as unknown as CommandContext),
-      ).rejects.toThrow("reauthenticate");
+        },
+        runtime: { accounts: new AgentAccountsRuntime() },
+      } as unknown as CommandContext;
+      await expect(command({ platform: "claude", reauthenticate }, context)).rejects.toThrow(
+        "reauthenticate",
+      );
       expect(loadAgentAccounts).not.toHaveBeenCalled();
-      expect(agentAccountLoginProgress().state).toBe("idle");
+      expect(agentAccountLoginProgress(context).state).toBe("idle");
     },
   );
   test.each([undefined, false, true])(
@@ -39,6 +41,7 @@ describe("account login argument validation", () => {
             },
           },
         },
+        runtime: { accounts: new AgentAccountsRuntime() },
       } as unknown as CommandContext;
       await expect(
         command(
@@ -46,8 +49,10 @@ describe("account login argument validation", () => {
           context,
         ),
       ).rejects.toThrow("stop before spawn");
-      expect(agentAccountLoginProgress().mode).toBe(reauthenticate ? "reauthenticate" : "add");
-      expect(agentAccountLoginProgress().operationId).toBeDefined();
+      expect(agentAccountLoginProgress(context).mode).toBe(
+        reauthenticate ? "reauthenticate" : "add",
+      );
+      expect(agentAccountLoginProgress(context).operationId).toBeDefined();
     },
   );
 });

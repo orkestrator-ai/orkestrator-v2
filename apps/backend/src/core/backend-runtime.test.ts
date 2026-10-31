@@ -5,6 +5,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { agentAccountLoginProgress, cancelAgentAccountLogin } from "./agent-accounts.js";
+import { claudeLoginHandoff } from "./agent-accounts-containers.js";
+import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { OrkestratorBackend } from "./index.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -589,6 +592,72 @@ describe("two BackendRuntimes in one process", () => {
     expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
     expect(first.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(false);
     expect(second.accounts.claimCoordinatorKeychainClear("/coordinator")).toBe(true);
+
+    // Account mutations queue within one backend only.
+    const mutation = held<void>();
+    const holding = first.accounts.withMutation(() => mutation.promise);
+    let secondRan = false;
+    await second.accounts.withMutation(async () => {
+      secondRan = true;
+    });
+    expect(secondRan).toBe(true);
+    let firstQueued = false;
+    const queued = first.accounts.withMutation(async () => {
+      firstQueued = true;
+    });
+    await Promise.resolve();
+    expect(firstQueued).toBe(false);
+    mutation.resolve();
+    await Promise.all([holding, queued]);
+    expect(firstQueued).toBe(true);
+
+    // A sign-in on one backend is not progress on the other, nor can it cancel it.
+    const contexts = [contextFor(first), contextFor(second)] as const;
+    first.accounts.claimLogin({
+      operationId: "operation-1",
+      platform: "claude",
+      accountId: "account",
+      mode: "add",
+      state: "pending",
+    });
+    expect(agentAccountLoginProgress(contexts[0])).toMatchObject({ state: "pending" });
+    expect(agentAccountLoginProgress(contexts[1])).toEqual({ state: "idle" });
+    expect(cancelAgentAccountLogin(contexts[1])).toEqual({ state: "idle" });
+    expect(agentAccountLoginProgress(contexts[0])).toMatchObject({ state: "pending" });
+    expect(cancelAgentAccountLogin(contexts[0])).toEqual({ state: "idle" });
+
+    // Per-account usage, its generations and what was pushed into each container.
+    const cached = { expiresAt: 1, snapshot: {} as PlanUsageSnapshot };
+    first.accounts.cacheUsage("root:claude:account", cached);
+    first.accounts.bumpUsageGeneration("root:claude:generation");
+    first.accounts.rememberPushedClaudeLogin("container-1", "digest");
+    expect(first.accounts.cachedUsage("root:claude:account")).toBe(cached);
+    expect(second.accounts.cachedUsage("root:claude:account")).toBeUndefined();
+    expect(first.accounts.usageGeneration("root:claude:generation")).toBe(1);
+    expect(second.accounts.usageGeneration("root:claude:generation")).toBe(0);
+    expect(first.accounts.pushedClaudeLogin("container-1")).toBe("digest");
+    expect(second.accounts.pushedClaudeLogin("container-1")).toBeUndefined();
+
+    // The MCP refresh tokens one backend saw on the host are its own.
+    const credentials = JSON.stringify({
+      claudeAiOauth: { accessToken: "a", expiresAt: Date.now() + 3_600_000 },
+      mcpOAuth: { linear: { accessToken: "m", refreshToken: "seen-by-first" } },
+    });
+    const handedOver = JSON.parse(claudeLoginHandoff(first.accounts, credentials)!.payload);
+    expect(Object.keys(handedOver.hostMcpRefresh)).toEqual(["linear"]);
+    expect(second.accounts.hostMcpRefreshDigests.snapshot()).toEqual({});
+
+    // One backend's active account filters only its own session windows.
+    first.accounts.planUsage.setActiveAccount("claude", "account-on-first");
+    second.accounts.planUsage.setActiveAccount("claude", "account-on-second");
+    const report = { usedTokens: 1, account: [{ window: "five_hour", usedPercent: 40 }] };
+    contextUsageWithPlanUsage(first.accounts.planUsage, "claude", report, "account-on-second");
+    expect(first.accounts.planUsage.cache.peek("claude")).toBeUndefined();
+    contextUsageWithPlanUsage(second.accounts.planUsage, "claude", report, "account-on-second");
+    expect(first.accounts.planUsage.cache.peek("claude")).toBeUndefined();
+    expect(second.accounts.planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(40);
+    first.accounts.readPlanUsage.invalidate("claude");
+    expect(second.accounts.planUsage.cache.peek("claude")?.windows[0]?.usedPercent).toBe(40);
 
     // The loaded store is per backend: the second reads the file afresh.
     const accountsRoot = await mkdtemp(path.join(tmpdir(), "ork-runtime-usage-"));

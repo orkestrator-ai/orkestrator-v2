@@ -796,6 +796,7 @@ export class OrkestratorBackend {
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
+        planUsage: this.runtime.accounts.planUsage,
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
@@ -1116,6 +1117,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
@@ -1144,6 +1146,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         artifactDispatch,
@@ -1285,6 +1288,7 @@ export class OrkestratorBackend {
       storage,
       invoke: invokeCommand,
       workflowResults: this.workflowResults,
+      providerDependencies: { planUsage: this.runtime.accounts.planUsage },
       agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
       toolResultsEnabled: (agent) => this.workflowResultRollout.allows(agent, "graph-output"),
@@ -1345,7 +1349,10 @@ export class OrkestratorBackend {
     this.graphDescribeProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),
-      dependencies: { workflowResults: this.workflowResults },
+      dependencies: {
+        workflowResults: this.workflowResults,
+        planUsage: this.runtime.accounts.planUsage,
+      },
     });
     this.graphDescribe = new GraphDescribeService({
       storage,
@@ -1376,6 +1383,7 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        planUsage: this.runtime.accounts.planUsage,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
@@ -1842,6 +1850,7 @@ export class OrkestratorBackend {
           if (!handler) throw new Error("Review bridge command is unavailable");
           return (await handler(args, this.context)) as T;
         },
+        this.runtime.accounts.planUsage,
       )
         .catch(() => {
           console.warn("[backend] Retired Looped Review cleanup remains pending");

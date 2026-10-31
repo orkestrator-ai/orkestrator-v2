@@ -145,19 +145,28 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
   };
 }
 
-/** The cache the settings reader serves from, and sessions write through. */
-export const sharedPlanUsageCache = createPlanUsageCache();
-const activeAccountIds = new Map<"claude" | "codex", string>();
+/**
+ * One backend's plan usage: the cache the settings reader serves from and
+ * sessions write through, and the active account a session's windows must
+ * belong to before they reach it. Owned by `AgentAccountsRuntime` as
+ * `planUsage`; the HTTP bridge providers are handed it through their
+ * dependencies, because they have no `CommandContext`.
+ */
+export class PlanUsageState {
+  readonly cache: PlanUsageCache = createPlanUsageCache();
+  private readonly activeAccountIds = new Map<"claude" | "codex", string>();
 
-export function setActivePlanUsageAccount(platform: "claude" | "codex", accountId: string): void {
-  activeAccountIds.set(platform, accountId);
-}
+  setActiveAccount(platform: "claude" | "codex", accountId: string): void {
+    this.activeAccountIds.set(platform, accountId);
+  }
 
-export function initializeActivePlanUsageAccount(
-  platform: "claude" | "codex",
-  accountId: string,
-): void {
-  if (!activeAccountIds.has(platform)) activeAccountIds.set(platform, accountId);
+  initializeActiveAccount(platform: "claude" | "codex", accountId: string): void {
+    if (!this.activeAccountIds.has(platform)) this.activeAccountIds.set(platform, accountId);
+  }
+
+  activeAccount(platform: "claude" | "codex"): string | undefined {
+    return this.activeAccountIds.get(platform);
+  }
 }
 
 /**
@@ -201,8 +210,10 @@ function sessionWindowId(label: string): string {
  * provider. A session that has just reported them makes that request
  * unnecessary for the next couple of minutes, so every provider read path
  * normalizes through here rather than letting the card poll on its own.
+ * A provider built without `planUsage` only normalizes.
  */
 export function contextUsageWithPlanUsage(
+  planUsage: PlanUsageState | undefined,
   agent: AgentPlatform,
   value: unknown,
   reportingAccountId?: string,
@@ -214,11 +225,12 @@ export function contextUsageWithPlanUsage(
       ? accountWindowsFromRateLimits(usage.rateLimits, agent)
       : undefined;
   if (
+    planUsage &&
     windows &&
     ((agent !== "claude" && agent !== "codex") ||
-      (reportingAccountId ?? "default") === (activeAccountIds.get(agent) ?? "default"))
+      (reportingAccountId ?? "default") === (planUsage.activeAccount(agent) ?? "default"))
   ) {
-    sharedPlanUsageCache.recordSessionWindows(agent, windows);
+    planUsage.cache.recordSessionWindows(agent, windows);
   }
   return usage;
 }

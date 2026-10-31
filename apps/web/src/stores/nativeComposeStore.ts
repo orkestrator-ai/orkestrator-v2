@@ -93,6 +93,10 @@ const EMPTY_DRAFT: NativeComposeDraft = {
  * one per session, and never persisted: after a restart the user resends.
  */
 export interface NativeSentPrompt {
+  /** Absent only until this tab's first dispatch creates its provider session. */
+  providerSessionId?: string;
+  /** Raw composer content, before transport references, annotations and handoff history. */
+  draft: Pick<NativeComposeDraft, "text" | "mentions" | "annotations">;
   prompt: string;
   attachments: WorkspaceAttachment[];
   /** Transcript rows visible when it was sent; its own row is the next user row. */
@@ -104,6 +108,8 @@ interface NativeComposeState {
   sentPrompts: Map<string, NativeSentPrompt>;
   updateDraft: (sessionKey: string, update: Partial<NativeComposeDraft>) => void;
   clearDraft: (sessionKey: string) => void;
+  clearSession: (sessionKey: string) => void;
+  clearSentPromptsForEnvironment: (environmentId: string) => void;
   recordSentPrompt: (sessionKey: string, sent: NativeSentPrompt | undefined) => void;
   consumeBrowserAnnotations: (environmentId: string, annotationIds: readonly string[]) => void;
 }
@@ -333,7 +339,7 @@ export function nativeComposeDraft(
   return state.drafts.get(sessionKey) ?? EMPTY_DRAFT;
 }
 
-export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
+export const useNativeComposeStore = create<NativeComposeState>()((set, get) => ({
   drafts: new Map(),
   sentPrompts: new Map(),
   updateDraft: (sessionKey, update) =>
@@ -377,6 +383,18 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       const drafts = new Map(state.drafts);
       drafts.delete(sessionKey);
       return { drafts };
+    }),
+  clearSession: (sessionKey) => {
+    get().clearDraft(sessionKey);
+    get().recordSentPrompt(sessionKey, undefined);
+  },
+  clearSentPromptsForEnvironment: (environmentId) =>
+    set((state) => {
+      const sentPrompts = new Map(state.sentPrompts);
+      for (const key of sentPrompts.keys()) {
+        if (getEnvironmentIdFromSessionKey(key) === environmentId) sentPrompts.delete(key);
+      }
+      return sentPrompts.size === state.sentPrompts.size ? state : { sentPrompts };
     }),
   recordSentPrompt: (sessionKey, sent) =>
     set((state) => {

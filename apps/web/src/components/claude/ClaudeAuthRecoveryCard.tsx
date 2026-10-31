@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId } from "react";
+import { useEffect, useEffectEvent, useId, useState } from "react";
 import { Check, KeyRound, Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
@@ -49,18 +49,23 @@ export function ClaudeAuthRecoveryCard({
   const isolatedContainer = Boolean(containerId) && !useHostClaudeCredentials;
   const reauth = useAgentAccountReauth("claude", !isolatedContainer, failureAt);
   const canOpenTerminal = Boolean(createTab) && (isolatedContainer || !containerId);
-  const signedIn = reauth.progress.state === "succeeded";
+  const [terminalSignIn, setTerminalSignIn] = useState(false);
+  const automaticResend = !isolatedContainer && !terminalSignIn && Boolean(onSignedIn);
+  const signedIn = !isolatedContainer && reauth.progress.state === "succeeded";
   const signingIn = reauth.progress.state === "pending";
   // The login being renewed is this machine's; with several machines, say which.
   const machineName = useSessionMachineName();
   // Also when the card mounts on a sign-in that already finished: the hook
   // only adopts one completed after this failure.
-  const notifySignedIn = useEffectEvent(() => onSignedIn?.());
+  const notifySignedIn = useEffectEvent(() => {
+    if (automaticResend) onSignedIn?.();
+  });
   useEffect(() => {
     if (signedIn) notifySignedIn();
   }, [signedIn]);
 
   const openSignInTerminal = () => {
+    setTerminalSignIn(true);
     createTab?.("plain", {
       displayTitle: "Claude sign-in",
       initialCommands: [
@@ -87,7 +92,7 @@ export function ClaudeAuthRecoveryCard({
             {machineName
               ? `Each machine keeps its own Claude login, and ${machineName}'s needs signing in again.`
               : "Claude needs you to sign in again."}{" "}
-            {onSignedIn || resendingAfterSignIn
+            {automaticResend || resendingAfterSignIn
               ? "Your message is sent again once you sign in."
               : "After signing in, return here and resend your message."}
           </p>
@@ -138,7 +143,10 @@ export function ClaudeAuthRecoveryCard({
                     size="sm"
                     className="gap-2"
                     disabled={reauth.starting}
-                    onClick={() => void reauth.start()}
+                    onClick={() => {
+                      setTerminalSignIn(false);
+                      void reauth.start();
+                    }}
                   >
                     {reauth.starting ? (
                       <Loader2 aria-hidden="true" className="size-4 animate-spin" />

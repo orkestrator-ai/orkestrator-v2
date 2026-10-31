@@ -992,6 +992,25 @@ export function SharedNativeAgentController({
   );
   // Lets transcript tool rows request their backend change presentations.
   const providerSessionId = projection?.sessionId ?? data.sessionId;
+  const observedProviderSessionId = useNativeAgentProjectionStore(
+    (state) => state.projections.get(sessionKey)?.sessionId,
+  );
+  useEffect(() => {
+    if (
+      !sentPrompt ||
+      !providerSessionId ||
+      useNativeComposeStore.getState().sentPrompts.get(sessionKey) !== sentPrompt
+    )
+      return;
+    const currentProviderSessionId = observedProviderSessionId ?? providerSessionId;
+    if (!sentPrompt.providerSessionId) {
+      // The launcher/first send did not have an id yet. Resume explicitly drops
+      // this record before replacing a session, so only creation can adopt it.
+      recordSentPrompt(sessionKey, { ...sentPrompt, providerSessionId: currentProviderSessionId });
+    } else if (sentPrompt.providerSessionId !== currentProviderSessionId) {
+      recordSentPrompt(sessionKey, undefined);
+    }
+  }, [observedProviderSessionId, providerSessionId, recordSentPrompt, sentPrompt, sessionKey]);
   const nativeChangeScope = useMemo<NativeChangeScope>(
     () => ({
       environmentId: data.environmentId,
@@ -1720,6 +1739,7 @@ export function SharedNativeAgentController({
         preflight?: boolean;
         /** Sent instead of the draft's, for a prompt sent again after sign-in. */
         attachments?: WorkspaceAttachment[];
+        replay?: NativeSentPrompt;
       },
     ) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
@@ -2101,9 +2121,19 @@ export function SharedNativeAgentController({
       // the send-again-after-sign-in path.
       recordSentPrompt(
         sessionKey,
-        rawCommand
+        rawCommand ||
+          platform !== "claude" ||
+          canQueue ||
+          submitOptions?.replay ||
+          (data.containerId && !(config.global.useHostClaudeCredentials ?? true))
           ? undefined
           : {
+              providerSessionId,
+              draft: {
+                text: preparedPrompt ? draft.text : text,
+                mentions: draft.mentions,
+                annotations: draft.annotations,
+              },
               prompt,
               attachments: submittedAttachments,
               priorMessageIds: visibleAuthoritativeMessageIds,
@@ -2184,8 +2214,11 @@ export function SharedNativeAgentController({
         }
       }
       updateDraft(sessionKey, {
-        text,
-        mentions: draft.mentions,
+        ...(submitOptions?.replay?.draft ?? {
+          text,
+          mentions: draft.mentions,
+          annotations: draft.annotations,
+        }),
         attachments: submittedAttachments,
         ...(requestIdRetired
           ? { requestId: undefined }
@@ -2215,6 +2248,8 @@ export function SharedNativeAgentController({
       consumeTabAgentHandoff,
       consumeBrowserAnnotations,
       data.environmentId,
+      data.containerId,
+      config.global.useHostClaudeCredentials,
       data.sessionId,
       discardProvisionalDraft,
       refreshUserCommands,
@@ -2233,6 +2268,7 @@ export function SharedNativeAgentController({
       platform,
       projection?.capabilities,
       projection?.sessionId,
+      providerSessionId,
       projection?.slashCommands,
       recordSentPrompt,
       recoverableDispatch,
@@ -2663,48 +2699,106 @@ export function SharedNativeAgentController({
    * over a draft the user has started since.
    */
   const notLoggedInPrompt = useMemo(() => {
-    if (claudeNotLoggedInNotice === null || !sentPrompt) return null;
+    if (
+      claudeNotLoggedInNotice === null ||
+      !sentPrompt ||
+      !providerSessionId ||
+      sentPrompt.providerSessionId !== providerSessionId ||
+      (data.containerId && !(config.global.useHostClaudeCredentials ?? true))
+    )
+      return null;
     const userMessages = normalizedMessages.filter((message) => message.role === "user");
     const refused = userMessages.at(-1);
     const previous = userMessages.at(-2);
     if (!refused || sentPrompt.priorMessageIds.has(refused.id)) return null;
     if (previous && !sentPrompt.priorMessageIds.has(previous.id)) return null;
     return sentPrompt;
-  }, [claudeNotLoggedInNotice, normalizedMessages, sentPrompt]);
+  }, [
+    claudeNotLoggedInNotice,
+    normalizedMessages,
+    sentPrompt,
+    providerSessionId,
+    data.containerId,
+    config.global.useHostClaudeCredentials,
+  ]);
   const composerEmpty =
     !draft.text.trim() && draft.attachments.length === 0 && draft.annotations.length === 0;
   const [resendAfterSignIn, setResendAfterSignIn] = useState<{
     sent: NativeSentPrompt;
     /** The notice it answers: one resend per refusal, across card remounts. */
     noticeId: string;
+    refusedMessageId: string;
     requestedAt: number;
   } | null>(null);
+  const [resendingNoticeId, setResendingNoticeId] = useState<string | null>(null);
+  // Release the payload as soon as it is consumed or invalidated. The status
+  // after a dispatch needs only the notice id, not its prompt or image data.
+  if (resendAfterSignIn && resendAfterSignIn.sent !== sentPrompt) setResendAfterSignIn(null);
   const noticeId = claudeNotLoggedInNotice === null ? undefined : latestAssistantMessage?.id;
   const resendingAfterSignIn =
-    resendAfterSignIn !== null && resendAfterSignIn.noticeId === noticeId && composerEmpty;
+    noticeId !== undefined &&
+    (resendAfterSignIn?.noticeId === noticeId || resendingNoticeId === noticeId) &&
+    composerEmpty;
   const requestResendAfterSignIn = useCallback(() => {
     if (!notLoggedInPrompt || !noticeId || !composerEmpty) return;
     if (resendAfterSignIn?.noticeId === noticeId) return;
-    setResendAfterSignIn({ sent: notLoggedInPrompt, noticeId, requestedAt: Date.now() });
+    setResendAfterSignIn({
+      sent: notLoggedInPrompt,
+      noticeId,
+      refusedMessageId: normalizedMessages.findLast((message) => message.role === "user")!.id,
+      requestedAt: Date.now(),
+    });
     // A bridge that found no login keeps the composer locked until it reads
     // again; a read now replaces it with one on the new login.
-    if (authenticationRequired) void refresh().catch(() => undefined);
+    const abandonResend = () => {
+      const store = useNativeComposeStore.getState();
+      if (store.sentPrompts.get(sessionKey) !== notLoggedInPrompt) return;
+      store.recordSentPrompt(sessionKey, undefined);
+      const current = nativeComposeDraft(store, sessionKey);
+      if (!current.text.trim() && !current.attachments.length && !current.annotations.length) {
+        store.updateDraft(sessionKey, {
+          ...notLoggedInPrompt.draft,
+          attachments: notLoggedInPrompt.attachments,
+        });
+      }
+      setResendAfterSignIn(null);
+    };
+    if (authenticationRequired) {
+      void refresh().then((next) => {
+        if (!next) abandonResend();
+      }, abandonResend);
+    }
   }, [
     authenticationRequired,
     composerEmpty,
     noticeId,
     notLoggedInPrompt,
+    normalizedMessages,
+    sessionKey,
     refresh,
     resendAfterSignIn?.noticeId,
   ]);
   useEffect(() => {
-    if (!resendAfterSignIn || resendAfterSignIn.sent !== sentPrompt) return;
-    if (!composerEmpty || sendLocked || isDispatching) {
+    if (!resendAfterSignIn) return;
+    if (resendAfterSignIn.sent !== sentPrompt) return;
+    if (
+      notLoggedInPrompt !== resendAfterSignIn.sent ||
+      noticeId !== resendAfterSignIn.noticeId ||
+      !composerEmpty
+    ) {
+      recordSentPrompt(sessionKey, undefined);
+      return;
+    }
+    if (sendLocked || isDispatching) {
       // Give up rather than send long after the user stopped expecting it; the
       // card then asks them to resend.
       const timer = setTimeout(
         () => {
           recordSentPrompt(sessionKey, undefined);
+          updateDraft(sessionKey, {
+            ...resendAfterSignIn.sent.draft,
+            attachments: resendAfterSignIn.sent.attachments,
+          });
           setResendAfterSignIn(null);
         },
         Math.max(0, resendAfterSignIn.requestedAt + RESEND_AFTER_SIGN_IN_TIMEOUT_MS - Date.now()),
@@ -2714,16 +2808,60 @@ export function SharedNativeAgentController({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      // Dropped before sending, so a send refused before dispatch cannot
-      // repeat. A dispatched one records itself again.
+      // Read the authoritative store again: another client may advance it
+      // between this render and the dispatch microtask.
+      const live = useNativeAgentProjectionStore.getState().projections.get(sessionKey);
+      const liveMessages = normalizeNativeMessages(
+        withNativeTerminalMessages(
+          (live?.messages ?? []) as NativeMessage[],
+          live?.terminalMessages as NativeMessage[] | undefined,
+        ),
+      );
+      const liveAssistant = liveMessages.findLast((message) => message.role === "assistant");
+      const liveUser = liveMessages.findLast((message) => message.role === "user");
+      if (
+        useNativeComposeStore.getState().sentPrompts.get(sessionKey) !== resendAfterSignIn.sent ||
+        live?.sessionId !== resendAfterSignIn.sent.providerSessionId ||
+        liveAssistant?.id !== resendAfterSignIn.noticeId ||
+        !isClaudeNotLoggedInNotice(liveAssistant) ||
+        liveUser?.id !== resendAfterSignIn.refusedMessageId ||
+        liveMessages.at(-1)?.role === "user"
+      ) {
+        recordSentPrompt(sessionKey, undefined);
+        setResendAfterSignIn(null);
+        return;
+      }
+      // Consume the recovery before dispatch, including rejected and unknown
+      // outcomes. A later retry belongs to the user.
+      setResendingNoticeId(resendAfterSignIn.noticeId);
       recordSentPrompt(sessionKey, undefined);
       void submit(resendAfterSignIn.sent.prompt, undefined, true, undefined, {
         attachments: resendAfterSignIn.sent.attachments,
+        replay: resendAfterSignIn.sent,
+        noQueue: true,
       }).then(
         (accepted) => {
-          if (!accepted) setResendAfterSignIn(null);
+          if (!accepted) {
+            const store = useNativeComposeStore.getState();
+            const current = nativeComposeDraft(store, sessionKey);
+            if (
+              !current.text.trim() &&
+              !current.attachments.length &&
+              !current.annotations.length
+            ) {
+              store.updateDraft(sessionKey, {
+                ...resendAfterSignIn.sent.draft,
+                attachments: resendAfterSignIn.sent.attachments,
+              });
+            }
+            setResendAfterSignIn(null);
+            setResendingNoticeId(null);
+          }
         },
-        () => setResendAfterSignIn(null),
+        () => {
+          setResendAfterSignIn(null);
+          setResendingNoticeId(null);
+        },
       );
     });
     return () => {
@@ -2732,6 +2870,9 @@ export function SharedNativeAgentController({
   }, [
     composerEmpty,
     isDispatching,
+    notLoggedInPrompt,
+    noticeId,
+    updateDraft,
     recordSentPrompt,
     resendAfterSignIn,
     sendLocked,
@@ -3271,6 +3412,10 @@ export function SharedNativeAgentController({
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;
+          if (providerSessionId !== sourceSessionId) {
+            recordSentPrompt(sessionKey, undefined);
+            setResendAfterSignIn(null);
+          }
           if (heldSubmit && providerSessionId !== heldSessionId) {
             settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
           }

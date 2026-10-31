@@ -430,7 +430,7 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
   }
 
   if (tab.type === "agent-native") {
-    useNativeComposeStore.getState().clearDraft(createSessionKey(envId, tab.id));
+    useNativeComposeStore.getState().clearSession(createSessionKey(envId, tab.id));
     const platform = getNativeAgentData(tab)?.platform;
     if (platform === "claude") cleanupBackendNativeTab(envId, tab.id, "claude-native", "Claude");
     else if (platform === "opencode")
@@ -454,7 +454,12 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
  * with the live terminal-session entry knows the exact PTY id, so that owner
  * closes/detaches it and records the persistent session as disconnected.
  */
-function cleanupLocalTabResources(envId: string, containerId: string | null, tab: TabInfo): void {
+function cleanupLocalTabResources(
+  envId: string,
+  containerId: string | null,
+  tab: TabInfo,
+  permanent = false,
+): void {
   useTerminalPortalStore.getState().disposeTerminal(envId, tab.id);
 
   if (tab.type === "browser") {
@@ -469,7 +474,12 @@ function cleanupLocalTabResources(envId: string, containerId: string | null, tab
     return;
   }
 
-  // Native agent tabs keep no renderer-owned session state to reclaim.
+  if (tab.type === "agent-native") {
+    const store = useNativeComposeStore.getState();
+    const key = createSessionKey(envId, tab.id);
+    if (permanent) store.clearSession(key);
+    else store.recordSentPrompt(key, undefined);
+  }
   if (tab.type === "claude-tmux") {
     const store = useClaudeTmuxStore.getState();
     store.resetTab(createClaudeTmuxStateKey(envId, tab.id));
@@ -608,6 +618,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envId) return;
 
     const envState = state.environments.get(envId);
+    useNativeComposeStore.getState().clearSentPromptsForEnvironment(envId);
 
     const terminalPortalStore = useTerminalPortalStore.getState();
     const containerId = envState?.containerId ?? null;
@@ -692,7 +703,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         .flatMap((leaf) => leaf.tabs)
         .filter((tab) => !restoredTabIds.has(tab.id));
       for (const tab of removedTabs) {
-        cleanupLocalTabResources(environmentId, current.containerId, tab);
+        cleanupLocalTabResources(environmentId, current.containerId, tab, true);
       }
     }
 

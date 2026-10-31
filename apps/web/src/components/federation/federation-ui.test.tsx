@@ -371,9 +371,8 @@ test("a repository group names each member by its machine in its colour and summ
   });
   expect(heading.getAttribute("aria-expanded")).toBeNull();
   expect(heading.getAttribute("title")).toBe(`Open ${hint} on Machine A`);
-  expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
-    "teal",
-  );
+  // No trailing dot or member count: the leading box carries the colour.
+  expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
   expect(within(heading).queryByText("2") === null).toBe(true);
   // The heading leads with the command node's home (no command node is known
   // here) over "owner/repo" and a machine and environment count.
@@ -429,9 +428,48 @@ test("a repository heading uses the command node's colour even when that machine
   const home = within(heading).getByTestId("command-node-home-icon");
   await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
   expect(home.querySelector("svg")!.classList).toContain("text-violet-500");
-  expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
-    "teal",
+  expect(home.classList).toContain("border-violet-500");
+  expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
+});
+
+test("a repository heading shows the command node's own icon for the project, outlined in its colour", async () => {
+  installTwoMachines();
+  const icon = "data:image/png;base64,iVBORw0KGgo=";
+  const remote = machineView({ bound: true });
+  remote.projects[0]!.repositoryHint = "github.com/acme/app";
+  remote.projects[0]!.icon = "data:image/png;base64,cmVtb3Rl";
+  const commandNode = machineView({
+    connectionId: "bk_self",
+    backendId: "bk_self" as BackendId,
+    name: "Command node",
+    colorToken: "violet",
+    projects: [
+      {
+        ref: projectRef("bk_self" as BackendId, "project-1"),
+        key: projectKey(projectRef("bk_self" as BackendId, "project-1")),
+        name: "app",
+        order: 0,
+        repositoryHint: "github.com/acme/app",
+        icon,
+      },
+    ],
+    environmentsByProject: new Map(),
+  });
+  renderWithFederation(
+    <MergedProjectList
+      machines={[remote, commandNode]}
+      shownIds={new Set([remote.connectionId])}
+      mode="repository"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />,
   );
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  const home = within(heading).getByTestId("command-node-home-icon");
+  await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
+  expect(home.classList).toContain("border-violet-500");
+  expect(home.querySelector("svg") === null).toBe(true);
+  expect(within(home).getByTestId("project-icon").getAttribute("src")).toBe(icon);
 });
 
 test("a repository with one visible environment uses singular summary labels and excludes project homes", async () => {

@@ -64,7 +64,7 @@ import type { ActivitySortOrder } from "@/stores/uiStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
-import { CommandNodeHomeIcon, MachineDot, machineStatusText } from "./MachineDot";
+import { CommandNodeHomeIcon, machineStatusText } from "./MachineDot";
 import {
   RemoteEnvironmentItem,
   RemoteMachineTree,
@@ -464,9 +464,7 @@ export function MergedProjectList({
         }
       />
     );
-  const commandNodeColor = machines.find(
-    (machine) => machine.backendId === portalState.selfId,
-  )?.colorToken;
+  const commandNode = machines.find((machine) => machine.backendId === portalState.selfId);
   const repositorySummary = (group: readonly MergedProject[]) => {
     const machineCount = new Set(group.map((item) => item.machine.connectionId)).size;
     const environmentCount = group.reduce(
@@ -505,7 +503,16 @@ export function MergedProjectList({
         repositorySeparator={mode === "repository" && index > 0}
         {...(mode === "repository"
           ? {
-              icon: <CommandNodeHomeIcon colorToken={commandNodeColor} />,
+              icon: (
+                <CommandNodeHomeIcon
+                  colorToken={commandNode?.colorToken}
+                  projectIcon={
+                    commandNode?.projects.find(
+                      (project) => project.repositoryHint === entry.name && project.icon,
+                    )?.icon
+                  }
+                />
+              ),
               subtitle: repositorySummary(entry.projects),
             }
           : {})}
@@ -527,11 +534,6 @@ export function MergedProjectList({
             : undefined
         }
         openMachineName={opens?.machine.name}
-        badge={
-          opens ? (
-            <MachineDot colorToken={opens.machine.colorToken} machineName={opens.machine.name} />
-          ) : undefined
-        }
         {...folderActions}
       >
         {entry.projects.map((item) =>

@@ -13,6 +13,7 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -81,6 +82,7 @@ import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-t
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
+import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const MAX_PROMPT_LENGTH = 100_000;
@@ -149,6 +151,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
   ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
+  ...ACCOUNT_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -170,6 +173,7 @@ export function coordinatorRoleCapabilities(role: "main" | "side"): string[] {
         "graphs",
         "mail",
         "schedules",
+        "accounts",
       ];
 }
 
@@ -530,6 +534,9 @@ export async function createControlMcp(
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         // Side agents launch nothing, so the PR rule is the main coordinator's.
         (coordinatorScope?.capabilities.includes("environments") ? ` ${COORDINATOR_PR_RULE}` : "") +
+        (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
+          ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
+          : "") +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : "") +
         (operator ? ` ${OPERATOR_INSTRUCTIONS}` : ""),
     },

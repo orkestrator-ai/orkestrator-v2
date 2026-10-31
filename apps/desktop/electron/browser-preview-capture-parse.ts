@@ -10,10 +10,13 @@ import type {
   WebAnnotationCaptureInput,
   WebAnnotationPageEvidence,
   WebAnnotationRect,
+  WebAnnotationSourceHint,
 } from "@orkestrator/protocol/web-annotations";
 import {
+  isSafeRelativePath,
   isWebAnnotationEvidence,
   isWebAnnotationRect,
+  isWebAnnotationSourceHint,
   isWebAnnotationTarget,
 } from "@orkestrator/protocol/web-annotations-validation";
 import {
@@ -167,6 +170,31 @@ function parseTarget(
     : null;
 }
 
+/**
+ * Page-declared source hints, rebuilt from known fields. An invalid hint is
+ * dropped on its own rather than failing the capture, and `verified` is always
+ * false: only the backend's workspace check may set it.
+ */
+export function parseSourceHints(value: unknown): WebAnnotationSourceHint[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hints: WebAnnotationSourceHint[] = [];
+  for (const entry of value.slice(0, 8)) {
+    if (!isRecord(entry)) continue;
+    const hint = {
+      producer: entry.producer,
+      path: entry.path,
+      ...(entry.line === undefined ? {} : { line: entry.line }),
+      ...(entry.component === undefined ? {} : { component: entry.component }),
+      verified: false,
+    };
+    if (!isWebAnnotationSourceHint(hint) || !isSafeRelativePath(hint.path)) continue;
+    if (hints.some((existing) => existing.path === hint.path)) continue;
+    hints.push(hint);
+    if (hints.length >= 4) break;
+  }
+  return hints.length > 0 ? hints : undefined;
+}
+
 function parseEvidence(
   value: unknown,
   mode: BrowserPreviewCaptureMode,
@@ -176,6 +204,7 @@ function parseEvidence(
   if (!isRecord(value)) return undefined;
   const record = (entry: unknown) =>
     isRecord(entry) ? Object.fromEntries(Object.entries(entry).slice(0, 49)) : entry;
+  const sourceHints = parseSourceHints(value.sourceHints);
   const evidence = {
     text: value.text,
     attributes: record(value.attributes),
@@ -184,6 +213,7 @@ function parseEvidence(
       ? value.hierarchy.slice(0, 13).map(pickAncestor)
       : value.hierarchy,
     html: value.html,
+    ...(sourceHints ? { sourceHints } : {}),
   };
   return isWebAnnotationEvidence(evidence) ? evidence : undefined;
 }

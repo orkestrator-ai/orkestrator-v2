@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createProject } from "./storage.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { conciseError, isGitSshAuthenticationFailure } from "./commands-error-text.js";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
@@ -227,7 +228,9 @@ export async function isResumableScratchRepository(
     if ((await git(["rev-list", "--count", "HEAD"])) !== "1") return false;
     if ((await git(["symbolic-ref", "--short", "HEAD"])) !== "main") return false;
     if ((await git(["remote"])) !== "") return false;
-    if ((await git(["status", "--porcelain"])) !== "") return false;
+    if ((await retryGitWithoutFsmonitorOnTimeout(["status", "--porcelain"], git)) !== "") {
+      return false;
+    }
     const identity = await git(["log", "-1", "--format=%an%n%ae%n%s"]);
     return (
       identity === [SCRATCH_COMMIT_AUTHOR, SCRATCH_COMMIT_EMAIL, SCRATCH_COMMIT_SUBJECT].join("\n")

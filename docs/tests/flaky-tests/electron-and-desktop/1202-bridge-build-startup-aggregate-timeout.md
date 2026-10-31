@@ -41,6 +41,59 @@ mise run test:logged -- --name review-repair-tests -- mise run test
 The successful rerun does not establish a flake fix; this case remains open.
 
 
+## Coordinator timers/account review — 2026-10-30
+
+Preparation at `574bb14b3` repeated the successful-start deadline at
+15,010.85 ms during `mise run test`. The complete unchanged owner passed
+alone (exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name recorded-desktop-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is in
+`.orkestrator/review-artifacts/review-validation-af449b96-aec4-419e-90d3-165bd324e649/validation-05.stdout.txt`.
+No desktop implementation, assertion, deadline or skip changed. The cause
+remains unconfirmed.
+
+The exact default-suite rerun subsequently passed (exit 0, 170.0 s):
+
+```sh
+mise run test:logged -- --name review-repaired-default -- mise run test
+```
+
+
+## Development source-hint coverage validation — 2026-10-30
+
+`mise run test` repeated the same 15-second bridge startup deadline
+(15,004.95 ms), followed by an `ENOENT` renaming the temporary profile's
+`status.json` after timeout cleanup. The root, bridges and protocol groups
+passed; workspace also had the separate settings sign-in case 1317.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.7r8HZm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed in 1.5 s:
+
+```sh
+mise run test:logged -- --name bridge-builds-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+No bridge implementation, test assertion, timeout or skip changed.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated
+this unchanged owner failure. The startup case exhausted its 15-second budget (15005.18 ms); desktop totals were 1,363 passed, 16 skipped and one failed.
+The complete unchanged owner then passed alone with exit 0 in 1.2 s:
+
+```sh
+mise run test:logged -- --name recorded-bridge-builds -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Passing output was removed by the runner.
+No owner implementation, assertion, timeout or skip changed; the cause remains
+unconfirmed.
+
 ## Project checkout review recurrence — 2026-10-31
 
 `mise run test:logged -- --name review-default-rerun -- mise run test`

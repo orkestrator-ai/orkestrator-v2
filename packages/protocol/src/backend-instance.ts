@@ -25,6 +25,17 @@ export interface BackendInstanceEndpoint {
   url: string;
 }
 
+/**
+ * The backend's Control MCP listener. Only the default data directory's
+ * backend binds the fixed port; any other takes an ephemeral one, so local
+ * clients read it here. The descriptor is rewritten when `running` changes.
+ */
+export interface BackendInstanceControlMcp {
+  running: boolean;
+  /** The listener when running; the fixed URL it is retrying otherwise. */
+  url?: string;
+}
+
 export interface BackendInstanceDescriptor {
   version: 1;
   type: typeof BACKEND_INSTANCE_DESCRIPTOR_TYPE;
@@ -41,6 +52,8 @@ export interface BackendInstanceDescriptor {
    * {@link BACKEND_INSTANCE_MAX_ENDPOINTS} entries.
    */
   endpoints?: BackendInstanceEndpoint[];
+  /** The Control MCP endpoint (additive; absent when it is disabled or on older backends). */
+  controlMcp?: BackendInstanceControlMcp;
   /** Absolute path of the mode-0600 gateway credential file. */
   authFile: string;
   /** Absolute data directory this backend owns. */
@@ -85,6 +98,20 @@ function parseEndpoints(value: unknown): BackendInstanceEndpoint[] {
   });
 }
 
+function parseControlMcp(value: unknown): BackendInstanceControlMcp {
+  if (
+    !isRecord(value) ||
+    typeof value.running !== "boolean" ||
+    (value.url !== undefined && !isHttpUrl(value.url))
+  ) {
+    throw new Error("Backend instance descriptor field is invalid: controlMcp");
+  }
+  return {
+    running: value.running,
+    ...(value.url !== undefined ? { url: value.url as string } : {}),
+  };
+}
+
 /** Strict parse; throws a content-free message on any mismatch. */
 export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceDescriptor {
   if (!isRecord(value)) throw new Error("Backend instance descriptor must be an object");
@@ -106,6 +133,7 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
     throw new Error("Backend instance descriptor field is invalid: browserUrl");
   }
   const endpoints = value.endpoints === undefined ? undefined : parseEndpoints(value.endpoints);
+  const controlMcp = value.controlMcp === undefined ? undefined : parseControlMcp(value.controlMcp);
   if (
     !Number.isSafeInteger(value.publicApiSchemaVersion) ||
     (value.publicApiSchemaVersion as number) < 1
@@ -127,6 +155,7 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
     url: value.url,
     ...(value.browserUrl !== undefined ? { browserUrl: value.browserUrl as string } : {}),
     ...(endpoints !== undefined ? { endpoints } : {}),
+    ...(controlMcp !== undefined ? { controlMcp } : {}),
     authFile,
     dataDir,
     appVersion: text("appVersion", 64),

@@ -31,7 +31,7 @@ import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 
-function assertNotDeleting(environment: Environment): void {
+export function assertNotDeleting(environment: Environment): void {
   if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
     throw new PublicActionError("conflict", "The environment is being deleted");
   }

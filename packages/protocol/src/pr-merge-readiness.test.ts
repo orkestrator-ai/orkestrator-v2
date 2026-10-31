@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   evaluatePrMergeReadiness,
   isPrMergeability,
+  isPrMonitorPolled,
+  isPrReadingConfirmedByMonitor,
   isPrReadyToMerge,
   mergeabilityFromMergeStateStatus,
   PR_MERGEABILITY_VALUES,
   type PrMergeReadinessSignals,
 } from "./pr-merge-readiness.js";
+import type { PrMonitorEnvironmentState } from "./pr-monitor.js";
 
 function ready(overrides: Partial<PrMergeReadinessSignals> = {}): PrMergeReadinessSignals {
   return {
@@ -74,6 +77,31 @@ describe("evaluatePrMergeReadiness", () => {
     ).toEqual({ ready: false, reason: "stale" });
   });
 
+  test("a credential without push, maintain or admin is not ready", () => {
+    expect(evaluatePrMergeReadiness(ready({ viewerCanMerge: false }))).toEqual({
+      ready: false,
+      reason: "no-merge-permission",
+    });
+  });
+
+  test("an unknown merge permission does not veto", () => {
+    // A cold cache or an older backend must not hide every shimmer.
+    expect(isPrReadyToMerge(ready({ viewerCanMerge: null }))).toBe(true);
+    expect(isPrReadyToMerge(ready({ viewerCanMerge: undefined }))).toBe(true);
+    expect(isPrReadyToMerge(ready({ viewerCanMerge: true }))).toBe(true);
+  });
+
+  test("conflicts and failing checks still read as such without merge permission", () => {
+    expect(
+      evaluatePrMergeReadiness(ready({ viewerCanMerge: false, hasMergeConflicts: true })),
+    ).toEqual({ ready: false, reason: "conflicts" });
+    expect(
+      evaluatePrMergeReadiness(
+        ready({ viewerCanMerge: false, checkSummary: { passed: 1, total: 2, pending: 0 } }),
+      ),
+    ).toEqual({ ready: false, reason: "checks-failing" });
+  });
+
   test("a failing check is reported before a pending one", () => {
     expect(
       evaluatePrMergeReadiness(ready({ checkSummary: { passed: 1, total: 3, pending: 1 } })),
@@ -116,5 +144,64 @@ describe("isPrMergeability", () => {
     expect(isPrMergeability("")).toBe(false);
     expect(isPrMergeability(null)).toBe(false);
     expect(isPrMergeability(1)).toBe(false);
+  });
+});
+
+describe("isPrReadingConfirmedByMonitor", () => {
+  const environment = {
+    prUrl: "https://github.com/o/r/pull/1",
+    prState: "open" as const,
+    hasMergeConflicts: false,
+    environmentType: "containerized",
+    status: "running",
+  };
+
+  function monitor(overrides: Partial<PrMonitorEnvironmentState> = {}): PrMonitorEnvironmentState {
+    return {
+      environmentId: "env-1",
+      mode: "normal",
+      checkInProgress: false,
+      consecutiveErrors: 0,
+      lastCheckAt: "2026-10-30T00:00:00.000Z",
+      lastSuccessfulCheckAt: "2026-10-30T00:00:00.000Z",
+      prUrl: environment.prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      checkSummary: null,
+      ...overrides,
+    };
+  }
+
+  test("a current-lifetime answer that agrees with the persisted reading confirms it", () => {
+    expect(isPrReadingConfirmedByMonitor(environment, monitor())).toBe(true);
+  });
+
+  test.each([
+    ["no monitor entry", null],
+    ["no answered check since start or resume", monitor({ lastSuccessfulCheckAt: null })],
+    ["an older backend without the field", monitor({ lastSuccessfulCheckAt: undefined })],
+    ["the latest check failed", monitor({ consecutiveErrors: 1 })],
+    ["a different PR", monitor({ prUrl: "https://github.com/o/r/pull/2" })],
+    ["a different state", monitor({ prState: "merged" })],
+    ["different conflicts", monitor({ hasMergeConflicts: true })],
+    ["no PR at all", monitor({ prUrl: null })],
+  ] as const)("not confirmed with %s", (_label, state) => {
+    expect(isPrReadingConfirmedByMonitor(environment, state)).toBe(false);
+  });
+
+  test("a stopped container cannot be polled, so it is never confirmed", () => {
+    expect(isPrReadingConfirmedByMonitor({ ...environment, status: "stopped" }, monitor())).toBe(
+      false,
+    );
+    expect(isPrMonitorPolled("local", "stopped")).toBe(true);
+  });
+
+  test("unknown conflicts are never confirmed", () => {
+    expect(
+      isPrReadingConfirmedByMonitor(
+        { ...environment, hasMergeConflicts: null },
+        monitor({ hasMergeConflicts: null }),
+      ),
+    ).toBe(false);
   });
 });

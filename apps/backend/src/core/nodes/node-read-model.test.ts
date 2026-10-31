@@ -399,3 +399,63 @@ test("restored offline node summaries obey the icon budget", async () => {
     model.stop();
   }
 });
+
+test("a leaf's PR monitor health hint re-reads that project's summaries with the health", async () => {
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let confirmed = false;
+  const snapshotArgs: Array<Record<string, unknown>> = [];
+  leaf.commands.set("get_projects", () => [{ id: "p1", name: "One" }]);
+  leaf.commands.set("get_environment_snapshots", (args) => {
+    snapshotArgs.push(args);
+    return [
+      {
+        id: "e1",
+        projectId: "p1",
+        name: "feature",
+        status: "running",
+        prUrl: "https://github.com/o/r/pull/1",
+        prState: "open",
+        hasMergeConflicts: false,
+        prMergeability: "clean",
+        ...(args.includePrMonitorHealth === true && confirmed ? { prMonitorConfirmed: true } : {}),
+      },
+    ];
+  });
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 60_000,
+    refreshDebounceMs: 0,
+  });
+  try {
+    await model.start();
+    await settle(40);
+    const first = (await model.summaries()).nodes[0]!.environments[0]!;
+    expect(first.prMonitorConfirmed).toBeUndefined();
+    expect(snapshotArgs.at(-1)).toMatchObject({ projectId: "p1", includePrMonitorHealth: true });
+
+    confirmed = true;
+    const reads = snapshotArgs.length;
+    leaf.emit("resource-changed", {
+      resource: "environment-pr-health",
+      id: "e1",
+      projectId: "p1",
+      revision: 1,
+    });
+    await settle(40);
+    expect(snapshotArgs.length).toBeGreaterThan(reads);
+    expect((await model.summaries()).nodes[0]!.environments[0]!.prMonitorConfirmed).toBe(true);
+    // The URL stays on the leaf.
+    expect(JSON.stringify((await model.summaries()).nodes[0])).not.toContain("github.com");
+  } finally {
+    model.stop();
+  }
+});

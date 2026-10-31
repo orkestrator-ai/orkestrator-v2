@@ -145,6 +145,68 @@ async function environmentName(caller: ControlMcpCaller, environmentId: unknown)
   return environment?.name ? `environment ${environment.name}` : `environment ${environmentId}`;
 }
 
+/** The facts a confirmation names about an environment's pull request, as far as they can be read. */
+interface PullRequestView {
+  url?: string;
+  number?: number;
+  environment?: { cleanupAfterMergeRequested?: boolean; projectHome?: boolean };
+  pullRequest?: {
+    title: string;
+    baseRef: string;
+    headRef: string;
+    isDraft: boolean;
+    checksState: string;
+    mergeability: string;
+  } | null;
+}
+
+async function readPullRequest(
+  caller: ControlMcpCaller,
+  environmentId: unknown,
+): Promise<PullRequestView | null> {
+  if (typeof environmentId !== "string") return null;
+  return readIfAllowed<PullRequestView>(caller, "pr.get", { environmentId });
+}
+
+/** `pull request #12 "Fix login" (fix-login into main)`, or its environment when unreadable. */
+function pullRequestName(view: PullRequestView | null, fallback: string): string {
+  const detail = view?.pullRequest;
+  if (detail) {
+    return `pull request #${view?.number} "${short(detail.title, 100)}" (${short(detail.headRef, 60)} into ${short(detail.baseRef, 60)})`;
+  }
+  return view?.number ? `pull request #${view.number}` : `the pull request of ${fallback}`;
+}
+
+/** What a merge is about to do and what stands against it, read out before it runs. */
+async function mergeDescription(
+  caller: ControlMcpCaller,
+  input: Record<string, unknown>,
+  view: PullRequestView | null,
+): Promise<string> {
+  const environment = await environmentName(caller, input.environmentId);
+  const detail = view?.pullRequest;
+  const warnings = [
+    detail?.isDraft ? "it is a draft and is marked ready first" : null,
+    detail?.checksState === "failure" ? "its checks are failing" : null,
+    detail?.checksState === "pending" ? "its checks are still running" : null,
+    detail?.mergeability === "dirty" ? "it has merge conflicts" : null,
+    detail?.mergeability === "blocked" ? "a required review or check is unmet" : null,
+    detail?.mergeability === "behind" ? "its branch is behind the base" : null,
+  ].filter((warning) => warning !== null);
+  const cleanup = input.cleanup === true || view?.environment?.cleanupAfterMergeRequested === true;
+  const method = typeof input.method === "string" ? input.method : "squash";
+  return [
+    `This merges ${pullRequestName(view, environment)} with ${method}`,
+    cleanup
+      ? `, then deletes ${environment} and its worktree`
+      : input.deleteBranch === false || view?.environment?.projectHome === true
+        ? ""
+        : " and deletes its branch",
+    ". It cannot be undone.",
+    warnings.length > 0 ? ` Note: ${warnings.join("; ")}.` : "",
+  ].join("");
+}
+
 interface InteractionView {
   id: string;
   kind: string;
@@ -173,6 +235,7 @@ async function confirmationFor(
   caller: ControlMcpCaller,
   action: PublicActionName,
   input: Record<string, unknown>,
+  mergeView: PullRequestView | null,
 ): Promise<string | null> {
   const rule = controlMcpConfirmationRule(action, caller.profile);
   if (rule === "none") return null;
@@ -202,6 +265,33 @@ async function confirmationFor(
       return `This starts an agent that commits, pushes and opens a pull request from ${await environmentName(caller, input.environmentId)}${typeof input.targetBranch === "string" ? ` against ${short(input.targetBranch, 100)}` : ""}.`;
     case "pr.resolve":
       return `This starts an agent that merges ${typeof input.targetBranch === "string" ? short(input.targetBranch, 100) : "the target branch"} into ${await environmentName(caller, input.environmentId)}, resolves conflicts and pushes.`;
+    case "pr.merge":
+      return mergeDescription(caller, input, mergeView);
+    case "pr.close":
+      return `This closes ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} without merging.`;
+    case "pr.reopen":
+      return `This reopens ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))}.`;
+    case "pr.review": {
+      const verdict =
+        input.event === "APPROVE"
+          ? "approves"
+          : input.event === "REQUEST_CHANGES"
+            ? "requests changes on"
+            : "comments on";
+      return `This ${verdict} ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} as the configured GitHub user.`;
+    }
+    case "pr.comment":
+    case "pr.comment.edit":
+    case "pr.review.comment":
+    case "pr.thread.reply": {
+      const verb =
+        action === "pr.comment.edit"
+          ? "edits a comment"
+          : action === "pr.thread.reply"
+            ? "replies to a thread"
+            : "posts a comment";
+      return `This ${verb} on ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} as the configured GitHub user: ${short(String(input.body ?? ""), 160)}`;
+    }
     case "project.create":
       return `This creates a private GitHub repository at ${short(String(input.path ?? "a new path"), 200)} and pushes to it.`;
     case "project.remove":
@@ -256,10 +346,27 @@ export async function runPublicAction(
   if (!mutation && requestId !== undefined) {
     return adapterError(action, "invalid-input", "Read actions do not take a requestId");
   }
-  const base = await confirmationFor(caller, action, input);
+  const mergeView =
+    action === "pr.merge" ? await readPullRequest(caller, input.environmentId) : null;
+  // Bind both approval and execution to the same resolved target and effects.
+  const executionInput =
+    action === "pr.merge"
+      ? {
+          ...input,
+          expectedPrUrl: mergeView?.url ?? "",
+          cleanup:
+            input.cleanup === true || mergeView?.environment?.cleanupAfterMergeRequested === true,
+          deleteBranch:
+            mergeView?.environment?.projectHome === true ? false : (input.deleteBranch ?? true),
+        }
+      : input;
+  const base = await confirmationFor(caller, action, input, mergeView);
   const description = base ? withNodeName(base, await nodeSuffix(caller)) : null;
   if (description) {
-    const bound = confirmedInput(caller, input);
+    const bound = confirmedInput(
+      caller,
+      action === "pr.merge" ? { input, resolved: executionInput } : input,
+    );
     const check = caller.confirmTokens.check(
       confirmToken,
       caller.credential.id,
@@ -283,7 +390,7 @@ export async function runPublicAction(
       });
     }
   }
-  return dispatchAs(caller, action, input, mutation ? requestId : undefined);
+  return dispatchAs(caller, action, executionInput, mutation ? requestId : undefined);
 }
 
 export interface RunStatusOutcome {

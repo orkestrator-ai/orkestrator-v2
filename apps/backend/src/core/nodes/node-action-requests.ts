@@ -23,6 +23,11 @@ import {
  *   `## Orkestrator` section of the project's root AGENTS.md, on the node
  *   that owns the project copy. The user may edit the entries while
  *   approving.
+ * - `switch-agent-account`: make another Claude or Codex login the active
+ *   account on one machine, through the same `set_active_agent_account` the
+ *   Settings switch uses. It changes which subscription pays for every new
+ *   turn there, so it needs the user unless a self-timer carries their
+ *   permission (see `control-mcp-account-tools.ts`).
  *
  * Requests hold names and identifiers only, never file contents or values;
  * the one exception is an AGENTS.md proposal's entries, which are the
@@ -44,7 +49,8 @@ export type NodeActionKind =
   | "update-project-files"
   | "reveal-env-value"
   | "apply-root-changes"
-  | "update-agents-md";
+  | "update-agents-md"
+  | "switch-agent-account";
 
 /** Kinds whose approved, unfinished runs are resumed after a restart. */
 const RESUMABLE_KINDS: ReadonlySet<NodeActionKind> = new Set(["update-agents-md"]);
@@ -61,6 +67,10 @@ export interface NodeActionTarget {
   gitRemote?: string;
   files?: string[];
   keys?: string[];
+  /** `switch-agent-account`: the provider and the account to make active. */
+  platform?: string;
+  accountId?: string;
+  accountLabel?: string;
 }
 
 export type NodeActionState =
@@ -385,6 +395,13 @@ export function describeNodeAction(request: Pick<NodeActionRequest, "kind" | "ta
     case "apply-root-changes":
       return `Apply uncommitted checkout changes to ${request.targets
         .map((target) => `“${names(target)}” on ${target.nodeName}`)
+        .join(", ")}`;
+    case "switch-agent-account":
+      return `Switch ${request.targets
+        .map(
+          (target) =>
+            `the active ${target.platform === "codex" ? "Codex" : "Claude"} account on ${target.nodeName} to “${target.accountLabel ?? target.accountId}”`,
+        )
         .join(", ")}`;
     case "update-agents-md":
       return `Open a pull request updating the ## Orkestrator section of AGENTS.md in ${request.targets

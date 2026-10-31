@@ -18,6 +18,7 @@ import {
   type NodeActionRequest,
   type NodeActionTarget,
 } from "./node-action-requests.js";
+import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import {
@@ -289,6 +290,12 @@ export class NodeCoordination {
         "create-project": (request, approval) => this.executeCreateProject(request, approval),
         "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
         "update-agents-md": (request, approval) => this.executeAgentsMdUpdate(request, approval),
+        "switch-agent-account": (request) =>
+          executeAgentAccountSwitch(request, {
+            selfId: () => this.options.nodes.selfIdentity(),
+            invoke: (command, args) => this.options.invoke(command, args),
+            invokeOnNode: (input) => this.options.portal.invokeOnNode(input),
+          }),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -504,6 +511,7 @@ export class NodeCoordination {
         "reveal-env-value",
         "apply-root-changes",
         "update-agents-md",
+        "switch-agent-account",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -533,6 +541,9 @@ export class NodeCoordination {
         "projectName",
         "location",
         "gitRemote",
+        "platform",
+        "accountId",
+        "accountLabel",
       ] as const) {
         if (typeof target[key] === "string") clean[key] = (target[key] as string).slice(0, 1024);
       }

@@ -1,11 +1,14 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import os from "node:os";
-import { existsSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import * as connection from "../src/client/service-connection.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
+
+const realAwaitServiceConnection = connection.awaitServiceConnection;
 
 const TOKEN = "install-fixture-token-0123456789";
 const ADDRESS = "http://100.64.0.10:4317";
@@ -137,6 +140,83 @@ test.each(["human", "json"])("deadline expiry reports not ready in %s output", a
   else expect(result.out).toContain("not reported ready yet");
 });
 
+/** A launcher that has already given up by the time the install starts waiting. */
+function launcherGaveUp(dataDir: string, state: () => Record<string, unknown>) {
+  const manager = childProcess.spawnSync as unknown as ReturnType<typeof spyOn>;
+  manager.mockImplementation((() => {
+    const root = path.join(dataDir, "backend");
+    const evidence = state();
+    const { installGeneration } = JSON.parse(readFileSync(path.join(root, "service.json"), "utf8"));
+    for (const key of ["bootFailure", "rollback"]) {
+      if (evidence[key]) Object.assign(evidence[key], { installGeneration });
+    }
+    writeFileSync(path.join(root, "launcher-state.json"), JSON.stringify(evidence));
+    writeFileSync(
+      path.join(root, "logs/service.log"),
+      [
+        "Checking pinned Orkestrator tools…",
+        "error: Unable to configure Tailscale Serve: Access denied: serve config denied",
+        "To not require root, use 'sudo tailscale set --operator=$USER' once.",
+        "[launcher] 2026-10-30T23:29:44.233Z 9.9.9 exited (code 1, signal none)",
+        "[launcher] 2026-10-30T23:29:46.000Z starting 2.23.0",
+      ].join("\n"),
+    );
+    return { status: 0, stdout: "", stderr: "", pid: 1, output: [null, "", ""], signal: null };
+  }) as unknown as typeof childProcess.spawnSync);
+}
+
+test("a release that fails to start ends the wait with what the service logged", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    lastReadyVersion: "9.9.9",
+    bootFailure: { version: "9.9.9", exits: 2, at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h"]);
+  expect(result.code).not.toBe(0);
+  expect(result.err).toContain("orkestrator@9.9.9 did not start");
+  expect(result.err).toContain("keeps retrying");
+  expect(result.err).toContain("Access denied: serve config denied");
+  expect(result.err).toContain("sudo tailscale set --operator");
+  expect(result.err).not.toContain("starting 2.23.0");
+  expect(result.err).toContain("service.log");
+  expect(result.out).not.toContain("The service is running");
+});
+
+test("a rollback names the release the service went back to", async () => {
+  const f = await fixture({ publish: false });
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: {},
+    rollback: { failedVersion: "9.9.9", restoredVersion: "2.23.0", at: new Date().toISOString() },
+  }));
+  const result = await f.run(["--timeout", "1h", "--output", "json"]);
+  expect(result.code).not.toBe(0);
+  const error = JSON.parse(result.out).error;
+  expect(error.code).toBe("operation-failed");
+  expect(error.message).toContain("the service went back to 2.23.0");
+  expect(error.message).toContain("Access denied");
+});
+
+test("a reinstall records the replaced release and the arguments it ran with", async () => {
+  const f = await fixture();
+  const first = await f.run(["--skip-start", "--", "--tailscale-bin", "/old"]);
+  expect(first.code).toBe(0);
+  const releases = path.join(f.dataDir, "backend/releases");
+  await cp(path.join(releases, "9.9.9"), path.join(releases, "8.8.8"), { recursive: true });
+  await symlink(path.join(releases, "8.8.8"), path.join(f.dataDir, "backend/current.next"));
+  await rename(
+    path.join(f.dataDir, "backend/current.next"),
+    path.join(f.dataDir, "backend/current"),
+  );
+  const second = await f.run(["--skip-start", "--", "--loopback-client-port", "34125"]);
+  expect(second.code).toBe(0);
+  const config = JSON.parse(readFileSync(path.join(f.dataDir, "backend/service.json"), "utf8"));
+  expect(config.args).toEqual(["--loopback-client-port", "34125"]);
+  expect(config.rollbackTarget).toEqual({ version: "8.8.8", args: ["--tailscale-bin", "/old"] });
+});
+
 test("zero timeout skips observation and skip-start renders the load command", async () => {
   const f = await fixture();
   const result = await f.run(["--timeout", "0", "--output", "json"]);
@@ -176,3 +256,123 @@ test.each(["SIGINT", "SIGTERM"])(
     expect(result.out).not.toContain("not reported ready");
   },
 );
+
+test("same-version old launcher failures during manager reload do not fail a corrected reinstall", async () => {
+  const f = await fixture({ publish: false });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "linux" });
+  restores.push(() => Object.defineProperty(process, "platform", platform));
+  await symlink(
+    path.join(f.dataDir, "backend/releases/9.9.9"),
+    path.join(f.dataDir, "backend/current"),
+  );
+  const calls: string[][] = [];
+  f.manager.mockImplementation(((file: string, args: string[]) => {
+    calls.push([file, ...args]);
+    // The old launcher keeps writing its own install generation through enable.
+    writeFileSync(
+      path.join(f.dataDir, "backend/launcher-state.json"),
+      JSON.stringify({
+        version: 1,
+        lastReadyVersion: "9.9.9",
+        bootAttempts: {},
+        bootFailure: {
+          version: "9.9.9",
+          exits: 3,
+          at: new Date().toISOString(),
+          installGeneration: "old-install",
+        },
+      }),
+    );
+    return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+  }) as unknown as typeof childProcess.spawnSync);
+  let polls = 0;
+  // Exercise the real observation and failure reader without wall-clock sleeps.
+  const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
+    (dir, previous, options) =>
+      realAwaitServiceConnection(dir, previous, {
+        ...options,
+        sleep: async () => {
+          polls++;
+          if (polls < 2) return;
+          writeFileSync(
+            path.join(f.dataDir, "backend-instance.json"),
+            JSON.stringify({
+              version: 1,
+              type: "orkestrator-backend-instance",
+              installationId: "install-1",
+              generation: "replacement",
+              pid: process.pid,
+              startedAt: new Date().toISOString(),
+              url: ADDRESS,
+              endpoints: [],
+              authFile: f.authFile,
+              dataDir: f.dataDir,
+              appVersion: "9.9.9",
+              publicApiSchemaVersion: 1,
+            }),
+          );
+        },
+      }),
+  );
+  restores.push(() => wait.mockRestore());
+  const result = await f.run([
+    "--timeout",
+    "1h",
+    "--output",
+    "json",
+    "--",
+    "--host",
+    "100.64.0.10",
+  ]);
+  expect(calls.map((call) => call.slice(0, 3))).toEqual([
+    ["systemctl", "--user", "daemon-reload"],
+    ["systemctl", "--user", "enable"],
+    ["systemctl", "--user", "restart"],
+  ]);
+  expect(polls).toBe(2);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.out).result.ready).toBe(true);
+});
+
+test("install waits through exhausted boots until the launcher records rollback", async () => {
+  const f = await fixture({ publish: false });
+  await symlink(
+    path.join(f.dataDir, "backend/releases/2.23.0"),
+    path.join(f.dataDir, "backend/previous"),
+  );
+  launcherGaveUp(f.dataDir, () => ({
+    version: 1,
+    bootAttempts: { "9.9.9": 2 },
+    lastReadyVersion: "2.23.0",
+    bootFailure: { version: "9.9.9", exits: 2, at: new Date().toISOString() },
+  }));
+  let polls = 0;
+  const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
+    (dir, previous, options) =>
+      realAwaitServiceConnection(dir, previous, {
+        ...options,
+        sleep: async () => {
+          polls++;
+          if (polls < 2) return;
+          const stateFile = path.join(f.dataDir, "backend/launcher-state.json");
+          const state = JSON.parse(readFileSync(stateFile, "utf8"));
+          state.rollback = {
+            failedVersion: "9.9.9",
+            restoredVersion: "2.23.0",
+            at: new Date().toISOString(),
+            installGeneration: state.bootFailure.installGeneration,
+          };
+          writeFileSync(stateFile, JSON.stringify(state));
+        },
+      }),
+  );
+  restores.push(() => wait.mockRestore());
+  const result = await f.run(["--timeout", "1h", "--output", "json"]);
+  expect(polls).toBe(2);
+  expect(result.code).not.toBe(0);
+  expect(JSON.parse(result.out).error).toMatchObject({
+    code: "operation-failed",
+    message: expect.stringContaining("went back to 2.23.0"),
+  });
+});

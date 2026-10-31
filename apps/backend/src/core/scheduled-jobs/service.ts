@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isReminderToSelf } from "./reminders.js";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
@@ -109,6 +110,28 @@ export interface ScheduledJobServiceOptions {
 
 function iso(ms: number): string {
   return new Date(ms).toISOString();
+}
+
+/**
+ * Refuses a coordinator's one-shot self-timer set too far ahead. Returns
+ * whether the schedule is a coordinator self-timer at all.
+ */
+function assertSelfTimerDelay(
+  owner: ScheduleOwner,
+  action: ScheduleAction,
+  trigger: ScheduledJob["trigger"],
+  now: number,
+): boolean {
+  if (owner.kind !== "coordinator" || !isReminderToSelf(owner, action)) return false;
+  if (
+    trigger.kind === "once" &&
+    Date.parse(trigger.at) - now > SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs
+  ) {
+    throw new ScheduleInputError(
+      `A self-timer can be set at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead`,
+    );
+  }
+  return true;
 }
 
 export class ScheduledJobService {
@@ -344,6 +367,7 @@ export class ScheduledJobService {
       if (prior) return this.replay(prior, fingerprint);
     }
     const trigger = normalizeScheduleTrigger(input, timeZone, now);
+    assertSelfTimerDelay(owner, action, trigger, now);
     await this.options.executor.validate(owner, action);
     const ownerLabel = (await this.options.ownerLabel?.(owner)) ?? defaultOwnerLabel(owner);
     const nextFireAt = nextScheduleSlot(trigger, timeZone, now);
@@ -425,6 +449,7 @@ export class ScheduledJobService {
       if (action) next.action = action;
       if (retimed) {
         next.trigger = normalizeScheduleTrigger(input, next.timeZone, now);
+        assertSelfTimerDelay(next.owner, next.action, next.trigger, now);
       } else if (input.startAt !== undefined) {
         throw new ScheduleInputError("startAt goes with everySeconds");
       }

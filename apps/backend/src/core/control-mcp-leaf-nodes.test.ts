@@ -177,6 +177,53 @@ describe("Control MCP and leaf nodes", () => {
     expect(publicActionsReceived(mcp.leafNode)).toBe(before);
   });
 
+  test("the pull request tools act on the leaf's environment, and its merge is confirmed here", async () => {
+    const mcp = await open();
+    const url = "https://github.com/acme/site/pull/7";
+    await mcp.leaf.harness.storage.updateEnvironment("env-1", { prUrl: url, prState: "open" });
+    const merges: Array<Record<string, unknown>> = [];
+    mcp.leaf.harness.commands.set("get_github_pull_request", async () => ({
+      title: "Fix",
+      state: "open",
+      baseRef: "main",
+      headRef: "fix",
+      isDraft: false,
+      checksState: "success",
+      mergeability: "clean",
+    }));
+    mcp.leaf.harness.commands.set("merge_environment_pr", async (args) => {
+      merges.push(args);
+      return { outcome: "merged", cleanupOutcome: "not-requested" };
+    });
+
+    const read = content(
+      await mcp.call(mcp.token, "pr_get", { environmentId: "env-1", nodeId: mcp.leafId }),
+    );
+    expect(read.ok).toBe(true);
+    expect(read.node).toMatchObject({ nodeId: mcp.leafId });
+    expect((read.result as { url: string }).url).toBe(url);
+    // On this machine env-1 does not exist.
+    expect(content(await mcp.call(mcp.token, "pr_get", { environmentId: "env-1" })).ok).toBe(false);
+
+    const args = { environmentId: "env-1", requestId: "leaf-merge", nodeId: mcp.leafId };
+    const first = content(await mcp.call(mcp.token, "pr_merge", args)) as {
+      error: { code: string; message: string; details: { confirmToken: string } };
+    };
+    expect(first.error.code).toBe("confirmation-required");
+    expect(first.error.message).toContain("on leaf machine");
+    expect(merges).toEqual([]);
+
+    const merged = content(
+      await mcp.call(mcp.token, "pr_merge", {
+        ...args,
+        confirmToken: first.error.details.confirmToken,
+      }),
+    );
+    expect(merged.ok).toBe(true);
+    expect(merged.node).toMatchObject({ nodeId: mcp.leafId });
+    expect(merges).toHaveLength(1);
+  });
+
   test("credential rules apply before anything crosses the node link", async () => {
     const mcp = await open();
     const readOnly = await mcp.credential("read-only");

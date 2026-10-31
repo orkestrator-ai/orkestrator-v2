@@ -87,3 +87,40 @@ export async function publishInstanceDescriptor(
     }
   };
 }
+
+/**
+ * Whether a process with this PID exists. Signal 0 delivers nothing; it only
+ * asks the kernel, and EPERM means the process exists under another user.
+ */
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * The backend another data directory's descriptor names, when its process is
+ * still alive and is not this one. A backend for a non-default data directory
+ * calls this with the default directory at startup, only to log that it runs
+ * beside the user's main install: the fixed ports are already kept off it.
+ * A stale descriptor whose PID was reused can give a false positive, which is
+ * harmless for a log line.
+ */
+export async function liveInstanceIn(
+  dataDir: string,
+  isAlive: (pid: number) => boolean = processExists,
+): Promise<{ pid: number; url: string } | null> {
+  let descriptor: BackendInstanceDescriptor;
+  try {
+    descriptor = parseBackendInstanceDescriptor(
+      JSON.parse(await fs.readFile(instanceDescriptorPath(dataDir), "utf8")),
+    );
+  } catch {
+    return null;
+  }
+  if (descriptor.pid === process.pid || !isAlive(descriptor.pid)) return null;
+  return { pid: descriptor.pid, url: descriptor.url };
+}

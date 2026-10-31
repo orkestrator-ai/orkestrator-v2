@@ -8,6 +8,7 @@
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
 import type { CodexChangeEvidence } from "./change-evidence.js";
+import type { CapacityRetryPolicy } from "./sessions/capacity-retry.js";
 import type {
   RefusedCell,
   RefusedCellTail,
@@ -85,6 +86,13 @@ export interface AppServerRuntimeOptions {
   orderedEventMaxBytes?: number;
   /** Test/embedding override for the one allowed initial-prompt overload retry. */
   initialPromptRetryDelayMs?: number;
+  /**
+   * Test/embedding override for retrying a turn the model refused for
+   * capacity (`sessions/capacity-retry.ts`); unset fields keep the defaults.
+   */
+  capacityRetry?: Partial<CapacityRetryPolicy>;
+  /** Jitter source for those retries; `Math.random` by default. */
+  capacityRetryRandom?: () => number;
   /** Test/embedding override for dispatch-journal admission limits. */
   dispatchJournalMaxRecords?: number;
   dispatchJournalMaxBytes?: number;

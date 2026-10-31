@@ -1,6 +1,6 @@
 # Container start poll quantisation (todo 0870) branch validation
 
-- **ID:** 1317
+- **ID:** 1316
 - **Status:** resolved
 - **Date observed:** 2026-10-30
 - **Branch:** `todo-0870-container-start-polling-ad6103f1e6b0`, uncommitted

@@ -223,7 +223,7 @@ export class CodexRuntimePrompt {
       if (decision.action === "reconcile" && decision.record?.threadId) {
         const outcome = await this.ctx.options.engine.reconcileRequest(
           decision.record.threadId,
-          requestId,
+          decision.record.providerRequestId ?? requestId,
         );
         if (outcome.result === "terminal") {
           await this.ctx.journal.markTerminal(requestId, outcome.status ?? "completed", {
@@ -900,6 +900,12 @@ export class CodexRuntimePrompt {
         startedAt: context.turnStartedAt,
       });
       accumulator.markRunning();
+      // A capacity refusal continues this turn with the same configuration.
+      accumulator.capacityRetry = {
+        config: turnConfig,
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        attempt: 1,
+      };
       context.activeTurn = accumulator;
       context.engineGeneration = turn.engineGeneration;
       context.dispatchInFlight = false;
@@ -1122,12 +1128,17 @@ export class CodexRuntimePrompt {
       });
     }
 
+    accumulator.providerRequestId = this.ctx.journal.get(requestId)?.providerRequestId ?? requestId;
+
     // Armed before the read so a reconciliation that hangs or throws still ends
     // in a definite phase.
     this.scheduleRecoveryBackstop(context);
     let outcome: Awaited<ReturnType<AppServerEngine["reconcileRequest"]>>;
     try {
-      outcome = await this.ctx.options.engine.reconcileRequest(context.threadId, requestId);
+      outcome = await this.ctx.options.engine.reconcileRequest(
+        context.threadId,
+        accumulator.providerRequestId,
+      );
     } catch (error) {
       console.warn(
         `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,

@@ -23,8 +23,10 @@ function harness(
   options: { status?: NodeStatus; leafProjects?: Array<Record<string, unknown>> } = {},
 ) {
   const tools = new Map<string, Handler>();
+  const descriptions = new Map<string, string>();
   const server = {
-    registerTool(name: string, _config: unknown, handler: Handler) {
+    registerTool(name: string, config: { description: string }, handler: Handler) {
+      descriptions.set(name, config.description);
       tools.set(name, handler);
     },
   };
@@ -107,7 +109,7 @@ function harness(
   });
   const call = async (name: string, input: Record<string, unknown> = {}) =>
     (await tools.get(name)!(input)).structuredContent;
-  return { tools, calls, routed, call };
+  return { tools, descriptions, calls, routed, call };
 }
 
 describe("CO-01/LM-02 node tools in leaf mode", () => {
@@ -165,6 +167,14 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
     await expect(
       call("read_node_environment", { nodeId: "bk_leaf", environmentId: "e1", limit: 10 }),
     ).rejects.toThrow("has no copy of this project");
+  });
+
+  test("the older launch tool permits placement based on load or OS", () => {
+    const { descriptions } = harness();
+    const description = descriptions.get("launch_node_environment")!;
+    expect(description).toContain("load or OS gives a clear reason to move");
+    expect(description).toContain("Check list_nodes before placement");
+    expect(description).not.toContain("only when the user asks");
   });
 
   test("launching on a node is the coordinator's node launch, scoped to this conversation", async () => {

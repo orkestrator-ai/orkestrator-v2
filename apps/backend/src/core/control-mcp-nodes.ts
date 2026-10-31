@@ -366,7 +366,7 @@ export function registerNodeTools(
     {
       title: "Launch an environment on a connected node",
       description:
-        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Use only when the user asks for another node. The worker reports back to you by mail.",
+        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Check list_nodes before placement. Stay on this node unless load or OS gives a clear reason to move, or the user requests another node. The worker reports back to you by mail.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         nodeId: nodeIdSchema,

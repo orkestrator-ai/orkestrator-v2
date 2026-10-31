@@ -12,7 +12,12 @@ import type { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { RecurringTimerFactory } from "./recurring-scheduler.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { runCommand } from "./shell.js";
-import { cpuPercent, cpuTimes, hostRamReader, type CachedRamReader } from "./system-usage.js";
+import {
+  measuredCpuPercent,
+  cpuTimes,
+  hostRamReader,
+  type CachedRamReader,
+} from "./system-usage.js";
 
 /**
  * Each backend's rolling record of its own machine, for coordinators choosing
@@ -234,7 +239,7 @@ export class MachineLoadSampler {
   private readonly metrics: RecurringWorkMetrics;
   private readonly platform: NodeJS.Platform;
   private jobs: BackendActivityJobs | null = null;
-  private baseline: { at: number; times: ReturnType<typeof cpuTimes> } | null = null;
+  private baseline: { at: number; times: ReturnType<typeof cpuTimes>; cores: number } | null = null;
   private latestSampleAt: number | null = null;
   private osName: string | null = null;
 
@@ -250,7 +255,8 @@ export class MachineLoadSampler {
 
   start(): void {
     if (this.jobs) return;
-    this.baseline = { at: this.now(), times: cpuTimes(this.cpus()) };
+    const cpus = this.cpus();
+    this.baseline = { at: this.now(), times: cpuTimes(cpus), cores: cpus.length };
     void this.resolveOsName();
     this.jobs = new BackendActivityJobs(
       [
@@ -293,9 +299,10 @@ export class MachineLoadSampler {
     await this.resolveOsName();
     const ramPercent = await this.readRam(this.now());
     const at = this.now();
-    const times = cpuTimes(this.cpus());
+    const cpus = this.cpus();
+    const times = cpuTimes(cpus);
     const previous = this.baseline;
-    this.baseline = { at, times };
+    this.baseline = { at, times, cores: cpus.length };
     if (!previous) return;
     const elapsedMs = at - previous.at;
     if (elapsedMs <= 0) {
@@ -304,10 +311,15 @@ export class MachineLoadSampler {
       return;
     }
     if (elapsedMs > MACHINE_LOAD_MAX_SAMPLE_GAP_MS) return;
+    // Empty CPU lists and core-count changes cannot provide matching counters.
+    if (cpus.length === 0 || previous.cores !== cpus.length) return;
+    const cpu = measuredCpuPercent(previous.times, times);
+    // Both averages share coverage; an unmeasurable CPU interval covers neither.
+    if (cpu === null) return;
     this.history.record({
       startMs: previous.at,
       endMs: at,
-      cpuPercent: cpuPercent(previous.times, times),
+      cpuPercent: cpu,
       ramPercent,
     });
     this.latestSampleAt = at;
@@ -316,6 +328,14 @@ export class MachineLoadSampler {
   /** No I/O, so a coordinator's `list_nodes` never waits on a probe. */
   report(): MachineLoadReport {
     const now = this.now();
+    if (
+      (this.baseline && this.baseline.at > now) ||
+      (this.latestSampleAt !== null && this.latestSampleAt > now)
+    ) {
+      this.history.dropAfter(now);
+      this.baseline = null;
+      this.latestSampleAt = null;
+    }
     // Windows end at the newest reading while sampling is on schedule, so a
     // steady machine reads as fully covered between readings. Once readings
     // stop they end now, and the history ages out of them.

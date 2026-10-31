@@ -110,6 +110,50 @@ describe("machine load windows", () => {
     sampler.stop();
   });
 
+  for (const [name, initial, invalid] of [
+    ["empty CPU lists", [], []],
+    ["stalled counters", cpus(100, 100), cpus(100, 100)],
+    ["decreasing totals", cpus(100, 100), cpus(50, 50)],
+    ["decreasing idle", cpus(100, 100), cpus(300, 50)],
+    ["decreasing busy", cpus(100, 100), cpus(50, 300)],
+  ] as const) {
+    test(`${name} add no coverage and recover from a fresh baseline`, async () => {
+      let now = START;
+      let counters: CpuInfo[] = [...initial];
+      const sampler = new MachineLoadSampler({
+        now: () => now,
+        cpus: () => counters,
+        platform: "linux",
+        readFile: async () => "NAME=Linux",
+        readRam: async () => 40,
+      });
+      await sampler.sample();
+      now += MINUTE;
+      counters = [...invalid];
+      await sampler.sample();
+      expect(sampler.report().latestSampleAgeSeconds).toBeNull();
+      for (const entry of sampler.report().load) {
+        expect(entry).toMatchObject({ coveredSeconds: 0, cpuPercent: null, ramPercent: null });
+      }
+      now += MINUTE;
+      const last = invalid[0]?.times;
+      counters = cpus((last?.user ?? 0) + 100, (last?.idle ?? 0) + 300);
+      await sampler.sample();
+      if (invalid.length === 0) {
+        // Reappearing counters establish a baseline; only the next delta counts.
+        expect(window(sampler.report(), "5m").coveredSeconds).toBe(0);
+        now += MINUTE;
+        counters = cpus(200, 600);
+        await sampler.sample();
+      }
+      expect(window(sampler.report(), "5m")).toMatchObject({
+        coveredSeconds: 60,
+        cpuPercent: 25,
+        ramPercent: 40,
+      });
+    });
+  }
+
   test("a figure older than a window leaves it", async () => {
     const { state, sampler, step } = fixture();
     sampler.start();
@@ -241,11 +285,33 @@ describe("partial history and restarts", () => {
     sampler.stop();
   });
 
+  test("reporting after rollback keeps only history completed before now, even when stopped", async () => {
+    const { state, sampler, step } = fixture();
+    sampler.start();
+    state.cpu = 20;
+    await step(MINUTE);
+    state.cpu = 80;
+    await step(MINUTE);
+    await step(MINUTE);
+    sampler.stop();
+    state.now = START + 90_000;
+    const report = sampler.report();
+    expect(report.latestSampleAgeSeconds).toBeNull();
+    for (const entry of report.load) {
+      expect(entry).toMatchObject({ coveredSeconds: 60, cpuPercent: 20, ramPercent: 40 });
+    }
+  });
+
   test("a clock moved back drops readings now dated in the future", async () => {
     const { state, sampler, step } = fixture();
     sampler.start();
     for (let minute = 0; minute < 3; minute += 1) await step(MINUTE);
     state.now -= HOUR;
+    const beforeSample = sampler.report();
+    expect(beforeSample.latestSampleAgeSeconds).toBeNull();
+    for (const entry of beforeSample.load) {
+      expect(entry).toMatchObject({ coveredSeconds: 0, cpuPercent: null, ramPercent: null });
+    }
     await sampler.sample();
     expect(window(sampler.report(), "24h").coveredSeconds).toBe(0);
     await step(MINUTE);

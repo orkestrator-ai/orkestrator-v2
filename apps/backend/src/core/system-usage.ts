@@ -112,11 +112,26 @@ export function cpuTimes(cpus: CpuInfo[]): CpuTimeSnapshot {
   return { idle, total };
 }
 
-export function cpuPercent(previous: CpuTimeSnapshot, current: CpuTimeSnapshot): number {
+/** Null means the counters did not describe a measurable CPU interval. */
+export function measuredCpuPercent(
+  previous: CpuTimeSnapshot,
+  current: CpuTimeSnapshot,
+): number | null {
   const elapsed = current.total - previous.total;
   const idle = current.idle - previous.idle;
-  if (elapsed <= 0 || idle < 0) return 0;
+  if (
+    !Number.isFinite(elapsed) ||
+    !Number.isFinite(idle) ||
+    elapsed <= 0 ||
+    idle < 0 ||
+    idle > elapsed
+  )
+    return null;
   return clampPercent(((elapsed - idle) / elapsed) * 100);
+}
+
+export function cpuPercent(previous: CpuTimeSnapshot, current: CpuTimeSnapshot): number {
+  return measuredCpuPercent(previous, current) ?? 0;
 }
 
 export async function readDiskPercent(

@@ -12,7 +12,7 @@ import { GOAL_TOKEN_BUDGET_PLATFORMS } from "@orkestrator/protocol/native-agent-
  */
 import { expect, test, type Page } from "@playwright/test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeGoalSummary } from "./goals-live-summary";
 import path from "node:path";
 import {
   authenticatedInvoke,
@@ -77,8 +77,7 @@ function writeSummary() {
     "goals",
     `summary-${platform}.json`,
   );
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  writeGoalSummary(file, record);
 }
 
 async function prepare(page: Page) {

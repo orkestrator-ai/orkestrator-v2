@@ -1,3 +1,4 @@
+import { writeGoalSummary } from "./goals-live-summary";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
@@ -145,3 +146,26 @@ test("a long failed-run trace larger than 16 MiB survives redaction", async () =
   expect(unpacked).toContain("orkestrator_gateway_auth=[REDACTED]");
   expect(unpacked).not.toContain("=secret");
 }, 20_000);
+
+test("later live-goal workers retain earlier statuses and error detail", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-goal-summary-"));
+  temporaryDirectories.push(root);
+  const file = path.join(root, "summary.json");
+  const identity = { platform: "grok", environmentKind: "local" };
+  writeGoalSummary(file, {
+    ...identity,
+    scenarios: { blocked: { status: "blocked", detail: "needs a key" } },
+  });
+  // A replacement worker has a fresh module-level record.
+  writeGoalSummary(file, { ...identity, scenarios: { compact: { status: "complete" } } });
+  expect(JSON.parse(await readFile(file, "utf8")).scenarios).toEqual({
+    blocked: { status: "blocked", detail: "needs a key" },
+    compact: { status: "complete" },
+  });
+  writeGoalSummary(file, {
+    platform: "codex",
+    environmentKind: "local",
+    scenarios: { plan: { status: "limited" } },
+  });
+  expect(Object.keys(JSON.parse(await readFile(file, "utf8")).scenarios)).toEqual(["plan"]);
+});

@@ -518,9 +518,15 @@ It can also drive a worker's own surfaces: open a terminal or tmux tab
 (`launch_terminal`), open or navigate a browser preview
 (`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
-fix (`custom_fix_multi_review`), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
+fix (`custom_fix_multi_review`), launch feature planning, fork a worker from
+its last commit into a new delegated worker (`fork_worker`, capability
+`environments`, a `requestId` receipt), and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
-[`coordinator.md`](coordinator.md#worker-surfaces).
+[`coordinator.md`](coordinator.md#worker-surfaces). `get_worker_changes`
+(capability `discovery`, so side agents have it too) reads what a worker
+changed, local or container: branch, base, commits since the base, changed
+and uncommitted files with line counts, and bounded diffs, all from backend
+change tracking; it only reads and refuses the project home.
 The main coordinator can propose saving durable decisions to the
 `## Orkestrator` section of the project's root `AGENTS.md`
 (`propose_agents_md_update`, capability `environments`, so never a side

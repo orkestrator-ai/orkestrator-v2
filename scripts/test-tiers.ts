@@ -67,6 +67,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/commands-terminal-terminate.test.ts",
     "src/core/container-git-fetch-git.test.ts",
     "src/core/container-worktree-signal-install.test.ts",
+    "src/core/coordinator-fork-worker.test.ts",
     "src/core/coordinator-service.test.ts",
     "src/core/coordinator-status-wakes.test.ts",
     "src/core/coordinator-surface-actions.test.ts",

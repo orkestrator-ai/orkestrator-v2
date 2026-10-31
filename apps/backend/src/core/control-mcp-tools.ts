@@ -82,6 +82,7 @@ import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-t
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
+import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-tools.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
@@ -151,6 +152,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
   ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
+  ...COORDINATOR_WORKER_TOOL_CAPABILITIES,
   ...ACCOUNT_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());

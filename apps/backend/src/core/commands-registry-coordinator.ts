@@ -107,6 +107,14 @@ async function assertWorkerDelegationAvailable(
   }
 }
 
+/** The report contract a worker on this node is given with its delegation. */
+export function localReportInstruction(): string {
+  return (
+    `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
+    `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed), then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`
+  );
+}
+
 export async function assertContainerDelegationCommitPublished(
   context: CommandContext,
   projectId: string,
@@ -603,9 +611,7 @@ export function registerCoordinatorCommands(
                 conversationId,
                 baseBranch: delegationBaseBranch,
                 baseCommit: delegationBaseCommit,
-                instruction:
-                  `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
-                  `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed), then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`,
+                instruction: localReportInstruction(),
               },
               input.initialPrompt,
             )

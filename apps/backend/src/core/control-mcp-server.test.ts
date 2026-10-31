@@ -564,6 +564,98 @@ describe("Orkestrator control MCP server", () => {
     expect(refused.isError).toBe(true);
   });
 
+  test("get_worker_changes reaches side agents; fork_worker is the main coordinator's", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", mailboxIncarnationId: "incarnation-1", role: "main" },
+          { id: "side-1", mailboxIncarnationId: "incarnation-2", role: "side" },
+        ],
+      },
+    }));
+    overrides.set("get_coordinator_worker_changes", () => ({ environmentId: "env-1" }));
+    overrides.set("fork_coordinator_worker", () => ({
+      environmentId: "env-2",
+      status: "accepted",
+      coordinatorDelegationOpened: true,
+    }));
+    const main = {
+      role: "coordinator" as const,
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    };
+    const side = {
+      ...main,
+      conversationId: "side-1",
+      mailboxIncarnationId: "incarnation-2",
+      capabilities: coordinatorRoleCapabilities("side"),
+    };
+    const sideTools = ((await server.listCoordinatorTools(side)) as Array<{ name: string }>).map(
+      (tool) => tool.name,
+    );
+    expect(sideTools).toContain("get_worker_changes");
+    expect(sideTools).not.toContain("fork_worker");
+    expect(
+      ((await server.listCoordinatorTools(main)) as Array<{ name: string }>).map(
+        (tool) => tool.name,
+      ),
+    ).toContain("fork_worker");
+
+    const read = await server.callCoordinatorTool(side, "get_worker_changes", {
+      environmentId: "env-1",
+      paths: ["src"],
+    });
+    expect(read.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "get_coordinator_worker_changes")?.args,
+    ).toEqual({
+      scope: { projectId: "project-1", coordinatorId: "coordinator-1", conversationId: "side-1" },
+      input: { environmentId: "env-1", paths: ["src"] },
+    });
+    // Bounds are refused before the backend is asked.
+    expect(
+      (
+        await server.callCoordinatorTool(side, "get_worker_changes", {
+          environmentId: "env-1",
+          maxDiffBytes: 10 * 1024 * 1024,
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await server.callCoordinatorTool(side, "fork_worker", {
+          requestId: "r",
+          environmentId: "e",
+        })
+      ).isError,
+    ).toBe(true);
+
+    const forked = await server.callCoordinatorTool(main, "fork_worker", {
+      requestId: "alt",
+      environmentId: "env-1",
+    });
+    expect(forked.isError).not.toBe(true);
+    expect(forked.text).toContain("Do not poll");
+    expect(
+      invocations.findLast((entry) => entry.command === "fork_coordinator_worker")?.args.input,
+    ).toEqual({ requestId: "alt", environmentId: "env-1" });
+    expect(
+      (
+        await server.callCoordinatorTool(main, "fork_worker", {
+          requestId: "alt-2",
+          environmentId: "env-1",
+          prompt: "p",
+          modelId: "m",
+        })
+      ).text,
+    ).toContain("modelId needs agent");
+  });
+
   test("publishes the worker prompt format rule on every delegation prompt field", async () => {
     const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
     const listed = await rpc(credential.url, credential.token, "tools/list");

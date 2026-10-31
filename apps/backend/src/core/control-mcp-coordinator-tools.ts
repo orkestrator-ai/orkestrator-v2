@@ -10,6 +10,7 @@ import {
 } from "./control-mcp-review-actions.js";
 import { registerAccountTools } from "./control-mcp-account-tools.js";
 import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfaces.js";
+import { registerCoordinatorWorkerTools } from "./control-mcp-coordinator-worker-tools.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
@@ -67,6 +68,7 @@ export function registerCoordinatorWorkflowTools(
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
+  registerCoordinatorWorkerTools(server, invoke, coordinatorScope);
   registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,

@@ -825,8 +825,8 @@ command an agent runs in a worker that starts waiting on the user also sends
 the main conversation one workflow notice with the link and code, whether or
 not the worker's turn has ended, and the panel shows it until it clears.
 
-A worker started by `launch_environment` receives its request as the startup
-tab's initial prompt. That prompt counts as an undelivered request until the
+A worker started by `launch_environment`, or forked with a prompt by
+`fork_worker`, receives its request as the startup tab's initial prompt. That prompt counts as an undelivered request until the
 provider accepts it (`pendingAgentLaunch` is cleared), exactly like
 uninjected mail, so the startup session reading idle during setup, before the
 delegated turn starts, cannot settle the delegation. A report held
@@ -1318,16 +1318,20 @@ environment of the bound project: the backend command
 (`coordinator-surface-actions.ts`) revalidates the credential's scope and
 refuses the project home, the checkout the coordinator may only read. Side
 agents have none of them (their capabilities are `discovery`, `mail` and
-`schedules`).
+`schedules`), except `get_worker_changes`, which only reads and is
+`discovery`: a side agent asked to review or discuss a worker's work can read
+that work. It does not widen the checkout boundary; the checkout itself is
+read directly, and `get_worker_changes` refuses the project home.
 
 `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
-`custom_fix_multi_review` and `open_multi_review` (with or without
-`reviewerId`) also take `nodeId` for a worker on a connected node. The
+`get_worker_changes`, `fork_worker`, `custom_fix_multi_review` and
+`open_multi_review` (with or without `reviewerId`) also take `nodeId` for a
+worker on a connected node. The
 receipt, and any adoption of the review, stay on the command node; the node
 that owns the worker checks its project and refuses its checkout, then runs
 the work through a controller command (`launch_controller_terminal`,
 `open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
-or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
+`get_controller_worker_changes`, `fork_controller_environment`, or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
 in `commands-registry-controller-workflows.ts`). Those are node-link only,
 never reachable with a workspace grant. Job, tab and navigation IDs on that
 node derive from the command node's receipt key. So when the node link loses
@@ -1349,6 +1353,8 @@ not ready. A node from before these commands answers "update that node".
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
+| `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
+| `fork_worker` | The sidebar's **Fork** for a worker: a new worker on its own branch from the worker's last commit, with an optional prompt for its agent (below). Main coordinator only (`environments`). | Replays the receipt; the fork's record carries a control request ID derived from the request, so a retry after a crash finds the same fork, and its association and delegation are idempotent. | A new environment in the sidebar, started in the background. Deleting it is the user's. |
 
 Receipts live in the coordinator store (`actionReceipts`, bounded at 2,000,
 oldest completed dropped first). A receipt is admitted before the action has
@@ -1357,6 +1363,56 @@ any effect and bound to a hash of the caller's payload; reusing a
 in one backend share one run. A failed run drops its pending receipt so the
 same request can be retried; a pending receipt whose backend process died is
 reclaimed by the next retry, which reattaches as the table says.
+
+**Reading a worker's changes.** `get_worker_changes` answers from backend
+change tracking, through the same `changes_*` commands the Changes panel and
+the public `changes.view` read (`coordinator-worker-changes.ts`), so it works
+for container workers the coordinator cannot fetch from. It returns the
+worker's branch and base (`createdFromCommit`, or the user's chosen diff base),
+the commits since the base (a bounded log of `<base>..HEAD` through the
+checkout's Git runner the base picker uses, local or `docker exec`),
+`sinceBase` (the `environment-net` measurement: base to working tree,
+committed and uncommitted together, each file with status and line counts and
+`uncommitted: true` when it also has uncommitted changes), `uncommitted` (the
+`uncommitted-net` measurement, `HEAD` to working tree with untracked files),
+and `diffs`: backend-rendered hunks of the listed `sinceBase` files as unified
+text (`changes_resolve_live_detail` and `changes_get_diff`, the Diff tab's
+path). Every part is bounded: 100 files by default (at most 500), 5,000 rows
+scanned per measurement, 50 commits (at most 200), diffs of 20 files (at most
+50), 16 KiB per file and 64 KiB in total (at most 256 KiB). A cut part says
+`truncated`, and the result names the arguments that page or narrow it:
+`offset` (`sinceBase.nextOffset`), `paths` (files or directories) and `file`,
+which renders one file's whole diff up to the total budget. A stopped
+container worker answers what change tracking last measured, with its commits
+unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. The diff is base to
+working tree, so a file marked `uncommitted` shows both kinds of change
+together: change tracking keeps no bodies for a commits-only or
+uncommitted-only comparison. With `nodeId` the node owning the worker reads it
+(`get_controller_worker_changes`) and applies its own bounds.
+
+**Forking a worker.** `fork_worker` runs what the sidebar's Fork runs
+(`forkEnvironmentRecord` in `commands-environment-fork.ts`): the worker's
+committed `HEAD` becomes the fork's base on a new branch, with its agent
+settings, network mode, allowed domains and ports. Its uncommitted changes and
+its conversation are not copied, so the description tells the coordinator to
+have the worker commit first. A container fork needs the commit on a remote,
+as for the sidebar. The fork becomes a coordinator worker exactly as a
+`launch_environment` worker does: a durable `environment` association with
+its base branch and commit (`requestId` `fork:<requestId>`) and, with a
+prompt, the delegated startup prompt (`pendingAgentLaunch`, see
+[Worker delegation](#worker-delegation)) and one delegation on the
+`startup-agent` tab, opened only once the start succeeded. Without a prompt
+the fork starts with no agent turn and no delegation. Omitted, the agent is
+the fork's own startup agent (the worker's, from its copied settings) and the
+model and effort resolve as for `launch_environment`; the result reports
+`selection` the same way. The fork does not keep the worker's
+`buildPipelineId`: deleting an environment deletes its linked pipeline and the
+supervisor finds a pipeline's environment by that ID, so a fork that kept it
+would appear to own the pipeline. `create_pr` therefore treats a fork as an
+ordinary worker. (The sidebar's Fork still keeps the link.) With `nodeId` the
+receipt, association and delegation stay on the command node, and the node
+owning the worker forks it (`fork_controller_environment`) under a control
+request ID derived from the receipt.
 
 **Uncommitted changes in a worker.** Workers start from a commit, so work the
 user has not committed never reaches one on its own. When the user wants it
@@ -1609,6 +1665,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
   and side agents: `control-mcp-server.test.ts`
+- `get_worker_changes` bounds, paging, path filters, uncommitted marks and
+  diff rendering over fake `changes_*` answers:
+  `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,
+  delegation, receipt replay, pipeline unlinking and project-home refusal
+  against a real Git checkout: `coordinator-fork-worker.test.ts` (slow tier)
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

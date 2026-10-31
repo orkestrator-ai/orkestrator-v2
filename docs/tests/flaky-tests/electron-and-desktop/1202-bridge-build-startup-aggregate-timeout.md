@@ -93,3 +93,16 @@ Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop
 below the host temporary directory. Passing output was removed by the runner.
 No owner implementation, assertion, timeout or skip changed; the cause remains
 unconfirmed.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `mise run test`, at implementation commit `d639571b2`; workspace reservation six slots with two isolated Bun workers for web/desktop and four for backend, bridges reservation two slots with one worker per provider. The component browser suite also ran on the shared host. The aggregate waited about 658 seconds for capacity and exited 1 after 1461 seconds.
+- **Failure:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`, `apps/desktop/scripts/dev/bridge-builds.test.ts`, exceeded its 15-second deadline (15006.02 ms). The owning package reported 1393 passed, 16 skipped, two failed across 98 files.
+- **Complete unchanged owner rerun:** the following one-worker command passed (exit 0, 1.7 seconds logged). Multi-file commands ran the two complete owners sequentially with Bun isolation. Passing raw output was removed by the bounded logger.
+
+```sh
+mise run test:logged -- --name desktop-review-failures-isolated -- bun test --cwd apps/desktop ./tests/preview-partition-retention.test.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.

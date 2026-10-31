@@ -210,6 +210,7 @@ import {
 } from "./workspace-code-rewind.js";
 import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
+import { PrAutoMergeController } from "./pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
@@ -242,6 +243,8 @@ export class OrkestratorBackend {
   /** Graph runs on the keyed `graph-run` domain (items 202, 203). */
   private readonly graphRuns: GraphRunService;
   private readonly graphSystemExecutor: GraphNodeSystemExecutor;
+  /** Merges ready pull requests and resolves conflicts for `autoMerge` environments. */
+  private readonly prAutoMerge: PrAutoMergeController;
   private readonly graphAgents: GraphAgentWiring;
   /** Launches saved templates from every surface (item 214). */
   private readonly graphLaunches: GraphRunLaunchService;
@@ -1277,6 +1280,15 @@ export class OrkestratorBackend {
       branchWorktrees: graphBranchWorktrees,
     });
     this.graphRuns.executors.register(this.graphSystemExecutor);
+    this.prAutoMerge = new PrAutoMergeController({
+      storage,
+      invoke: invokeCommand,
+      resumeMonitoring: () => context.runtime.prMonitor.sync(context),
+      subscribe: (listener) => context.runtime.prMonitor.onEvent(listener),
+      monitorState: (environmentId) =>
+        context.runtime.prMonitor.announcedStates().get(environmentId) ?? null,
+    });
+    context.prAutoMerge = this.prAutoMerge;
     // Mock runs (item 213): mock agent, system and human executors; no
     // sessions, no side effects. Gates and merges above serve them too.
     const graphMockOwner = `backend-${randomUUID()}`;
@@ -2304,6 +2316,8 @@ export class OrkestratorBackend {
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
     this.scheduledJobs.start();
+    // Acts on PR monitor readings for environments whose auto-merge is on.
+    await this.prAutoMerge.resume();
     // Agent shell commands waiting on the user (sign-in links, codes, ENTER).
     this.agentHumanPrompts.start();
     this.reserveOwnedPreviewPorts();
@@ -2528,6 +2542,8 @@ export class OrkestratorBackend {
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
+    // Start no new merge or Resolve launch; the durable flag resumes it next start.
+    this.prAutoMerge.dispose();
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
     this.nodeCoordination.dispose();
     this.nodePortal.stop();

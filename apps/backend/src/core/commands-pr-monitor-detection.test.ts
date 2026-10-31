@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getPrMonitorDetectionRequest,
+  parsePrMonitorCheckResponse,
   parsePrMonitorDetectionResponse,
 } from "./commands-pr-monitor.js";
 import type { PrMonitorTarget } from "./pr-monitor.js";
@@ -61,4 +62,26 @@ describe("PR attachment detection", () => {
         ?.url,
     ).toBe(own.url);
   });
+});
+
+test("check rollups must describe the same head as the mergeability observation", () => {
+  const head = "a".repeat(40);
+  expect(() =>
+    parsePrMonitorCheckResponse(
+      JSON.stringify({ headRefOid: "b".repeat(40), statusCheckRollup: [] }),
+      head,
+    ),
+  ).toThrow("PR head changed");
+  expect(
+    parsePrMonitorCheckResponse(JSON.stringify({ headRefOid: head, statusCheckRollup: [] }), head),
+  ).toEqual({ passed: 0, pending: 0, total: 0 });
+});
+
+test("authoritative PR metadata carries the full head SHA", () => {
+  const headSha = "a".repeat(40);
+  const request = getPrMonitorDetectionRequest({ ...target, prUrl: own.url, prState: "open" });
+  expect(request.args.at(-1)).toContain("headRefOid");
+  expect(
+    parsePrMonitorDetectionResponse(request, JSON.stringify({ ...own, headRefOid: headSha })),
+  ).toMatchObject({ headSha });
 });

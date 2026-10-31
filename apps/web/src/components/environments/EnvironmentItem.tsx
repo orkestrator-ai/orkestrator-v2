@@ -43,6 +43,7 @@ import {
   Loader2,
   Copy,
   MoreVertical,
+  GitMerge,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Environment, EnvironmentType } from "@/types";
@@ -535,6 +536,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   </EnvironmentNameShimmer>
                   {isBuildEnvironment && (
                     <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
+                  )}
+                  {environment.autoMerge === true && (
+                    <GitMerge
+                      className="h-3 w-3 shrink-0 translate-y-px text-white"
+                      role="img"
+                      aria-label="Auto-merge on"
+                      data-testid="environment-auto-merge-icon"
+                    />
                   )}
                   <EnvironmentNameSignalMarker
                     signal={nameSignal}

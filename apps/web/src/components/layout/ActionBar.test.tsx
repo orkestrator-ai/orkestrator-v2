@@ -218,6 +218,12 @@ const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null>
 const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
+const setEnvironmentAutoMergeMock = mock(
+  async (_id: string, enabled: boolean): Promise<Environment> => ({
+    ...currentEnvironment,
+    autoMerge: enabled,
+  }),
+);
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -794,6 +800,7 @@ mock.module("@/lib/backend", () => ({
   readContainerFile: readContainerFileMock,
   readLocalFile: readLocalFileMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
+  setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
   startMultiReview: startMultiReviewMock,
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
@@ -996,6 +1003,7 @@ beforeEach(() => {
   disarmRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
+  setEnvironmentAutoMergeMock.mockClear();
   mergeEnvironmentPrMock.mockImplementation(
     async (_environmentId, _method, _deleteBranch, cleanupAfterMerge) => ({
       outcome: "merged",
@@ -8187,5 +8195,53 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.textContent).toContain("Failed to merge PR: An unexpected error occurred");
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActionBar auto-merge", () => {
+  test("saves the open PR toggle, disables it during saving, and reflects on/off", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", autoMerge: false };
+    let finish!: (environment: Environment) => void;
+    setEnvironmentAutoMergeMock.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const view = render(<ActionBar />);
+    const toggle = screen.getByRole("button", { name: "Auto-merge" }) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(currentEnvironment.id, true);
+    expect(toggle.disabled).toBe(true);
+    await act(async () => finish({ ...currentEnvironment, autoMerge: true }));
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, { autoMerge: true });
+    currentEnvironment = { ...currentEnvironment, autoMerge: true };
+    view.rerender(<ActionBar />);
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(currentEnvironment.id, false),
+    );
+  });
+
+  for (const state of ["merged", "closed"] as const) {
+    test(`hides auto-merge after the PR is ${state}`, () => {
+      currentEnvironment = { ...selectedEnvironment, prState: state, autoMerge: false };
+      render(<ActionBar />);
+      expect(screen.queryByRole("button", { name: "Auto-merge" })).toBeNull();
+    });
+  }
+
+  test("shows the persisted failure and removes it when recovery is announced", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    const view = render(<ActionBar />);
+    expect(screen.getByText("Auto-merge: GitHub refused the merge")).toBeTruthy();
+    currentEnvironment = { ...currentEnvironment, autoMergeError: null };
+    view.rerender(<ActionBar />);
+    expect(screen.queryByText("Auto-merge: GitHub refused the merge")).toBeNull();
   });
 });

@@ -81,6 +81,28 @@
 - **Isolated rerun:** `mise run test:logged -- --name codex-subagent-alone -- bun --cwd=apps/backend test tests/codex-subagent-cards.test.ts` passed (4.0 s).
 - **Assessment:** intermittent recurrence; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1324](../aggregate-validation-runs/1324-storage-test-split-0930-validation.md).
 
+
+## PR auto-merge review preparation recurrence — 2026-10-31
+
+Preparation's `mise run test` failed the child-card projection equality at
+line 140 after 1128.08 ms: child IDs and a `lint_check` card differed from the
+expected snapshot. Evidence is
+`.orkestrator/review-artifacts/review-validation-038a8906-ba10-4822-a245-7c81a58b7a2c/validation-04.stdout.txt`
+(the backend used two parallel workers). The unchanged complete card owner
+passed in the isolated command below; its sibling title-runner owner failed
+because this checkout lacked the pinned Codex binary (9 passed, one failed,
+2.7 s total):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts ./src/core/session-title-runners.test.ts --parallel=1 --only-failures
+```
+
+No projection implementation, assertion, or timeout changed.
+
+After `mise run download:codex` installed the pinned 0.166.0 binary in the
+ignored checkout-local `binaries/` directory, the exact isolated command above
+passed both complete owners (10 tests, 5.1 s, exit 0).
+
 ## Capacity retry review (1010) recurrence — 2026-10-31
 
 - **Original command:** `mise run test` on

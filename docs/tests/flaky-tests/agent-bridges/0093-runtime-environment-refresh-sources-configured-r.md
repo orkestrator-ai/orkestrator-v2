@@ -95,6 +95,14 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Evidence:** `orkestrator-test-run.fqu9cJ/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirms recurrence; no implementation, assertion, deadline or skip changed. The original aggregate remains non-green.
 
+## PR auto-merge branch — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`, default admission plan, one Bun worker per bridge package, on branch `auto-merge-toggle-811626194e15-r1`.
+- **Failure:** `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` timed out at 15000.33 ms. Codex reported 2,313 passed, 53 skipped and one failed across 2,367 tests in 103 files (78.41 s).
+- **Complete unchanged owner:** `mise run test:logged -- --name codex-runtime-env -- bun --cwd=bridges/codex-bridge test ./src/runtime-env.test.ts --parallel=1` passed (0.3 s).
+- **Evidence:** `orkestrator-test-run.FfRoe7/bridges.log.gz` below the host temporary directory.
+- **Assessment:** confirms recurrence. The branch does not touch any bridge; no implementation, assertion, deadline or skip changed.
+
 ## Session history review fixes — 2026-10-31
 
 - **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`;

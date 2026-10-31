@@ -63,6 +63,22 @@ mise run test:logged -- --name review-repaired-default -- mise run test
 ```
 
 
+## Development source-hint coverage validation — 2026-10-30
+
+`mise run test` repeated the same 15-second bridge startup deadline
+(15,004.95 ms), followed by an `ENOENT` renaming the temporary profile's
+`status.json` after timeout cleanup. The root, bridges and protocol groups
+passed; workspace also had the separate settings sign-in case 1317.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.7r8HZm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed in 1.5 s:
+
+```sh
+mise run test:logged -- --name bridge-builds-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+No bridge implementation, test assertion, timeout or skip changed.
+
 ## Pipeline validation-history review, 2026-10-30
 
 `mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated

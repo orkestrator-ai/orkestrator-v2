@@ -67,7 +67,7 @@ describe("NativeComposeBar", () => {
       { length, items: items.map((text, index) => ({ id: `q${index}`, text })), onOpen },
     );
     if (!length) {
-      expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+      expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true);
       return;
     }
     const stack = within(screen.getByTestId("compose-queue-strip"));

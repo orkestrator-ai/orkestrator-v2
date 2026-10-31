@@ -37,6 +37,7 @@ import {
   PREVIEW_WORKER_USER,
   resolveSeccompProfile,
 } from "./runtime.js";
+import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 const IMAGE = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE ?? DEFAULT_PREVIEW_WORKER_IMAGE;
@@ -311,6 +312,7 @@ describe("credential isolation and resource escape", () => {
       reset();
       const runner = new TranscriptPreviewRunner({
         isolation: "process",
+        scratchRoot: previewTestScratchRoot(),
         allowProcessInteractive: true,
       });
       try {

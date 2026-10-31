@@ -100,7 +100,7 @@ describe("KanbanCard ticket sections", () => {
       }),
     );
     expect(screen.getByText("Tickets are blobs.")).toBeTruthy();
-    expect(screen.queryByText(/## Problem/)).toBeNull();
+    expect(screen.queryByText(/## Problem/) === null).toBe(true);
   });
 
   test("shows a criteria tally once Verify has checked something", () => {
@@ -123,7 +123,7 @@ describe("KanbanCard ticket sections", () => {
     expect(screen.getByTestId("kanban-card-criteria").textContent).toBe("1/2");
     cleanup();
     renderCard(makeTask({ acceptanceCriteria: "- A\n- B" }));
-    expect(screen.queryByTestId("kanban-card-criteria")).toBeNull();
+    expect(screen.queryByTestId("kanban-card-criteria") === null).toBe(true);
   });
 });
 

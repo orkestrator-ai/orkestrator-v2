@@ -421,8 +421,14 @@ export class StorageService {
 
   armPrRecheckAfterAgentCompletion(
     environmentId: string,
+    claim?: {
+      onlyIfUnarmed?: boolean;
+      autoMergePrUrl?: string;
+      autoMergeEnabledAt?: string;
+      requestId?: string;
+    },
   ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
-    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId);
+    return this.repos.projects.armPrRecheckAfterAgentCompletion(environmentId, claim);
   }
 
   disarmPrRecheckAfterAgentCompletion(

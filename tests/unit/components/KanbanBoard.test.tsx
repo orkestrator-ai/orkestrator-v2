@@ -299,7 +299,9 @@ describe("KanbanBoard experimental graphs", () => {
 
     render(<KanbanBoard projectId="project-1" />);
 
-    expect(within(openCardMenu()).queryByRole("menuitem", { name: "Run graph…" })).toBeNull();
+    expect(within(openCardMenu()).queryByRole("menuitem", { name: "Run graph…" }) === null).toBe(
+      true,
+    );
   });
 
   test("a card offers Run graph… once graphs are on", () => {

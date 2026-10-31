@@ -12,6 +12,7 @@ import { verifyMermaidSvg } from "./mermaid-svg.js";
 import { isAlive, listProcesses } from "./preview-process-tree.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
 import type { WorkerResult } from "./preview-worker-protocol.js";
+import { previewTestScratchRoot } from "./fixtures/preview-scratch-root.js";
 
 const CHROMIUM = resolveDesignChromiumPath();
 if (!CHROMIUM)
@@ -99,7 +100,10 @@ function controlledPolicyRunner() {
 }
 
 beforeAll(() => {
-  runner = new TranscriptPreviewRunner({ isolation: "process" });
+  runner = new TranscriptPreviewRunner({
+    isolation: "process",
+    scratchRoot: previewTestScratchRoot(),
+  });
 });
 afterAll(async () => {
   await runner?.close();
@@ -227,6 +231,7 @@ describe("mermaid rendering", () => {
       // production timeout behaviour has a separate watchdog test below.
       const integration = new TranscriptPreviewRunner({
         isolation: "process",
+        scratchRoot: previewTestScratchRoot(),
         budgets: {
           mermaidRenderMs: 30_000,
           workerWallMs: 40_000,
@@ -273,6 +278,7 @@ describe("mermaid rendering", () => {
       }> = [];
       const blocking = new TranscriptPreviewRunner({
         isolation: "process",
+        scratchRoot: previewTestScratchRoot(),
         testing: { blockMermaidRender: true },
         // A shorter render deadline than the production one: the watchdog is
         // the same, only the wait for it is shorter.

@@ -13027,7 +13027,9 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-inline-arrows" data={identity("codex")} isActive />);
       const input = await screen.findByRole("textbox");
       const head = await screen.findByRole("button", { name: "Steer queued prompt 1 of 3: First" });
-      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Steer queued prompt 2 of 3/ }) === null).toBe(
+        true,
+      );
       act(() => input.focus());
       fireEvent.keyDown(input, { key: "ArrowUp" });
       expect(document.activeElement).toBe(head);
@@ -13108,7 +13110,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId={`tab-inline-gate-${gate}`} data={identity("codex")} isActive />,
       );
       const strip = within(await screen.findByTestId("compose-queue-strip"));
-      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+      expect(strip.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
       for (const name of ["Edit queued prompt 1 of 1", "Remove queued prompt 1 of 1"]) {
         expect(Boolean(strip.queryByRole("button", { name }))).toBe(gate !== "annotation");
       }

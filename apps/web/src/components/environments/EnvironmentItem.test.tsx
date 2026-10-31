@@ -242,6 +242,24 @@ describe("EnvironmentItem project home", () => {
   });
 });
 
+describe("EnvironmentItem auto-merge", () => {
+  test("shows a white merge icon to the right of the name while auto-merge is on", () => {
+    renderItem(environmentFixture({ name: "feature-work", autoMerge: true }));
+    const icon = screen.getByRole("img", { name: "Auto-merge on" });
+    expect(icon.getAttribute("class")).toContain("text-white");
+    const name = screen.getByText("feature-work");
+    expect(name.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("shows no merge icon when auto-merge is off or unknown", () => {
+    renderItem(environmentFixture({ name: "feature-work", autoMerge: false }));
+    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+    cleanup();
+    renderItem(environmentFixture({ name: "feature-work" }));
+    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+  });
+});
+
 test("a renamed project home shows its saved display name", () => {
   renderItem(environmentFixture({ projectHome: true, name: "Release checkout" }));
   expect(screen.getByRole("button", { name: /Release checkout/ })).toBeTruthy();

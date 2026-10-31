@@ -288,3 +288,15 @@ The combined three-owner rerun finished with 50 passed, one skipped and three
 failed in 180.2 s (the other two failures were native branch selection).
 Command and evidence are recorded in the 2026-10-31 Resolve entry in
 [0382](0382-component-browser-parallel-load.md).
+
+## Auto-merge main-merge validation — 2026-10-31
+
+The nine-worker `mise run test:logged -- --name merge-feature-browser -- mise run test:browser` run repeated the mobile waiting-group failure at line 471 (`scrollTop` 704 instead of zero). It finished with 1,019 passed, 108 skipped and three failed in 607.7 s logged; the other two failures were native branch selection.
+
+The complete unchanged ToolGroupFold and AgentLaunchDialog owners ran sequentially with one worker:
+
+```sh
+mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1
+```
+
+All 38 ToolGroupFold cases passed; both native branch-selection cases still failed (40 passed, two failed overall; 103.5 s logged). This confirms the existing intermittent overflow-follow recurrence. No owning source, assertion, timeout or skip changed. Evidence under the host temporary directory: `orkestrator-test-run.xHtE03/merge-feature-browser.log.gz` and `orkestrator-test-run.OdWuh9/merge-browser-owners.log.gz`. The aggregate remains failed.

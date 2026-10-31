@@ -235,7 +235,7 @@ describe("TiptapMarkdownEditor", () => {
         "const mermaid = true;",
       );
     });
-    expect(editor.querySelector("[data-markdown-diagram]")).toBeNull();
+    expect(editor.querySelector("[data-markdown-diagram]") === null).toBe(true);
   });
 
   test("debounces rich-editor changes into Markdown", async () => {

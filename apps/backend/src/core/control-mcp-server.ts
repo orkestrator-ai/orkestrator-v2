@@ -606,6 +606,8 @@ export class ControlMcpServer {
         "update_config",
         "remove_project",
         "merge_environment_pr",
+        // Arming auto-merge is merge authority by another name.
+        "set_environment_auto_merge",
         "delete_environment",
         "write_file",
         "move_file",

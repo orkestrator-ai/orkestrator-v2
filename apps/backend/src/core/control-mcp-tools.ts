@@ -83,6 +83,7 @@ import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./co
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
 import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-tools.js";
+import { WORKER_TURN_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-turns.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
@@ -149,10 +150,14 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["create_schedule", "schedules"],
   ["list_schedules", "schedules"],
   ["cancel_schedule", "schedules"],
+  ["pause_schedule", "schedules"],
+  ["resume_schedule", "schedules"],
+  ["update_schedule", "schedules"],
   ...NODE_TOOL_CAPABILITIES,
   ...NODE_FILE_TOOL_CAPABILITIES,
   ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
   ...COORDINATOR_WORKER_TOOL_CAPABILITIES,
+  ...WORKER_TURN_TOOL_CAPABILITIES,
   ...ACCOUNT_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());

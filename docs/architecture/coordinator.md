@@ -936,6 +936,42 @@ Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain
 distinct states. An injection receipt is not proof that the task finished.
 
+### Stopping a worker's turn
+
+`stop_worker_turn` ends a runaway or wrong-direction turn in one worker tab
+(see [Worker surfaces](#worker-surfaces)); `deliverNow` is for correcting a
+turn that should go on. When the coordinator is waiting on that tab, the stop
+records `stopRequestedAt` on each open delegation for it before the provider
+is asked, then the turn end settles the delegation as any other: the
+coordinator is woken once, with the worker's held report if it sent one, or
+with a notice that says it stopped the turn itself ("… stopped because you
+stopped its turn with stop_worker_turn, before it sent a report") and the
+worker's last message. On this node a stop the agent confirms settles the
+delegation at once rather than on the next edge or sweep, so the tab takes a
+`send_prompt_to_tab` straight away, in that turn or the next; an unconfirmed
+one settles on the turn end. For a worker on another node the command node
+asks that node for the worker's state at once, and the usual remote rules
+(seen working, or the idle grace period) decide when it settles. The background-work hold above is skipped for a
+stopped turn. A stop that finds the tab idle marks nothing. A follow-up the
+worker has not read yet still keeps the delegation open, as it does for any
+turn end, so the worker's next turn answers it.
+
+Decisions:
+
+- **Settle on the turn end, and say who stopped it (chosen).** Options:
+  (a) settle as usual with a stop-aware notice; (b) close the delegation as
+  `stopped` at once with no wake, since the coordinator knows what it did;
+  (c) leave the delegation untouched, so the notice says the worker finished
+  without a report. (a) keeps the one-wake-per-request contract and releases
+  whatever the worker had sent, which (b) would leave held or drop; (c) tells
+  the coordinator something false. Con of (a): a report the worker sent
+  before the stop is released as the wake without the stop note; the
+  coordinator called the tool, so it knows.
+- **Mark before the stop, unmark if nothing stopped.** Marking after the stop
+  could lose the race with the turn-end edge and its wake. A stop that fails,
+  or that a node answers with "idle", removes the mark; a lost node answer
+  keeps it, because the stop may have landed.
+
 ## Scheduled wakes and actions
 
 A coordinator turn cannot wait, so a coordinator that needs to act later
@@ -948,8 +984,12 @@ Schedules can also send a worker mail, prompt a worker tab, launch a worker
 the coordinator's own tools, with `nodeId` where the tool takes one. Each
 fire runs the coordinator's own tool under its current scope, so read-only
 rules and project boundaries apply unchanged. Main schedules follow the next
-main conversation; a side agent's schedules end with it. See
-[scheduled-jobs.md](scheduled-jobs.md).
+main conversation; a side agent's schedules end with it.
+`list_schedules`, `cancel_schedule`, `pause_schedule`, `resume_schedule` and
+`update_schedule` manage them: each conversation sees only its own (the main
+also its side agents'), and `update_schedule` checks a new action exactly as
+`create_schedule` does, so a side agent cannot reschedule into a tool it
+cannot call. See [scheduled-jobs.md](scheduled-jobs.md).
 
 ### Self-timers and provider accounts
 
@@ -1327,7 +1367,8 @@ that work. It does not widen the checkout boundary; the checkout itself is
 read directly, and `get_worker_changes` refuses the project home.
 
 `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `create_pr`,
-`get_worker_changes`, `fork_worker`, `custom_fix_multi_review` and
+`get_worker_changes`, `fork_worker`, `stop_worker_turn`,
+`list_worker_commands`, `run_worker_command`, `custom_fix_multi_review` and
 `open_multi_review` (with or without `reviewerId`) also take `nodeId` for a
 worker on a connected node. The
 receipt, and any adoption of the review, stay on the command node; the node
@@ -1335,7 +1376,9 @@ that owns the worker checks its project and refuses its checkout, then runs
 the work through a controller command (`launch_controller_terminal`,
 `open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
 `get_controller_worker_changes`, `fork_controller_environment`, or the `reviewer` and `custom-fix` surfaces of `controller_multi_review_surface`
-in `commands-registry-controller-workflows.ts`). Those are node-link only,
+in `commands-registry-controller-workflows.ts`; `stop_controller_worker_turn`,
+`list_controller_worker_commands` and `run_controller_worker_command` in
+`coordinator-worker-turn-actions.ts`). Those are node-link only,
 never reachable with a workspace grant. Job, tab and navigation IDs on that
 node derive from the command node's receipt key. So when the node link loses
 an answer, the tool returns outcome-unknown and asks for a retry with the same
@@ -1354,6 +1397,9 @@ node and only the approved answer crosses the link
 | `launch_terminal` | A terminal tab in the worker running one command (`plain`), an agent CLI with an optional prompt (`claude`, `codex`, `grok`, `opencode`, `pi`), or Claude under tmux (`claude-tmux`), through `launch_terminal_job`. | Replays the receipt; the job and tab IDs derive from the request, so a retry after a crash reattaches to the same PTY. | The tab opens selected, like one the user opened; closing it ends the PTY. |
 | `open_worker_browser` | A browser tab at a loopback `http(s)` address of a service the worker runs, or navigates an existing browser tab. The address is stored as an `agent-link` preview intent, so it resolves to the worker's own service, local or container. | Replays; the new tab's ID and the write's `navigationRequestId` derive from the request. | A browser tab; the address bar and back button work as usual. The open web is refused: the coordinator's research tools are the policy-gated way out. |
 | `edit_worker_tab` | Focus, move (to a pane from `list_tabs`) or close one tab. | No receipt: each edit states the end state, so a retry is a no-op. Closing a tab that is gone succeeds. | Closing never deletes a conversation (`teardown_tab`'s retain-history close). It is refused while a native agent tab's turn is running or waiting on a person, and while a coordinator waits on that tab's report. A terminal tab closes with whatever its process is doing. |
+| `stop_worker_turn` | The tab's **Stop** button: stops the running turn of one native agent tab, never the environment (that is `stop_environment`). Runs `session.stop`'s own stop (`stopSessionTurn` in `public-api/session-turn-stop.ts`), so the tab's active public run settles as cancelled. An idle tab answers `stopped: false`, not an error; terminal and tmux tabs are refused. | Replays the receipt, so a retry never stops a later turn. A lost answer from a node is outcome-unknown and says to check `get_tab_state` first: a retry with the same `requestId` stops whatever turn is running then. | The turn ends as if the user pressed Stop; the tab and its conversation stay. A delegation on that tab still wakes the coordinator once (below). |
+| `list_worker_commands` | The tab's `/` menu: `session.commands` for one native tab, without commands that act on a running turn (`/steer`). `refresh` re-reads the agent's list. | A read. | Nothing. |
+| `run_worker_command` | Picks one row of that menu: `session.command`'s resolution and every refusal it has (missing, ambiguous, unavailable, changed since listed, wrong arguments, busy tab, parked dispatch), dispatched as a selection, never as prompt text. `/steer` is refused. A command that starts a provider turn opens a delegation, as `send_prompt_to_tab` does, and is refused while one is open on that tab; one that answers without a turn (`bridge-local`, an Orkestrator session action such as `/compact`) opens none and says to read its output with `get_tab_transcript`. | Replays the receipt; the dispatch request ID derives from it, so a retry after a lost answer replays on the node that owns the worker. | The command runs in the tab as if the user picked it. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
@@ -1362,6 +1408,28 @@ node and only the approved answer crosses the link
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
 | `fork_worker` | The sidebar's **Fork** for a worker: a new worker on its own branch from the worker's last commit, with an optional prompt for its agent (below). Main coordinator only (`environments`). | Replays the receipt; the fork's record carries a control request ID derived from the request, so a retry after a crash finds the same fork, and its association and delegation are idempotent. | A new environment in the sidebar, started in the background. Deleting it is the user's. |
 | `answer_worker_question` | Proposes an answer to a question a worker is waiting on, for the user to confirm (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog with the worker, its tab, the question, its options and the proposed answer, which the user may change. Declining leaves the question waiting in the worker's tab. |
+
+**Worker slash commands.** `list_worker_commands` and `run_worker_command`
+share `session.commands` and `session.command`'s code (`listSessionCommands`
+and `resolveSessionCommand` in `public-api/actions-session-commands.ts`), so a
+command a coordinator runs is checked, journaled and refused exactly as one
+the CLI runs ([native-agent-commands.md](native-agent-commands.md)). Two
+choices are the coordinator's own:
+
+- **No live-turn commands.** `/steer` (and any row whose `busy` is
+  `running`) is neither listed nor run. Options: expose it as a command; refuse
+  it and point at `send_message` with `deliverNow`. Chosen: refuse. The mail
+  path already steers a running turn and carries what a raw steer would skip:
+  mutes, inject policy, budgets, joining the open delegation and the steer
+  journal's single-attempt verification.
+- **Which commands are delegations.** Options: every command; none; by
+  execution kind. Chosen: by execution kind. `bridge-local` commands (Codex
+  `/help`, `/models`) and Orkestrator session actions (`/compact`) answer
+  without a provider turn, so a delegation would only wake the coordinator
+  with a "finished without a report" notice for nothing; every other kind
+  starts a turn and opens one, refused like `send_prompt_to_tab` while one is
+  already open on that tab. Con: a provider command that happens to answer
+  locally (some Claude built-ins) still opens one and wakes once.
 
 Receipts live in the coordinator store (`actionReceipts`, bounded at 2,000,
 oldest completed dropped first). A receipt is admitted before the action has
@@ -1718,6 +1786,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,
   delegation, receipt replay, pipeline unlinking and project-home refusal
   against a real Git checkout: `coordinator-fork-worker.test.ts` (slow tier)
+- worker turns (`stop_worker_turn`, `list_worker_commands`,
+  `run_worker_command`) over the real registry, native-agent service and
+  delegations: the stopped run settling as cancelled, the one stop-aware wake,
+  a later prompt not refused, idle and terminal tabs, the project home,
+  `session.command`'s refusals and side agents (`coordinator-worker-turns.test.ts`);
+  on a connected node, with lost answers (`coordinator-worker-turns-remote.test.ts`)
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

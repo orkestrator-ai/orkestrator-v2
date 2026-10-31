@@ -477,8 +477,10 @@ or mint credentials. Repository branch switching and synchronization are UI-only
 backend actions and are not MCP tools.
 
 In addition to the ordinary discovery tools, a coordinator can schedule
-actions for later (`create_schedule`, `list_schedules`, `cancel_schedule`,
-capability `schedules`, granted to the main and side roles; see
+actions for later and manage its own schedules (`create_schedule`,
+`list_schedules`, `cancel_schedule`, `pause_schedule`, `resume_schedule`,
+`update_schedule`, capability `schedules`, granted to the main and side
+roles; `update_schedule` checks a new action as `create_schedule` does; see
 [scheduled-jobs.md](scheduled-jobs.md)), start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, run saved graphs, and use durable mailbox
@@ -516,7 +518,11 @@ a template (D6); a test asserts none exists. A coordinator schedules a graph
 with `create_schedule` and `type: "tool", tool: "launch_graph"`.
 It can also drive a worker's own surfaces: open a terminal or tmux tab
 (`launch_terminal`), open or navigate a browser preview
-(`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), open
+(`open_worker_browser`), focus, move or close a tab (`edit_worker_tab`), stop
+one tab's running turn without stopping the environment (`stop_worker_turn`),
+list and run a native tab's slash commands with `session.command`'s
+restrictions (`list_worker_commands`, `run_worker_command`; capability
+`jobs`, so main only), open
 a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
 fix (`custom_fix_multi_review`), launch feature planning, fork a worker from
 its last commit into a new delegated worker (`fork_worker`, capability

@@ -45,6 +45,8 @@ export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "propose-agents-md-update",
   "fork-worker",
   "request-worker-answer",
+  "stop-worker-turn",
+  "run-worker-command",
 ] as const);
 export type CoordinatorSurfaceAction = (typeof COORDINATOR_SURFACE_ACTIONS)[number];
 

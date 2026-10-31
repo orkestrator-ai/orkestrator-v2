@@ -455,3 +455,196 @@ test("coordinator launch replay reuses the persisted base after branch advanceme
   expect(launches[0]!.args).toEqual(launches[1]!.args);
   expect(store.list()[0]!.fires[0]!.state).toBe("succeeded");
 });
+
+describe("coordinator schedule edits", () => {
+  const scheduleIdOf = (result: Awaited<ReturnType<typeof call>>) =>
+    String(result.structuredContent!.scheduleId);
+  const failure = (result: Awaited<ReturnType<typeof call>>) => JSON.stringify(result.content);
+
+  test("both roles are offered pause, resume and update", async () => {
+    for (const role of ["main", "side"] as const) {
+      const issued = credential(role);
+      const { body } = await rpc(issued.url, issued.token, "tools/list");
+      expect(body.result!.tools!.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["pause_schedule", "resume_schedule", "update_schedule"]),
+      );
+    }
+  });
+
+  test("pause holds every fire and resume starts again at the next slot", async () => {
+    const created = await call("main", "create_schedule", {
+      requestId: "hourly",
+      everyMinutes: 60,
+      action: { type: "send_message", toEnvironmentId: "coordinator", body: "Hourly check." },
+    });
+    const id = scheduleIdOf(created);
+    const paused = await call("main", "pause_schedule", { scheduleId: id });
+    expect(paused.structuredContent).toMatchObject({ state: "paused", pausedReason: "user" });
+    clock.now += 3 * 60 * 60_000;
+    await fire();
+    expect(mail).toHaveLength(0);
+    const resumed = await call("main", "resume_schedule", { scheduleId: id });
+    expect(resumed.structuredContent).toMatchObject({ state: "active" });
+    // Time spent paused is not caught up.
+    expect(Date.parse(String(resumed.structuredContent!.nextFireAt))).toBeGreaterThan(clock.now);
+    await fire();
+    expect(mail).toHaveLength(0);
+    clock.now += 60 * 60_000;
+    await fire();
+    expect(mail).toHaveLength(1);
+  });
+
+  test("update retimes, renames and replaces the action, checked as create checks it", async () => {
+    const created = await call("main", "create_schedule", {
+      requestId: "wake",
+      at: "03:12",
+      action: { type: "send_message", toEnvironmentId: "coordinator", body: "Old." },
+    });
+    const id = scheduleIdOf(created);
+    const retimed = await call("main", "update_schedule", {
+      scheduleId: id,
+      at: "04:30",
+      name: "Morning check",
+    });
+    expect(retimed.isError).not.toBe(true);
+    expect(retimed.structuredContent).toMatchObject({
+      name: "Morning check",
+      nextFireAt: "2026-10-26T04:30:00.000Z",
+    });
+    const changed = await call("main", "update_schedule", {
+      scheduleId: id,
+      action: { type: "tool", tool: "start_environment", arguments: { environmentId: "env-1" } },
+    });
+    expect(changed.isError).not.toBe(true);
+    expect(changed.structuredContent).toMatchObject({ action: "start_environment" });
+    // Reads and schedule tools are refused, as at creation.
+    for (const tool of ["list_environments", "update_schedule", "pause_schedule"]) {
+      const refused = await call("main", "update_schedule", {
+        scheduleId: id,
+        action: { type: "tool", tool, arguments: {} },
+      });
+      expect(refused.isError).toBe(true);
+    }
+    expect(service.get({ kind: "operator" }, id).action).toMatchObject({
+      kind: "action",
+      action: "start_environment",
+    });
+    // A new action that makes it a self-timer gets the self-timer limits.
+    const far = await call("main", "create_schedule", {
+      requestId: "far",
+      at: "+8d",
+      action: { type: "send_message", toEnvironmentId: "env-worker", body: "Later." },
+    });
+    const refused = await call("main", "update_schedule", {
+      scheduleId: scheduleIdOf(far),
+      action: { type: "remind_me", body: "Me, later." },
+    });
+    expect(refused.isError).toBe(true);
+    expect(failure(refused)).toContain("at most 7 days ahead");
+  });
+
+  test("a side agent cannot schedule a tool it cannot call, and only owners change actions", async () => {
+    const created = await call("side", "create_schedule", {
+      requestId: "side-ping",
+      at: "+1h",
+      action: { type: "send_message", toEnvironmentId: "coordinator", body: "ping" },
+    });
+    const id = scheduleIdOf(created);
+    for (const action of [
+      { type: "launch_environment", projectId: "project-1", agent: "claude", prompt: "x" },
+      { type: "tool", tool: "start_environment", arguments: { environmentId: "env-1" } },
+      { type: "send_prompt_to_tab", environmentId: "env-worker", tabId: "worker-tab", prompt: "x" },
+    ]) {
+      const refused = await call("side", "update_schedule", { scheduleId: id, action });
+      expect(refused.isError).toBe(true);
+      expect(failure(refused)).toContain("cannot call");
+    }
+    expect(service.get({ kind: "operator" }, id).action).toMatchObject({
+      kind: "action",
+      action: "send_message",
+    });
+    // The side agent may retime its own; the main may pause it but not rewrite what it does.
+    expect((await call("side", "update_schedule", { scheduleId: id, at: "+2h" })).isError).not.toBe(
+      true,
+    );
+    expect((await call("main", "pause_schedule", { scheduleId: id })).isError).not.toBe(true);
+    const rewritten = await call("main", "update_schedule", {
+      scheduleId: id,
+      action: { type: "send_message", toEnvironmentId: "env-worker", body: "x" },
+    });
+    expect(rewritten.isError).toBe(true);
+    expect(failure(rewritten)).toContain("owner");
+    // A main schedule is not the side agent's to see or edit.
+    const main = await call("main", "create_schedule", {
+      requestId: "main-only",
+      at: "+1h",
+      action: { type: "send_message", toEnvironmentId: "coordinator", body: "main" },
+    });
+    const hidden = await call("side", "pause_schedule", { scheduleId: scheduleIdOf(main) });
+    expect(hidden.isError).toBe(true);
+    expect(failure(hidden)).toContain("not found");
+  });
+
+  test("a timer carrying the user's account-switch permission is retimed only with their word", async () => {
+    const conversation = currentWorkspace.conversations.find((item) => item.id === "main-1")!;
+    Object.assign(conversation, {
+      lastTurnOrigin: "user",
+      lastTurnStartedAt: "2026-10-25T09:59:00Z",
+    });
+    const created = await call("main", "create_schedule", {
+      requestId: "switch",
+      at: "+2h",
+      action: {
+        type: "remind_me",
+        body: "Switch accounts if the workers are limited.",
+        authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch if limited" },
+      },
+    });
+    expect(created.structuredContent).toMatchObject({ carriesAccountSwitchPermission: true });
+    const id = scheduleIdOf(created);
+    const retimed = await call("main", "update_schedule", { scheduleId: id, at: "+3h" });
+    expect(retimed.isError).toBe(true);
+    expect(failure(retimed)).toContain("permission");
+    const repeating = await call("main", "update_schedule", {
+      scheduleId: id,
+      everyMinutes: 60,
+      action: {
+        type: "remind_me",
+        body: "Again.",
+        authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch if limited" },
+      },
+    });
+    expect(repeating.isError).toBe(true);
+    expect(failure(repeating)).toContain("one-shot");
+    // In a turn started by mail the permission cannot be given again.
+    Object.assign(conversation, { lastTurnOrigin: "mail" });
+    const byMail = await call("main", "update_schedule", {
+      scheduleId: id,
+      at: "+3h",
+      action: {
+        type: "remind_me",
+        body: "Later.",
+        authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch if limited" },
+      },
+    });
+    expect(byMail.isError).toBe(true);
+    Object.assign(conversation, { lastTurnOrigin: "user" });
+    const again = await call("main", "update_schedule", {
+      scheduleId: id,
+      at: "+3h",
+      action: {
+        type: "remind_me",
+        body: "Later.",
+        authorizeAccountSwitch: { platforms: ["claude"], userInstruction: "switch if limited" },
+      },
+    });
+    expect(again.isError).not.toBe(true);
+    expect(again.structuredContent).toMatchObject({ carriesAccountSwitchPermission: true });
+    // Without the permission field the new action carries none.
+    const plain = await call("main", "update_schedule", {
+      scheduleId: id,
+      action: { type: "remind_me", body: "Just a reminder." },
+    });
+    expect(plain.structuredContent?.carriesAccountSwitchPermission).toBeUndefined();
+  });
+});

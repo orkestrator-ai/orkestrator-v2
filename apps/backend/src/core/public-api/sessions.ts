@@ -32,7 +32,7 @@ export interface ResolvedSession {
 }
 
 export async function resolveSession(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   target: { sessionId: string; environmentId: string; tabId: string },
 ): Promise<ResolvedSession> {
   const storage = context.command.storage;
@@ -62,7 +62,7 @@ export async function resolveSession(
 }
 
 export function sessionActivity(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   session: {
     environmentId: string;
     agent: AgentPlatform;

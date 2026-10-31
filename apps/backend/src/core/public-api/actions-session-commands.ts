@@ -89,8 +89,11 @@ function publicCommand(command: NativeAgentSlashCommand): PublicSessionCommand {
   };
 }
 
+/** What listing and resolving a session's commands needs; a coordinator command supplies it too. */
+export type SessionCommandContext = Pick<PublicActionContext, "command" | "invoke">;
+
 function cachedProjection(
-  context: PublicActionContext,
+  context: Pick<PublicActionContext, "command">,
   session: ResolvedSession,
 ): NativeAgentSessionProjection | null {
   return (
@@ -103,7 +106,7 @@ function cachedProjection(
 }
 
 async function refreshedProjection(
-  context: PublicActionContext,
+  context: SessionCommandContext,
   session: ResolvedSession,
 ): Promise<{
   projection: NativeAgentSessionProjection | null;
@@ -134,32 +137,40 @@ const sessionCommandsList: ReadActionHandler<{
   },
   async run(input, context) {
     const session = await resolveSession(context, input);
-    let projection = cachedProjection(context, session);
-    let refresh: PublicSessionCommandList["refresh"];
-    if (input.refresh) {
-      const refreshed = await refreshedProjection(context, session);
-      projection = refreshed.projection ?? projection;
-      refresh = {
-        outcome: refreshed.outcome,
-        ...(refreshed.message ? { message: bounded(refreshed.message)! } : {}),
-      };
-    }
-    const catalogue = projection?.slashCommandCatalogue;
-    const result: PublicSessionCommandList = {
-      sessionId: session.sessionId,
-      agent: session.agent,
-      catalogue: {
-        status: catalogue?.status ?? (projection ? "unavailable" : "unknown"),
-        revision: catalogue?.revision ?? null,
-        fetchedAt: catalogue?.fetchedAt ?? null,
-        error: bounded(catalogue?.error?.message ?? catalogue?.error?.code),
-      },
-      commands: sessionCommands(session, projection).map(publicCommand),
-      ...(refresh ? { refresh } : {}),
-    };
-    return { result };
+    return { result: await listSessionCommands(context, session, input.refresh) };
   },
 };
+
+/** `session.commands` for one resolved session: its catalogue as the backend holds it. */
+export async function listSessionCommands(
+  context: SessionCommandContext,
+  session: ResolvedSession,
+  refresh: boolean,
+): Promise<PublicSessionCommandList> {
+  let projection = cachedProjection(context, session);
+  let refreshed: PublicSessionCommandList["refresh"];
+  if (refresh) {
+    const read = await refreshedProjection(context, session);
+    projection = read.projection ?? projection;
+    refreshed = {
+      outcome: read.outcome,
+      ...(read.message ? { message: bounded(read.message)! } : {}),
+    };
+  }
+  const catalogue = projection?.slashCommandCatalogue;
+  return {
+    sessionId: session.sessionId,
+    agent: session.agent,
+    catalogue: {
+      status: catalogue?.status ?? (projection ? "unavailable" : "unknown"),
+      revision: catalogue?.revision ?? null,
+      fetchedAt: catalogue?.fetchedAt ?? null,
+      error: bounded(catalogue?.error?.message ?? catalogue?.error?.code),
+    },
+    commands: sessionCommands(session, projection).map(publicCommand),
+    ...(refreshed ? { refresh: refreshed } : {}),
+  };
+}
 
 interface CommandInput {
   sessionId: string;
@@ -204,6 +215,91 @@ export function selectCommand(
   });
 }
 
+/** Argument text is kept byte-for-byte; only an all-blank value means "none". */
+export function commandArguments(raw: unknown): string | undefined {
+  if (raw !== undefined && typeof raw !== "string") throw invalid("arguments must be a string");
+  if (raw !== undefined && Buffer.byteLength(raw) > PUBLIC_API_LIMITS.commandArgumentsMaxBytes) {
+    throw new PublicActionError("input-too-large", "arguments is too large");
+  }
+  return raw !== undefined && raw.trim().length > 0 ? raw : undefined;
+}
+
+export interface ResolvedSessionCommand {
+  command: NativeAgentSlashCommand;
+  commandId: string;
+  bindingRevision: string | undefined;
+  /** What the composer would send: the insert text, then the arguments verbatim. */
+  text: string;
+  intent: { kind: "selected"; commandId: string; bindingRevision?: string };
+}
+
+/**
+ * Every check `session.command` makes before admission, shared with the
+ * coordinator's `run_worker_command`: the session takes a prompt now (or a
+ * queued one), the command exists exactly once, is available, has not changed
+ * since it was listed, and gets the arguments it takes.
+ */
+export async function resolveSessionCommand(
+  context: SessionCommandContext,
+  session: ResolvedSession,
+  input: Pick<CommandInput, "command" | "arguments" | "expectedBindingRevision" | "enqueue">,
+): Promise<ResolvedSessionCommand> {
+  assertSessionAcceptsPrompt(context, session, input.enqueue === true);
+  const cached = cachedProjection(context, session);
+  let commands = sessionCommands(session, cached);
+  if (cached?.slashCommandCatalogue?.status !== "ready" || !cached.slashCommands?.length) {
+    // Nothing read yet for this session (a fresh backend, a cold tab):
+    // read the provider's list once rather than refusing a real command.
+    commands = sessionCommands(session, (await refreshedProjection(context, session)).projection);
+  }
+  const command = selectCommand(commands, input.command);
+  if (input.expectedBindingRevision && command.bindingRevision !== input.expectedBindingRevision) {
+    throw new PublicActionError(
+      "revision-conflict",
+      `${command.name} changed since it was listed; list the commands again`,
+      { details: { commandId: command.id, bindingRevision: command.bindingRevision ?? null } },
+    );
+  }
+  if (!commandIsAvailable(command)) {
+    throw new PublicActionError(
+      "capability-unavailable",
+      `${command.name} is unavailable: ${command.availability?.message ?? command.availability?.reason ?? "the provider reports it unavailable"}`.slice(
+        0,
+        500,
+      ),
+      { details: { commandId: command.id } },
+    );
+  }
+  const policy = command.inputPolicy?.arguments;
+  if (policy === "none" && input.arguments !== undefined) {
+    throw invalid(`${command.name} takes no arguments`);
+  }
+  if (policy === "required" && input.arguments === undefined) {
+    throw invalid(`${command.name} needs arguments`);
+  }
+  if (command.inputPolicy?.busy === "idle" && !input.enqueue) {
+    const activity = sessionActivity(context, {
+      environmentId: session.environment.id,
+      agent: session.agent,
+      logicalSessionKey: session.logicalSessionKey,
+    });
+    if (activity !== "idle" && activity !== "unknown") {
+      throw new PublicActionError("busy", `${command.name} runs when the agent is idle`, {
+        details: { activity },
+      });
+    }
+  }
+  const commandId = command.id!;
+  const bindingRevision = command.bindingRevision;
+  return {
+    command,
+    commandId,
+    bindingRevision,
+    text: `${command.insertText ?? command.name}${input.arguments !== undefined ? ` ${input.arguments}` : ""}`,
+    intent: { kind: "selected", commandId, ...(bindingRevision ? { bindingRevision } : {}) },
+  };
+}
+
 const sessionCommand: MutationActionHandler<CommandInput> = {
   kind: "mutation",
   action: "session.command",
@@ -211,13 +307,7 @@ const sessionCommand: MutationActionHandler<CommandInput> = {
     onlyActionKeys(input, "session.command");
     const target = sessionTarget(input);
     const command = requiredString(input, "command", 500).trim();
-    const raw = input.arguments;
-    if (raw !== undefined && typeof raw !== "string") throw invalid("arguments must be a string");
-    if (raw !== undefined && Buffer.byteLength(raw) > PUBLIC_API_LIMITS.commandArgumentsMaxBytes) {
-      throw new PublicActionError("input-too-large", "arguments is too large");
-    }
-    // Argument text is kept byte-for-byte; only an all-blank value means "none".
-    const args = raw !== undefined && raw.trim().length > 0 ? raw : undefined;
+    const args = commandArguments(input.arguments);
     const expectedBindingRevision = optionalString(input, "expectedBindingRevision", 200);
     const enqueue = parseEnqueue(input);
     const value: CommandInput = {
@@ -240,62 +330,11 @@ const sessionCommand: MutationActionHandler<CommandInput> = {
   },
   async prepare(input, context) {
     const session = await resolveSession(context, input);
-    assertSessionAcceptsPrompt(context, session, input.enqueue === true);
-    const cached = cachedProjection(context, session);
-    let commands = sessionCommands(session, cached);
-    if (cached?.slashCommandCatalogue?.status !== "ready" || !cached.slashCommands?.length) {
-      // Nothing read yet for this session (a fresh backend, a cold tab):
-      // read the provider's list once rather than refusing a real command.
-      commands = sessionCommands(session, (await refreshedProjection(context, session)).projection);
-    }
-    const command = selectCommand(commands, input.command);
-    if (
-      input.expectedBindingRevision &&
-      command.bindingRevision !== input.expectedBindingRevision
-    ) {
-      throw new PublicActionError(
-        "revision-conflict",
-        `${command.name} changed since it was listed; list the commands again`,
-        { details: { commandId: command.id, bindingRevision: command.bindingRevision ?? null } },
-      );
-    }
-    if (!commandIsAvailable(command)) {
-      throw new PublicActionError(
-        "capability-unavailable",
-        `${command.name} is unavailable: ${command.availability?.message ?? command.availability?.reason ?? "the provider reports it unavailable"}`.slice(
-          0,
-          500,
-        ),
-        { details: { commandId: command.id } },
-      );
-    }
-    const policy = command.inputPolicy?.arguments;
-    if (policy === "none" && input.arguments !== undefined) {
-      throw invalid(`${command.name} takes no arguments`);
-    }
-    if (policy === "required" && input.arguments === undefined) {
-      throw invalid(`${command.name} needs arguments`);
-    }
-    if (command.inputPolicy?.busy === "idle" && !input.enqueue) {
-      const activity = sessionActivity(context, {
-        environmentId: session.environment.id,
-        agent: session.agent,
-        logicalSessionKey: session.logicalSessionKey,
-      });
-      if (activity !== "idle" && activity !== "unknown") {
-        throw new PublicActionError("busy", `${command.name} runs when the agent is idle`, {
-          details: { activity },
-        });
-      }
-    }
-    const commandId = command.id!;
-    const bindingRevision = command.bindingRevision;
-    const text = `${command.insertText ?? command.name}${input.arguments !== undefined ? ` ${input.arguments}` : ""}`;
-    const intent = {
-      kind: "selected" as const,
-      commandId,
-      ...(bindingRevision ? { bindingRevision } : {}),
-    };
+    const { commandId, bindingRevision, text, intent } = await resolveSessionCommand(
+      context,
+      session,
+      input,
+    );
     const mode = sessionPromptMode(context, session, undefined);
     return {
       resolved: {

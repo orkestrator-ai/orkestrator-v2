@@ -22,6 +22,7 @@ import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
 import { ticketCommands } from "./commands/ticket.js";
 import { toolchainCommands } from "./commands/toolchain.js";
+import { pullRequestCommands } from "./commands/pull-requests.js";
 import { workflowCommands } from "./commands/workflows.js";
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { CliError } from "./errors.js";
@@ -44,6 +45,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...sessionCommands,
   ...changesCommands,
   ...workflowCommands,
+  ...pullRequestCommands,
   ...buildCommands,
   ...graphCommands,
   ...attentionCommands,

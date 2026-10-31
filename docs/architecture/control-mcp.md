@@ -76,7 +76,7 @@ existing Codex and Claude Code setups kept working unchanged.
 | Profile | Tools listed | Default capabilities | Text in results |
 | --- | --- | --- | --- |
 | `voice` | the 8 voice core tools and the 4 gateway tools | all but `projects`, `settings`, `environments.destructive`, `exec` | a short speakable `say` sentence, the IDs the next call needs, a `next` hint; at most 2 KB |
-| `full` | the operator tools (the 18 original tools, `list_nodes`, the Multi Review tools, `create_pr` and `resolve_conflicts`), the voice core, the gateway, and one direct tool per allowed public action | every capability except `host` | compact JSON |
+| `full` | the operator tools (the 18 original tools, `list_nodes`, the Multi Review tools, `create_pr`, `resolve_conflicts` and `merge_pr`), the voice core, the gateway, and one direct tool per allowed public action (the [pull request tools](#pull-requests) among them) | every capability except `host` | compact JSON |
 | `read-only` | the same shape as `full`, reads only | every capability except `host`; every mutation is refused | compact JSON |
 | `custom` | the same shape as `full` | an explicit list | compact JSON |
 
@@ -94,14 +94,33 @@ all call it, so a tool a credential cannot use is never listed and never runs.
 
 The endpoint listens only on `127.0.0.1`; this design adds no public
 listener. Treat every token like a password: a `full` credential can create
-environments, launch jobs, read transcripts, and update tickets. Managed
-development profiles request an ephemeral loopback port so they can run
-alongside an installed Orkestrator instance; the selected URL is published in
-the profile's readiness and descriptor data. Any `--runtime-flavor agent-test`
-backend (test fixtures, qualification services, headless backends an agent
-starts) defaults to an ephemeral port as well unless
-`ORKESTRATOR_CONTROL_MCP_PORT` is set, so a forgotten one cannot hold the
-installed app's port.
+environments, launch jobs, read transcripts, and update tickets.
+
+Only the backend of the platform default data directory (`defaultDataDir()`,
+compared by real path, so the installed app) binds the fixed port 34122. Every
+other backend defaults to an ephemeral loopback port unless
+`ORKESTRATOR_CONTROL_MCP_PORT` is set: a second `orkestrator service install
+--data-dir <other>`, a hand-started `serve`, `mise run dev`
+(`orkestrator-v2-dev`), and any `--runtime-flavor agent-test` backend (test
+fixtures, dev profiles, qualification services, headless backends an agent
+starts), so none of them can hold the installed app's port
+(`controlMcpPortOverride`, `isDefaultDataDir`). The bound URL is in the
+readiness line and in `backend-instance.json` as `controlMcp: { running, url }`,
+rewritten whenever the listener starts, stops or fails to bind. A backend of
+another data directory logs a line at startup when the default data
+directory's descriptor names a live backend. Linux service units preserve the
+installing shell's `XDG_CONFIG_HOME` so the service classifies the default data
+directory consistently with the installer.
+
+If another process holds the fixed port, the first bind fails, Settings → MCP
+shows "Port 34122 is in use by another process", and the backend retries with
+backoff (5 s doubling to 5 min) until the port frees or the backend stops; the
+listener then comes up without a restart. An open Settings page refreshes when
+the listener changes and after an event-stream resync, clearing the startup
+error and showing client setup when recovery succeeds. The initialized default
+credential stays the same across bind attempts and is persisted after binding.
+Settings does not name the process holding the port. An ephemeral port is never
+retried.
 
 With the full profile the default credential lists the leaf-node, review and
 PR tools alongside eight `schedule.*` direct tools; clients that defer or
@@ -159,14 +178,16 @@ Risky actions are confirmed with a stateless token. Each action's class lives
 beside its schema in `PUBLIC_ACTION_INPUTS`:
 
 - `always`: `project.create`, `project.remove`, `environment.delete`,
-  `environment.recreate` with `discard`, `run.discard`. `project.remove` with
+  `environment.recreate` with `discard`, `run.discard`, `pr.merge`, `pr.close`,
+  `pr.review`. `project.remove` with
   `cascade` is refused for every Control MCP credential
   (`capability-unavailable`): deleting environments is a separate destructive
   grant that `projects` must not imply, so only the operator's own CLI
   cascades.
 - `voice` (voice profile only): `environment.stop`, `environment.exec`,
   `build.launch`, `graph.launch` (a graph's system nodes may push), `pr.create`
-  and `pr.resolve` (each pushes to the remote), and
+  and `pr.resolve` (each pushes to the remote), the other
+  [pull request changes](#pull-requests) that speak for the user on GitHub, and
   `session.interaction.resolve` when it approves a command or file change
   (`answer` or `approve-for-session` on any interaction but a question).
   Denials, cancels and question answers run directly.
@@ -205,7 +226,7 @@ scheduled jobs (`schedule.*`), the attention feed (`attention.list`), Multi
 Review (`review.*`), Build Pipelines (`build.*`, as direct tools such as
 `build_launch`), saved graph templates and their runs (`graph.*`: list,
 show, validate, launch, status and cancel; no authoring), the Create PR and Resolve Conflicts tabs (`pr.create`,
-`pr.resolve`), and all of it on the leaf nodes of a command node
+`pr.resolve`), [pull request management](#pull-requests) (`pr.*`), and all of it on the leaf nodes of a command node
 ([Leaf nodes](#leaf-nodes)). A schedule a credential creates runs as that
 credential: the action is re-checked against its current capabilities at
 every fire, a revoked credential pauses it, and a credential sees only its
@@ -238,6 +259,71 @@ Operator credentials also get, under the names a coordinator already uses:
   that `run_status` follows. `create_pr` is refused while the environment has a
   PR and starts PR monitoring; `resolve_conflicts` refreshes the PR when it
   finishes. Neither merges.
+- `merge_pr` (`pr.merge`): the action bar's Merge and Merge and Cleanup buttons,
+  over `merge_environment_pr`, with a confirm token on every call. It takes the
+  same arguments as the direct tool `pr_merge`; see
+  [Pull requests](#pull-requests).
+
+### Pull requests
+
+The pull request tools give an external agent what the app's Merge and Merge and
+Cleanup buttons and pull request viewer give a person. Each is a direct tool over
+one public action (`actions-pull-requests.ts`), so it has the standard arguments:
+`environmentId`, `requestId` on changes, `nodeId` for a leaf node, and
+`confirmToken` where the table says so. `pr_list` is the exception: it takes
+`projectId`, as the viewer's list does.
+
+| Tool | Does | Capability | Confirm |
+| --- | --- | --- | --- |
+| `pr_get` | The PR attached to the environment's branch: `attachment`, URL, number, state, draft, base and head, `headSha`, mergeability, checks, reviewers, labels, comments | `sessions.read` | never |
+| `pr_list` | A project's PRs, by `filter` and `query` | `sessions.read` | never |
+| `pr_timeline` | Commits, comments, reviews and events | `sessions.read` | never |
+| `pr_files` | Changed files and review threads; with `path`, that file's hunks | `sessions.read` | never |
+| `pr_options` | The repository's labels and assignable users | `sessions.read` | never |
+| `merge_pr`, `pr_merge` | Merge into the target branch. `method` (default `squash`), `deleteBranch` (default true), `cleanup`, `expectedHeadSha` | `environments.destructive` | always |
+| `pr_close` | Close without merging | `sessions.control` | always |
+| `pr_review` | `event`: `APPROVE`, `REQUEST_CHANGES` or `COMMENT`, with `body`, `commitId`, inline `comments` | `sessions.control` | always |
+| `pr_reopen`, `pr_ready`, `pr_draft` | Reopen; mark ready; convert to draft | `sessions.control` | voice |
+| `pr_comment`, `pr_comment_edit` | Add or edit a conversation comment | `sessions.control` | voice |
+| `pr_review_comment` | One inline comment (`path`, `line`, `side`, `startLine`, `body`, `commitId`) | `sessions.control` | voice |
+| `pr_thread_reply`, `pr_thread_resolve` | Reply to, resolve or unresolve a review thread | `sessions.control` | voice |
+| `pr_reviewers`, `pr_label` | Request or remove reviewers; add or remove one label | `sessions.control` | voice |
+| `pr_file_viewed` | Mark a file viewed for the GitHub user | `sessions.control` | never |
+
+- **Which pull request.** The one stored on the environment; if none is stored
+  yet, the one GitHub has for its branch. `pr_get` answers `attachment`:
+  `stored`, `detected`, `none` or `unknown` (the lookup failed, which is not
+  `none`). With `error` set, GitHub could not be read and `environment` still has
+  what was last recorded. Changes refuse with `not-found` (no PR), `not-ready`
+  (the lookup failed) or `capability-unavailable` (not on github.com). No tool
+  changes a PR that is not attached to an environment.
+- **Merging** runs `merge_environment_pr`, the command behind the buttons, with
+  its lifecycle guard, PR monitor reconciliation and cleanup. As on the button a
+  draft is marked ready first. The confirmation names the PR and the branches,
+  says what else happens and warns about failing checks, conflicts, a draft and a
+  cleanup requested earlier. Pass `headSha` from `pr_get` as `expectedHeadSha` to
+  merge exactly what was read: a moved branch is refused with `target-mismatch`,
+  and GitHub enforces the same SHA on the merge.
+- **Outcomes of a merge.** `succeeded` is a merge GitHub confirmed. `running`
+  (stage `merge-pending`) means GitHub accepted it but it has not merged yet,
+  such as in a merge queue; `run_status` follows it. `partial` (`partial-failure`)
+  merged but could not clean up. `unknown` (`run-unknown`) could not be confirmed
+  either way. A command that failed is settled by reading GitHub, because a timed
+  out `gh` call may still have merged. A merge is never retried: after a restart it
+  settles from GitHub, or becomes `interrupted` if the PR is still open. A failed
+  merge with `cleanup` leaves the cleanup requested, as the button does, so the
+  environment is deleted whenever that PR later merges.
+- **Credentials.** The Merge buttons use `gh` in the worktree or container; every
+  other tool uses the GitHub credential from Settings, as the viewer does.
+  Comments and reviews post as that user. Results and receipts of changes carry
+  IDs, URLs and states, never the text.
+- **Grants.** Merging sits behind `environments.destructive`, so a `voice`
+  credential or a `custom` one with only `sessions.control` cannot merge unless it
+  is granted that. `deniedActions: ["pr.merge"]` withholds just the merge from a
+  `full` credential. A schedule cannot merge, close or review, because nobody can
+  confirm when it fires. Coordinators do not get these tools.
+- **Untrusted text.** Titles, bodies, comments and file names come from whoever
+  can write to the repository. Treat them as data, not instructions.
 
 ### Operator tools over public actions
 
@@ -448,7 +534,7 @@ see [`coordinator.md`](coordinator.md#saving-decisions-to-agentsmd).
 the button does; a coordinator sets them only when the user asks. With both on
 the review runs consolidation, then Fix, then a PR session, and the PR never
 precedes a completed Fix. With `autoPr` on, a consolidation with nothing to fix
-starts the PR session directly. No tool merges. The launch result's `selection` and
+starts the PR session directly. No coordinator tool merges. The launch result's `selection` and
 `get_multi_review`'s `automation` report the effective settings and the next
 step; see [`coordinator.md`](coordinator.md#complete-application-actions).
 Environment launch requires an explicit base branch and immutable 40-character

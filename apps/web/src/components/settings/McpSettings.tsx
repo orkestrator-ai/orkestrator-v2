@@ -48,6 +48,7 @@ import {
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import { useTimedCopyFeedback } from "@/hooks";
 import * as backend from "@/lib/backend";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import { cn } from "@/lib/utils";
 
 const PROFILE_TEXT: Record<ControlMcpProfile, { label: string; description: string }> = {
@@ -77,7 +78,7 @@ const CAPABILITY_TEXT: Record<string, string> = {
   "sessions.control": "Start, prompt, steer and stop sessions",
   interactions: "Answer questions and approvals",
   "environments.lifecycle": "Create, start and stop environments",
-  "environments.destructive": "Delete and recreate environments",
+  "environments.destructive": "Delete and recreate environments, merge pull requests",
   exec: "Run commands in environments",
   projects: "Add, create and remove projects",
   settings: "Change project and environment settings",
@@ -288,7 +289,16 @@ export function McpSettings() {
   );
 
   useEffect(() => {
-    void fetchSettings();
+    const controller = new AbortController();
+    // Subscribe before the snapshot, and refresh after any replay gap.
+    void listenAuthoritative("control-mcp-state-changed", fetchSettings, {
+      onResync: fetchSettings,
+      signal: controller.signal,
+      resyncOnSubscribe: true,
+    }).catch(() => {
+      if (!controller.signal.aborted) void fetchSettings();
+    });
+    return () => controller.abort();
   }, [fetchSettings]);
 
   const retry = useCallback(() => {

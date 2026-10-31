@@ -15,7 +15,12 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 export default defineConfig({
   testDir: import.meta.dirname,
-  testMatch: ["goals-live.spec.ts"],
+  // The restart spec stops its profile, so it only runs on one started by hand.
+  testMatch: [
+    process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY === "restart"
+      ? "goals-restart-live.spec.ts"
+      : "goals-live.spec.ts",
+  ],
   fullyParallel: false,
   workers: 1,
   timeout: 900_000,

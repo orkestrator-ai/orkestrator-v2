@@ -87,7 +87,13 @@ export const GOAL_QUALIFIED_PLATFORMS = Object.freeze([
 ] as const);
 
 /** Where the provider's session counters can back a token budget. */
-export const GOAL_TOKEN_BUDGET_PLATFORMS = Object.freeze(["claude", "codex"] as const);
+export const GOAL_TOKEN_BUDGET_PLATFORMS = Object.freeze([
+  "claude",
+  "codex",
+  "opencode",
+  "cursor",
+  "pi",
+] as const);
 
 export const GOAL_REPORT_STATUSES = ["done", "blocked", "progress"] as const;
 export type GoalReportStatus = (typeof GOAL_REPORT_STATUSES)[number];

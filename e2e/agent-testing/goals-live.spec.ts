@@ -371,6 +371,63 @@ test.describe(`goal loop: ${platform}`, () => {
     });
   });
 
+  test("what the provider offers, and a live background task", async ({ page }) => {
+    page.setDefaultTimeout(15_000);
+    const { invoke, environment, workspace, model, container } = await prepare(page);
+    const identity = await openTab(invoke, environment, "goals-probe", container, model);
+    const facts: Record<string, unknown> = {};
+    record.probe = facts;
+    // Which goal tools reach a session, as the model sees them. A closure this
+    // qualification relies on shows up here as an empty list.
+    await invoke("dispatch_native_agent_intent", {
+      ...identity,
+      requestId: `probe-${Date.now()}`,
+      prompt:
+        "List every tool available to you whose name contains the word goal, in any letter case, one name per line. If there are none, reply NONE. Use no tools.",
+      ...(model ? { model } : {}),
+    });
+    const settled = async () => {
+      for (let wait = 0; wait < 90; wait += 1) {
+        const view = await invoke<Projection>("get_native_agent_projection", identity);
+        const phase = view.turn.phase;
+        if (phase === "idle" || phase === "error") return view;
+        await page.waitForTimeout(2_000);
+      }
+      throw new Error("the probe turn never ended");
+    };
+    const view = await settled();
+    const last = [...(view.messages ?? [])].reverse().find((row) => row.role === "assistant");
+    const text =
+      typeof last?.content === "string"
+        ? last.content
+        : JSON.stringify((last as { parts?: unknown } | undefined)?.parts ?? last?.content ?? "");
+    facts.goalToolsTheModelNames = text.slice(0, 400);
+    writeSummary();
+    expect(text).toContain("report_goal");
+
+    // A task the agent leaves running must not hide the turn's end from the loop.
+    await invoke("native_agent_goal_command", {
+      ...identity,
+      text: `Start the shell command "sleep 240" in the background and end your turn without waiting for it and without calling report_goal. When you are told to continue, call the orkestrator report_goal tool with status "done". --max-iterations 4`,
+      ...(model ? { model } : {}),
+    });
+    let goal: Goal | undefined;
+    const deadline = Date.now() + TURN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      goal = (await invoke<{ goal?: Goal }>("get_native_agent_goal", identity)).goal;
+      if (goal && !["active", "checking"].includes(goal.status)) break;
+      await page.waitForTimeout(2_000);
+    }
+    facts.backgroundTask = {
+      status: goal?.status,
+      reason: goal?.statusReason,
+      iterations: goal?.iterations,
+    };
+    writeSummary();
+    expect(goal?.status).toBe("claimed");
+    void workspace;
+  });
+
   test("the browser: set, watch from elsewhere, reload, pause and clear", async ({
     page,
   }, testInfo) => {

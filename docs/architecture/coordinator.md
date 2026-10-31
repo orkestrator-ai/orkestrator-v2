@@ -14,7 +14,11 @@ OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
 worker-surface follow-ups (other nodes, status wakes for feature
 planning) in
-[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
+[0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
+live qualification of the gap tools (`resolve_conflicts`, PR wakes,
+`stop_worker_turn`, `get_worker_changes`, `fork_worker`, schedule edits,
+worker slash commands, `answer_worker_question`) in
+[1021-coordinator-gap-tools-follow-ups.md](../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.

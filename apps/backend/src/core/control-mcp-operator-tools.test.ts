@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  COORDINATOR_EXECUTION_POLICY,
-  COORDINATOR_WORKSPACE_VERSION,
-  coordinatorConversationSessionKey,
-  coordinatorRuntimeId,
-} from "@orkestrator/protocol/coordinator";
-import {
   decodePublicSessionId,
   encodePublicSessionId,
 } from "@orkestrator/protocol/public-api-resources";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { seedCoordinator } from "./public-api/test-coordinator.js";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
 import { cleanupSessionHarnesses, setActivity } from "./public-api/test-provider.js";
 
@@ -187,47 +185,9 @@ describe("operator tools over public actions", () => {
   describe("Coordinator conversations", () => {
     async function withCoordinator() {
       const harness = await open();
-      const storage = harness.harness.storage;
-      await storage.updateProject(harness.projectId, { localPath: harness.harness.root });
-      const main = {
-        id: "main",
-        tabId: "coordinator-main",
-        logicalSessionKey: coordinatorConversationSessionKey("coordinator-1", {
-          id: "main",
-          tabId: "coordinator-main",
-        }),
-        agent: "claude" as const,
-        title: "Coordinator",
-        createdAt: new Date(0).toISOString(),
-        mailboxIncarnationId: "incarnation-main",
-        role: "main" as const,
-      };
-      await storage.coordinators.mutateCoordinatorWorkspace(harness.projectId, () => ({
-        version: COORDINATOR_WORKSPACE_VERSION,
-        id: "coordinator-1",
-        projectId: harness.projectId,
-        executionPolicy: COORDINATOR_EXECUTION_POLICY,
-        lifecycleState: "ready",
-        conversations: [main],
-        selectedConversationId: "main",
-        repositoryContextRevision: 0,
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      }));
-      const environmentId = coordinatorRuntimeId("coordinator-1", "main");
-      const providerSessionId = "provider-coordinator";
-      await harness.harness.commands.get("adopt_native_agent_session")!(
-        {
-          environmentId,
-          agent: "claude",
-          logicalSessionKey: main.logicalSessionKey,
-          providerSessionId,
-          origin: "interactive-native",
-        },
-        harness.harness.context,
-      );
-      setActivity(harness.service, "claude", main.tabId, providerSessionId, "idle", environmentId);
-      return { harness, environmentId, tabId: main.tabId };
+      const { environmentId, tabId, providerSessionId } = await seedCoordinator(harness);
+      setActivity(harness.service, "claude", tabId, providerSessionId, "idle", environmentId);
+      return { harness, environmentId, tabId };
     }
 
     test("what list_agents names, every session and tab tool can then reach", async () => {
@@ -287,6 +247,106 @@ describe("operator tools over public actions", () => {
         receipt: { action: "session.prompt", requestId: "prompt-coordinator" },
       });
       expect(harness.stub.sends.at(-1)?.prompt).toContain("What is the state of the release?");
+    });
+
+    for (const persisted of [false, true]) {
+      test(`paused tab reads retain earlier messages without a provider (persisted=${persisted})`, async () => {
+        const { harness, environmentId, tabId } = await withCoordinator();
+        harness.stub.messages.push({
+          id: "earlier",
+          role: "assistant",
+          content: "Saved answer",
+          parts: [],
+          createdAt: new Date(0).toISOString(),
+        });
+        // The progressive transcript is the durable source used after restart.
+        await harness.call(harness.defaultToken, "session_transcript", {
+          sessionId: encodePublicSessionId(environmentId, tabId),
+        });
+        await harness.call(harness.defaultToken, "get_tab_transcript", { environmentId, tabId });
+        if (persisted) {
+          await collaborators(harness.service).projections.flushDisplayTailPersist(
+            nativeAgentSessionStorageKey(environmentId, "claude", `env-${environmentId}:${tabId}`),
+          );
+          projectionInternals(harness.service).progressiveTranscriptCache.clear();
+          projectionInternals(harness.service).projectionCache.clear();
+        }
+        await harness.harness.storage.coordinators.mutateCoordinatorWorkspace(
+          harness.projectId,
+          (current) => ({ ...current!, lifecycleState: "paused" }),
+        );
+        let reads = 0;
+        Object.assign(harness.stub.provider, {
+          messages: async () => {
+            reads++;
+            throw new Error("No paused provider reads");
+          },
+          status: async () => {
+            reads++;
+            throw new Error("No paused status reads");
+          },
+        });
+        const state = await harness.call(harness.defaultToken, "get_tab_state", {
+          environmentId,
+          tabId,
+        });
+        expect(state.isError).not.toBe(true);
+        expect(state.structuredContent).toMatchObject({
+          state: { connection: "error", turn: { error: expect.stringContaining("paused") } },
+        });
+        const transcript = await harness.call(harness.defaultToken, "get_tab_transcript", {
+          environmentId,
+          tabId,
+        });
+        expect(transcript.structuredContent).toMatchObject({
+          messages: [{ id: "earlier", content: "Saved answer" }],
+          connection: "error",
+          error: expect.stringContaining("paused"),
+        });
+        expect(reads).toBe(0);
+        expect(
+          (await harness.harness.storage.coordinators.getCoordinatorWorkspace(harness.projectId))
+            ?.lifecycleState,
+        ).toBe("paused");
+      });
+    }
+
+    test("a paused stored session without cached history reports an unreadable transcript", async () => {
+      const { harness, environmentId, tabId } = await withCoordinator();
+      await harness.harness.storage.coordinators.mutateCoordinatorWorkspace(
+        harness.projectId,
+        (current) => ({ ...current!, lifecycleState: "paused" }),
+      );
+      const transcript = await harness.call(harness.defaultToken, "get_tab_transcript", {
+        environmentId,
+        tabId,
+      });
+      expect(transcript.structuredContent).toMatchObject({
+        messages: [],
+        connection: "error",
+        error: expect.stringContaining("no saved transcript"),
+      });
+      const publicRead = await harness.harness.call("session.transcript", {
+        sessionId: encodePublicSessionId(environmentId, tabId),
+      });
+      expect(!publicRead.ok && publicRead.error.code).toBe("connection-failed");
+    });
+
+    test("tab tools preserve closed and unassigned refusal codes", async () => {
+      const { harness } = await withCoordinator();
+      for (const [conversation, code] of [
+        ["closed", "not-found"],
+        ["unassigned", "not-ready"],
+      ]) {
+        for (const tool of ["list_tabs", "get_tab_state", "get_tab_transcript"]) {
+          const response = await harness.call(harness.defaultToken, tool!, {
+            environmentId: coordinatorRuntimeId("coordinator-1", conversation!),
+            ...(tool !== "list_tabs" ? { tabId: `coordinator-${conversation}` } : {}),
+          });
+          expect(response.isError).toBe(true);
+          expect(JSON.stringify(response)).toContain(code!);
+        }
+      }
     });
 
     test("resolve_target finds a project's Coordinator by name", async () => {

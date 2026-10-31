@@ -1,17 +1,21 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   COORDINATOR_EXECUTION_POLICY,
-  COORDINATOR_WORKSPACE_VERSION,
-  coordinatorConversationSessionKey,
   coordinatorRuntimeId,
-  type CoordinatorConversation,
 } from "@orkestrator/protocol/coordinator";
 import {
   encodePublicSessionId,
   type PublicSessionSummary,
 } from "@orkestrator/protocol/public-api-resources";
+import { classifyReceiptForWait } from "@orkestrator/protocol/public-api-wait";
+import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import { CoordinatorService } from "../coordinator-service.js";
+import { collaborators, projectionInternals } from "../native-agent-service-test-collaborators.js";
+import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativePromptQueueKey } from "./prompt-delivery.js";
+import { seedCoordinator } from "./test-coordinator.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 
 /**
@@ -25,67 +29,8 @@ afterEach(cleanupSessionHarnesses);
 const PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPgPAAEDAQDa/0kPAAAAAElFTkSuQmCC";
 
-function conversation(
-  coordinatorId: string,
-  id: string,
-  fields: Partial<CoordinatorConversation> = {},
-): CoordinatorConversation {
-  const tabId = `coordinator-${id}`;
-  return {
-    id,
-    tabId,
-    logicalSessionKey: coordinatorConversationSessionKey(coordinatorId, { id, tabId }),
-    agent: "claude",
-    title: "Coordinator",
-    createdAt: new Date(0).toISOString(),
-    mailboxIncarnationId: `incarnation-${id}`,
-    role: "main",
-    ...fields,
-  };
-}
-
 async function coordinatorSetup(options: { adopt?: boolean } = {}) {
-  const session = await setup();
-  const { harness, projectId } = session;
-  await harness.storage.updateProject(projectId, { localPath: harness.root });
-  const coordinatorId = "coordinator-1";
-  await harness.storage.coordinators.mutateCoordinatorWorkspace(projectId, () => ({
-    version: COORDINATOR_WORKSPACE_VERSION,
-    id: coordinatorId,
-    projectId,
-    executionPolicy: COORDINATOR_EXECUTION_POLICY,
-    lifecycleState: "ready",
-    conversations: [
-      conversation(coordinatorId, "main"),
-      conversation(coordinatorId, "unassigned", { agent: undefined, role: "side", sideOrdinal: 1 }),
-      conversation(coordinatorId, "closed", {
-        role: "side",
-        sideOrdinal: 2,
-        closedAt: new Date(0).toISOString(),
-      }),
-    ],
-    selectedConversationId: "main",
-    repositoryContextRevision: 0,
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  }));
-  const environmentId = coordinatorRuntimeId(coordinatorId, "main");
-  const tabId = "coordinator-main";
-  const sessionId = encodePublicSessionId(environmentId, tabId);
-  const providerSessionId = "provider-coordinator";
-  if (options.adopt !== false) {
-    await harness.commands.get("adopt_native_agent_session")!(
-      {
-        environmentId,
-        agent: "claude",
-        logicalSessionKey: `env-${environmentId}:${tabId}`,
-        providerSessionId,
-        origin: "interactive-native",
-      },
-      harness.context,
-    );
-  }
-  return { ...session, coordinatorId, environmentId, tabId, sessionId, providerSessionId };
+  return seedCoordinator(await setup(), options);
 }
 
 describe("Coordinator conversations are public sessions", () => {
@@ -178,21 +123,362 @@ describe("Coordinator conversations are public sessions", () => {
     expect(stub.sends).toHaveLength(0);
   });
 
-  test("a paused Coordinator can be read but not prompted", async () => {
-    const { harness, sessionId, environmentId, projectId } = await coordinatorSetup();
+  for (const source of ["memory", "persisted", "projection"]) {
+    test(`a paused Coordinator reads saved messages without provider access (source=${source})`, async () => {
+      const {
+        harness,
+        service,
+        stub,
+        sessionId,
+        environmentId,
+        tabId,
+        projectId,
+        providerSessionId,
+      } = await coordinatorSetup();
+      setActivity(service, "claude", tabId, providerSessionId, "idle", environmentId);
+      const sent = await harness.call(
+        "session.prompt",
+        { sessionId, prompt: "Earlier question" },
+        { requestId: "before-pause" },
+      );
+      expect(sent.ok).toBe(true);
+      stub.messages.push({
+        id: "earlier",
+        role: "assistant",
+        content: "Earlier answer",
+        parts: [],
+        createdAt: new Date(0).toISOString(),
+      });
+      expect((await harness.call("session.transcript", { sessionId })).ok).toBe(true);
+      await service.getProjection({
+        environmentId,
+        agent: "claude",
+        logicalSessionKey: `env-${environmentId}:${tabId}`,
+      });
+      if (source === "projection") projectionInternals(service).progressiveTranscriptCache.clear();
+      if (source === "persisted") {
+        await collaborators(service).projections.flushDisplayTailPersist(
+          nativeAgentSessionStorageKey(environmentId, "claude", `env-${environmentId}:${tabId}`),
+        );
+        projectionInternals(service).progressiveTranscriptCache.clear();
+        projectionInternals(service).projectionCache.clear();
+      }
+      await harness.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) => ({
+        ...current!,
+        lifecycleState: "paused",
+      }));
+      const providerRead = mock(async () => {
+        throw new Error("Paused reads must not touch the provider");
+      });
+      Object.assign(stub.provider, {
+        messages: providerRead,
+        status: providerRead,
+        createSession: providerRead,
+      });
+      expect((await harness.call("session.list", { environmentId })).ok).toBe(true);
+      expect((await harness.call("session.get", { sessionId })).ok).toBe(true);
+      const transcript = await harness.call("session.transcript", { sessionId });
+      expect(transcript.ok && transcript.result).toMatchObject({
+        messages: [{ id: "earlier", text: "Earlier answer" }],
+        freshness: "cached",
+      });
+      const projection = await service.getProjection({
+        environmentId,
+        agent: "claude",
+        logicalSessionKey: `env-${environmentId}:${tabId}`,
+      });
+      expect(projection).toMatchObject({
+        messages: [{ id: "earlier", content: "Earlier answer" }],
+      });
+      expect(providerRead).not.toHaveBeenCalled();
+      const refused = await harness.call(
+        "session.prompt",
+        { sessionId, prompt: "Hello" },
+        { requestId: "paused" },
+      );
+      expect(!refused.ok && refused.error.code).toBe("not-ready");
+      expect(
+        (await harness.storage.coordinators.getCoordinatorWorkspace(projectId))?.lifecycleState,
+      ).toBe("paused");
+    });
+  }
+
+  test("small paused transcript windows preserve wider cached and persisted history", async () => {
+    const { harness, service, stub, environmentId, tabId, projectId } = await coordinatorSetup();
+    const identity = {
+      environmentId,
+      agent: "claude" as const,
+      logicalSessionKey: `env-${environmentId}:${tabId}`,
+      viewVersion: 1 as const,
+    };
+    stub.messages.push(
+      ...["first", "second"].map((id) => ({
+        id,
+        role: "assistant",
+        content: id,
+        parts: [],
+        createdAt: new Date(0).toISOString(),
+      })),
+    );
+    await service.getTranscriptUpdate({
+      ...identity,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      forceSnapshot: true,
+    });
+    await service.getProjection({ ...identity, messageLimit: 100 });
+    const key = nativeAgentSessionStorageKey(environmentId, "claude", identity.logicalSessionKey);
+    await collaborators(service).projections.flushDisplayTailPersist(key);
+    const tail = await harness.storage.getNativeAgentDisplayTail(key);
     await harness.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) => ({
       ...current!,
       lifecycleState: "paused",
     }));
-    const listed = await harness.call("session.list", { environmentId });
-    expect(listed.ok).toBe(true);
-    const refused = await harness.call(
+    const narrow = await service.getTranscriptUpdate({
+      ...identity,
+      liveWindow: { messages: 1, targetBytes: 512 * 1024 },
+      forceSnapshot: true,
+    });
+    expect(narrow.status === "snapshot" && narrow.value).toMatchObject({
+      messages: [{ id: "second" }],
+      historyComplete: false,
+      messageWindow: { truncated: true },
+    });
+    const wide = await service.getTranscriptUpdate({
+      ...identity,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      forceSnapshot: true,
+    });
+    expect(wide.status === "snapshot" && wide.value.messages).toHaveLength(2);
+    projectionInternals(service).progressiveTranscriptCache.clear();
+    const smallProjection = await service.getProjection({ ...identity, messageLimit: 1 });
+    expect(smallProjection?.messages).toHaveLength(1);
+    const wideProjection = await service.getProjection({ ...identity, messageLimit: 100 });
+    expect(wideProjection?.messages).toHaveLength(2);
+    await collaborators(service).projections.flushDisplayTailPersist(key);
+    expect(await harness.storage.getNativeAgentDisplayTail(key)).toEqual(tail);
+  });
+
+  test("a queued run is interrupted and retired by the real close path", async () => {
+    const {
+      harness,
+      service,
+      stub,
+      sessionId,
+      environmentId,
+      tabId,
+      projectId,
+      providerSessionId,
+    } = await coordinatorSetup();
+    const repository = await harness.createRepository("coordinator-close");
+    await harness.storage.updateProject(projectId, { localPath: repository.projectPath });
+    harness.context.coordinators = new CoordinatorService(harness.storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    setActivity(service, "claude", tabId, providerSessionId, "working", environmentId);
+    const queued = await harness.call<{ runId: string }>(
       "session.prompt",
-      { sessionId, prompt: "Hello" },
-      { requestId: "paused" },
+      { sessionId, prompt: "Never send this", enqueue: true },
+      { requestId: "close-queued" },
     );
-    expect(!refused.ok && refused.error.code).toBe("not-ready");
-    expect(!refused.ok && refused.error.message).toContain("paused");
+    if (!queued.ok) throw new Error(queued.error.message);
+    const queueKey = nativePromptQueueKey("claude", `env-${environmentId}:${tabId}`);
+    expect((await harness.storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+    await harness.commands.get("close_coordinator_conversation")!(
+      { projectId, conversationId: "main" },
+      harness.context,
+    );
+    // The CLI's run wait polls run.get for this same terminal receipt.
+    for (let read = 0; read < 2; read++) {
+      const settled = await harness.call("run.get", { operationId: queued.result.runId });
+      expect(settled.receipt).toMatchObject({
+        state: "interrupted",
+        dispatch: { state: "not-sent" },
+        execution: { state: "interrupted" },
+      });
+      expect(classifyReceiptForWait(settled.receipt!)).toEqual({
+        kind: "terminal",
+        succeeded: false,
+      });
+    }
+    expect(await harness.storage.getPromptQueue(queueKey)).toBeNull();
+    await service.drainPromptQueueForSession({
+      agent: "claude",
+      logicalSessionKey: `env-${environmentId}:${tabId}`,
+    });
+    expect(stub.sends).toHaveLength(0);
+  });
+
+  test("observation retires a queued prompt left by an older close path", async () => {
+    const { harness, service, sessionId, environmentId, tabId, projectId, providerSessionId } =
+      await coordinatorSetup();
+    setActivity(service, "claude", tabId, providerSessionId, "working", environmentId);
+    const queued = await harness.call<{ runId: string }>(
+      "session.prompt",
+      { sessionId, prompt: "Do not retry", enqueue: true },
+      { requestId: "orphaned-queue" },
+    );
+    if (!queued.ok) throw new Error(queued.error.message);
+    const key = nativePromptQueueKey("claude", `env-${environmentId}:${tabId}`);
+    await harness.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) => ({
+      ...current!,
+      conversations: current!.conversations.map((item) =>
+        item.id === "main" ? { ...item, closedAt: new Date().toISOString() } : item,
+      ),
+    }));
+    expect((await harness.storage.getPromptQueue(key))?.messages).toHaveLength(1);
+    const settled = await harness.call("run.get", { operationId: queued.result.runId });
+    expect(settled.receipt).toMatchObject({
+      state: "interrupted",
+      dispatch: { state: "not-sent" },
+    });
+    expect(await harness.storage.getPromptQueue(key)).toBeNull();
+  });
+
+  test("a busy Coordinator queues and drains a prompt with the fixed execution policy", async () => {
+    const { harness, service, stub, sessionId, environmentId, tabId, providerSessionId } =
+      await coordinatorSetup();
+    setActivity(service, "claude", tabId, providerSessionId, "working", environmentId);
+    const queued = await harness.call<{ runId: string }>(
+      "session.prompt",
+      { sessionId, prompt: "Follow up", enqueue: true },
+      { requestId: "queued" },
+    );
+    if (!queued.ok) throw new Error(queued.error.message);
+    expect(queued.receipt?.dispatch?.state).toBe("pending");
+    stub.setStatus(async () => "idle");
+    setActivity(service, "claude", tabId, providerSessionId, "idle", environmentId);
+    await service.drainPromptQueueForSession({
+      agent: "claude",
+      logicalSessionKey: `env-${environmentId}:${tabId}`,
+    });
+    expect(stub.sends).toEqual([
+      expect.objectContaining({
+        prompt: expect.stringContaining("Follow up"),
+        requestId: queued.result.runId,
+      }),
+    ]);
+    expect(
+      (await harness.call("run.get", { operationId: queued.result.runId })).receipt?.dispatch
+        ?.state,
+    ).toBe("accepted");
+    const record = await harness.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(environmentId, "claude", `env-${environmentId}:${tabId}`),
+    );
+    expect(record?.executionPolicy).toBe(COORDINATOR_EXECUTION_POLICY);
+    expect(record?.controls?.mode).toBeUndefined();
+  });
+
+  test("commands, model controls, steering, interaction answers and stop preserve Coordinator policy", async () => {
+    const { harness, service, stub, sessionId, environmentId, tabId, providerSessionId } =
+      await coordinatorSetup();
+    const update = mock(async () => undefined);
+    const action = mock(async () => ({ outcome: "applied" }));
+    const composer = {
+      models: [{ platform: "claude", id: "sonnet", label: "Sonnet" }],
+      selectedModelId: "sonnet",
+      modes: [],
+    };
+    Object.assign(stub.provider, {
+      interactiveSnapshot: async () => ({ status: "idle", messages: stub.messages, composer }),
+      updateInteractiveControls: update,
+      activeSteerRun: async () => ({ state: "running", runId: "provider-turn" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "dispatched",
+      performSessionAction: action,
+      commandCatalogue: async () => ({
+        enhanced: true,
+        status: "ready",
+        commands: [
+          {
+            name: "/review",
+            id: "claude:/review",
+            source: "project",
+            executionKind: "provider-prompt",
+            bindingRevision: "review-v1",
+          },
+        ],
+      }),
+    });
+    setActivity(service, "claude", tabId, providerSessionId, "idle", environmentId);
+    const configured = await harness.call(
+      "session.config.set",
+      { sessionId, model: "sonnet" },
+      { requestId: "model" },
+    );
+    expect(configured.ok).toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      providerSessionId,
+      expect.objectContaining({ modelId: "sonnet" }),
+    );
+    const sent = await harness.call<{ runId: string }>(
+      "session.command",
+      { sessionId, command: "review", arguments: "release" },
+      { requestId: "command" },
+    );
+    if (!sent.ok) throw new Error(sent.error.message);
+    expect(stub.sends.at(-1)?.prompt).toContain("/review release");
+    setActivity(service, "claude", tabId, providerSessionId, "working", environmentId);
+    const steered = await harness.call(
+      "session.steer",
+      { sessionId, text: "Focus on tests", expectedOperationId: sent.result.runId },
+      { requestId: "steer" },
+    );
+    expect(steered.ok).toBe(true);
+    expect(action).toHaveBeenCalled();
+    stub.pending.push({
+      version: 1,
+      id: "question",
+      provider: "claude",
+      kind: "question",
+      origin: "interactive-native",
+      sessionId: providerSessionId,
+      state: "pending",
+      revision: 1,
+      presentation: {
+        title: "Which target?",
+        questions: [
+          {
+            id: "target",
+            prompt: "Choose",
+            required: true,
+            multiple: false,
+            secret: false,
+            allowFreeText: true,
+            options: [],
+          },
+        ],
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as AgentInteractionRequest);
+    const answered = await harness.call(
+      "session.interaction.resolve",
+      {
+        sessionId,
+        interactionId: "question",
+        expectedRevision: 1,
+        action: "answer",
+        answers: [{ questionId: "target", freeText: "release" }],
+      },
+      { requestId: "answer" },
+    );
+    expect(answered.ok).toBe(true);
+    expect(stub.resolutions).toHaveLength(1);
+    const stopped = await harness.call(
+      "session.stop",
+      { sessionId, expectedOperationId: sent.result.runId },
+      { requestId: "stop" },
+    );
+    expect(stopped.ok).toBe(true);
+    expect(stub.provider.abort).toHaveBeenCalled();
+    const record = await harness.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(environmentId, "claude", `env-${environmentId}:${tabId}`),
+    );
+    expect(record?.executionPolicy).toBe(COORDINATOR_EXECUTION_POLICY);
+    expect(record?.controls?.mode).toBeUndefined();
+    expect(await harness.storage.getPaneLayout(environmentId)).toBeNull();
   });
 
   test("a conversation that never started is not-ready, not missing", async () => {

@@ -131,6 +131,31 @@ async function evaluateQueuedRun(
   const session = await storage.getNativeAgentSession(
     nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),
   );
+  if (session?.dispatchedRequestIds?.includes(id)) {
+    const accepted = { ...record, dispatch: { state: "accepted" as const }, stage: "executing" };
+    const observed = await evaluateRun(accepted, context);
+    return { ...observed, dispatch: { state: "accepted" }, stage: observed?.stage ?? "executing" };
+  }
+  if (
+    coordinatorIdFromRuntimeId(target.environmentId) &&
+    !(await openCoordinatorConversation(storage, target.environmentId))
+  ) {
+    // A closed owner can never drain again. Retire its queue, including any
+    // held claim, rather than leaving work pending or eligible for retry.
+    await storage.deletePromptQueuesByEnvironment(target.environmentId);
+    return {
+      state: "interrupted",
+      stage: "completed",
+      dispatch: { state: session?.pendingDispatch?.requestId === id ? "unknown" : "not-sent" },
+      execution: {
+        state: "interrupted",
+        evidence: "none",
+        reason: "The Coordinator conversation was closed",
+        observedAt,
+      },
+      error: { code: "run-interrupted", message: "The Coordinator conversation was closed" },
+    };
+  }
   if (session?.pendingDispatch?.requestId === id) {
     return {
       state: "unknown",
@@ -143,11 +168,6 @@ async function evaluateQueuedRun(
         observedAt,
       },
     };
-  }
-  if (session?.dispatchedRequestIds?.includes(id)) {
-    const accepted = { ...record, dispatch: { state: "accepted" as const }, stage: "executing" };
-    const observed = await evaluateRun(accepted, context);
-    return { ...observed, dispatch: { state: "accepted" }, stage: observed?.stage ?? "executing" };
   }
   if (held) {
     return record.stage === "queued" ? null : { stage: "queued", dispatch: { state: "pending" } };

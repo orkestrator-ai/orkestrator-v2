@@ -1070,6 +1070,8 @@ export async function createControlMcp(
             tabId,
             ...where,
             agent: native.agent,
+            connection: "error",
+            error: "The transcript is unavailable right now",
             messages: [],
           });
         }
@@ -1082,6 +1084,10 @@ export async function createControlMcp(
           ...where,
           agent: native.agent,
           ...compact,
+          connection: projection.connection,
+          ...(isRecord(projection.turn) && projection.turn.error
+            ? { error: projection.turn.error }
+            : {}),
           messageWindow: projection.messageWindow,
           revision: projection.revision,
           generation: projection.generation,

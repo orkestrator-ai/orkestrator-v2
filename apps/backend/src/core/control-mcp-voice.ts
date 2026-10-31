@@ -30,7 +30,11 @@ import {
   type ControlMcpCaller,
 } from "./control-mcp-caller.js";
 import { sayForEnvelope } from "./control-mcp-gateway.js";
-import { operatorAllNodes, operatorNode } from "./control-mcp-operator-tools.js";
+import {
+  ControlMcpNodeError,
+  operatorAllNodes,
+  operatorNode,
+} from "./control-mcp-operator-tools.js";
 import {
   resolveTarget,
   sessionAliases,
@@ -468,7 +472,20 @@ async function targetCandidates(
     // Naming another machine reads node.list first; don't fail a credential without it.
     (!caller.nodeId || allowed(caller, "node.list"))
   ) {
-    candidates.push(...(await coordinatorCandidates(caller, scope)));
+    try {
+      candidates.push(...(await coordinatorCandidates(caller, scope)));
+    } catch (error) {
+      if (error instanceof VoiceReadError) throw error;
+      throw new VoiceReadError(
+        adapterError(
+          "resolve_target",
+          error instanceof ControlMcpNodeError && isPublicErrorCode(error.code)
+            ? error.code
+            : "node-unavailable",
+          "Coordinator discovery is unavailable on the requested node",
+        ),
+      );
+    }
   }
   return candidates;
 }

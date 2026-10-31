@@ -62,7 +62,8 @@ export function GlobalSettingsFixture() {
     <main className="p-4">
       <GlobalSettings
         activeSection={
-          new URLSearchParams(window.location.search).has("cursor-disabled") ? "cursor" : "claude"
+          new URLSearchParams(window.location.search).get("section") ??
+          (new URLSearchParams(window.location.search).has("cursor-disabled") ? "cursor" : "claude")
         }
       />
     </main>

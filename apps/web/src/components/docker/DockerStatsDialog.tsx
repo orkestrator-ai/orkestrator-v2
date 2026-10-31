@@ -42,6 +42,7 @@ import {
 import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 import { DockerCleanupReview } from "./DockerCleanupReview";
+import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 
 interface DockerStatsDialogProps {
   open: boolean;
@@ -240,7 +241,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     }
 
     return (
-      <div className="max-w-3xl space-y-6">
+      <SettingsPageLayout title="Containers">
         <DockerImageStatusPanel />
         {/* System Resources */}
         {stats && (
@@ -468,7 +469,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
             </p>
           )}
         </div>
-      </div>
+      </SettingsPageLayout>
     );
   };
 

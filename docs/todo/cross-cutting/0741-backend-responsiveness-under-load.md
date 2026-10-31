@@ -123,7 +123,7 @@ desktop's own loop, so it is not a measure of the backend's loop.
 **Decisions.**
 
 - **How to measure?**
-  - **A timer-lateness sampler (chosen).** `apps/backend/src/event-loop-stall-monitor.ts`
+  - **A timer-lateness sampler (chosen).** `packages/protocol/src/event-loop-stall-monitor.ts`
     chains a 500 ms timer. A tick at least 1 s late logs
     `[Backend] Event loop stalled for N ms, ending <time>`. Lines are at most
     one per 30 s, with suppressed stalls folded into the next line, and a

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
+import { SettingsSectionHeader } from "../SettingsPageLayout";
 
 const byteCount = new Intl.NumberFormat("en-US");
 
@@ -62,16 +63,11 @@ export function ReviewLensPresetsEditor({
   return (
     <section className="space-y-3" aria-labelledby="review-lens-presets-heading">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h3 id="review-lens-presets-heading" className="text-sm font-medium text-foreground">
-            Review focus presets
-          </h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Offered as a reviewer&apos;s Focus when you launch a Multi Review or a build. A launch
-            copies the text, so editing or deleting a preset never changes a review that already
-            started. A reviewer with a focus still reports critical issues outside it.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Review focus presets" headingId="review-lens-presets-heading">
+          Offered as a reviewer&apos;s Focus when you launch a Multi Review or a build. A launch
+          copies the text, so editing or deleting a preset never changes a review that already
+          started. A reviewer with a focus still reports critical issues outside it.
+        </SettingsSectionHeader>
         <div className="flex shrink-0 gap-2">
           <Button
             type="button"

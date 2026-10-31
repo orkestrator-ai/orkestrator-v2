@@ -2837,6 +2837,51 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("a legacy goal retry with a rotated delivery identity is parked before send", async () => {
+      const stub = createProviderStub("codex");
+      await withService(
+        { prefix: "orkestrator-native-goal-retired-", provider: async () => stub.provider },
+        async ({ storage, service }) => {
+          const session = await service.ensureSession({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:tab-1",
+          });
+          await storage.updateNativeAgentGoal(session.key, () => ({
+            goalId: "g1",
+            objective: "Keep going",
+            status: "active",
+            providerSessionId: session.providerSessionId,
+            iterations: 2,
+            maxIterations: 5,
+            noProgressStreak: 0,
+            setAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          }));
+          const queueKey = "codex\0env-env-1:tab-1";
+          await storage.savePromptQueue(queueKey, "env-1", [
+            {
+              id: "goal:g1:1",
+              requestId: "legacy-rotated-id",
+              text: "continue",
+              origin: { kind: "goal", goalId: "g1", iteration: 1 },
+            },
+          ]);
+          await queueInternals(service).drainPromptQueues();
+          expect(stub.send).not.toHaveBeenCalled();
+          expect((await storage.getPromptQueue(queueKey))?.dispatchError?.message).toContain(
+            "Resume the goal",
+          );
+          await service.goals.init();
+          await service.goals.settled();
+          expect((await storage.getNativeAgentSession(session.key))?.goal).toMatchObject({
+            status: "paused",
+            statusReason: "continuation-failed",
+          });
+        },
+      );
+    });
+
     test("parks a terminal session error reported without a detail", async () => {
       // The bridge reports `error` with no explanation, so `status()` returns it
       // instead of throwing. The queued prompt must still park, not stall.

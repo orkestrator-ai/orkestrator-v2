@@ -384,27 +384,44 @@ describe("goal cancellation fences", () => {
       });
     });
 
-    test(`${action} cancels an already reserved continuation before provider handoff`, async () => {
-      await withStorage(async (storage) => {
-        await createSession(storage);
-        await storage.updateNativeAgentGoal(SESSION_KEY, () => continuationGoal());
-        await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", carrier);
-        expect((await storage.reservePromptQueueHeadForDispatch(KEY))?.requestId).toBe(carrier.id);
-        await storage.updateNativeAgentGoal(SESSION_KEY, (goal) =>
-          action === "clear" ? null : { ...goal!, status: "paused", statusReason: "user-paused" },
-        );
-        let sends = 0;
-        expect(
-          (
-            await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, carrier.id, async () => {
-              sends++;
-            })
-          ).dispatched,
-        ).toBe(false);
-        await storage.acknowledgePromptQueueDispatch(KEY, carrier.id);
-        expect(sends).toBe(0);
-        expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
-      });
-    });
+    test.each([false, true])(
+      `${action} cancels a reserved continuation before handoff (retired: %s)`,
+      async (retired) => {
+        await withStorage(async (storage) => {
+          await createSession(storage);
+          await storage.updateNativeAgentGoal(SESSION_KEY, () => continuationGoal());
+          await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", carrier);
+          expect((await storage.reservePromptQueueHeadForDispatch(KEY))?.requestId).toBe(
+            carrier.id,
+          );
+          if (retired) {
+            await storage.failPromptQueueDispatch(KEY, carrier.id, "retired", {
+              requestIdRetired: true,
+            });
+            expect((await storage.getPromptQueue(KEY))?.messages[0]).toMatchObject({
+              requestId: carrier.id,
+            });
+            await storage.retryPromptQueueDispatch(KEY);
+            expect((await storage.reservePromptQueueHeadForDispatch(KEY))?.requestId).toBe(
+              carrier.id,
+            );
+          }
+          await storage.updateNativeAgentGoal(SESSION_KEY, (goal) =>
+            action === "clear" ? null : { ...goal!, status: "paused", statusReason: "user-paused" },
+          );
+          let sends = 0;
+          expect(
+            (
+              await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, carrier.id, async () => {
+                sends++;
+              })
+            ).dispatched,
+          ).toBe(false);
+          await storage.acknowledgePromptQueueDispatch(KEY, carrier.id);
+          expect(sends).toBe(0);
+          expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+        });
+      },
+    );
   }
 });

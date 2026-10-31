@@ -1,3 +1,4 @@
+import { goalContinuationRequestId } from "@orkestrator/protocol/native-agent-goal";
 import type {
   BuildPipelineAgent,
   NativeAgentSessionActionOutcome,
@@ -713,6 +714,28 @@ export class NativeAgentPromptQueueDispatcher {
     if (!nonBlank(message.text)) {
       await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
       return;
+    }
+
+    const origin = message.origin as
+      { kind?: unknown; goalId?: unknown; iteration?: unknown } | undefined;
+    if (origin?.kind === "goal") {
+      const valid =
+        nonBlank(origin.goalId) &&
+        typeof origin.iteration === "number" &&
+        Number.isInteger(origin.iteration) &&
+        origin.iteration >= 0;
+      const canonical = valid
+        ? goalContinuationRequestId(origin.goalId as string, origin.iteration as number)
+        : undefined;
+      if (!canonical || message.id !== canonical || reservation.requestId !== canonical) {
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          reservation.requestId,
+          "That goal continuation's delivery identity was retired. Resume the goal to send a new iteration.",
+        );
+        this.clearQueueBackoff(queueKey);
+        return;
+      }
     }
 
     // Queued attachments were staged by the renderer, so they already carry

@@ -693,9 +693,14 @@ export class PromptsRepository {
       }
       // Only an explicit retirement permits a fresh dispatch identity. Keep the
       // stable row id, and leave the error latched until the user retries.
-      const failedMessage = options?.requestIdRetired
-        ? { ...inFlight.message, requestId: randomUUID() }
-        : inFlight.message;
+      // Goal identity belongs to the iteration. Only goal resume may mint its
+      // next identity; a generic queue retry must not escape the goal fence.
+      const goalCarrier =
+        isRecord(inFlight.message.origin) && inFlight.message.origin.kind === "goal";
+      const failedMessage =
+        options?.requestIdRetired && !goalCarrier
+          ? { ...inFlight.message, requestId: randomUUID() }
+          : inFlight.message;
       const saved: PersistedPromptQueue = {
         ...withoutInFlight,
         messages: [failedMessage, ...previous.messages],

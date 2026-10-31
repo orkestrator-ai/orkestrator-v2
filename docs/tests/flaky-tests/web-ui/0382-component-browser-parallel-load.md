@@ -215,3 +215,43 @@ ORKESTRATOR_E2E_PORT=15427 mise run test:logged -- --name failed-turn-browser-ow
 The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7 s). All cases in AgentUsage, DesignCanvas, EnvironmentSettingsDrawer, KeyboardShortcuts, TranscriptPaging and VirtuosoFollow passed, confirming their aggregate failures were intermittent. Both AgentLaunchDialog native selection cases still returned `rel` instead of `release/2.0`; these remain unresolved, not newly classified flakes. The original ToolGroupFold released-reader case passed, but that owner failed its separate mobile waiting-group overflow-follow case (the existing 0747 record); the complete owner was not green.
 
 Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
+
+
+## Resolve tab reuse review — 2026-10-31
+
+The exact component-browser command was rerun for the Resolve retry repairs
+(code commit `527d6edab`), using free fixture ports because port 1422 belonged
+to another checkout:
+
+```sh
+ORKESTRATOR_E2E_PORT=14220 ORKESTRATOR_PUBLIC_E2E_PORT=14423 mise run test:logged -- --name review-browser-rerun -- mise run test:browser
+```
+
+It finished with 973 passed, 106 skipped and 17 failed (exit 1, 1385.4 s,
+nine workers). All failures were in unchanged browser owners: native branch
+selection, AgentUsage, DataSavingGateway, DesignCanvas, environment settings,
+global settings, keyboard shortcuts, PipelineFlow, setup recovery, streaming,
+tool-group folding, transcript paging and Virtuoso following. The public-site
+part of the chained command was not reached. The host load average was
+observed at 45.86 during this run; this observation does not establish a
+cause for any individual failure.
+
+The three preparation-failure owners were then rerun unchanged with one worker:
+
+```sh
+ORKESTRATOR_E2E_PORT=14220 mise run test:logged -- --name browser-preparation-owners -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts ToolGroupFold.spec.ts MarkdownEditorDiagram.spec.ts --workers=1 --output=output/playwright/resolve-review-owners
+```
+
+That run finished with 50 passed, one skipped and three failed (exit 1,
+180.2 s). Both native branch-picker cases still received `rel` instead of
+`release/2.0`; the mobile waiting-group overflow case retained scrollTop 704
+instead of zero (existing case 0747). The diagram owner passed, including the
+arrow-key case that failed during preparation. The other failed owners were
+not individually rerun in this backend-only repair; their failures are not
+newly classified as flakes. No browser assertion, timeout, skip or owning
+source was changed.
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.fHVVkg/review-browser-rerun.log.gz` and
+`orkestrator-test-run.PdSHXQ/browser-preparation-owners.log.gz`.
+Owner traces are in `output/playwright/resolve-review-owners/`.

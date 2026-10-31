@@ -473,6 +473,12 @@ browsed with the `create_host_directory` command, then opens it. The name must
 be a single path component (no separators, `.` or `..`); missing parents are
 never created and an existing entry is reported rather than reused.
 
+The project icon setting uses the picker in file mode, starting in the
+project's local path, and reads the chosen image with `read_host_image_file`
+(image extensions only, at most 5 MB). Before browsing, when no icon is set,
+`find_project_icons` checks the usual favicon, app icon and logo locations in
+the project root, common app subfolders, and `apps/*` / `packages/*`.
+
 Out of scope: pickers whose target is not a host path (for example, MCP server
 working directories, which can resolve inside a container) and file uploads from
 the client's own disk.

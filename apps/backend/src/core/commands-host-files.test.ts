@@ -4,7 +4,10 @@ import os, { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createHostDirectory,
+  findProjectIcons,
   listHostDirectory,
+  MAX_HOST_IMAGE_BYTES,
+  readHostImageFile,
   listHostDirectoryRoots,
   MAX_HOST_DIRECTORY_ENTRIES,
   registerHostFileCommands,
@@ -338,5 +341,103 @@ describe("create_host_directory", () => {
     ] as const) {
       await expect(Promise.resolve().then(() => run(args, {} as never))).rejects.toThrow(message);
     }
+  });
+});
+
+describe("find_project_icons", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "orkestrator-project-icons-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const write = async (relative: string, contents = "x") => {
+    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await fs.writeFile(path.join(root, relative), contents);
+  };
+
+  test("prefers scalable and large images over .ico favicons, root before packages", async () => {
+    await write("public/favicon.ico");
+    await write("public/favicon.svg");
+    await write("apps/web/public/favicon.png");
+    await write("apps/desktop/electron/resources/icon.png");
+
+    expect(await findProjectIcons(root)).toEqual([
+      path.join(root, "public/favicon.svg"),
+      path.join(root, "public/favicon.ico"),
+      path.join(root, "apps/desktop/electron/resources/icon.png"),
+      path.join(root, "apps/web/public/favicon.png"),
+    ]);
+  });
+
+  test("skips empty, oversized and directory matches", async () => {
+    await write("favicon.ico", "");
+    await fs.mkdir(path.join(root, "favicon.svg"));
+    await write("logo.png", "x".repeat(MAX_HOST_IMAGE_BYTES + 1));
+    await write("frontend/public/icon.png");
+
+    expect(await findProjectIcons(root)).toEqual([path.join(root, "frontend/public/icon.png")]);
+  });
+
+  test("finds nothing in a missing folder", async () => {
+    expect(await findProjectIcons(path.join(root, "missing"))).toEqual([]);
+    await expect(findProjectIcons("relative/path")).rejects.toThrow("path must be absolute");
+  });
+});
+
+describe("read_host_image_file", () => {
+  let root = "";
+
+  beforeEach(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "orkestrator-host-image-")));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("returns the image with its type", async () => {
+    const filePath = path.join(root, "Favicon.ICO");
+    await fs.writeFile(filePath, Buffer.from([0, 0, 1, 0]));
+
+    expect(await readHostImageFile(filePath)).toEqual({
+      path: filePath,
+      name: "Favicon.ICO",
+      mimeType: "image/x-icon",
+      base64: Buffer.from([0, 0, 1, 0]).toString("base64"),
+    });
+  });
+
+  test("refuses non-images, folders, missing and oversized files", async () => {
+    await fs.writeFile(path.join(root, ".env"), "SECRET=1");
+    await fs.mkdir(path.join(root, "folder.png"));
+    await fs.writeFile(path.join(root, "huge.png"), Buffer.alloc(MAX_HOST_IMAGE_BYTES + 1));
+
+    await expect(readHostImageFile(path.join(root, ".env"))).rejects.toThrow(
+      "Choose an image file",
+    );
+    await expect(readHostImageFile(path.join(root, "folder.png"))).rejects.toThrow("is not a file");
+    await expect(readHostImageFile(path.join(root, "gone.png"))).rejects.toThrow("does not exist");
+    await expect(readHostImageFile(path.join(root, "huge.png"))).rejects.toThrow(
+      "larger than 5 MB",
+    );
+  });
+
+  test("the registered commands validate their arguments", async () => {
+    const commands = new Map<string, CommandHandler>();
+    registerHostFileCommands((name, handler) => commands.set(name, handler));
+    for (const [name, args, message] of [
+      ["read_host_image_file", { path: root, extra: 1 }, "Unexpected arguments field: extra"],
+      ["read_host_image_file", { path: 42 }, "Expected path to be a string"],
+      ["find_project_icons", {}, "Expected root to be a string"],
+    ] as const) {
+      const run = commands.get(name)!;
+      await expect(Promise.resolve().then(() => run(args, {} as never))).rejects.toThrow(message);
+    }
+    expect(await commands.get("find_project_icons")!({ root }, {} as never)).toEqual([]);
   });
 });

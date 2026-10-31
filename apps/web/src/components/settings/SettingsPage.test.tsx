@@ -307,3 +307,185 @@ test("a remote workspace opens Docker in parent Settings and every action target
   expect(await screen.findByText("Command container")).toBeTruthy();
   expect(screen.queryByText("Remote container")).toBeNull();
 });
+
+for (const scenario of [
+  "availability",
+  "stats with reattach",
+  "pending cleanup",
+  "selected cleanup",
+] as const) {
+  test(`switching Docker hosts discards ${scenario} and ignores late responses`, async () => {
+    const callbacks = new Map<number, () => void>();
+    let nextId = 0;
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+      callbacks.set(++nextId, callback);
+      return nextId;
+    }) as typeof setInterval);
+    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
+      callbacks.delete(id);
+    }) as typeof clearInterval);
+    const nodes = [
+      {
+        nodeId: "bk_remote",
+        view: { displayName: "Build box", connection: { state: "connected" } },
+        projects: [],
+        environments: [],
+        freshness: "current",
+      },
+    ] as never;
+    portalStore.store.setState({ ...initialPortal, selfId: "bk_command" as BackendId, nodes });
+    useAccountMachineStore.getState().choose("bk_remote");
+    let resolveOld!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    let deferStats = false;
+    const routed: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const direct: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const preview = (remote: boolean) => ({
+      selectionToken: remote ? "old-token" : "new-token",
+      rows: [
+        {
+          kind: "container",
+          id: remote ? "old-container" : "new-container",
+          name: remote ? "Old orphan" : "New orphan",
+          classification: "eligible",
+          sizeBytes: 100,
+        },
+      ],
+    });
+    function answer(command: string, remote: boolean): unknown {
+      if (command === "get_config") return initialConfig.config;
+      if (command === "check_docker")
+        return remote && scenario === "availability" ? pending : { available: true, reason: null };
+      if (command === "get_docker_system_stats")
+        return remote && deferStats
+          ? pending
+          : { containersRunning: remote ? 1 : 2, containersTotal: 2 };
+      if (command === "get_projects")
+        return [
+          {
+            id: remote ? "old-project" : "new-project",
+            name: remote ? "Old project" : "New project",
+          },
+        ];
+      if (command === "get_orkestrator_containers")
+        return [
+          {
+            id: remote ? "old-container" : "new-container",
+            name: remote ? "Old container" : "New container",
+            state: "running",
+            isAssigned: false,
+            cleanupExclusion: null,
+            cpuPercent: null,
+            projectId: remote ? "old-project" : "new-project",
+            created: null,
+          },
+        ];
+      if (command === "docker_cleanup_preview")
+        return remote && scenario === "pending cleanup" ? pending : preview(remote);
+      if (command === "docker_cleanup_execute")
+        return {
+          removed: 1,
+          alreadyAbsent: 0,
+          conflicts: 0,
+          skipped: 0,
+          failed: 0,
+          reclaimedBytes: 100,
+        };
+      return undefined;
+    }
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === "get_backend_profile")
+        return { revision: 1, displayName: "Command", colorToken: "blue", updatedAt: "" };
+      if (command === "get_node_summaries") return { selfId: "bk_command", nodes };
+      if (command === "get_node_status") return { nodeId: "bk_command" };
+      if (command === "invoke_on_node") {
+        routed.push(args as (typeof routed)[number]);
+        return { outcome: "ok", result: await answer(args.command as string, true) };
+      }
+      direct.push({ command, args });
+      return answer(command, false);
+    });
+    const view = render(
+      <FederationProvider>
+        <DockerAvailabilityProvider available>
+          <SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />
+        </DockerAvailabilityProvider>
+      </FederationProvider>,
+    );
+    if (scenario === "availability") {
+      await screen.findByText("Checking Docker…");
+    } else {
+      await screen.findByText("Old container");
+      if (scenario === "stats with reattach") {
+        deferStats = true;
+        await act(async () => {
+          for (const callback of Array.from(callbacks.values())) callback();
+        });
+        fireEvent.click(screen.getByTitle("Reattach to project"));
+        fireEvent.change(screen.getByRole("textbox"), { target: { value: "Old draft" } });
+      } else {
+        fireEvent.click(screen.getByRole("button", { name: "Review cleanup…" }));
+        if (scenario === "selected cleanup") await screen.findByText("Can be removed (1)");
+        else
+          await waitFor(() =>
+            expect(routed.some((call) => call.command === "docker_cleanup_preview")).toBe(true),
+          );
+      }
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+    }
+    const oldTimers = Array.from(callbacks.keys());
+    const oldReads = routed.length;
+    // Settings can change its selected machine while a previous view has pending work.
+    act(() => useAccountMachineStore.getState().choose(null));
+    await screen.findByText("New container");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByText("Old container")).toBeNull();
+    expect(oldTimers.every((id) => !callbacks.has(id))).toBe(true);
+    await act(async () =>
+      resolveOld(
+        scenario === "availability"
+          ? { available: false, reason: null }
+          : scenario === "stats with reattach"
+            ? { containersRunning: 99, containersTotal: 99 }
+            : preview(true),
+      ),
+    );
+    expect(screen.getByText("New container")).toBeTruthy();
+    expect(screen.queryByText(/Docker is not running/)).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByText(/Old orphan/)).toBeNull();
+    await act(async () => {
+      for (const callback of Array.from(callbacks.values())) callback();
+    });
+    expect(routed).toHaveLength(oldReads);
+    expect(direct.filter((call) => call.command === "get_docker_system_stats")).toHaveLength(2);
+    expect(
+      direct.some(
+        (call) =>
+          call.command === "reattach_container" || call.command === "docker_cleanup_execute",
+      ),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Review cleanup…" }));
+    await screen.findByText("Can be removed (1)");
+    expect(screen.getByText(/New orphan/)).toBeTruthy();
+    expect(screen.queryByText(/Old orphan/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove 1 selected" }));
+    await screen.findByText(/1 removed/);
+    expect(direct.find((call) => call.command === "docker_cleanup_execute")?.args).toEqual({
+      selectionToken: "new-token",
+      containerIds: ["new-container"],
+      volumeNames: [],
+      networkNames: [],
+    });
+    expect(
+      routed.some(
+        (call) =>
+          call.command === "docker_cleanup_execute" || call.command === "reattach_container",
+      ),
+    ).toBe(false);
+    view.unmount();
+    expect(callbacks.size).toBe(0);
+  });
+}

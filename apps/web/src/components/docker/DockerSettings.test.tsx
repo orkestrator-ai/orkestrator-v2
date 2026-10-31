@@ -226,4 +226,137 @@ describe("Docker settings section", () => {
       mock.restore();
     }
   });
+  test("remote probe errors preserve an open dialog and polling until recovery or confirmed shutdown", async () => {
+    const callbacks = new Map<number, () => void>();
+    const panelTimers: Array<() => void> = [];
+    let nextId = 0;
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
+      if (delay === 5_000) panelTimers.push(callback);
+      callbacks.set(++nextId, callback);
+      return nextId;
+    }) as typeof setInterval);
+    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
+      callbacks.delete(id);
+    }) as typeof clearInterval);
+    let probeState: "available" | "error" | "stopped" = "available";
+    let statsReads = 0;
+    window.orkestratorPortal = {
+      invoke: async (_command: string, args: Record<string, unknown>) => {
+        const command = args.command;
+        if (command === "check_docker" && probeState === "error")
+          throw new Error("Link interrupted");
+        const result =
+          command === "check_docker"
+            ? { available: probeState === "available", reason: null }
+            : command === "get_docker_system_stats"
+              ? { ...unknownStats, containersRunning: ++statsReads }
+              : command === "get_orkestrator_containers"
+                ? [container({ isAssigned: false, cleanupExclusion: null })]
+                : command === "get_projects"
+                  ? []
+                  : undefined;
+        return { outcome: "ok", result };
+      },
+    } as never;
+    try {
+      const view = render(
+        <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
+          <DockerSettings />
+        </AccountMachineProvider>,
+      );
+      await screen.findByText("System Resources");
+      const [probe, refresh] = panelTimers;
+      expect(callbacks.size).toBe(3);
+      fireEvent.click(screen.getByTitle("Reattach to project"));
+      const dialog = screen.getByRole("alertdialog");
+      const name = screen.getByRole("textbox");
+      fireEvent.change(name, { target: { value: "Keep this name" } });
+      probeState = "error";
+      await act(async () => probe!());
+      expect(screen.getByRole("status", { hidden: true }).textContent).toBe("Link interrupted");
+      expect(screen.getByText("System Resources")).toBeTruthy();
+      expect(screen.getByRole("alertdialog")).toBe(dialog);
+      expect((name as HTMLInputElement).value).toBe("Keep this name");
+      expect(callbacks.size).toBe(3);
+      await act(async () => refresh!());
+      expect(statsReads).toBe(2);
+      probeState = "available";
+      await act(async () => probe!());
+      expect(screen.queryByText("Link interrupted")).toBeNull();
+      expect(screen.getByRole("alertdialog")).toBe(dialog);
+      await act(async () => refresh!());
+      expect(statsReads).toBe(3);
+      probeState = "stopped";
+      await act(async () => probe!());
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(callbacks.size).toBe(1);
+      probeState = "available";
+      await act(async () => probe!());
+      await screen.findByText("System Resources");
+      expect(statsReads).toBe(4);
+      view.unmount();
+      expect(callbacks.size).toBe(0);
+    } finally {
+      cleanup();
+      delete window.orkestratorPortal;
+      mock.restore();
+    }
+  });
+
+  test("an initial remote probe error retries without polling panel data before availability is known", async () => {
+    const callbacks = new Map<number, () => void>();
+    const panelTimers: Array<() => void> = [];
+    let nextId = 0;
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
+      if (delay === 5_000) panelTimers.push(callback);
+      callbacks.set(++nextId, callback);
+      return nextId;
+    }) as typeof setInterval);
+    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
+      callbacks.delete(id);
+    }) as typeof clearInterval);
+    let failing = true;
+    const reads: string[] = [];
+    window.orkestratorPortal = {
+      invoke: async (_command: string, args: Record<string, unknown>) => {
+        const command = args.command as string;
+        reads.push(command);
+        if (command === "check_docker" && failing) throw new Error("Node unavailable");
+        return {
+          outcome: "ok",
+          result:
+            command === "check_docker"
+              ? { available: true, reason: null }
+              : command === "get_docker_system_stats"
+                ? unknownStats
+                : command === "get_projects" || command === "get_orkestrator_containers"
+                  ? []
+                  : undefined,
+        };
+      },
+    } as never;
+    try {
+      const view = render(
+        <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
+          <DockerSettings />
+        </AccountMachineProvider>,
+      );
+      await screen.findByText("Node unavailable");
+      expect(reads).toEqual(["check_docker"]);
+      expect(callbacks.size).toBe(1);
+      failing = false;
+      await act(async () => Array.from(callbacks.values())[0]!());
+      await screen.findByText("System Resources");
+      expect(screen.queryByText("Node unavailable")).toBeNull();
+      expect(reads).toContain("get_docker_system_stats");
+      expect(callbacks.size).toBe(3);
+      view.unmount();
+      expect(callbacks.size).toBe(0);
+    } finally {
+      cleanup();
+      delete window.orkestratorPortal;
+      mock.restore();
+    }
+  });
 });

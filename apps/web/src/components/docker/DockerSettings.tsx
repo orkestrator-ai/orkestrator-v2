@@ -89,7 +89,8 @@ function MachineDockerSettings() {
         }
       } catch (err) {
         if (active) {
-          setRemoteAvailable(null);
+          // A failed probe does not establish that Docker stopped. Retain the
+          // last confirmed state so transient link errors preserve open dialogs.
           setProbeError(err instanceof Error ? err.message : String(err));
         }
       } finally {
@@ -105,7 +106,12 @@ function MachineDockerSettings() {
   }, [machine, windowMachine]);
 
   const available = windowMachine ? windowAvailable : remoteAvailable;
-  if (!windowMachine && probeError) return <p className="text-sm text-destructive">{probeError}</p>;
+  if (available === null && probeError)
+    return (
+      <p role="status" className="text-sm text-destructive">
+        {probeError}
+      </p>
+    );
   if (available === null) return <p className="text-sm text-muted-foreground">Checking Docker…</p>;
   if (!available) {
     return (
@@ -115,7 +121,16 @@ function MachineDockerSettings() {
       </div>
     );
   }
-  return <DockerSettingsPanel />;
+  return (
+    <>
+      {probeError && (
+        <p role="status" className="text-sm text-destructive">
+          {probeError}
+        </p>
+      )}
+      <DockerSettingsPanel />
+    </>
+  );
 }
 
 function DockerSettingsPanel() {

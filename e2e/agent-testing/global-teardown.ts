@@ -8,7 +8,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 
 /** Redacts one suite's artifacts under `output/agent-testing/<run>/<suite>`. */
-export async function sanitizeRunArtifacts(suite: "browser" | "coordinator"): Promise<void> {
+export async function sanitizeRunArtifacts(suite: "browser" | "coordinator" | "goals"): Promise<void> {
   const statusResult = spawnSync(
     "bun",
     ["run", "dev:status", "--", "--profile", profile, "--json"],

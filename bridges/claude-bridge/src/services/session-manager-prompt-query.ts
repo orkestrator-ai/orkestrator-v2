@@ -223,9 +223,12 @@ export async function resolveQueryPlan(
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   // Any other policy keeps its override and also loses the tools for each
   // capability it denies (a network denial takes WebFetch and WebSearch).
-  const disallowedTools = coordinatorReadOnly
-    ? claudeDeniedTools(policy)
-    : claudeDisallowedTools(policy);
+  // `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
+  // backend, and two must never stack on one session (`plans/goals.md`, D2).
+  const disallowedTools = [
+    ...((coordinatorReadOnly ? claudeDeniedTools(policy) : claudeDisallowedTools(policy)) ?? []),
+    "ProposeGoal",
+  ];
 
   const fastMode = options?.fastMode === true;
   const ultracode = requestsUltracode(options?.parameterValues);

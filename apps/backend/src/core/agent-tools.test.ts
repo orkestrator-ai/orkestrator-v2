@@ -3,6 +3,7 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -66,6 +67,121 @@ describe("dropInheritedAgentToolConnection", () => {
     };
     dropInheritedAgentToolConnection(env);
     expect(env).toEqual({ ORKESTRATOR_PARENT_PID: "1", PATH: "/usr/bin" });
+  });
+});
+
+describe("report_goal", () => {
+  let dataDir: string;
+  let storage: StorageService;
+  let server: AgentToolsServer;
+  const reports: unknown[] = [];
+
+  beforeEach(async () => {
+    reports.length = 0;
+    dataDir = await mkdtemp(join(tmpdir(), "ork-agent-goal-tools-"));
+    storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addProject({ id: "project-1", name: "Project", localPath: dataDir } as never);
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    } as never);
+    server = new AgentToolsServer(storage, "127.0.0.1");
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await server.stop();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  async function call(tabId: string | undefined, method: string, params?: Record<string, unknown>) {
+    const { url, token } = server.connection("env-1", "project-1", undefined, tabId);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }),
+    });
+    const text = await response.text();
+    const line = text.startsWith("{")
+      ? text
+      : text
+          .split("\n")
+          .find((entry) => entry.startsWith("data: "))
+          ?.slice("data: ".length);
+    return JSON.parse(line ?? "{}") as {
+      result?: { tools?: { name: string }[]; content?: { text: string }[] };
+    };
+  }
+
+  test("is listed only while the goal loop is installed", async () => {
+    const before = await call("tab-1", "tools/list");
+    expect(before.result?.tools?.map((tool) => tool.name)).not.toContain("report_goal");
+    server.setGoalToolHost({
+      report: async () => ({ ok: true, message: "ok" }),
+    });
+    const after = await call("tab-1", "tools/list");
+    expect(after.result?.tools?.map((tool) => tool.name)).toContain("report_goal");
+    expect(AGENT_GOAL_TOOL_NAMES).toContain("report_goal");
+  });
+
+  test("passes the credential's own scope, never one the caller chose", async () => {
+    server.setGoalToolHost({
+      report: async (scope, input) => {
+        reports.push({ scope, input });
+        return { ok: true, message: "Recorded." };
+      },
+    });
+    const answer = await call("tab-1", "tools/call", {
+      name: "report_goal",
+      arguments: { goalId: "g1", status: "done", message: "finished", tabId: "tab-2" },
+    });
+    expect(answer.result?.content?.[0]?.text).toContain("Recorded.");
+    expect(reports).toEqual([
+      {
+        scope: { environmentId: "env-1", tabId: "tab-1" },
+        input: { goalId: "g1", status: "done", message: "finished" },
+      },
+    ]);
+  });
+
+  test("an environment credential reports with no tab", async () => {
+    server.setGoalToolHost({
+      report: async (scope) => {
+        reports.push(scope);
+        return { ok: false, message: "No active goal" };
+      },
+    });
+    await call(undefined, "tools/call", {
+      name: "report_goal",
+      arguments: { goalId: "g1", status: "progress", message: "m" },
+    });
+    expect(reports).toEqual([{ environmentId: "env-1" }]);
+  });
+
+  test("refuses a status it does not know", async () => {
+    server.setGoalToolHost({ report: async () => ({ ok: true, message: "ok" }) });
+    const answer = await call("tab-1", "tools/call", {
+      name: "report_goal",
+      arguments: { goalId: "g1", status: "complete", message: "m" },
+    });
+    expect(JSON.stringify(answer)).not.toContain('"ok":true');
   });
 });
 

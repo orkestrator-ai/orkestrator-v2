@@ -19,6 +19,7 @@ import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthSnapshot,
 } from "@orkestrator/protocol/opencode-provider-auth";
+import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 const MAX_SEARCH_RESULTS = 12;
 
@@ -237,17 +238,11 @@ export function OpenCodeProvidersSection() {
   return (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <PlugZap className="h-4 w-4" />
-            Provider Sign-in
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The model providers OpenCode is signed in to, shared by every local environment.
-            OpenCode cannot tell an expired key from a valid one: if a model request fails with HTTP
-            401, sign in again here. Containers copy the login in when they start.
-          </p>
-        </div>
+        <SettingsSectionHeader icon={<PlugZap className="h-4 w-4" />} title="Provider Sign-in">
+          The model providers OpenCode is signed in to, shared by every local environment. OpenCode
+          cannot tell an expired key from a valid one: if a model request fails with HTTP 401, sign
+          in again here. Containers copy the login in when they start.
+        </SettingsSectionHeader>
         <Button
           type="button"
           size="icon"

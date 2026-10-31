@@ -48,11 +48,9 @@ import {
   Code2,
   Check,
   Terminal,
-  Bot,
   Boxes,
   FolderOpen,
   ExternalLink,
-  Globe2,
   WifiOff,
   Copy,
   RefreshCw,
@@ -119,6 +117,12 @@ import {
   MIN_TERMINAL_HISTORY_RETENTION_DAYS,
   MIN_TERMINAL_HISTORY_RETENTION_MB,
 } from "@orkestrator/protocol/terminal-history";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsRow,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -438,7 +442,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     .join(" ");
 
   const renderReview = () => (
-    <div className="max-w-3xl space-y-5">
+    <SettingsPageLayout title="Review">
       <MultiReviewDefaultsEditor
         tier={agentSettings}
         onChange={setAgentSettings}
@@ -450,34 +454,24 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         disabled={isSaving}
       />
 
-      <div className="border-t border-zinc-800/80 pt-5">
-        <ReviewLensPresetsEditor
-          presets={reviewLensPresets}
-          onChange={setReviewLensPresets}
-          disabled={isSaving}
-        />
-      </div>
+      <ReviewLensPresetsEditor
+        presets={reviewLensPresets}
+        onChange={setReviewLensPresets}
+        disabled={isSaving}
+      />
 
-      <div className="border-t border-zinc-800/80 pt-5">
-        <MultiReviewEngineSetting
-          value={multiReviewEngine}
-          onChange={setMultiReviewEngine}
-          disabled={isSaving}
-        />
-      </div>
+      <MultiReviewEngineSetting
+        value={multiReviewEngine}
+        onChange={setMultiReviewEngine}
+        disabled={isSaving}
+      />
 
-      <div className="border-t border-zinc-800/80 pt-5">
+      <div className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Eye className="h-4 w-4" />
-              Code review instruction
-            </h3>
-            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              Applied to normal, Multi Review, and build-pipeline native reviews. Orkestrator adds
-              the fixed safety, workflow, and output-schema contract around it.
-            </p>
-          </div>
+          <SettingsSectionHeader icon={<Eye className="h-4 w-4" />} title="Code review instruction">
+            Applied to normal, Multi Review, and build-pipeline native reviews. Orkestrator adds the
+            fixed safety, workflow, and output-schema contract around it.
+          </SettingsSectionHeader>
           <span
             className={cn(
               "w-fit rounded-full border px-2 py-1 font-mono text-[10px] font-medium uppercase tracking-wider",
@@ -490,7 +484,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </span>
         </div>
 
-        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           <div className="flex flex-col gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
               <Label htmlFor="review-instruction" className="text-sm font-medium">
@@ -570,7 +564,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           schema. Changes apply to newly started review sessions.
         </p>
       </div>
-    </div>
+    </SettingsPageLayout>
   );
 
   const { catalog, catalogProjectId, catalogProjectLabel, selectedProjectId, refresh } =
@@ -613,18 +607,20 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   );
 
   const renderDefaults = () => (
-    <AgentDefaultsPane
-      tier={agentSettings}
-      onChange={setAgentSettings}
-      tiers={agentTiers}
-      // The application tier has nothing above it, so it shows concrete
-      // choices and the shipped defaults rather than an Inherit option.
-      canInherit={false}
-      enabledPlatforms={enabledAgentPlatforms}
-      catalog={catalog}
-      disabled={isSaving}
-      scopeLabel="the app"
-    />
+    <SettingsPageLayout title="Defaults" width="wide">
+      <AgentDefaultsPane
+        tier={agentSettings}
+        onChange={setAgentSettings}
+        tiers={agentTiers}
+        // The application tier has nothing above it, so it shows concrete
+        // choices and the shipped defaults rather than an Inherit option.
+        canInherit={false}
+        enabledPlatforms={enabledAgentPlatforms}
+        catalog={catalog}
+        disabled={isSaving}
+        scopeLabel="the app"
+      />
+    </SettingsPageLayout>
   );
 
   const [accountStatusToken, setAccountStatusToken] = useState(0);
@@ -635,7 +631,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     extras?: React.ReactNode,
     signInControls?: React.ReactNode,
   ) => (
-    <div className="max-w-2xl space-y-5">
+    <SettingsPageLayout title={AGENT_PLATFORM_LABELS[platform]}>
       <>
         {/* Read without a session, so it is there before any environment runs it. */}
         {enabledAgentPlatforms.includes(platform) ? (
@@ -684,22 +680,18 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       >
         {extras}
       </AgentPlatformPane>
-    </div>
+    </SettingsPageLayout>
   );
 
   const renderGeneral = () => (
-    <div className="max-w-2xl space-y-8">
+    <SettingsPageLayout title="General">
       <DataSavingSetting />
 
       {/* Preferred Editor */}
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-            <Code2 className="h-4 w-4" />
-            Preferred Editor
-          </h3>
-          <p className="text-xs text-muted-foreground mt-1">Editor for "Open in Editor" (Cmd+O)</p>
-        </div>
+        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred Editor">
+          Editor for "Open in Editor" (Cmd+O)
+        </SettingsSectionHeader>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <button
             type="button"
@@ -738,17 +730,14 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       </div>
 
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-            <GithubIcon className="h-4 w-4" />
-            GitHub authentication
-          </h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Used for GitHub issues and pull requests, and by containers to clone private
-            repositories and push over HTTPS.
-          </p>
-        </div>
-        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+        <SettingsSectionHeader
+          icon={<GithubIcon className="h-4 w-4" />}
+          title="GitHub authentication"
+        >
+          Used for GitHub issues and pull requests, and by containers to clone private repositories
+          and push over HTTPS.
+        </SettingsSectionHeader>
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           <div className="flex items-center justify-between gap-6 p-4">
             <div className="min-w-0 space-y-1">
               <Label
@@ -945,13 +934,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
       {/* Claude Code credentials */}
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Claude Code Credentials</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Controls whether containerized environments start signed in to Claude Code.
-          </p>
-        </div>
-        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+        <SettingsSectionHeader title="Claude Code Credentials">
+          Controls whether containerized environments start signed in to Claude Code.
+        </SettingsSectionHeader>
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           <div className="flex items-center justify-between gap-6 p-4">
             <div className="min-w-0 space-y-1">
               <Label
@@ -996,12 +982,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
       {/* Environment Files */}
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Environment Files</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            File patterns for .env files to copy (comma-separated)
-          </p>
-        </div>
+        <SettingsSectionHeader title="Environment Files">
+          File patterns for .env files to copy (comma-separated)
+        </SettingsSectionHeader>
         <Input
           value={envPatterns}
           onChange={(e) => setEnvPatterns(e.target.value)}
@@ -1011,22 +994,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Files matching these patterns will be copied into containers
         </p>
       </div>
-    </div>
+    </SettingsPageLayout>
   );
 
   const renderPlatforms = () => (
-    <div className="max-w-2xl space-y-5">
-      <div>
-        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <Bot className="h-4 w-4" />
-          Agent platforms
-        </h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          Enabled systems appear in the toolbar, review picker, and build workflow. Newly enabled
-          binaries are downloaded on the next app launch.
-        </p>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40">
+    <SettingsPageLayout
+      title="Agent platforms"
+      description="Enabled systems appear in the toolbar, review picker, and build workflow. Newly enabled binaries are downloaded on the next app launch."
+    >
+      <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
         {AGENT_PLATFORMS.map((platform, index) => {
           const checked = enabledAgentPlatforms.includes(platform);
           return (
@@ -1097,7 +1073,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <div
           role="radiogroup"
           aria-label="Coordinator safety level"
-          className="mt-3 gap-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40"
+          className={cn(SETTINGS_CARD_CLASS, "mt-3 gap-0 overflow-hidden")}
         >
           {COORDINATOR_TIER_CHOICES.map((choice, index) => (
             <label
@@ -1131,7 +1107,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         servers={coordinatorResearchMcpServers}
         setServers={setCoordinatorResearchMcpServers}
       />
-    </div>
+    </SettingsPageLayout>
   );
 
   const renderClaude = () =>
@@ -1140,15 +1116,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <>
         {/* Anthropic API Key */}
         <div className="space-y-3">
-          <div>
-            <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-              <Key className="h-4 w-4" />
-              Anthropic API Key
-            </h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              Optional API-key override for Claude Code in containers
-            </p>
-          </div>
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Anthropic API Key">
+            Optional API-key override for Claude Code in containers
+          </SettingsSectionHeader>
           <div className="relative">
             <Input
               type={showApiKey ? "text" : "password"}
@@ -1269,16 +1239,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "opencode",
       <>
         <div className="space-y-3">
-          <div>
-            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Key className="h-4 w-4" />
-              OpenCode Zen API Key
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent
-              to an agent environment.
-            </p>
-          </div>
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="OpenCode Zen API Key">
+            Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent to
+            an agent environment.
+          </SettingsSectionHeader>
           <div className="relative">
             <Input
               aria-label="OpenCode Zen API key"
@@ -1324,16 +1288,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
 
         <div className="space-y-3 border-t border-border/60 pt-5">
-          <div>
-            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Boxes className="h-4 w-4" />
-              Model Providers
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Only models from these OpenCode providers appear in model pickers. Filtering happens
-              before the catalog reaches the app, so excluded providers are never loaded.
-            </p>
-          </div>
+          <SettingsSectionHeader icon={<Boxes className="h-4 w-4" />} title="Model Providers">
+            Only models from these OpenCode providers appear in model pickers. Filtering happens
+            before the catalog reaches the app, so excluded providers are never loaded.
+          </SettingsSectionHeader>
 
           {openCodeModelProviders.length > 0 ? (
             <ul className="space-y-2">
@@ -1435,16 +1393,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "cursor",
       <>
         <div className="space-y-3">
-          <div>
-            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Key className="h-4 w-4" />
-              Cursor API Key
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
-              Keychain and cannot be mounted into a container.
-            </p>
-          </div>
+          <SettingsSectionHeader icon={<Key className="h-4 w-4" />} title="Cursor API Key">
+            Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
+            Keychain and cannot be mounted into a container.
+          </SettingsSectionHeader>
           <div className="relative">
             <Input
               aria-label="Cursor API key"
@@ -1547,7 +1499,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderTerminal = () => {
     const previewColors = getPreviewColors(terminalBackgroundColor);
     return (
-      <div className="max-w-2xl space-y-8">
+      <SettingsPageLayout title="Terminal">
         {/* Font Family */}
         <div className="space-y-3">
           <Label>Font Family</Label>
@@ -1605,7 +1557,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         </div>
 
         <div className="space-y-3">
-          <div className="flex max-w-2xl items-start justify-between gap-4">
+          <div className="flex items-start justify-between gap-4">
             <div>
               <Label htmlFor="terminal-history-enabled">Backend history retention</Label>
               <p className="text-xs text-muted-foreground">
@@ -1626,7 +1578,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 Lower limits remove the oldest archived output; they do not change the live terminal
                 scrollback above.
               </p>
-              <div className="mt-3 grid max-w-2xl gap-3 sm:grid-cols-3">
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="terminal-history-session-mb">Per terminal (MiB)</Label>
                   <Input
@@ -1733,78 +1685,79 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <div>Hello</div>
           </div>
         </div>
-      </div>
+      </SettingsPageLayout>
     );
   };
 
   const renderNetwork = () => (
-    <div className="max-w-2xl space-y-4">
-      <div>
-        <h3 className="text-sm font-medium text-foreground">Network Whitelist</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}
-        </p>
-      </div>
-      <Textarea
-        value={allowedDomains}
-        onChange={handleDomainsChange}
-        placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
-        rows={8}
-        className={cn("font-mono text-sm", domainErrors.length > 0 && "border-red-500")}
-      />
+    <SettingsPageLayout
+      title="Network Whitelist"
+      description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
+    >
+      <div className="space-y-4">
+        <Textarea
+          value={allowedDomains}
+          onChange={handleDomainsChange}
+          placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
+          rows={8}
+          className={cn("font-mono text-sm", domainErrors.length > 0 && "border-red-500")}
+        />
 
-      {domainErrors.length > 0 && (
-        <div className="text-sm text-red-500 space-y-1">
-          {domainErrors.map((error, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <XCircle className="h-3 w-3" />
-              {error}
-            </div>
-          ))}
+        {domainErrors.length > 0 && (
+          <div className="text-sm text-red-500 space-y-1">
+            {domainErrors.map((error, i) => (
+              <div key={i} className="flex items-center gap-1">
+                <XCircle className="h-3 w-3" />
+                {error}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleTestDomains}
+            disabled={isTesting || domainErrors.length > 0}
+          >
+            {isTesting ? (
+              <>
+                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                Testing...
+              </>
+            ) : (
+              "Test DNS"
+            )}
+          </Button>
         </div>
-      )}
 
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleTestDomains}
-          disabled={isTesting || domainErrors.length > 0}
-        >
-          {isTesting ? (
-            <>
-              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-              Testing...
-            </>
-          ) : (
-            "Test DNS"
-          )}
-        </Button>
+        {testResults && (
+          <div className="border border-zinc-800 rounded-md p-2 space-y-1 text-xs">
+            {testResults.map((result, i) => (
+              <div key={i} className="flex items-center gap-1">
+                {result.resolvable ? (
+                  <CheckCircle2 className="h-3 w-3 text-green-500" />
+                ) : result.valid ? (
+                  <AlertCircle className="h-3 w-3 text-yellow-500" />
+                ) : (
+                  <XCircle className="h-3 w-3 text-red-500" />
+                )}
+                <span className="font-mono">{result.domain}</span>
+                {result.error && <span className="text-red-500 ml-1">{result.error}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-
-      {testResults && (
-        <div className="border border-zinc-800 rounded-md p-2 space-y-1 text-xs">
-          {testResults.map((result, i) => (
-            <div key={i} className="flex items-center gap-1">
-              {result.resolvable ? (
-                <CheckCircle2 className="h-3 w-3 text-green-500" />
-              ) : result.valid ? (
-                <AlertCircle className="h-3 w-3 text-yellow-500" />
-              ) : (
-                <XCircle className="h-3 w-3 text-red-500" />
-              )}
-              <span className="font-mono">{result.domain}</span>
-              {result.error && <span className="text-red-500 ml-1">{result.error}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    </SettingsPageLayout>
   );
 
   const renderContainer = () => (
-    <ContainerResourceLimitsSettings initial={global.containerResourceLimits} />
+    <SettingsPageLayout title="Container">
+      <ContainerResourceLimitsSettings initial={global.containerResourceLimits} />
+    </SettingsPageLayout>
   );
 
   const gatewayTokenValidationError = gatewayTokenSettings?.editable
@@ -1868,18 +1821,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           : "Off";
 
     return (
-      <div className="max-w-2xl space-y-6">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Globe2 className="h-4 w-4" />
-            Web client
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Connect from orkestrator.dev through a private Tailscale HTTPS address.
-          </p>
-        </div>
-
-        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+      <SettingsPageLayout
+        title="Web client"
+        description="Connect from orkestrator.dev through a private Tailscale HTTPS address."
+      >
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           <div className="flex items-center justify-between gap-6 p-4">
             <div className="min-w-0 space-y-1">
               <Label htmlFor="web-client-enabled" className="text-sm font-medium">
@@ -2100,7 +2046,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           When enabled, enter the HTTPS address shown above and this gateway token at
           www.orkestrator.dev/connect. Both devices must be on the same tailnet.
         </p>
-      </div>
+      </SettingsPageLayout>
     );
   };
 
@@ -2114,12 +2060,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   };
 
   const renderDebug = () => (
-    <div className="max-w-2xl space-y-5">
+    <SettingsPageLayout title="Debug">
       <div>
-        <h3 className="text-sm font-medium text-foreground">App version</h3>
-        <p className="text-xs text-muted-foreground mt-1">
+        <SettingsSectionHeader title="App version">
           The Orkestrator client on this machine and the backend it is connected to
-        </p>
+        </SettingsSectionHeader>
         <dl
           className="mt-2 grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1 text-sm"
           aria-live="polite"
@@ -2151,12 +2096,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p className="mt-2 text-xs text-amber-500">{versionReminder.description}</p>
         ) : null}
       </div>
-      <div>
-        <h3 className="text-sm font-medium text-foreground">Save Logs for Debugging</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Write application logs to disk for troubleshooting
-        </p>
-      </div>
+      <SettingsSectionHeader title="Save Logs for Debugging">
+        Write application logs to disk for troubleshooting
+      </SettingsSectionHeader>
       <button
         type="button"
         onClick={() => setDebugLogging(!debugLogging)}
@@ -2291,111 +2233,110 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <p className="text-xs text-muted-foreground/60">
         Enabling logging or changing retention requires an app restart to take effect.
       </p>
-    </div>
+    </SettingsPageLayout>
   );
 
   const renderExperimental = () => (
-    <div className="max-w-2xl space-y-4">
+    <SettingsPageLayout title="Experimental">
       {isWindowMachine(machine) && (
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <Label htmlFor="experimental-graphs">Graphs</Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              Graphs chain agents, reviews and checks into a reusable flow. Turning this on adds the
-              action bar&apos;s Graphs and Run graph… buttons and Run graph… on a ticket.
-            </p>
-          </div>
-          <Switch
-            id="experimental-graphs"
-            checked={experimentalGraphs}
-            onCheckedChange={setExperimentalGraphs}
-            aria-label="Enable graphs"
-          />
+        <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
+          <SettingsRow
+            label="Graphs"
+            htmlFor="experimental-graphs"
+            description="Graphs chain agents, reviews and checks into a reusable flow. Turning this on adds the action bar's Graphs and Run graph… buttons and Run graph… on a ticket."
+          >
+            <Switch
+              id="experimental-graphs"
+              checked={experimentalGraphs}
+              onCheckedChange={setExperimentalGraphs}
+              aria-label="Enable graphs"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Scheduling"
+            htmlFor="experimental-scheduling"
+            description={
+              <>
+                Schedules run an action, a prompt to an agent tab or an environment launch at a set
+                time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
+                <code>orkestrator schedule</code> commands and the agents&apos; and
+                coordinators&apos; schedule tools. While it is off, saved schedules are kept but do
+                not fire.
+              </>
+            }
+          >
+            <Switch
+              id="experimental-scheduling"
+              checked={experimentalScheduling}
+              onCheckedChange={setExperimentalScheduling}
+              aria-label="Enable scheduling"
+            />
+          </SettingsRow>
         </div>
       )}
-      {isWindowMachine(machine) && (
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <Label htmlFor="experimental-scheduling">Scheduling</Label>
-            <p className="text-xs text-muted-foreground mt-1">
-              Schedules run an action, a prompt to an agent tab or an environment launch at a set
-              time, once or on a cron or interval. Turning this on adds Settings → Schedules, the{" "}
-              <code>orkestrator schedule</code> commands and the agents&apos; and coordinators&apos;
-              schedule tools. While it is off, saved schedules are kept but do not fire.
-            </p>
-          </div>
-          <Switch
-            id="experimental-scheduling"
-            checked={experimentalScheduling}
-            onCheckedChange={setExperimentalScheduling}
-            aria-label="Enable scheduling"
-          />
-        </div>
-      )}
-      <div className="border-t border-border/60 pt-5">
-        <h3 className="text-sm font-medium text-foreground">Codex Raw Event Logging</h3>
-        <p className="text-xs text-muted-foreground mt-1">
+      <div className="space-y-3">
+        <SettingsSectionHeader title="Codex Raw Event Logging">
           Captures the additional raw Codex bridge events used to validate transcript-derived
           subagent rendering.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={() => setExperimentalCodexRawEventLogging(!experimentalCodexRawEventLogging)}
-        className={cn(
-          "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
-          experimentalCodexRawEventLogging
-            ? "border-primary bg-primary/5"
-            : "border-transparent bg-zinc-900 hover:border-zinc-600",
-        )}
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-medium text-sm">
-            {experimentalCodexRawEventLogging ? "Enabled" : "Disabled"}
-          </span>
-          <div
-            className={cn(
-              "w-9 h-5 rounded-full transition-colors relative",
-              experimentalCodexRawEventLogging ? "bg-primary" : "bg-muted-foreground/30",
-            )}
-          >
+        </SettingsSectionHeader>
+        <button
+          type="button"
+          onClick={() => setExperimentalCodexRawEventLogging(!experimentalCodexRawEventLogging)}
+          className={cn(
+            "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
+            experimentalCodexRawEventLogging
+              ? "border-primary bg-primary/5"
+              : "border-transparent bg-zinc-900 hover:border-zinc-600",
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-sm">
+              {experimentalCodexRawEventLogging ? "Enabled" : "Disabled"}
+            </span>
             <div
               className={cn(
-                "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                experimentalCodexRawEventLogging ? "translate-x-4" : "translate-x-0.5",
+                "w-9 h-5 rounded-full transition-colors relative",
+                experimentalCodexRawEventLogging ? "bg-primary" : "bg-muted-foreground/30",
               )}
-            />
+            >
+              <div
+                className={cn(
+                  "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                  experimentalCodexRawEventLogging ? "translate-x-4" : "translate-x-0.5",
+                )}
+              />
+            </div>
           </div>
-        </div>
-      </button>
-      <p className="text-xs text-muted-foreground">
-        Leave this enabled while validating subagent transcript rendering. Turn it off later if you
-        no longer want to persist the extra Codex event payloads.
-      </p>
-      {experimentalCodexRawEventLogging && logDirectory && (
-        <div className="space-y-1.5">
-          <p className="text-xs text-muted-foreground">
-            Local environment logs will be saved under:
-          </p>
-          <button
-            type="button"
-            disabled={!canRevealFiles}
-            onClick={() => {
-              if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
-            }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
-            title={`${logDirectory}/codex-raw`}
-          >
-            <FolderOpen className="h-3 w-3 shrink-0" />
-            <span className="truncate">{logDirectory}/codex-raw</span>
-          </button>
-        </div>
-      )}
-      <p className="text-xs text-muted-foreground/60">
-        Requires bridge restart to take effect. Local environment logs are written under the app log
-        directory in `codex-raw/`.
-      </p>
-    </div>
+        </button>
+        <p className="text-xs text-muted-foreground">
+          Leave this enabled while validating subagent transcript rendering. Turn it off later if
+          you no longer want to persist the extra Codex event payloads.
+        </p>
+        {experimentalCodexRawEventLogging && logDirectory && (
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground">
+              Local environment logs will be saved under:
+            </p>
+            <button
+              type="button"
+              disabled={!canRevealFiles}
+              onClick={() => {
+                if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
+              }}
+              className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
+              title={`${logDirectory}/codex-raw`}
+            >
+              <FolderOpen className="h-3 w-3 shrink-0" />
+              <span className="truncate">{logDirectory}/codex-raw</span>
+            </button>
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground/60">
+          Requires bridge restart to take effect. Local environment logs are written under the app
+          log directory in `codex-raw/`.
+        </p>
+      </div>
+    </SettingsPageLayout>
   );
 
   const sectionContent: Record<string, () => React.ReactNode> = {

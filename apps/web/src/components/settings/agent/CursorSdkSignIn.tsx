@@ -24,6 +24,7 @@ import {
   cursorSdkLogout,
 } from "@/lib/backend";
 import type { CursorSdkLoginProgress } from "@/types";
+import { SettingsSectionHeader } from "../SettingsPageLayout";
 
 /** How often to ask the backend whether the browser flow has finished. */
 const POLL_INTERVAL_MS = 1_500;
@@ -168,16 +169,10 @@ export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: Curs
 
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <LogIn className="h-4 w-4" />
-          Cursor sign-in
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          The SDK bridge signs in through your browser and stores a Cursor API key that Orkestrator
-          owns. A Cursor API key above, if set, is used instead.
-        </p>
-      </div>
+      <SettingsSectionHeader icon={<LogIn className="h-4 w-4" />} title="Cursor sign-in">
+        The SDK bridge signs in through your browser and stores a Cursor API key that Orkestrator
+        owns. A Cursor API key above, if set, is used instead.
+      </SettingsSectionHeader>
 
       <div className="flex flex-wrap items-center gap-2">
         {auth?.authenticated ? (

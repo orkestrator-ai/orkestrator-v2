@@ -15,6 +15,7 @@ import {
 import { refreshAllWebAnnotationCapabilities } from "@/lib/web-annotations/sync";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { WebAnnotationDiagnostics } from "./WebAnnotationDiagnostics";
+import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 const MODE_LABELS: Record<WebAnnotationRolloutMode, { title: string; detail: string }> = {
   enabled: {
@@ -84,14 +85,9 @@ export function WebAnnotationSettings() {
       aria-labelledby="web-annotation-settings-title"
       data-web-annotation-settings
     >
-      <div>
-        <h3 id="web-annotation-settings-title" className="text-sm font-semibold">
-          Web page annotations
-        </h3>
-        <p className="text-xs text-muted-foreground">
-          Notes captured in browser previews, for this backend.
-        </p>
-      </div>
+      <SettingsSectionHeader title="Web page annotations" headingId="web-annotation-settings-title">
+        Notes captured in browser previews, for this backend.
+      </SettingsSectionHeader>
       {!snapshot && !error ? (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> Loading…

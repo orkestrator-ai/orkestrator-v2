@@ -50,6 +50,8 @@ export interface DesignBrowserLaunchOptions {
   headless: boolean;
   timeout: number;
   executablePath: string;
+  /** Where Playwright puts this browser's artifacts; it never removes it (see browser-profiles.ts). */
+  artifactsDir?: string;
 }
 
 /** A launched browser and control of its process. */
@@ -149,6 +151,8 @@ interface Generation {
   terminating?: Promise<void>;
   /** The profile ledger record for this generation's browser. */
   profileRecord?: Promise<string | null>;
+  /** The artifacts directory the ledger made for this generation's browser. */
+  artifactsDir?: string;
 }
 
 interface Ticket {
@@ -552,12 +556,21 @@ export class DesignRenderer {
       this.markDead(gen, "launch-deadline");
       rejectReady(unavailable("Design renderer did not start in time"));
     }, launchMs);
-    attempt(() => this.launchBrowser({ headless: true, timeout: launchMs, executablePath })).then(
+    attempt(async () => {
+      gen.artifactsDir = await this.profiles?.createArtifactsDir();
+      const { artifactsDir } = gen;
+      return this.launchBrowser({
+        headless: true,
+        timeout: launchMs,
+        executablePath,
+        ...(artifactsDir ? { artifactsDir } : {}),
+      });
+    }).then(
       (handle) => {
         if (gen.launchTimer) clearTimeout(gen.launchTimer);
         gen.launchTimer = undefined;
         gen.handle = handle;
-        gen.profileRecord = this.profiles?.record(handle.pid, handle.profileDir);
+        gen.profileRecord = this.profiles?.record(handle.pid, handle.profileDir, gen.artifactsDir);
         const { browser } = handle;
         if (gen.dead) {
           // Launch finished after its deadline or shutdown: this process is ours to end.
@@ -573,6 +586,7 @@ export class DesignRenderer {
       () => {
         if (gen.launchTimer) clearTimeout(gen.launchTimer);
         gen.launchTimer = undefined;
+        void this.profiles?.discardArtifactsDir(gen.artifactsDir);
         if (gen.dead) return;
         warn("launch-failed", { generation: gen.id, elapsedMs: Date.now() - started });
         this.noteLaunchFailure();
@@ -649,8 +663,12 @@ export class DesignRenderer {
     })()
       .catch(() => undefined)
       // Playwright removes the profile once the browser has exited; a profile
-      // still present keeps its record for startup recovery.
-      .then(async () => this.profiles?.release((await gen.profileRecord) ?? null))
+      // still present keeps its record, and artifacts, for startup recovery.
+      .then(async () => {
+        const record = (await gen.profileRecord) ?? null;
+        if (record) await this.profiles?.release(record);
+        else await this.profiles?.discardArtifactsDir(gen.artifactsDir);
+      })
       .finally(() => {
         this.generations.delete(gen);
       });

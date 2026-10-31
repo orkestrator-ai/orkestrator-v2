@@ -293,6 +293,19 @@ describe("readActivityGroup with individual reads", () => {
     expect(applied.size).toBe(19);
   });
 
+  test("a lifecycle-only status error carries terminal failure on its idle observation", async () => {
+    const { applied, apply } = collector();
+    await readActivityGroup({
+      provider: provider({ status: async () => "error" }),
+      sessions: sessions(1),
+      apply,
+    });
+    expect(applied.get("key-s-0")).toEqual({
+      state: "idle",
+      observation: { state: "idle", turnFailed: true },
+    });
+  });
+
   test("falls back to the coarse status contract without observeActivity", async () => {
     const p = provider({
       status: async (id: string) =>

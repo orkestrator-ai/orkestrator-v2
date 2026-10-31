@@ -5,6 +5,7 @@ import { closeSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { enableExperimentalGraphs } from "./experimental-graphs";
+import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 /**
  * The run view's read side against the real backend (item 211): the
@@ -639,6 +640,7 @@ async function restartProfile(profile: string, logPath: string): Promise<void> {
   const launcher = spawn("bun", args, {
     cwd: repositoryRoot,
     detached: true,
+    env: outlivingProcessEnv(),
     stdio: ["ignore", log, log],
   });
   closeSync(log);

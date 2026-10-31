@@ -256,3 +256,19 @@ remains open; the aggregate cause is unproven.
 - **Assessment:** the unchanged ToolGroupFold owner pass confirms recurrence
   of this intermittent case. No assertion, deadline, skip or owning code was
   changed. The root cause remains unestablished.
+
+## Provider-upgrade review — 2026-10-30
+
+The exact `mise run test:browser` repeat hit the mobile waiting-group overflow
+assertion at `ToolGroupFold.spec.ts:471`: `scrollTop` stayed 704 instead of 0.
+Aggregate: 981 passed, 106 skipped, five failed (8.4 min). Evidence:
+`orkestrator-test-run.x5T4jf/review-browser-suite.log.gz` under the host
+temporary directory. The complete unchanged owner passed alone with one
+worker (78.5 s):
+
+```sh
+mise run test:logged -- --name review-browser-tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+No source, assertion, timeout or skip changed. The root cause remains
+unestablished; this is the existing intermittent overflow-follow case.

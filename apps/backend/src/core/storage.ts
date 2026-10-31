@@ -206,6 +206,11 @@ export class StorageService {
     this.context.changes.announce("native-agent-session", environmentId, undefined, scope);
   }
 
+  /** The PR monitor health relayed in node summaries changed (runtime only). */
+  announceEnvironmentPrHealth(environmentId: string, projectId: string): void {
+    this.context.changes.announce("environment-pr-health", environmentId, projectId);
+  }
+
   /** Publish a content-free hint after the artifact service commits its store. */
   announceTranscriptArtifact(conversationKey: string): void {
     this.context.changes.announce("transcript-artifact", conversationKey);
@@ -476,7 +481,10 @@ export class StorageService {
   recordEnvironmentSessionCompletion(
     environmentId: string,
     occurredAt: string,
-    reason: Extract<EnvironmentUnreadReason, "agent_finished" | "agent_waiting"> = "agent_finished",
+    reason: Extract<
+      EnvironmentUnreadReason,
+      "agent_finished" | "agent_failed" | "agent_waiting"
+    > = "agent_finished",
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,
@@ -1624,7 +1632,8 @@ export class StorageService {
        * The coordinator's `deliverNow`: if the message is scheduled for
        * delivery, mark its pending entry `steerRequested`, exactly as Deliver
        * now does, so a recipient mid-turn has it steered into that turn.
-       * Honoured only for a coordinator sender.
+       * Honoured only for a coordinator sender: one on this node, or a
+       * command node's coordinator whose mail its node link delivered.
        */
       steer?: boolean;
     } = {},

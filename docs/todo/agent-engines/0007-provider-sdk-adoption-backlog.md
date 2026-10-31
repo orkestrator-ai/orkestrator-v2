@@ -1,29 +1,34 @@
 # Provider SDK adoption backlog
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `cd7bbe3e5` (2026-10-30); pins and candidates rechecked at `6ce02251b` for the 2026-10-30 upgrade ([1020](1020-provider-upgrade-2026-10-30.md)).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Statuses rechecked
+2026-10-30 against `main` at `cd7bbe3e5`: no pin has moved since the analysis
+(`packages/toolchain/src/manifest.ts:6-12`, the bridges' `package.json`), and
+none of the tasks below had already merged. Rechecked again the same day
+against the upgraded pins (see "Recheck at the 2026-10-30 upgrade" under
+Assumptions and decisions).
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
 
 ### Tasks
 
-1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: open (the file's pins are out of date).
-2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: open.
-3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: open (decision).
-4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (decision).
-5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (on a provider-neutral tool-card field).
-6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred.
-7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK).
-8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: open.
-9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred.
-10. **Grok MCP elicitation**: UI only once Grok advertises a contract. Status: blocked (upstream Grok).
-11. **Grok `costUsdTicks` qualification**: one billed Grok turn to establish the tick unit. Status: open (needs Grok credentials).
-12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: deferred.
-13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: open (still present).
+1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: done (pins, verification note and Codex-goals wording refreshed; see Assumptions and decisions).
+2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: done (`refactor(claude-bridge): delete dead compact-boundary guard`).
+3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (depends on 0001's live runs for re-arm; provenance not started).
+5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
+6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
+7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
+8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: open (recommendation corrected: Codex and OpenCode cannot take instructions at the current pins, so it needs a capability bit).
+9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
+10. **Grok MCP elicitation**: UI only once Grok advertises a contract. Status: blocked (needs one live Grok run; 1.0.70's docs name a vendor `x.ai/mcp/elicit` request).
+11. **Grok `costUsdTicks` qualification**: two billed Grok turns to establish the tick unit. Status: open (Grok documents 10¹⁰ ticks per USD for `grok sessions`; whether the ACP field is the same quantity, per turn or cumulative, still needs billed turns).
+12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: done for `find.*` (moved to "Decided out"); Session V2 stays with 0008.
+13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: done (`docs(agent-engines): fix Claude compatibility surface and Grok ACP drift`).
 
 ### 1. Re-check the backlog against current pins
 
@@ -56,7 +61,7 @@ pins undercut one of them is it raised below (task 1).
 
 **Context.** Small hygiene item listed under Candidates.
 
-**Investigation.** Still dead. Defined at `bridges/claude-bridge/src/types/index.ts:242`; imported only by `services/session-manager-core.ts:41` and `services/session-manager-session.ts:35` (two modules, not four as the file says) and called only in `src/types/index.test.ts`.
+**Investigation.** Still dead. Defined at `bridges/claude-bridge/src/types/index.ts:242`; imported only by `services/session-manager-core.ts:41` and `services/session-manager-session.ts:35` (two modules, not four as the file says) and called only in `src/types/index.test.ts`. Rechecked 2026-10-30: by then only `session-manager-session.ts` imported it (with the equally unused `SdkCompactBoundaryMessage` type).
 
 **Decisions.**
 
@@ -155,22 +160,24 @@ pins undercut one of them is it raised below (task 1).
 
 **Investigation.** Still blocked at `@cursor/sdk` `1.0.40`: `askQuestion` is only a member of the `ToolName` string union (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/options.d.ts:378`, and `agent/options.d.ts`), with no typed call or answer API.
 
+Rechecked at `1.2.0` (2026-10-30): `askQuestion` is still only in `ToolName`, there is still no `askQuestion` tool-call variant or answer API, and the bundled runtime still answers `askQuestionInteractionQuery` with `rejected`.
+
 **Decisions.** None: blocked upstream; recheck on the next Cursor bump.
 
 ### 8. Pi compaction controls
 
 **Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction.
 
-**Context.** Shared layer has no compaction-parameter surface yet; other providers would need the same field to avoid Pi-only UI.
+**Context.** Shared layer has no compaction-parameter surface yet; optional instructions need a shared field and a capability bit so the UI accepts them only for providers that can honour them.
 
-**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`).
+**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path. Rechecked at the 2026-10-30 pins: Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, and OpenCode `1.19.5`'s `summarize` body is unchanged. Cursor `1.2.0` adds `agent.summarize()` (no instructions), listed under Candidates.
 
 **Decisions.**
 
 - **What to adopt first?**
-  - **Custom instructions through an optional argument on the shared `compact` action, which Claude and Codex can also honour (recommended).**
-    - Pros: provider-neutral; small; useful.
-    - Cons: needs a composer affordance.
+  - **Custom instructions through an optional argument on the shared `compact` action, gated by a capability bit such as `actions.compactInstructions` (recommended).**
+    - Pros: provider-neutral; enables instructions for Claude and Pi while refusing them for Codex and OpenCode at the current pins; Grok can opt in once its `/compact` input support is verified.
+    - Cons: needs a composer affordance and capability-gated `/compact` argument policy, with changes across the protocol, command dispatch, provider compact paths and web submission path (see "Task 8: recommendation corrected, left open" under Assumptions and decisions).
   - **Abort and auto-toggle first.**
     - Pros: abort fixes a real "stuck compaction" case.
     - Cons: abort interacts with the claim and cancel logic in `http.ts:900-912`; the toggle is a Pi-only setting.
@@ -199,7 +206,7 @@ pins undercut one of them is it raised below (task 1).
 
 **Context.** Grok's ACP client does not advertise elicitation.
 
-**Investigation.** The ACP bridge has no elicitation handling (no hits under `bridges/acp-bridge/src`). The `2.0.1` ACP SDK does carry elicitation types (`dist/nes/acp.d.ts`, `dist/v1/acp.js`), so the client-side contract now exists; whether Grok `1.0.67` sends it is unchecked.
+**Investigation.** The ACP bridge has no elicitation handling (no hits under `bridges/acp-bridge/src`). The `2.0.1` ACP SDK does carry elicitation types (`dist/nes/acp.d.ts`, `dist/v1/acp.js`), so the client-side contract now exists; whether Grok `1.0.67` sends it is unchecked. Rechecked 2026-10-30: the bridge's `initialize` advertises only `fs`, `terminal` and `session` client capabilities (`bridges/acp-bridge/src/acp-context.ts:1156-1160`), not elicitation, and an elicitation request would be refused with `-32601` by the catch-all branch (`acp-context.ts:1414-1419`). Rechecked at Grok `1.0.70` (2026-10-30, signed out): both 1.0.67 and 1.0.70 document an "MCP elicitation card" driven by a vendor `x.ai/mcp/elicit` / `x.ai/mcp/elicit_complete` pair rather than standard `elicitation/create`, and the binary logs "MCP elicitation in non-interactive session; cancelling". Whether a stdio ACP client is sent `_x.ai/mcp/elicit` is unverified, so the qualification step below should look for that method specifically.
 
 **Decisions.**
 
@@ -217,7 +224,7 @@ pins undercut one of them is it raised below (task 1).
 
 **Context.** Batched with 0031's live provider runs.
 
-**Investigation.** Still ignored (`bridges/acp-bridge/src/usage.ts:87,154`).
+**Investigation.** Still ignored (`bridges/acp-bridge/src/usage.ts:87,154`). The "undocumented unit" premise is out of date: the help text bundled in both Grok 1.0.67 and 1.0.70 says "`costUsdTicks` is 10¹⁰ ticks per USD (divide by `1e10` for dollars)" for `grok sessions` output, and headless mode's `total_cost_usd_ticks` is "1 USD = 10^10 ticks" (read from the binaries' strings, 2026-10-30). The fixture in `usage.test.ts` fits that unit. Still unverified: that ACP's `costUsdTicks` is the same quantity, and whether it is per turn or cumulative (the bridge treats ACP cost as a cumulative session snapshot).
 
 **Decisions.**
 
@@ -235,7 +242,7 @@ pins undercut one of them is it raised below (task 1).
 
 **Context.** Session V2 is owned by 0008. `find.*` has no consumer: Orkestrator's own file search already covers workspaces.
 
-**Investigation.** No `find.*` call under `apps/backend/src`.
+**Investigation.** No `find.*` call under `apps/backend/src` (rechecked 2026-10-30).
 
 **Decisions.**
 
@@ -265,6 +272,111 @@ pins undercut one of them is it raised below (task 1).
     - Pros: one combined edit.
     - Cons: the stale guidance is what that bump would follow.
 
+## Assumptions and decisions
+
+### Recheck at the 2026-10-30 upgrade
+
+The pins moved to Claude `0.3.314` / `2.1.314`, Codex `0.166.0`, OpenCode
+`1.19.5`, Cursor `1.2.0`, Grok `1.0.70` and ACP SDK `2.1.0` (Pi unchanged).
+Rechecked every task and candidate here against them; the per-provider
+classification is in [1020](1020-provider-upgrade-2026-10-30.md). Changes made
+here: the Codex goals entry under "Decided out" is corrected, because the
+flag it relied on defaults on, and the bridge now turns it off. New candidates
+were added for Claude, Codex, Cursor and Grok. Tasks 7, 8, 10 and 11 record the
+new evidence; their statuses are unchanged apart from the wording of 10 and 11.
+
+Recorded 2026-10-30 by the worker that acted on this file, against `main` at
+`cd7bbe3e5`. Each choice takes the (recommended) option unless it says why not.
+
+### Task 1: refresh the pins in place
+
+Chose the recommended option: "Current state" and "Needs verification" now
+name the current pins, and the Codex-goals entry under "Decided out" says
+"feature-flagged" rather than "no stable goal RPC". Kept the pin list rather
+than pointing at `manifest.ts`, because the list records which version each
+candidate was last checked against. The goals RPC is in Codex `0.164.0`'s
+generated surface (`thread/goal/get|set|clear` and the `cleared` / `updated`
+notifications in `bridges/codex-bridge/src/app-server/generated/protocol-manifest.json`);
+the bridge never sets `features.goals` in production (the only uses are the
+`configOverrides` doc comment in `process-supervisor.ts:95` and its test).
+
+### Task 1: do not reopen Codex goals
+
+Chose the recommended option. A Codex feature flag is not a stability promise,
+and "Decided out" says not to reopen without a new reason. Revisit when goals
+leave the flag.
+
+### Task 2: delete the guard and its type
+
+Chose the recommended option, and also deleted the `SdkCompactBoundaryMessage`
+interface: it existed only to give the guard a narrowing target, and its one
+import (`session-manager-session.ts`) was as unused as the guard's. The guard's
+test cases went with it. `isSdkResultMessage` and its tests stay.
+`SYSTEM_SUBTYPE_DISPOSITIONS` still records `compact_boundary`, so the drift
+check is unchanged.
+
+### Task 3: keep the HTTP MCP server
+
+Chose the recommended option and moved the item to "Decided out". Pi, Cursor,
+Codex and Grok reach the same HTTP server, and the backend, not the bridge,
+enforces per-tab scope. An in-process server would still need a backend
+credential to proxy calls, so the loopback hop would move rather than
+disappear.
+
+### Task 4: left open
+
+Did not start it. Re-arm is recommended only after 0001's live runs, and those
+are still open (`0001-agent-interactions-and-permissions.md` tasks 3–7).
+Provenance is a protocol, bridge and renderer change that would have made this
+batch too big; nothing blocks it.
+
+### Tasks 5, 6 and 9: keep deferred
+
+Chose the recommended option for each: MCP Apps widgets stay deferred until a
+user-visible MCP server needs them; the other Claude and Codex surfaces stay as
+candidates and are rechecked on each bump; a second ACP agent waits for a user
+to ask for a specific one. Nothing in the current pins changes those reasons.
+
+### Task 7: still blocked
+
+`@cursor/sdk` is still `1.0.40`, so the upstream gap is unchanged.
+
+### Task 8: recommendation corrected, left open
+
+The recommended option assumed Claude and Codex could both honour compaction
+instructions. At the current pins Codex (`ThreadCompactStartParams` is
+`{ threadId }`) and OpenCode (`summarize` takes only a model) cannot. A shared
+`instructions` argument would therefore need a capability bit (for example
+`actions.compactInstructions`), set for Claude and Pi, and for Grok only if
+its `/compact` is shown to take input. That bit should
+gate the `/compact` row's argument policy, so the composer refuses arguments
+where the provider would silently drop them. That touches the protocol, the
+command dispatch, five provider paths and the web submission path, too large
+for this batch. Abort and the auto-compaction toggle stay second, as
+recommended. Task 8's Context and Decisions now state this capability-gated
+recommendation directly, replacing the stale claim that Codex can honour the
+shared argument. Task 8 remains open.
+
+### Tasks 10 and 11: need live Grok runs
+
+Both need a signed-in Grok CLI and billed turns, which this worker may not use.
+The exact steps are under "Qualification".
+
+### Task 12: drop `find.*`
+
+Chose the recommended option and moved it to "Decided out": Orkestrator owns
+workspace file search, and no consumer exists. Session V2 stays with 0008.
+
+### Task 13: fix the living docs now
+
+Chose the recommended option. `agent-engines.md` "Claude Code" and
+`upgrade-agents.md` now name the real compatibility surface. "Grok Build" now
+describes the `fs/*` and `terminal/*` client methods, the `x.ai/*` reverse
+requests, the provider config record, the protocol-version refusal and the
+image capability. Grok behaviour that was observed only at `1.0.52` is marked
+"not rechecked at 1.0.67" rather than restated as current, because nobody has
+observed it at the new pin.
+
 This is one list of the vendor SDK and CLI surfaces Orkestrator does not use,
 with the reason for each, and of the product decisions that keep some of them
 out. Every entry has already been reviewed against a vendor release and
@@ -273,9 +385,10 @@ rediscovers the same gaps. It is low priority: nothing here is a defect.
 
 ## Current state
 
-- Pins: Claude Agent SDK `0.3.296` / CLI `2.1.296`, Codex `0.162.1`, OpenCode
-  SDK and CLI `1.19.0`, `@cursor/sdk` `1.0.37`, Pi `1.2.0`, Grok `1.0.52`,
-  `@agentclientprotocol/sdk` `1.8.0`. `tests/unit/version-drift.test.ts` keeps
+- Pins (upgraded 2026-10-30, [1020](1020-provider-upgrade-2026-10-30.md)):
+  Claude Agent SDK `0.3.314` / CLI `2.1.314`, Codex `0.166.0`, OpenCode SDK and
+  CLI `1.19.5`, `@cursor/sdk` `1.2.0`, Pi `1.4.0`, Grok `1.0.70`,
+  `@agentclientprotocol/sdk` `2.1.0`. `tests/unit/version-drift.test.ts` keeps
   every mirror of each pin in step.
 - Drift detection:
   - Each bridge dispatches over its vendor's typed union and turns an unknown
@@ -312,8 +425,23 @@ reason.
   shared daemon. The last two would replace Orkestrator's own worktree and
   process lifecycle. Codex `mcpServer/tool/call` and `resource/read` are also
   out.
-- **Codex goals.** Disabled: the pinned app-server has no stable goal RPC.
-  `thread/goal/*` notifications are ignored and there is no `/goal` command.
+- **Codex goals.** Disabled. Correction (2026-10-30): goals were never
+  behind an off flag. `features.goals` has been stable and on by default
+  since at least `0.164.0`, so every native thread offered the model
+  `create_goal`, `get_goal` and `update_goal`. Every bridge now launches
+  app-server with `features.goals=false` (`codexAppServerConfigOverrides`;
+  the loopback case in `live-network-lock.test.ts` proves Codex's default
+  offers the tools and a bridge thread does not). `thread/goal/*`
+  notifications are ignored and there is no `/goal` command. Revisit only
+  with a goal surface and a design for turns Codex continues on its own.
+- **Claude `createSdkMcpServer()` for the Orkestrator control tools.** One
+  HTTP MCP server serves every platform (Pi, Cursor, Codex and Grok reach the
+  same one), and the backend, not the bridge, enforces per-tab scope. An
+  in-process server would still need a backend credential to proxy each call,
+  so the bearer-token hop would move rather than disappear, and Claude would
+  diverge from the other bridges.
+- **OpenCode `find.*` file search.** Orkestrator owns workspace file search;
+  the provider's search has no consumer.
 - **Pi provider login.** Status stays read-only (see
   [0003-agent-accounts-and-sign-in.md](0003-agent-accounts-and-sign-in.md)).
 - **Codex `thread/delete`.** Never.
@@ -336,10 +464,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 
 - Claude (`bridges/claude-bridge`):
   - `additionalDirectories`, inline `agents` and the `skills` option. Not used.
-  - `createSdkMcpServer()` for the Orkestrator control tools, so the
-    bearer-token loopback hop disappears. Decide against the coordinator's
-    scoped-credential requirement; if other processes must reach the same
-    server, keep HTTP and say why.
   - Pending-permission re-arm on (re)initialize: `pending_permission_requests` on
     the initialize response and `Query.reinitialize()`. This touches the
     authorization lifecycle.
@@ -349,10 +473,12 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - MCP Apps widgets (`readMcpResource`, the tool's `_meta.ui`), and the Codex
     equivalent. Both need a provider-neutral tool-card field before either
     bridge wires them.
-  - Dead compaction guard. The compaction row already comes only from the
-    `PostCompact` hook, and `compact_boundary` is counted as a notice.
-    `isSdkCompactBoundaryMessage` (`src/types/index.ts`) is imported by four
-    service modules but called only in its own test. Delete it and the imports.
+  - `permissions.blockWritesOutsideWorkingDirectories` (Agent SDK 0.3.314).
+    A possible worktree-confinement policy; needs a product decision, and it
+    also removes EnterWorktree/ExitWorktree.
+  - `prewarm()` in `/core` and `claim()` deciding `.mcp.json` servers and
+    plugins (0.3.312–0.3.314): a spare-process lifecycle change that would
+    revisit 0005's warm-CLI decision.
   - `initializationResult()` is adopted: a running CLI's held answer serves the
     model catalogue and the account (`live-claude-control.ts`). `startup()` /
     `WarmQuery` were measured and not adopted; the decision is in
@@ -364,18 +490,31 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     `fs/*`, `feedback/upload`, `gitDiffToRemote`.
   - Dynamic tools. `item/tool/call` is answered as a failure with a transcript
     explanation (`server-request-router.ts`).
+  - `Account.chatgpt.workspaceName` (0.166.0) in the account label. The shared
+    account shape (`label`, `plan`) has no workspace field, so it needs a
+    protocol field first.
+  - Experimental `accountSession/list|switch`, `thread/fork.attachToSource`
+    and `thread/memory/read` (0.166.0). Outside the generated surface (no
+    experimental flag); revisit if they become stable.
   - Managed application and network requirements (`ConfigRequirementsReadResponse`
     and friends in `src/app-server/generated/`). They are in the generated
     protocol but not projected, pending a provider-neutral requirements surface.
 - Cursor (`bridges/cursor-bridge`):
   - `askQuestion` is in the SDK's `ToolName`, but the SDK has no typed tool-call
     variant and no answer path, so it cannot become a `question` interaction.
+  - `agent.summarize()` (1.2.0): a manual compaction. Needs run ownership and
+    a command route; it throws on cloud agents, before the first saved
+    conversation, and while another run is active.
+  - Root-session `resourceProviderOptions` and `overrideDeleteExecutor`
+    (1.2.0) as a coordinator write guard. `LocalToolExecutor` is opaque, so
+    the shape of a guard is unclear.
   - `SendOptions.local.force` and `SDKAgentInfo.archived` are tracked in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
 - Pi (`bridges/pi-bridge`): compaction controls (custom instructions,
   `abortCompaction`, an auto-compaction toggle). `session.compact()` is called
-  with no instructions (`http.ts`).
+  with no instructions (`http.ts`). Custom instructions need a capability bit,
+  because Codex and OpenCode cannot take them (task 8).
 - ACP (`bridges/acp-bridge`):
   - A second ACP agent (Gemini CLI, Claude-over-ACP). The launcher now builds
     an `AcpProviderConfig` record (`acp-provider-config.ts`; the Grok record is
@@ -386,20 +525,50 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Grok MCP elicitation. Grok's ACP client does not advertise it. Add UI only
     once Grok exposes a supported reverse-request contract; inventing one would
     not activate anything.
-  - Grok cost. `costUsdTicks` is ignored on purpose because the tick has no
-    documented scale (`bridges/acp-bridge/src/usage.ts`), and cost is taken only
-    from an explicit USD `usage_update.cost`. Accept it once the qualification
-    below confirms the unit.
-- OpenCode: the `find.*` file search is on the 1.x surface the provider already
-  drives and is unused. `reference.list` and the other Session V2 features wait
-  for [0008-opencode-v2.md](0008-opencode-v2.md).
+  - Grok cost. `costUsdTicks` is ignored (`bridges/acp-bridge/src/usage.ts`),
+    and cost is taken only from an explicit USD `usage_update.cost`. Grok
+    documents 10¹⁰ ticks per USD for its own session stats (task 11), so the
+    unit is no longer the blocker. What remains is whether ACP's field is per
+    turn or cumulative; the qualification below settles it.
+  - Grok `GROK_DISABLE_EXPERIMENTS=1` (1.0.70) for bridge children. It would
+    stop config-file experiments changing the default model or update channel,
+    but also overrides experiments a user joined. Decide with a user report.
+  - Grok `retry_state` session updates (`attempt`, `max_retries`,
+    `error_type`, `exhausted`, `is_rate_limited`) for retry UI. Whether they
+    reach ACP clients is unverified; belongs with the retry-with-backoff work.
+- OpenCode: `reference.list` and the other Session V2 features wait for
+  [0008-opencode-v2.md](0008-opencode-v2.md).
 
 ### Qualification
 
-- Grok `costUsdTicks`: run one real billed Grok turn, compare the ticks against
-  the provider's billed amount, then record the conversion and the evidence in
-  the `usage.ts` comment before accepting it. Needs Grok credentials; see
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+Both runs need a signed-in Grok CLI at the pinned `1.0.67` and billed turns,
+in a throwaway Orkestrator profile (never the real data directory, never ports
+34121 or 34122); see
+[0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+
+- Grok `costUsdTicks` (task 11):
+  1. Note the xAI billing dashboard's spend for the account before starting.
+  2. Run two Grok turns of clearly different sizes, for example a one-line
+     answer and a turn that reads several large files. Wait for each to finish.
+  3. For each turn, capture the raw ACP `usage_update` and `session/prompt`
+     result that carry `costUsdTicks`. The bridge's parsed usage drops ticks,
+     so capture the raw JSON-RPC lines: drive `grok agent stdio` with a small
+     ACP client script that logs every line from the agent's stdout.
+  4. Read the billed amount for each turn from the dashboard once it settles.
+  5. Pass only if the two tick-to-USD ratios agree within the dashboard's
+     rounding. Then record the conversion, both samples and the date in the
+     `usage.ts` comment, and change `parseUsdCost` to accept ticks.
+- Grok MCP elicitation (task 10), folded into the same session:
+  1. Add an MCP server to the environment that calls `elicitation/create` from
+     a tool (a small stdio server is enough).
+  2. Ask Grok to call that tool.
+  3. In the raw frame log from step 3 above, look for any agent-to-client
+     request whose method the bridge does not handle (through the bridge, it
+     would be answered `-32601 Unsupported ACP client method: <name>`). Also
+     check whether Grok's `initialize` answer mentions elicitation.
+  4. If Grok sends a request, record its method and shape here and unblock the
+     task. If it does not, record "1.0.67 does not forward elicitation" and keep
+     it blocked.
 
 ## Constraints and rationale
 
@@ -430,11 +599,16 @@ Unadopted today. Each line says what blocks it or what decision it needs.
 ## Needs verification
 
 - Re-check each deferred item against the current pins before scheduling it.
-  At Claude SDK `0.3.296`, `pending_permission_requests`, `reinitialize()`,
+  At Claude SDK `0.3.314` the symbols below are still present
+  (`pending_permission_requests`, `reinitialize()`, `McpServerProvenance`,
+  `readMcpResource`, `verbatimPrompts`, `additionalDirectories`,
+  `createSdkMcpServer`; checked 2026-10-30).
+  At Claude SDK `0.3.309`, `pending_permission_requests`, `reinitialize()`,
   `McpServerProvenance`, `readMcpResource`, the tool `_meta.ui` members,
   `verbatimPrompts`, `additionalDirectories` and `createSdkMcpServer` are all
-  still present. The Grok `1.0.52` elicitation and `costUsdTicks` behaviour has
-  not been rechecked.
+  still present (checked 2026-10-30 in `bridges/claude-bridge/node_modules`).
+  The Grok `1.0.67` elicitation and `costUsdTicks` behaviour has not been
+  checked live; the steps are under "Qualification".
 
 ## Related
 
@@ -450,22 +624,9 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   command-discovery probe.
 - [agent-engines.md](../../architecture/agent-engines.md) and
   [upgrade-agents.md](../../development/upgrade-agents.md).
-- Living-doc drift to fix:
-  - [agent-engines.md](../../architecture/agent-engines.md) "Grok Build" says the
-    bridge answers only `session/update` and `session/request_permission` and
-    refuses every other inbound request with `-32601`. It now also serves the
-    ACP client `fs/*` and `terminal/*` methods (`acp-client-methods.ts`,
-    workspace-confined, bounded terminals) and the `x.ai/exit_plan_mode` /
-    `x.ai/ask_user_question` reverse requests. The provider config record,
-    protocol-version refusal and Grok's undeclared image capability are not
-    described there either.
-  - [agent-engines.md](../../architecture/agent-engines.md) "Claude Code" and
-    [upgrade-agents.md](../../development/upgrade-agents.md) (the Claude
-    compatibility-surface paragraph and the "Review `session-manager.ts`" step)
-    name `services/session-manager.ts` as the compatibility surface. It is a
-    12-line barrel. The real surface is `session-manager-prompt-handlers/*`,
-    `session-manager-messages.ts`, `types/index.ts` and
-    `sdk-compatibility.test.ts`.
+- The living-doc drift once listed here (Grok Build's inbound-request
+  description and the Claude compatibility surface in `agent-engines.md` and
+  `upgrade-agents.md`) was fixed on 2026-10-30 (task 13).
 
 ## Replaces
 

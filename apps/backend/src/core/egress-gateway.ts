@@ -7,6 +7,7 @@ import type { NetworkPolicyVersion } from "./container-network.js";
 import { runCommand } from "./shell.js";
 import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.js";
 import { startDockerContainer } from "./container-start.js";
+import { PROBE_WINDOW_MS, boundedWaitScript, probeIterations } from "./container-readiness.js";
 import { copyGithubRangesSeed } from "./github-ranges-cache.js";
 
 export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";
@@ -286,17 +287,24 @@ const FIREWALL_REPORT = "/run/orkestrator-firewall/firewall.json";
 /**
  * The current boot's firewall report. `pending` when the exec ran, which
  * proves the gateway is running, but found no final state; `null` when Docker
- * could not exec into it (stopped, missing or unreachable).
+ * could not exec into it (stopped, missing or unreachable). With `waitMs` the
+ * exec first waits inside the gateway, up to that long, for the report to
+ * reach `applied` or `failed` (its /run is fresh per boot, so any report is
+ * this boot's).
  */
 async function gatewayFirewallState(
   gatewayId: string,
+  waitMs = 0,
 ): Promise<"applied" | "failed" | "pending" | null> {
+  const window = Math.max(0, Math.min(waitMs, PROBE_WINDOW_MS));
+  const settled = `case "$(head -c 4096 ${FIREWALL_REPORT} 2>/dev/null)" in *'"state":"applied"'*|*'"state":"failed"'*) true ;; *) false ;; esac`;
+  const wait = window > 0 ? boundedWaitScript(probeIterations(window), settled) : "";
   let stdout: string;
   try {
     ({ stdout } = await runCommand(
       "docker",
-      ["exec", gatewayId, "sh", "-c", `head -c 4096 ${FIREWALL_REPORT} 2>/dev/null || true`],
-      { timeoutMs: 10_000 },
+      ["exec", gatewayId, "sh", "-c", `${wait}head -c 4096 ${FIREWALL_REPORT} 2>/dev/null || true`],
+      { timeoutMs: 10_000 + window },
     ));
   } catch {
     return null;
@@ -312,17 +320,25 @@ async function gatewayFirewallState(
 /**
  * Waits for the gateway's current boot to apply its firewall. A failed or
  * missing report, or a gateway that stopped, refuses the workload's start.
- * The gateway is inspected only when the exec itself failed, so a poll while
- * the firewall is still applying costs one Docker call, not two.
+ * Each read waits inside the gateway for up to a window (`windowMs`), so the
+ * report is seen as soon as it is written and an unfinished firewall costs
+ * one Docker call per window. The gateway is inspected only when the exec
+ * itself failed. `pollMs` is the floor between reads that came back early
+ * without a final state.
  */
 export async function waitForEgressGatewayFirewall(
   gatewayId: string,
-  options: { timeoutMs?: number; pollMs?: number } = {},
+  options: { timeoutMs?: number; pollMs?: number; windowMs?: number } = {},
 ): Promise<void> {
   const deadline = Date.now() + (options.timeoutMs ?? EGRESS_GATEWAY_READY_TIMEOUT_MS);
   const pollMs = options.pollMs ?? 250;
+  const windowMs = options.windowMs ?? PROBE_WINDOW_MS;
   while (true) {
-    const state = await gatewayFirewallState(gatewayId);
+    const readAt = Date.now();
+    const state = await gatewayFirewallState(
+      gatewayId,
+      Math.min(windowMs, Math.max(0, deadline - readAt)),
+    );
     if (state === "applied") return;
     if (state === "failed") {
       throw lifecycleError(
@@ -345,7 +361,8 @@ export async function waitForEgressGatewayFirewall(
         "The environment's egress gateway did not apply its network policy in time, so the container was not started. Retry the start.",
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const pause = pollMs - (Date.now() - readAt);
+    if (pause > 0) await new Promise((resolve) => setTimeout(resolve, pause));
   }
 }
 
@@ -369,7 +386,7 @@ function startError(error: unknown): unknown {
  */
 export async function prepareEgressGatewayForStart(
   workloadId: string,
-  options: { timeoutMs?: number; pollMs?: number } = {},
+  options: { timeoutMs?: number; pollMs?: number; windowMs?: number } = {},
 ): Promise<"none" | "ready" | "restarted-gateway"> {
   const gatewayId = await egressGatewayOf(workloadId);
   if (!gatewayId) return "none";

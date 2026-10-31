@@ -3,7 +3,9 @@
  * case per platform and scenario on the live suite's lists: `read-only` (the
  * boundary), `async` and `family` (real workers and their mail, see
  * `coordinator-live-delegation.ts`), `status` (a Multi Review's and a held
- * worker's status wakes, see `coordinator-live-status.ts`) and `peer`. Every
+ * worker's status wakes, see `coordinator-live-status.ts`), `deliver-now` (a
+ * `deliverNow` correction steered into a busy worker's turn, see
+ * `coordinator-live-deliver-now.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -106,6 +108,8 @@ import {
   settleCoordinatorTurn,
 } from "../../apps/desktop/scripts/dev/coordinator-live-observer";
 import { runStatusScenario } from "../../apps/desktop/scripts/dev/coordinator-live-status-orchestration";
+import { runDeliverNowScenario } from "../../apps/desktop/scripts/dev/coordinator-live-deliver-now-orchestration";
+import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-live-deliver-now";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import {
   coordinatorTurn,
@@ -860,6 +864,36 @@ async function statusCase(input: {
 }
 
 /**
+ * The deliver-now scenario: the coordinator launches a worker that parks on a
+ * gate, corrects it with `deliverNow` while it is parked, and the harness
+ * opens the gate once the correction is in. On Claude the coordinator then
+ * opens a tmux Claude in the same environment and corrects that one too.
+ */
+async function deliverNowCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runDeliverNowScenario(input);
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    workers: watch.workers.length,
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the deliver-now scenario`).toEqual([]);
+}
+
+/**
  * The peer scenario: two ordinary environments, neither launched by a
  * coordinator, with Wake peers on. The responder starts idle; the opener
  * sends it the first message by environment id; they alternate until ten
@@ -1016,6 +1050,31 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await statusCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("deliver-now")) {
+      test(`deliverNow on ${platform} steers a correction into a busy worker's turn, and the coordinator is woken once when that turn ends${platform === "claude" ? "; a tmux worker reports unsupported and gets it at turn end" : ""}`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests["deliver-now"]);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "deliver-now", async ({ summary, skip, cleanup }) => {
+          if (!deliverNowApplies(platform)) {
+            skip(
+              `${platform} cannot take mail mid-turn, so deliverNow reports unsupported, queued`,
+            );
+          }
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await deliverNowCase({ coordinator, summary, cleanup });
         });
       });
     }

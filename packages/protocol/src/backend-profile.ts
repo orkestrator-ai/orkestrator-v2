@@ -187,6 +187,13 @@ export const BACKEND_CAPABILITIES = {
    * so a Control MCP credential's operations stay its own on this leaf.
    */
   publicActionRelay: "public-action-relay",
+  /**
+   * `deliver_node_mail` accepts `steer`: a command node's coordinator
+   * `deliverNow` is steered into the leaf worker's running turn, and the
+   * answer carries the outcome. An older leaf rejects the unknown key, so
+   * the field is sent only to a leaf that advertises this.
+   */
+  nodeMailSteer: "node-mail-steer",
 } as const;
 
 const MAX_CAPABILITIES = 64;

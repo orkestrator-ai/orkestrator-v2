@@ -121,6 +121,13 @@ export interface PrMonitorEnvironmentState {
   hasMergeConflicts: boolean | null;
   /** Null until GitHub has returned check-rollup data for this PR. */
   checkSummary: PrCheckSummary | null;
+  /**
+   * Whether the credential this environment merges with has push, maintain or
+   * admin on the PR's repository: a cached reading, refreshed at most hourly
+   * (`pr-viewer-permission.ts` in the backend). Null or absent when unknown,
+   * including from backends that predate it; only `false` blocks readiness.
+   */
+  viewerCanMerge?: boolean | null;
 }
 
 /**
@@ -228,7 +235,10 @@ export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorE
     (candidate.prUrl === null || typeof candidate.prUrl === "string") &&
     isPrStateOrNull(candidate.prState) &&
     (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean") &&
-    (candidate.checkSummary === null || isPrCheckSummary(candidate.checkSummary))
+    (candidate.checkSummary === null || isPrCheckSummary(candidate.checkSummary)) &&
+    (candidate.viewerCanMerge === undefined ||
+      candidate.viewerCanMerge === null ||
+      typeof candidate.viewerCanMerge === "boolean")
   );
 }
 

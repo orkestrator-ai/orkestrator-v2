@@ -39,6 +39,8 @@ export class CodexRuntimeTail {
     for (const context of this.ctx.registry.listThreads()) {
       const turn = context.activeTurn;
       if (!turn || turn.isTerminal() || turn.isUnconfirmed()) continue;
+      // A turn waiting to retry has no app-server turn to interrupt.
+      if (this.lifecycle.capacityRetry.endForParentExit(context, turn)) continue;
       turn.stoppedByShutdown = true;
       const { engineHandle } = context;
       stopping.push(
@@ -88,6 +90,11 @@ export class CodexRuntimeTail {
       };
     }
 
+    // Stop during a capacity retry's wait ends the wait; the app-server turn
+    // it would have interrupted has already ended.
+    if (this.lifecycle.capacityRetry.stop(context, turn)) {
+      return { status: "cancelling", phase: "cancelling" };
+    }
     this.ctx.threadState.get(context.threadId)?.refusedCellTail?.tail.close();
     turn.markCancelling();
     this.ctx.registry.setPhase(context, "cancelling");

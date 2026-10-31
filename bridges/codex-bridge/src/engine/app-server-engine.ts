@@ -57,7 +57,12 @@ import type {
   InteractionRequest,
   InteractionResolution,
 } from "../app-server/interactions.js";
-import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
+import { adaptAppServerItem } from "../app-server/item-adapter.js";
+import {
+  reduceHistoricalTurns,
+  reduceNotification,
+  toTurnError,
+} from "../app-server/event-reducer.js";
 import type {
   ReviewDelivery,
   SkillsExtraRootsSetParams,
@@ -2673,7 +2678,11 @@ export class AppServerEngine implements CodexEngine {
         return {
           id: String(turn.id ?? ""),
           status: (turn.status as EngineThreadTurn["status"]) ?? "completed",
-          items: [],
+          items: items.flatMap((item) => {
+            const adapted = adaptAppServerItem(item).item;
+            return adapted ? [adapted] : [];
+          }),
+          ...(turn.error ? { error: toTurnError(turn.error) } : {}),
           clientId: clientIds[0] ?? null,
           clientIds,
           reconciliationItems,
@@ -2925,7 +2934,13 @@ export class AppServerEngine implements CodexEngine {
           clientId,
         })),
     }));
-    return reconcileFromThreadTurns(turns, requestId);
+    const outcome = reconcileFromThreadTurns(turns, requestId);
+    const matched = thread?.turns?.find((turn) => turn.id === outcome.turnId);
+    return {
+      ...outcome,
+      ...(matched?.items.length ? { items: matched.items } : {}),
+      ...(matched?.error ? { error: matched.error } : {}),
+    };
   }
 
   /** Classifies a dispatch failure so callers know if a retry is even legal. */

@@ -131,6 +131,26 @@ mise run test:logged -- --name name-signal-public-browser -- bunx playwright tes
 ```
 
 
+## Coordinator timers/account review — 2026-10-30
+
+The exact browser-suite rerun (`mise run test:browser`) reported 983 passed,
+106 skipped and three failed in 507.4 seconds. The desktop find-convergence
+case expected `converged` and received `unresolved` after five seconds at
+line 371. The other failures were the two unchanged native branch suggestions.
+
+The complete unchanged one-worker streaming owner passed (exit 0, 47.7 seconds):
+
+```sh
+mise run test:logged -- --name browser-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1
+```
+
+Aggregate evidence is `orkestrator-test-run.WutQx0/review-repaired-browser.log.gz`
+under the host temporary directory. The passing logged runner discarded its
+output. No transcript implementation, assertion, deadline or skip changed.
+This observation matches the earlier aggregate-only recurrence; the cause
+remains unconfirmed. The public-site suite passed separately in 10.5 seconds.
+
+
 ## Leaf-check readiness review — 2026-10-30
 
 Preparation repeated the desktop find-convergence failure in the nine-worker

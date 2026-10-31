@@ -40,6 +40,29 @@ mise run test:logged -- --name review-repair-tests -- mise run test
 
 The successful rerun does not establish a flake fix; this case remains open.
 
+
+## Coordinator timers/account review — 2026-10-30
+
+Preparation at `574bb14b3` repeated the successful-start deadline at
+15,010.85 ms during `mise run test`. The complete unchanged owner passed
+alone (exit 0, 1.0 s):
+
+```sh
+mise run test:logged -- --name recorded-desktop-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+Preparation evidence is in
+`.orkestrator/review-artifacts/review-validation-af449b96-aec4-419e-90d3-165bd324e649/validation-05.stdout.txt`.
+No desktop implementation, assertion, deadline or skip changed. The cause
+remains unconfirmed.
+
+The exact default-suite rerun subsequently passed (exit 0, 170.0 s):
+
+```sh
+mise run test:logged -- --name review-repaired-default -- mise run test
+```
+
+
 ## Development source-hint coverage validation — 2026-10-30
 
 `mise run test` repeated the same 15-second bridge startup deadline

@@ -19,6 +19,7 @@ import { registerCoordinatorReviewActions } from "./coordinator-review-actions.j
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
+import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
 import {
   buildPipelineInputWithDefaults,
   multiReviewInputWithDefaults,
@@ -134,6 +135,7 @@ export function registerCoordinatorCommands(
   registerCoordinatorSurfaceActions(register, dependencies);
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
+  registerWorkerQuestionRelayCommands(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);

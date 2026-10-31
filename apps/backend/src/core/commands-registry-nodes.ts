@@ -342,7 +342,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("create_node_action_request", async (args, context) => {
     assertOnlyKeys(
       args,
-      ["requestId", "kind", "targets", "requestedBy", "reason", "agentsMd"],
+      ["requestId", "kind", "targets", "requestedBy", "reason", "agentsMd", "workerQuestion"],
       "arguments",
     );
     return coordination(context).createActionRequest(args);

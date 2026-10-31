@@ -972,7 +972,8 @@ export async function createControlMcp(
     "get_tab_state",
     {
       title: "Get tab state",
-      description: "Read native-agent state for a tab without returning its transcript.",
+      description:
+        "Read native-agent state for a tab without returning its transcript. state.interactions lists what the tab is waiting on: each pending question or approval with its id, kind, questions and options (a coordinator may propose an answer to a question with answer_worker_question).",
       inputSchema: z.object({
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),

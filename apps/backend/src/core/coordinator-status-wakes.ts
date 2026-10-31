@@ -703,6 +703,20 @@ export function waitingBlocker(interactions: unknown): CoordinatorWaitingBlocker
   return question ? "question" : undefined;
 }
 
+/**
+ * What the coordinator may do about a waiting question: propose an answer the
+ * user confirms (`answer_worker_question`). It never answers on its own, and
+ * approvals stay with the person in the worker's tab.
+ */
+const WAITING_RELAY_HINTS: Partial<Record<CoordinatorWaitingBlocker | "unknown", string>> = {
+  question:
+    "It may propose an answer with answer_worker_question (the interaction id is in get_tab_state's state.interactions); the user confirms, edits or declines it in Orkestrator, and only their approval answers the worker.",
+  "approval-and-question":
+    "Approvals stay with the person in the worker's tab. For the question it may propose an answer with answer_worker_question (the interaction id is in get_tab_state's state.interactions); only the user's approval in Orkestrator answers it.",
+  unknown:
+    "If get_tab_state shows a pending question, it may propose an answer with answer_worker_question, which the user confirms in Orkestrator before anything is sent; approvals stay in the worker's tab.",
+};
+
 const WAITING_HEADLINES: Record<CoordinatorWaitingBlocker | "unknown", string> = {
   approval: "is waiting for an approval",
   question: "is waiting for an answer to a question",
@@ -727,7 +741,10 @@ export function waitingStatus(
     terminal: false,
     headline: WAITING_HEADLINES[blocker ?? "unknown"],
     details: [
-      `Waiting since ${since}. A person has to answer it in the worker's tab; the coordinator cannot ${blocker === "approval-and-question" ? "approve or answer" : blocker === "question" ? "answer" : "approve"} on its behalf.`,
+      `Waiting since ${since}. A person has to answer it${blocker === "question" ? "" : " in the worker's tab"}; the coordinator cannot ${blocker === "approval-and-question" ? "approve or answer" : blocker === "question" ? "answer" : "approve"} on its behalf.`,
+      ...(WAITING_RELAY_HINTS[blocker ?? "unknown"]
+        ? [WAITING_RELAY_HINTS[blocker ?? "unknown"]!]
+        : []),
       ...(excerpt ? [`Last message: ${boundedLine(excerpt)}`] : []),
     ],
     tools: [

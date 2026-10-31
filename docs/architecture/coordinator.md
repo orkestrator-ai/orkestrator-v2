@@ -781,7 +781,10 @@ an approval or a question has not finished — that needs a person — so
 `working → waiting` does not close the delegation. Once the wait has lasted
 20 seconds the coordinator does get one status notice saying so (see
 [Status wakes](#status-wakes)), so it can tell the user; it still cannot
-answer on the worker's behalf.
+answer on the worker's behalf. For a question it may propose an answer with
+`answer_worker_question`, which the user confirms, edits or declines in
+Orkestrator (see [Worker surfaces](#worker-surfaces)); approvals stay with the
+person in the worker's tab.
 
 Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
 and readable, held with reason `delegation-running`, and released together with
@@ -1018,7 +1021,7 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
-| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message | `settled` |
+| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
 A graph run is reduced to two statuses only (`graphRunCoordinatorStatus` in
@@ -1338,6 +1341,9 @@ when the retry arrives is reported, with its Fix tab, rather than refused as
 not ready. A node from before these commands answers "update that node".
 `request_root_changes` stays on this node; see
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
+`answer_worker_question` also takes `nodeId`; its request stays on the command
+node and only the approved answer crosses the link
+(`answer_controller_worker_question`).
 
 | Tool | What it does | Retry with the same `requestId` | What the user sees and can undo |
 | --- | --- | --- | --- |
@@ -1349,6 +1355,7 @@ not ready. A node from before these commands answers "update that node".
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. No status wake: the result says to schedule a check and read `prUrl` with `get_environment`. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
+| `answer_worker_question` | Proposes an answer to a question a worker is waiting on, for the user to confirm (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog with the worker, its tab, the question, its options and the proposed answer, which the user may change. Declining leaves the question waiting in the worker's tab. |
 
 Receipts live in the coordinator store (`actionReceipts`, bounded at 2,000,
 oldest completed dropped first). A receipt is admitted before the action has
@@ -1374,6 +1381,41 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
 The coordinator never sees the patch.
+
+**Answering a worker's question.** A delegated worker waiting on a question
+needs a person, and the coordinator cannot answer for them, but it can save
+the user a trip to the worker's window. It reads the question in
+`get_tab_state` (`state.interactions`: id, kind, questions and options) and
+calls `answer_worker_question` with the interaction id, the answer in the
+question's own shape (each `questionId` with its `optionIds` and/or
+`freeText`) and a short reason. The backend command
+(`request_coordinator_worker_answer` in `worker-question-relay.ts`) reads the
+pending interaction from the tab, on this node or through the node link,
+and refuses anything that is not a `question`: command, file, plan and tool
+approvals, MCP forms and links, terminal selections and any question asking
+for a secret stay in the worker's tab. It checks the proposal against the
+question and creates an `answer-worker-question` node action request holding
+a bounded copy of the question, its revision and the proposed answer; it
+answers nothing. The user sees the worker, its tab, the question, its
+options with the proposal preselected and the reason, may change the answer,
+and approves or declines. Only the approval runs
+`answer_project_worker_question` (or, for a worker on another node,
+`answer_controller_worker_question` over the node link), which the
+coordinator's command invoker refuses by name, as it does
+`resolve_native_agent_interaction`. It re-reads the worker's pending
+interactions where the worker lives and answers only the revision the
+request named, through `resolve_native_agent_interaction`, the command the
+worker's tab uses, with the answer as the user approved it. A question
+answered in the tab meanwhile, replaced, expired, or gone because the turn
+ended or the tab closed settles the request `stale` and nothing is sent.
+Malformed answers fail without reaching the worker; an approval that times
+out (24 hours) expires; a node that disconnects fails the request, and an
+answer lost on the node link settles it outcome-unknown, never resent. A
+schedule's tool action for `answer_worker_question` runs the same tool, so it
+too only creates a request. Answered, stale, declined and failed requests
+each mail the conversation a system notice, which wakes it; the notice,
+receipt and logs name the worker and tab only, never the question or the
+answer.
 
 ## Saved graphs
 
@@ -1546,6 +1588,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
+- the answer relay: questions only, the proposal checked and stored, stale and
+  malformed answers never sent, end to end on this node
+  (`worker-question-relay.test.ts`) and on a connected node
+  (`worker-question-relay-remote.test.ts`), the approval executor
+  (`node-worker-answer.test.ts`), and the approval dialog
+  (`WorkerQuestionApprovalDialog.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
   `coordinator-conformance.test.ts`

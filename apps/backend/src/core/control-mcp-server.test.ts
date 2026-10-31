@@ -564,6 +564,96 @@ describe("Orkestrator control MCP server", () => {
     expect(refused.isError).toBe(true);
   });
 
+  test("answer_worker_question only creates a request, for the main coordinator, scheduled or not", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", mailboxIncarnationId: "incarnation-1", role: "main" },
+          { id: "side-1", mailboxIncarnationId: "incarnation-2", role: "side" },
+        ],
+      },
+    }));
+    overrides.set("request_coordinator_worker_answer", () => ({
+      approvalRequestId: "approval-1",
+      state: "pending",
+    }));
+    const scope = {
+      role: "coordinator" as const,
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    };
+    const sideScope = {
+      ...scope,
+      conversationId: "side-1",
+      mailboxIncarnationId: "incarnation-2",
+      capabilities: coordinatorRoleCapabilities("side"),
+    };
+    expect((await server.listCoordinatorTools(scope)).map((tool) => tool.name)).toContain(
+      "answer_worker_question",
+    );
+    expect((await server.listCoordinatorTools(sideScope)).map((tool) => tool.name)).not.toContain(
+      "answer_worker_question",
+    );
+    const input = {
+      requestId: "answer-db",
+      environmentId: "env-1",
+      tabId: "agent-1",
+      interactionId: "q-1",
+      answers: [{ questionId: "db", optionIds: ["pg"] }],
+      reason: "The ticket says Postgres",
+    };
+    // A scheduled tool action runs through this same in-process call.
+    const proposed = await server.callCoordinatorTool(scope, "answer_worker_question", input);
+    expect(proposed.isError).not.toBe(true);
+    expect(proposed.structuredContent).toMatchObject({
+      approvalRequestId: "approval-1",
+      delivery: "async",
+      nextStep: "Finish your turn now. Do not poll.",
+    });
+    expect(
+      invocations.findLast((entry) => entry.command === "request_coordinator_worker_answer")?.args,
+    ).toEqual({
+      scope: {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+      },
+      input,
+    });
+    expect(
+      (await server.callCoordinatorTool(sideScope, "answer_worker_question", input)).isError,
+    ).toBe(true);
+    expect(
+      (
+        await server.callCoordinatorTool(scope, "answer_worker_question", {
+          ...input,
+          action: "approve",
+        })
+      ).isError,
+    ).toBe(true);
+    const guarded = server as unknown as {
+      coordinatorInvoker(
+        scope: Record<string, unknown>,
+      ): Promise<{ ok: boolean; invoke: ControlMcpInvoker }>;
+    };
+    const checked = await guarded.coordinatorInvoker(scope);
+    // Only the user's approval answers; the coordinator's credential cannot.
+    const approvalOnly = [
+      "answer_project_worker_question",
+      "answer_controller_worker_question",
+      "resolve_native_agent_interaction",
+      "resolve_node_action_request",
+    ];
+    for (const command of approvalOnly)
+      await expect(checked.invoke(command, {})).rejects.toThrow("Coordinator capability denied");
+    expect(invocations.filter((entry) => approvalOnly.includes(entry.command))).toEqual([]);
+  });
+
   test("publishes the worker prompt format rule on every delegation prompt field", async () => {
     const credential = coordinatorCredential(coordinatorRoleCapabilities("main"));
     const listed = await rpc(credential.url, credential.token, "tools/list");

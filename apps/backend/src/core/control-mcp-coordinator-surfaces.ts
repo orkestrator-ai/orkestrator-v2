@@ -13,6 +13,10 @@ import { createNodeTargets } from "./control-mcp-nodes.js";
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 import { readAnnotations, toolResult, type JsonRecord } from "./control-mcp-tool-support.js";
+import {
+  registerWorkerQuestionTools,
+  WORKER_QUESTION_TOOL_CAPABILITIES,
+} from "./control-mcp-worker-questions.js";
 
 /**
  * Coordinator tools for a worker's own surfaces (todo 0142): a terminal or
@@ -59,6 +63,7 @@ export const COORDINATOR_SURFACE_TOOL_CAPABILITIES: ReadonlyArray<readonly [stri
   ["open_worker_browser", "environments"],
   ["edit_worker_tab", "environments"],
   ["request_root_changes", "environments"],
+  ...WORKER_QUESTION_TOOL_CAPABILITIES,
   // Main coordinator only: side agents' credentials lack `environments`.
   ["propose_agents_md_update", "environments"],
   ["create_pr", "multi-review"],
@@ -190,6 +195,8 @@ export function registerCoordinatorSurfaceTools(
         nextStep: "Finish your turn now. Do not poll.",
       }),
   );
+
+  registerWorkerQuestionTools(server, call);
 
   const entryText = z.string().min(1).max(MAX_AGENTS_MD_ENTRY_CHARS);
   server.registerTool(

@@ -623,7 +623,12 @@ remain and use the same paths.
   review stay on the command node, and with `nodeId` the section is read and
   the pull request opened on the leaf that owns that copy
   (`read_project_agents_md_section`, `open_project_agents_md_pr`, routed); see
-  [coordinator.md](coordinator.md#saving-decisions-to-agentsmd).
+  [coordinator.md](coordinator.md#saving-decisions-to-agentsmd). So does
+  `answer_worker_question` (kind `answer-worker-question`): the request stays
+  on the command node, and with `nodeId` the question is read from the leaf's
+  worker tab and the approved answer sent through
+  `answer_controller_worker_question`, a node-link-only command; see
+  [coordinator.md](coordinator.md#worker-surfaces).
 - Creating an environment on a leaf follows the same rules as creating a
   local environment today: a worktree (or container) is made from the
   project, then the project's `.env` files and other files selected in the

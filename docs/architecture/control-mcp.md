@@ -521,6 +521,16 @@ a reviewer's subtab (`open_multi_review` with `reviewerId`), start a custom
 fix (`custom_fix_multi_review`), launch feature planning, and ask the user to copy uncommitted checkout changes into a worker
 (`request_root_changes`); see
 [`coordinator.md`](coordinator.md#worker-surfaces).
+For a worker waiting on a question, the main coordinator reads the question in
+`get_tab_state` (`state.interactions`) and may propose an answer
+(`answer_worker_question`, capability `environments`, with `nodeId` for a
+worker on a connected node). It answers nothing: the user confirms, edits or
+declines it, and only the approval answers the worker through
+`answer_project_worker_question` or, on another node,
+`answer_controller_worker_question`. Both, and
+`resolve_native_agent_interaction` itself, are refused by name to coordinator
+credentials. Approvals and permissions are never relayed; see
+[`coordinator.md`](coordinator.md#worker-surfaces).
 The main coordinator can propose saving durable decisions to the
 `## Orkestrator` section of the project's root `AGENTS.md`
 (`propose_agents_md_update`, capability `environments`, so never a side

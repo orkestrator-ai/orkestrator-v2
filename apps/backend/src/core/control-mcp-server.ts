@@ -615,6 +615,11 @@ export class ControlMcpServer {
         "apply_project_root_changes",
         // Runs only from the user's approval of an `update-agents-md` request.
         "open_project_agents_md_pr",
+        // Run only from the user's approval of an `answer-worker-question`
+        // request; a coordinator never answers a worker's interaction itself.
+        "answer_project_worker_question",
+        "answer_controller_worker_question",
+        "resolve_native_agent_interaction",
       ]);
       if (denied.has(command)) throw new Error("Coordinator capability denied");
       return this.invoke<T>(command, args);

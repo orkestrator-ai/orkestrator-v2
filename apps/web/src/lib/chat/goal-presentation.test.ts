@@ -1,3 +1,4 @@
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { describe, expect, test } from "bun:test";
 import { parseGoalCommandArguments } from "@orkestrator/protocol/native-agent-goal";
 import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
@@ -159,5 +160,6 @@ test("goalLimitToRaise names the limit that stopped the goal", () => {
 test("a token budget is offered only where usage can back it", () => {
   expect(goalTokenBudgetAvailable("claude")).toBe(true);
   expect(goalTokenBudgetAvailable("codex")).toBe(true);
-  expect(goalTokenBudgetAvailable("pi")).toBe(false);
+  expect(goalTokenBudgetAvailable("pi")).toBe(true);
+  expect(goalTokenBudgetAvailable("unknown" as AgentPlatform)).toBe(false);
 });

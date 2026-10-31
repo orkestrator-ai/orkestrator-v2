@@ -1,3 +1,4 @@
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
@@ -282,7 +283,7 @@ describe("GoalPanel form", () => {
   });
 
   test("no budget field where the agent's usage cannot back one", () => {
-    renderPanel({ platform: "pi", agentLabel: "Pi" });
+    renderPanel({ platform: "unknown" as AgentPlatform, agentLabel: "Unknown" });
     expect(screen.queryByLabelText("Token budget (optional)")).toBeNull();
     expect(screen.getByLabelText("Iteration limit")).toBeTruthy();
   });

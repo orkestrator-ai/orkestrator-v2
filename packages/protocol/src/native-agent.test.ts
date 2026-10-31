@@ -157,6 +157,7 @@ describe("native agent capability table", () => {
       images: true,
     });
     expect(nativeAgentCapabilities("codex").actions).toEqual({
+      goal: true,
       compact: true,
       steer: true,
       review: true,

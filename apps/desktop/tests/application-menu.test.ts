@@ -271,7 +271,7 @@ describe("desktop application menu on macOS", () => {
       "Keyboard Shortcuts…",
     ]);
     const item = items.at(-1)!;
-    expect(item.accelerator).toBe("CmdOrCtrl+Shift+K");
+    expect(item.accelerator).toBe("CmdOrCtrl+Shift+/");
     // Display-only on Windows and Linux: main's before-input-event hook owns the key.
     expect(item.registerAccelerator).toBe(false);
 
@@ -356,7 +356,7 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
     const template = createApplicationMenuTemplate(
       menuActions({ platform, zoom, showKeyboardShortcuts }),
     );
-    // CmdOrCtrl is Control here: Ctrl+N, Ctrl+=, Ctrl+-, Ctrl+0 and Ctrl+Shift+K.
+    // CmdOrCtrl is Control here: Ctrl+N, Ctrl+=, Ctrl+-, Ctrl+0 and Ctrl+Shift+/.
     expect(menuItem(template, "File", "New Window")?.accelerator).toBe("CmdOrCtrl+N");
     expect(menuItem(template, "View", "Zoom In")?.accelerator).toBe("CmdOrCtrl+=");
     expect(menuItem(template, "View", "Zoom Out")?.accelerator).toBe("CmdOrCtrl+-");
@@ -367,8 +367,8 @@ describe.each(["linux", "win32"] as const)("desktop application menu on %s", (pl
     expect(settings.registerAccelerator).toBe(false);
 
     const shortcuts = menuItem(template, "View", "Keyboard Shortcuts…")!;
-    expect(shortcuts.accelerator).toBe("CmdOrCtrl+Shift+K");
-    // Shown as Ctrl+Shift+K but never registered: main's before-input-event
+    expect(shortcuts.accelerator).toBe("CmdOrCtrl+Shift+/");
+    // Shown as Ctrl+Shift+/ but never registered: main's before-input-event
     // hook is the only owner of the key, so one press cannot toggle twice.
     expect(shortcuts.registerAccelerator).toBe(false);
     const click = shortcuts.click as (

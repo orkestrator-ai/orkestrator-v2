@@ -84,6 +84,10 @@ import {
   validAgentPath,
 } from "../subagent-spawn.js";
 import { turnFailureText } from "../messages/turn-failure.js";
+import {
+  capacityRetryStartedText,
+  parseCapacityRetryContinuation,
+} from "../sessions/capacity-retry.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -1911,6 +1915,23 @@ async function replayPersistedRollout(
       const assistantMessage = ensureAssistantMessage(timestamp);
       assistantMessage.content = displayText;
       assistantMessage.parts.push({ type: "text", content: displayText });
+      return;
+    }
+
+    // The bridge's own continuation after a capacity refusal is not a message
+    // the user typed: it shows as the retry card the live turn showed, in
+    // place of the refusal line that ended the attempt before it.
+    const continuation = parseCapacityRetryContinuation(text);
+    if (continuation) {
+      const previous = messages.at(-1);
+      const row = previous?.role === "assistant" ? previous : ensureAssistantMessage(timestamp);
+      const last = row.parts.at(-1);
+      if (last?.type === "status" && last.severity === "error") row.parts.pop();
+      row.parts.push({
+        type: "retry",
+        content: capacityRetryStartedText(continuation.attempt, continuation.maxAttempts),
+        toolState: "success",
+      });
       return;
     }
 

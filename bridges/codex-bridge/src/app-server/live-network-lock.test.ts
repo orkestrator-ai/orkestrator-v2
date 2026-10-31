@@ -131,6 +131,14 @@ function offersWebSearch(frame: Record<string, unknown>): boolean {
   return text.includes("web__run") || /"type":"web_search/.test(text);
 }
 
+/** Codex's goal tools, offered while `features.goals` is on (its default). */
+const GOAL_TOOLS = ["create_goal", "get_goal", "update_goal"];
+
+function offeredGoalTools(frame: Record<string, unknown>): string[] {
+  const text = JSON.stringify(frame);
+  return GOAL_TOOLS.filter((name) => text.includes(name));
+}
+
 /** Whether a model request still carries tools at all, so absence means something. */
 function offersTools(frame: Record<string, unknown>): boolean {
   return JSON.stringify(frame).includes('"name":"exec"');
@@ -242,6 +250,64 @@ describeLive("live hosted network lock", () => {
       client.close();
       child.stdin.end();
       child.kill("SIGTERM");
+      await responses.stop();
+    }
+  }, 120_000);
+
+  test("Codex's goal tools are offered by default and not on a bridge thread", async () => {
+    // Control: Codex's own default offers them, so their absence below
+    // means the bridge's override removed them.
+    const control = await sandbox();
+    const controlResponses = startFakeResponses();
+    const { "features.goals": _goals, ...withoutGoalsOverride } = codexAppServerConfigOverrides({});
+    const controlEngine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome: control.codexHome,
+      workspace: control.workspace,
+      configOverrides: {
+        ...withoutGoalsOverride,
+        openai_base_url: JSON.stringify(controlResponses.baseUrl),
+      },
+    });
+    const { codexHome, workspace } = await sandbox();
+    const responses = startFakeResponses();
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: {
+        ...codexAppServerConfigOverrides({}),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
+    });
+    const turn = (cwd: string): EngineTurnConfig => ({
+      mode: "build",
+      cwd,
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+      networkAccessEnabled: true,
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      },
+    });
+    try {
+      const controlFrame = await firstModelRequest(
+        controlEngine,
+        controlResponses,
+        turn(control.workspace),
+      );
+      expect(offeredGoalTools(controlFrame)).toEqual(GOAL_TOOLS);
+      const frame = await firstModelRequest(engine, responses, turn(workspace));
+      expect(offersTools(frame)).toBe(true);
+      expect(offeredGoalTools(frame)).toEqual([]);
+    } finally {
+      await controlEngine.stop();
+      await engine.stop();
+      await controlResponses.stop();
       await responses.stop();
     }
   }, 120_000);

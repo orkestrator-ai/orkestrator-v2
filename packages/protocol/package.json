@@ -6,6 +6,7 @@
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
+    "./agent-usage-limits": "./src/agent-usage-limits.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
     "./ticket-sections": "./src/ticket-sections.ts",

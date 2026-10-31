@@ -232,7 +232,13 @@ export async function runMultiReviewSurface(
       if (latest && isMultiReviewWorkflow(latest.snapshot))
         workflow = { ...latest.snapshot, backendRevision: latest.revision };
       const handoffArmed =
-        workflow.phase === "interactive" && workflow.addressPromptPending === true;
+        workflow.phase === "interactive" &&
+        workflow.addressPromptPending === true &&
+        (!customFix ||
+          (workflow.customFixInstruction === customFix.instruction &&
+            workflow.customFixModel?.agent === customFix.fixModel.agent &&
+            workflow.customFixModel.model === customFix.fixModel.model &&
+            workflow.customFixModel.reasoningEffort === customFix.fixModel.reasoningEffort));
       if (customFix && !handoffArmed)
         throw new Error(
           `Custom fix handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,

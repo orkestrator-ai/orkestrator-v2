@@ -13,3 +13,22 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-agent-tools-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`, with the same PATH preference, passed unchanged (exit 0) in 2.2 seconds while the bridge group was running.
 - **Evidence:** `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YjH5CD/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z4nMqJ/merge-tests.log.gz`.
 - **Assessment:** the unchanged isolated pass establishes intermittence. The fixture delays its HTTP response by 75 ms and the assertion uses a fixed 150 ms wait; shared-host scheduling or HTTP latency is a plausible but unconfirmed cause. The merge conflicts were confined to flake documentation. No product code, assertion, timeout or skip was changed.
+
+## Capacity retry review — 2026-10-30
+
+Preparation's `mise run test` failed when the 150 ms background-configuration assertion retained one configuration (176.96 ms).
+The backend reported 2 failures in the default aggregate with its normal
+concurrent groups. Evidence is `validation-05.stdout.txt` under
+`.orkestrator/review-artifacts/review-validation-197e8c94-de90-4cb9-9a1d-f52dd1d193c4/`.
+
+Both unchanged owners passed together with one isolated worker (exit 0, 3.3 s):
+
+```sh
+mise run test:logged -- --name preparation-backend-failures -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts ./tests/standalone-ready.test.ts --parallel=1 --only-failures
+```
+
+Consistent with the previously recorded real-timer scheduling sensitivity;
+no product code, assertions, timeouts, or skips in these owners changed.
+
+The exact default-suite command subsequently passed (exit 0, 160.5 s):
+`mise run test:logged -- --name capacity-review-default-tests -- mise run test`.

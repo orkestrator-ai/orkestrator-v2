@@ -7,11 +7,11 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.309`, Anthropic SDK `1.2.0`, CLI `2.1.309` (npm `latest`, verified 2026-10-23) |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.4` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.40` (npm `latest`, verified 2026-10-23) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-30) |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
@@ -65,7 +65,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.40 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.2.0 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,10 +75,11 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.40 those are `W_0`,
-`x01` and `Z_0` (1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`, `Xn0`, `dE0`).
-All three live in `dist/bundled/index.js`, and the controller loop is still
-`for await (let U of N) await this.clientStream.write(U)`. Run the Cursor
+`serverStream;clientStream;controlledExecManager`. In 1.2.0 those are `Vm0`,
+`N71` and `Qm0` (1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`;
+1.0.36: `aE0`, `Xn0`, `dE0`). All three live in `dist/bundled/index.js`, and
+the controller loop is still
+`for await (let D of N) await this.clientStream.write(D)`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
 verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
 enable raw SDK logs as a substitute for the bounded observer.
@@ -413,10 +414,11 @@ window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
 coordinator home or container receives, built from a synthetic login against
-a local server, and reports every refresh attempt. On 0.164.0: no refresh for
-an access token more than five minutes from its `exp`, whatever
-`last_refresh` says; inside those five minutes, or after a 401, one attempt
-with the blank refresh token that fails and leaves the file untouched. A
+a local server, and reports every refresh attempt. On 0.164.0 and 0.166.0
+alike: no refresh for an access token more than five minutes from its `exp`,
+whatever `last_refresh` says; inside those five minutes a few attempts (four
+in the probe's run) and after a 401 one, each with the blank refresh token,
+each failing and leaving the file untouched. A
 change there (a refresh before the window, or a rewritten file) needs
 `restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
 
@@ -437,8 +439,11 @@ modules `packages/cli/scripts/build.ts` leaves unbundled — so the Agent SDK
 there is a real
 runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's.
 
-`bridges/claude-bridge/src/services/session-manager.ts` is the main compatibility
-surface. It uses the Agent SDK's `query()` async iterator, session lifecycle
+`bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
+compatibility surface is `services/session-manager-prompt-handlers/*` (one
+handler per SDK frame type), `services/session-manager-messages.ts`, the
+SDK-facing types in `types/index.ts`, `services/session-manager-prompt-launch.ts`
+(where `query()` is called) and `sdk-compatibility.test.ts`. Together they use the Agent SDK's `query()` async iterator, session lifecycle
 helpers, supported models and agents, file rewind, background-task controls,
 partial messages, structured output, checkpoints, permission/input callbacks,
 settings, plugins, MCP configuration, and SDK message unions. It passes
@@ -518,7 +523,9 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
 
 5. Refresh and verify the four Claude artifact records using the shared binary
    procedure.
-6. Review `session-manager.ts` for option, event, and message-union changes. Pay
+6. Review the compatibility surface above (`session-manager-prompt-handlers/*`,
+   `session-manager-messages.ts`, `session-manager-prompt-launch.ts` and
+   `types/index.ts`) for option, event, and message-union changes. Pay
    particular attention to the version-pinned `canUseTool` comment in
    `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool
@@ -608,17 +615,25 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    mise run build:claude-bridge
    bun run --cwd bridges/claude-bridge typecheck
    bun test bridges/claude-bridge/src/sdk-compatibility.test.ts
-   bun test bridges/claude-bridge/src --parallel
+   bun run --cwd bridges/claude-bridge test:bridge
    ```
 
-Last verified 2026-10-23 at Agent SDK 0.3.309 (`claudeCodeVersion` 2.1.309, so
-the SDK's CLI and the managed one are the same version) with CLI 2.1.309: the
+   Run the suite through `test:bridge`, which preloads `tests/setup-node.ts`.
+   A bare `bun test bridges/claude-bridge/src` from the root picks up the
+   root DOM preload instead, whose `AbortSignal` is not Node's: since 0.3.314
+   the SDK passes the query's signal to `events.setMaxListeners`, which throws
+   on it, so every test that starts a real SDK query fails there.
+
+Last verified 2026-10-30 at Agent SDK 0.3.314 (`claudeCodeVersion` 2.1.314, so
+the SDK's CLI and the managed one are the same version) with CLI 2.1.314: the
 compatibility test including the `canUseTool` proof, `verify:claude:mcp-live`
-against both the SDK's CLI and the managed binary, the vendored build, the
-typecheck and the full bridge suite. No new SDK message type, `system`
-subtype or hook event; `ModelInfo` still has no Ultracode flag. `TaskOutput`
-left `WAITING_TOOLS`: 2.1.309 lists it among the names it does not offer.
-`claude-host-login-refresh.ts` is still as checked against 2.1.296 (it needs a
+against both the SDK's CLI and the managed binary, `verify:claude:plugin-mcp-live`,
+the coordinator sandbox live test (macOS only), the vendored build, the
+typecheck and the full bridge suite. The only SDK union change was a new
+`SDKStartupFailureReason`, `sandbox_required_unavailable`, now mapped in
+`claudeStartupFailureMessage`. Not rerun at 2.1.314: the Linux sandbox probe
+(needs a Linux host), the billed coordinator-skills probe and
+`claude-host-login-refresh.ts` (still as checked against 2.1.296; it needs a
 container with a fake login).
 
 The compatibility test's deterministic CLI fixture does not authenticate or
@@ -795,7 +810,7 @@ the pinned binary's parser over the production argument shape.
      bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
    ```
 
-   It expects 0.164.0's behaviour: no item for a refused `apply_patch` or
+   It expects 0.164.0's behaviour, unchanged in 0.166.0: no item for a refused `apply_patch` or
    refused command, the cell and its refusal kept in the rollout, and the
    bridge showing each refused cell as a failed `exec` row in the order it
    ran. It also pins the exception: a cell an interrupt stops (below) records
@@ -819,7 +834,7 @@ the pinned binary's parser over the production argument shape.
    Every Orkestrator turn runs in Codex's Default collaboration mode, which
    refuses `request_user_input` unless the thread turns on the
    under-development `default_mode_request_user_input` feature
-   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour: an
+   (`codexRequestUserInputConfig`). The test expects 0.164.0's behaviour, unchanged in 0.166.0: an
    interactive session's call parks as a pausable question, the turn waits for
    the answer, and a `pipeline` session still gets "unavailable in Default
    mode". If the feature is renamed or removed, the first case fails: find the
@@ -847,7 +862,7 @@ the pinned binary's parser over the production argument shape.
 
    Orkestrator never offers or sends Codex's exec-policy and network-policy
    amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
-   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's
+   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's (and 0.166.0's)
    behaviour: an `untrusted` command approval carries
    `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
    empty, and the identical command asks again in the next turn. Its control
@@ -951,6 +966,23 @@ the pinned binary's parser over the production argument shape.
    - Usage no longer double-counts reasoning tokens. The bridge passes the
      counts through, so totals for comparable 0.164 turns read lower than
      0.162's; nothing compensated for the old count.
+
+   Codex 0.166.0 changed four things the bridge relies on, all handled:
+
+   - `review/start` lost detached delivery (`ReviewDelivery` is `"inline"`
+     only); `startReview` takes the generated type.
+   - Every `ThreadItem` may carry `startedAtMs` / `completedAtMs`; the
+     generated union is now an intersection, which the protocol test still
+     reads.
+   - `CodexErrorInfo` gained `modelNotFound` (0.165, never retried) and
+     `policyCapacityUnavailable`; both pass through `codexErrorInfoToCode`.
+   - Idle threads with no subscriber unload after 60 s instead of 1800 s
+     (`thread_unload_delay_secs`), so a thread the bridge has idle-detached is
+     freed a minute later and its next attach is a cold resume from the
+     rollout, which is what idle detach already assumes.
+
+   Every `features.*` the bridge depends on kept its 0.164.0 stage and
+   default (`codex features list` in a temporary `CODEX_HOME`).
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns
@@ -1423,7 +1455,7 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.0.1`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.1.0`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
@@ -1447,6 +1479,13 @@ updates. The bridge's three imports (`acp-prompt.ts`, `acp-context.ts`,
 and every session update untyped, so moved types change nothing at runtime,
 and it builds only `http` MCP servers. Import from `/unstable` only for a
 surface the bridge really implements; never mix the v2 types into the v1 wire.
+
+2.0.1 → 2.1.0 changed no stable v1 type the bridge reads (`PROTOCOL_VERSION`
+is still `1`; `StopReason`, the session-update variants, `sessionCapabilities`
+and `promptCapabilities` are unchanged). It added `RequestError.sessionNotFound`
+(`-32002`, an agent-side helper), unstable MCP-over-ACP behind
+`./experimental/mcp-http` and `./experimental/mcp-server`, and an optional peer
+`@modelcontextprotocol/server` that only those entries import.
 
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
@@ -1476,8 +1515,8 @@ grok --help | rg -- '--always-approve'
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
-# 1.0.52 answer both; 1.0.67 was checked signed out only (`initialize` answers,
-# the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
+# 1.0.52 answer both; 1.0.67 and 1.0.70 were checked signed out only
+# (`initialize` answers, identically on both, and the liveness probes stay up). Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
 ```
@@ -1507,7 +1546,11 @@ default.
 Re-check these against the real binary on a bump; the fake agents in the suite
 encode them and cannot notice a change. Each bullet says what was re-verified
 against 1.0.67 signed out (`initialize`, `--help`, `strings`, the changelog);
-anything that needs a session is still as last verified against 1.0.52.
+anything that needs a session is still as last verified against 1.0.52. At
+1.0.70 the same signed-out checks found nothing changed: the `initialize`
+answer is identical, every flag and `x.ai/*` name below is still present, and
+the 1.0.68–1.0.70 changelogs touch only the TUI, dashboard, worktree copies,
+experiments and the updater.
 
 - **Images.** Since 1.0.67 `initialize` answers `promptCapabilities.image:
   true` (re-verified signed out; 1.0.52 answered `false` while reading the
@@ -1548,7 +1591,7 @@ anything that needs a session is still as last verified against 1.0.52.
   policy refusal during the attempt is never continued, so neither changes
   what the bridge sends (how a hook stop is reported over ACP is unverified).
   Project trust is still `GROK_FOLDER_TRUST=0`, re-verified by
-  `conformance-execution-policy.test.ts` against the real 1.0.67 binary
+  `conformance-execution-policy.test.ts` against the real 1.0.70 binary
   (`ORKESTRATOR_POLICY_GROK_PATH`).
 - **`session/close`.** Advertised in `sessionCapabilities` (re-verified signed
   out, with `list` and `resume`). It answers

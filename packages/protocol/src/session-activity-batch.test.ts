@@ -75,6 +75,16 @@ describe("session activity observation", () => {
     });
   });
 
+  test("keeps a failed turn and drops an explicit success", () => {
+    expect(parseSessionActivityObservation({ activity: "idle", turnFailed: true })).toEqual({
+      activity: "idle",
+      turnFailed: true,
+    });
+    expect(parseSessionActivityObservation({ activity: "idle", turnFailed: false })).toEqual({
+      activity: "idle",
+    });
+  });
+
   test("drops unknown fields but refuses malformed known ones", () => {
     expect(parseSessionActivityObservation({ activity: "idle", future: 1 })).toEqual({
       activity: "idle",
@@ -85,6 +95,7 @@ describe("session activity observation", () => {
       { activity: "idle", readyForInput: "yes" },
       { activity: "idle", completionPending: "yes" },
       { activity: "idle", closing: 1 },
+      { activity: "idle", turnFailed: "yes" },
       { activity: "idle", contentRevision: "" },
       { activity: "idle", contentRevision: 7 },
       {

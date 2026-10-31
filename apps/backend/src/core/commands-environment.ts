@@ -1620,7 +1620,10 @@ export async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveGitHubToken(config.global);
-      await syncContainerGitHubCredential(containerId, githubToken);
+      await context.runtime.prMonitor.viewerPermissions.rotateScope(
+        `container:${containerId}`,
+        () => syncContainerGitHubCredential(containerId, githubToken),
+      );
     }
     await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);
     const hostEntryPort = environment.entryPort

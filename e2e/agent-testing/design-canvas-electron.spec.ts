@@ -343,7 +343,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
         element.setAttribute("tabindex", "0");
         (element as HTMLElement).focus();
       });
-      const shortcutsChord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`;
+      const shortcutsChord = `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`;
       await window.keyboard.press(shortcutsChord);
       await expect(window.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
       await expect(

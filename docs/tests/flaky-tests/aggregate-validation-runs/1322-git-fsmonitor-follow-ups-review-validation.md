@@ -1,6 +1,6 @@
 # Git fsmonitor follow-ups (0735) review validation
 
-- **ID:** 1316
+- **ID:** 1322
 - **Status:** resolved
 - **Date observed:** 2026-10-30
 - **Branch:** `todo-0735-git-fsmonitor-follow-ups-9b3c131c7412`
@@ -51,3 +51,7 @@ host-wide aggregate lease before executing. The earlier root-change approval
 owner timeout remains evidence of the existing issue; its unchanged test
 passed in this final default-suite run. No browser or live-agent suite was
 required for these backend Git changes.
+
+Merge reconciliation (2026-10-31): renumbered from 1316 to 1322 because main
+already assigned 1316 to the container start poll validation report. The original
+evidence and resolved status are unchanged.

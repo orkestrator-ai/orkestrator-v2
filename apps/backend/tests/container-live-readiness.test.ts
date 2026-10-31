@@ -5,6 +5,8 @@
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * (a manifest-bearing image; never retag `orkestrator-v2:latest` for this).
  * Restricted boots need outbound access to api.github.com and github.com.
+ * ORKESTRATOR_QUALIFICATION_AGENT_TOOLS_PORT optionally selects an existing
+ * host-firewall-admitted port for C22; it must be free and bind successfully.
  *
  * Faults enter only through fixtures at the lifecycle-service boundary:
  * throwaway images derived from the qualification image (no firewall script,
@@ -608,6 +610,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a boot status directory the entrypoint cannot write fails the launch",
     async () => {
+      pinInContainerFirewall();
       // A permission fault: the status directory is root-owned, so the
       // entrypoint (node) cannot record any phase, not even `failed`.
       const image = await deriveImage("status-unwritable", [
@@ -1010,6 +1013,7 @@ describe("C22 live host-service reply", () => {
     async () => {
       const { StorageService } = await import("../src/core/storage");
       const { AgentToolsServer } = await import("../src/core/agent-tools");
+      const { WorkflowResultService } = await import("../src/core/workflow-result-service");
       const {
         CONTAINER_HOST_PROBE_SCRIPT,
         ContainerHostReachabilityService,
@@ -1022,10 +1026,22 @@ describe("C22 live host-service reply", () => {
       // The real agent tools server, bound as the backend binds it.
       const storage = new StorageService(path.join(scene.root, "agent-tools"));
       await storage.init();
-      const server = new AgentToolsServer(storage, "0.0.0.0");
+      const requestedPort = process.env.ORKESTRATOR_QUALIFICATION_AGENT_TOOLS_PORT;
+      const workflowResults = requestedPort
+        ? new WorkflowResultService(path.join(scene.root, "agent-tools"))
+        : undefined;
+      const server = new AgentToolsServer(storage, "0.0.0.0", workflowResults);
+      cleanups.push(async () => {
+        await server.stop();
+        workflowResults?.closeStorage();
+      });
+      if (workflowResults) {
+        await workflowResults.initializeCapabilityIdentity();
+        await workflowResults.recordCapabilityPort(Number(requestedPort));
+      }
       await server.start();
-      cleanups.push(() => server.stop());
       const servicePort = server.servicePort()!;
+      if (requestedPort) expect(servicePort).toBe(Number(requestedPort));
       const other = Bun.serve({
         hostname: "0.0.0.0",
         port: 0,

@@ -39,6 +39,24 @@ export async function dockerExecDetached(
   });
 }
 
+/**
+ * A health answer counts only as a 2xx that is not an HTML page.
+ *
+ * OpenCode 2.x serves only `/api/*` and answers every legacy path, including
+ * `/global/health`, with its web app's `200 text/html` fallback. Accepting
+ * that would report a wrongly pinned or port-squatting 2.x server healthy and
+ * then fail every session call. No bridge or 1.x server answers health with
+ * HTML; some answer plain text or no body, so only HTML is refused.
+ */
+export function isHealthyHttpResponse(
+  statusCode: number | undefined,
+  contentType: string | undefined,
+): boolean {
+  const status = statusCode ?? 0;
+  if (status < 200 || status >= 300) return false;
+  return !(contentType ?? "").trim().toLowerCase().startsWith("text/html");
+}
+
 export async function checkHttpHealth(
   port: number,
   pathName = "/global/health",
@@ -63,7 +81,7 @@ export async function checkHttpHealth(
       },
       (response) => {
         response.resume();
-        complete((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
+        complete(isHealthyHttpResponse(response.statusCode, response.headers["content-type"]));
       },
     );
     request.once("timeout", () => {

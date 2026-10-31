@@ -424,6 +424,52 @@ describe("PrMonitorService", () => {
     expect(harness.stateEvents()).toHaveLength(eventsAfterSummary);
   });
 
+  test("announces a merge-permission change once and keeps it through observations that did not look", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ viewerCanMerge: false }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    expect(harness.service.snapshot()[0]?.viewerCanMerge).toBe(false);
+    expect(harness.stateEvents().at(-1)?.state.viewerCanMerge).toBe(false);
+
+    // The same answer again is not news; an observation without one keeps it.
+    const events = harness.stateEvents().length;
+    await harness.fireNext();
+    harness.setDetect(async () => detection());
+    await harness.fireNext();
+    expect(harness.stateEvents()).toHaveLength(events);
+    expect(harness.service.snapshot()[0]?.viewerCanMerge).toBe(false);
+
+    harness.setDetect(async () => detection({ viewerCanMerge: true }));
+    await harness.fireNext();
+    expect(harness.stateEvents().at(-1)?.state.viewerCanMerge).toBe(true);
+  });
+
+  test("clears the merge permission when the PR becomes terminal or is replaced", async () => {
+    const harness = createHarness();
+    harness.setDetect(async () => detection({ viewerCanMerge: true }));
+    harness.service.sync([openPr()]);
+    await harness.fireNext();
+
+    harness.setDetect(async () =>
+      detection({ url: "https://github.com/org/repo/pull/2", viewerCanMerge: undefined }),
+    );
+    await harness.fireNext();
+    expect(harness.service.snapshot()[0]?.viewerCanMerge).toBeNull();
+
+    harness.setDetect(async () =>
+      detection({ url: "https://github.com/org/repo/pull/2", viewerCanMerge: false }),
+    );
+    await harness.fireNext();
+    harness.setDetect(async () =>
+      detection({ url: "https://github.com/org/repo/pull/2", state: "merged" }),
+    );
+    await harness.fireNext();
+    expect(harness.service.snapshot()[0]?.viewerCanMerge).toBeNull();
+    expect(harness.stateEvents().at(-1)?.state.viewerCanMerge).toBeNull();
+  });
+
   test("clears a CI summary when an open PR becomes terminal", async () => {
     const harness = createHarness();
     harness.setDetect(async () => detection({ checkSummary: { passed: 4, total: 4, pending: 0 } }));

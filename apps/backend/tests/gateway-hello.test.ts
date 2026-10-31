@@ -46,6 +46,25 @@ function controlRoutes() {
 }
 
 describe("authenticated hello handshake", () => {
+  for (const nodeMode of ["leaf", "command"] as const) {
+    test(`${nodeMode} mode advertises remote mail steering on both listeners`, async () => {
+      const { info } = await startGateway({
+        controlBindAddress: "127.0.0.1",
+        controlPort: 0,
+        backendHello: async () => ({ ...identity, nodeMode }),
+      });
+      for (const base of [info.url, info.browserUrl!]) {
+        const response = await requestUrl(helloUrl(base), {
+          headers: { authorization: `Bearer ${info.token}` },
+        });
+        expect(response.status).toBe(200);
+        const hello = parseBackendHello(response.json());
+        expect(hello.nodeMode).toBe(nodeMode);
+        expect(hello.capabilities[BACKEND_CAPABILITIES.nodeMailSteer]).toBe(1);
+      }
+    });
+  }
+
   test("requires the gateway token and reports the answering listener's role", async () => {
     const backendHello = mock(async () => identity);
     const { info, dataDir } = await startGateway({

@@ -2,10 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   createFakeCaptureApi,
   FakeWebAnnotationBackend,
+  fixtureCapabilities,
   invokeMock,
   seedPending,
 } from "@/test/web-annotation-fakes";
-import { commitPendingCapture, resultCaptureMetadata } from "./capture-commit";
+import type { WebAnnotationSourceHint } from "@orkestrator/protocol/web-annotations";
+import { useWebAnnotationStore } from "@/stores/webAnnotationStore";
+import {
+  commitPendingCapture,
+  resultCaptureMetadata,
+  withAdvertisedSourceHints,
+} from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
 
 let backend: FakeWebAnnotationBackend;
@@ -75,4 +82,68 @@ describe("result capture commit", () => {
       masks: [],
     });
   });
+});
+
+describe("source hint capability gate", () => {
+  const hint: WebAnnotationSourceHint = {
+    producer: "data-orkestrator-source",
+    path: "src/Save.tsx",
+    line: 12,
+    verified: false,
+  };
+
+  beforeEach(() => {
+    backend = new FakeWebAnnotationBackend("env-1").install();
+  });
+  afterEach(() => {
+    useWebAnnotationStore.getState().reset();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  function hintedRecord(captureId: string) {
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, { captureId, image: null });
+    record.capture = {
+      ...record.capture,
+      evidence: { ...record.capture.evidence!, sourceHints: [hint] },
+    };
+    return { fake, record };
+  }
+
+  function advertise(sourceHints: boolean | undefined) {
+    useWebAnnotationStore.getState().update("env-1", () => ({
+      capabilities: fixtureCapabilities({ sourceHints }),
+      capabilityStatus: "available",
+    }));
+  }
+
+  test("strips hints for a backend that does not advertise them", () => {
+    const { record } = hintedRecord("cap-pure");
+    expect(withAdvertisedSourceHints(record.capture, false).evidence).not.toHaveProperty(
+      "sourceHints",
+    );
+    expect(withAdvertisedSourceHints(record.capture, true).evidence?.sourceHints).toEqual([hint]);
+  });
+
+  for (const [label, advertised, expected] of [
+    ["sends hints when the backend advertises them", true, [hint]],
+    ["omits hints when the backend does not advertise them", false, undefined],
+    ["omits hints for an older backend without the flag", undefined, undefined],
+  ] as const) {
+    test(label, async () => {
+      advertise(advertised);
+      const { fake, record } = hintedRecord(`cap-${String(advertised)}`);
+      await commitPendingCapture({
+        api: fake.api,
+        environmentId: "env-1",
+        captureId: record.descriptor.captureId,
+        record,
+        input: { body: "Hinted." },
+      });
+      const args = backend.callsOf("web_annotation_create")[0]!.args as {
+        capture: { evidence: { sourceHints?: unknown } };
+      };
+      expect(args.capture.evidence.sourceHints).toEqual(expected);
+    });
+  }
 });

@@ -25,7 +25,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Explain the start-time rise with 0109**: find what added 300 to 600 ms to warm start and fresh boot. Status: done 2026-10-28 on Docker Desktop: readiness-poll quantisation, not the relay copy. Confirmation on the reference host is task 5.
 3. **Fix or record each miss**: apply the merge-gate rule to the three misses, re-baselining only with a stated reason. Status: done 2026-10-28. Calls were cut by 1 + k per fresh start and the target re-baselined to ≤ 27 with the gateway's share stated. The start-time misses are recorded with their reason, and their fix is [0870](0870-container-start-poll-quantisation.md). The first CI run of this change still has to confirm the calls figure.
 4. **Record the CI numbers, arm64 included**: copy them into `container-qualification.md` before the artefacts expire. Status: done 2026-10-28 (runs 40409285999 and 40746551838, both architectures).
-5. **Reference-host run at HEAD**: run the harness on the host the targets were set on. Status: open (not reachable from the machine this work was done on).
+5. **Reference-host run at HEAD**: run the harness on the host the targets were set on. Status: open (depends on freeing omarchy-hp's address pools). Attempted 2026-10-30 on omarchy-hp at `cd7bbe3e`: the first fresh start failed with `resource-exhausted`, because 29 leaked probe networks ([0241](0241-leaked-reach-probe-networks.md)) hold every default range.
 
 ### 1. Attribute the extra Docker calls
 
@@ -268,7 +268,10 @@ None here. The poll-quantisation fix is
   architectures, and read `startToReady.*` and `warmStopStart.startSteps` to
   see how many readiness polls CI's boot takes.
 - Task 5: the harness on omarchy-hp at HEAD and with an image at
-  `1aabf049`'s parent, results in `container-qualification.md`.
+  `1aabf049`'s parent, results in `container-qualification.md`. It first
+  needs the 29 leaked probe networks removed
+  ([0241](0241-leaked-reach-probe-networks.md) task 5); with 0870 merged,
+  run it once at the commit before 0870 and once after.
 
 ## Assumptions and decisions
 
@@ -354,6 +357,24 @@ Took the recommended option.
 
 The reference host was not reachable from this machine, and the delegation
 excluded it.
+
+### Task 5: attempted on omarchy-hp, still open (2026-10-30)
+
+Took the recommended host, during todo
+[0870](0870-container-start-poll-quantisation.md).
+
+- The harness ran at `cd7bbe3e` with `orkestrator-v2:qual-0870-cd7bbe3e`.
+  Its first fresh start failed at the environment network create
+  (`resource-exhausted`) after 6 s.
+- The cause: 29 unattached probe networks, leaked on 2026-10-28 before
+  #1419, hold all 31 default address ranges. They belong to other runs,
+  and the delegation allowed removing only what this run created, so I
+  left them. The task stays open rather than closing on a run that never
+  measured anything.
+- What 0870 could measure without a new network is in
+  [container-qualification.md](../../development/container-qualification.md#bounded-readiness-probe-on-omarchy-hp-and-a-blocked-reference-host-run-2026-10-30).
+  Those are probe timings on `--network none` containers, not harness
+  figures.
 
 ## Constraints and rationale
 

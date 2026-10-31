@@ -19,6 +19,7 @@ import {
   pipelineReviewIssueCounts,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  isReviewValidationRun,
   newReviewValidationRun,
   parseReviewValidationPlan,
   type ReviewValidationRun,
@@ -66,6 +67,7 @@ import {
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
   safeParseStructuredReviewReport,
   stripStructuredReviewProvenance,
@@ -1044,6 +1046,9 @@ export class BuildPipelineSupervisor {
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     if (result.value && typeof result.value === "object" && "commands" in result.value) {
+      // Forward passes clear their run before the next plan; one left over is
+      // still the record's only copy, so keep its summary.
+      archiveValidationRun(pipeline);
       pipeline.validationRun = newReviewValidationRun(
         `review-validation-${randomUUID()}`,
         parseReviewValidationPlan(result.value),
@@ -1340,11 +1345,14 @@ export class BuildPipelineSupervisor {
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
     if (pipeline.validationRun) {
-      await this.ctx.invoke("cancel_review_validation", {
+      const cancelled = await this.ctx.invoke<unknown>("cancel_review_validation", {
         environmentId: pipeline.environmentId,
         run: pipeline.validationRun,
       });
-      delete pipeline.validationRun;
+      archiveValidationRun(
+        pipeline,
+        isReviewValidationRun(cancelled) ? cancelled : pipeline.validationRun,
+      );
     }
     delete pipeline.reviewPackage;
     await this.startStage(pipeline, "fix", "fixing", {

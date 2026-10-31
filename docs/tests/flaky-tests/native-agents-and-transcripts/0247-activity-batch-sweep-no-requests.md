@@ -230,3 +230,34 @@ Evidence is `orkestrator-test-run.dVAVdc/default-tests-rerun.log.gz` and the
 workspace group in `orkestrator-test-run.9oowaB/` below the host temporary
 directory. No activity-sweep implementation, test, deadline or skip changed.
 This confirms aggregate-only intermittence; its cause remains unproven.
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated
+this unchanged owner failure. The 100-session sweep recorded no requests instead of batches of 64 and 36 (205.03 ms); backend totals were 11,271 passed, 87 skipped and two failed.
+The complete unchanged owner then passed alone with exit 0 in 1.0 s:
+
+```sh
+mise run test:logged -- --name recorded-activity-batch -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Passing output was removed by the runner.
+No owner implementation, assertion, timeout or skip changed; the cause remains
+unconfirmed.
+
+## Recurrence during the provider upgrade — 2026-10-30
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  on `upgrade-agent-providers-638712a01b8e` (agent SDK and CLI pin bumps; no
+  activity-sweep code changed).
+- **Failure:** `activity sweep over the batch route > 10 sessions cost 1 request(s) and touch nothing`
+  (17.81 ms), with the usual `ProviderUnavailableError` and
+  `ProviderUnreachableError` reconciliation logs for `env-1`.
+- **Suite counts:** backend 11,277 passed and 2 failed; the other failure was
+  `session-title-runners.test.ts`, which needs the pinned Codex binary in the
+  managed toolchain and passed with `CODEX_PROTOCOL_BINARY` set. Web 10,842
+  passed; root, bridges and the Codex protocol lockfile passed.
+- **Isolated rerun:** `mise run test:logged -- --name activity-batch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/native-agent-service-activity-batch.test.ts --parallel`
+  passed the unchanged owning file (0.4 s).
+- **Disposition:** recorded evidence only; no test changed.

@@ -18,6 +18,7 @@ import {
   type NodeActionRequest,
   type NodeActionTarget,
 } from "./node-action-requests.js";
+import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import {
@@ -289,6 +290,12 @@ export class NodeCoordination {
         "create-project": (request, approval) => this.executeCreateProject(request, approval),
         "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
         "update-agents-md": (request, approval) => this.executeAgentsMdUpdate(request, approval),
+        "switch-agent-account": (request) =>
+          executeAgentAccountSwitch(request, {
+            selfId: () => this.options.nodes.selfIdentity(),
+            invoke: (command, args) => this.options.invoke(command, args),
+            invokeOnNode: (input) => this.options.portal.invokeOnNode(input),
+          }),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -298,13 +305,19 @@ export class NodeCoordination {
    * Leaf side
    */
 
-  /** Mail from a command node's coordinator to an agent on this node. */
+  /**
+   * Mail from a command node's coordinator to an agent on this node. `steer`
+   * is its `deliverNow`: the pending entry is marked as a local coordinator's
+   * would be, and the caller runs the one delivery pass that settles it.
+   */
   async deliverIncoming(args: Record<string, unknown>): Promise<{
     messageId: string;
     toTabId: string;
     toEnvironmentName: string;
     toTabName?: string;
     placement: string;
+    placementReason?: string;
+    injectedVia?: "steer";
   }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
@@ -344,7 +357,7 @@ export class NodeCoordination {
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: describeCoordinatorMail(body, controller.displayName),
       },
-      { newDelegation: true },
+      { newDelegation: true, steer: args.steer === true },
     );
     await this.leafMail.recordThread(message.id, mailbox);
     // An environment the coordinator talks to reports back to it, until
@@ -363,6 +376,7 @@ export class NodeCoordination {
       ...(toTabName ? { toTabName } : {}),
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+      ...(message.injectedVia ? { injectedVia: message.injectedVia } : {}),
     };
   }
 
@@ -497,6 +511,7 @@ export class NodeCoordination {
         "reveal-env-value",
         "apply-root-changes",
         "update-agents-md",
+        "switch-agent-account",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -526,6 +541,9 @@ export class NodeCoordination {
         "projectName",
         "location",
         "gitRemote",
+        "platform",
+        "accountId",
+        "accountLabel",
       ] as const) {
         if (typeof target[key] === "string") clean[key] = (target[key] as string).slice(0, 1024);
       }

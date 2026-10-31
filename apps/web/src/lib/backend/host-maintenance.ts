@@ -7,13 +7,21 @@ import type {
   HostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
 import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
 /**
  * The connected backend's host: its version, its updater, any update job and
  * dependency task. `detail` adds live readings (restart impact, tools, image).
  */
-export async function getHostMaintenance(detail = false): Promise<HostMaintenanceSnapshot> {
-  return invoke<HostMaintenanceSnapshot>("get_host_maintenance", detail ? { detail: true } : {});
+export async function getHostMaintenance(
+  detail = false,
+  machine?: AccountMachine,
+): Promise<HostMaintenanceSnapshot> {
+  return machineInvoke<HostMaintenanceSnapshot>(
+    machine,
+    "get_host_maintenance",
+    detail ? { detail: true } : {},
+  );
 }
 
 /** What restarting the host would interrupt right now; null when it cannot be measured. */
@@ -50,8 +58,8 @@ export async function startHostToolchainRepair(): Promise<HostTask> {
 }
 
 /** Pulls the release container image matching the backend. */
-export async function startHostImageUpdate(): Promise<HostTask> {
-  return invoke<HostTask>("start_host_image_update");
+export async function startHostImageUpdate(machine?: AccountMachine): Promise<HostTask> {
+  return machineInvoke<HostTask>(machine, "start_host_image_update");
 }
 
 /** Switches which Orkestrator releases the host updates to; the host checks again. */

@@ -26,7 +26,8 @@ import * as backend from "@/lib/backend";
 import { isWindowMachine, useAccountMachine } from "@/components/settings/account-machine";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import type { DockerSystemStats, ContainerInfo } from "@/lib/backend";
-import { useProjectStore, useEnvironmentStore } from "@/stores";
+import { useEnvironmentStore } from "@/stores";
+import type { Project } from "@/types";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -55,23 +56,58 @@ function isUnclaimedContainer(container: ContainerInfo): boolean {
   );
 }
 
-/**
- * Settings → Docker. Docker commands reach only this window's backend, so
- * another machine picked in the header gets a notice instead of figures that
- * belong to a different host.
- */
+/** Settings → Docker, scoped to the machine selected in the header. */
 export function DockerSettings() {
   const { machine } = useAccountMachine();
-  const dockerAvailable = useDockerAvailability();
-  if (!isWindowMachine(machine)) {
-    return (
-      <p className="max-w-3xl text-sm text-muted-foreground">
-        Docker containers can be managed only for the machine this window works on. Pick it in the
-        header to see its Docker resources.
-      </p>
-    );
-  }
-  if (!dockerAvailable) {
+  // Discard snapshots, open confirmations and pending probes when changing hosts.
+  return (
+    <MachineDockerSettings
+      key={machine === undefined ? "workspace" : (machine ?? "command-node")}
+    />
+  );
+}
+
+function MachineDockerSettings() {
+  const { machine } = useAccountMachine();
+  const windowAvailable = useDockerAvailability();
+  const windowMachine = isWindowMachine(machine);
+  const [remoteAvailable, setRemoteAvailable] = useState<boolean | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (windowMachine) return;
+    let active = true;
+    let probing = false;
+    const probe = async () => {
+      if (probing) return;
+      probing = true;
+      try {
+        const availability = await backend.checkDocker(machine);
+        if (active) {
+          setRemoteAvailable(availability.available);
+          setProbeError(null);
+        }
+      } catch (err) {
+        if (active) {
+          setRemoteAvailable(null);
+          setProbeError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        probing = false;
+      }
+    };
+    void probe();
+    const timer = setInterval(() => void probe(), STATS_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [machine, windowMachine]);
+
+  const available = windowMachine ? windowAvailable : remoteAvailable;
+  if (!windowMachine && probeError) return <p className="text-sm text-destructive">{probeError}</p>;
+  if (available === null) return <p className="text-sm text-muted-foreground">Checking Docker…</p>;
+  if (!available) {
     return (
       <div className="flex max-w-3xl items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
         <AlertCircle className="h-4 w-4 shrink-0" />
@@ -83,6 +119,7 @@ export function DockerSettings() {
 }
 
 function DockerSettingsPanel() {
+  const { machine } = useAccountMachine();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DockerSystemStats | null>(null);
@@ -94,9 +131,8 @@ function DockerSettingsPanel() {
   const [stoppingContainerId, setStoppingContainerId] = useState<string | null>(null);
   const [deletingContainerId, setDeletingContainerId] = useState<string | null>(null);
 
-  // Get project lookup function and projects list
-  const getProjectById = useProjectStore((state) => state.getProjectById);
-  const projects = useProjectStore((state) => state.projects);
+  // Projects must belong to the same host as the container being reattached.
+  const [projects, setProjects] = useState<Project[]>([]);
 
   // Get environment store action to add reattached environments
   const addEnvironment = useEnvironmentStore((state) => state.addEnvironment);
@@ -113,27 +149,35 @@ function DockerSettingsPanel() {
 
   const loading = useRef(false);
   /** Fetches without a spinner; a refresh never overlaps another load. */
-  const fetchData = useCallback((background: boolean) => {
-    if (loading.current) return;
-    loading.current = true;
-    void Promise.all([backend.getDockerSystemStats(), backend.getOrkestratorContainers()])
-      .then(([statsData, containersData]) => {
-        setStats(statsData);
-        setStatsReceivedAt(Date.now());
-        setContainers(containersData);
-        if (background) setError(null);
-      })
-      .catch((err: unknown) => {
-        console.error("[DockerSettings] Failed to load data:", err);
-        setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        loading.current = false;
-        // Also ends the spinner shown on opening, which a load already in
-        // flight then (possibly a background one) answers.
-        setIsLoading(false);
-      });
-  }, []);
+  const fetchData = useCallback(
+    (background: boolean) => {
+      if (loading.current) return;
+      loading.current = true;
+      void Promise.all([
+        backend.getDockerSystemStats(machine),
+        backend.getOrkestratorContainers(machine),
+        backend.getProjects(machine),
+      ])
+        .then(([statsData, containersData, projectsData]) => {
+          setProjects(projectsData);
+          setStats(statsData);
+          setStatsReceivedAt(Date.now());
+          setContainers(containersData);
+          if (background) setError(null);
+        })
+        .catch((err: unknown) => {
+          console.error("[DockerSettings] Failed to load data:", err);
+          setError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          loading.current = false;
+          // Also ends the spinner shown on opening, which a load already in
+          // flight then (possibly a background one) answers.
+          setIsLoading(false);
+        });
+    },
+    [machine],
+  );
 
   /** A load the user asked for, shown with a spinner. */
   const loadData = () => {
@@ -156,9 +200,9 @@ function DockerSettingsPanel() {
     setStoppingContainerId(containerId);
     setError(null);
     try {
-      await backend.dockerStopContainer(containerId);
+      await backend.dockerStopContainer(containerId, machine);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerSettings] Stop container failed:", err);
@@ -172,9 +216,9 @@ function DockerSettingsPanel() {
     setDeletingContainerId(containerId);
     setError(null);
     try {
-      await backend.dockerRemoveContainer(containerId);
+      await backend.dockerRemoveContainer(containerId, machine);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerSettings] Delete container failed:", err);
@@ -202,11 +246,13 @@ function DockerSettingsPanel() {
         selectedProjectId,
         reattachingContainer.id,
         reattachName || undefined,
+        machine,
       );
-      // Add the new environment to the store so sidebar updates immediately
-      addEnvironment(newEnvironment);
+      // Only this window's environments belong in its store; remote realms
+      // reconcile their own snapshots from the backend resource events.
+      if (isWindowMachine(machine)) addEnvironment(newEnvironment);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
       // Close dialog
       setShowReattachDialog(false);
@@ -345,7 +391,9 @@ function DockerSettingsPanel() {
                 const isDeleting = deletingContainerId === container.id;
                 const isOperating = isStopping || isDeleting;
                 const isRunning = container.state === "running";
-                const project = container.projectId ? getProjectById(container.projectId) : null;
+                const project = container.projectId
+                  ? projects.find((project) => project.id === container.projectId)
+                  : null;
                 return (
                   <div
                     key={container.id}

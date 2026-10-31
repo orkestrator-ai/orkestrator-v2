@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { ContainerInfo, DockerSystemStats } from "@/lib/backend";
@@ -49,6 +49,7 @@ function install(stats: DockerSystemStats, containers: ContainerInfo[]) {
     calls.push(command);
     if (command === "get_docker_system_stats") return stats;
     if (command === "get_orkestrator_containers") return containers;
+    if (command === "get_projects") return [];
     return undefined;
   });
   return calls;
@@ -123,15 +124,106 @@ describe("Docker settings section", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("another machine picked in the header never shows this window's Docker", async () => {
-    const calls = install(unknownStats, [container({})]);
-    render(
-      <AccountMachineProvider value={{ machine: "bk_elsewhere", name: "Build box" }}>
-        <DockerSettings />
-      </AccountMachineProvider>,
-    );
-    expect(screen.getByText(/only for the machine this window works on/)).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls).toHaveLength(0);
+  test("Docker stopping unmounts the panel and stops its polling until it returns", async () => {
+    const callbacks = new Map<number, () => void>();
+    let nextId = 0;
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+      callbacks.set(++nextId, callback);
+      return nextId;
+    }) as typeof setInterval);
+    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
+      callbacks.delete(id);
+    }) as typeof clearInterval);
+    try {
+      const calls = install(unknownStats, []);
+      const view = render(
+        <DockerAvailabilityProvider available>
+          <DockerSettings />
+        </DockerAvailabilityProvider>,
+      );
+      await screen.findByText("System Resources");
+      await act(async () => {
+        for (const callback of callbacks.values()) callback();
+      });
+      expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(2);
+      view.rerender(
+        <DockerAvailabilityProvider available={false}>
+          <DockerSettings />
+        </DockerAvailabilityProvider>,
+      );
+      expect(screen.getByText(/Docker is not running/)).toBeTruthy();
+      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(callbacks.size).toBe(0);
+      view.rerender(
+        <DockerAvailabilityProvider available>
+          <DockerSettings />
+        </DockerAvailabilityProvider>,
+      );
+      await screen.findByText("System Resources");
+      expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(3);
+      view.unmount();
+      expect(callbacks.size).toBe(0);
+    } finally {
+      cleanup();
+      mock.restore();
+    }
+  });
+
+  test("remote availability ignores the window status and stops reads when remote Docker stops", async () => {
+    const callbacks = new Map<number, { callback: () => void; delay: number | undefined }>();
+    let nextId = 0;
+    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
+      callbacks.set(++nextId, { callback, delay });
+      return nextId;
+    }) as typeof setInterval);
+    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
+      callbacks.delete(id);
+    }) as typeof clearInterval);
+    let available = true;
+    const calls: string[] = [];
+    const remote = mock(async (_command: string, args: Record<string, unknown> = {}) => {
+      const command = args.command as string;
+      calls.push(command);
+      const result =
+        command === "check_docker"
+          ? { available, reason: null }
+          : command === "get_docker_system_stats"
+            ? unknownStats
+            : command === "get_orkestrator_containers" || command === "get_projects"
+              ? []
+              : undefined;
+      return { outcome: "ok", result };
+    });
+    window.orkestratorPortal = { invoke: remote } as never;
+    invokeMock.mockClear();
+    try {
+      const view = render(
+        <DockerAvailabilityProvider available={false}>
+          <AccountMachineProvider value={{ machine: "bk_remote", name: "Build box" }}>
+            <DockerSettings />
+          </AccountMachineProvider>
+        </DockerAvailabilityProvider>,
+      );
+      await screen.findByText("System Resources");
+      available = false;
+      // The first timer belongs to the availability probe; the panel has its own timer.
+      const probe = [...callbacks.values()].find(({ delay }) => delay === 5_000)!;
+      await act(async () => probe.callback());
+      expect(screen.getByText(/Docker is not running/)).toBeTruthy();
+      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(callbacks.size).toBe(1);
+      const statsReads = calls.filter((command) => command === "get_docker_system_stats").length;
+      await act(async () => probe.callback());
+      expect(calls.filter((command) => command === "get_docker_system_stats")).toHaveLength(
+        statsReads,
+      );
+      expect(invokeMock).not.toHaveBeenCalled();
+      view.unmount();
+      expect(callbacks.size).toBe(0);
+    } finally {
+      cleanup();
+      delete window.orkestratorPortal;
+      mock.restore();
+    }
   });
 });

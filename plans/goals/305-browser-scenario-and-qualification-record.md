@@ -8,7 +8,7 @@ depends_on: [202, 203, 204, 301, 302, 303, 304]
 blocked_by: ""
 owner: "Claude Opus 5.5 (investigate-goal-command)"
 branch: "investigate-goal-command-c4666baa82d9-r1"
-pr: "pending"
+pr: "https://github.com/orkestrator-ai/orkestrator-v2/pull/1482"
 updated: 2026-10-31
 ---
 

@@ -408,7 +408,7 @@ export const PUBLIC_ACTIONS = {
   "session.goal.pause": {
     version: 1,
     mutation: true,
-    effects: ["metadata"],
+    effects: ["metadata", "provider-session", "filesystem", "process"],
     observation: "receipt",
     milestone: "D",
     summary: "Pause a running goal; no further turn starts until it is resumed.",
@@ -424,7 +424,7 @@ export const PUBLIC_ACTIONS = {
   "session.goal.clear": {
     version: 1,
     mutation: true,
-    effects: ["metadata"],
+    effects: ["metadata", "provider-session", "filesystem", "process"],
     observation: "receipt",
     milestone: "D",
     summary: "Remove a session's goal in any status; it stays readable in the goal history.",

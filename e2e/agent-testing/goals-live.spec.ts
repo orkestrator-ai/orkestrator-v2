@@ -37,10 +37,11 @@ const TURN_TIMEOUT_MS = 300_000;
 const only = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY;
 /**
  * Something slow for the agent to do. Grok's shell fails to spawn in Orkestrator
- * sessions, with or without a goal (`plans/goals/303`), so it writes instead.
+ * sessions, with or without a goal (`plans/goals/303`); Cursor can background
+ * long shell commands. Stream text on both so Stop has a live turn to stop.
  */
 function slowStep(seconds: number): string {
-  return platform === "grok"
+  return platform === "grok" || platform === "cursor"
     ? `Write out every whole number from 1 to ${seconds * 3} in words, separated by commas`
     : `Run the shell command "sleep ${seconds}"`;
 }
@@ -61,7 +62,13 @@ type Projection = {
   goal?: { status: string };
   slashCommands?: { name: string; executionKind?: string }[];
   contextUsage?: { sessionTokens?: number; usedTokens?: number };
-  composer?: { selectedModelId?: string; selectedModeId?: string };
+  composer?: {
+    selectedModelId?: string;
+    selectedModeId?: string;
+    selectedExecutionProfileId?: string;
+    modes?: { id: string }[];
+    executionProfiles?: { id: string }[];
+  };
   messages?: { role?: string; content?: unknown }[];
 };
 
@@ -404,6 +411,14 @@ test.describe(`goal loop: ${platform}`, () => {
     test.skip(only !== undefined && only !== "repairs", `only the ${only} cases`);
     const { invoke, environment, model, container } = await prepare(page);
     const scenarios = record.scenarios as Record<string, unknown>;
+    const failures: unknown[] = [];
+    const probe = async (run: () => Promise<void>) => {
+      try {
+        await run();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     const send = (identity: Awaited<ReturnType<typeof openTab>>, text: string) =>
       invoke("native_agent_goal_command", { ...identity, text, ...(model ? { model } : {}) });
     const wait = async (identity: Awaited<ReturnType<typeof openTab>>, label: string) => {
@@ -430,38 +445,58 @@ test.describe(`goal loop: ${platform}`, () => {
     };
     const objective =
       "Reply with the single word waiting and end this turn. Do not call any tools, report_goal, or change any files. Repeat exactly this for each continuation.";
-    const planning = await openTab(invoke, environment, "goals-plan", container, model);
-    await invoke("ensure_native_agent_session", {
-      ...planning,
-      sessionMode: "plan",
-      ...(model ? { model } : {}),
+    await probe(async () => {
+      const planning = await openTab(invoke, environment, "goals-plan", container, model);
+      await invoke("ensure_native_agent_session", {
+        ...planning,
+        ...(model ? { model } : {}),
+      });
+      const before = await invoke<Projection>("get_native_agent_projection", planning);
+      const conversationMode = before.composer?.modes?.some((mode) => mode.id === "plan") === true;
+      const executionProfile =
+        before.composer?.executionProfiles?.some((profile) => profile.id === "plan") === true;
+      if (!conversationMode && !executionProfile) {
+        scenarios["plan-mode"] = { supported: false };
+        writeSummary();
+        return;
+      }
+      const selectedPlan = (view: Projection) =>
+        conversationMode
+          ? view.composer?.selectedModeId
+          : view.composer?.selectedExecutionProfileId;
+      const ready = await invoke<Projection>("update_native_agent_controls", {
+        ...planning,
+        update: conversationMode ? { mode: "plan" } : { executionProfileId: "plan" },
+      });
+      expect(selectedPlan(ready)).toBe("plan");
+      await send(planning, `${objective} --max-iterations 2`);
+      const planned = await wait(planning, "plan-mode");
+      expect(planned.status).toBe("limited");
+      expect(planned.iterations).toBe(2);
+      expect(selectedPlan(await invoke<Projection>("get_native_agent_projection", planning))).toBe(
+        "plan",
+      );
     });
-    const ready = await invoke<Projection>("update_native_agent_controls", {
-      ...planning,
-      update: { mode: "plan" },
-    });
-    expect(ready?.composer?.selectedModeId).toBe("plan");
-    await send(planning, `${objective} --max-iterations 2`);
-    const planned = await wait(planning, "plan-mode");
-    expect(planned.status).toBe("limited");
-    expect(planned.iterations).toBe(2);
-    expect(
-      (await invoke<Projection>("get_native_agent_projection", planning)).composer?.selectedModeId,
-    ).toBe("plan");
 
-    const unchanged = await openTab(invoke, environment, "goals-no-progress", container, model);
-    await send(unchanged, `${objective} --max-iterations 8`);
-    const stalled = await wait(unchanged, "no-progress");
-    expect(stalled.status).toBe("paused");
-    expect(stalled.statusReason).toBe("no-progress");
+    await probe(async () => {
+      const unchanged = await openTab(invoke, environment, "goals-no-progress", container, model);
+      await send(unchanged, `${objective} --max-iterations 8`);
+      const stalled = await wait(unchanged, "no-progress");
+      expect(stalled.status).toBe("paused");
+      expect(stalled.statusReason).toBe("no-progress");
+    });
 
     if ((GOAL_TOKEN_BUDGET_PLATFORMS as readonly string[]).includes(platform)) {
-      const budgeted = await openTab(invoke, environment, "goals-budget", container, model);
-      await send(budgeted, `${objective} --max-iterations 8 --budget 1`);
-      const limited = await wait(budgeted, "token-budget");
-      expect(limited.status).toBe("limited");
-      expect(limited.statusReason).toBe("token-budget");
+      await probe(async () => {
+        const budgeted = await openTab(invoke, environment, "goals-budget", container, model);
+        await send(budgeted, `${objective} --max-iterations 8 --budget 1`);
+        const limited = await wait(budgeted, "token-budget");
+        expect(limited.status).toBe("limited");
+        expect(limited.statusReason).toBe("token-budget");
+      });
     }
+    if (failures.length > 0)
+      throw new AggregateError(failures, `${failures.length} live goal limit probes failed`);
   });
 
   test("a compaction between turns, and a verifier's verdict", async ({ page }) => {

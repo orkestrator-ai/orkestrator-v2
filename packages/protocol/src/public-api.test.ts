@@ -241,3 +241,14 @@ test("goal set and resume declare their check process and filesystem effects", (
     expect(PUBLIC_ACTIONS[action].effects).toEqual(["provider-session", "filesystem", "process"]);
   }
 });
+
+test("goal pause and clear declare check and verifier cancellation effects", () => {
+  for (const action of ["session.goal.pause", "session.goal.clear"] as const) {
+    expect(PUBLIC_ACTIONS[action].effects).toEqual([
+      "metadata",
+      "provider-session",
+      "filesystem",
+      "process",
+    ]);
+  }
+});

@@ -191,7 +191,7 @@ not advertise at its version before sending it.
 | `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
 | `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--verifier AGENT[:MODEL]] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider, filesystem, process |
 | `session goal get SESSION [--check-output] [--wait]` | `session.goal.get` | the session record; starts nothing | read (content) |
-| `session goal pause\|clear SESSION` | `session.goal.pause/clear` | the goal service on the session record; starts no bridge | metadata |
+| `session goal pause\|clear SESSION` | `session.goal.pause/clear` | the goal service on the session record; cancels its check or verifier | metadata, provider, filesystem, process |
 | `session goal resume SESSION [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.resume` | the goal service, through the live session | provider, filesystem, process |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |

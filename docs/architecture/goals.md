@@ -60,7 +60,8 @@ command, and objective, report and check output are JSON-escaped inside it so th
 cannot form carrier structure. Taking a continuation out of the queue pauses the
 goal. Publication and provider handoff both check the current goal identity,
 active status and iteration. Carriers preserve the session mode. A parked
-dispatch pauses the goal with its error.
+dispatch pauses the goal with its error. Queue retries keep the iteration
+identity; resuming the goal creates a new one after a retired delivery.
 
 ## Limits
 

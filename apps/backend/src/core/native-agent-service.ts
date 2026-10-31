@@ -3416,7 +3416,12 @@ export class NativeAgentService {
                   mode: input.mode ?? durable.controls?.mode,
                   fastMode: input.fastMode,
                   subAgent: input.subAgent,
-                  executionAgent: preparation.executionAgent ?? input.executionAgent,
+                  executionAgent:
+                    preparation.executionAgent ??
+                    input.executionAgent ??
+                    (input.mode === undefined
+                      ? (durable.controls?.executionProfileId ?? undefined)
+                      : undefined),
                   includeLocalSettings: input.includeLocalSettings,
                   promptSuggestions: input.promptSuggestions,
                   model: preparation.model ?? input.model,

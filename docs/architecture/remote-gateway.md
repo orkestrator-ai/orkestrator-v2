@@ -113,7 +113,7 @@ equivalent environment variable unless noted.
 | `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121`. |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
 | `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
-| `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. |
+| `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
 | `--tailscale-serve-port` | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | Serve HTTPS port. Default `443`. |
 | `--tailscale-bin` | `ORKESTRATOR_TAILSCALE_BIN` | Tailscale CLI path. |
 | `--compression` | `ORKESTRATOR_GATEWAY_COMPRESSION` | `off`, `body` (default) or `on` (adds SSE gzip). See [Compression and terminal transport](#compression-and-terminal-transport). |

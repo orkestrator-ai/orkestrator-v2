@@ -27,7 +27,7 @@ mise run test:logged -- --name data-saving-owner -- bunx playwright test --confi
 ```
 
 This sequential rerun followed an invalid overlapping owner attempt; see
-[1320](../aggregate-validation-runs/1320-second-backend-one-host-0244-validation.md).
+[1323](../aggregate-validation-runs/1323-second-backend-one-host-0244-validation.md).
 No implementation, assertion, timeout or skip changed. The cause is unconfirmed.
 
 ## Merge-readiness review — 2026-10-30

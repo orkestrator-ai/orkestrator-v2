@@ -1,6 +1,6 @@
 # Terminal resume environment entry misses its startup deadline
 
-- **ID:** 1321
+- **ID:** 1320
 - **Status:** open
 - **Date observed:** 2026-10-30
 - **Test:** `Electron keeps a lost terminal write fenced until Resume, without restarting the PTY`

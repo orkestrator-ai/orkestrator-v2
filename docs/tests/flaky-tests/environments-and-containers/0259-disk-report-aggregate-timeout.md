@@ -282,7 +282,7 @@ No implementation, assertion, deadline or skip changed in this owner.
 The aggregate repeated the five-second deadline with a null status under load
 average 45 to 77. Alone with `--parallel=1 --only-failures` the unchanged owner
 passed once (5.3 s) and timed out once (6.3 s) under the same load. Details in
-[1320](../aggregate-validation-runs/1320-second-backend-one-host-0244-validation.md).
+[1323](../aggregate-validation-runs/1323-second-backend-one-host-0244-validation.md).
 No implementation, assertion, deadline or skip changed.
 
 ## Pipeline validation-history review, 2026-10-30

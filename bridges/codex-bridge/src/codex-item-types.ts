@@ -205,6 +205,18 @@ export interface StatusItem {
   severity?: "info" | "warning" | "error";
 }
 
+/**
+ * The bridge retrying a turn the model refused for capacity
+ * (`sessions/capacity-retry.ts`). Never reported by app-server: the bridge
+ * adds it to the turn it is continuing, and `state` is the card's lifecycle.
+ */
+export interface RetryItem {
+  id: string;
+  type: "retry";
+  text: string;
+  state: "pending" | "success" | "failure";
+}
+
 /** Canonical union of rendered thread items. */
 export type ThreadItem =
   | AgentMessageItem
@@ -218,6 +230,7 @@ export type ThreadItem =
   | ImageItem
   | CompactionItem
   | StatusItem
+  | RetryItem
   | ErrorItem;
 
 /** One element of a user turn's input. */

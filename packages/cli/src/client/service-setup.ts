@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import { CliError } from "./errors.js";
@@ -23,6 +24,13 @@ export interface SetupProbe {
   hasTailscaleAddress(): boolean;
   /** The Tailscale CLI the backend would find by default, or null. */
   findTailscaleCli(): string | null;
+  /**
+   * The user to make Tailscale's operator when this one may not configure
+   * Serve, or null when it may or that cannot be told.
+   */
+  tailscaleOperatorNeeded(cli: string): string | null;
+  /** Runs the operator command with sudo; whether it succeeded. */
+  grantTailscaleOperator(cli: string, user: string): boolean;
 }
 
 export const systemSetupProbe: SetupProbe = {
@@ -36,6 +44,23 @@ export const systemSetupProbe: SetupProbe = {
     }
     return typeof Bun === "undefined" ? null : Bun.which("tailscale");
   },
+  tailscaleOperatorNeeded: (cli) => {
+    // Linux tailscaled lets only root and its operator change Serve. A macOS
+    // administrator already may.
+    if (process.platform !== "linux") return null;
+    const user = os.userInfo();
+    if (user.uid === 0) return null;
+    const prefs = spawnSync(cli, ["debug", "prefs"], { encoding: "utf8", timeout: 10_000 });
+    if (prefs.status !== 0) return null;
+    try {
+      const { OperatorUser } = JSON.parse(prefs.stdout) as { OperatorUser?: unknown };
+      return OperatorUser === user.username ? null : user.username;
+    } catch {
+      return null;
+    }
+  },
+  grantTailscaleOperator: (cli, user) =>
+    spawnSync("sudo", [cli, "set", `--operator=${user}`], { stdio: "inherit" }).status === 0,
 };
 
 function isTailscaleIPv4(address: string): boolean {
@@ -84,13 +109,43 @@ function quote(arg: string): string {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
+function operatorMessage(cli: string, user: string): string {
+  return [
+    `\nTailscale only lets root or its operator configure Serve, and ${user} is neither.`,
+    "The backend cannot start with --tailscale-serve until this has been run once:",
+    `  sudo ${quote(cli)} set --operator=${quote(user)}\n`,
+  ].join("\n");
+}
+
+/** Scripted installs cannot be asked, so they only get told. */
+export function warnIfTailscaleOperatorNeeded(
+  io: ClientIo,
+  serveArgs: readonly string[],
+  probe: SetupProbe = systemSetupProbe,
+): void {
+  if (!serveArgs.includes("--tailscale-serve")) return;
+  const binFlag = serveArgs.indexOf("--tailscale-bin");
+  const cli =
+    (binFlag >= 0 ? serveArgs[binFlag + 1] : undefined) ??
+    io.env.ORKESTRATOR_TAILSCALE_BIN ??
+    probe.findTailscaleCli();
+  const user = cli ? probe.tailscaleOperatorNeeded(cli) : null;
+  if (cli && user) io.stderr(operatorMessage(cli, user));
+}
+
 /**
  * Asks the setup questions and returns the serve arguments, after the user
  * confirms the equivalent non-interactive command.
  */
 export async function askServeArguments(
   io: ClientIo,
-  options: { installCommand: string[]; probe?: SetupProbe; signal?: AbortSignal },
+  options: {
+    installCommand: string[];
+    probe?: SetupProbe;
+    signal?: AbortSignal;
+    /** Nothing may change: report a missing Tailscale operator, do not grant it. */
+    dryRun?: boolean;
+  },
 ): Promise<string[]> {
   const source = io;
   io = {
@@ -122,10 +177,20 @@ export async function askServeArguments(
   }
   if (access === "serve") {
     args.push("--tailscale-serve");
-    if (!probe.findTailscaleCli()) {
+    let cli = probe.findTailscaleCli();
+    if (!cli) {
       io.stderr("\nThe Tailscale CLI was not found, and Tailscale Serve needs it.\n");
-      const cli = await ask(io, "Path to the tailscale executable (empty to keep `tailscale`): ");
+      cli = await ask(io, "Path to the tailscale executable (empty to keep `tailscale`): ");
       if (cli !== "") args.push("--tailscale-bin", cli);
+    }
+    const operator = cli ? probe.tailscaleOperatorNeeded(cli) : null;
+    if (cli && operator) {
+      io.stderr(operatorMessage(cli, operator));
+      const granted =
+        !options.dryRun &&
+        (await confirm(io, "Run it now with sudo?", true)) &&
+        probe.grantTailscaleOperator(cli, operator);
+      if (!granted && !options.dryRun) io.stderr("Continuing without it.\n");
     }
     if (await confirm(io, "\nAllow the hosted web client at orkestrator.dev?", true)) {
       args.push("--allowed-origins", HOSTED_WEB_ORIGINS);

@@ -24,6 +24,8 @@ function fixture(
       options: { timeoutMs: number },
     ) => Promise<unknown>;
   },
+  /** Turns a capacity retry is waiting on, which it ends itself. */
+  retrying: ReadonlySet<TurnAccumulator> = new Set(),
 ) {
   // Only the context surface this collaborator consumes; no app-server process or I/O.
   const context = {
@@ -33,7 +35,12 @@ function fixture(
     },
     options: { engine },
   } as unknown as CodexRuntimeContext;
-  return new CodexRuntimeTail(context, {} as CodexRuntimeLifecycle, {} as CodexRuntimeSessions);
+  const lifecycle = {
+    capacityRetry: {
+      endForParentExit: (_context: unknown, turn: TurnAccumulator) => retrying.has(turn),
+    },
+  } as unknown as CodexRuntimeLifecycle;
+  return new CodexRuntimeTail(context, lifecycle, {} as CodexRuntimeSessions);
 }
 
 describe("parent exit interrupt deadline", () => {
@@ -74,6 +81,20 @@ describe("parent exit interrupt deadline", () => {
       ["handle-0", "first", { timeoutMs: 1000 }],
       ["handle-2", "second", { timeoutMs: 1000 }],
     ]);
+  });
+
+  test("a turn waiting on a capacity retry is ended by the retry, never interrupted", async () => {
+    const waiting = turn("waiting");
+    const running = turn("running");
+    const interruptTurn = mock(async () => undefined);
+    const waitForTurnTerminal = mock(async () => "interrupted");
+    const tail = fixture(
+      [waiting, running],
+      { interruptTurn, waitForTurnTerminal },
+      new Set([waiting]),
+    );
+    expect(await tail.interruptForParentExit(1000)).toBe(1);
+    expect(interruptTurn.mock.calls).toEqual([["handle-1", "running"]]);
   });
 
   test("a rejected interrupt is contained and leaves shutdown ownership on the turn", async () => {

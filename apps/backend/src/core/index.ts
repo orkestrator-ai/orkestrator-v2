@@ -63,6 +63,7 @@ import {
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { MachineLoadSampler } from "./machine-load.js";
 import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
@@ -291,6 +292,7 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
+  private readonly machineLoad = new MachineLoadSampler();
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
@@ -707,6 +709,7 @@ export class OrkestratorBackend {
         pickInheritedGlobalSettings((await storage.loadConfig()).global),
       onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
     });
+    context.machineLoad = this.machineLoad;
     context.nodes = this.nodes;
     // While a leaf, this node works with its command node's settings.
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
@@ -1712,6 +1715,7 @@ export class OrkestratorBackend {
       },
     });
     this.hostSuspendDetector.start();
+    this.machineLoad.start();
     // Containers hold Claude logins access-only; this hands them each host
     // renewal and renews the host login before it lapses.
     this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
@@ -2515,6 +2519,7 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    this.machineLoad.stop();
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
     this.containerLoginFileWatcher?.stop();

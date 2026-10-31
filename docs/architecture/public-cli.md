@@ -174,7 +174,7 @@ not advertise at its version before sending it.
 | `environment launch` | `environment.launch` | create + start + startup reconciliation's single first prompt | all |
 | `environment exec ID -- ARGV…` | `environment.exec` | environment-side exec worker | filesystem, process |
 | `agent options` | `agent.options` | model catalogues (`--refresh` asks providers) | read |
-| `session list/get` | `session.list/get` | pane layout + native-session records (metadata only) | read |
+| `session list/get` | `session.list/get` | pane layout + native-session records (metadata only); a Coordinator conversation's runtime ID (from `mail mailboxes`) resolves from the coordinator store, see [control-mcp.md](control-mcp.md#coordinator-conversations) | read |
 | `session start [--literal] [--attach F]` | `session.start` | `launch_native_agent_job` (durable job tab, exactly-once first prompt) | provider |
 | `session prompt SESSION [--literal] [--enqueue] [--attach F]` | `session.prompt` | `dispatch_native_agent_intent`; with `--enqueue`, the native prompt queue (`enqueuePromptQueueMessageIfAbsent`, drained by `drainPromptQueue`) | provider |
 | `session commands SESSION [--refresh]` | `session.commands` | the session's cached command catalogue (`refresh_native_agent_commands` with `--refresh`) | read |

@@ -534,8 +534,10 @@ Tailscale HTTPS or SSH via the command node), and the node it belongs to.
 
 Coordinators run on the top-level command node only. A coordinator can:
 
-- **Create environments** — on its own node by default, or on a named
-  connected node when asked.
+- **Create environments** — on the node the user names, otherwise on its own
+  node unless load or OS gives a clear reason to use another connected node
+  (`list_nodes` reports both; see
+  [coordinator.md](coordinator.md#choosing-a-machine)).
 - **Control environments on every connected node** — start, stop, prompt,
   answer — including on command nodes acting as leaves.
 - **Delete environments only when the user asks.** A coordinator never
@@ -709,7 +711,7 @@ Built in milestones with tested commits on one branch, reviewed as one PR.
    opened directly from the client with scoped grants and relay fallback;
    connection path in the info panel. Removal of the client-side
    federation runtime and catalogue.
-3. **Cross-node coordinators:** environment placement (own node by default),
+3. **Cross-node coordinators:** environment placement (a named node, else its own unless load or OS says otherwise),
    messages to and from leaf agents with routing to the right command node,
    direct read access to leaf transcripts and state, deletion only on user
    request with confirmation.

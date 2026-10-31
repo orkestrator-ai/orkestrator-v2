@@ -183,6 +183,15 @@ export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
   };
 }
 
+/**
+ * The gateway port the desktop asks its backend for. The installed app owns the
+ * fixed port; `mise run dev` has its own data directory and takes a free one, so
+ * it cannot move the installed app's address by starting first.
+ */
+export function desktopGatewayPort(isDev: boolean, profilePort?: number): number {
+  return profilePort ?? (isDev ? 0 : 34121);
+}
+
 export function createBackendProcessEnvironment(
   parentEnv: NodeJS.ProcessEnv,
   appVersion?: string,
@@ -717,7 +726,7 @@ export class BackendProcess {
     const args = [
       entry,
       "--port",
-      String(options.gatewayPort ?? 34121),
+      String(desktopGatewayPort(options.isDev, options.gatewayPort)),
       "--control-host",
       "127.0.0.1",
       "--control-port",

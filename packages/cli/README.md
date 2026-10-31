@@ -57,6 +57,10 @@ bunx orkestrator \
   --allow-non-tailscale-bind
 ```
 
+Only the default data directory's backend defaults to port 34121. With another
+`--data-dir` and no `--port`, the backend takes a free port that changes on each
+start, so pass `--port` if remote clients need a stable address.
+
 Or install Bun when needed and start the service in one command:
 
 ```bash

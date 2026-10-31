@@ -32,6 +32,7 @@ import {
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
+  desktopGatewayPort,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
   removeAgentTestHostKeychainLink,
@@ -129,6 +130,13 @@ const FRESH_CONNECTED_FRAME = `id: desktop1:0\ndata: ${JSON.stringify({
 })}\n\n`;
 
 describe("Electron backend process supervisor", () => {
+  test("only the installed app asks for the fixed gateway port", () => {
+    expect(desktopGatewayPort(false)).toBe(34121);
+    expect(desktopGatewayPort(true)).toBe(0);
+    expect(desktopGatewayPort(true, 45000)).toBe(45000);
+    expect(desktopGatewayPort(false, 0)).toBe(0);
+  });
+
   test("accepts a live SSH-agent socket through a stable symlink and rejects an unreachable socket", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-socket-"));
     directories.push(directory);

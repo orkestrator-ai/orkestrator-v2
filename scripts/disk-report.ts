@@ -16,6 +16,11 @@ import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";
 import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdir";
+import {
+  listProbeNetworks,
+  removeStaleProbeNetworks,
+  staleProbeNetworks,
+} from "./probe-network-sweep";
 
 /**
  * Read-only inventory of the disk state Orkestrator work leaves behind, with
@@ -23,7 +28,9 @@ import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdi
  * docs/development/disk-usage.md for why each location grows.
  *
  * Nothing here deletes anything except the explicit `--fix legacy-turbo`,
- * which removes Turbo artifacts that no current Turbo version reads.
+ * which removes Turbo artifacts that no current Turbo version reads, and
+ * `--fix probe-networks`, which removes leaked host-reachability probe
+ * networks (see probe-network-sweep.ts).
  */
 
 export type ReportRow = {
@@ -276,6 +283,24 @@ export function environmentCleanupLedgerRow(
   };
 }
 
+/**
+ * Host-reachability probe networks of every owner. Each holds one of the
+ * daemon's address pools, so a backlog stops new environment networks being
+ * created; null when Docker cannot be asked.
+ */
+export function probeNetworkRow(dockerRun: Run = run, now = Date.now()): ReportRow | null {
+  const networks = listProbeNetworks(dockerRun);
+  if (networks === null) return null;
+  const stale = staleProbeNetworks(networks, now);
+  return {
+    location: "Docker host-reachability probe networks (address pools)",
+    bytes: null,
+    orphaned: `${stale.length} of ${networks.length} unattached and older than a day`,
+    owner: "each backend's own check (reaps only its own owner's)",
+    cleanup: "mise run disk:report -- --fix probe-networks",
+  };
+}
+
 export type ReportContext = {
   mainCheckout: string;
   homeDir: string;
@@ -317,6 +342,9 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
       });
     }
   }
+
+  const probeNetworks = probeNetworkRow();
+  if (probeNetworks) rows.push(probeNetworks);
 
   const turbo = path.join(context.mainCheckout, ".turbo");
   const legacy = legacyTurboArtifacts(turbo);
@@ -603,8 +631,18 @@ if (import.meta.main) {
     const args = process.argv.slice(2).filter((argument) => argument !== "--");
     const context = defaultContext();
     const fix = args.indexOf("--fix");
-    if (fix !== -1) {
-      if (args[fix + 1] !== "legacy-turbo") throw new Error("--fix accepts legacy-turbo");
+    if (fix !== -1 && args[fix + 1] === "probe-networks") {
+      const result = removeStaleProbeNetworks(run);
+      if (result === null) throw new Error("Docker did not list its networks");
+      for (const name of result.removed) console.log(`Removed ${name}`);
+      for (const name of result.failed) console.error(`Could not remove ${name}`);
+      console.log(
+        `Removed ${result.removed.length} probe networks; kept ${result.kept} attached or under a day old.`,
+      );
+      if (result.failed.length > 0) process.exitCode = 1;
+    } else if (fix !== -1) {
+      if (args[fix + 1] !== "legacy-turbo")
+        throw new Error("--fix accepts legacy-turbo or probe-networks");
       const legacy = legacyTurboArtifacts(path.join(context.mainCheckout, ".turbo"));
       const bytes = diskUsage(legacy);
       for (const file of legacy) rmSync(file, { force: true });

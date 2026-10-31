@@ -67,19 +67,28 @@ export interface StandaloneServiceConfig {
    * not hand it arguments only the newer release understands.
    */
   rollbackTarget?: { version: string; args: string[] };
+  /** Identifies this install, including reinstalls of the same version. */
+  installGeneration?: string;
   installedAt: string;
 }
 
 export interface LauncherState {
   version: 1;
+  /** Install whose boot attempts are recorded. */
+  installGeneration?: string;
   /** The last release that reached readiness. */
   lastReadyVersion: string | null;
   /** Boots of each release that has not reached readiness yet. */
   bootAttempts: Record<string, number>;
   /** The most recent rollback, which the restored backend reports. */
-  rollback: { failedVersion: string; restoredVersion: string; at: string } | null;
+  rollback: {
+    failedVersion: string;
+    restoredVersion: string;
+    at: string;
+    installGeneration?: string;
+  } | null;
   /** Boots of one release that this launcher saw exit before readiness, in a row. */
-  bootFailure: { version: string; exits: number; at: string } | null;
+  bootFailure: { version: string; exits: number; at: string; installGeneration?: string } | null;
 }
 
 /** A release that `service install` activated and that is not going to start. */
@@ -122,6 +131,9 @@ export function readServiceConfig(layout: StandaloneLayout): StandaloneServiceCo
           },
         }
       : {}),
+    ...(typeof value.installGeneration === "string"
+      ? { installGeneration: value.installGeneration }
+      : {}),
     installedAt: typeof value.installedAt === "string" ? value.installedAt : "",
   };
 }
@@ -141,8 +153,22 @@ export function nextRollbackTarget(
   if (!config || !before) return undefined;
   const target = config.rollbackTarget;
   if (before === version) return target?.version === version ? undefined : target;
-  const restored = target?.version === before && linkedVersion(layout.previous) === before;
-  return { version: before, args: restored ? target.args : config.args };
+  return {
+    version: before,
+    args: effectiveServiceArguments(config, before, linkedVersion(layout.previous)),
+  };
+}
+
+/** Keep in sync with the standalone launcher's serveArguments rule. */
+export function effectiveServiceArguments(
+  config: StandaloneServiceConfig | null,
+  current: string | null,
+  previous: string | null,
+): string[] {
+  const target = config?.rollbackTarget;
+  return target && target.version === current && previous === current
+    ? target.args
+    : (config?.args ?? []);
 }
 
 export async function writeServiceConfig(
@@ -159,6 +185,9 @@ export function readLauncherState(layout: StandaloneLayout): LauncherState {
   const bootFailure = value?.bootFailure;
   return {
     version: 1,
+    ...(typeof value?.installGeneration === "string"
+      ? { installGeneration: value.installGeneration }
+      : {}),
     lastReadyVersion: typeof value?.lastReadyVersion === "string" ? value.lastReadyVersion : null,
     bootAttempts:
       value?.bootAttempts && typeof value.bootAttempts === "object" ? value.bootAttempts : {},
@@ -190,15 +219,21 @@ export function readStartupFailure(
   layout: StandaloneLayout,
   version: string,
   sinceMs: number,
+  installGeneration?: string,
 ): StandaloneStartupFailure | null {
   const state = readLauncherState(layout);
   const rollback = state.rollback;
-  if (rollback?.failedVersion === version && Date.parse(rollback.at) >= sinceMs) {
+  if (
+    rollback?.failedVersion === version &&
+    (installGeneration === undefined || rollback.installGeneration === installGeneration) &&
+    Date.parse(rollback.at) >= sinceMs
+  ) {
     return { restoredVersion: rollback.restoredVersion };
   }
   const failure = state.bootFailure;
   if (
     failure?.version !== version ||
+    (installGeneration !== undefined && failure.installGeneration !== installGeneration) ||
     failure.exits < STANDALONE_MAX_BOOT_ATTEMPTS ||
     Date.parse(failure.at) < sinceMs
   ) {

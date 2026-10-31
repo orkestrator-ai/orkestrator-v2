@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
@@ -262,7 +263,9 @@ export const serviceCommands: CommandSpec[] = [
         version,
       );
       await service.activateRelease(layout, version);
+      const installGeneration = randomUUID();
       await service.writeServiceConfig(layout, {
+        installGeneration,
         version: 1,
         dataDir,
         bun,
@@ -281,8 +284,8 @@ export const serviceCommands: CommandSpec[] = [
         // A backend already serving this data directory (a reinstall) is
         // replaced; only a new generation's descriptor describes this install.
         const previousGeneration = await currentDescriptorGeneration(dataDir);
-        // Launcher records and log lines from before this point describe an
-        // earlier service, not this install.
+        // The generation excludes failures written by the old launcher while
+        // manager commands run; the timestamp also excludes earlier logs.
         const loadedAt = Date.now();
         const logOffset = await stat(logFile).then(
           (file) => file.size,
@@ -300,7 +303,12 @@ export const serviceCommands: CommandSpec[] = [
             signal: context.signal,
             expectedVersion: version,
             assertStarting: async () => {
-              const failure = service.readStartupFailure(layout, version, loadedAt);
+              const failure = service.readStartupFailure(
+                layout,
+                version,
+                loadedAt,
+                installGeneration,
+              );
               if (failure) throw await startupFailedError(version, failure, logFile, logOffset);
             },
           });
@@ -407,15 +415,17 @@ export const serviceCommands: CommandSpec[] = [
       const state = service.readLauncherState(layout);
       const installed = existsSync(unit.file);
       const running = installed ? runManager(serviceManagerCommands(unit).status, true).ok : false;
+      const current = service.linkedVersion(layout.current);
+      const previous = service.linkedVersion(layout.previous);
       const result = {
         dataDir,
         installed,
         running,
         unit: { manager: unit.manager, name: unit.name, file: unit.file },
-        current: service.linkedVersion(layout.current),
-        previous: service.linkedVersion(layout.previous),
+        current,
+        previous,
         bun: config?.bun ?? null,
-        args: config?.args ?? [],
+        args: service.effectiveServiceArguments(config, current, previous),
         lastReadyVersion: state.lastReadyVersion,
         rollback: state.rollback,
       };

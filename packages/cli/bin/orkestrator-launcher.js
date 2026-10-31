@@ -72,9 +72,14 @@ function readState() {
   const value = readJson(layout.stateFile) ?? {};
   return {
     version: 1,
+    ...(service.installGeneration ? { installGeneration: service.installGeneration } : {}),
     lastReadyVersion: typeof value.lastReadyVersion === "string" ? value.lastReadyVersion : null,
     bootAttempts:
-      value.bootAttempts && typeof value.bootAttempts === "object" ? value.bootAttempts : {},
+      (!service.installGeneration || value.installGeneration === service.installGeneration) &&
+      value.bootAttempts &&
+      typeof value.bootAttempts === "object"
+        ? value.bootAttempts
+        : {},
     rollback: value.rollback ?? null,
     bootFailure: value.bootFailure ?? null,
   };
@@ -167,6 +172,7 @@ while (!stopping) {
       pointLink(layout.current, previousTarget);
       state.bootAttempts[version] = 0;
       state.rollback = {
+        ...(service.installGeneration ? { installGeneration: service.installGeneration } : {}),
         failedVersion: version,
         restoredVersion: previousVersion,
         at: new Date().toISOString(),
@@ -238,7 +244,11 @@ while (!stopping) {
       exits: failedBoots.version === version ? failedBoots.exits + 1 : 1,
     };
     const next = readState();
-    next.bootFailure = { ...failedBoots, at: new Date().toISOString() };
+    next.bootFailure = {
+      ...failedBoots,
+      ...(service.installGeneration ? { installGeneration: service.installGeneration } : {}),
+      at: new Date().toISOString(),
+    };
     writeState(next);
   }
   await sleep(ready ? CRASH_DELAY_MS : RETRY_DELAY_MS);

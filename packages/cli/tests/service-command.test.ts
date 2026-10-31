@@ -1,4 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, symlink } from "node:fs/promises";
+import {
+  standaloneLayout,
+  releaseDirectory,
+  writeServiceConfig,
+} from "@orkestrator/protocol/node/standalone-service";
 import path from "node:path";
 import { serviceManagerCommands, serviceUnit } from "../src/client/service-units.js";
 import { createSandbox, type ClientSandbox } from "./support/client-harness.js";
@@ -145,3 +151,30 @@ describe("orkestrator service", () => {
     });
   });
 });
+
+test.each(["1.0.0", "2.0.0"])(
+  "status reports effective arguments when previous is %s",
+  async (previous) => {
+    const box = await createSandbox();
+    sandboxes.push(box);
+    const dataDir = path.join(box.root, "data");
+    const layout = standaloneLayout(dataDir);
+    await mkdir(layout.root, { recursive: true });
+    await writeServiceConfig(layout, {
+      version: 1,
+      dataDir,
+      bun: process.execPath,
+      bunVersion: Bun.version,
+      args: ["--new-flag"],
+      rollbackTarget: { version: "1.0.0", args: ["--host", "100.64.0.1"] },
+      installedAt: "",
+    });
+    await symlink(releaseDirectory(layout, "1.0.0"), layout.current);
+    await symlink(releaseDirectory(layout, previous), layout.previous);
+    const result = await box.run(["service", "status", "--data-dir", dataDir, "--output", "json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out).result.args).toEqual(
+      previous === "1.0.0" ? ["--host", "100.64.0.1"] : ["--new-flag"],
+    );
+  },
+);

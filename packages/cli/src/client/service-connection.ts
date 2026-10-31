@@ -61,8 +61,21 @@ export async function startupLogExcerpt(
   }
   const lines = text.split("\n");
   const exit = lines.findLastIndex((line) => line.includes(` ${version} exited (`));
+  // Persisted boot attempts can trigger rollback without another child exit.
+  // In that case stop at the rollback message (or the next release's start).
+  const rollback = lines.findIndex(
+    (line) =>
+      line.includes(` ${version} did not start after `) && line.includes("; rolling back to "),
+  );
+  const nextStart = lines.findIndex(
+    (line) => /^\[launcher\] \S+ starting /.test(line) && !line.endsWith(` starting ${version}`),
+  );
+  const end =
+    exit >= 0
+      ? exit
+      : Math.min(...[rollback, nextStart, lines.length].filter((index) => index >= 0));
   return lines
-    .slice(0, exit < 0 ? lines.length : exit)
+    .slice(0, end)
     .filter((line) => line.trim() !== "")
     .slice(-LOG_EXCERPT_LINES)
     .map((line) => line.slice(0, LOG_EXCERPT_MAX_LINE));

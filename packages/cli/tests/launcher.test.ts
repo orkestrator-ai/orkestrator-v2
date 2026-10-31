@@ -80,6 +80,7 @@ async function setup(options: {
   lastReady?: string;
   args?: string[];
   rollbackTarget?: { version: string; args: string[] };
+  installGeneration?: string;
 }): Promise<void> {
   const root = path.join(dataDir, "backend");
   await symlink(path.join(root, "releases", options.current), path.join(root, "current"));
@@ -90,6 +91,7 @@ async function setup(options: {
     path.join(root, "service.json"),
     JSON.stringify({
       version: 1,
+      installGeneration: options.installGeneration,
       dataDir,
       bun: process.execPath,
       bunVersion: Bun.version,
@@ -136,12 +138,21 @@ describe("orkestrator-launcher", () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-"));
     await release("1.0.0", "good");
     await release("2.0.0", "crash");
-    await setup({ current: "2.0.0", previous: "1.0.0", lastReady: "1.0.0" });
+    await setup({
+      current: "2.0.0",
+      previous: "1.0.0",
+      lastReady: "1.0.0",
+      installGeneration: "new-install",
+    });
     const state = () => readJson(path.join(dataDir, "backend", "launcher-state.json"));
     await until(
       () => readJson(path.join(dataDir, "backend-instance.json"))?.appVersion === "1.0.0",
     );
-    expect(state()?.rollback).toMatchObject({ failedVersion: "2.0.0", restoredVersion: "1.0.0" });
+    expect(state()?.rollback).toMatchObject({
+      failedVersion: "2.0.0",
+      restoredVersion: "1.0.0",
+      installGeneration: "new-install",
+    });
     // The restored release was already the last ready one, so only clearing the
     // failure shows the launcher has seen it become ready again.
     await until(() => state()?.bootFailure === null);
@@ -181,12 +192,12 @@ describe("orkestrator-launcher", () => {
   test("records consecutive failed boots when nothing can be rolled back to", async () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-"));
     await release("2.0.0", "crash");
-    await setup({ current: "2.0.0" });
+    await setup({ current: "2.0.0", installGeneration: "new-install" });
     const failure = () =>
       readJson(path.join(dataDir, "backend", "launcher-state.json"))?.bootFailure as
         { version: string; exits: number; at: string } | undefined;
     await until(() => (failure()?.exits ?? 0) >= 2);
-    expect(failure()?.version).toBe("2.0.0");
+    expect(failure()).toMatchObject({ version: "2.0.0", installGeneration: "new-install" });
     expect(Number.isNaN(Date.parse(failure()!.at))).toBe(false);
   }, 30_000);
 
@@ -233,3 +244,32 @@ test("kills live unready children after a bounded grace period and restores the 
   expect(pids).toHaveLength(2);
   for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
 }, 20_000);
+
+test("a corrected reinstall gets fresh boot attempts despite persisted old failures", async () => {
+  dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-reinstall-"));
+  await release("1.0.0", "good");
+  await release("2.0.0", "good");
+  await writeFile(
+    path.join(dataDir, "backend/launcher-state.json"),
+    JSON.stringify({
+      version: 1,
+      installGeneration: "old-install",
+      lastReadyVersion: "1.0.0",
+      bootAttempts: { "2.0.0": 2 },
+      bootFailure: {
+        version: "2.0.0",
+        exits: 2,
+        at: new Date().toISOString(),
+        installGeneration: "old-install",
+      },
+    }),
+  );
+  await setup({ current: "2.0.0", previous: "1.0.0", installGeneration: "new-install" });
+  await until(
+    () => readJson(path.join(dataDir, "backend/launcher-state.json"))?.lastReadyVersion === "2.0.0",
+  );
+  const state = readJson(path.join(dataDir, "backend/launcher-state.json"));
+  expect(state?.installGeneration).toBe("new-install");
+  expect(state?.rollback).toBeNull();
+  expect(state?.bootFailure).toBeNull();
+}, 30_000);

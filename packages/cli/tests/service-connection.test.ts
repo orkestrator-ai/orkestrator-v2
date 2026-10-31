@@ -230,3 +230,17 @@ describe("startup log excerpt", () => {
     expect(await startupLogExcerpt(missing, 0, "2.0.0")).toEqual([]);
   });
 });
+
+test("startup excerpt excludes the restored release when rollback has no exit marker", async () => {
+  const file = path.join(await dataDirectory(), "service.log");
+  await writeFile(
+    file,
+    [
+      "failed-release diagnostic",
+      "[launcher] 2026-10-30T23:29:46.000Z 2.0.0 did not start after 2 attempts; rolling back to 1.0.0",
+      "[launcher] 2026-10-30T23:29:47.000Z starting 1.0.0",
+      ...Array.from({ length: 30 }, (_, i) => `restored release output ${i}`),
+    ].join("\n"),
+  );
+  expect(await startupLogExcerpt(file, 0, "2.0.0")).toEqual(["failed-release diagnostic"]);
+});

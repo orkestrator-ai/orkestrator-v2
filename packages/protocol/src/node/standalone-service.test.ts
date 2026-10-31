@@ -228,3 +228,32 @@ test("satisfiesBunRange understands the published forms", () => {
   expect(satisfiesBunRange("1.4.3", "1.4.4")).toBe(false);
   expect(satisfiesBunRange(undefined, "1.0.0")).toBe(true);
 });
+
+test.each(["bootFailure", "rollback"])(
+  "startup failure accepts only evidence from this install: %s",
+  async (kind) => {
+    const layout = standaloneLayout(dataDir);
+    await mkdir(layout.root, { recursive: true });
+    for (const installGeneration of [undefined, "old-install", "new-install"]) {
+      await writeFile(
+        layout.stateFile,
+        JSON.stringify({
+          version: 1,
+          [kind]:
+            kind === "bootFailure"
+              ? { version: "2.0.0", exits: 2, at: new Date().toISOString(), installGeneration }
+              : {
+                  failedVersion: "2.0.0",
+                  restoredVersion: "1.0.0",
+                  at: new Date().toISOString(),
+                  installGeneration,
+                },
+        }),
+      );
+      const failure = readStartupFailure(layout, "2.0.0", 0, "new-install");
+      if (installGeneration === "new-install")
+        expect(failure).toEqual({ restoredVersion: kind === "rollback" ? "1.0.0" : null });
+      else expect(failure).toBeNull();
+    }
+  },
+);

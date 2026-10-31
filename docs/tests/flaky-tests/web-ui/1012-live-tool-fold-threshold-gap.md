@@ -102,3 +102,16 @@ skipped, only the two native branch-picker cases failed), with evidence in
 `orkestrator-test-run.VyCqpD/browser.log.gz` under the host temporary directory.
 The host still ran other validation during the owner run; the cause remains
 unconfirmed. No group implementation, assertion, timeout or skip changed.
+
+
+## Validation worker review — 2026-10-31
+
+The four-worker browser aggregate passed the fold-threshold cases, but the
+complete unchanged one-worker owner subsequently failed mobile with a 9 pixel
+gap at line 147 and desktop with a 7 pixel gap at line 122 (both expect at most
+2). The owner reported 35 passed and three failed in 166.2 seconds; the third
+failure was a mobile live-group-below-reader `scrollend` timeout. Both
+waiting-group cases passed (0747). This does not establish a root cause or a
+fix. The exact command, concurrent isolated-profile context and retained
+artifacts are recorded in the Validation worker review entry in
+[0747](0747-tool-group-overflow-follow.md). No assertions or timeouts changed.

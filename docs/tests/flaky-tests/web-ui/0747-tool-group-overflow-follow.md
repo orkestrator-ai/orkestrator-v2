@@ -288,3 +288,33 @@ The combined three-owner rerun finished with 50 passed, one skipped and three
 failed in 180.2 s (the other two failures were native branch selection).
 Command and evidence are recorded in the 2026-10-31 Resolve entry in
 [0382](0382-component-browser-parallel-load.md).
+
+
+## Validation worker review — 2026-10-31
+
+The exact browser check ran with `ORKESTRATOR_REVIEW_VALIDATION=1` and
+`ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4`:
+
+```sh
+mise run test:logged -- --name browser -- mise run test:browser
+```
+
+The mobile waiting-group case initially failed and passed its single retry;
+the desktop case failed both attempts. The whole run reported 1,002 passed,
+108 skipped, 13 failed and three flaky in 569.9 seconds. Evidence:
+`/tmp/orkestrator-test-run.ZCNLHR/browser.log.gz`.
+
+Both waiting-group viewport cases passed in the complete unchanged owner,
+with retries disabled:
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=0 mise run test:logged -- --name tool-group-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/review-tool-group-owner
+```
+
+The owner remained non-green: 35 passed and three failed in 166.2 seconds.
+Mobile and desktop fold-threshold cases failed with 9 and 7 pixel gaps
+(1012), and the mobile live-group-below-reader case timed out awaiting
+`scrollend` at line 173. A separate isolated application browser run was active
+on its own profile and server. Evidence:
+`/tmp/orkestrator-test-run.j3n9O4/tool-group-owner.log.gz`.
+No source, assertion, timeout or skip changed. Overflow-follow remains open.

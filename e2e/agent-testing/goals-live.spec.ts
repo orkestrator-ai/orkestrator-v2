@@ -17,6 +17,7 @@ import {
   authenticatedInvoke,
   containerWorkspace,
   hostWorkspace,
+  sidebarNavigator,
   profileStatus,
   repositoryRoot,
   type Environment,
@@ -106,7 +107,15 @@ async function prepare(page: Page) {
     : hostWorkspace(started.worktreePath!);
   const model = await smallestModel(invoke, environment.id);
   record.model = model ?? "provider default";
-  return { invoke, environment: started, workspace, model, container };
+  return {
+    invoke,
+    environment: started,
+    workspace,
+    model,
+    container,
+    projectName: fixture!.name,
+    projectId: fixture!.id,
+  };
 }
 
 /** The cheapest model the catalogue names, so a qualification run costs little. */
@@ -361,5 +370,89 @@ test.describe(`goal loop: ${platform}`, () => {
       await command(identity, "clear");
       expect((await detail(identity)).goal).toBeUndefined();
     });
+  });
+
+  test("the browser: set, watch from elsewhere, reload, pause and clear", async ({
+    page,
+  }, testInfo) => {
+    page.setDefaultTimeout(30_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const { invoke, environment, workspace, model, container, projectName, projectId } =
+      await prepare(page);
+    const other = await invoke<Environment>("create_environment", {
+      projectId,
+      name: `goals-other-${Date.now()}`,
+      networkAccessMode: "restricted",
+      environmentType: "local",
+    });
+    await invoke("start_environment", { environmentId: other.id });
+    const identity = await openTab(invoke, environment, "goals-ui", container, model);
+    const detail = () => invoke<{ goal?: Goal }>("get_native_agent_goal", identity);
+    const open = sidebarNavigator(page, projectName);
+    const status = profileStatus(profile);
+    await page.goto(status.browserUrl!);
+    await open(environment.name);
+    const composeBar = page.getByTestId("shared-native-compose-bar");
+    const input = composeBar.getByRole("textbox").first();
+    const pill = page.getByTestId("goal-pill");
+
+    // Set it by typing, as a person would. The draft clears and the pill appears.
+    await input.fill(
+      `/goal First create goal-ui-1.txt and end your turn without calling report_goal. When told to continue, create goal-ui-2.txt, then call the orkestrator report_goal tool with status "done". --max-iterations 4 --check test -f goal-ui-2.txt`,
+    );
+    await input.press("Enter");
+    await expect(pill).toBeVisible();
+    await expect(input).toHaveValue("");
+    await page.screenshot({ path: testInfo.outputPath("goal-running.png") });
+
+    // A reload mid-goal renders from the snapshot.
+    await page.reload();
+    await expect(page.getByTestId("goal-pill")).toBeVisible();
+
+    // Away from the tab, the loop keeps going with nothing mounted.
+    await open(other.name);
+    await expect(page.getByTestId("goal-pill")).toHaveCount(0);
+    await expect
+      .poll(async () => (await detail()).goal?.status, {
+        timeout: TURN_TIMEOUT_MS,
+        intervals: [2_000],
+      })
+      .toBe("complete");
+    expect(workspace.read("goal-ui-2.txt")).toBeDefined();
+
+    // Back on the tab: the ended state, tiles rather than user bubbles.
+    await open(environment.name);
+    await expect(pill).toBeVisible();
+    await expect(pill).toContainText(/complete/i);
+    await expect(page.getByText("orkestrator-goal", { exact: false })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("goal-complete.png") });
+
+    // The narrow composer keeps the pill reachable.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(pill).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("goal-narrow.png") });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // The panel's own controls, on a goal that is still running.
+    await input.fill(
+      `/goal Run the shell command "sleep 90", then end your turn. --max-iterations 4`,
+    );
+    await input.press("Enter");
+    await expect
+      .poll(async () => (await detail()).goal?.status, { timeout: 30_000 })
+      .toBe("active");
+    await pill.click();
+    const panel = page.getByTestId("goal-panel");
+    await expect(panel).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("goal-panel.png") });
+    await panel.getByRole("button", { name: /^Pause/ }).click();
+    await expect
+      .poll(async () => (await detail()).goal?.status, { timeout: 30_000 })
+      .toBe("paused");
+    await panel.getByRole("button", { name: /^Clear/ }).click();
+    const confirm = page.getByRole("button", { name: /^(Clear goal|Confirm)$/ });
+    if (await confirm.isVisible().catch(() => false)) await confirm.click();
+    await expect.poll(async () => (await detail()).goal, { timeout: 30_000 }).toBeUndefined();
+    await invoke("stop_native_agent_session", identity).catch(() => undefined);
   });
 });

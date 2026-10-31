@@ -939,7 +939,13 @@ test("no indicator flickers on quiet safety reads", async ({ context }, testInfo
 type DirectClientReport = {
   states: Array<{ at: number; state: string }>;
   desyncs: Array<{ at: number; session: string }>;
-  recoveries: Array<{ at: number; session: string; recoveredMissedOutput: boolean }>;
+  resyncs: Array<{ at: number }>;
+  recoveries: Array<{
+    at: number;
+    session: string;
+    via: "snapshot" | "main-resync" | "replay";
+    recoveredMissedOutput: boolean;
+  }>;
 };
 declare global {
   interface Window {
@@ -961,37 +967,78 @@ async function startDirectClient(
       const modulePath = "/src/lib/native/web-gateway.ts";
       const { createBrowserGatewayApi } = await import(/* @vite-ignore */ modulePath);
       const api = createBrowserGatewayApi({ baseUrl, token, terminalTransport: transport });
-      const report: DirectClientReport = { states: [], desyncs: [], recoveries: [] };
+      const report: DirectClientReport = { states: [], desyncs: [], resyncs: [], recoveries: [] };
       api.eventStreamConnection.subscribe((state: string) => {
         report.states.push({ at: Date.now(), state });
       });
-      const stops = [api.listen("environment-updated", () => undefined)];
+      const recoverSnapshot = async (session: string, via: "snapshot" | "main-resync") => {
+        try {
+          const snapshot = await api.invoke("get_terminal_output_snapshot", {
+            sessionId: session,
+          });
+          const recoveredMissedOutput =
+            typeof expectedOutput === "string" && snapshot.output.includes(expectedOutput);
+          await api.invoke("terminal_snapshot_applied", {
+            sessionId: session,
+            generation: snapshot.generation,
+            revision: snapshot.revision,
+          });
+          report.recoveries.push({
+            at: Date.now(),
+            session,
+            via,
+            recoveredMissedOutput,
+          });
+        } catch {
+          // A reconnect can lose its snapshot request too. Keep that failure
+          // observable without leaking terminal bytes or an unhandled promise.
+          report.recoveries.push({
+            at: Date.now(),
+            session,
+            via,
+            recoveredMissedOutput: false,
+          });
+          await api.invoke("terminal_snapshot_failed", { sessionId: session });
+        }
+      };
+      const stops = [
+        api.listen("environment-updated", () => undefined),
+        // Like useTerminal, reconcile after a fresh backend generation even if
+        // a socket cursor can be reused without a channel-level desync.
+        api.listen("native-event-stream-connected", async () => {
+          report.resyncs.push({ at: Date.now() });
+          await Promise.all(sessionIds.map((session) => recoverSnapshot(session, "main-resync")));
+        }),
+      ];
       for (const session of sessionIds) {
+        const decoder = new TextDecoder();
+        let outputTail = "";
         stops.push(
           api.listen(`terminal-output-${session}`, async (payload: unknown) => {
             const desynced = (payload as { desynced?: boolean } | null)?.desynced === true;
-            if (!desynced) return;
+            if (!desynced) {
+              const output = payload as { bytes?: Uint8Array; text?: string } | null;
+              const text =
+                output?.bytes instanceof Uint8Array
+                  ? decoder.decode(output.bytes, { stream: true })
+                  : (output?.text ?? "");
+              // Keep terminal bytes in the page only; evidence records a boolean.
+              outputTail = (outputTail + text).slice(-4096);
+              if (expectedOutput && outputTail.includes(expectedOutput)) {
+                report.recoveries.push({
+                  at: Date.now(),
+                  session,
+                  via: "replay",
+                  recoveredMissedOutput: true,
+                });
+                outputTail = "";
+              }
+              return;
+            }
             report.desyncs.push({ at: Date.now(), session });
             // Follow the consumer's recovery contract: a notice must produce an
             // authoritative snapshot, then acknowledge its cursor to the socket.
-            try {
-              const snapshot = await api.invoke("get_terminal_output_snapshot", {
-                sessionId: session,
-              });
-              const recoveredMissedOutput =
-                typeof expectedOutput === "string" && snapshot.output.includes(expectedOutput);
-              await api.invoke("terminal_snapshot_applied", {
-                sessionId: session,
-                generation: snapshot.generation,
-                revision: snapshot.revision,
-              });
-              report.recoveries.push({ at: Date.now(), session, recoveredMissedOutput });
-            } catch {
-              // A reconnect can lose its snapshot request too. Keep that failure
-              // observable without leaking terminal bytes or an unhandled promise.
-              report.recoveries.push({ at: Date.now(), session, recoveredMissedOutput: false });
-              await api.invoke("terminal_snapshot_failed", { sessionId: session });
-            }
+            await recoverSnapshot(session, "snapshot");
           }),
         );
       }
@@ -1095,16 +1142,19 @@ for (const transport of ["http-sse", "websocket"] as const) {
           .poll(
             async () => {
               const report = await page.evaluate(() => window.directClient.report());
-              return report.recoveries.some(
-                (entry) =>
-                  entry.at >= listeningAt &&
-                  entry.session === sessionId &&
-                  entry.recoveredMissedOutput,
-              );
+              return {
+                desyncs: report.desyncs.filter((entry) => entry.at >= listeningAt),
+                resyncs: report.resyncs.filter((entry) => entry.at >= listeningAt),
+                recoveries: report.recoveries.filter((entry) => entry.at >= listeningAt),
+              };
             },
             { timeout: RECONNECT_BUDGET_MS * 2 },
           )
-          .toBe(true);
+          .toMatchObject({
+            recoveries: expect.arrayContaining([
+              expect.objectContaining({ session: sessionId, recoveredMissedOutput: true }),
+            ]),
+          });
       }
 
       const perClient = await Promise.all(
@@ -1122,6 +1172,14 @@ for (const transport of ["http-sse", "websocket"] as const) {
             })),
             terminalDesyncsAfterBack: report.desyncs.filter((entry) => entry.at >= listeningAt)
               .length,
+            mainResyncsAfterBack: report.resyncs.filter((entry) => entry.at >= listeningAt).length,
+            replayRecoveredMissedOutput: report.recoveries.some(
+              (entry) =>
+                entry.at >= listeningAt &&
+                entry.session === sessionId &&
+                entry.via === "replay" &&
+                entry.recoveredMissedOutput,
+            ),
             recoveredMissedOutput: report.recoveries.some(
               (entry) =>
                 entry.at >= listeningAt &&
@@ -1157,7 +1215,14 @@ for (const transport of ["http-sse", "websocket"] as const) {
       // A terminal's own ladder may find the backend first; it must never lag.
       for (const result of perClient) {
         expect(result.terminalBehindMainMs).toBeLessThan(2_000);
-        expect(result.terminalDesyncsAfterBack).toBeGreaterThan(0);
+        // SSE notifies per-terminal snapshot recovery. WebSockets can also
+        // reconcile a new backend generation through the main stream or replay
+        // every missed revision exactly, which needs no desync notification.
+        if (transport === "http-sse") {
+          expect(result.terminalDesyncsAfterBack).toBeGreaterThan(0);
+        } else if (!result.replayRecoveredMissedOutput) {
+          expect(result.terminalDesyncsAfterBack + result.mainResyncsAfterBack).toBeGreaterThan(0);
+        }
         expect(result.recoveredMissedOutput).toBe(true);
       }
     } finally {

@@ -18,6 +18,8 @@ import type { PtyProcess } from "./pty.js";
 import type { StorageService } from "./storage.js";
 import type { DockerCleanupGrant } from "./docker-cleanup-grants.js";
 import type { CursorSdkLoginHandle } from "./cursor-sdk-bridge.js";
+import type { AgentAccountLoginHandle } from "./agent-accounts-login.js";
+import type { runCommand } from "./shell.js";
 import type { KanbanTask } from "./storage-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxSession } from "./tmux-session-manager.js";
@@ -560,6 +562,62 @@ describe("two BackendRuntimes in one process", () => {
     expect(second.publicApi.reconcileExec("operation-1", async () => null)).not.toBe(observed);
     evaluation.resolve(null);
     await observed;
+  });
+
+  test("the GitHub CLI sign-in is per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const begin = held<AgentAccountLoginHandle>();
+    const starting = first.localServers.gitHubCliLogin.start(() => begin.promise);
+    expect(first.localServers.gitHubCliLogin.progress()).toMatchObject({ state: "pending" });
+    expect(second.localServers.gitHubCliLogin.progress()).toEqual({ state: "idle" });
+
+    const cancel = mock(() => undefined);
+    begin.resolve({
+      url: "https://github.com/login/device",
+      needsCode: false,
+      completion: held<void>().promise,
+      submitCode: () => undefined,
+      cancel,
+    });
+    await starting;
+    expect(second.localServers.gitHubCliLogin.cancel()).toEqual({ state: "idle" });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(first.localServers.gitHubCliLogin.cancel()).toEqual({ state: "idle" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test("each backend's gh runs follow its own selected credential", async () => {
+    const tokens: Array<string | undefined> = [];
+    const commands = createCommandRegistry({
+      projectCreation: {
+        runCommand: (async (
+          _command: string,
+          _args: string[],
+          options?: { env?: NodeJS.ProcessEnv },
+        ) => {
+          tokens.push(options?.env?.GH_TOKEN);
+          return { stdout: "octocat\n", stderr: "" };
+        }) as typeof runCommand,
+      },
+    });
+    const contextSelecting = (githubToken: string): CommandContext => ({
+      ...contextFor(createRuntime()),
+      storage: {
+        loadConfig: async () => ({ global: { useHostGitHubCredentials: false, githubToken } }),
+      } as unknown as StorageService,
+    });
+    const first = contextSelecting("first-pat");
+    const second = contextSelecting("second-pat");
+
+    await commands.get("list_github_clone_accounts")!({}, first);
+    expect(new Set(tokens)).toEqual(new Set(["first-pat"]));
+    tokens.length = 0;
+    await commands.get("list_github_clone_accounts")!({}, second);
+    expect(new Set(tokens)).toEqual(new Set(["second-pat"]));
+    tokens.length = 0;
+    await commands.get("list_github_clone_accounts")!({}, first);
+    expect(new Set(tokens)).toEqual(new Set(["first-pat"]));
   });
 
   test("the Cursor SDK login and agent-account state are per backend", async () => {

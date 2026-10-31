@@ -225,11 +225,14 @@ test("base and detached homes never discover a PR or delete a remote ref", async
     await context.runtime.prMonitor.wakeForCompletion(home.id, context);
     await context.runtime.prMonitor.requestRefresh(home.id, context);
     expect((await storage.getEnvironment(home.id))?.prUrl).toBeNull();
-    await deleteMergedEnvironmentRemoteBranch({
-      ...home,
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-    });
+    await deleteMergedEnvironmentRemoteBranch(
+      {
+        ...home,
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+      },
+      storage,
+    );
     const detached = path.join(root, "detached");
     await runCommand("git", ["clone", checkout, detached]);
     await runCommand("git", ["checkout", "--detach"], { cwd: detached });

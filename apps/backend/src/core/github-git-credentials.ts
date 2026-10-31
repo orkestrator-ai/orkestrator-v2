@@ -1,5 +1,5 @@
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 
 // Git appends get/store/erase as $1. Never store the token, and check the
 // credential request too: URL-scoped configuration alone is not a secret boundary.
@@ -16,12 +16,13 @@ const PAT_HELPER = `!f() {
 
 /** Per-transfer PAT authentication; no secrets in argv, URLs or persisted Git config. */
 export async function gitHubGitCredentials(
+  source: GitHubCliConfigSource | undefined,
   remote: string,
   base?: NodeJS.ProcessEnv,
 ): Promise<{ env?: NodeJS.ProcessEnv; gitOptions: string[] }> {
   const parsed = parseGitHubRepositoryRemote(remote);
   if (!parsed.ok) return { gitOptions: [] };
-  const env = await gitHubCliEnv(base);
+  const env = await gitHubCliEnv(source, base);
   if (!env.GH_TOKEN) return { gitOptions: [] };
   const https = `https://github.com/${parsed.repository.owner}/${parsed.repository.name}.git`;
   return {

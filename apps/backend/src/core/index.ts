@@ -37,7 +37,6 @@ import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-se
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
-import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import {
@@ -608,7 +607,6 @@ export class OrkestratorBackend {
     this.context = context;
     context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
     setManagedGitHubCli(context.pinnedGitHubCli);
-    setGitHubCliConfigSource(async () => (await storage.loadConfig()).global);
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
@@ -1205,11 +1203,10 @@ export class OrkestratorBackend {
         workspaceHead: async (environment) => ({
           branch: environment.branch,
           headRef: (
-            await createGraphEnvironmentShell(context.runtime.environments.fence).git(environment, [
-              "rev-parse",
-              "--verify",
-              "HEAD^{commit}",
-            ])
+            await createGraphEnvironmentShell(context.runtime.environments.fence, storage).git(
+              environment,
+              ["rev-parse", "--verify", "HEAD^{commit}"],
+            )
           ).trim(),
         }),
       }),
@@ -1250,7 +1247,7 @@ export class OrkestratorBackend {
     this.graphRunAttention = new GraphRunAttention(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
-    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence);
+    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence, storage);
     this.graphSystemExecutor = new GraphNodeSystemExecutor({
       storage,
       invoke: invokeCommand,

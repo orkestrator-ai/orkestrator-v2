@@ -7,6 +7,7 @@ import {
 } from "./opencode-agent-tools.js";
 import { OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
+import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 
 export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
@@ -99,6 +100,8 @@ export class LocalServerRuntime {
   readonly piCatalog: PiCatalogProbes;
   /** The single in-flight Cursor SDK sign-in (`cursor-sdk-bridge.ts`). */
   readonly cursorSdkLogin = new CursorSdkLoginSlot();
+  /** The single in-flight GitHub CLI sign-in (`github-cli-setup.ts`). */
+  readonly gitHubCliLogin = new GitHubCliLoginSlot();
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();

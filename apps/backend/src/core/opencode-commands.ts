@@ -6,8 +6,9 @@
  * terminal UI's own controls (`/themes`, `/exit`, `/editor`, …) are not server
  * commands, so an empty discovery stays empty.
  *
- * Facts below come from the pinned 1.19.0 SDK types and the matching server
- * build:
+ * Facts below come from the 1.19.0 SDK types and the matching server build. The
+ * SDK facts (the `Command` type, the directory rewrite) were re-checked on
+ * 1.19.5; the server facts have not been re-proved since 1.19.0:
  *
  * - `Command` is `{ name, description?, agent?, model?, source?, template,
  *   subtask?, hints }` with `source: "command" | "mcp" | "skill"`. There is no

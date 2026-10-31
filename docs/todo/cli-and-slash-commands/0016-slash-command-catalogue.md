@@ -15,7 +15,7 @@ upstream-blocked item and two small verification or hygiene points.
 1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311).
 2. **Codex cold-settle wait in a slow container** (Needs verification): confirm two 1 s re-reads are enough where plugin loading is slower. Status: open.
 3. **Real v2.21.0 pairings** (Needs verification): mixed-version run against real old builds. Status: open, owned by 0015 item 1.
-4. **Stale OpenCode pin comment**: `opencode-commands.ts` still names 1.19.0 while the pin is 1.19.4. Status: open.
+4. **Stale OpenCode pin comment**: `opencode-commands.ts` named 1.19.0 as the pin while the pin had moved on. Status: done (2026-10-31).
 
 ### 1. Claude terminal marker
 
@@ -79,6 +79,8 @@ upstream-blocked item and two small verification or hygiene points.
     - Cons: two places to update when 0015 runs.
 
 ### 4. Stale OpenCode pin comment
+
+Done 2026-10-31 on `main` at `931e5541`; see decision 13 in "Assumptions and decisions". The analysis below was written at pin 1.19.4; the pin is now 1.19.5.
 
 **Problem.** The header comment in `apps/backend/src/core/opencode-commands.ts:9` says its facts come from "the pinned 1.19.0 SDK types", but the pin is `1.19.4` (`apps/backend/package.json:23`).
 
@@ -177,8 +179,8 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   `e2e/agent-testing/slash-command-picker.spec.ts`.
 - Owner comments as of 2026-10-24: Claude `session-manager-commands.ts` names
   Agent SDK 0.3.309 (the pin); Cursor's `http.ts` names 1.0.37, type surface
-  re-checked on 1.0.40 (the pin); `opencode-commands.ts` names 1.19.0 while the
-  pin is 1.19.4 (not re-checked here).
+  re-checked on 1.0.40 (the pin). `opencode-commands.ts` (2026-10-31) names
+  1.19.0, SDK facts re-checked on 1.19.5 (the pin), server facts not.
 
 ## Outstanding work
 
@@ -546,6 +548,20 @@ Made on 2026-10-24 while completing this file.
       could not create a session against today's Grok CLI.
     - Pros: real processes on both sides. Cons: Claude, Codex and Pi old
       builds were not run.
+13. **The OpenCode pin comment (2026-10-31, task 4).**
+    - Options: (a) change the number to 1.19.5; (b) keep 1.19.0 as the version
+      the facts were proved on and say what was re-checked; (c) re-prove the
+      server facts on a private `opencode serve`, then relabel to 1.19.5.
+    - Chosen: (b).
+    - Why: `upgrade-agents.md` moves a version comment only once it has been
+      re-proved, and nothing has re-proved the server facts:
+      `native-agent-commands.md` says the OpenCode row is unproven at 1.19.5. On
+      the installed 1.19.5 SDK the `Command` type is unchanged and `rewrite` in
+      `dist/v2/client.js` still turns the directory header into a query on GET.
+    - Pros: one comment, and honest about what was checked; also drops the word
+      "pinned", which is what went stale twice. Cons: the case-sensitive lookup,
+      built-in templates and read-once facts stay dated to 1.19.0 until the
+      OpenCode row in `native-agent-commands.md` is re-run.
 
 Assumptions:
 

@@ -28,6 +28,19 @@ export const PROBE_NETWORK_MIN_AGE_MS = 24 * 3_600_000;
 /** The name `createProbeNetwork` gives it: `ork-<16 hex owner>-reach-probe-net`. */
 const PROBE_NETWORK_NAME = /^ork-[0-9a-f]{16}-reach-probe-net$/;
 
+function parseCreatedAt(value: string): number | null {
+  // Docker's Go template prints time.Time as a Go time string rather than
+  // RFC 3339. Normalize it explicitly instead of relying on Date.parse's
+  // implementation-specific handling of spaces, nanoseconds and zone names.
+  const goTime =
+    /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))? ([+-]\d{2})(\d{2}) \S+$/.exec(value);
+  const normalized = goTime
+    ? `${goTime[1]}T${goTime[2]}.${(goTime[3] ?? "").padEnd(3, "0").slice(0, 3)}${goTime[4]}:${goTime[5]}`
+    : value;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 /** Probe networks by role label and exact name shape, or null when Docker cannot answer. */
 export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
   const listed = run("docker", [
@@ -51,7 +64,7 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
     );
   return entries.map(([id, name]) => {
     const inspected = run("docker", ["network", "inspect", "--format", "{{.Created}}", id]);
-    const createdAt = inspected.status === 0 ? Date.parse(inspected.stdout.trim()) : Number.NaN;
+    const createdAt = inspected.status === 0 ? parseCreatedAt(inspected.stdout.trim()) : null;
     // `network inspect` lists only running endpoints, so ask `ps -a` for
     // containers in every state. A never-started container matches only the
     // network's name, a started one its id; repeated filters are ORed.
@@ -66,7 +79,7 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
     return {
       id,
       name,
-      createdAt: Number.isFinite(createdAt) ? createdAt : null,
+      createdAt,
       containers: attached.status === 0 ? attached.stdout.split("\n").filter(Boolean).length : null,
     };
   });
@@ -92,15 +105,18 @@ export function staleProbeNetworks(
 export function removeStaleProbeNetworks(
   run: DockerRun,
   now = Date.now(),
-): { removed: string[]; failed: string[]; kept: number } | null {
+): { removed: string[]; failed: string[]; kept: number; unknown: number } | null {
   const networks = listProbeNetworks(run);
   if (networks === null) return null;
   const stale = staleProbeNetworks(networks, now);
+  const unknown = networks.filter(
+    (network) => network.createdAt === null || network.containers === null,
+  ).length;
   const removed: string[] = [];
   const failed: string[] = [];
   for (const network of stale) {
     if (run("docker", ["network", "rm", network.id]).status === 0) removed.push(network.name);
     else failed.push(network.name);
   }
-  return { removed, failed, kept: networks.length - stale.length };
+  return { removed, failed, kept: networks.length - stale.length - unknown, unknown };
 }

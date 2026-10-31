@@ -626,6 +626,12 @@ function defaultContext(): ReportContext {
   };
 }
 
+export function formatProbeNetworkSweepSummary(
+  result: NonNullable<ReturnType<typeof removeStaleProbeNetworks>>,
+): string {
+  return `Removed ${result.removed.length} probe networks; kept ${result.kept} attached or at most a day old; kept ${result.unknown} with unknown age or attachment (Docker could not describe).`;
+}
+
 if (import.meta.main) {
   try {
     const args = process.argv.slice(2).filter((argument) => argument !== "--");
@@ -636,9 +642,7 @@ if (import.meta.main) {
       if (result === null) throw new Error("Docker did not list its networks");
       for (const name of result.removed) console.log(`Removed ${name}`);
       for (const name of result.failed) console.error(`Could not remove ${name}`);
-      console.log(
-        `Removed ${result.removed.length} probe networks; kept ${result.kept} attached or under a day old.`,
-      );
+      console.log(formatProbeNetworkSweepSummary(result));
       if (result.failed.length > 0) process.exitCode = 1;
     } else if (fix !== -1) {
       if (args[fix + 1] !== "legacy-turbo")

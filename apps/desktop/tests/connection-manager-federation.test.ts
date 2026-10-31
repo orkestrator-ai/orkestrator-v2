@@ -90,6 +90,7 @@ type Host = {
   token?: string;
   role?: "client" | "control";
   down?: boolean;
+  eventsUnauthorized?: boolean;
   colorToken?: string;
 };
 
@@ -107,6 +108,7 @@ function installGateways(hosts: Record<string, Host>) {
       return new Response(JSON.stringify({ error: "Authentication required" }), { status: 401 });
     }
     if (url.pathname === "/__orkestrator/events") {
+      if (host.eventsUnauthorized) return new Response("{}", { status: 401 });
       const list = eventSignals.get(url.origin) ?? [];
       list.push(init?.signal as AbortSignal);
       eventSignals.set(url.origin, list);
@@ -1265,5 +1267,23 @@ test("a realm's existing relay-origin preview is replaced by an authorized direc
     scopes.releaseAll();
     connections.dispose();
     setSystemTime();
+  }
+});
+
+test("a refused event stream marks the machine authentication-required without route fallback", async () => {
+  installGateways({ "https://a.example": { installationId: "bk_a", eventsUnauthorized: true } });
+  const connections = manager(
+    new MemoryStore(catalogue([savedBackend("a", ["https://a.example"])])),
+  );
+  try {
+    await connections.initialize();
+    await connections.bind("window", "a");
+    await until(
+      () => connections.getList().connections[1]?.transport === "authentication-required",
+      "stream authentication failure",
+    );
+    expect(connections.getList().connections[1]?.transport).toBe("authentication-required");
+  } finally {
+    connections.dispose();
   }
 });

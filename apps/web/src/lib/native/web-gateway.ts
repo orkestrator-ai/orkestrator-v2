@@ -374,16 +374,30 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     setMainStreamConnectionState("connecting");
   };
 
+  let mainStreamCredentialProbe: AbortController | null = null;
+  const invalidateMainStreamCredentialProbe = () => {
+    mainStreamCredentialProbe?.abort();
+    mainStreamCredentialProbe = null;
+  };
+
   /** An `EventSource` cannot read the status that closed it, so ask the same gate. */
   const checkMainStreamCredential = () => {
+    invalidateMainStreamCredentialProbe();
+    const controller = new AbortController();
+    mainStreamCredentialProbe = controller;
     void fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
       credentials,
       headers: requestHeaders(),
+      signal: controller.signal,
     })
       .then((response) => {
+        if (mainStreamCredentialProbe !== controller || controller.signal.aborted) return;
         if (response.status === 401) mainStreamCredentialRejected();
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (mainStreamCredentialProbe === controller) mainStreamCredentialProbe = null;
+      });
   };
 
   const detectAgentTestSession = async () => {
@@ -753,6 +767,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     source.onerror = () => {
       if (eventSource !== source) return;
       console.warn("[RemoteGateway] Event stream disconnected");
+      invalidateMainStreamCredentialProbe();
       const refused = source.readyState === EVENT_SOURCE_CLOSED;
       // A network failure ends what a refusal told us, so the next one asks again.
       if (!refused) mainStreamCredentialRefused = false;
@@ -775,6 +790,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * they have no watchdog of their own.
    */
   const dropSilentStreams = () => {
+    invalidateMainStreamCredentialProbe();
     stopWatchingMainStream();
     console.warn("[RemoteGateway] Event stream disconnected: the link went silent");
     setMainStreamConnectionState("disconnected");
@@ -797,6 +813,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const afterMainStreamOpened = () => {
+    invalidateMainStreamCredentialProbe();
     mainStreamCredentialRefused = false;
     retryWaitingTerminalFallbacks();
     if (!silentDropSinceMainOpen) return;
@@ -819,6 +836,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const closeEventStreamIfIdle = () => {
     if (hasMainEventListeners()) return;
+    invalidateMainStreamCredentialProbe();
     eventSource?.close();
     eventSource = null;
     streamAbortController?.abort();
@@ -1035,6 +1053,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (bearerToken || baseUrl) {
       const controller = new AbortController();
       stream.controller = controller;
+      stream.fetchOpen = false;
       void (async () => {
         try {
           const response = await fetch(apiUrl(eventStreamPath(stream.event)), {
@@ -1097,6 +1116,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.source = null;
     stream.controller?.abort();
     stream.controller = null;
+    stream.fetchOpen = false;
     if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
     stream.reconnectTimer = null;
     if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource({ defer: true });
@@ -1501,6 +1521,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
     // A replaced gateway's state says nothing about its successor.
+    invalidateMainStreamCredentialProbe();
     setMainStreamConnectionState("idle");
     mainStreamConnectionListeners.clear();
     disposeAgentTestActivity();

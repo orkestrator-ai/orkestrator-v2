@@ -939,6 +939,7 @@ test("no indicator flickers on quiet safety reads", async ({ context }, testInfo
 type DirectClientReport = {
   states: Array<{ at: number; state: string }>;
   desyncs: Array<{ at: number; session: string }>;
+  recoveries: Array<{ at: number; session: string; recoveredMissedOutput: boolean }>;
 };
 declare global {
   interface Window {
@@ -952,24 +953,45 @@ declare global {
 async function startDirectClient(
   page: Page,
   link: OutageLink,
-  options: { token: string; sessionIds: string[]; transport: Transport },
+  options: { token: string; sessionIds: string[]; transport: Transport; expectedOutput?: string },
 ): Promise<void> {
   await page.goto(new URL(BLANK_PATH, link.url).href);
   await page.evaluate(
-    async ({ baseUrl, token, sessionIds, transport }) => {
+    async ({ baseUrl, token, sessionIds, transport, expectedOutput }) => {
       const modulePath = "/src/lib/native/web-gateway.ts";
       const { createBrowserGatewayApi } = await import(/* @vite-ignore */ modulePath);
       const api = createBrowserGatewayApi({ baseUrl, token, terminalTransport: transport });
-      const report: DirectClientReport = { states: [], desyncs: [] };
+      const report: DirectClientReport = { states: [], desyncs: [], recoveries: [] };
       api.eventStreamConnection.subscribe((state: string) => {
         report.states.push({ at: Date.now(), state });
       });
       const stops = [api.listen("environment-updated", () => undefined)];
       for (const session of sessionIds) {
         stops.push(
-          api.listen(`terminal-output-${session}`, (payload: unknown) => {
+          api.listen(`terminal-output-${session}`, async (payload: unknown) => {
             const desynced = (payload as { desynced?: boolean } | null)?.desynced === true;
-            if (desynced) report.desyncs.push({ at: Date.now(), session });
+            if (!desynced) return;
+            report.desyncs.push({ at: Date.now(), session });
+            // Follow the consumer's recovery contract: a notice must produce an
+            // authoritative snapshot, then acknowledge its cursor to the socket.
+            try {
+              const snapshot = await api.invoke("get_terminal_output_snapshot", {
+                sessionId: session,
+              });
+              const recoveredMissedOutput =
+                typeof expectedOutput === "string" && snapshot.output.includes(expectedOutput);
+              await api.invoke("terminal_snapshot_applied", {
+                sessionId: session,
+                generation: snapshot.generation,
+                revision: snapshot.revision,
+              });
+              report.recoveries.push({ at: Date.now(), session, recoveredMissedOutput });
+            } catch {
+              // A reconnect can lose its snapshot request too. Keep that failure
+              // observable without leaking terminal bytes or an unhandled promise.
+              report.recoveries.push({ at: Date.now(), session, recoveredMissedOutput: false });
+              await api.invoke("terminal_snapshot_failed", { sessionId: session });
+            }
           }),
         );
       }
@@ -1005,6 +1027,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
     ).sessionId;
     await invoke("start_local_terminal_session", { sessionId });
     const clients: Array<{ page: Page; link: OutageLink }> = [];
+    const marker = `RESTART-MISSED-${Date.now()}-42`;
     try {
       for (const owner of ["direct-1", "direct-2", "direct-3", "direct-4"]) {
         const link = await startOutageLink({
@@ -1014,7 +1037,12 @@ for (const transport of ["http-sse", "websocket"] as const) {
         });
         const page = await context.newPage();
         clients.push({ page, link });
-        await startDirectClient(page, link, { token, sessionIds: [sessionId], transport });
+        await startDirectClient(page, link, {
+          token,
+          sessionIds: [sessionId],
+          transport,
+          expectedOutput: marker,
+        });
       }
       for (const client of clients) {
         await expect
@@ -1023,6 +1051,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
       }
       await clients[0]!.page.waitForTimeout(2_000);
 
+      for (const { link } of clients) link.setMode("reset");
       const stoppedAt = Date.now();
       await stopBackend(status);
       const gone = Date.now();
@@ -1030,6 +1059,22 @@ for (const transport of ["http-sse", "websocket"] as const) {
       const startingAt = Date.now();
       await startBackend(status);
       const listeningAt = Date.now();
+      // Re-establish the shell as a terminal consumer does after a backend
+      // restart, and generate output while every client is still cut off.
+      await invoke("start_local_terminal_session", { sessionId });
+      await invoke("local_terminal_write", {
+        sessionId,
+        // The computed result cannot be mistaken for the echoed command text.
+        data: `echo ${marker.slice(0, -2)}$((6*7))\n`,
+      });
+      await expect
+        .poll(async () =>
+          (
+            await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })
+          ).output.includes(marker),
+        )
+        .toBe(true);
+      for (const { link } of clients) link.setMode("up");
 
       const terminalKind: LinkRequestKind =
         transport === "websocket" ? "terminal-socket" : "terminal-stream";
@@ -1045,7 +1090,22 @@ for (const transport of ["http-sse", "websocket"] as const) {
           })
           .not.toBeNull();
       }
-      await clients[0]!.page.waitForTimeout(1_000);
+      for (const { page } of clients) {
+        await expect
+          .poll(
+            async () => {
+              const report = await page.evaluate(() => window.directClient.report());
+              return report.recoveries.some(
+                (entry) =>
+                  entry.at >= listeningAt &&
+                  entry.session === sessionId &&
+                  entry.recoveredMissedOutput,
+              );
+            },
+            { timeout: RECONNECT_BUDGET_MS * 2 },
+          )
+          .toBe(true);
+      }
 
       const perClient = await Promise.all(
         clients.map(async ({ page, link }) => {
@@ -1060,9 +1120,14 @@ for (const transport of ["http-sse", "websocket"] as const) {
               state: entry.state,
               afterStopMs: entry.at - stoppedAt,
             })),
-            terminalDesyncsAfterBack: report.desyncs.filter(
-              (entry) => entry.at >= Math.min(mainBack, terminalBack),
-            ).length,
+            terminalDesyncsAfterBack: report.desyncs.filter((entry) => entry.at >= listeningAt)
+              .length,
+            recoveredMissedOutput: report.recoveries.some(
+              (entry) =>
+                entry.at >= listeningAt &&
+                entry.session === sessionId &&
+                entry.recoveredMissedOutput,
+            ),
             mainAttempts: attemptTimes(link, "main-stream", stoppedAt, listeningAt).map(
               (at) => at - stoppedAt,
             ),
@@ -1090,7 +1155,11 @@ for (const transport of ["http-sse", "websocket"] as const) {
       });
       expect(retriesAreSpread(rungs("main-stream"), eventJitterWindowMs)).toBe(true);
       // A terminal's own ladder may find the backend first; it must never lag.
-      for (const result of perClient) expect(result.terminalBehindMainMs).toBeLessThan(2_000);
+      for (const result of perClient) {
+        expect(result.terminalBehindMainMs).toBeLessThan(2_000);
+        expect(result.terminalDesyncsAfterBack).toBeGreaterThan(0);
+        expect(result.recoveredMissedOutput).toBe(true);
+      }
     } finally {
       for (const { page, link } of clients) {
         await page.close().catch(() => undefined);

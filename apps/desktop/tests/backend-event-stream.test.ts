@@ -206,3 +206,42 @@ test("a stream that stops its keepalives, or an attempt nothing answers, is give
     client.stopListening();
   }
 });
+
+for (const initiallyOpen of [false, true]) {
+  test(`a stream 401 exposes authentication rather than an outage (previously open: ${initiallyOpen})`, async () => {
+    console.error = mock(() => undefined);
+    let attempts = 0;
+    globalThis.fetch = Object.assign(
+      mock(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/events")) {
+          attempts += 1;
+          if (initiallyOpen && attempts === 1) {
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.close();
+                },
+              }),
+            );
+          }
+        }
+        return new Response(JSON.stringify({ error: "Token rejected" }), { status: 401 });
+      }),
+      { preconnect: originalFetch.preconnect },
+    );
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "fixture-token", {
+      eventReconnectDelayMs: 1,
+    });
+    const states: string[] = [];
+    client.listen(() => undefined, { onStreamState: (state) => states.push(state) });
+    try {
+      const deadline = Date.now() + 2000;
+      while (!states.includes("unauthorized") && Date.now() < deadline) await Bun.sleep(1);
+      expect(states.at(-1)).toBe("unauthorized");
+      expect(states).toEqual(initiallyOpen ? ["open", "closed", "unauthorized"] : ["unauthorized"]);
+      await expect(client.invoke("get_settings")).rejects.toThrow("Token rejected");
+    } finally {
+      client.stopListening();
+    }
+  });
+}

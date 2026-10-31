@@ -316,7 +316,7 @@ const EVENT_RECONNECT_DELAY_MS = 500;
 const EVENT_RECONNECT_MAX_DELAY_MS = 8_000;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 
-export type BackendStreamState = "open" | "closed";
+export type BackendStreamState = "open" | "closed" | "unauthorized";
 
 export type BackendListenOptions = {
   /** Called when the authoritative stream opens or drops (it reconnects by itself). */
@@ -564,6 +564,7 @@ export class BackendHttpClient {
         Math.min(silenceLimitMs, connectTimeoutMs) / 4,
       );
       watchdog.unref?.();
+      let credentialRejected = false;
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
@@ -571,6 +572,7 @@ export class BackendHttpClient {
           headers: { authorization: `Bearer ${this.token}` },
           signal: attempt.signal,
         });
+        credentialRejected = response.status === 401;
         if (!response.ok || !response.body)
           throw new Error(`Backend event stream returned HTTP ${response.status}`);
         if (signal.aborted) {
@@ -609,7 +611,9 @@ export class BackendHttpClient {
         signal.removeEventListener("abort", abortAttempt);
       }
       if (signal.aborted) return;
-      options.onStreamState?.("closed");
+      // A refused credential proves the backend is reachable. Keep reads enabled
+      // so command responses can expose the authentication failure to the user.
+      options.onStreamState?.(credentialRejected ? "unauthorized" : "closed");
       // A stream that ends cleanly is retried with the same backoff as a failed
       // one, so a peer that accepts and immediately closes cannot spin this loop.
       await new Promise<void>((resolve) => {

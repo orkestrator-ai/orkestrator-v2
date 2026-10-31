@@ -1259,7 +1259,9 @@ describe("a link that drops without an answer", () => {
     console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    let now = 0;
     const api = createBrowserGatewayApi({
+      eventReconnectNow: () => now,
       eventReconnectDelayMs: 1,
       eventStreamSilenceLimitMs: SILENCE_MS,
       eventStreamConnectTimeoutMs: 10_000,
@@ -1279,11 +1281,15 @@ describe("a link that drops without an answer", () => {
     // Keepalives keep it alive past the limit.
     for (let tick = 0; tick < 5; tick += 1) {
       await new Promise((resolve) => setTimeout(resolve, SILENCE_MS / 2));
+      now += SILENCE_MS / 2;
       main.keepalive();
     }
     expect(api.eventStreamConnection.state()).toBe("connected");
     expect(main.closed).toBe(false);
 
+    // Advance only the gateway's clock: a busy host must not turn a late
+    // keepalive timer into an unintended silence before this assertion.
+    now += SILENCE_MS;
     // Then nothing arrives, and nothing errors either.
     await waitForReal(() => main.closed, "The silent stream was never dropped");
     expect(api.eventStreamConnection.state()).toBe("disconnected");
@@ -1353,8 +1359,10 @@ describe("a link that drops without an answer", () => {
       responses.push(entry);
       return new Response(body, { status: 200 });
     }) as unknown as typeof fetch;
+    let now = 0;
     const api = createBrowserGatewayApi({
       ...DIRECT,
+      eventReconnectNow: () => now,
       eventReconnectDelayMs: 1,
       eventStreamSilenceLimitMs: SILENCE_MS,
       eventStreamConnectTimeoutMs: CONNECT_MS,
@@ -1362,12 +1370,14 @@ describe("a link that drops without an answer", () => {
     const stop = api.listen("changed", () => undefined);
     await waitForReal(() => api.eventStreamConnection.state() === "connected", "Never connected");
     for (let tick = 0; tick < 5; tick += 1) {
+      now += SILENCE_MS / 2;
       responses[0]!.push(": keepalive\n\n");
       await new Promise((resolve) => setTimeout(resolve, SILENCE_MS / 2));
     }
     expect(responses).toHaveLength(1);
     expect(api.eventStreamConnection.state()).toBe("connected");
 
+    now += SILENCE_MS;
     await waitForReal(() => responses[0]!.aborted, "The silent stream was never dropped");
     await waitForReal(() => responses.length > 1, "The silent stream was never replaced");
     stop();
@@ -1398,6 +1408,82 @@ describe("a link that drops without an answer", () => {
 });
 
 describe("a stream the gateway refuses for its credential", () => {
+  for (const supersededBy of [
+    "open",
+    "idle",
+    "disposal",
+    "network failure",
+    "new probe",
+  ] as const) {
+    test(`ignores a delayed credential refusal after ${supersededBy}`, async () => {
+      console.warn = mock(() => undefined);
+      MockEventSource.instances = [];
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const timers = manualTimers();
+      const probes: Array<{ signal: AbortSignal; resolve(response: Response): void }> = [];
+      globalThis.fetch = mock((input: unknown, init?: RequestInit) => {
+        if (String(input).endsWith("/agent-test/session")) {
+          return Promise.resolve(new Response("{}"));
+        }
+        // Deliberately resolve even after abort: identity must fence late responses too.
+        return new Promise<Response>((resolve) => probes.push({ signal: init!.signal!, resolve }));
+      }) as unknown as typeof fetch;
+      const lapsed = mock(() => undefined);
+      const target = { location: { protocol: "https:" } } as Pick<
+        Window,
+        "location" | "orkestrator" | "orkestratorGateway"
+      >;
+      installBrowserGatewayApi(target, {
+        eventReconnectDelayMs: 100,
+        eventReconnectRandom: TOP_OF_RANGE,
+        agentTestSessionActivity: true,
+        onCredentialLapsed: lapsed,
+      });
+      const api = target.orkestrator!;
+      const stop = api.listen("changed", () => undefined);
+      try {
+        await flushMicrotasks();
+        const first = MockEventSource.instances[0]!;
+        first.open();
+        first.fail();
+        expect(probes).toHaveLength(1);
+        if (supersededBy === "idle") stop();
+        else if (supersededBy === "disposal") {
+          installBrowserGatewayApi(target, { replaceExisting: true });
+        } else {
+          timers.fire(100);
+          const next = MockEventSource.instances.at(-1)!;
+          if (supersededBy === "open") next.open();
+          else if (supersededBy === "new probe") next.fail();
+          else {
+            next.readyState = EVENT_SOURCE_CONNECTING;
+            next.onerror?.();
+          }
+        }
+        const expected =
+          supersededBy === "open"
+            ? "connected"
+            : supersededBy === "idle" || supersededBy === "disposal"
+              ? "idle"
+              : "disconnected";
+        expect(probes[0]!.signal.aborted).toBe(true);
+        probes[0]!.resolve(new Response("{}", { status: 401 }));
+        await flushMicrotasks();
+        expect(api.eventStreamConnection!.state()).toBe(expected);
+        expect(lapsed).not.toHaveBeenCalled();
+        if (supersededBy === "new probe") {
+          probes[1]!.resolve(new Response("{}", { status: 401 }));
+          await flushMicrotasks();
+          expect(lapsed).toHaveBeenCalledTimes(1);
+          expect(api.eventStreamConnection!.state()).toBe("connecting");
+        }
+      } finally {
+        stop();
+        installBrowserGatewayApi(target, { replaceExisting: true });
+      }
+    });
+  }
+
   test("a same-origin 401 is no outage, and an agent-test tab leaves for its login page", async () => {
     console.warn = mock(() => undefined);
     MockEventSource.instances = [];

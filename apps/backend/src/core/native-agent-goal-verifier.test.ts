@@ -794,6 +794,7 @@ describe("the session itself", () => {
 
 test("Grok resumes after a compact turn and verifies the next report once", async () => {
   const w = await world(answers(PASS), { agent: "grok" });
+  w.state.session = { ...w.state.session, agent: "grok" };
   await w.set("Resume the work after compaction --verifier grok");
   await w.turnEnds({ status: "blocked", message: "compact first" });
   expect(w.goal().status).toBe("blocked");

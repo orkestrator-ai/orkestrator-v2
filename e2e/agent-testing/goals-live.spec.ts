@@ -417,7 +417,16 @@ test.describe(`goal loop: ${platform}`, () => {
     const objective =
       "Reply with the single word waiting and end this turn. Do not call any tools, report_goal, or change any files. Repeat exactly this for each continuation.";
     const planning = await openTab(invoke, environment, "goals-plan", container, model);
-    await invoke("update_native_agent_controls", { ...planning, update: { mode: "plan" } });
+    await invoke("ensure_native_agent_session", {
+      ...planning,
+      sessionMode: "plan",
+      ...(model ? { model } : {}),
+    });
+    const ready = await invoke<Projection>("update_native_agent_controls", {
+      ...planning,
+      update: { mode: "plan" },
+    });
+    expect(ready?.composer?.selectedModeId).toBe("plan");
     await send(planning, `${objective} --max-iterations 2`);
     const planned = await wait(planning, "plan-mode");
     expect(planned.status).toBe("limited");

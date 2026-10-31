@@ -32,6 +32,7 @@ import {
   type GraphSelectCandidate,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphSelectFallback } from "@orkestrator/protocol/graphs/system-actions";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import {
   GraphSystemActionError,
   graphProviderError,
@@ -133,7 +134,11 @@ async function moveBranch(
     );
   }
   const dirty = (
-    await git(ctx, environment, ["status", "--porcelain", "--untracked-files=no"])
+    await retryGitWithoutFsmonitorOnTimeout(
+      ["status", "--porcelain", "--untracked-files=no"],
+      (args) => git(ctx, environment, args),
+      ctx.signal,
+    )
   ).trim();
   if (dirty.length > 0) {
     throw new GraphSystemActionError(

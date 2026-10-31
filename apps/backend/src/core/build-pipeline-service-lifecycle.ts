@@ -81,6 +81,7 @@ import {
   codeRewindRecord,
   codeRewindStateBlocker,
   inspectCodeRewind,
+  readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
 
@@ -1112,11 +1113,7 @@ export class BuildPipelineLifecycle {
               "The branch moved since the rewind was previewed. Review the commits it drops again.",
             );
           }
-          if (
-            (
-              await git(candidate.environmentId, ["status", "--porcelain", "--untracked-files=all"])
-            ).trim()
-          ) {
+          if ((await readWorktreeStatus(git, candidate.environmentId)).trim()) {
             return new Error(
               "The worktree has uncommitted changes, which a reset would destroy. Commit or discard them first.",
             );

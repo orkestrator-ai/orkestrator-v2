@@ -76,7 +76,7 @@ import {
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
-import { stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
+import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux.js";
@@ -1059,10 +1059,10 @@ export async function reconcileContainerDelegationBase(
   if (currentHead === commit && currentBranch === environment.branch) return;
 
   const dirty = (
-    await execute(
-      "docker",
-      ["exec", containerId, "git", "-C", "/workspace", "status", "--porcelain"],
-      { timeoutMs: 30_000 },
+    await retryGitWithoutFsmonitorOnTimeout(["status", "--porcelain"], (args) =>
+      execute("docker", ["exec", containerId, "git", "-C", "/workspace", ...args], {
+        timeoutMs: 30_000,
+      }),
     )
   ).stdout.trim();
   if (dirty) {

@@ -7,6 +7,10 @@ import {
 import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
+import {
+  parseWorkerQuestionRelay,
+  workerQuestionAnswerProblem,
+} from "@orkestrator/protocol/worker-question-relay";
 
 import type { StorageService } from "../storage.js";
 import { agentsMdBranchName, agentsMdRequestKey, type AgentsMdPrResult } from "../agents-md-pr.js";
@@ -19,7 +23,7 @@ import {
   type NodeActionTarget,
 } from "./node-action-requests.js";
 import { executeAgentAccountSwitch } from "./node-account-switch.js";
-import { NodeOutcomeUnknownError } from "./node-link.js";
+import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import {
   describeCoordinatorMail,
@@ -289,6 +293,8 @@ export class NodeCoordination {
         "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
         "create-project": (request, approval) => this.executeCreateProject(request, approval),
         "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
+        "answer-worker-question": (request, approval) =>
+          this.executeWorkerAnswer(request, approval),
         "update-agents-md": (request, approval) => this.executeAgentsMdUpdate(request, approval),
         "switch-agent-account": (request) =>
           executeAgentAccountSwitch(request, {
@@ -512,6 +518,7 @@ export class NodeCoordination {
         "apply-root-changes",
         "update-agents-md",
         "switch-agent-account",
+        "answer-worker-question",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -557,6 +564,10 @@ export class NodeCoordination {
       }
       return clean;
     });
+    const workerQuestion =
+      kind === "answer-worker-question" ? parseWorkerQuestionRelay(args.workerQuestion) : undefined;
+    if (kind === "answer-worker-question" && !workerQuestion)
+      throw new Error("A worker question request carries the question and the proposed answer.");
     return this.actions.create({
       ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
       kind,
@@ -570,6 +581,7 @@ export class NodeCoordination {
       ...(kind === "update-agents-md"
         ? { agentsMd: { changes: parseAgentsMdChanges(agentsMdPayload(args.agentsMd)) } }
         : {}),
+      ...(workerQuestion ? { workerQuestion } : {}),
     });
   }
 
@@ -744,6 +756,80 @@ export class NodeCoordination {
   }
 
   /**
+   * Approved: answer the worker's question with the answer the user settled
+   * on (else the coordinator's proposal), where the worker lives. The node
+   * that owns it re-reads the question and answers only the revision the
+   * request named; a question that went away settles the request `stale`.
+   * A lost answer from a node is never resent: the request settles
+   * outcome-unknown and the coordinator is told to look at the tab.
+   */
+  private async executeWorkerAnswer(request: NodeActionRequest, approval: NodeActionApproval) {
+    const [target] = request.targets;
+    const relay = request.workerQuestion;
+    if (!target?.environmentId || !target.projectId || request.targets.length !== 1 || !relay)
+      throw new Error("The request names one worker question.");
+    const answers = approval.answers ?? relay.proposed;
+    // Malformed or incomplete answers never reach the worker.
+    const problem = workerQuestionAnswerProblem(relay.questions, answers);
+    if (problem) throw new Error(`${problem} Nothing was sent.`);
+    const edited = JSON.stringify(answers) !== JSON.stringify(relay.proposed);
+    const self = await this.options.nodes.selfIdentity();
+    const local = target.nodeId === self;
+    const where = `${relay.tabName ? `tab “${relay.tabName}” of ` : ""}“${target.environmentName ?? target.environmentId}”${local ? "" : ` on ${target.nodeName}`}`;
+    const args = {
+      projectId: target.projectId,
+      environmentId: target.environmentId,
+      tabId: relay.tabId,
+      interactionId: relay.interactionId,
+      revision: relay.revision,
+      answers,
+    };
+    let outcome: { result?: unknown; reason?: unknown };
+    if (local) {
+      outcome = await this.options.invoke<typeof outcome>("answer_project_worker_question", args);
+    } else {
+      const lost = {
+        code: "outcome-unknown",
+        message: `The connection to ${target.nodeName} was lost while it answered the question in ${where}. It was not resent; check the worker's tab.`,
+        outcomeUnknown: true,
+      };
+      try {
+        const routed = await this.options.portal.invokeOnNode({
+          nodeId: target.nodeId,
+          command: "answer_controller_worker_question",
+          args,
+          requestKey: `worker-answer:${request.requestId}`,
+        });
+        if (routed.outcome !== "ok") return lost;
+        outcome = (routed.result ?? {}) as typeof outcome;
+      } catch (error) {
+        if (error instanceof NodeOutcomeUnknownError) return lost;
+        if (error instanceof NodeUnavailableError)
+          throw new Error(`${target.nodeName} is not connected; nothing was sent.`);
+        if (
+          error instanceof Error &&
+          error.message.includes("Unknown command: answer_controller_worker_question")
+        )
+          throw new Error(
+            `${target.nodeName} runs an older Orkestrator that cannot relay answers; update it. Nothing was sent.`,
+          );
+        throw error;
+      }
+    }
+    if (outcome.result === "stale")
+      return {
+        code: "stale",
+        stale: true,
+        message: `${typeof outcome.reason === "string" ? outcome.reason.slice(0, 200) : "The question was no longer waiting."} Nothing was sent to ${where}.`,
+      };
+    if (outcome.result !== "answered") throw new Error("The worker's node gave no answer outcome.");
+    return {
+      code: "answered",
+      message: `Answered the question in ${where} with ${edited ? "the answer as the user edited it" : "the coordinator's proposed answer"}.`,
+    };
+  }
+
+  /**
    * Approved: copy the coordinator's project (this node's copy) to each
    * target, with the location and files the user settled on while approving.
    * The copy runs in the background; its outcome is mailed when it ends.
@@ -832,7 +918,11 @@ export class NodeCoordination {
         body: `${describeNodeAction(request)}: ${request.state}. ${request.result?.message ?? ""}${
           request.kind === "update-agents-md" && request.state === "rejected"
             ? " Do not propose these AGENTS.md entries again in this conversation unless the user asks."
-            : ""
+            : request.kind === "answer-worker-question" && request.state === "rejected"
+              ? " The question is still waiting in the worker's tab for the user; do not propose the same answer again unless the user asks."
+              : request.kind === "answer-worker-question" && request.state === "executed"
+                ? " Its delegation still wakes you when the worker's turn ends."
+                : ""
         }`.trim(),
       },
     );

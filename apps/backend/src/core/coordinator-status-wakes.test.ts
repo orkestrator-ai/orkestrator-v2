@@ -1542,9 +1542,16 @@ describe("waiting blockers", () => {
     const question = waitingStatus(delegation, "e", "t", undefined, "question")!;
     expect(question.headline).toBe("is waiting for an answer to a question");
     expect(question.details[0]).toContain("cannot answer on its behalf");
+    // It may propose an answer the user confirms; approvals get no such hint.
+    expect(question.details[1]).toContain("answer_worker_question");
+    expect(question.details[1]).toContain("only their approval answers the worker");
+    expect(
+      waitingStatus(delegation, "e", "t", undefined, "approval")!.details.join(" "),
+    ).not.toContain("answer_worker_question");
     const combined = waitingStatus(delegation, "e", "t", undefined, "approval-and-question")!;
     expect(combined.headline).toBe("is waiting for an approval and an answer to a question");
     expect(combined.details[0]).toContain("cannot approve or answer on its behalf");
+    expect(combined.details[1]).toContain("Approvals stay with the person in the worker's tab");
     // The key is the episode, never the blocker: a later read cannot resend it.
     expect(waitingStatus(delegation, "e", "t", undefined, "question")!.key).toBe(
       waitingStatus(delegation, "e", "t")!.key,

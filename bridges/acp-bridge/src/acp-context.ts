@@ -6,6 +6,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import {
+  DEFAULT_CAPACITY_RETRY_POLICY,
+  type CapacityRetryPolicy,
+} from "@orkestrator/protocol/capacity-retry";
+import {
   PROTOCOL_VERSION,
   type InitializeRequest,
   type InitializeResponse,
@@ -235,8 +239,23 @@ export interface BridgeStatusPart {
   severity?: "info" | "warning" | "error";
 }
 
+/** The bridge's own wait before continuing a turn a transient provider error ended. */
+export interface BridgeRetryPart {
+  type: "retry";
+  content: string;
+  toolState: "pending" | "success" | "failure";
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+}
+
 export type BridgeMessagePart =
-  BridgeTextPart | BridgeFilePart | BridgeToolPart | BridgeImagePart | BridgeStatusPart;
+  | BridgeTextPart
+  | BridgeFilePart
+  | BridgeToolPart
+  | BridgeImagePart
+  | BridgeStatusPart
+  | BridgeRetryPart;
 
 export interface PromptJournalEntry {
   requestId: string;
@@ -497,6 +516,11 @@ export interface SessionState {
   promptTurnClock?: PromptTurnClock;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
+  /**
+   * Ends the retry wait now, so its owner rechecks the turn: Stop, a close and
+   * an agent exit must not sit out a wait of up to a minute. Never persisted.
+   */
+  wakeRetryWait?: () => void;
   /** `promptSequence` of the turn in which a held request expired unanswered. */
   expiredRequestPromptSequence?: number;
   /**
@@ -989,8 +1013,6 @@ export const MAX_CURSOR_CHILD_PROMPT_BYTES = 4 * 1024;
 /** Leading records of a child transcript scanned for that prompt. */
 export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
-/** Auto-retries for transient provider errors (`resource_exhausted`, `unavailable`). */
-export const RETRIABLE_PROVIDER_MAX_RETRIES = 3;
 /**
  * Continuations of one turn the agent ended on a policy refusal. A read-only
  * coordinator turn that tries each kind of mutation once (create, edit, shell,
@@ -1003,10 +1025,15 @@ export const POLICY_DENIAL_MAX_CONTINUATIONS = 8;
 // the backoff of any deployment that pinned it. A second accepted spelling was
 // considered and rejected — it is config surface no test can distinguish from
 // the default without a timing assertion.
-export const RETRIABLE_PROVIDER_RETRY_BASE_MS = parseDuration(
-  process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,
-  1_000,
-);
+/** Auto-retries for transient provider errors (`resource_exhausted`, `unavailable`). */
+export const RETRIABLE_PROVIDER_RETRY_POLICY: CapacityRetryPolicy = {
+  ...DEFAULT_CAPACITY_RETRY_POLICY,
+  baseDelayMs: parseDuration(
+    process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,
+    DEFAULT_CAPACITY_RETRY_POLICY.baseDelayMs,
+  ),
+};
+export const RETRIABLE_PROVIDER_MAX_RETRIES = RETRIABLE_PROVIDER_RETRY_POLICY.maxAttempts - 1;
 export const PARENT_WATCHDOG_INTERVAL_MS = parseDuration(
   process.env.ACP_PARENT_WATCHDOG_INTERVAL_MS,
   PARENT_WATCH_INTERVAL_MS,

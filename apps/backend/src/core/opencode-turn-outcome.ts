@@ -40,7 +40,12 @@ export async function readOpenCodeTurnTerminalError(
   sessionId: string,
   requestId: string,
   requestOptions: { signal: AbortSignal },
-  dispatch: { failure?: OpenCodeDispatchFailure; now?: number } = {},
+  dispatch: {
+    failure?: OpenCodeDispatchFailure;
+    now?: number;
+    /** A retry still answers this failure (`OpenCodeCapacityRetry`). */
+    retrying?: (error: unknown) => boolean;
+  } = {},
 ): Promise<string | null> {
   const marker = openCodeRequestMarker(requestId);
   const response = await client.session.messages(
@@ -65,6 +70,9 @@ export async function readOpenCodeTurnTerminalError(
           openCodeActionFailureForMessage(asRecord(sessionResponse.data) ?? {}, history[index]) ??
           terminal.message
         );
+      }
+      if (terminal && dispatch.retrying?.(info.error)) {
+        throw new ProviderUnavailableError("OpenCode is about to retry this request");
       }
       if (terminal) return terminal.message;
       if (typeof asRecord(info.time)?.completed === "number") return null;

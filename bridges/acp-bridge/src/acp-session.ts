@@ -1058,6 +1058,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     state.error = error.message;
     // The agent is gone, so nothing will ever complete the tools it had open.
     reconcileStaleToolParts(state, true);
+    state.wakeRetryWait?.();
     state.revision += 1;
     schedulePersist();
   };

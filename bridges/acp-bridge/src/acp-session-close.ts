@@ -109,6 +109,7 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
       ? state.promptSequence + 1
       : state.promptSequence;
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.wakeRetryWait?.();
   }
 
   const children = new Set<AcpProcess>();

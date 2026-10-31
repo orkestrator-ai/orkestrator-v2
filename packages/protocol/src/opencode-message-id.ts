@@ -236,7 +236,21 @@ export function resolveOpenCodeMessageId(
 ): string {
   const existing = findOpenCodeMessageId(entries, requestId);
   if (existing) return existing;
+  return nextOpenCodeMessageIdForRequest(entries, requestId, now, reservations);
+}
 
+/**
+ * A new message ID for a request, even when the request already has one: a turn
+ * continued under the same request after a provider refusal. Ordered like
+ * {@link resolveOpenCodeMessageId}. The shared marker is what keeps every
+ * attempt the same request's, and `findOpenCodeMessageId` reads the newest.
+ */
+export function nextOpenCodeMessageIdForRequest(
+  entries: readonly unknown[],
+  requestId: string,
+  now: number = Date.now(),
+  reservations: readonly string[] = [],
+): string {
   const marker = openCodeRequestMarker(requestId);
   const ids: string[] = [...reservations];
   for (const entry of entries) {

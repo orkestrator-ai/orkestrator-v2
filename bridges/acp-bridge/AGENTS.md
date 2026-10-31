@@ -109,6 +109,19 @@ the record would be dropped).
   deadline decides; a duration or off switch the user set is left alone and
   published as the request's provider limit.
 
+## Transient provider errors
+
+`requestPromptWithRetriableProviderRetries` continues a turn a transient
+provider error ended (`[resource_exhausted]`, `[unavailable]`, Grok's own
+overload sentence on a JSON-RPC error), on the shared capacity backoff
+(`@orkestrator/protocol/capacity-retry`: five attempts, waits of about 2 to 54 s
+with jitter). `ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS` overrides only the base
+wait. The wait shows as a `retry` card settled in place, and anything that ends
+the turn calls `state.wakeRetryWait`, so Stop never sits out a wait. An error
+naming a usage or rate limit, quota or a login is never retried, whatever its
+code (`namesLimitOrLogin`). See
+[1010](../../docs/todo/agent-engines/1010-model-capacity-backoff-retry.md).
+
 ## Policy refusals
 
 - **Refuse with `reject_once`, never `cancelled` or `reject_always`.** Under a

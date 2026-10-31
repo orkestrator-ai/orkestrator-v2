@@ -116,6 +116,25 @@ the root cause of this existing intermittent case remains unestablished.
 Browser validation limits for the same repair are recorded in
 [0382](../web-ui/0382-component-browser-parallel-load.md).
 
+## Hidden flow graph review — 2026-10-31
+
+The required exact `mise run test` rerun repeated this assertion after 261.25 ms.
+The profile had been removed but its JSON ledger entry remained at line 505.
+The web package passed all 10,876 tests; the backend had two failures,
+including the other timing case recorded in this review.
+
+Both complete unchanged owners then passed with one file worker
+(exit 0, 2.4 s):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.Od2gTp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, timeout or
+skip in either owner changed. This repeats the existing intermittent symptom;
+no new cause was established.
+
 ## Settings layout branch, 2026-10-31
 
 The first `mise run test` on this renderer-only branch (nothing in `design/`

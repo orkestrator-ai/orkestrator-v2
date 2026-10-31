@@ -1123,6 +1123,51 @@ describe("zoom and pan", () => {
     }
   });
 
+  for (const observeHide of [true, false]) {
+    test(`centres a stage selected at zero width after showing (hide observed: ${observeHide})`, () => {
+      let width = 1200;
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+      const originalObserver = globalThis.ResizeObserver;
+      const matchMedia = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        ...matchMedia.call(window, query),
+        matches: query.includes("prefers-reduced-motion"),
+      })) as typeof window.matchMedia;
+      const callbacks = new Set<() => void>();
+      globalThis.ResizeObserver = class {
+        constructor(callback: () => void) {
+          callbacks.add(callback);
+        }
+        observe() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver;
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+        configurable: true,
+        get: () => width,
+      });
+      const notify = () => act(() => callbacks.forEach((callback) => callback()));
+      const view = render(<MultiReviewFlowGraph {...panel(4)} />);
+      try {
+        expect(viewport().scrollLeft).toBe(0);
+        width = 0;
+        if (observeHide) notify();
+        view.rerender(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
+        expect(viewport().scrollLeft).toBe(0);
+        if (!observeHide) notify();
+        width = 1200;
+        notify();
+        const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+        expect(viewport().scrollLeft).toBe(layout.width - width);
+      } finally {
+        view.unmount();
+        globalThis.ResizeObserver = originalObserver;
+        window.matchMedia = matchMedia;
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+        else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      }
+    });
+  }
+
   test("restores remembered pan before centering, then recenters the same stage on resize", () => {
     let width = 1200;
     const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");

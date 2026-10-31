@@ -76,6 +76,7 @@ import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tool
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
@@ -271,6 +272,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     sidebarFolderKey(machine.backendId, projectFolderKey(name));
   const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
   const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
+  const sortingStrategy = projectTreeSortingStrategy(tree, sortableIds);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -356,7 +358,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+      <SortableContext items={sortableIds} strategy={sortingStrategy}>
         {tree.map((entry) => {
           if (entry.kind === "project") return renderProject(entry.project);
           const folderActions = sortable

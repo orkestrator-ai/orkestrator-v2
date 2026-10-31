@@ -491,11 +491,13 @@ export class StorageService {
       EnvironmentUnreadReason,
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
+    completionKey?: string,
   ): Promise<Environment> {
     return this.repos.projects.recordEnvironmentSessionCompletion(
       environmentId,
       occurredAt,
       reason,
+      completionKey,
     );
   }
 
@@ -1122,6 +1124,13 @@ export class StorageService {
     queue: PersistedPromptQueue | null;
   }> {
     return this.repos.nativeAgentSessions.readNativeAgentPublicationState(key, queueKey);
+  }
+
+  recordNativeAgentActivityTurn(
+    expected: PersistedNativeAgentSession,
+    state: "active" | "settled",
+  ): Promise<void> {
+    return this.repos.nativeAgentSessions.recordNativeAgentActivityTurn(expected, state);
   }
 
   recordNativeAgentTurnOutcome(

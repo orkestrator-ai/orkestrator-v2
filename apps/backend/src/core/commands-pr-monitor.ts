@@ -292,6 +292,8 @@ export async function detectEnvironmentPullRequest(
     /**
      * Rereads a project home's durable record first, so a lookup follows the
      * home's current checkout rather than the target captured when it was queued.
+     * Also supplies the selected GitHub credential for local `gh` runs;
+     * omitting storage uses the host login.
      */
     storage?: StorageService;
     /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */
@@ -323,7 +325,7 @@ export async function detectEnvironmentPullRequest(
     const { stdout } = await runCommand(gitHubCli(), request.args, {
       cwd: target.worktreePath,
       timeoutMs: PR_DETECTION_TIMEOUT_MS,
-      env: await gitHubCliEnv(),
+      env: await gitHubCliEnv(options.storage),
     });
     const worktreePath = target.worktreePath;
     const parsed = parsePrMonitorDetectionResponse(request, stdout);
@@ -337,7 +339,7 @@ export async function detectEnvironmentPullRequest(
           await runCommand(gitHubCli(), args, {
             cwd: worktreePath,
             timeoutMs: PR_VIEWER_PERMISSION_TIMEOUT_MS,
-            env: await gitHubCliEnv(),
+            env: await gitHubCliEnv(options.storage),
           })
         ).stdout,
     );
@@ -353,7 +355,7 @@ export async function detectEnvironmentPullRequest(
             await runCommand(gitHubCli(), checkRequest.args, {
               cwd: worktreePath,
               timeoutMs: 10_000,
-              env: await gitHubCliEnv(),
+              env: await gitHubCliEnv(options.storage),
             })
           ).stdout,
           detection.headSha,

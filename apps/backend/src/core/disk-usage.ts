@@ -65,6 +65,10 @@ const defaultProbes: DiskUsageProbes = {
   },
 };
 
+/**
+ * Process-wide on purpose: this bounds disk scans on this host, so a bound per
+ * backend would multiply it (docs/architecture/backend-runtime.md).
+ */
 let running = 0;
 const waiting: Array<() => void> = [];
 

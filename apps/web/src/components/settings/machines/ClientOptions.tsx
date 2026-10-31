@@ -4,6 +4,8 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { Switch } from "@/components/ui/switch";
 import { publishConnections } from "@/lib/connections";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { SETTINGS_CARD_CLASS } from "../SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /**
  * This device's route features for the machines it can connect to directly
@@ -52,10 +54,7 @@ export function ClientOptions({ list }: { list: ConnectionList }) {
     },
   ];
   return (
-    <div
-      className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4"
-      data-testid="federation-toggles"
-    >
+    <div className={cn(SETTINGS_CARD_CLASS, "space-y-3 p-4")} data-testid="federation-toggles">
       <div>
         <p className="text-sm font-medium text-zinc-200">This device</p>
         <p className="text-xs text-zinc-500">

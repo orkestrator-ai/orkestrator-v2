@@ -78,6 +78,11 @@ import {
   parseContainerLifecycleError,
 } from "@orkestrator/protocol/container-lifecycle";
 import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsSectionHeader,
+} from "@/components/settings/SettingsPageLayout";
 
 interface EnvironmentSettingsDialogProps {
   open: boolean;
@@ -268,7 +273,12 @@ function AgentExtensionSection({
                 : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
         </span>
       </div>
-      <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/80 bg-card/40 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">
+      <div
+        className={cn(
+          SETTINGS_CARD_CLASS,
+          "grid grid-cols-1 divide-y divide-zinc-800 overflow-hidden md:grid-cols-2 md:divide-x md:divide-y-0",
+        )}
+      >
         <ExtensionCollection
           title="MCP servers"
           emptyLabel="No MCP servers configured"
@@ -822,7 +832,7 @@ export function EnvironmentSettingsDialog({
     switch (section) {
       case "general":
         return (
-          <div className="max-w-2xl space-y-6">
+          <div className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="env-name">Name</Label>
               <Input
@@ -912,7 +922,7 @@ export function EnvironmentSettingsDialog({
           setAgentSettings({ ...agentSettings, executionPolicy: next });
         };
         return (
-          <div className="max-w-2xl space-y-5">
+          <div className="space-y-5">
             <p className="text-sm text-muted-foreground">
               These overrides apply to new native-agent sessions in this environment. Inherit uses
               the backend&apos;s host or container default.
@@ -1031,7 +1041,7 @@ export function EnvironmentSettingsDialog({
         );
       case "network":
         return (
-          <div className="max-w-2xl space-y-4">
+          <div className="space-y-4">
             {environment.environmentType !== "local" && environment.containerId ? (
               <>
                 <EnvironmentAgentToolsStatus />
@@ -1141,7 +1151,7 @@ export function EnvironmentSettingsDialog({
         );
       case "container":
         return (
-          <div className="max-w-2xl space-y-4">
+          <div className="space-y-4">
             {!environment.containerId ? (
               <p className="text-sm text-muted-foreground">
                 This environment has no container yet. Start it to create one.
@@ -1227,7 +1237,7 @@ export function EnvironmentSettingsDialog({
         );
       case "ports":
         return (
-          <div className="max-w-2xl space-y-4">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
                 Expose container ports to the host machine. Changes require a container restart.
@@ -1424,15 +1434,12 @@ export function EnvironmentSettingsDialog({
           extensionCatalogs.find((catalog) => catalog.agent === activeExtensionAgent) ??
           extensionCatalogs[0];
         return (
-          <div className="max-w-5xl space-y-4">
+          <div className="space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-medium">Agent extensions</p>
-                <p className="text-xs text-muted-foreground">
-                  Effective MCP servers, plugins, and skills for this environment. Refreshing
-                  health-checks Claude&apos;s approved MCP servers, which starts each one.
-                </p>
-              </div>
+              <SettingsSectionHeader title="Agent extensions">
+                Effective MCP servers, plugins, and skills for this environment. Refreshing
+                health-checks Claude&apos;s approved MCP servers, which starts each one.
+              </SettingsSectionHeader>
               <Button
                 type="button"
                 variant="outline"
@@ -1475,7 +1482,7 @@ export function EnvironmentSettingsDialog({
               </TabsList>
             </Tabs>
             {!hasLoadedExtensions ? (
-              <div className="flex items-center gap-2 rounded-xl border border-border/80 px-4 py-8 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 rounded-lg border border-zinc-800 px-4 py-8 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Reading each agent's configuration…
               </div>
@@ -1529,7 +1536,14 @@ export function EnvironmentSettingsDialog({
           </>
         }
       >
-        {renderSection}
+        {(section) => (
+          <SettingsPageLayout
+            title={menuItems.find((item) => item.id === section)?.label}
+            width={section === "defaults" || section === "extensions" ? "wide" : "default"}
+          >
+            {renderSection(section)}
+          </SettingsPageLayout>
+        )}
       </FullscreenSettingsLayout>
 
       {/* Explicit destructive reset confirmation */}

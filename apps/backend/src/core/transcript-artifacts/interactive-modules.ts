@@ -205,6 +205,7 @@ function runBuild(source: string, declared: readonly ArtifactDependency[]) {
   } as Bun.BuildConfig);
 }
 
+/** Process-wide on purpose: a fact about this Bun (docs/architecture/backend-runtime.md). */
 let macroCheck: Promise<void> | null = null;
 
 /**

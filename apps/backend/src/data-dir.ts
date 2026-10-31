@@ -30,7 +30,7 @@ export function defaultDataDir(
 /**
  * Whether `dataDir` is the platform default data directory, comparing real
  * paths so a symlink to the default still counts. Only that directory's
- * backend may hold the user's fixed per-user ports (the Control MCP's 34122).
+ * backend may hold the user's fixed per-user ports (`fixed-ports.ts`).
  */
 export function isDefaultDataDir(
   dataDir: string,

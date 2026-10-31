@@ -9,6 +9,7 @@ import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol
 import {
   createPipelineEnvironmentGit,
   createEnvironmentCommandRunner,
+  createGitEnvironmentCommandRunner,
   generateReviewPackage,
   parseGitPorcelainPaths,
   parseReviewArtifactStatOutput,
@@ -697,7 +698,7 @@ describe("pipeline environment Git wiring", () => {
       });
       const lookup = mock(async () => environment);
       const git = createPipelineEnvironmentGit({ getEnvironment: lookup }, fence, (env, guard) =>
-        createEnvironmentCommandRunner(env, guard, execute),
+        createEnvironmentCommandRunner(env, guard, undefined, execute),
       );
       expect(await git("git-env", ["rev-parse", "HEAD"])).toBe("head-sha\n");
       expect(lookup).toHaveBeenCalledWith("git-env");
@@ -724,7 +725,7 @@ describe("pipeline environment Git wiring", () => {
   );
 
   test("refuses a missing environment before creating a runner", async () => {
-    const runner = mock(createEnvironmentCommandRunner);
+    const runner = mock(createGitEnvironmentCommandRunner);
     const git = createPipelineEnvironmentGit(
       { getEnvironment: async () => null },
       { beginMutation: () => () => {} },

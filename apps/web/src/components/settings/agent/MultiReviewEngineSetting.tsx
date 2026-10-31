@@ -1,5 +1,6 @@
 import type { MultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CARD_CLASS } from "../SettingsPageLayout";
 
 const CHOICES: { id: MultiReviewEngine; label: string; description: string }[] = [
   {
@@ -40,7 +41,7 @@ export function MultiReviewEngineSetting({
       <div
         role="radiogroup"
         aria-labelledby="multi-review-engine-heading"
-        className="mt-3 gap-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40"
+        className={cn(SETTINGS_CARD_CLASS, "mt-3 gap-0 overflow-hidden")}
       >
         {CHOICES.map((choice, index) => (
           <label

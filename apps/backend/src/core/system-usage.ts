@@ -23,6 +23,7 @@ interface SystemUsageDependencies {
   totalMemory: () => number;
   freeMemory: () => number;
   ramPercent: () => Promise<number>;
+  ramReader: CachedRamReader;
   diskPercent: (path: string) => Promise<number | null>;
   gpuPercent: () => Promise<number | null>;
   now: () => number;
@@ -111,11 +112,26 @@ export function cpuTimes(cpus: CpuInfo[]): CpuTimeSnapshot {
   return { idle, total };
 }
 
-export function cpuPercent(previous: CpuTimeSnapshot, current: CpuTimeSnapshot): number {
+/** Null means the counters did not describe a measurable CPU interval. */
+export function measuredCpuPercent(
+  previous: CpuTimeSnapshot,
+  current: CpuTimeSnapshot,
+): number | null {
   const elapsed = current.total - previous.total;
   const idle = current.idle - previous.idle;
-  if (elapsed <= 0 || idle < 0) return 0;
+  if (
+    !Number.isFinite(elapsed) ||
+    !Number.isFinite(idle) ||
+    elapsed <= 0 ||
+    idle < 0 ||
+    idle > elapsed
+  )
+    return null;
   return clampPercent(((elapsed - idle) / elapsed) * 100);
+}
+
+export function cpuPercent(previous: CpuTimeSnapshot, current: CpuTimeSnapshot): number {
+  return measuredCpuPercent(previous, current) ?? 0;
 }
 
 export async function readDiskPercent(
@@ -332,36 +348,22 @@ export async function readGpuPercent(
   }
 }
 
-/**
- * Keeps sampling state and probe caches in the backend. Concurrent command
- * calls share one snapshot, and a stale CPU baseline is refreshed over a
- * bounded interval before it is presented as current usage.
- */
-export function createSystemUsageReader(
-  dependencies: Partial<SystemUsageDependencies> = {},
-): (diskPath: string) => Promise<SystemUsageSnapshot> {
-  const cpus = dependencies.cpus ?? os.cpus;
+/** RAM percent at a time; a reading still fresh then is reused and a probe in flight is joined. */
+export type CachedRamReader = (sampledAt: number) => Promise<number>;
+
+export function createCachedRamReader(
+  dependencies: Partial<
+    DarwinRamDependencies & Pick<SystemUsageDependencies, "freeMemory" | "now">
+  > = {},
+): CachedRamReader {
+  const platform = dependencies.platform ?? process.platform;
   const totalMemory = dependencies.totalMemory ?? os.totalmem;
   const freeMemory = dependencies.freeMemory ?? os.freemem;
-  const diskPercent = dependencies.diskPercent ?? readDiskPercent;
-  const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
-  const platform = dependencies.platform ?? process.platform;
   const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
-  const metrics = dependencies.metrics ?? recurringWorkMetrics;
-  const delay =
-    dependencies.delay ??
-    ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  let previousCpuTimes = cpuTimes(cpus());
-  let previousCpuSampledAt = now();
-  let lastCpuUsage: number | null = null;
-  let pendingCpu: Promise<number> | null = null;
-  let cachedGpu: { value: number | null; expiresAt: number } | null = null;
-  let pendingGpu: Promise<number | null> | null = null;
   let cachedRam: { value: number; expiresAt: number } | null = null;
   let pendingRam: Promise<number> | null = null;
   let lastDarwinRam: number | null = null;
-  const pendingReads = new Map<string, Promise<SystemUsageSnapshot>>();
 
   const fallbackRamPercent = (): number => {
     const total = totalMemory();
@@ -389,6 +391,63 @@ export function createSystemUsageReader(
     // rather than os.freemem(), which treats cached files as used.
     return { value: lastDarwinRam ?? fallbackRamPercent(), darwinFailed: true };
   };
+
+  return (sampledAt) => {
+    if (cachedRam && cachedRam.expiresAt > sampledAt) return Promise.resolve(cachedRam.value);
+    if (pendingRam) return pendingRam;
+
+    pendingRam = (async () => {
+      try {
+        const { value, darwinFailed } = await probeRam();
+        cachedRam = {
+          value,
+          expiresAt: now() + (darwinFailed ? RAM_UNAVAILABLE_CACHE_MS : RAM_AVAILABLE_CACHE_MS),
+        };
+        return value;
+      } finally {
+        pendingRam = null;
+      }
+    })();
+    return pendingRam;
+  };
+}
+
+/**
+ * This host's RAM reader, shared by the title-bar meter and the machine-load
+ * sampler so that together they run one `vm_stat` per cache period, not two.
+ */
+export const hostRamReader = createCachedRamReader();
+
+/**
+ * Keeps sampling state and probe caches in the backend. Concurrent command
+ * calls share one snapshot, and a stale CPU baseline is refreshed over a
+ * bounded interval before it is presented as current usage.
+ */
+export function createSystemUsageReader(
+  dependencies: Partial<SystemUsageDependencies> = {},
+): (diskPath: string) => Promise<SystemUsageSnapshot> {
+  const cpus = dependencies.cpus ?? os.cpus;
+  const totalMemory = dependencies.totalMemory ?? os.totalmem;
+  const freeMemory = dependencies.freeMemory ?? os.freemem;
+  const diskPercent = dependencies.diskPercent ?? readDiskPercent;
+  const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
+  const platform = dependencies.platform ?? process.platform;
+  const execute = dependencies.runCommand ?? runCommand;
+  const now = dependencies.now ?? Date.now;
+  const metrics = dependencies.metrics ?? recurringWorkMetrics;
+  const delay =
+    dependencies.delay ??
+    ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  let previousCpuTimes = cpuTimes(cpus());
+  let previousCpuSampledAt = now();
+  let lastCpuUsage: number | null = null;
+  let pendingCpu: Promise<number> | null = null;
+  let cachedGpu: { value: number | null; expiresAt: number } | null = null;
+  let pendingGpu: Promise<number | null> | null = null;
+  const pendingReads = new Map<string, Promise<SystemUsageSnapshot>>();
+  const cachedRamPercent =
+    dependencies.ramReader ??
+    createCachedRamReader({ platform, totalMemory, freeMemory, runCommand: execute, now });
 
   const calculateCpu = async (): Promise<number> => {
     const sampleStartedAt = now();
@@ -444,25 +503,8 @@ export function createSystemUsageReader(
     return pendingGpu;
   };
 
-  const sampleRam = (sampledAt: number): Promise<number> => {
-    if (dependencies.ramPercent) return dependencies.ramPercent();
-    if (cachedRam && cachedRam.expiresAt > sampledAt) return Promise.resolve(cachedRam.value);
-    if (pendingRam) return pendingRam;
-
-    pendingRam = (async () => {
-      try {
-        const { value, darwinFailed } = await probeRam();
-        cachedRam = {
-          value,
-          expiresAt: now() + (darwinFailed ? RAM_UNAVAILABLE_CACHE_MS : RAM_AVAILABLE_CACHE_MS),
-        };
-        return value;
-      } finally {
-        pendingRam = null;
-      }
-    })();
-    return pendingRam;
-  };
+  const sampleRam = (sampledAt: number): Promise<number> =>
+    dependencies.ramPercent ? dependencies.ramPercent() : cachedRamPercent(sampledAt);
 
   return (diskPath) => {
     metrics.requested("system-usage-sample");

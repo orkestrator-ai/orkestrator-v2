@@ -1,5 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
   compareGitHubNames,
@@ -49,12 +49,13 @@ function outputLogins(stdout: string): string[] {
  * page is fetched so none are left out.
  */
 export async function listGitHubCloneAccounts(
+  source: GitHubCliConfigSource | undefined,
   run: typeof runCommand,
 ): Promise<GitHubCloneAccount[]> {
   let viewer: string[];
   let organizations: string[];
   try {
-    const env = await gitHubCliEnv();
+    const env = await gitHubCliEnv(source);
     [viewer, organizations] = await Promise.all([
       run(gitHubCli(), ["api", "--hostname", GITHUB_HOST, "user", "--jq", ".login"], {
         timeoutMs: GITHUB_API_TIMEOUT_MS,
@@ -152,6 +153,7 @@ function parseRepository(value: unknown, protocol: "ssh" | "https"): GitHubClone
 
 /** One bounded page of repositories owned by a GitHub user or organization. */
 export async function listGitHubCloneRepositories(
+  source: GitHubCliConfigSource | undefined,
   owner: string,
   run: typeof runCommand,
   cursor?: string,
@@ -160,7 +162,7 @@ export async function listGitHubCloneRepositories(
   if (cursor !== undefined && (!cursor || cursor.length > CURSOR_MAX_CHARS)) {
     throw new Error("Invalid GitHub repository cursor");
   }
-  const env = await gitHubCliEnv();
+  const env = await gitHubCliEnv(source);
   const [protocol, stdout] = await Promise.all([
     preferredGitProtocol(run),
     run(

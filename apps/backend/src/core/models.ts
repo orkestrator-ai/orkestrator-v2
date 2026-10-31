@@ -734,6 +734,12 @@ export interface PersistedNativeAgentSession {
    * makes. Lets observers settle a turn as failed without reading transcripts.
    */
   turnOutcomes?: PersistedNativeAgentTurnOutcome[];
+  /** Last applied activity for a request; settled roots may still own background work. */
+  activityTurn?: {
+    providerSessionId: string;
+    requestId?: string;
+    state: "active" | "settled";
+  };
   /**
    * Bounded request ids whose turn was still active when a stop was requested.
    * A provider reports a stopped turn as idle, so this is the only durable

@@ -42,7 +42,7 @@ import {
 } from "@orkestrator/protocol/claude-model-catalog";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
-import { getBridgePath } from "./commands-servers.js";
+import { prepareBridgePath } from "./commands-servers.js";
 import { resolveBunBinary } from "./commands-agent-support.js";
 import {
   cancelCursorSdkLogin,
@@ -469,13 +469,14 @@ export function registerProjectCommands(
   });
   // Read-only listings for the "From GitHub" add-project picker. The clone
   // itself goes through `add_project`, which owns locking and rollback.
-  register("list_github_clone_accounts", (args) => {
+  register("list_github_clone_accounts", (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return listGitHubCloneAccounts(runProjectCreationCommand);
+    return listGitHubCloneAccounts(context.storage, runProjectCreationCommand);
   });
-  register("list_github_clone_repositories", (args) => {
+  register("list_github_clone_repositories", (args, context) => {
     assertOnlyKeys(args, ["owner", "cursor"], "arguments");
     return listGitHubCloneRepositories(
+      context.storage,
       asNonBlankString(args.owner, "owner").trim(),
       runProjectCreationCommand,
       args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
@@ -1057,7 +1058,8 @@ export function registerProjectCommands(
    */
   register("cursor_sdk_login_start", async (payload, context) => {
     return startCursorSdkLogin(context, {
-      bridgeEntrypoint: nodePath.join(getBridgePath(context, "cursor-bridge"), "dist", "index.js"),
+      bridgeEntrypoint: async () =>
+        nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
       runtime: resolveBunBinary(context),
       // A client opens the link in its own browser, which may be on another
       // machine. Without the flag (an older client) this machine's desktop

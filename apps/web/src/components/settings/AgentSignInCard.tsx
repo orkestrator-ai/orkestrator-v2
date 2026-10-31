@@ -28,6 +28,7 @@ import type {
   NativeAgentAuthState,
   NativeAgentAuthStatus,
 } from "@orkestrator/protocol/native-agent";
+import { SETTINGS_CARD_CLASS } from "./SettingsPageLayout";
 
 const STATE_LABELS: Record<NativeAgentAuthState, string> = {
   "signed-in": "Signed in",
@@ -105,10 +106,7 @@ export function AgentSignInCard({
   const command = TERMINAL_COMMANDS[platform];
 
   return (
-    <section
-      aria-label={`${label} sign-in`}
-      className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4"
-    >
+    <section aria-label={`${label} sign-in`} className={cn(SETTINGS_CARD_CLASS, "p-4")}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h3 className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">

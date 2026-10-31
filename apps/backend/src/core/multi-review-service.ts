@@ -518,7 +518,10 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     workflow: MultiReviewWorkflow,
     selection: MultiReviewModelSelection,
   ) => Promise<BuildPipelineProvider>;
-  providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
+  providerDependencies?: Pick<
+    ProviderDependencies,
+    "openCodeClient" | "monitorRetryMs" | "planUsage"
+  >;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;
   resolveAgentToolConnection?: (

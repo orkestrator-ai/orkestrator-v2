@@ -316,10 +316,13 @@ export function registerPullRequestCommands(
             }
 
             if (!mergedStatePersisted) {
-              await deleteMergedEnvironmentRemoteBranch({
-                ...environment,
-                prState: "merged",
-              }).catch(() => undefined);
+              await deleteMergedEnvironmentRemoteBranch(
+                {
+                  ...environment,
+                  prState: "merged",
+                },
+                context.storage,
+              ).catch(() => undefined);
             }
 
             // Reconcile the linked task before deletion untracks the environment.

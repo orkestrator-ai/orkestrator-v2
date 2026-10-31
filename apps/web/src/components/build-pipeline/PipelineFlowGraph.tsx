@@ -107,8 +107,12 @@ export function pipelineNodeStatusLabel(
 /** The user skipped this step: its session, or the validation run it shows. */
 function isSkipped(node: PipelineFlowNode, pipeline: BuildPipeline): boolean {
   if (node.hasValidation) {
-    const run = pipeline.validationRun;
-    return run !== undefined && run.id === pipeline.skippedValidationRunId;
+    const run = node.validationRun ?? pipeline.validationRun;
+    if (!run) return false;
+    return (
+      run.id === pipeline.skippedValidationRunId ||
+      pipeline.validationHistory?.some((entry) => entry.runId === run.id && entry.skipped) === true
+    );
   }
   return node.session?.skipped === true;
 }
@@ -135,7 +139,7 @@ function nodeDetail(
       break;
   }
   if (node.kind === "prepare" && !node.agent) {
-    const run = pipeline.validationRun;
+    const run = node.validationRun ?? pipeline.validationRun;
     return run ? plural(run.plan.commands.length, "check") : "Validation";
   }
   if (!node.agent) return "";
@@ -239,8 +243,8 @@ export function pipelineNodeView({
     severity: node.issueCounts,
     findingsLabel: issues === undefined ? undefined : plural(issues, "issue"),
     validation:
-      node.hasValidation && pipeline.validationRun
-        ? validationChips(pipeline.validationRun)
+      node.hasValidation && (node.validationRun ?? pipeline.validationRun)
+        ? validationChips(node.validationRun ?? pipeline.validationRun)
         : undefined,
     error: node.error,
     idleIcon: PIPELINE_IDLE_ICON[node.kind],

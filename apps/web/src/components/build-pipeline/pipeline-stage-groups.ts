@@ -9,6 +9,51 @@ export type PipelineStageItem =
   | { kind: "validation"; id: string; key: string };
 
 export type ValidationRun = NonNullable<BuildPipeline["validationRun"]>;
+export type ValidationSummary = NonNullable<BuildPipeline["validationHistory"]>[number];
+
+/** Shown with an earlier pass's checks, whose output the record does not keep. */
+export const ARCHIVED_VALIDATION_NOTE =
+  "An earlier pass's run: its results are kept, its command output is not.";
+
+/**
+ * An earlier pass's validation summary as a read-only run, so its Prepare
+ * node and Tests view render like the live one. Output paths are empty, so
+ * nothing is fetched, and no result is running, so nothing can be stopped.
+ */
+export function validationRunFromSummary(summary: ValidationSummary): ValidationRun {
+  return {
+    id: summary.runId,
+    plan: {
+      headRef: summary.headRef,
+      commands: summary.commands.map((command) => ({
+        id: command.id,
+        command: command.command,
+        cwd: ".",
+        dependsOn: [],
+        resources: [],
+        weight: 1,
+        timeoutMs: 0,
+      })),
+      limitations: [ARCHIVED_VALIDATION_NOTE],
+    },
+    status: summary.status,
+    startedAt: summary.startedAt,
+    ...(summary.completedAt ? { completedAt: summary.completedAt } : {}),
+    ...(summary.error ? { error: summary.error } : {}),
+    results: summary.commands.map((command) => ({
+      id: command.id,
+      command: command.command,
+      status: command.status,
+      exitCode: command.exitCode,
+      stdoutPath: null,
+      stderrPath: null,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      durationMs: command.durationMs,
+      limitation: null,
+    })),
+  };
+}
 export type ValidationOutcome = "running" | "failed" | "cancelled" | "incomplete" | "passed";
 
 /**

@@ -63,3 +63,23 @@ instead of `release/2.0`. This observation remains non-green in the complete
 owner and is not a newly established flake. No assertions, deadlines or skips
 changed. Evidence: host temporary directory
 `orkestrator-test-run.E3EaSR/recorded-browser-owners.log.gz`.
+
+## Pipeline validation-history review, 2026-10-30
+
+The unchanged desktop steering case failed in the required full browser rerun
+(`mise run test:logged -- --name repaired-browser-suite -- mise run test:browser`):
+line 719 received `The Cursor session has no running turn to steer` instead of
+no error. The suite reported 974 passed, 106 skipped and four failed (764.2 s).
+The complete unchanged owner also failed, now waiting at line 724 for the
+steer-saturated runtime card (30-second deadline): 19 passed, 20 skipped and
+one failed in 136.3 s. No new isolated pass was established.
+
+```sh
+mise run test:logged -- --name recorded-close-retention -- bunx playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts --workers=1
+```
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.CtuZX3/repaired-browser-suite.log.gz` and
+`orkestrator-test-run.frrs8L/recorded-close-retention.log.gz`. No owner source,
+assertion, timeout or skip changed. The fixture lifecycle race remains a
+hypothesis; this turn does not establish its cause.

@@ -61,3 +61,19 @@ The exact default-suite rerun subsequently passed (exit 0, 170.0 s):
 ```sh
 mise run test:logged -- --name review-repaired-default -- mise run test
 ```
+
+
+## Pipeline validation-history review, 2026-10-30
+
+`mise run test:logged -- --name repaired-unit-suite -- mise run test` repeated
+this unchanged owner failure. The startup case exhausted its 15-second budget (15005.18 ms); desktop totals were 1,363 passed, 16 skipped and one failed.
+The complete unchanged owner then passed alone with exit 0 in 1.2 s:
+
+```sh
+mise run test:logged -- --name recorded-bridge-builds -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence is `orkestrator-test-run.jn7K1f/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Passing output was removed by the runner.
+No owner implementation, assertion, timeout or skip changed; the cause remains
+unconfirmed.

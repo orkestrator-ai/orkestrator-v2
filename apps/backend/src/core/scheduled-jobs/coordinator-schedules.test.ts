@@ -605,6 +605,21 @@ describe("coordinator schedule edits", () => {
     const retimed = await call("main", "update_schedule", { scheduleId: id, at: "+3h" });
     expect(retimed.isError).toBe(true);
     expect(failure(retimed)).toContain("permission");
+    // Anything else that can move when it fires is refused the same way: a
+    // wider catch-up window would let a missed timer fire days late.
+    for (const change of [{ catchUpMinutes: 7 * 24 * 60 }, { timeZone: "America/New_York" }]) {
+      const moved = await call("main", "update_schedule", { scheduleId: id, ...change });
+      expect(moved.isError).toBe(true);
+      expect(failure(moved)).toContain("permission");
+    }
+    expect(service.get({ kind: "operator" }, id)).toMatchObject({
+      catchUpMinutes: 15,
+      timeZone: "Europe/London",
+    });
+    // A rename moves nothing.
+    const renamed = await call("main", "update_schedule", { scheduleId: id, name: "Switch check" });
+    expect(renamed.isError).not.toBe(true);
+    expect(renamed.structuredContent).toMatchObject({ carriesAccountSwitchPermission: true });
     const repeating = await call("main", "update_schedule", {
       scheduleId: id,
       everyMinutes: 60,

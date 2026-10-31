@@ -973,9 +973,13 @@ stopped its turn with stop_worker_turn, before it sent a report") and the
 worker's last message. On this node a stop the agent confirms settles the
 delegation at once rather than on the next edge or sweep, so the tab takes a
 `send_prompt_to_tab` straight away, in that turn or the next; an unconfirmed
-one settles on the turn end. For a worker on another node the command node
-asks that node for the worker's state at once, and the usual remote rules
-(seen working, or the idle grace period) decide when it settles. The background-work hold above is skipped for a
+one settles on the turn end. For a worker on another node, after any stop
+that reached a running turn (confirmed or not), the command node asks that
+node for the worker's state at once, and the usual remote rules (seen
+working, or the idle grace period) decide when it settles. The notice keeps
+the stop note however the delegation closes: a turn end, or an environment
+that failed or stopped meanwhile ("… failed after you stopped its turn with
+stop_worker_turn"). The background-work hold above is skipped for a
 stopped turn. A stop that finds the tab idle marks nothing. A follow-up the
 worker has not read yet still keeps the delegation open, as it does for any
 turn end, so the worker's next turn answers it.

@@ -299,6 +299,24 @@ async function toolScheduleAction(
   });
 }
 
+/**
+ * Whether an update can change when a schedule fires: its trigger, the zone
+ * its wall times are read in, or how late a missed fire may still run.
+ */
+function movesFire(
+  timing: Pick<ScheduleUpdateInput, "at" | "cron" | "startAt" | "timeZone" | "catchUpMinutes">,
+  everyMinutes: number | undefined,
+): boolean {
+  return (
+    timing.at !== undefined ||
+    timing.cron !== undefined ||
+    everyMinutes !== undefined ||
+    timing.startAt !== undefined ||
+    timing.timeZone !== undefined ||
+    timing.catchUpMinutes !== undefined
+  );
+}
+
 /** The reminder's subject is "Scheduled reminder: <name>". */
 function selfTimerName(body: string): string {
   const summary = body.replace(/\s+/g, " ").trim();
@@ -543,7 +561,7 @@ function registerScheduleEditTools(
     {
       title: "Change a schedule",
       description:
-        "Change one of your schedules: its name, its time (exactly one of at, cron or everyMinutes replaces the old one), timeZone, catchUpMinutes or its action. Fields you leave out keep their value. A new action is checked as create_schedule checks it: it runs as you, with your permissions at fire time, and anything you could not do directly is refused. Only the schedule's owner can change its action. A self-timer that carries the user's account-switch permission keeps it only for the time it was given for: to retime it, give the action again with authorizeAccountSwitch in a turn the user started, or cancel it and create a new one. Giving a finished one-shot a new time runs it again.",
+        "Change one of your schedules: its name, its time (exactly one of at, cron or everyMinutes replaces the old one), timeZone, catchUpMinutes or its action. Fields you leave out keep their value. A new action is checked as create_schedule checks it: it runs as you, with your permissions at fire time, and anything you could not do directly is refused. Only the schedule's owner can change its action. A self-timer that carries the user's account-switch permission keeps it only for the time it was given for: to change its time, timeZone or catchUpMinutes, give the action again with authorizeAccountSwitch in a turn the user started, or cancel it and create a new one. Giving a finished one-shot a new time runs it again.",
       inputSchema: z
         .object({ scheduleId, ...timingFields, action: actionSchema("coordinator").optional() })
         .strict(),
@@ -567,10 +585,12 @@ function registerScheduleEditTools(
         scheduled = await toolScheduleAction(resolved, action, repeating);
         if (action.type === "remind_me" && timing.name === undefined)
           timing.name = selfTimerName(action.body!);
-      } else if (retimed && scheduleAccountSwitchGrant(existing.action)) {
-        // The user's permission was for the time they gave; a new time needs their word again.
+      } else if (movesFire(timing, everyMinutes) && scheduleAccountSwitchGrant(existing.action)) {
+        // The user's permission was for the time they gave; anything that can
+        // change when it fires (a new time, zone or catch-up window) needs
+        // their word again.
         throw new Error(
-          "This self-timer carries the user's permission to switch accounts at the time it was set for. To change its time, give the action again (remind_me with authorizeAccountSwitch) in a turn the user started, or cancel it and create a new one.",
+          "This self-timer carries the user's permission to switch accounts at the time it was set for. To change at, cron, everyMinutes, startAt, timeZone or catchUpMinutes, give the action again (remind_me with authorizeAccountSwitch) in a turn the user started, or cancel it and create a new one. Its name can still be changed.",
         );
       }
       const updated = await resolved.update(scheduleId, {

@@ -25,6 +25,7 @@ let routed: string[];
 let activity: "idle" | "working";
 let dispatches: Array<Record<string, unknown>>;
 let stops: number;
+let stopConfirmed: boolean;
 const loseAnswer = new Set<string>();
 
 const tool = (name: string, input: Record<string, unknown>) =>
@@ -91,6 +92,7 @@ beforeEach(async () => {
   activity = "working";
   dispatches = [];
   stops = 0;
+  stopConfirmed = true;
   const leafContext = {
     storage: leaf,
     emit: () => undefined,
@@ -106,6 +108,7 @@ beforeEach(async () => {
       }),
       stopProjectionSession: async () => {
         stops += 1;
+        if (!stopConfirmed) return { turn: { phase: "running" } };
         activity = "idle";
         return { turn: { phase: "idle" } };
       },
@@ -241,6 +244,24 @@ test("a confirmed remote stop reports the waiting delegation", async () => {
   });
   expect(idle.structuredContent).toMatchObject({ stopped: false });
   expect((await delegation(other))?.stopRequestedAt).toBeUndefined();
+});
+
+test("an unconfirmed remote stop still asks the node for the worker's state at once", async () => {
+  const id = await remoteDelegation("job-slow");
+  stopConfirmed = false;
+  const settle = spyOn(world.coordinator, "settleRemoteWorker");
+  const stopped = await tool("stop_worker_turn", {
+    requestId: "stop-slow",
+    environmentId: workerId,
+    tabId: "agent",
+  });
+  expect(stopped.structuredContent).toMatchObject({
+    stopped: true,
+    acknowledged: false,
+    delegationOpen: true,
+  });
+  expect(settle).toHaveBeenCalledWith("bk_leaf", workerId);
+  expect((await delegation(id))?.stopRequestedAt).toBeString();
 });
 
 test("remote terminal tabs and the node's project checkout are refused", async () => {

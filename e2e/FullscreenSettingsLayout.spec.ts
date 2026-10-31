@@ -155,7 +155,7 @@ test("narrow settings use the selector to reach the last section with the keyboa
   await expect(page.getByRole("listbox")).toBeHidden();
 });
 
-test("with machines attached the header lists them and the title moves right", async ({
+test("with machines attached the header lists them and the content owns its title", async ({
   page,
 }, testInfo) => {
   const mobile = testInfo.project.name === "mobile-chromium";
@@ -174,7 +174,8 @@ test("with machines attached the header lists them and the title moves right", a
     const title = page.getByRole("heading", { name: "Section 1" });
     const stripBox = await strip.boundingBox();
     const titleBox = await title.boundingBox();
-    expect(titleBox!.x).toBeGreaterThan(stripBox!.x + stripBox!.width);
+    expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
+    await expect(title).toHaveCount(1);
   }
 
   await chip("Desk").click();

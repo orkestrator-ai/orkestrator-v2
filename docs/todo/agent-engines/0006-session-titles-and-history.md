@@ -1,153 +1,169 @@
 # Session titles and history
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `931e55417` (2026-10-31).
+
+Every session should have a sensible title that the backend owns. Fork, rewind
+and branch navigation should be offered wherever the vendor supports them,
+through the shared session-action bus.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-31 against main at `931e55417`, with Claude CLI 2.1.314 and Agent SDK 0.3.314, Codex 0.166.0 and `@cursor/sdk` 1.2.0.
+
+The previous analysis was written against `863b5782`, before #1337 landed, so it listed tasks 1 to 5 as open while the rest of this file said they were done. This analysis replaces it. Each task below says what was already there, what the recheck found and what changed.
 
 ### Tasks
 
-1. **Backend-owned title generation**: move title generation out of the Codex and Claude bridges into one backend service. Status: open (Claude's generator is already dead code).
-2. **External Codex rewinds**: adopt `thread/reverted` and trim the served transcript. Status: open.
-3. **Codex archive**: offer `thread/archive` / `unarchive` for explicit removal from the resume list. Status: open.
-4. **Cursor archived agents**: hide `SDKAgentInfo.archived` agents in the resume list. Status: open.
-5. **Claude history decisions**: decide message-level rewind and `getSubagentMessages()` rehydration. Status: open.
-6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: open.
-7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: blocked (on task 1).
+1. **Backend-owned title generation**: one backend service, nothing in the bridges. Status: done (#1337; hardened on 2026-10-31).
+2. **External Codex rewinds**: adopt `thread/reverted` and trim the served transcript. Status: done (#1337; rechecked at 0.166.0).
+3. **Codex archive**: explicit removal from the resume list, as a shared action. Status: done (#1337 for Codex; Cursor added on 2026-10-31).
+4. **Cursor archived agents**: out of the resume list by default, reachable by a toggle. Status: done (2026-10-31; supersedes the hide-only decision 8).
+5. **Claude history decisions**: subagent rehydration and message-level rewind. Status: open (rehydration done; message rewind awaits the user's decision).
+6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: open (needs signed-in runs).
+7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: open (offline half done; the signed-in run remains).
 
 ### 1. Backend-owned title generation
 
-**Problem.** Titles come from three places with different behaviour. Codex sessions get a model-generated title from a bridge subprocess; Claude, Cursor, Grok, Pi and OpenCode sessions get the backend's first-message fallback or the provider's own title. Users see inconsistent title quality by platform.
+**Problem.** Titles came from three places with different behaviour, so title quality depended on the platform.
 
-**Context.** The file's constraints apply: never generate in the renderer, never inherit the user's tools/MCP/settings/hooks, leave no resumable transcript, and keep `--safe-mode` (not `--bare`) for Claude so OAuth still works. Credentials differ per environment (host vs container), which is why the bridges did this originally.
+**Context.** Never generate in the renderer, never inherit the user's tools, MCP, settings, hooks or plugins, leave no resumable transcript, and keep `--safe-mode` (not `--bare`) for Claude so OAuth still works.
 
-**Investigation.** Still accurate, with one sharpening. Codex still generates live: `generateSessionTitleWithCodexExec` (`bridges/codex-bridge/src/session-titles.ts:386`) is wired at `bridges/codex-bridge/src/index.ts:816-819` and called once per session from `bridges/codex-bridge/src/app-server-runtime-prompt.ts:1354-1380`, which dual-writes `thread/name/set` and the bridge's `session-titles.jsonl` index. `session-titles.ts` is not only the generator: it also owns that index (`readPersistedSessionTitleEntries` :467, `persistSessionTitle` :529, `normalizeExplicitSessionTitle` :19), imported by six other modules, so "delete `session-titles.ts`" really means "delete its generator half". Claude's `generateTitleViaCli` (`bridges/claude-bridge/src/services/session-manager-core.ts:1509`) is reached only from `generateAndSetSessionTitle` (:1556), which has no caller, so Claude sessions get no generated title today, only the backend fallback. The backend fallback and push-back are at `apps/backend/src/core/native-agent-transcript-projection.ts:5076-5100`. No title service exists under `apps/backend/src/core/` (only `tmux-transcript-title.test.ts`). Recent title work (#1318, `9791a425`) only changed fallback filtering.
+**Investigation.** The service is live: `session-title-service.ts` and `session-title-runners.ts`, called from `native-agent-session-titles.ts`. No bridge generates a title. Three things were found on 2026-10-31.
+
+- The Codex run was not hermetic. Against the real CLI (0.164.0 and 0.166.0) and a loopback endpoint, each title request carried the name and description of every skill in `$CODEX_HOME/skills` and `~/.agents/skills`, offered `request_user_input` and `view_image`, and included the permissions text and environment context. At 0.166.0, a `$skill` in the first message also sent that skill's whole `SKILL.md`; that was not tried on 0.164.0. The old parser test ran only `--help`, so it could not see any of this.
+- The recommended option's cost, "needs a setting or disclosure" for a first message crossing vendors, had not been met: the only control was an environment variable.
+- To-do 1020's question is answered: `claude -p` exiting 1 on startup failure does not affect titles. See below.
+
+*`claude -p` exit codes.* The pinned CLI and 2.1.309 were run with the production arguments against a loopback endpoint. Missing credentials, HTTP 400, 401, 403, 404, low credit and 529, an unusable proxy, an unusable temporary directory and a malformed response all exit 1 on both versions, with the error on stdout or stderr. `runCommand` rejects any non-zero exit, so the error text does not become a title; the service rests that strategy and moves to the next. The two versions behaved the same in every case tried, so the change the upstream note describes was not reproduced. Exit 1 is the safe direction either way: the runner treats exit 0 stdout as the title, so only a failure that exited 0 could have been misread. Most `SDKStartupFailureReason` values could not be triggered offline (the `org_*` and managed-settings reasons need a policy), and that rests on the upstream note that they exit 1.
 
 **Decisions.**
 
 - **Where does the generator run?**
-  - **Backend service that runs the hermetic CLI through the environment's runtime (recommended).** One service in `apps/backend/src/core/`, choosing a strategy from the credentials the environment already has, executing host-side or via `docker exec` for containers.
-    - Pros: matches the file's goal; one place for the isolation flags; Cursor, Grok, Pi and OpenCode can gain generated titles.
-    - Cons: the backend must know how to spawn each CLI per runtime; container exec adds latency and a failure mode.
-  - **Keep generation in the bridges, add a shared route.** Each bridge exposes `POST /session/:id/title/generate`; the backend decides when to call it.
-    - Pros: credentials stay where they already work; smaller change.
-    - Cons: still N implementations; Cursor and Grok bridges would need generators they lack.
-- **What to do with Claude's dead generator now?**
-  - **Delete `generateTitleViaCli` / `generateAndSetSessionTitle` in a small change first (recommended).** Move the flag list into the new service when it lands.
-    - Pros: removes unreachable code that suggests Claude titles work; independent of the larger design.
-    - Cons: the flag list must be recovered from git history later.
-  - **Leave it until the backend service lands.**
-    - Pros: code stays as a reference.
-    - Cons: misleads readers today; the persistence comment at `session-manager-persistence.ts:200` already refers to it as live.
-- **Which model generates when an environment has several credentials?**
-  - **The session's own platform first, then any other signed-in platform, then the first-message fallback (recommended).**
-    - Pros: no surprise cross-vendor spend; still gives a title on Cursor/Grok when Codex or Claude is signed in.
-    - Cons: a cross-vendor call sends the first prompt to a second vendor; needs a setting or disclosure.
-  - **Own platform only, else fallback.**
-    - Pros: no data crosses vendors.
-    - Cons: Cursor, Grok, Pi and OpenCode keep fallback titles unless they get their own strategy.
+  - **Backend service that runs the host's CLI on the active account (recommended).**
+    - Pros: one implementation and one place for the isolation flags; every platform can get a generated title.
+    - Cons: a container environment is titled with the host's login; one CLI spawn per new session.
+  - **Same service, through `docker exec` for containers.**
+    - Pros: a container's session uses that container's login.
+    - Cons: needs a CLI and a login inside each container; adds latency and a failure mode for a title.
+- **Which login writes the title?**
+  - **The session's own platform first, then the other signed-in one, with a setting that can stop it crossing vendors (recommended).**
+    - Pros: Cursor, Grok, Pi and OpenCode get real titles by default, and the user can see and change where the message goes.
+    - Cons: by default a first message reaches a second vendor; the disclosure lives in Settings, not at the moment it happens.
+  - **The session's own platform only, by default.**
+    - Pros: no data crosses vendors unless the user opts in.
+    - Cons: Cursor, Grok, Pi and OpenCode keep first-message titles unless the user finds the setting.
+- **What to do about the global `AGENTS.md`?**
+  - **Accept it and document it (recommended).**
+    - Pros: Codex has no switch for it, and it goes to the vendor the user already gave it to; the title model has no tools and a strict output schema, so the worst outcome is a worse title.
+    - Cons: a Cursor session's title request carries the user's Codex instructions; a few extra tokens.
+  - **Run with a scratch `CODEX_HOME` holding a copy of the login.**
+    - Pros: fully hermetic.
+    - Cons: a token refresh in the copy can rotate the refresh token and sign the user out of their real login.
 
 ### 2. External Codex rewinds
 
-**Problem.** If another Codex client rewinds a thread Orkestrator also serves, the bridge keeps serving the removed turns, so the tab shows history the model no longer has.
+**Problem.** If another Codex client rewinds a thread Orkestrator also serves, the tab would keep showing turns the model no longer has.
 
-**Context.** Only matters when a second client (Codex CLI or IDE) shares the same `CODEX_HOME` and thread. The ignore list comment says adopting it would drop transcript with no way back.
+**Context.** Only matters when a second client shares the same `CODEX_HOME` and thread.
 
-**Investigation.** Still ignored at `bridges/codex-bridge/src/app-server/event-reducer.ts:154-157`; the comment there cites "plan 09", a retired plan that this file replaced (stale reference). New detail from the pinned 0.164.0 protocol: `ThreadRevertedNotification` carries only `{ threadId }` (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadRevertedNotification.ts`), so the bridge cannot trim locally; it has to re-read the thread (`thread/read`) and replace the rows. The bridge's own rewind is `revertThread` at `bridges/codex-bridge/src/engine/app-server-engine.ts:2376`.
+**Investigation.** Done in #1337 (`sessions/external-revert.ts`, `reconcileExternalRevert`). `ThreadRevertedNotification` is still `{ threadId }` at 0.166.0, so the re-read design still applies. `app-server/live-resume-context.test.ts` passes against the real 0.166.0 binary and a loopback endpoint; `app-server-runtime-revert.test.ts` and `external-revert.test.ts` pass. No code changed on 2026-10-31.
 
 **Decisions.**
 
 - **How to apply an external revert?**
-  - **Re-hydrate the thread with `thread/read` and publish the replacement rows as a revision gap (recommended).**
-    - Pros: authoritative; fits the "missed events are detectable" invariant; no guessing which turns went.
-    - Cons: a full read of a long thread; must never be awaited on the stdout loop, so it needs an off-loop queue.
+  - **Re-read the thread with `thread/read` and publish the replacement (recommended).**
+    - Pros: authoritative; no guessing which turns went.
+    - Cons: a full read of a long thread, off the stdout loop.
   - **Mark the transcript stale and let the next tab read reconcile.**
-    - Pros: cheap; no new read path.
+    - Pros: cheap.
     - Cons: an inactive tab shows wrong history until something reads it.
-- **Keep or retire the task?**
-  - **Keep at low priority (recommended).**
-    - Pros: a real, if rare, correctness gap.
-    - Cons: needs a two-client test fixture to prove.
-  - **Retire as out of scope (Orkestrator owns its threads).**
-    - Pros: no work.
-    - Cons: shared `CODEX_HOME` on the host is a supported setup.
 
 ### 3. Codex archive
 
-**Problem.** Users cannot remove a Codex session from the resume list without deleting it, and deletion is forbidden.
+**Problem.** Users could not remove a session from the resume list without deleting it, and deletion is forbidden.
 
-**Context.** `thread/delete` is banned by the transport invariants. Design-canvas todo 0038 waits on an archived state.
+**Context.** `thread/delete` is banned by the transport invariants. Design-canvas to-do 0038 waits on an archived state.
 
-**Investigation.** The pinned protocol has `thread/archive`, `thread/unarchive`, `thread/archived` and `thread/unarchived` (`.../generated/typescript/ClientRequest.ts`, `ServerNotification.ts`). Nothing calls them. `listThreads` already forwards an `archived` filter (`bridges/codex-bridge/src/engine/app-server-engine.ts:2438`), but the option is named `includeArchived` (`bridges/codex-bridge/src/engine/types.ts:336`) while `ThreadListParams.archived = true` returns **only** archived threads (`.../v2/ThreadListParams.ts:39-42`); no caller sets it yet, but the name will mislead whoever does. There is no archive session action in `packages/protocol/src/native-agent.ts` and no renderer surface.
+**Investigation.** #1337 shipped the action for Codex with `actions.archive`, and renamed the misleading option to `onlyArchived`. Decision 8 kept Cursor out because its SDK could only unarchive cloud agents. That is false at 1.2.0: the real SDK's `Agent.archive` and `Agent.unarchive` both work on a local agent (`JsonlLocalAgentStore`), despite `stubs.d.ts` saying "Cloud-only". So the recommended shared action is now possible, and Cursor has it.
 
 **Decisions.**
 
 - **Is archive Codex-only or a shared session action?**
-  - **Shared `archive` / `unarchive` session action with a capability bit; Codex and Cursor first (recommended).**
-    - Pros: one UI; Cursor already has `Agent.archive`; 0038 gets one archived state.
-    - Cons: needs protocol, backend and renderer work for what starts as two platforms.
-  - **Codex-only bridge route.**
-    - Pros: quickest.
-    - Cons: a second platform-specific path the renderer must special-case.
-- **Rename `includeArchived`?**
-  - **Rename to `archivedOnly` (or a tri-state) in the same change (recommended).**
-    - Pros: matches the wire semantics and prevents an "include" caller hiding every live thread.
-    - Cons: touches the engine type and tests.
-  - **Keep the name, document it.**
-    - Pros: no churn.
-    - Cons: a trap for the first caller.
+  - **Shared action with a capability bit, Codex and Cursor (recommended).**
+    - Pros: one UI; 0038 gets one archived state.
+    - Cons: protocol, backend and renderer work for two platforms.
+  - **Codex-only.**
+    - Pros: already shipped.
+    - Cons: Cursor users can archive in Cursor and never get the agent back from here.
 
 ### 4. Cursor archived agents
 
-**Problem.** Archived Cursor agents (archived in Cursor's own UI) still appear in Orkestrator's resume list.
+**Problem.** Archived Cursor agents appeared in the resume list, then failed when chosen.
 
-**Context.** Related to task 3; both should behave the same.
+**Context.** Should match task 3.
 
-**Investigation.** Pinned `@cursor/sdk` is now `1.0.40` (`bridges/cursor-bridge/package.json`). `SDKAgentInfo.archived?: boolean` exists (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/agent.d.ts:96-100`). `listResumableSessions` (`bridges/cursor-bridge/src/agent-session.ts:838`) lists every page and never reads it.
+**Investigation.** The local store refuses a follow-up on an archived agent ("Unarchive it first") and `unarchiveAgent` sets it back to idle, so a listed agent can be recovered by restoring it first. `archive-sdk.test.ts` runs this round trip through the real SDK and disk store.
 
 **Decisions.**
 
 - **Filter in the bridge or pass the flag through?**
-  - **Pass `archived` through on each resume entry and let the renderer hide archived by default with a "show archived" toggle (recommended).**
-    - Pros: one behaviour for Codex and Cursor; reversible by the user.
-    - Cons: a protocol field and renderer change rather than a one-line filter.
-  - **Drop archived items in the bridge.**
-    - Pros: one line; immediate.
-    - Cons: no way to resume an archived agent from Orkestrator.
+  - **Pass `archived` through and let the picker hide archived rows behind a "Show archived" toggle (recommended).**
+    - Pros: one behaviour for Codex and Cursor; reversible; also gives Codex the way back that decision 5 lacked.
+    - Cons: protocol and renderer change.
+  - **Drop archived agents in the bridge.**
+    - Pros: one line.
+    - Cons: no way to get one back from Orkestrator.
+- **What does choosing an archived row do?**
+  - **Restore it, then resume it (recommended).**
+    - Pros: one click for the obvious intent; a refused restore does not resume.
+    - Cons: choosing a row changes its archived state, though that is what continuing it requires anyway.
+  - **Require an explicit restore first.**
+    - Pros: no implied state change.
+    - Cons: two steps, and a row that looks clickable but cannot be resumed.
 
 ### 5. Claude history decisions
 
-**Problem.** Claude offers fork and file rewind but not message-level rewind, and resumed sessions lose subagent detail.
+**Problem.** Claude offers fork and file rewind but not message-level rewind, and resumed sessions used to lose subagent detail.
 
-**Context.** Claude actions are `{ compact, rewindFiles, steer }` (`packages/protocol/src/native-agent.ts:1139`); Codex, Cursor and Pi offer `rewindMessages`. Fork is `sdk.forkSession` at `bridges/claude-bridge/src/services/session-manager-persistence.ts:744`.
+**Context.** Fork is `sdk.forkSession`. The bridge keeps one warm CLI per session (`bridges/claude-bridge/AGENTS.md`, "One CLI per session").
 
-**Investigation.** Pinned SDK `0.3.309`. It has `resumeSessionAt` and a new `resumeDropsTurn` validator (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:2138-2190`), which refuses a truncating resume when the discarded range holds anything other than the named turn, and is print/headless-lane only. `getSubagentMessages` exists (`sdk.d.ts:957`). The bridge uses neither.
+**Investigation.** Rehydration shipped in #1337, eagerly and bounded, not lazily as first recommended. Its cost was measured on 2026-10-31 with the real SDK reader and synthetic transcripts: 8 subagents of 200 KB took 14 ms, 64 of 200 KB took 60 ms, and the largest the bound allows that was tried, 64 of 2 MB, took 91 ms. That excludes turning records into parts, which is capped per call. It runs once per session per bridge process (`persistedMessagesLoaded`), not per tab read, so a lazy path would save little.
+
+Message rewind was probed against the real 2.1.314 CLI and a loopback endpoint, three turns in a temporary home:
+
+- Booting with `resumeSessionAt` and no prompt writes nothing; every reader still shows all three turns. So decision 6 is right that a rewind must be staged until the next prompt.
+- `resumeDropsTurn` naming a turn when the range holds more is refused with `Resume rejected by --resume-drops-turn:`, with no model call and no change to the transcript. The SDK surfaces it as a thrown error.
+- A plain truncating resume keeps the same session id, and afterwards `getSessionMessages` shows only the kept turn and the new one. There is no id change for the backend to follow.
+
+That removes two of the risks, but the staged state is still needed in every reader and has to survive a bridge restart.
 
 **Decisions.**
 
 - **Offer Claude message rewind?**
-  - **Offer it as truncating resume with `resumeSessionAt` plus `resumeDropsTurn`, mapping a refusal to a plain resume with a notice (recommended).**
-    - Pros: parity with Codex/Cursor/Pi; the validator makes the truncation safe against absorbed mid-turn messages.
-    - Cons: interacts with the warm CLI (0005), which must be restarted on the truncated chain; refusal handling is a new path.
-  - **Record "fork only" as the Claude answer.**
-    - Pros: no new state; fork already gives a branch point.
-    - Cons: parity gap stays; fork leaves the old session in the list.
+  - **Stay with fork at a message (recommended).**
+    - Pros: no new state beside the one-CLI invariant, where the recent Claude bridge bugs have been; fork already gives the same result without changing the conversation.
+    - Cons: Claude alone lacks in-place rewind among Codex, Cursor and Pi; forks accumulate in the resume list.
+  - **Truncating resume with a persisted staged marker.**
+    - Pros: parity; the probe shows a stable id and a safe refusal, and OpenCode's revert (0175) is a precedent.
+    - Cons: retires the warm CLI on rewind; every reader (`getSessionMessages`, transcript v2, resume list, fork) must honour the marker across restarts; a new refusal path; its own branch.
+  - **Fork at the message and move the tab onto the fork.**
+    - Pros: no staged state, and the transcript is right immediately.
+    - Cons: the provider session id changes under the tab, the abandoned session stays in the list, and running background work needs an answer.
 - **Rehydrate subagent detail on resume?**
-  - **Yes, lazily through transcript v2 detail reads (recommended).**
-    - Pros: no cost until the user expands a subagent card; fits the detail-locator design.
-    - Cons: needs a locator per subagent card.
-  - **Eagerly on resume.**
-    - Pros: simple.
-    - Cons: large sessions pay a read per subagent on every hydrate.
+  - **Eagerly, bounded, once per session per process (recommended).**
+    - Pros: shipped; measured at under 100 ms at the bound; the row's parts match the live stream.
+    - Cons: a session with more than 64 subagents shows the rest as calls only.
+  - **Lazily through transcript v2 detail reads.**
+    - Pros: no read until a card is expanded.
+    - Cons: a locator per card and a second path to the same parts, to save about 100 ms.
 
 ### 6. Fork and rewind live qualification
 
 **Problem.** Fork, rewind and branch navigation are unproven on the real stack for Codex, Pi and Cursor.
 
-**Context.** Belongs with the batched runs in 0031.
+**Context.** Belongs with the batched runs in 0031. Needs billed turns.
 
-**Investigation.** Code paths exist (Codex `revertThread`, Cursor checkpoint revert at `bridges/cursor-bridge/src/agent-session.ts:703`, Pi fork at `bridges/pi-bridge/src/agent-session.ts:1352` and `navigateSessionHistory` at :1370). No browser spec covers them.
+**Investigation.** Unchanged. Offline coverage is listed under Qualification below. Not run on 2026-10-31.
 
 **Decisions.**
 
@@ -161,37 +177,28 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 7. Title live qualification
 
-**Problem.** The backend title path is not proven for generation, fallback and failed push.
+**Problem.** The backend title path is not proven for generation, fallback and failed push on a real login.
 
-**Context.** Depends on task 1.
+**Context.** Was blocked on task 1, which is done.
 
-**Investigation.** The fallback and ignored-push behaviour exist today (`native-agent-transcript-projection.ts:5076-5100`), so two of the three checks could run now.
+**Investigation.** The offline half is done. `native-agent-session-titles.test.ts` runs the fallback and failed-push checks for all six platforms, and the real CLIs generate titles and fail correctly against loopback endpoints (`session-title-codex-live.test.ts`, `session-title-claude-live.test.ts`). A signed-in run across the platforms, and real title cost and latency, remain.
 
 **Decisions.**
 
-- **Wait for task 1 or run the fallback checks now?**
-  - **Run the fallback and failed-push checks now with a deterministic test, leave the generated-title run for after task 1 (recommended).**
-    - Pros: covers existing behaviour without a live provider.
-    - Cons: splits the item.
-  - **Wait for task 1.**
-    - Pros: one run.
-    - Cons: shipped fallback stays unproven meanwhile.
-
-Every session should have a sensible title that the backend owns. Fork, rewind
-and branch navigation should be offered wherever the vendor supports them,
-through the shared session-action bus. Every code item is done (2026-10-27):
-titles are generated by the backend for every platform, Codex adopts rewinds
-made by other clients and can archive a conversation out of the resume list,
-Cursor hides archived agents, and Claude rehydrates subagent detail on resume.
-Offline qualification now runs the pinned provider binaries/SDKs with temporary
-homes and scripted loopback endpoints. Authenticated product-level QA remains.
+- **How to finish it?**
+  - **Batch the signed-in run with task 6 and 0031 (recommended).**
+    - Pros: one signed-in session covers several checks.
+    - Cons: real-login evidence comes later than the code.
+  - **Run it on its own now.**
+    - Pros: earlier evidence.
+    - Cons: a second billed session for a few cents of titles.
 
 ## Current state
 
 - Protocol (`packages/protocol/src/native-agent.ts`): `actions.rewindMessages`,
-  `actions.branches` and `actions.archive` (Codex only), the `rewind-messages`
-  and `switch-branch` session actions, and `parentId` / `branchLabel` on resume
-  entries.
+  `actions.branches` and `actions.archive` (Codex and Cursor), the
+  `rewind-messages` and `switch-branch` session actions, and `parentId`,
+  `branchLabel` and `archived` on resume entries.
 - Rewind and branches per provider:
   - Codex: `rewind-messages` through `thread/revert`
     (`bridges/codex-bridge/src/engine/app-server-engine.ts`). A rewind by
@@ -204,8 +211,8 @@ homes and scripted loopback endpoints. Authenticated product-level QA remains.
     supports older `thread_rolled_back` markers (`history/rollout.ts`).
   - Cursor: checkpoint revert to a run's `startCheckpointRef`
     (`bridges/cursor-bridge/src/agent-session.ts`). The resume list pages with
-    `nextCursor`, keeps tool failures in replay, and leaves out agents the SDK
-    reports `archived`.
+    `nextCursor` and keeps tool failures in replay. Agents the SDK reports
+    `archived` are listed only on request.
   - Pi: `navigateSessionHistory` → `navigateTree`. Fork uses
     `runtime.fork(entryId, { position: "before" })` and hands the selected
     message back as a composer draft (`bridges/pi-bridge/src/agent-session.ts`).
@@ -217,10 +224,12 @@ homes and scripted loopback endpoints. Authenticated product-level QA remains.
     hides a pending revert until the next prompt commits it (0175).
   - Grok: no rewind or fork on ACP v1.
 - Archive: the resume dialog's **Remove from list** (with **Undo**) calls
-  `set_native_agent_resumable_session_archived`, which reaches the Codex
-  bridge's `POST /session/list/:threadId/archive` / `unarchive` and
-  `thread/archive` / `thread/unarchive`. The resume list leaves archived
-  threads out. Nothing calls `thread/delete`.
+  `set_native_agent_resumable_session_archived`, which reaches the bridge's
+  `POST /session/list/:id/archive` / `unarchive`: `thread/archive` /
+  `thread/unarchive` on Codex, `Agent.archive` / `Agent.unarchive` on Cursor.
+  The live list leaves archived conversations out. **Show archived** lists them
+  below the live rows; choosing one restores it and resumes it. Nothing calls
+  `thread/delete` or `Agent.delete`.
 - Titles (`docs/architecture/agent-engines.md`, "Session titles"):
   - `native-agent-session-titles.ts` decides the shown title on every
     projection read (legacy, progressive transcript and state views) and
@@ -232,6 +241,11 @@ homes and scripted loopback endpoints. Authenticated product-level QA remains.
     `claude --print --safe-mode` (`session-title-runners.ts`). Pipeline
     sessions and sessions no generator could title keep the first-message
     fallback (`session-title-text.ts`).
+  - The **Session titles** setting (`sessionTitleGeneration`) says which logins
+    may write a title: any signed-in one (default), the session's own, or none.
+  - The Codex run gets no tools and no skill list, and a `$skill` in the first
+    message is escaped so Codex does not load it. Its global `AGENTS.md` still
+    reaches the title model; Codex has no switch for it.
   - The choice is stored on the session record (`backendTitle`) and pushed
     through `setSessionTitle`; an unaccepted title outranks the provider's
     own, so a failed push never loses it. Cursor and Grok have no setter, so
@@ -245,19 +259,16 @@ homes and scripted loopback endpoints. Authenticated product-level QA remains.
 
 ### Code
 
-Every code item is done (2026-10-27):
+Only one decision is left. Tasks 1 to 4 are done.
 
-1. ~~Backend-owned title generation.~~ Done: see Current state, decisions 1–4.
-2. ~~External Codex rewinds.~~ Done; `thread/reverted` is off the ignore list.
-3. ~~Codex archive.~~ Done; see decision 5.
-4. ~~Cursor archived agents.~~ Done; hidden by default (decision 8).
-5. ~~Claude decisions.~~ Message rewind not offered (decision 6); subagent
-   detail rehydrated on resume (decision 7).
+1. **Claude message rewind**: not built. Task 5 has the options and the probe
+   results. It needs the user's decision, and its own branch if the answer is
+   to build it.
 
 ### Qualification
 
-Pinned-provider and browser qualification is recorded below. Authenticated
-end-to-end product QA is still listed separately.
+Tasks 6 and 7 need signed-in runs. Pinned-provider and browser qualification is
+recorded below; authenticated end-to-end product QA is listed separately.
 
 ## Constraints and rationale
 
@@ -311,17 +322,44 @@ end-to-end product QA is still listed separately.
   capability/command plumbing. `e2e/NativeResumeSession.spec.ts` checks visible
   branch labels and selection at desktop and mobile widths.
 
+## Qualification (2026-10-31, at the new pins)
+
+All of this ran offline, with temporary homes and loopback endpoints: no billed
+turn, no real login. The Codex and Claude binaries were downloaded to a
+temporary directory and matched the manifest's archive and executable SHA-256,
+then passed through `CODEX_PROTOCOL_BINARY` and
+`ORKESTRATOR_POLICY_CLAUDE_PATH`. The real toolchain directory has neither
+version on this machine, so without those variables the live tests skip.
+
+- `session-title-codex-live.test.ts` (new) runs the production runner on real
+  Codex 0.166.0 in a home seeded with skills and a `config.toml`. It asserts no
+  tools, no skill text, no config text, and nothing left to resume, and that a
+  refused request rejects. With the fix removed its first case fails.
+- `session-title-claude-live.test.ts` runs real Claude 2.1.314 and now also
+  covers an unusable proxy, missing credentials and a refused request: each
+  rejects with no title.
+- `archive-sdk.test.ts` round-trips archive and restore through the real
+  `@cursor/sdk` 1.2.0 and its disk store.
+- `app-server/live-resume-context.test.ts` passes on real Codex 0.166.0 with
+  `RUN_LIVE_CODEX_APP_SERVER=1`.
+- `e2e/NativeResumeSession.spec.ts` checks the archived toggle, ordering, width
+  and restore-then-resume in Chromium at phone and desktop sizes.
+
 ### Remaining authenticated product QA
 
 The checks above qualify actual pinned binaries and SDK filesystem contracts
 without external model calls. They do not claim a real-account browser run
-across all six platforms, Cursor's own archive UI, a newly spawned Claude
-subagent across a full app restart, or production title cost/latency. Those
+across all six platforms, Cursor's own archive UI, resuming a restored agent on
+a real Cursor login, a newly spawned Claude subagent across a full app restart,
+or production title cost/latency. Those
 remain in [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ## Assumptions and decisions
 
-Decisions made on 2026-10-27 while doing the items.
+### 2026-10-27 (#1337)
+
+Decision 8 is superseded by the 2026-10-31 entry below, and the "no in-app way"
+cost in decision 5 no longer applies.
 
 1. **Where generation runs and which login it uses.** Options: (a) keep the
    generators in the bridges, each titling its own sessions; (b) a backend
@@ -400,6 +438,53 @@ Decisions made on 2026-10-27 while doing the items.
     placeholder back to it when nothing better existed (asserted by 0081's
     test). Now only a title the backend chose is pushed; that test asserts no
     push.
+
+### 2026-10-31 (tasks 1, 3, 4 and 5)
+
+#### Task 1: close the Codex title leak with flags and an escape
+
+Added `--disable view_image`, `skills.include_instructions=false`,
+`tools.experimental_request_user_input.enabled=false` and the three
+`include_*` switches, and JSON-escaped `$` in the prompt as `\u0024`. The escape
+is there because no flag stops `$skill` loading a skill; the model still reads
+the same string. `skills.bundled.enabled=false` was tried and left out: the
+instruction switch already removes the leak, so it would add a flag for nothing.
+
+#### Task 1: a setting, default unchanged
+
+Added `sessionTitleGeneration` (`any-signed-in`, `own-platform`, `off`) to
+Settings, with the disclosure beside it. The default stays `any-signed-in`, as
+the file recommended, so existing users keep the titles they have. It is read
+per generation. It travels from a command node to its leaves, because the
+choice is a preference about where a message may go, not a fact about one
+machine. A policy that cannot be read counts as `off`, so an unknown choice
+sends nothing.
+
+#### Task 1: `claude -p` needs no code change
+
+Added regression tests instead, against fake and real CLIs. See the task's
+Investigation.
+
+#### Tasks 3 and 4: decision 8 superseded
+
+Decision 8's premise (only cloud agents can be unarchived) does not hold at SDK
+1.2.0, so the recommended options apply. Cursor now has the shared action, and
+both platforms get the toggle. Decision 5's cost, no in-app way back once the
+toast is gone, is gone with it. The picker always asks for archived rows on a
+platform that can archive: the bridges read them anyway, so the toggle needs no
+refetch. Archive still refuses an agent a tab here holds. A `bc-` cloud id is
+refused too, because this bridge lists only local agents and the SDK would send
+that id to the Cursor API.
+
+#### Task 5: rehydration stays eager
+
+Chose to keep what shipped over the file's lazy recommendation, on the
+measurement in the task's Investigation.
+
+#### Task 5: message rewind left for the user
+
+Not built on this branch. Decision 6's premise was confirmed by probe, and the
+work is a new state machine that would make this branch too large to review.
 
 ## Related
 

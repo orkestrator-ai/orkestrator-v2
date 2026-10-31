@@ -80,17 +80,16 @@ does not hold (never 404), or 503 `{closed:false,pending:true,error}` when it
 cannot prove the work stopped — in which case the session stays registered.
 The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route
-means the bridge predates it: the backend may then use a legacy
-`DELETE /session/:id` only for platforms whose DELETE has never deleted history
-(`LEGACY_DELETE_RETAINS_HISTORY`: Codex, Pi, Grok, Cursor). Claude's DELETE
-calls the SDK's `deleteSession`, so an old Claude bridge leaves the close
-pending with a "restart the environment" error instead.
+means the bridge predates it, which only an unpublished source build can do.
+The close stays pending with a "restart the environment" error on every
+platform and never falls back to `DELETE /session/:id`: Claude's calls the SDK's
+`deleteSession`.
 
 Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
 malformed 2xx leaves the intent pending. Pending intents are retried at
 startup and by the backend's coalesced 60-second sweep, with a per-intent
 backoff (30 s, doubling, capped at 15 minutes) so a bridge that keeps refusing
-is not polled every minute. The old-Claude-bridge failure carries a stable
+is not polled every minute. The old-bridge failure carries a stable
 `bridge-upgrade-required` marker (`@orkestrator/protocol/tab-teardown`), and
 the renderer shows one non-destructive toast per environment asking the user
 to restart it; the conversation is not deleted and the close is retried.
@@ -177,21 +176,25 @@ operation and nothing in the backend or renderer calls it.
 
 ### Removing a conversation from the resume list
 
-Codex is the one platform that offers it (`actions.archive`). The resume
-dialog shows a **Remove from list** button on each row, with an **Undo**
-toast; the backend command `set_native_agent_resumable_session_archived` goes
-to the bridge's `POST /session/list/:threadId/archive` or `/unarchive`, which
-call `thread/archive` / `thread/unarchive`. The rollout is kept: archive is the
-explicit "remove from list", never a delete, and nothing calls
-`thread/delete`. A thread a tab in the same environment still holds is
-refused (409). The resume list leaves archived threads out: `thread/list`
-omits them, and the rollout fallback skips both what app-server lists as
-archived (following every archived-only `thread/list` page) and rollouts under
-`archived_sessions`.
+Codex and Cursor offer it (`actions.archive`). The resume dialog shows a
+**Remove from list** button on each row, with an **Undo** toast; the backend
+command `set_native_agent_resumable_session_archived` goes to the bridge's
+`POST /session/list/:id/archive` or `/unarchive`, which call `thread/archive` /
+`thread/unarchive` on Codex and `Agent.archive` / `Agent.unarchive` on Cursor.
+The conversation is kept: archive is the explicit "remove from list", never a
+delete, and nothing calls `thread/delete` or `Agent.delete`. A conversation a
+tab in the same environment still holds is refused (409). Cursor also refuses a
+`bc-` cloud id, since its bridge lists only local agents.
 
-Cursor's resume list hides agents the SDK reports `archived` (Cursor refuses a
-follow-up run on one until it is unarchived, which is cloud-only in the pinned
-SDK), so there is no archive action for Cursor.
+The live list leaves archived conversations out. On Codex, `thread/list` omits
+them, and the rollout fallback skips both what app-server lists as archived
+(following every archived-only `thread/list` page) and rollouts under
+`archived_sessions`. `GET /session/list?includeArchived=1` adds them after the
+live rows, flagged `archived`, so they cannot crowd a live row past the
+backend's cap. The dialog shows them behind **Show archived**, including agents
+archived in Cursor's own UI. Both vendors refuse to continue an archived
+conversation, so choosing one restores it first; a refused restore does not
+resume.
 
 ## Session titles
 
@@ -215,9 +218,20 @@ none of its own and the read reaches the start of the conversation:
   setting sources and no session persistence (`--bare` would also disable
   OAuth/Keychain sign-in). Both read the prompt on stdin, framed as untrusted
   JSON data, without the coordinator preamble, framed guidance or the
-  annotation envelope. A failed strategy rests for ten minutes; at most two
-  run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns generation off,
-  and it never runs under `bun test`.
+  annotation envelope. A failed strategy rests for ten minutes (a non-zero exit
+  rejects, and `claude -p` exits 1 on every failure tried, so its error text
+  does not become a title); at most two run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0`
+  turns generation off, and it never runs under `bun test`.
+- The **Session titles** setting (`sessionTitleGeneration`) says which logins
+  may be used, read per generation: any signed-in one (the default, so a Cursor,
+  Grok, Pi or OpenCode session's first message goes to OpenAI or Anthropic), the
+  session's own, or none. A policy that cannot be read counts as none.
+- `--ignore-user-config` does not make the Codex run hermetic alone: it also
+  turns off `view_image`, `request_user_input`, the skill list and the
+  permissions, apps and environment text, and the prompt escapes `$` so a
+  `$skill` in the first message is not loaded. Codex has no switch for its
+  global `AGENTS.md`, which still reaches the title model; the home also holds
+  the login, so it cannot be replaced with an empty one.
 - Pipeline and review sessions, and any session no generator could title,
   keep the first-message fallback.
 
@@ -747,7 +761,7 @@ OpenCode bump.
 | `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
 | `AgentNativeTab`                  | Shared native-agent chat UI                  |
 | `NativeAgentQuestionCard`         | Shared question/answer UI                    |
-| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts` |
+| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts`. Interactive only: an unattended OpenCode overload is continued by `OpenCodeCapacityRetry` (`opencode-capacity-retry.ts`), which keeps the workflow's request and result tool |
 
 The server's SSE event types:
 

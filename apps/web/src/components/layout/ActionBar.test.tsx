@@ -3499,6 +3499,175 @@ describe("ActionBar workflow tabs", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
+  describe("resending to an open Resolve tab", () => {
+    const openResolveTab = (
+      identity: Record<string, unknown> = {
+        jobCompletionAction: "refresh-pr-after-agent-completion",
+      },
+    ) =>
+      usePaneLayoutStore.setState({
+        activeEnvironmentId: "env-1",
+        environments: new Map([
+          [
+            "env-1",
+            {
+              activePaneId: "default",
+              containerId: "container-1",
+              root: {
+                kind: "leaf",
+                id: "default",
+                tabs: [
+                  { id: "terminal-1", type: "plain" },
+                  {
+                    id: "agent-job-resolve",
+                    type: "agent-native",
+                    ...identity,
+                    nativeAgentData: { environmentId: "env-1", platform: "codex" },
+                  },
+                ],
+                activeTabId: "terminal-1",
+              },
+            },
+          ],
+        ]),
+      } as never);
+    const launched = (queued?: true) => ({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "accepted" as const,
+      completionActionArmed: true,
+      reused: true,
+      ...(queued ? { queued } : {}),
+    });
+
+    beforeEach(() => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: true };
+    });
+
+    afterEach(() => {
+      usePaneLayoutStore.setState({ environments: new Map() });
+    });
+
+    test("a plain press asks the backend to reuse the tab and focuses it", async () => {
+      openResolveTab();
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
+          "env-1",
+          "agent-job-resolve",
+          expect.any(Object),
+        ),
+      );
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tabReuse: "any-agent",
+          completionAction: "refresh-pr-after-agent-completion",
+          activateTab: true,
+        }),
+      );
+      expect(toastInfoMock).not.toHaveBeenCalled();
+    });
+
+    test("says when the prompt is waiting behind the tab's current work", async () => {
+      openResolveTab();
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched(true));
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(toastInfoMock).toHaveBeenCalledWith(
+          "Conflict resolution is queued",
+          expect.any(Object),
+        ),
+      );
+      expect(requestPaneTabActivationMock).toHaveBeenCalled();
+    });
+
+    test("a full tab bar still resends when a Resolve tab is open", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      const button = screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement;
+      expect(button.disabled).toBe(false);
+      fireEvent.click(button);
+
+      await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    });
+
+    test("a full tab bar with no Resolve tab still stops the button", () => {
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+
+    test("a tab that only carries the Resolve title does not lift the tab limit", () => {
+      openResolveTab({ displayTitle: "Resolve" });
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+
+    test("the dialog stays available on a full tab bar and honours its own selection", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockResolvedValueOnce(launched());
+      render(<ActionBar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+      expect(screen.queryByRole("alert") === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+
+      await waitFor(() =>
+        expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+          expect.objectContaining({ tabReuse: "same-agent" }),
+        ),
+      );
+    });
+
+    test("the keyboard shortcut opens the same dialog on a full tab bar", () => {
+      openResolveTab();
+      currentTabCount = 10;
+      render(<ActionBar />);
+
+      fireEvent.keyDown(window, { key: "u", metaKey: true, shiftKey: true });
+
+      expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    });
+
+    test("reports the backend's tab limit when it had to open a new tab", async () => {
+      openResolveTab();
+      currentTabCount = 10;
+      launchNativeAgentJobMock.mockRejectedValueOnce(
+        new Error("Environment already has the maximum of 10 tabs"),
+      );
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+      await waitFor(() =>
+        expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
+          description: "Environment already has the maximum of 10 tabs",
+        }),
+      );
+    });
+  });
+
   test("continues the pinned backend Resolve launch after the selected environment changes", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

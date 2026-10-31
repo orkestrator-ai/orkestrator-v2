@@ -23,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
+import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -100,17 +101,14 @@ export function HostDependencySettings({
   return (
     <>
       <section className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium">Agent tools</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            The command-line tools this Orkestrator release pins, as the host has them. Newer
-            versions arrive with Orkestrator updates
-            {snapshot.nextRelease
-              ? `; ${snapshot.nextRelease.version} brings the versions shown`
-              : ""}
-            .
-          </p>
-        </div>
+        <SettingsSectionHeader title="Agent tools">
+          The command-line tools this Orkestrator release pins, as the host has them. Newer versions
+          arrive with Orkestrator updates
+          {snapshot.nextRelease
+            ? `; ${snapshot.nextRelease.version} brings the versions shown`
+            : ""}
+          .
+        </SettingsSectionHeader>
         {tools.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
@@ -185,13 +183,10 @@ export function HostDependencySettings({
       </section>
 
       <section className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium">Container image</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            New container environments start from this image. Running environments keep theirs until
-            they are rebuilt.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Container image">
+          New container environments start from this image. Running environments keep theirs until
+          they are rebuilt.
+        </SettingsSectionHeader>
         {image === undefined ? (
           <p className="text-sm text-muted-foreground">Checking the image…</p>
         ) : image === null ? (

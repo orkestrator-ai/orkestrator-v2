@@ -109,6 +109,13 @@ and on a clean `dfedcd743` (origin/main) clone (22 pass). Evidence:
 under the host temporary directory. No implementation, assertion, wait,
 timeout or skip changed.
 
+## Storage test splits (0930) recurrence — 2026-10-30
+
+- **Original command:** `mise run test` on `todo-0930-storage-test-files-8ccf873101e6` at `d5091591d` (rebased as `559ba28af`), Bun 1.4.4 on the shared Linux host, load average about 20–33 (the run took 1,531 s).
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning` at 5,036.06 ms, over its 5,000 ms deadline.
+- **Isolated rerun:** `mise run test:logged -- --name agent-native-commands-alone -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed (7.0 s for the file).
+- **Assessment:** intermittent deadline miss under load; the branch changes only storage tests and the writer guard. Recorded in aggregate case [1324](../aggregate-validation-runs/1324-storage-test-split-0930-validation.md).
+
 ## White pipe icon main merge — 2026-10-30
 
 - **Parents:** feature `12b47b2dd5d69bf33452af39c7dcde8fcea7b70d` and main `f32615affffe1e6b9f215ac8f6c9af509bf30567`; the only original conflict was `apps/web/src/components/environments/EnvironmentItem.tsx`.
@@ -117,3 +124,16 @@ timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-command-filter-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.2 seconds logged.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.czctSA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate completion. The passing owner's bounded runner removed its raw output; only its successful exit and duration were retained.
 - **Assessment:** recurrence confirmed by the complete unchanged owner pass. Shared-host contention remains a hypothesis; no command implementation, assertion, deadline or skip changed, and the aggregate remains non-green.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `mise run test`, at implementation commit `d639571b2`; workspace reservation six slots with two isolated Bun workers for web/desktop and four for backend, bridges reservation two slots with one worker per provider. The component browser suite also ran on the shared host. The aggregate waited about 658 seconds for capacity and exited 1 after 1461 seconds.
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`, `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx:711`, expected one projection read but received two (1948.07 ms). The owning package reported 10883 passed, 10 skipped, two failed across 722 files.
+- **Complete unchanged owner rerun:** the following one-worker command passed (exit 0, 12.7 seconds logged). Multi-file commands ran the two complete owners sequentially with Bun isolation. Passing raw output was removed by the bounded logger.
+
+```sh
+mise run test:logged -- --name transcript-review-failures-isolated -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.

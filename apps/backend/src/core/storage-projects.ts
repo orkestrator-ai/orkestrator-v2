@@ -1181,7 +1181,7 @@ export class ProjectsRepository {
    */
   async armPrRecheckAfterAgentCompletion(
     environmentId: string,
-  ): Promise<{ environment: Environment; armedAt: string | null }> {
+  ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
@@ -1193,6 +1193,7 @@ export class ProjectsRepository {
       )
         return { environment, armedAt: null };
 
+      const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;
       const now = Date.now();
       const previous = environment.prRecheckAfterAgentCompletionArmedAt
         ? Date.parse(environment.prRecheckAfterAgentCompletionArmedAt)
@@ -1205,6 +1206,7 @@ export class ProjectsRepository {
       return {
         environment,
         armedAt: environment.prRecheckAfterAgentCompletionArmedAt,
+        previousArmedAt,
       };
     });
   }
@@ -1213,6 +1215,7 @@ export class ProjectsRepository {
   async disarmPrRecheckAfterAgentCompletion(
     environmentId: string,
     armedAt: string,
+    previousArmedAt?: string,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -1220,7 +1223,7 @@ export class ProjectsRepository {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       if (environment.prRecheckAfterAgentCompletionArmedAt !== armedAt) return environment;
 
-      environment.prRecheckAfterAgentCompletionArmedAt = undefined;
+      environment.prRecheckAfterAgentCompletionArmedAt = previousArmedAt;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -1313,7 +1316,7 @@ export class ProjectsRepository {
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error(
-        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, or graph-run",
+        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, graph-run, or build-pipeline",
       );
     }
     if (
@@ -1578,6 +1581,7 @@ export class ProjectsRepository {
       EnvironmentUnreadReason,
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
+    completionKey?: string,
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -1589,6 +1593,14 @@ export class ProjectsRepository {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
+      // Keep request dedupe and the badge in the same durable write.
+      if (completionKey) {
+        if (environment.agentAttentionKeys?.includes(completionKey)) return environment;
+        environment.agentAttentionKeys = [
+          ...(environment.agentAttentionKeys ?? []),
+          completionKey,
+        ].slice(-1_000);
+      }
       const previousTime = Date.parse(environment.lastActivityAt ?? "");
       const acceptedTime =
         Number.isFinite(previousTime) && previousTime >= occurredTime

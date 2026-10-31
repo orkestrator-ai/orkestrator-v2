@@ -27,6 +27,7 @@ import {
   type CoordinatorPollGuard,
 } from "./control-mcp-tools.js";
 import { isRecord, type JsonRecord } from "./control-mcp-tool-support.js";
+import { DEFAULT_CONTROL_MCP_PORT } from "../fixed-ports.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 import {
   callToolInProcess,
@@ -37,7 +38,6 @@ import {
 
 const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
-export const DEFAULT_CONTROL_MCP_PORT = 34_122;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const COORDINATOR_CREDENTIAL_TTL_MS = 12 * 60 * 60 * 1_000;
 const MAX_COORDINATOR_CREDENTIALS = 512;
@@ -605,7 +605,7 @@ export class ControlMcpServer {
       const denied = new Set([
         "update_config",
         "remove_project",
-        "merge_environment",
+        "merge_environment_pr",
         "delete_environment",
         "write_file",
         "move_file",

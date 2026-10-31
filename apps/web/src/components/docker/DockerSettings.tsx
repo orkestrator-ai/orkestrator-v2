@@ -40,6 +40,7 @@ import {
 import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 import { DockerCleanupReview } from "./DockerCleanupReview";
+import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 
 /** Refresh interval while the section is shown. */
 const STATS_REFRESH_MS = 5_000;
@@ -301,7 +302,7 @@ function DockerSettingsPanel() {
     }
 
     return (
-      <div className="max-w-3xl space-y-6">
+      <SettingsPageLayout title="Containers">
         <DockerImageStatusPanel />
         {/* System Resources */}
         {stats && (
@@ -531,7 +532,7 @@ function DockerSettingsPanel() {
             </p>
           )}
         </div>
-      </div>
+      </SettingsPageLayout>
     );
   };
 

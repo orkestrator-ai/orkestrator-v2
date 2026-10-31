@@ -34,6 +34,8 @@ import type {
 } from "@orkestrator/protocol/agent-accounts";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /** How often to ask the backend whether the browser sign-in has finished. */
 const POLL_INTERVAL_MS = 1_500;
@@ -362,21 +364,13 @@ export function AgentAccountsSection({
   const otherLoginPending = login.state === "pending" && !loginHere;
 
   return (
-    <section
-      aria-label={`${platformLabel} accounts`}
-      className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4"
-    >
+    <section aria-label={`${platformLabel} accounts`} className={cn(SETTINGS_CARD_CLASS, "p-4")}>
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">
-            {machineName ? `Accounts on ${machineName}` : "Accounts"}
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {platformLabel} agents, containers and new terminals
-            {machineName ? ` on ${machineName}` : ""} use the active account. Switching applies to
-            each agent the next time it starts work while idle; conversations carry over.
-          </p>
-        </div>
+        <SettingsSectionHeader title={machineName ? `Accounts on ${machineName}` : "Accounts"}>
+          {platformLabel} agents, containers and new terminals
+          {machineName ? ` on ${machineName}` : ""} use the active account. Switching applies to
+          each agent the next time it starts work while idle; conversations carry over.
+        </SettingsSectionHeader>
         <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"

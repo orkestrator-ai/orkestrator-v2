@@ -1,3 +1,6 @@
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { AgentRegistry } from "./agent-registry.js";
+import { seedCoordinator } from "./public-api/test-coordinator.js";
 import { createProject } from "./storage.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
@@ -177,6 +180,53 @@ describe("Control MCP and leaf nodes", () => {
     expect(publicActionsReceived(mcp.leafNode)).toBe(before);
   });
 
+  test("the pull request tools act on the leaf's environment, and its merge is confirmed here", async () => {
+    const mcp = await open();
+    const url = "https://github.com/acme/site/pull/7";
+    await mcp.leaf.harness.storage.updateEnvironment("env-1", { prUrl: url, prState: "open" });
+    const merges: Array<Record<string, unknown>> = [];
+    mcp.leaf.harness.commands.set("get_github_pull_request", async () => ({
+      title: "Fix",
+      state: "open",
+      baseRef: "main",
+      headRef: "fix",
+      isDraft: false,
+      checksState: "success",
+      mergeability: "clean",
+    }));
+    mcp.leaf.harness.commands.set("merge_environment_pr", async (args) => {
+      merges.push(args);
+      return { outcome: "merged", cleanupOutcome: "not-requested" };
+    });
+
+    const read = content(
+      await mcp.call(mcp.token, "pr_get", { environmentId: "env-1", nodeId: mcp.leafId }),
+    );
+    expect(read.ok).toBe(true);
+    expect(read.node).toMatchObject({ nodeId: mcp.leafId });
+    expect((read.result as { url: string }).url).toBe(url);
+    // On this machine env-1 does not exist.
+    expect(content(await mcp.call(mcp.token, "pr_get", { environmentId: "env-1" })).ok).toBe(false);
+
+    const args = { environmentId: "env-1", requestId: "leaf-merge", nodeId: mcp.leafId };
+    const first = content(await mcp.call(mcp.token, "pr_merge", args)) as {
+      error: { code: string; message: string; details: { confirmToken: string } };
+    };
+    expect(first.error.code).toBe("confirmation-required");
+    expect(first.error.message).toContain("on leaf machine");
+    expect(merges).toEqual([]);
+
+    const merged = content(
+      await mcp.call(mcp.token, "pr_merge", {
+        ...args,
+        confirmToken: first.error.details.confirmToken,
+      }),
+    );
+    expect(merged.ok).toBe(true);
+    expect(merged.node).toMatchObject({ nodeId: mcp.leafId });
+    expect(merges).toHaveLength(1);
+  });
+
   test("credential rules apply before anything crosses the node link", async () => {
     const mcp = await open();
     const readOnly = await mcp.credential("read-only");
@@ -206,6 +256,71 @@ describe("Control MCP and leaf nodes", () => {
       error: { code: string };
     };
     expect(offline.error.code).toBe("node-unavailable");
+  });
+
+  test("Coordinator discovery and synthetic tab layouts route to the owning node", async () => {
+    const mcp = await open();
+    const { environmentId, tabId, sessionId } = await seedCoordinator(mcp.leaf);
+    mcp.command.context.agentRegistry = new AgentRegistry(mcp.command.storage);
+    const voice = await mcp.credential("voice");
+    for (const nodeId of [mcp.leafId, "all"]) {
+      const resolved = content(
+        await mcp.call(voice, "resolve_target", {
+          query: "coordinator",
+          kind: "session",
+          nodeId,
+          ...(nodeId !== "all" ? { projectId: mcp.leaf.projectId, environmentId } : {}),
+        }),
+      );
+      expect(resolved).toMatchObject({
+        ok: true,
+        result: {
+          target: { id: sessionId, environmentId, nodeId: mcp.leafId, node: expect.any(String) },
+        },
+      });
+    }
+    for (const tool of ["list_tabs", "get_tab_state", "get_tab_transcript"]) {
+      const response = await mcp.call(mcp.token, tool, {
+        environmentId,
+        nodeId: mcp.leafId,
+        ...(tool !== "list_tabs" ? { tabId } : {}),
+      });
+      expect(response.isError).not.toBe(true);
+      expect(content(response)).toMatchObject({ nodeId: mcp.leafId });
+      for (const [conversation, code] of [
+        ["closed", "not-found"],
+        ["unassigned", "not-ready"],
+      ]) {
+        const refused = await mcp.call(mcp.token, tool, {
+          environmentId: coordinatorRuntimeId("coordinator-1", conversation!),
+          nodeId: mcp.leafId,
+          ...(tool !== "list_tabs" ? { tabId: `coordinator-${conversation}` } : {}),
+        });
+        expect(refused.isError).toBe(true);
+        expect(JSON.stringify(refused)).toContain(code!);
+      }
+    }
+    expect(mcp.leafNode.received.some((call) => call.command === "get_agent_registry")).toBe(true);
+    expect(await mcp.command.storage.getPaneLayout(environmentId)).toBeNull();
+  });
+
+  test("a routed Coordinator registry failure is a voice error with say text", async () => {
+    const mcp = await open();
+    await seedCoordinator(mcp.leaf);
+    const voice = await mcp.credential("voice");
+    mcp.leafNode.commands.set("get_agent_registry", async () => {
+      throw new Error("Registry unavailable");
+    });
+    const response = await mcp.call(voice, "resolve_target", {
+      query: "coordinator",
+      nodeId: mcp.leafId,
+    });
+    expect(response.isError).toBe(true);
+    expect(content(response)).toMatchObject({
+      ok: false,
+      error: { code: expect.stringMatching(/^node-/) },
+    });
+    expect(response.content?.[0]?.text).toContain("Coordinator discovery is unavailable");
   });
 
   test("voice: overview and resolve_target span machines and hand back the nodeId", async () => {

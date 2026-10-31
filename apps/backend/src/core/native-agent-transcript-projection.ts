@@ -80,6 +80,7 @@ import {
 } from "./native-agent-service-shared.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { openCoordinatorConversation } from "./coordinator-runtime.js";
 import { type CommandCatalogueSnapshot } from "./native-agent-command-catalogue.js";
 import {
   nativeAsyncQuestionItemId,
@@ -2742,6 +2743,81 @@ export class NativeAgentTranscriptProjection {
     return projection;
   }
 
+  /** A paused owner may expose saved history, but must never resolve a provider. */
+  private async pausedCoordinatorTranscript(
+    input: NativeAgentProjectionInput | NativeAgentTranscriptUpdateInput,
+    limit: number,
+    targetBytes: number,
+  ): Promise<NativeAgentTranscriptView | null | undefined> {
+    if (!coordinatorIdFromRuntimeId(input.environmentId)) return undefined;
+    const open = await openCoordinatorConversation(this.storage, input.environmentId);
+    if (open?.workspace.lifecycleState !== "paused") return undefined;
+    if (
+      open.conversation.agent !== input.agent ||
+      open.conversation.logicalSessionKey !== input.logicalSessionKey
+    )
+      throw new Error("Native agent session key collision");
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(sessionKey);
+    if (!session) return null;
+    let progressive: NativeAgentTranscriptView | undefined;
+    for (const { value } of this.progressiveTranscriptCache.values()) {
+      if (
+        value.identity.environmentId === input.environmentId &&
+        value.identity.logicalSessionKey === input.logicalSessionKey &&
+        value.identity.platform === input.agent &&
+        value.identity.providerSessionId === session.providerSessionId &&
+        (!progressive || value.messages.length >= progressive.messages.length)
+      )
+        progressive = value;
+    }
+    const legacy = this.cachedProjectionSnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const cached = progressive ?? (legacy?.sessionId === session.providerSessionId ? legacy : null);
+    const persisted = cached ? null : await this.storage.getNativeAgentDisplayTail(sessionKey);
+    const source =
+      cached ?? (persisted?.providerSessionId === session.providerSessionId ? persisted : null);
+    if (!source)
+      throw new ProviderUnavailableError(
+        "The Coordinator is paused and no saved transcript is available",
+      );
+    const bounded = this.boundedProjectedMessages(source.messages, limit, targetBytes);
+    const priorWindow = source.messageWindow;
+    const messageWindow = {
+      ...priorWindow,
+      ...bounded.window,
+      truncated: priorWindow?.truncated === true || bounded.window.truncated,
+      // Loading provider history would require resuming the paused runtime.
+      canLoadEarlier: false,
+    };
+    return {
+      identity: this.progressiveIdentity(
+        { ...input, viewVersion: 1 },
+        session.providerSessionId,
+        progressive?.identity.sourceGeneration ?? legacy?.generation ?? `saved:${input.agent}`,
+      ),
+      freshness: "cached",
+      messages: bounded.messages,
+      historyEpoch:
+        progressive?.historyEpoch ??
+        persisted?.historyEpoch ??
+        `saved:${session.providerSessionId}`,
+      historyComplete:
+        (progressive?.historyComplete ??
+          (persisted ? persisted.historyComplete === true : priorWindow?.truncated === false)) &&
+        !messageWindow.truncated,
+      messageWindow,
+      ...(source.title ? { title: source.title } : {}),
+    };
+  }
+
   async getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
   ): Promise<NativeAgentTranscriptUpdate> {
@@ -2761,6 +2837,27 @@ export class NativeAgentTranscriptProjection {
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
     const startedAt = monotonicMs();
     const cached = this.progressiveTranscriptCache.get(key);
+    try {
+      const saved = await this.pausedCoordinatorTranscript(
+        input,
+        input.liveWindow.messages,
+        input.liveWindow.targetBytes,
+      );
+      if (saved === null) return { viewVersion: 1, status: "missing" };
+      if (saved) {
+        // Saved reads must not replace a wider cached view or checkpoint a
+        // smaller paused window over the durable tail.
+        const token = createHash("sha256").update(JSON.stringify(saved)).digest("base64url");
+        return { viewVersion: 1, status: "snapshot", token, value: saved };
+      }
+    } catch (error) {
+      return {
+        viewVersion: 1,
+        status: "unavailable",
+        retryable: false,
+        error: error instanceof Error ? error.message : "Saved transcript unavailable",
+      };
+    }
     // Phase timings for the read this caller waits on; background refreshes
     // behind a cached answer are not attributed to this response.
     const phases = new ProgressiveReadPhaseTimer();
@@ -4604,6 +4701,33 @@ export class NativeAgentTranscriptProjection {
     let generation = previous?.generation ?? `unresolved:${input.agent}`;
     let transient = resolvedSession?.transient ?? false;
     try {
+      const saved =
+        !resolvedSession &&
+        (await this.pausedCoordinatorTranscript(input, messageLimit, NATIVE_PROJECTION_MAX_BYTES));
+      if (saved === null) return null;
+      if (saved) {
+        // Keep the original cached history: a one-message state read must
+        // not narrow a later paused transcript read.
+        const savedGeneration = String(saved.identity.sourceGeneration);
+        return {
+          platform: input.agent,
+          environmentId: input.environmentId,
+          sessionId: saved.identity.providerSessionId,
+          title: saved.title,
+          messages: saved.messages,
+          messageWindow: saved.messageWindow,
+          connection: "error",
+          turn: { phase: "idle", error: "The Coordinator is paused; showing saved history" },
+          interactions: [],
+          composerControls: [],
+          capabilities: nativeCapabilities(input.agent),
+          revision: this.nextProjectionRevision(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+            savedGeneration,
+          ),
+          generation: savedGeneration,
+        };
+      }
       const resolved = resolvedSession ?? (await this.host.resolveProjectionSession(input));
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {

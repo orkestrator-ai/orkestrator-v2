@@ -25,9 +25,12 @@ import type { AppConfig, Environment } from "./models.js";
  * replacement, its candidate — never both running), so the in-container
  * firewall no longer has to guess which /24 is "the host": siblings live on
  * other networks, which Docker isolates from each other. The network is
- * labelled with this registry's owner and the environment, created without
- * IPv6, adopted only when its labels match exactly, and removed after the
- * environment's containers by the deletion ledger.
+ * labelled with this registry's owner and the environment, adopted only when
+ * its labels match exactly, and removed after the environment's containers by
+ * the deletion ledger. It does not ask for IPv6, but a daemon whose
+ * `default-network-opts` enable IPv6 gives it a subnet anyway; the namespace
+ * owner's `disable_ipv6` sysctl and the firewall's ip6tables DROP keep the
+ * runtime off IPv6 regardless.
  */
 
 export const NETWORK_ROLE = "network";

@@ -8,6 +8,8 @@ import {
   readGitHubCliToken,
   runtimeEnvironmentForAgentQuery,
   runtimeEnvironmentForSessionQuery,
+  UNATTENDED_OVERLOAD_RETRY_ENV,
+  withUnattendedOverloadRetry,
 } from "./runtime-env.js";
 
 const noGhToken = async () => undefined;
@@ -274,6 +276,45 @@ describe("graph agent sessions (item 209)", () => {
     expect(environment).toMatchObject({
       GH_TOKEN: "host-token",
       [GITHUB_MCP_TOKEN_ENV]: "host-token",
+    });
+  });
+});
+
+describe("withUnattendedOverloadRetry", () => {
+  test("adds the longer 529 backoff to a pipeline session only", () => {
+    const environment = { PATH: "/usr/bin" };
+    expect(withUnattendedOverloadRetry({ id: "pipeline" }, environment)).toEqual({
+      PATH: "/usr/bin",
+      ...UNATTENDED_OVERLOAD_RETRY_ENV,
+    });
+    for (const policy of [
+      undefined,
+      { id: "interactive-host" },
+      { id: "interactive-container" },
+      { id: "coordinator-read-only" },
+    ] as const) {
+      expect(withUnattendedOverloadRetry(policy, environment)).toBe(environment);
+    }
+  });
+
+  test("stays within the bounds the pinned CLI accepts", () => {
+    expect(
+      Number(UNATTENDED_OVERLOAD_RETRY_ENV.CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS),
+    ).toBeLessThanOrEqual(32_000);
+    expect(
+      Number(UNATTENDED_OVERLOAD_RETRY_ENV.CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS),
+    ).toBeLessThanOrEqual(64_000);
+  });
+
+  test("keeps a value the user set", () => {
+    expect(
+      withUnattendedOverloadRetry(
+        { id: "pipeline" },
+        { CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS: "32000" },
+      ),
+    ).toEqual({
+      CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS: "4000",
+      CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS: "32000",
     });
   });
 });

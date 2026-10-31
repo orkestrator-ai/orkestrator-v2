@@ -22,6 +22,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-shared.ts` | The record types and pure helpers every repository shares, re-exported from `storage-shared-core.ts` (base guards, record types, protocol names) the topic modules `storage-shared-<topic>.ts` (pane layouts, agent activity, persisted records, native sessions, model catalogues, config normalisation) and `storage-shared-extra.ts` (OpenCode catalogues, the storage error classes) |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
+| `apps/backend/src/core/storage-writer-guards-test-support.ts` | The writer guard's static analysis; its tests are `storage-writer-guards.test.ts` (the facade's stores), `storage-writer-guards-raw.test.ts` (raw `StorageDatabase` writers) and `storage-writer-guards-analysis.test.ts` (fixtures for the analysis itself) |
 
 ## Code layout
 
@@ -283,12 +284,17 @@ rather than detected in production by revision checks on save.
 
 Engines with stores of their own (workflow results, the cleanup ledger,
 display tails, web annotations, transcript artifacts, usage history, design
-signals, …) write through `StorageDatabase` directly, outside that scan. The
-same test resolves the store each of those writes names, through constants,
-template literals, small name functions (`webAnnotationStoreName`),
-constructor-set fields and row helpers that take the store as a parameter,
-and fails a write whose store it cannot name or that a repository also
-writes. The import and record upgrades in `storage-stores.ts`,
+signals, …) write through `StorageDatabase` directly, outside that scan.
+`storage-writer-guards-raw.test.ts` resolves the store each of those writes
+names, through constants, template literals, small name functions
+(`webAnnotationStoreName`), constructor-set fields and row helpers that take
+the store as a parameter, and fails a write whose store it cannot name or
+that a repository also writes. It parses a backend file only when the file's
+text can name a raw writer method, when a store name being resolved is
+imported from it, or when it can call a row helper whose store parameter is
+being followed. The text check decodes `\u` escapes, so it never skips a file
+in which a full parse would find a write.
+The import and record upgrades in `storage-stores.ts`,
 `storage-record-upgrades.ts` and `storage-retired-features.ts` are exempt: they
 run inside the migration transaction at open, before any writer.
 
@@ -404,14 +410,14 @@ that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
 
-One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
-version and can still write a prompt-queue claim (`outstandingClaim`). So
-`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+One upgrade cannot run once: a backend up to v2.29.0-beta can write a
+prompt-queue claim (`outstandingClaim`), and one that opened the database before
+version 5 keeps writing until it stops, because the version is checked only at
+open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
 load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
 and survive queue writes until settlement or expiry. Expired or malformed
 leases restore their message to the head, and the next save persists that.
-Malformed message ids receive a stable recovery id. A new migration would have made
-every older release refuse the database.
+Malformed message ids receive a stable recovery id.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,
@@ -483,7 +489,9 @@ The archive stays that pre-migration copy, except that deletes reach it:
 
 Use `storage-test-support.ts` rather than writing files into a data directory:
 `seedStore`, `seedUnreadableStore`, `readStoredValue`, `hasStore`,
-`deleteStoredValue` and `storageFilesContain`. `storageDatabase(storage)` and
+`deleteStoredValue` and `storageFilesContain`. `withTemporaryStorage(run)`
+runs `run` against an initialised service in a fresh data directory and
+removes the directory afterwards. `storageDatabase(storage)` and
 `storageInternals(storage)` reach a running service's database, context and
 repositories, for injecting a failure into a primitive or patching one
 repository method. Patch the repository, not the facade: a repository calls

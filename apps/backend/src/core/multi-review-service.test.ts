@@ -178,6 +178,11 @@ class Provider implements BuildPipelineProvider {
    * stays failed until the next turn runs.
    */
   readonly sessionFailures = new Map<string, string>();
+  /** `settleTurn`'s answer; unset leaves the read as a provider without settlement. */
+  turnSettledValue: boolean | undefined;
+  async settleTurn(_sessionId: string, _requestId: string): Promise<boolean> {
+    return this.turnSettledValue as boolean;
+  }
   /** Sessions whose `sessionFailures` entry is a provider restart's interruption. */
   readonly restartInterrupted = new Set<string>();
   readonly attached: string[] = [];
@@ -5262,6 +5267,69 @@ test.each(["recovers", "exhausted"] as const)(
         expect(finished.phase).toBe("completed");
         expect(finished.fixResult).toBeDefined();
         // No hand-typed "Please continue": the step sent its prompt once.
+        expect(provider.sends.size).toBe(1);
+      },
+      {
+        toolMode: true,
+        invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+          if (command === "start_review_validation")
+            return {
+              ...(args!.run as ReviewValidationRun),
+              status: "completed",
+            } as T;
+          return stableReviewInvoker<T>(command, args);
+        },
+      },
+    );
+  },
+);
+
+test.each(["recovers", "exhausted"] as const)(
+  "an unattended Fix waits out an OpenCode capacity retry (%s)",
+  async (outcome) => {
+    const provider = new Provider(false);
+    provider.statusValue = "running";
+    const environmentId = `env-fix-opencode-capacity-${outcome}`;
+    await withService(
+      environmentId,
+      provider,
+      async (context) => {
+        const { service, snapshot, workflowResults } = context;
+        const first = await startFollowUpStep("fix", context, environmentId, true);
+        const sessionId = first.fixSession!.providerSessionId;
+        const requestId = first.activeRequest!.requestId;
+        // The provider's backoff: OpenCode reads idle, the request has not
+        // settled. Far more passes than the idle-result bound would allow.
+        provider.statusValue = "idle";
+        provider.turnSettledValue = false;
+        for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(first.id);
+        const waiting = await snapshot(first.id);
+        expect(waiting).toMatchObject({
+          phase: "fixing",
+          activeRequest: { requestId, state: "sent" },
+        });
+        expect(waiting!.activeRequest!.idleResultPolls).toBeUndefined();
+        provider.turnSettledValue = undefined;
+        if (outcome === "exhausted") {
+          provider.sessionFailures.set(sessionId, "Service Unavailable");
+          await service.advanceNow(first.id);
+          expect(await snapshot(first.id)).toMatchObject({
+            phase: "failed",
+            error: "The fix session failed: Service Unavailable",
+          });
+          expect(provider.sends.size).toBe(1);
+          return;
+        }
+        expect(
+          await workflowResults!.submit(
+            { environmentId, projectId: "project-1" },
+            requestId,
+            completedFix,
+          ),
+        ).toMatchObject({ ok: true });
+        await service.advanceNow(first.id);
+        expect((await snapshot(first.id))!.phase).toBe("completed");
+        // The workflow itself sent its prompt once; the continuation is the provider's.
         expect(provider.sends.size).toBe(1);
       },
       {

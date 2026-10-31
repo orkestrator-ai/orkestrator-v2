@@ -6,6 +6,7 @@ import {
   encodePublicSessionId,
   type PublicNodeList,
   type PublicProjectSummary,
+  type PublicSessionSummary,
   type PublicTicketDetail,
   type PublicTicketSummary,
 } from "@orkestrator/protocol/public-api-resources";
@@ -72,9 +73,10 @@ export const OPERATOR_TOOL_ACTIONS: Readonly<Record<string, readonly PublicActio
     open_multi_review_fix: ["review.open"],
     address_multi_review: ["review.address"],
     cancel_multi_review: ["review.cancel"],
-    // The action bar's PR and Resolve buttons.
+    // The action bar's PR, Resolve and Merge buttons.
     create_pr: ["pr.create"],
     resolve_conflicts: ["pr.resolve"],
+    merge_pr: ["pr.merge"],
   });
 
 /** A node refusal of a legacy tool, worded with its public error code. */
@@ -157,6 +159,36 @@ export async function operatorNode(
     caller: { ...onNode(caller, nodeId), readInvoke: routed },
     invoke: routed,
     tag: { nodeId, node: node.name },
+  };
+}
+
+/**
+ * A Coordinator conversation has no pane layout, so the legacy tab tools read
+ * it as the one-tab layout `session.list` describes. That also runs on a leaf,
+ * and refuses a closed or unassigned conversation with its public code.
+ */
+export async function operatorCoordinatorLayout(
+  node: OperatorNode,
+  environmentId: string,
+): Promise<JsonRecord> {
+  const listed = await dispatchAs<{ items: PublicSessionSummary[] }>(node.caller, "session.list", {
+    environmentId,
+  });
+  if (!listed.ok) throw new ControlMcpNodeError(listed.error.code, listed.error.message);
+  return {
+    root: {
+      kind: "leaf",
+      id: environmentId,
+      tabs: listed.result.items.map((session) => ({
+        id: session.tabId,
+        type: "agent-native",
+        displayTitle: session.title,
+        nativeAgentData: {
+          platform: session.agent,
+          ...(session.hasProviderSession ? { sessionId: session.id } : {}),
+        },
+      })),
+    },
   };
 }
 

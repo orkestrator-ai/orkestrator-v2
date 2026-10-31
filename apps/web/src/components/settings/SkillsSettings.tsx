@@ -25,6 +25,7 @@ import type {
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { SettingsPageHeader, SettingsSectionHeader } from "./SettingsPageLayout";
 
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
   { id: "claude", label: "Claude" },
@@ -399,6 +400,28 @@ export function SkillsSettings({
 
   const missingRoots = state.scan?.roots.filter((root) => !root.exists).length ?? 0;
   const presentRoots = (state.scan?.roots.length ?? 0) - missingRoots;
+  const headerDescription = description ?? (
+    <>
+      Every skill each agent can load from its user-level skill directories, including shared
+      locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills are
+      not listed here.
+    </>
+  );
+  const providerTabs = showProviderTabs ? (
+    <Tabs
+      value={provider}
+      onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
+    >
+      <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
+        {PROVIDERS.map((entry) => (
+          <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
+            <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
+            {entry.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  ) : null;
 
   return (
     <div
@@ -407,35 +430,14 @@ export function SkillsSettings({
         embedded ? "h-[calc(100dvh-17rem)]" : PANE_HEIGHT_CLASSES,
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Skills</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {description ?? (
-              <>
-                Every skill each agent can load from its user-level skill directories, including
-                shared locations such as <code className="text-[11px]">~/.agents/skills</code>.
-                Project skills are not listed here.
-              </>
-            )}
-          </p>
+      {embedded ? (
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <SettingsSectionHeader title="Skills">{headerDescription}</SettingsSectionHeader>
+          {providerTabs}
         </div>
-        {showProviderTabs && (
-          <Tabs
-            value={provider}
-            onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
-          >
-            <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
-              {PROVIDERS.map((entry) => (
-                <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
-                  <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
-                  {entry.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        )}
-      </div>
+      ) : (
+        <SettingsPageHeader title="Skills" description={headerDescription} actions={providerTabs} />
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
         {/* Skill list */}

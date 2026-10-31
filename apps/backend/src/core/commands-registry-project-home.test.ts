@@ -8,6 +8,7 @@ import type { CommandContext } from "./commands-context.js";
 import { startEnvironmentSetupOnce } from "./commands-environment.js";
 import { projectHomeTesting } from "./project-home-environment.js";
 import { runCommand } from "./shell.js";
+import * as shell from "./shell.js";
 import type { Environment } from "./models.js";
 import {
   deleteMergedEnvironmentRemoteBranch,
@@ -211,7 +212,7 @@ test("starting a home with a missing checkout refuses to create a worktree", asy
   const home = await ensure();
   await rm(checkout, { recursive: true, force: true });
   await expect(startEnvironmentOnce(home.id, context, () => undefined)).rejects.toThrow(
-    "checkout is unavailable",
+    "local checkout does not exist",
   );
   expect(await storage.getEnvironment(home.id)).toMatchObject({ status: "error" });
   await expect(readFile(path.join(context.worktreeDir!, "README.md"))).rejects.toThrow();
@@ -224,11 +225,14 @@ test("base and detached homes never discover a PR or delete a remote ref", async
     await context.runtime.prMonitor.wakeForCompletion(home.id, context);
     await context.runtime.prMonitor.requestRefresh(home.id, context);
     expect((await storage.getEnvironment(home.id))?.prUrl).toBeNull();
-    await deleteMergedEnvironmentRemoteBranch({
-      ...home,
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-    });
+    await deleteMergedEnvironmentRemoteBranch(
+      {
+        ...home,
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+      },
+      storage,
+    );
     const detached = path.join(root, "detached");
     await runCommand("git", ["clone", checkout, detached]);
     await runCommand("git", ["checkout", "--detach"], { cwd: detached });
@@ -417,3 +421,47 @@ test("completion discovers only a same-repository PR targeting the home base", a
     gh.restore();
   }
 });
+
+for (const read of [
+  ["write-tree"],
+  ["diff-index", "--raw", "-z", "HEAD"],
+  ["diff", "--raw", "-z"],
+  ["ls-files", "-z", "-o", "--exclude-standard"],
+]) {
+  test(`dirty checkout confirmation recovers a timed-out ${read.join(" ")}`, async () => {
+    await runCommand("git", ["branch", "other"], { cwd: checkout });
+    await writeFile(path.join(checkout, "README.md"), "changed\n");
+    await writeFile(path.join(checkout, "untracked.txt"), "new\n");
+    const service = new ProjectGitService(storage);
+    const original = shell.runCommand;
+    const calls: string[][] = [];
+    const command = spyOn(shell, "runCommand").mockImplementation(
+      async (executable, args = [], options) => {
+        const disabled = args[0] === "-c" && args[1] === "core.fsmonitor=false";
+        const inner = disabled ? args.slice(2) : args;
+        if (executable === "git" && JSON.stringify(inner) === JSON.stringify(read)) {
+          expect(options).toEqual({ cwd: checkout, timeoutMs: 10_000 });
+          calls.push(args);
+          if (!disabled) throw new shell.CommandFailedError("timeout", { timedOut: true });
+        }
+        return original(executable, args, options);
+      },
+    );
+    let confirmation;
+    try {
+      confirmation = await service.prepareSwitchBranch(projectId, "refs/heads/other");
+      expect(confirmation).toMatchObject({ trackedChanges: 1, untrackedFiles: 1 });
+      expect(calls).toEqual([read, ["-c", "core.fsmonitor=false", ...read]]);
+      expect(await readFile(path.join(checkout, "README.md"), "utf8")).toBe("changed\n");
+    } finally {
+      command.mockRestore();
+    }
+    // The recovered inspection must fingerprint the same state as a healthy read.
+    const switched = await service.switchBranch(projectId, "refs/heads/other", {
+      confirmationToken: confirmation.token,
+    });
+    expect(switched.branch).toBe("other");
+    expect(switched.trackedChanges).toBe(0);
+    expect(switched.untrackedChanges).toBe(0);
+  });
+}

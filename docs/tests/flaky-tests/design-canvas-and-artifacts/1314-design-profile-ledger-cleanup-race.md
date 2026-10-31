@@ -129,3 +129,73 @@ The final branch run passed all four groups; logs are retained separately in
 `.orkestrator/review-artifacts/docker-probe-fix-e2ff8181c/docker-fix-final-full-test.log`
 and `docker-fix-main-full-test.log` in that directory. The intermittent ledger
 failure remains open; a passing retry does not establish a cleanup fix.
+
+## Resolve tab reuse review — 2026-10-31
+
+The final exact `mise run test` rerun against the committed Resolve repairs
+(`527d6edab`) repeated this assertion at `browser-profiles.test.ts:505` after
+224.54 ms: the profile was gone, but one JSON ledger entry remained. Backend
+totals were 11,712 passed and this one failure. Every other package and the
+root, bridge and protocol groups passed. The new Resolve command, queue,
+retry and completion regressions passed in this aggregate run.
+
+The complete unchanged owner passed alone with one worker (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name design-profile-owner -- bun test --cwd apps/backend src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.V7Etln/review-default-final.log.gz` and
+`orkestrator-test-run.8wPYnM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The run spent about 1,116 seconds waiting for host admission and finished in
+1,529.4 seconds. No design cleanup source, assertion, timeout or skip changed;
+the root cause of this existing intermittent case remains unestablished.
+Browser validation limits for the same repair are recorded in
+[0382](../web-ui/0382-component-browser-parallel-load.md).
+
+## Hidden flow graph review — 2026-10-31
+
+The required exact `mise run test` rerun repeated this assertion after 261.25 ms.
+The profile had been removed but its JSON ledger entry remained at line 505.
+The web package passed all 10,876 tests; the backend had two failures,
+including the other timing case recorded in this review.
+
+Both complete unchanged owners then passed with one file worker
+(exit 0, 2.4 s):
+
+```sh
+mise run test:logged -- --name recorded-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone-ready.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `orkestrator-test-run.Od2gTp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, timeout or
+skip in either owner changed. This repeats the existing intermittent symptom;
+no new cause was established.
+
+## Settings layout branch, 2026-10-31
+
+The first `mise run test` on this renderer-only branch (nothing in `design/`
+changed) failed this test after 70.36 ms with the same symptom: the profile was
+gone and `59426-59429-0123abcd.json` was still in the ledger. The complete
+owner then passed alone twice (0.4 s and 0.9 s logged), and the next full run did
+not repeat the failure. Aggregate evidence:
+`orkestrator-test-run.eT8TET/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the host temporary directory.
+
+## Failed-turn restart validation observation
+
+On 2026-10-31, while validating [0940](../../../todo/cross-cutting/0940-failed-turn-reads-as-completed.md)
+task 3, `mise run test` failed this case in 100.81 ms: the JSON ledger entry was
+still present at line 505 after the profile had gone. The backend reported
+11,713 passed, 103 skipped and this one failure across 804 files (109.36 s), on a
+host running other workers (the whole run took 1,002 s against 521 s earlier the
+same day). The same test passed in that earlier run. The complete unchanged owner
+then passed alone three times out of three (37 passed):
+
+```sh
+mise exec -- bun test src/core/design/browser-profiles.test.ts
+```
+
+run from `apps/backend`. No design code, assertion, timeout or skip changed.
+Asynchronous ledger removal remains a hypothesis.

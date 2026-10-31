@@ -48,6 +48,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Set `ORKESTRATOR_EGRESS=in-container` for the in-container firewall |
+| Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; pinned to the in-container firewall), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
@@ -115,6 +116,95 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+## Egress gateway conditions on Linux Engine (2026-10-31)
+
+Todo [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+task 3: IPv6, a Docker daemon restart and DNS rotation behind the egress
+gateway.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64), host Docker Engine
+  29.9.2 rootful. The host daemon was neither restarted nor reconfigured.
+- **Disposable daemon:** `docker:29-dind` (Engine 29.9.2) in a privileged
+  container with its own volume, reached through a socket in a private
+  directory. A supervisor loop restarts `dockerd` when it exits, so
+  `kill -TERM` of the inner `dockerd` is a real daemon restart. Its
+  `daemon.json` set `default-network-opts.bridge.com.docker.network.enable_ipv6`
+  to `true`, address pools `172.30.0.0/16` and `2001:db8:100::/56`, and
+  `live-restore` false or true per run.
+- **Images:** `orkestrator-v2:latest` (`2.34.4-beta`, revision `f2d21713`,
+  firewall and gateway scripts identical to `main` `931e5541`, capabilities
+  including `egress-gateway=1`, `network-policy=3`), and
+  `orkestrator-v2:q0018-revoke`: that image plus this change's
+  `firewall-domains.sh`.
+- **Suite:** `container-live-egress-conditions.test.ts`, with `DOCKER_HOST`
+  set to the disposable daemon and
+  `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` set to a script that restarts
+  only that daemon.
+
+Results:
+- **IPv6** (12 assertions, passed on both images). The backend-created
+  environment network got `2001:db8:100::/64`, and a control container
+  without the sysctl reached a peer's IPv6 echo port. The gateway and the
+  runtime had no IPv6 address (`/proc/net/if_inet6` empty), `disable_ipv6=1`
+  on every interface, and no IPv6 path to the peer as `node` or root. The
+  report said `ipv6: blocked`, with `ip6tables -P OUTPUT DROP`. Rerun on the
+  daemon without the IPv6 default, with `ORKESTRATOR_LIVE_IPV6_NETWORK=1`
+  attaching a ULA network to the gateway before its first start: the same.
+  A manual check with `alpine` showed that a container with the sysctl also
+  gets no IPv6 on a network connected after it started.
+- **Daemon restart**, `live-restore` off (29 assertions, two restarts).
+  Runtimes stopped through the backend, and runtimes running when the daemon
+  stopped, came back with neither container running and nothing started by
+  Docker. `docker start` of the runtime alone was refused while its gateway
+  was stopped. The backend's start path restored both in order: `CapEff` 0,
+  the report `applied`, `-P OUTPUT DROP` with the final REJECT, IPv6 off,
+  `registry.npmjs.org` reachable and `example.com` rejected (exit 7).
+- **Daemon restart**, `live-restore` on (37 assertions). Both containers kept
+  running in the same namespace (gateway `StartedAt` unchanged). The same
+  checks passed, a manual `update-firewall.sh --refresh` succeeded through
+  Docker's re-created embedded DNS, and `prepareEgressGatewayForStart`
+  returned `ready`.
+- **DNS rotation.** A resolver inside the gateway answered `rotate.test` with
+  local echo peers' addresses, and the trusted `resolv.conf` pointed at it.
+  First answer: 21,600 s timeout, refresh delay 300 s for a 30 s TTL. After
+  the rotation the new address got its own six hours, and the old one was
+  carried with the rest of its own. Its open connection was not revoked.
+  Over five swaps, a watcher probing every 50 ms never opened the unlisted
+  peer and was never refused by the carried one. A 4000 s TTL capped the
+  delay at 1800 s. With the old address's recorded expiry moved to four
+  seconds ahead, one refresh carried it with a four-second kernel timeout,
+  and the kernel dropped it on time with no refresh running. New connections
+  were then refused. **On the release image, a connection opened before the
+  expiry kept working through the next refresh**: revocation compared only
+  live-set members, and the kernel had already removed the expired one.
+  Fixed in `firewall-domains.sh` (the members are recorded at each
+  application and included in the next diff). On `q0018-revoke` the
+  connection is cut at that refresh, and all 25 assertions pass.
+- **One full run** on `q0018-revoke` (IPv6 default, `live-restore` off): 3/3,
+  66 assertions, 71 s, no leftovers.
+- **Fix against the existing suites.** `container-live-firewall.test.ts` on
+  `q0018-revoke` passed 2/2 on the host daemon, in its own labelled networks
+  (C23 edits, revocation, refresh, restart, published ports and gateway
+  restart; the policy 3 tuples). On the disposable daemon the tuple test
+  passed. C23 stopped only at its published-port fetch, which goes to the
+  test host's `127.0.0.1` rather than the nested daemon's.
+- **Default developer run.** On the host daemon without the opt-ins: IPv6
+  logged "not covered" and created no IPv6 network (host IPv6 forwarding
+  stayed 0), DNS rotation passed, and the restart case skipped.
+- **Not covered:** a rootless daemon restart (0018 task 2), external IPv6
+  reachability (the disposable daemon had no IPv6 uplink; the control
+  container proved the IPv6 path on the network itself), and a real CDN's
+  rotation over six hours.
+
+Linux Engine CI, recorded from `gh run view` on 2026-10-31. Run 40999226305
+(head `79c35c0b`, 2026-10-30, Engine 28.0.4, image with `egress-gateway=1`)
+passed every step on `ubuntu-24.04` and `ubuntu-24.04-arm`: replacement
+12/12, network 4/4, firewall 2/2, readiness 9/9 on each runner. Run
+40338400817 (`e8306626`, 2026-10-26) passed the same steps, and runs
+40746551838 (2026-10-28) and 40799843615 (2026-10-29) passed too. The workflow
+now also runs `container-live-egress-conditions.test.ts` with
+`ORKESTRATOR_LIVE_IPV6_NETWORK=1`; the daemon-restart case stays manual.
 
 ## Bounded readiness probe on omarchy-hp, and a blocked reference-host run (2026-10-30)
 

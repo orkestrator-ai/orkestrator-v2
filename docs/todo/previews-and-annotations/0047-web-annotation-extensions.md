@@ -405,8 +405,8 @@ design. The embedding go or no-go is no longer an outstanding decision.
    reload the user's active page. Reuse the stable-geometry window, reapply the
    user's redaction masks, and keep manual capture as the path whenever login
    or form state cannot be reproduced.
-3. Development source hints: done (task 4). Left over: no build plugin ships
-   with Orkestrator, and the thread view does not show hints; see
+3. Development source hints: done (task 4). The documented emitter, the thread
+   view list and the live captures are done in
    [0950](0950-source-hint-producer-plugin.md).
 4. Open shadow roots and same-origin iframes.
    - Requires explicit root paths, a navigation generation per frame, and

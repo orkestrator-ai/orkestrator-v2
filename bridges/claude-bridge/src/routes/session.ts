@@ -1,7 +1,7 @@
 import { sessionOperationError } from "../services/session-manager-core.js";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 // Session management routes
-import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
+import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
 import { parseBase64ImageData } from "../services/image-attachment-data.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
@@ -1549,7 +1549,7 @@ session.post("/:id/interactions/:interactionId", interactionBodyLimit, async (c)
   if (
     action === "accept" &&
     pending.kind === "mcp-form" &&
-    !isValidClaudeFormContent(pending.schema, content)
+    !isValidMcpFormContent(pending.schema, content)
   ) {
     return c.json({ error: "The answer does not match the MCP form schema" }, 400);
   }

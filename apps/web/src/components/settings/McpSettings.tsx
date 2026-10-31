@@ -50,6 +50,11 @@ import { useTimedCopyFeedback } from "@/hooks";
 import * as backend from "@/lib/backend";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import { cn } from "@/lib/utils";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
 
 const PROFILE_TEXT: Record<ControlMcpProfile, { label: string; description: string }> = {
   voice: {
@@ -78,7 +83,7 @@ const CAPABILITY_TEXT: Record<string, string> = {
   "sessions.control": "Start, prompt, steer and stop sessions",
   interactions: "Answer questions and approvals",
   "environments.lifecycle": "Create, start and stop environments",
-  "environments.destructive": "Delete and recreate environments",
+  "environments.destructive": "Delete and recreate environments, merge pull requests",
   exec: "Run commands in environments",
   projects: "Add, create and remove projects",
   settings: "Change project and environment settings",
@@ -108,8 +113,8 @@ function SetupRecipe({
   const { copied, copy } = useTimedCopyFeedback();
 
   return (
-    <section className="overflow-hidden rounded-lg border border-white/10 bg-zinc-950/60">
-      <div className="flex items-center justify-between gap-4 border-b border-white/8 px-4 py-3">
+    <section className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
+      <div className="flex items-center justify-between gap-4 border-b border-zinc-800 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">
           {icon}
           <div className="min-w-0">
@@ -179,7 +184,7 @@ function CreateCredentialForm({
 
   return (
     <form
-      className="space-y-3 rounded-lg border border-white/10 bg-zinc-900/45 p-4"
+      className={cn(SETTINGS_CARD_CLASS, "space-y-3 p-4")}
       onSubmit={(event) => {
         event.preventDefault();
         if (!canCreate) return;
@@ -362,20 +367,24 @@ export function McpSettings() {
 
   if (loadError || !settings) {
     return (
-      <div className="mx-auto max-w-3xl rounded-lg border border-red-500/20 bg-red-500/5 p-5">
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
-          <div className="space-y-3">
-            <div>
-              <h2 className="text-sm font-medium text-foreground">MCP settings are unavailable</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+      <SettingsPageLayout title="Control Orkestrator from another agent">
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">
+                  MCP settings are unavailable
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={retry}>
+                Try again
+              </Button>
             </div>
-            <Button variant="outline" size="sm" onClick={retry}>
-              Try again
-            </Button>
           </div>
         </div>
-      </div>
+      </SettingsPageLayout>
     );
   }
 
@@ -384,24 +393,20 @@ export function McpSettings() {
     selected?.token ? value.replace(selected.token, "••••••••••••") : value;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-8">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-6 sm:flex-row sm:items-start sm:justify-between">
-        <div className="max-w-2xl">
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-blue-300">
-            <CircleDot className={cn("h-3.5 w-3.5", available && "text-emerald-400")} />
-            {available ? "Listening locally" : "Not available"}
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Control Orkestrator from another agent
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {available
-              ? "Give each client its own credential and copy its setup below. Addresses and tokens stay the same across app restarts."
-              : "The setup details will appear after the local MCP server is available."}
-          </p>
+    <SettingsPageLayout
+      title="Control Orkestrator from another agent"
+      description={
+        available
+          ? "Give each client its own credential and copy its setup below. Addresses and tokens stay the same across app restarts."
+          : "The setup details will appear after the local MCP server is available."
+      }
+      actions={
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <CircleDot className={cn("h-3.5 w-3.5", available && "text-emerald-400")} />
+          {available ? "Listening locally" : "Not available"}
         </div>
-      </div>
-
+      }
+    >
       {settings.error && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
@@ -414,7 +419,7 @@ export function McpSettings() {
 
       {available ? (
         <>
-          <div className="rounded-lg border border-white/10 bg-zinc-900/45 p-4">
+          <div className={cn(SETTINGS_CARD_CLASS, "p-4")}>
             <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Server className="h-3.5 w-3.5" />
               Server URL
@@ -434,17 +439,12 @@ export function McpSettings() {
           </div>
 
           <section className="space-y-3" aria-labelledby="mcp-credentials-heading">
-            <div>
-              <h2 id="mcp-credentials-heading" className="text-sm font-medium text-foreground">
-                Credentials
-              </h2>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Each credential has its own token, profile and allowed actions. Rotating or revoking
-                one never affects the others.
-              </p>
-            </div>
+            <SettingsSectionHeader headingId="mcp-credentials-heading" title="Credentials">
+              Each credential has its own token, profile and allowed actions. Rotating or revoking
+              one never affects the others.
+            </SettingsSectionHeader>
             {credentials.length === 0 && (
-              <p className="rounded-lg border border-white/10 bg-zinc-900/45 p-4 text-sm text-muted-foreground">
+              <p className={cn(SETTINGS_CARD_CLASS, "p-4 text-sm text-muted-foreground")}>
                 No credentials. Create one below to connect a client.
               </p>
             )}
@@ -558,10 +558,11 @@ export function McpSettings() {
 
           {selected && recipes && (
             <section className="space-y-3" aria-labelledby="mcp-setup-heading">
-              <h2 id="mcp-setup-heading" className="text-sm font-medium text-foreground">
-                Set up a client with {selected.label}
-              </h2>
-              <div className="rounded-lg border border-white/10 bg-zinc-900/45 p-4">
+              <SettingsSectionHeader
+                headingId="mcp-setup-heading"
+                title={`Set up a client with ${selected.label}`}
+              />
+              <div className={cn(SETTINGS_CARD_CLASS, "p-4")}>
                 <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <KeyRound className="h-3.5 w-3.5" />
                   Access token
@@ -619,7 +620,7 @@ export function McpSettings() {
           )}
         </>
       ) : (
-        <div className="rounded-lg border border-white/10 bg-zinc-900/45 p-4 text-sm text-muted-foreground">
+        <div className={cn(SETTINGS_CARD_CLASS, "p-4 text-sm text-muted-foreground")}>
           {settings.enabled
             ? "The local MCP server is not running. Resolve the startup error above and try again."
             : "The local MCP server is disabled for this installation."}
@@ -631,6 +632,6 @@ export function McpSettings() {
         you run here. Treat every token like a password: a Full credential can create environments,
         launch jobs, read transcripts and update tickets.
       </p>
-    </div>
+    </SettingsPageLayout>
   );
 }

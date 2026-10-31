@@ -23,6 +23,9 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
+import { openCodeFake } from "./agent-provider-test-support.js";
+import { createNativeAgentProvider } from "./native-agent-provider.js";
+import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -235,7 +238,7 @@ async function withService(
       >;
     },
   ) => Promise<void>,
-  options: { transcriptPersistIntervalMs?: number } = {},
+  options: { transcriptPersistIntervalMs?: number; runtimeProvider?: BuildPipelineProvider } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -366,7 +369,7 @@ async function withService(
   const service = new BuildPipelineService(storage, invoke, {
     autoAdvance: false,
     ...options,
-    provider: async () => provider,
+    provider: async () => options.runtimeProvider ?? provider,
   });
   try {
     await run(service, storage, provider, invocations, controls);
@@ -418,6 +421,64 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
+  test("schema-less OpenCode build holds its stage for capacity continuation", async () => {
+    const fake = openCodeFake();
+    const native = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        openCodeCapacityRetryPolicy: { baseDelayMs: 0 },
+        monitorRetryMs: 1,
+      },
+    );
+    try {
+      await withService(
+        async (service, storage) => {
+          const { started, session } = await startBuilding(service, storage, {
+            agentType: "opencode",
+            reviewPreparation: { agent: "opencode" },
+          });
+          expect(session.structuredRequestId).toBeUndefined();
+          expect(fake.promptCalls).toHaveLength(1);
+          const original = fake.promptCalls[0]!;
+          fake.setMessagesResponse({
+            data: [
+              { info: { id: original.messageID, role: "user" }, parts: [] },
+              {
+                info: {
+                  id: "answer-1",
+                  role: "assistant",
+                  parentID: original.messageID,
+                  time: { completed: 1 },
+                  error: {
+                    name: "APIError",
+                    data: { statusCode: 503, message: "Service Unavailable" },
+                  },
+                },
+                parts: [],
+              },
+            ],
+          });
+          for (let i = 0; i < 3; i++) {
+            await service.advanceNow(started.id);
+            expect((await pipeline(storage, started.id)).phase).toBe("building");
+          }
+          expect(fake.promptCalls).toHaveLength(2);
+          expect(fake.promptCalls[1]!.messageID).not.toBe(original.messageID);
+        },
+        { runtimeProvider: native },
+      );
+    } finally {
+      await native.dispose?.();
+    }
+  });
+
   test("a manual turn in a resumed stage session cannot satisfy the pipeline result request", async () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);

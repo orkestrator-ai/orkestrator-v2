@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   nativeAgentCapabilities,
   type NativeAgentCommandIntent,
@@ -149,8 +150,16 @@ export function attachmentIntent(
 export function assertAttachmentSupport(
   agent: AgentPlatform,
   attachments: readonly ParsedAttachment[] | undefined,
+  coordinator = false,
 ): void {
   if (!attachments?.length) return;
+  if (coordinator && attachments.some((attachment) => attachment.type === "file")) {
+    // Only images have a home outside the checkout, which stays unwritten.
+    throw new PublicActionError(
+      "capability-unavailable",
+      "A Coordinator accepts image attachments only",
+    );
+  }
   const support = nativeAgentCapabilities(agent).attachments;
   if (attachments.some((attachment) => attachment.type === "image") && !support.images) {
     throw new PublicActionError("capability-unavailable", `${agent} does not accept images`);
@@ -175,7 +184,8 @@ function stagedFilename(name: string, index: number): string {
  * named for this operation, and describe them as the bridges expect. Runs
  * after admission and before dispatch; a replay of the same key returns the
  * recorded operation and never stages twice. The files live with the
- * workspace and are removed when the environment is deleted.
+ * workspace and are removed when the environment is deleted. A Coordinator's
+ * "workspace" is the user's checkout, so its images go to application data.
  */
 export async function stageAttachments(
   context: PublicActionContext,
@@ -184,6 +194,7 @@ export async function stageAttachments(
   attachments: readonly ParsedAttachment[] | undefined,
 ): Promise<PromptAttachment[]> {
   if (!attachments?.length) return [];
+  const coordinator = coordinatorIdFromRuntimeId(environment.id) !== null;
   const local = environment.environmentType === "local";
   if (local && !environment.worktreePath) {
     throw new PublicActionError("not-ready", "The environment has no worktree for attachments");
@@ -196,20 +207,26 @@ export async function stageAttachments(
   for (const [index, attachment] of attachments.entries()) {
     const filename = stagedFilename(attachment.name, index);
     const relativePath = `${directory}/${filename}`;
-    const path = local
-      ? await context.invoke<string>("write_local_file", {
-          worktreePath: environment.worktreePath,
-          filePath: relativePath,
+    const path = coordinator
+      ? await context.invoke<string>("write_coordinator_attachment", {
+          environmentId: environment.id,
+          filename: attachment.name,
           base64Data: attachment.dataBase64,
         })
-      : await (async () => {
-          await context.invoke("write_container_file", {
-            containerId: environment.containerId,
+      : local
+        ? await context.invoke<string>("write_local_file", {
+            worktreePath: environment.worktreePath,
             filePath: relativePath,
             base64Data: attachment.dataBase64,
-          });
-          return `/workspace/${relativePath}`;
-        })();
+          })
+        : await (async () => {
+            await context.invoke("write_container_file", {
+              containerId: environment.containerId,
+              filePath: relativePath,
+              base64Data: attachment.dataBase64,
+            });
+            return `/workspace/${relativePath}`;
+          })();
     staged.push(
       attachment.type === "image"
         ? {

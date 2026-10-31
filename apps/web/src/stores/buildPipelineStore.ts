@@ -3,6 +3,7 @@ import {
   BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
   isBuildPipeline,
+  isWorkingBuildPipeline,
   type BuildPhase,
   type BuildPipeline,
   type BuildPipelineSource,
@@ -16,7 +17,7 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
-export { BUILD_PIPELINE_VERSION, isActiveBuildPhase, isBuildPipeline };
+export { BUILD_PIPELINE_VERSION, isActiveBuildPhase, isBuildPipeline, isWorkingBuildPipeline };
 export type {
   BuildPhase,
   BuildPipeline,
@@ -66,21 +67,6 @@ interface BuildPipelineState {
   getPipelineById: (id: string) => BuildPipeline | undefined;
   getActivePipelineForEnvironment: (environmentId: string) => BuildPipeline | undefined;
   isBuildEnvironment: (environmentId: string) => boolean;
-}
-
-const SETUP_BUILD_PHASES = new Set<BuildPhase>([
-  "creating-environment",
-  "starting-environment",
-  "waiting-for-setup",
-]);
-
-/** True when a pipeline should paint the environment icon as working. */
-export function isWorkingBuildPipeline(pipeline: BuildPipeline): boolean {
-  return (
-    isActiveBuildPhase(pipeline.phase) &&
-    !SETUP_BUILD_PHASES.has(pipeline.phase) &&
-    pipeline.stallWarning === undefined
-  );
 }
 
 function environmentIds(pipelines: ReadonlyMap<string, BuildPipeline>): Set<string> {

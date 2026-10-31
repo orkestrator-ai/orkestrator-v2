@@ -124,15 +124,22 @@ export function resetLegacyFsmonitorMigrationsForTests(): void {
  * fsmonitor disabled. A hung daemon blocks every git call that consults it, and
  * no amount of waiting fixes that; skipping the daemon costs only a full scan.
  * Other failures are returned as they are.
+ *
+ * Use it for reads that scan the working tree (`status`, `diff` against it):
+ * only those consult the daemon. Pass the caller's `signal`, because
+ * `runCommand` reports a cancelled call as timed out too; that one stays
+ * cancelled.
  */
 export async function retryGitWithoutFsmonitorOnTimeout<T>(
   args: string[],
   run: (args: string[]) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   try {
     return await run(args);
   } catch (error) {
     if (!(error instanceof CommandFailedError) || !error.timedOut) throw error;
+    if (signal?.aborted) throw signal.reason;
     return run([...GIT_FSMONITOR_DISABLED_ARGS, ...args]);
   }
 }
@@ -142,9 +149,9 @@ export function runGitWithFsmonitorFallback(
   args: string[],
   options: Parameters<typeof runCommand>[2] = {},
 ): Promise<ExecResult> {
-  return retryGitWithoutFsmonitorOnTimeout(args, async (gitArgs) => {
-    // runCommand reports a cancelled call as timed out too; that one stays cancelled.
-    if (gitArgs !== args && options.signal?.aborted) throw options.signal.reason;
-    return runCommand("git", gitArgs, options);
-  });
+  return retryGitWithoutFsmonitorOnTimeout(
+    args,
+    (gitArgs) => runCommand("git", gitArgs, options),
+    options.signal,
+  );
 }

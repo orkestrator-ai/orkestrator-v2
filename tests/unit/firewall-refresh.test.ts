@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allowedDomainsRevision } from "../../apps/backend/src/core/container-network";
@@ -29,7 +37,10 @@ case "$command" in
     printf 'Name: %s\\nMembers:\\n' "$1"
     awk '{ print $1 " timeout " $2 }' "$state/$1"
     ;;
-  swap) mv "$state/$1" "$state/.swap"; mv "$state/$2" "$state/$1"; mv "$state/.swap" "$state/$2" ;;
+  swap)
+    [ ! -e "$state/fail-swap" ] || exit 1
+    mv "$state/$1" "$state/.swap"; mv "$state/$2" "$state/$1"; mv "$state/.swap" "$state/$2"
+    ;;
 esac`;
 
 // Answers from DIG_ANSWERS ("domain address ttl" lines); anything else fails.
@@ -209,6 +220,167 @@ describe("firewall allowlist refresh and edits", () => {
       expect(record).toContain("a.example 192.0.2.10 ");
     });
   });
+
+  test.skipIf(NO_GNU_DATE !== undefined)(
+    titleWithSkip(
+      "an address the kernel expired between refreshes still has its connections revoked",
+      NO_GNU_DATE,
+    ),
+    () => {
+      withFixture(
+        (fixture) => {
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          expect(fixture.members().has("192.0.2.10,tcp:443")).toBe(true);
+          // Six hours pass with no refresh: the kernel drops the rotated-away
+          // address on its own timeout, before any refresh can see it go.
+          const sets = join(fixture.dir, "ipsets", "allowed-domains");
+          writeFileSync(
+            sets,
+            readFileSync(sets, "utf8")
+              .split("\n")
+              .filter((line) => !line.startsWith("192.0.2.10,"))
+              .join("\n"),
+          );
+          const record = join(fixture.dir, "var", "domain-addresses");
+          writeFileSync(
+            record,
+            readFileSync(record, "utf8").replace(
+              /^a\.example 192\.0\.2\.10 \d+$/m,
+              `a.example 192.0.2.10 ${Math.floor(Date.now() / 1000) - 1}`,
+            ),
+          );
+          writeFileSync(join(fixture.dir, "calls"), "");
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          const calls = fixture.calls();
+          // Its established flows are deleted per tuple, like a removal.
+          expect(calls).toContain("conntrack -D -p tcp --dport 443 -d 192.0.2.10");
+          expect(calls).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10");
+          expect(calls).not.toContain("-d 192.0.2.99");
+          expect(fixture.status()).toMatchObject({ revokedEntries: 2 });
+          // Revoked once: a later refresh has nothing left to revoke.
+          writeFileSync(join(fixture.dir, "calls"), "");
+          expect(fixture.run(["--refresh"], "a.example 192.0.2.99 60\n").exitCode).toBe(0);
+          expect(fixture.calls()).not.toContain("conntrack -D");
+        },
+        { policy: 3 },
+      );
+    },
+  );
+
+  test("a tuple expiring after the revocation snapshot is revoked on the next refresh", () => {
+    withFixture(
+      (fixture) => {
+        // The stale GitHub range is revoked after the new membership snapshot.
+        // Expire the carried address at that point, before records are committed.
+        writeStub(
+          join(fixture.dir, "bin"),
+          "conntrack",
+          `printf 'conntrack %s\\n' "$*" >> "$CALL_LOG"
+if [[ "$*" == *"--mask-dst 255.254.0.0"* ]]; then
+  members="$IPSET_DIR/allowed-domains"
+  awk '$1 !~ /^192[.]0[.]2[.]10,/' "$members" > "$members.tmp"
+  mv "$members.tmp" "$members"
+  record="$IPSET_DIR/../var/domain-addresses.next"
+  awk '$2 == "192.0.2.10" { $3 = 0 } { print }' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+fi
+exit 1`,
+        );
+        const answers = "a.example 192.0.2.99 60\n";
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
+        expect(fixture.members().has("192.0.2.10,tcp:443")).toBe(false);
+        expect(fixture.calls()).not.toContain("-d 192.0.2.10");
+        const entries = readFileSync(join(fixture.dir, "var", "allowed-entries"), "utf8");
+        expect(entries).toContain("192.0.2.10,tcp:443\n");
+        expect(entries).toContain("192.0.2.10,tcp:80\n");
+
+        writeFileSync(join(fixture.dir, "calls"), "");
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
+        expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 443 -d 192.0.2.10\n");
+        expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10\n");
+        expect(fixture.calls()).not.toContain("-d 192.0.2.99");
+        expect(fixture.status()).toMatchObject({ revokedEntries: 2 });
+        expect(readFileSync(join(fixture.dir, "var", "allowed-entries"), "utf8")).not.toContain(
+          "192.0.2.10,",
+        );
+      },
+      { policy: 3 },
+    );
+  });
+
+  test("failed rebuilds retain history until a successful rebuild revokes expired tuples", () => {
+    withFixture(
+      (fixture) => {
+        const answers = "a.example 192.0.2.99 60\n";
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
+        const entries = join(fixture.dir, "var", "allowed-entries");
+        const saved = readFileSync(entries, "utf8");
+        const failure = join(fixture.dir, "ipsets", "fail-swap");
+        writeFileSync(failure, "");
+        writeFileSync(join(fixture.dir, "calls"), "");
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(1);
+        expect(readFileSync(entries, "utf8")).toBe(saved);
+
+        // The kernel expires the carried tuples during the rebuild outage.
+        const members = join(fixture.dir, "ipsets", "allowed-domains");
+        writeFileSync(
+          members,
+          readFileSync(members, "utf8")
+            .split("\n")
+            .filter((line) => !line.startsWith("192.0.2.10,"))
+            .join("\n"),
+        );
+        const record = join(fixture.dir, "var", "domain-addresses");
+        writeFileSync(
+          record,
+          readFileSync(record, "utf8").replace(
+            /^a\.example 192\.0\.2\.10 \d+$/m,
+            "a.example 192.0.2.10 0",
+          ),
+        );
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(1);
+        expect(readFileSync(entries, "utf8")).toBe(saved);
+        expect(fixture.calls()).not.toContain("conntrack -D");
+
+        rmSync(failure);
+        expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
+        expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 443 -d 192.0.2.10\n");
+        expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10\n");
+        expect(fixture.calls()).not.toContain("-d 192.0.2.99");
+        expect(fixture.status()).toMatchObject({ revokedEntries: 2, refreshFailures: 0 });
+        expect(readFileSync(entries, "utf8")).not.toContain("192.0.2.10,");
+      },
+      { policy: 3 },
+    );
+  });
+
+  for (const record of ["missing", "symlinked"]) {
+    test(`a ${record} membership record falls back to live entries and is replaced safely`, () => {
+      withFixture(
+        (fixture) => {
+          const entries = join(fixture.dir, "var", "allowed-entries");
+          const target = join(fixture.dir, "untrusted-entries");
+          const forged = "198.51.100.123,tcp:443\n";
+          if (record === "symlinked") {
+            writeFileSync(target, forged);
+            symlinkSync(target, entries);
+          }
+          expect(
+            fixture.run(["--set-domains", "b.example"], "b.example 192.0.2.99 60\n").exitCode,
+          ).toBe(0);
+          expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 443 -d 192.0.2.10\n");
+          expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10\n");
+          expect(fixture.calls()).not.toContain("-d 198.51.100.123");
+          expect(lstatSync(entries).isSymbolicLink()).toBe(false);
+          expect(readFileSync(entries, "utf8").trim().split("\n")).toEqual(
+            Array.from(fixture.members().keys()).sort(),
+          );
+          if (record === "symlinked") expect(readFileSync(target, "utf8")).toBe(forged);
+        },
+        { policy: 3 },
+      );
+    });
+  }
 
   test("add and remove edit the stored list through the same swap", () => {
     withFixture((fixture) => {

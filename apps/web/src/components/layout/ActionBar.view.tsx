@@ -307,6 +307,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isSelectedEnvironmentDeleting,
     canCreateTab,
     canLaunchBackendJob,
+    canLaunchResolve,
     editorUnavailableOnRemoteConnection,
     canOpenEditor,
     environmentPortAddress,
@@ -1266,7 +1267,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       tooltip={
                         <>
                           <p>GitHub is still checking whether this PR can be merged</p>
-                          {isRunning && canLaunchBackendJob && (
+                          {isRunning && canLaunchResolve && (
                             <p className="text-xs text-muted-foreground">
                               ⌘⇧U or right-click/long-press to resolve conflicts anyway
                             </p>
@@ -1315,7 +1316,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           ) : (
                             "Container must be running"
                           )
-                        ) : !canLaunchBackendJob ? (
+                        ) : !canLaunchResolve ? (
                           "Maximum tabs reached"
                         ) : (
                           <>
@@ -1346,7 +1347,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         }}
                         {...resolveLongPress.handlers}
                         data-toolbar-custom-context-menu="true"
-                        disabled={!isRunning || !canLaunchBackendJob || resolveLaunchInFlight}
+                        disabled={!isRunning || !canLaunchResolve || resolveLaunchInFlight}
                       >
                         <AlertTriangle className="h-4 w-4" />
                         <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>

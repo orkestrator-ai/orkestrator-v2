@@ -809,7 +809,12 @@ A capable image's runtime joins its own bridge network
 environment and role, created before the container and adopted only with
 exactly those labels. A creation failure is an explicit error (`resource-exhausted`
 when Docker's address pools are full) and never falls back to the shared
-bridge. The container is created with `net.ipv6.conf.all.disable_ipv6=1` and
+bridge. The network asks for nothing about IPv6, so a daemon whose
+`default-network-opts` enable IPv6 gives it an IPv6 subnet. The namespace
+owner (the egress gateway, or the container itself) is created with
+`net.ipv6.conf.all.disable_ipv6=1`, which leaves every interface, including
+one attached later, without an IPv6 address; that was checked live on Engine
+29.9.2 with IPv6 on by default (0018 task 3). The container also gets
 three policy inputs the root bootstrap captures once, root-owned:
 
 | File | Meaning |
@@ -899,7 +904,12 @@ both the boot and every later change:
 - **Revocation.** Entries that leave the set have their tracked connections
   deleted (`conntrack -D`), so an open connection to a removed domain is
   re-checked against the new set and rejected rather than continuing. A
-  removed policy 3 tuple revokes only its own protocol and port.
+  removed policy 3 tuple revokes only its own protocol and port. An address
+  the kernel expired between refreshes counts as leaving: every application
+  records the set's members (`/var/lib/orkestrator/allowed-entries`), and the
+  next refresh revokes what that record has and the new set lacks, at most
+  one refresh interval (30 minutes) after the expiry. New connections to it
+  are refused from the moment it expires.
 - **Edits.** `update-firewall.sh --set-domains <list>` (root, via `docker
   exec`) applies a list and then stores it in `/etc/orkestrator/allowed-domains`,
   so a restart boots with it; `--add`/`--remove` edit the stored list the same

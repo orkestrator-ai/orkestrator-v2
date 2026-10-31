@@ -49,6 +49,11 @@ import {
   resolveClaudeBackgroundCommandLimitHours,
 } from "@orkestrator/protocol/claude-background-commands";
 import {
+  DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+  resolveSessionTitleGenerationPolicy,
+  type SessionTitleGenerationPolicy,
+} from "@orkestrator/protocol/session-title-generation";
+import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
   isValidDebugLogRetentionDays,
@@ -73,6 +78,8 @@ import {
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
+import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
@@ -129,6 +136,7 @@ interface CoreFieldsSnapshot {
   openCodeModelProviders: string[];
   codexMaxConcurrentThreads: number;
   claudeBackgroundCommandLimitHours: number;
+  sessionTitleGeneration: SessionTitleGenerationPolicy;
   terminalAppearance: TerminalAppearance;
   terminalScrollback: number;
   terminalHistoryEnabled: boolean;
@@ -176,6 +184,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     claudeBackgroundCommandLimitHours: resolveClaudeBackgroundCommandLimitHours(
       global.claudeBackgroundCommandLimitHours,
     ),
+    sessionTitleGeneration: resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
     terminalAppearance: {
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
@@ -265,6 +274,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
+    resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
     global.terminalAppearance?.fontFamily ?? "",
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
@@ -347,6 +357,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   );
   const [claudeBackgroundCommandLimitHours, setClaudeBackgroundCommandLimitHours] = useState(() =>
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
+  );
+  const [sessionTitleGeneration, setSessionTitleGeneration] = useState(() =>
+    resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
     global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
@@ -468,6 +481,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setClaudeBackgroundCommandLimitHours(
       resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     );
+    setSessionTitleGeneration(resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration));
     const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
     setTerminalFontFamily(appearance.fontFamily);
     setTerminalFontSize(appearance.fontSize);
@@ -653,6 +667,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
+      sessionTitleGeneration,
       terminalAppearance: {
         fontFamily: terminalFontFamily,
         fontSize: terminalFontSize,
@@ -691,6 +706,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       openCodeModelProviders,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
+      sessionTitleGeneration,
       terminalFontFamily,
       terminalFontSize,
       terminalBackgroundColor,
@@ -867,6 +883,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         openCodeModelProviders: string[];
         codexMaxConcurrentThreads: number;
         claudeBackgroundCommandLimitHours?: number;
+        sessionTitleGeneration?: SessionTitleGenerationPolicy;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         terminalHistoryEnabled: boolean;
@@ -905,6 +922,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         // Absent keeps the Claude CLI's own ceiling and its foreground limit.
         ...(claudeBackgroundCommandLimitHours !== DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS
           ? { claudeBackgroundCommandLimitHours }
+          : {}),
+        // Absent keeps following the default if it ever changes.
+        ...(sessionTitleGeneration !== DEFAULT_SESSION_TITLE_GENERATION_POLICY
+          ? { sessionTitleGeneration }
           : {}),
         terminalAppearance: {
           fontFamily: terminalFontFamily,
@@ -1166,6 +1187,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setCodexMaxConcurrentThreads,
     claudeBackgroundCommandLimitHours,
     setClaudeBackgroundCommandLimitHours,
+    sessionTitleGeneration,
+    setSessionTitleGeneration,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,
@@ -1383,13 +1406,15 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         <div
           role="status"
           aria-live="polite"
-          className={
+          className={cn(
+            "mb-4 rounded-md border px-3 py-2 text-xs",
+            SETTINGS_PAGE_DEFAULT_WIDTH_CLASS,
             saveStatus.tone === "blocked"
-              ? "mb-4 rounded-md border border-amber-400/30 bg-amber-400/[0.06] px-3 py-2 text-xs text-amber-300"
+              ? "border-amber-400/30 bg-amber-400/[0.06] text-amber-300"
               : saveStatus.tone === "pending"
-                ? "mb-4 rounded-md border border-border/60 bg-zinc-900/50 px-3 py-2 text-xs text-muted-foreground"
-                : "mb-4 rounded-md border border-emerald-500/20 bg-emerald-500/[0.04] px-3 py-2 text-xs text-emerald-400/90"
-          }
+                ? "border-border/60 bg-zinc-900/50 text-muted-foreground"
+                : "border-emerald-500/20 bg-emerald-500/[0.04] text-emerald-400/90",
+          )}
         >
           {saveStatus.text}
         </div>

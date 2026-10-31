@@ -1063,10 +1063,12 @@ function AccountSection({
   rows,
   daily,
   accountLabel,
+  accountEmail,
 }: {
   rows: AccountRow[];
   daily: DailyTokenPoint[];
   accountLabel?: string;
+  accountEmail?: string;
 }) {
   const nowMs = useAccountNow(rows);
 
@@ -1079,7 +1081,11 @@ function AccountSection({
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
             Account
             {accountLabel ? (
-              <span className="normal-case tracking-normal"> ({accountLabel})</span>
+              <span className="break-words normal-case tracking-normal">
+                {" "}
+                ({accountLabel})
+                {accountEmail && accountEmail !== accountLabel ? ` (${accountEmail})` : null}
+              </span>
             ) : null}
           </div>
           {rows.map((row) => (
@@ -1126,6 +1132,7 @@ export function UsagePanel({
   modelId,
   rateLimits,
   accountLabel,
+  accountEmail,
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
@@ -1140,6 +1147,8 @@ export function UsagePanel({
    * differ from the machine's default account until the session next idles.
    */
   accountLabel?: string;
+  /** That account's email, shown after a label that does not already say it. */
+  accountEmail?: string;
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
   const { rows: accountRows, daily: dailyTokens } = buildAccountRows({
@@ -1149,7 +1158,12 @@ export function UsagePanel({
   });
   const account =
     accountRows.length > 0 || dailyTokens.length > 0 ? (
-      <AccountSection rows={accountRows} daily={dailyTokens} accountLabel={accountLabel} />
+      <AccountSection
+        rows={accountRows}
+        daily={dailyTokens}
+        accountLabel={accountLabel}
+        accountEmail={accountEmail}
+      />
     ) : null;
 
   if (!usage) {

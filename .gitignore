@@ -8,6 +8,8 @@ node_modules/
 # Build outputs
 dist/
 dist-electron/
+# The standalone CLI build stages bridges and their on-demand runtime inputs here.
+/packages/cli/resources/
 .turbo/
 out/
 /release/

@@ -32,7 +32,6 @@ import {
   buildMergeContainerProviderAuthCommand,
   claudeLoginHandoff,
   DROP_IMPORTED_LOGIN_COMMAND,
-  resetHostMcpRefreshDigests,
   syncContainerLogin,
   startContainerWithAgentAccounts,
   type ContainerRunners,
@@ -223,7 +222,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   hostClaudeLoginRefresher = undefined;
-  resetHostMcpRefreshDigests();
   for (const runtime of runtimes.splice(0)) runtime.shutdown();
   for (const key of ENV_KEYS) {
     if (savedEnv[key] === undefined) delete process.env[key];
@@ -1757,7 +1755,6 @@ describe("access-only Claude logins", () => {
       });
     beforeEach(() => {
       file = path.join(root, "container-home", ".claude", ".credentials.json");
-      resetHostMcpRefreshDigests();
     });
 
     test("keeps the MCP logins the container made itself and replaces stale host copies", async () => {
@@ -1820,8 +1817,9 @@ describe("access-only Claude logins", () => {
           claudeAiOauth: { accessToken: "a", refreshToken: "SUB", expiresAt: LIVE },
           mcpOAuth: { linear: { accessToken: "m", refreshToken: token } },
         });
-      claudeLoginHandoff(host("FIRST"));
-      const payload = JSON.parse(claudeLoginHandoff(host("SECOND"))!.payload);
+      const accounts = context.runtime.accounts;
+      claudeLoginHandoff(accounts, host("FIRST"));
+      const payload = JSON.parse(claudeLoginHandoff(accounts, host("SECOND"))!.payload);
       expect(payload.hostMcpRefresh).toEqual({ linear: [sha256("SECOND"), sha256("FIRST")] });
       expect(JSON.stringify(payload)).not.toContain("FIRST");
       expect(JSON.stringify(payload)).not.toContain("SUB");

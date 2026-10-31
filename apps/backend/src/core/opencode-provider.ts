@@ -83,6 +83,11 @@ import {
   type OpenCodeDiscoveryMetadata as OpenCodeDiscoveryMetadataResult,
 } from "./opencode-discovery-metadata.js";
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
+import {
+  OpenCodeCapacityRetry,
+  isUnattendedOpenCodeOrigin,
+  type OpenCodeContinuationRequest,
+} from "./opencode-capacity-retry.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
 import { OpenCodeCatalogCache } from "./opencode-catalog-cache.js";
@@ -143,6 +148,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly messageIds: OpenCodeMessageIdCoordinator;
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly interactionAdapter: OpenCodeInteractionAdapter;
+  private readonly capacityRetry: OpenCodeCapacityRetry;
   readonly interactions: AgentInteractionProviderCapability = {
     listPendingInteractions: (sessionId) =>
       this.interactionAdapter.listPendingInteractions(sessionId),
@@ -260,6 +266,31 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       (sessionId, operation) =>
         this.messageIds.runExclusive(openCodeMessageIdScope(connection, sessionId), operation),
     );
+    this.capacityRetry = new OpenCodeCapacityRetry({
+      client: this.client,
+      directory: connection.directory,
+      requestOptions: () => this.requestOptions(),
+      now: () => this.now(),
+      policy: dependencies.openCodeCapacityRetryPolicy,
+      accepted: (sessionId, requestId) =>
+        this.messageIds.markAccepted(openCodeMessageIdScope(connection, sessionId), requestId),
+      nextMessageId: (sessionId, history, requestId, now) =>
+        this.messageIds.next(
+          openCodeMessageIdScope(connection, sessionId),
+          history,
+          requestId,
+          now,
+        ),
+      beginAttempt: async (sessionId, requestId, messageId) => {
+        const startedAt = this.now();
+        this.streamState.beginTurn(sessionId, startedAt, requestId);
+        this.actionRetry.beginTurn(sessionId);
+        await this.changeEvidence.beginTurn(sessionId, messageId);
+        return startedAt;
+      },
+      rejectAttempt: (sessionId, startedAt, ambiguous) =>
+        this.streamState.rejectTurn(sessionId, startedAt, ambiguous),
+    });
     this.capabilitiesAdapter = new OpenCodeCapabilities(
       this.client,
       connection.directory,
@@ -674,6 +705,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.streamState.beginTurn(sessionId, dispatchStartedAt, options.requestId);
       this.actionRetry.beginTurn(sessionId);
       await this.changeEvidence.beginTurn(sessionId, messageID);
+      this.capacityRetry.forget(sessionId);
+      let continuation: OpenCodeContinuationRequest | undefined;
       let response;
       try {
         if (command) {
@@ -701,16 +734,24 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           }
           response = outcome.response;
         } else {
+          continuation = {
+            prepare: () => this.workflowResults.prepare(sessionId, options),
+            shapeText: (text) =>
+              options.schema ? openCodeStructuredPrompt(text, options.schema) : text,
+            fields: {
+              model,
+              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
+              variant,
+              ...openCodePromptToolOptions(options, reviewEnabled),
+            },
+          };
           response = await this.client.session.promptAsync(
             {
               sessionID: sessionId,
               directory: this.connection.directory,
               messageID,
               parts,
-              model,
-              agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
-              variant,
-              ...openCodePromptToolOptions(options, reviewEnabled),
+              ...continuation.fields,
             },
             this.requestOptions(),
           );
@@ -746,6 +787,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
       }
       this.messageIds.markAccepted(scope, options.requestId);
+      if (
+        continuation &&
+        isUnattendedOpenCodeOrigin(this.interactionTracker.registration(sessionId).origin)
+      ) {
+        this.capacityRetry.arm(sessionId, options.requestId, continuation);
+      }
     });
   }
 
@@ -795,14 +842,19 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions(), {
       failure: this.streamState.dispatchFailure(sessionId, requestId),
       now: this.now(),
+      retrying: (error, parentId) =>
+        this.capacityRetry.willRetry(sessionId, requestId, error, parentId),
     });
 
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
-    return this.workflowResults.settleCompleted(
-      sessionId,
-      requestId,
-      () => this.status(sessionId),
-      () => this.reviewPermissions.restoreIfNeeded(sessionId),
+    return this.commandReload.withinPromptDispatch(() =>
+      this.workflowResults.settleCompleted(
+        sessionId,
+        requestId,
+        () => this.status(sessionId),
+        () => this.reviewPermissions.restoreIfNeeded(sessionId),
+        (error, history) => this.capacityRetry.hold(sessionId, requestId, error, history),
+      ),
     );
   }
 
@@ -1372,6 +1424,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
+    this.capacityRetry.forget(sessionId);
     await this.workflowResults.abort(
       sessionId,
       () => this.streamState.endTurn(sessionId),
@@ -1380,6 +1433,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    this.capacityRetry.forget(sessionId);
     await this.workflowResults.closeRetaining(
       sessionId,
       () => this.streamState.endTurn(sessionId),
@@ -1396,6 +1450,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.sessionPolicies.delete(sessionId);
     this.sessionPolicy.forget(sessionId);
     this.actionRetry.forget(sessionId);
+    this.capacityRetry.forget(sessionId);
   }
 
   /** See `AgentSessionProvider.observationStreamLive`. */

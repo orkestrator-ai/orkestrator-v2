@@ -10,18 +10,26 @@ import {
 } from "../../../../tests/helpers/auth-secret-canaries.js";
 import type { CommandContext } from "./commands-context.js";
 import {
-  __testing,
   createOpenCodeProviderLogin,
   normalizeOpenCodeProviderAuth,
   openCodeProviderLoginProgress,
   type OpenCodeProviderLoginDependencies,
 } from "./opencode-provider-login.js";
+import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
 
 const SECRET_KEY = AUTH_SECRET_CANARIES.openAiApiKey;
 
+let slot = new OpenCodeProviderLoginSlot();
 const context = {
+  runtime: {
+    localServers: {
+      get openCodeProviderLogin() {
+        return slot;
+      },
+    },
+  },
   storage: {
     loadConfig: async () => ({ global: { openCodeModelProviders: ["opencode-go"] } }),
   },
@@ -144,7 +152,8 @@ function harness(
 }
 
 afterEach(() => {
-  __testing.reset();
+  slot.cancel();
+  slot = new OpenCodeProviderLoginSlot();
 });
 
 describe("normalizeOpenCodeProviderAuth", () => {
@@ -355,7 +364,7 @@ describe("OpenCode provider login", () => {
       if (other === "oauth") {
         const oauth = harness();
         oauth.login.startOAuth(context, { providerId: "openai", method: 0 });
-        await until(() => openCodeProviderLoginProgress().state === "succeeded");
+        await until(() => openCodeProviderLoginProgress(context).state === "succeeded");
       } else await attempt();
       expect(store.get("opencode-go")).toBe("new");
       expect(store.get("openai")).toBe(other === "remove" ? undefined : "old");
@@ -396,14 +405,14 @@ describe("OpenCode provider login", () => {
       },
     });
     login.startOAuth(context, { providerId: "openai", method: 0 });
-    await until(() => Boolean(openCodeProviderLoginProgress().url));
-    login.cancel();
+    await until(() => Boolean(openCodeProviderLoginProgress(context).url));
+    login.cancel(context);
     await expect(login.signOut(context, "openai")).rejects.toThrow("Another OpenCode sign-in");
     expect(() => login.startOAuth(context, { providerId: "openai", method: 0 })).toThrow(
       "Another OpenCode sign-in",
     );
     stop.resolve();
-    await until(() => openCodeProviderLoginProgress().state === "idle");
+    await until(() => openCodeProviderLoginProgress(context).state === "idle");
     await harness().login.signOut(context, "openai");
   });
 
@@ -422,8 +431,8 @@ describe("OpenCode provider login", () => {
         method: 1,
       });
       expect(started).toMatchObject({ state: "pending", providerId: "openai" });
-      await until(() => openCodeProviderLoginProgress().url !== undefined);
-      const waiting = openCodeProviderLoginProgress();
+      await until(() => openCodeProviderLoginProgress(context).url !== undefined);
+      const waiting = openCodeProviderLoginProgress(context);
       expect(waiting).toMatchObject({
         state: "pending",
         providerLabel: "OpenAI",
@@ -440,9 +449,9 @@ describe("OpenCode provider login", () => {
         "Another OpenCode sign-in is in progress",
       );
       approved.resolve({ data: true });
-      await until(() => openCodeProviderLoginProgress().state === "succeeded");
+      await until(() => openCodeProviderLoginProgress(context).state === "succeeded");
     });
-    const done = openCodeProviderLoginProgress();
+    const done = openCodeProviderLoginProgress(context);
     expect(done.url).toBeUndefined();
     expect(done.userCode).toBeUndefined();
     expect(done.completedAt).toBeDefined();
@@ -459,10 +468,12 @@ describe("OpenCode provider login", () => {
       authorize: { data: { url: CANARY_LOGIN_URL, method: "code", instructions: "Paste it" } },
     });
     login.startOAuth(context, { providerId: "poe", method: 0, inputs: { region: "eu" } });
-    await until(() => openCodeProviderLoginProgress().needsCode === true);
-    expect(() => login.submitCode("   ")).toThrow("Enter the sign-in code");
-    expect(login.submitCode(` ${AUTH_SECRET_CANARIES.oauthCode} `).codeSubmitted).toBe(true);
-    await until(() => openCodeProviderLoginProgress().state === "succeeded");
+    await until(() => openCodeProviderLoginProgress(context).needsCode === true);
+    expect(() => login.submitCode(context, "   ")).toThrow("Enter the sign-in code");
+    expect(login.submitCode(context, ` ${AUTH_SECRET_CANARIES.oauthCode} `).codeSubmitted).toBe(
+      true,
+    );
+    await until(() => openCodeProviderLoginProgress(context).state === "succeeded");
     expect(calls).toEqual([
       { route: "authorize", input: { providerID: "poe", method: 0, inputs: { region: "eu" } } },
       {
@@ -470,7 +481,7 @@ describe("OpenCode provider login", () => {
         input: { providerID: "poe", method: 0, code: AUTH_SECRET_CANARIES.oauthCode },
       },
     ]);
-    expectNoCanary(openCodeProviderLoginProgress(), "finished progress");
+    expectNoCanary(openCodeProviderLoginProgress(context), "finished progress");
   });
 
   test("cancelling returns to idle and stops the server", async () => {
@@ -481,11 +492,11 @@ describe("OpenCode provider login", () => {
         ),
     });
     const { operationId } = login.startOAuth(context, { providerId: "openai", method: 0 });
-    await until(() => openCodeProviderLoginProgress().url !== undefined);
-    expect(login.cancel("another-operation").state).toBe("pending");
-    expect(login.cancel(operationId).state).toBe("pending");
+    await until(() => openCodeProviderLoginProgress(context).url !== undefined);
+    expect(login.cancel(context, "another-operation").state).toBe("pending");
+    expect(login.cancel(context, operationId).state).toBe("pending");
     await until(() => servers.length === 2);
-    expect(openCodeProviderLoginProgress()).toEqual({ state: "idle" });
+    expect(openCodeProviderLoginProgress(context)).toEqual({ state: "idle" });
     expect(onLoginChanged).not.toHaveBeenCalled();
   });
 
@@ -500,12 +511,12 @@ describe("OpenCode provider login", () => {
     });
     const { output } = await captureOutput(async () => {
       login.startOAuth(context, { providerId: "openai", method: 0 });
-      await until(() => openCodeProviderLoginProgress().state === "failed");
+      await until(() => openCodeProviderLoginProgress(context).state === "failed");
     });
-    expect(openCodeProviderLoginProgress().error).toBe(
+    expect(openCodeProviderLoginProgress(context).error).toBe(
       "Completing the sign-in failed: the provider did not confirm the sign-in.",
     );
-    expectNoCanary(openCodeProviderLoginProgress(), "failed progress");
+    expectNoCanary(openCodeProviderLoginProgress(context), "failed progress");
     expectNothingSecretLogged(output, "failed sign-in");
     expect(onLoginChanged).not.toHaveBeenCalled();
   });
@@ -519,8 +530,8 @@ describe("OpenCode provider login", () => {
         ),
     });
     login.startOAuth(context, { providerId: "openai", method: 0 });
-    await until(() => openCodeProviderLoginProgress().state === "failed");
-    expect(openCodeProviderLoginProgress().error).toBe("The sign-in timed out.");
+    await until(() => openCodeProviderLoginProgress(context).state === "failed");
+    expect(openCodeProviderLoginProgress(context).error).toBe("The sign-in timed out.");
   });
 
   test("refuses a sign-in link that is not a web address", async () => {
@@ -528,7 +539,7 @@ describe("OpenCode provider login", () => {
       authorize: { data: { url: "javascript:alert(1)", method: "auto", instructions: "" } },
     });
     login.startOAuth(context, { providerId: "openai", method: 0 });
-    await until(() => openCodeProviderLoginProgress().state === "failed");
-    expect(openCodeProviderLoginProgress().error).toBe("OpenCode returned no sign-in link.");
+    await until(() => openCodeProviderLoginProgress(context).state === "failed");
+    expect(openCodeProviderLoginProgress(context).error).toBe("OpenCode returned no sign-in link.");
   });
 });

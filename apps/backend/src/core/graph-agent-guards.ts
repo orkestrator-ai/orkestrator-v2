@@ -70,6 +70,7 @@ import {
   type GraphGuardPeerSource,
   type GraphPushEvidence,
 } from "./graph-agent-remote-attribution.js";
+import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";
 import {
@@ -436,7 +437,12 @@ export class GraphAgentGuards {
     const branch = (
       await inWorktree(["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "")
     ).trim();
-    const dirty = (await inWorktree(["status", "--porcelain", "--untracked-files=all"]))
+    const dirty = (
+      await retryGitWithoutFsmonitorOnTimeout(
+        ["status", "--porcelain", "--untracked-files=all"],
+        inWorktree,
+      )
+    )
       .split("\n")
       .map((line) => line.slice(3).trim())
       .filter((path) => path.length > 0);

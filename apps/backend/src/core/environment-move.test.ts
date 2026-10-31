@@ -11,6 +11,7 @@ import {
 } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { startEnvironmentOnce } from "./commands-environment.js";
@@ -322,6 +323,53 @@ async function exists(target: string): Promise<boolean> {
 }
 
 describe("move_environment", () => {
+  test("distinguishes an unconfigured checkout from a missing checkout", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    await storage.updateProject(environment.projectId, { localPath: null });
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
+    ).rejects.toThrow("This project has no local checkout configured, so the worktree can't move");
+    const missing = path.join(root, "missing");
+    await storage.updateProject(environment.projectId, { localPath: missing });
+    await expect(
+      moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
+    ).rejects.toThrow(
+      `The project's local checkout does not exist: ${missing} on ${os.hostname()}`,
+    );
+    expect(await fs.stat(projectPath)).toBeTruthy();
+    expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(
+      environment.worktreePath,
+    );
+    expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeFalsy();
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a checkout under an inaccessible parent as a permission problem",
+    async () => {
+      const { root, storage, context, startLocal } = await setup();
+      const environment = await startLocal();
+      const parent = path.join(root, "locked");
+      const checkout = path.join(parent, "checkout");
+      await fs.mkdir(checkout, { recursive: true });
+      await storage.updateProject(environment.projectId, { localPath: checkout });
+      await fs.chmod(parent, 0o000);
+      try {
+        await expect(
+          moveEnvironmentTask(environment.id, path.join(root, "moved"), context),
+        ).rejects.toThrow(
+          `Orkestrator does not have permission to open the project's local checkout: ${checkout} on ${os.hostname()}`,
+        );
+      } finally {
+        await fs.chmod(parent, 0o700);
+      }
+      expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(
+        environment.worktreePath,
+      );
+      expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeFalsy();
+    },
+  );
+
   test("moves with no tmux sessions or hook backups and preserves workspace settings", async () => {
     const { root, storage, context, startLocal } = await setup();
     const environment = await startLocal();

@@ -1,13 +1,20 @@
+import { randomBytes } from "node:crypto";
+import {
+  capacityRetryDelayMs,
+  formatRetryDelay,
+  namesLimitOrLogin,
+} from "@orkestrator/protocol/capacity-retry";
 import {
   AcpProcess,
   POLICY_DENIAL_MAX_CONTINUATIONS,
   PROMPT_TIMEOUT_MS,
   RETRIABLE_PROVIDER_MAX_RETRIES,
-  RETRIABLE_PROVIDER_RETRY_BASE_MS,
+  RETRIABLE_PROVIDER_RETRY_POLICY,
   provider,
   sessions,
   shuttingDown,
   type BridgeMessage,
+  type BridgeRetryPart,
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
@@ -15,6 +22,7 @@ import {
 import { recordTurnUsage } from "./acp-session.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
+import { currentAssistantMessage, noteMessageMutation, notePartMutation } from "./acp-rows.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import {
   startPromptTurnClock,
@@ -60,6 +68,13 @@ export const FLATTENED_RETRIABLE_PROVIDER_SUFFIX = new RegExp(
   `(?:^|\\n\\n)Error: [A-Za-z_$][\\w$]*: ${RETRIABLE_PROVIDER_CODE}${RETRIABLE_PROVIDER_SEPARATOR}${RETRIABLE_PROVIDER_DETAIL}[^\\n]*\\s*$`,
   "i",
 );
+/**
+ * Grok's own wording for a model overload (Grok 1.0.70), which carries no
+ * `[code]`. Accepted on a JSON-RPC error only: assistant text is
+ * model-controlled, and this exact sentence there proves nothing.
+ */
+const GROK_OVERLOADED_RPC_ERROR =
+  /\b(?:Grok|Model) is temporarily overloaded\. (?:Please t|T)ry again in a moment\./;
 export const RETRIABLE_PROVIDER_CONTINUATION =
   "Continue from where the interrupted turn stopped. A transient provider error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
 export const POLICY_DENIAL_CONTINUATION =
@@ -113,7 +128,9 @@ export function flattenedRetriableProviderTail(state: SessionState): {
   const message = state.messages.at(-1);
   const part = message?.parts.at(-1);
   if (message?.role !== "assistant" || part?.type !== "text") return null;
-  return FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(part.content) &&
+  const suffix = FLATTENED_RETRIABLE_PROVIDER_SUFFIX.exec(part.content)?.[0];
+  return suffix !== undefined &&
+    !namesLimitOrLogin(suffix) &&
     FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(message.content)
     ? { message, part }
     : null;
@@ -146,15 +163,68 @@ export function structuredPromptInstruction(schema: JsonObject): string {
   return `${STRUCTURED_PROMPT_INSTRUCTION_PREFIX} matching this JSON Schema. That final message must be the JSON value alone, with no Markdown fence and no commentary around it.\n\nBefore that final message you may send ordinary prose progress updates. Keep them plain sentences: never send a JSON object or array as a progress update, and never draft or preview the final value.\n\n${JSON.stringify(schema)}`;
 }
 
+/**
+ * A transient provider failure. A `[resource_exhausted]` naming a usage or rate
+ * limit, or a login, is not one: gRPC uses that code for quota too, and waiting
+ * a minute cures none of them.
+ */
 export function retriableProviderError(error: unknown): error is Error {
-  return error instanceof Error && RETRIABLE_PROVIDER_ERROR.test(error.message);
+  return (
+    error instanceof Error &&
+    (RETRIABLE_PROVIDER_ERROR.test(error.message) ||
+      GROK_OVERLOADED_RPC_ERROR.test(error.message)) &&
+    !namesLimitOrLogin(error.message)
+  );
 }
 
-export function retryDelay(milliseconds: number): Promise<void> {
+/** The wait before a continuation; `state.wakeRetryWait` ends it early. */
+export function retryDelay(state: SessionState, milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => {
-    const timer = setTimeout(resolvePromise, milliseconds);
+    const finish = () => {
+      clearTimeout(timer);
+      state.wakeRetryWait = undefined;
+      resolvePromise();
+    };
+    const timer = setTimeout(finish, milliseconds);
     timer.unref();
+    state.wakeRetryWait = finish;
   });
+}
+
+const RETRY_CARD_SUBJECT = "Provider temporarily unavailable";
+
+/**
+ * The transcript's account of a wait. It joins the row the failed attempt
+ * ended on, and is settled in place on that row when the wait ends.
+ */
+function openRetryCard(state: SessionState, text: string): BridgeRetryPart {
+  const message = currentAssistantMessage(state);
+  const part: BridgeRetryPart = {
+    type: "retry",
+    content: text,
+    toolState: "pending",
+    sourcePartId: randomBytes(12).toString("hex"),
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+  };
+  message.parts.push(part);
+  noteMessageMutation(state, message);
+  state.revision += 1;
+  schedulePersist();
+  return part;
+}
+
+function settleRetryCard(
+  state: SessionState,
+  part: BridgeRetryPart,
+  text: string,
+  toolState: "success" | "failure",
+): void {
+  part.content = text;
+  part.toolState = toolState;
+  notePartMutation(state, part);
+  state.revision += 1;
+  schedulePersist();
 }
 
 export function retryStillOwned(
@@ -227,6 +297,22 @@ export async function requestPromptWithRetriableProviderRetries(
     recordTurnUsage(state, result);
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
     if (!requestError && !flattened) {
+      const last = state.messages.at(-1);
+      const part = last?.parts.at(-1);
+      const suffix =
+        part?.type === "text"
+          ? FLATTENED_RETRIABLE_PROVIDER_SUFFIX.exec(part.content)?.[0]
+          : undefined;
+      if (
+        last?.role === "assistant" &&
+        suffix &&
+        namesLimitOrLogin(suffix) &&
+        FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(last.content)
+      ) {
+        throw new Error(suffix.trim());
+      }
+    }
+    if (!requestError && !flattened) {
       if (
         promptStopReason(result) !== "cancelled" ||
         !endedOnPolicyRefusal(state, result, deniedBefore) ||
@@ -264,14 +350,28 @@ export async function requestPromptWithRetriableProviderRetries(
     // that actually recovered.
     resetEndedAttempt(state);
     retries += 1;
-    await retryDelay(RETRIABLE_PROVIDER_RETRY_BASE_MS * 2 ** (retries - 1));
+    const nextAttempt = retries + 1;
+    const { maxAttempts } = RETRIABLE_PROVIDER_RETRY_POLICY;
+    const delayMs = capacityRetryDelayMs(RETRIABLE_PROVIDER_RETRY_POLICY, nextAttempt);
+    const card = openRetryCard(
+      state,
+      `${RETRY_CARD_SUBJECT}, retrying in ${formatRetryDelay(delayMs)} (attempt ${nextAttempt} of ${maxAttempts})`,
+    );
+    await retryDelay(state, delayMs);
 
     if (!retryStillOwned(state, child, promptSequence)) {
+      settleRetryCard(state, card, `${RETRY_CARD_SUBJECT}, automatic retry cancelled`, "failure");
       if (state.retryCancelledPromptSequence === promptSequence) {
         return { stopReason: "cancelled" };
       }
       throw retryOwnershipLostError(state);
     }
+    settleRetryCard(
+      state,
+      card,
+      `${RETRY_CARD_SUBJECT}, retried automatically (attempt ${nextAttempt} of ${maxAttempts})`,
+      "success",
+    );
     prompt = continuationPrompt(state, RETRIABLE_PROVIDER_CONTINUATION, schema);
   }
 }

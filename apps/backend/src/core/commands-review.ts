@@ -1,6 +1,6 @@
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
@@ -157,12 +157,15 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
   );
 }
 
-export function createLocalGhRunner(cwd: string): GhCliRunner {
+export function createLocalGhRunner(
+  cwd: string,
+  gitHubConfig: GitHubCliConfigSource | undefined,
+): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
     const { stdout } = await runCommand(gitHubCli(), args, {
       cwd,
       timeoutMs,
-      env: await gitHubCliEnv(),
+      env: await gitHubCliEnv(gitHubConfig),
     });
     return stdout;
   };
@@ -210,7 +213,7 @@ export type ReviewPreparationFileNote = {
 export function createPipelineEnvironmentGit(
   storage: { getEnvironment: (id: string) => Promise<Environment | null> },
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
-  createRunner = createEnvironmentCommandRunner,
+  createRunner = createGitEnvironmentCommandRunner,
 ): EnvironmentGit {
   return async (environmentId, args) => {
     const environment = await storage.getEnvironment(environmentId);
@@ -223,6 +226,7 @@ export function createPipelineEnvironmentGit(
 export function createEnvironmentCommandRunner(
   environment: Environment,
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
+  gitHubConfig: GitHubCliConfigSource | undefined,
   execute = runCommand,
 ): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
@@ -239,7 +243,7 @@ export function createEnvironmentCommandRunner(
             await execute(command === "gh" ? gitHubCli() : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
-              env: command === "gh" ? await gitHubCliEnv(env) : env,
+              env: command === "gh" ? await gitHubCliEnv(gitHubConfig, env) : env,
             })
           ).stdout
         );
@@ -265,6 +269,14 @@ export function createEnvironmentCommandRunner(
       release();
     }
   };
+}
+
+/** For callers that only run Git, which takes no GitHub credential. */
+export function createGitEnvironmentCommandRunner(
+  environment: Environment,
+  fence: Pick<EnvironmentMutationFence, "beginMutation">,
+): EnvironmentCommandRunner {
+  return createEnvironmentCommandRunner(environment, fence, undefined);
 }
 
 export function parseReviewPackageId(value: unknown): string {
@@ -809,7 +821,11 @@ export async function verifyEnvironmentReviewPackage(
 ): Promise<ReviewPackageVerification> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
+  const runner = createEnvironmentCommandRunner(
+    environment,
+    context.runtime.environments.fence,
+    context.storage,
+  );
   try {
     await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
     const contents = await readEnvironmentWorkspaceFile(environment, runner, reference.filePath);
@@ -864,7 +880,11 @@ export async function verifyEnvironmentPullRequest(
     throw new Error("Pull request belongs to a different repository");
   }
 
-  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
+  const runner = createEnvironmentCommandRunner(
+    environment,
+    context.runtime.environments.fence,
+    context.storage,
+  );
   const raw = await runner(
     "gh",
     ["pr", "view", submittedUrl, "--json", "url,headRefName,baseRefName,state"],
@@ -935,7 +955,11 @@ export async function generateReviewPackage(
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const branch = validateGitRefName(targetBranch, "target branch");
-  const runner = createEnvironmentCommandRunner(environment, context.runtime.environments.fence);
+  const runner = createEnvironmentCommandRunner(
+    environment,
+    context.runtime.environments.fence,
+    context.storage,
+  );
   const baseName = `origin/${branch}`;
   const [headOutput, baseOutput] = await Promise.all([
     runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
@@ -1152,15 +1176,17 @@ export async function deletePullRequestHeadBranchViaGitHubApi(
 }
 
 export async function mergePullRequestViaGitHubApi(
+  gitHubConfig: GitHubCliConfigSource,
   prUrl: string,
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
   cwd: string,
+  expectedHeadSha?: string,
 ): Promise<MergePrResult> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const mergeEndpoint = `${pullEndpoint}/merge`;
-  const runGh = createLocalGhRunner(cwd);
+  const runGh = createLocalGhRunner(cwd, gitHubConfig);
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
@@ -1170,7 +1196,15 @@ export async function mergePullRequestViaGitHubApi(
   }
 
   const mergeOutput = await runGh(
-    ["api", mergeEndpoint, "--method", "PUT", "-f", `merge_method=${method}`],
+    [
+      "api",
+      mergeEndpoint,
+      "--method",
+      "PUT",
+      "-f",
+      `merge_method=${method}`,
+      ...(expectedHeadSha ? ["-f", `sha=${expectedHeadSha}`] : []),
+    ],
     120_000,
   );
 
@@ -1193,15 +1227,25 @@ export async function mergePullRequestInContainer(
   containerId: string,
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
+  expectedHeadSha?: string,
+  attachedPrUrl?: string,
 ): Promise<MergePrResult> {
   const runGh = createContainerGhRunner(containerId);
-  const prUrl = (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
+  const prUrl =
+    attachedPrUrl ?? (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
   parseGitHubPullRequestUrl(prUrl);
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
   await runGh(
-    ["pr", "merge", prUrl, `--${method}`, ...(deleteBranch ? ["--delete-branch"] : [])],
+    [
+      "pr",
+      "merge",
+      prUrl,
+      `--${method}`,
+      ...(deleteBranch ? ["--delete-branch"] : []),
+      ...(expectedHeadSha ? ["--match-head-commit", expectedHeadSha] : []),
+    ],
     120_000,
   );
 
@@ -1225,6 +1269,7 @@ export async function runStoredEnvironmentMerge<T>(
   deleteBranch: boolean,
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
+  expectedHeadSha?: string,
 ): Promise<T> {
   const release = environment.projectHome
     ? context.projectGit?.beginCoordinatorTurn(environment.projectId)
@@ -1236,6 +1281,7 @@ export async function runStoredEnvironmentMerge<T>(
       deleteBranch,
       context,
       onResult,
+      expectedHeadSha,
     );
   } finally {
     release?.();
@@ -1248,6 +1294,7 @@ async function runStoredEnvironmentMergeOnce<T>(
   deleteBranch: boolean,
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
+  expectedHeadSha?: string,
 ): Promise<T> {
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
@@ -1267,7 +1314,7 @@ async function runStoredEnvironmentMergeOnce<T>(
         "The project checkout branch changed; refresh its pull request before merging",
       );
     }
-    const runner = createLocalGhRunner(environment.worktreePath!);
+    const runner = createLocalGhRunner(environment.worktreePath!, context.storage);
     const identity = JSON.parse(
       await runner(
         ["pr", "view", previousPr, "--json", "headRefName,baseRefName,isCrossRepository"],
@@ -1311,12 +1358,20 @@ async function runStoredEnvironmentMergeOnce<T>(
       result =
         environment.environmentType === "local"
           ? await mergePullRequestViaGitHubApi(
+              context.storage,
               environment.prUrl!,
               method,
               deleteBranch,
               environment.worktreePath!,
+              expectedHeadSha,
             )
-          : await mergePullRequestInContainer(environment.containerId!, method, deleteBranch);
+          : await mergePullRequestInContainer(
+              environment.containerId!,
+              method,
+              deleteBranch,
+              expectedHeadSha,
+              environment.prUrl ?? undefined,
+            );
     } catch (error) {
       // The shimmer said this credential may merge; ask GitHub again on the
       // next check instead of trusting the cached answer for up to an hour.

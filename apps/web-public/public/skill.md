@@ -102,6 +102,13 @@ How tools work:
   check on it). `create_pr` opens the Create PR agent tab and
   `resolve_conflicts` the Resolve Conflicts tab; both return a run for
   `run_status`. They never merge.
+- **Managing a pull request.** `pr_get` reads the pull request attached to an
+  environment (state, URL, mergeability, checks, `headSha`). `merge_pr` merges it
+  into its target branch, and with `cleanup: true` also deletes the environment.
+  `pr_comment`, `pr_review`, `pr_close`, `pr_reopen`, `pr_ready` and `pr_draft`
+  do what their names say; `find_actions` with `pr` lists the rest. `merge_pr`,
+  `pr_close` and `pr_review` return `confirmation-required` first: show the user
+  its `description`, then repeat the call with its `confirmToken`.
 
 ## Option B: the `orkestrator` CLI (same machine or remote)
 

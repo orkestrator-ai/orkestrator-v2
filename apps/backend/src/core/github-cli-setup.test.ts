@@ -15,9 +15,9 @@ import {
   getGitHubCliStatus,
   gitHubCliLoginCommand,
   gitHubCliLoginProgress,
-  resetGitHubCliSetupForTests,
   startGitHubCliLogin,
 } from "./github-cli-setup.js";
+import { GitHubCliLoginSlot } from "./github-cli-login.js";
 
 // What gh 2.102 prints for `gh auth login --web` without a terminal.
 const GH_LOGIN_OUTPUT = [
@@ -72,16 +72,16 @@ describe("GitHub CLI setup", () => {
   let root: string;
   let previousPath: string | undefined;
   let reminderDismissed: boolean | undefined;
+  let gitHubCliLogin: GitHubCliLoginSlot;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ork-github-cli-setup-"));
     previousPath = process.env.PATH;
     reminderDismissed = undefined;
-    resetGitHubCliSetupForTests();
+    gitHubCliLogin = new GitHubCliLoginSlot();
   });
 
   afterEach(() => {
-    resetGitHubCliSetupForTests();
     setManagedGitHubCli(undefined);
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -98,6 +98,7 @@ describe("GitHub CLI setup", () => {
       toolchainBinDir,
       appRoot,
       resourceRoot: appRoot,
+      runtime: { localServers: { gitHubCliLogin } },
       storage: {
         agentAccounts: {
           agentAccountsDirectory: () => path.join(root, "accounts"),
@@ -192,11 +193,11 @@ describe("GitHub CLI setup", () => {
 
     fake.child().finish(0);
     await Bun.sleep(0);
-    expect(gitHubCliLoginProgress()).toEqual({
+    expect(gitHubCliLoginProgress(contextFor())).toEqual({
       state: "succeeded",
       operationId: progress.operationId,
     });
-    expect(cancelGitHubCliLogin()).toEqual({ state: "idle" });
+    expect(cancelGitHubCliLogin(contextFor())).toEqual({ state: "idle" });
   });
 
   test("cancelling a pending sign-in stops gh", async () => {
@@ -209,8 +210,10 @@ describe("GitHub CLI setup", () => {
     fake.child().stdoutStream.write(GH_LOGIN_OUTPUT);
     const progress = await started;
 
-    expect(cancelGitHubCliLogin("another-operation")).toMatchObject({ state: "pending" });
-    expect(cancelGitHubCliLogin(progress.operationId)).toEqual({ state: "idle" });
+    expect(cancelGitHubCliLogin(contextFor(), "another-operation")).toMatchObject({
+      state: "pending",
+    });
+    expect(cancelGitHubCliLogin(contextFor(), progress.operationId)).toEqual({ state: "idle" });
     expect(fake.child().signalCode).toBe("SIGTERM");
   });
 
@@ -231,7 +234,7 @@ describe("GitHub CLI setup", () => {
     // Attach a rejection handler before cancelling a process still starting.
     const outcome = started.catch((error: unknown) => error);
     await waitForSpawn(fake.calls);
-    expect(cancelGitHubCliLogin()).toEqual({ state: "idle" });
+    expect(cancelGitHubCliLogin(contextFor())).toEqual({ state: "idle" });
 
     const replacement = fakeSpawn();
     const restarted = startGitHubCliLogin(contextFor(), {
@@ -245,8 +248,8 @@ describe("GitHub CLI setup", () => {
     fake.child().stderrStream.write(GH_LOGIN_OUTPUT);
     expect(await outcome).toMatchObject({ message: "The sign-in was cancelled" });
     expect(fake.child().signalCode).toBe("SIGTERM");
-    expect(gitHubCliLoginProgress()).toEqual(progress);
-    cancelGitHubCliLogin();
+    expect(gitHubCliLoginProgress(contextFor())).toEqual(progress);
+    cancelGitHubCliLogin(contextFor());
   });
 
   test("reports startup rejection and permits another sign-in", async () => {
@@ -259,7 +262,10 @@ describe("GitHub CLI setup", () => {
     await waitForSpawn(fake.calls);
     fake.child().emit("error", new Error("gh unavailable"));
     expect(await outcome).toMatchObject({ message: "gh unavailable" });
-    expect(gitHubCliLoginProgress()).toMatchObject({ state: "failed", error: "gh unavailable" });
+    expect(gitHubCliLoginProgress(contextFor())).toMatchObject({
+      state: "failed",
+      error: "gh unavailable",
+    });
 
     const restarted = startGitHubCliLogin(contextFor(), {
       spawnImpl: fake.spawnImpl,
@@ -269,7 +275,7 @@ describe("GitHub CLI setup", () => {
     expect(fake.calls).toHaveLength(2);
     fake.child().stdoutStream.write(GH_LOGIN_OUTPUT);
     expect((await restarted).state).toBe("pending");
-    cancelGitHubCliLogin();
+    cancelGitHubCliLogin(contextFor());
   });
 
   test("reports nonzero completion after a device prompt", async () => {
@@ -283,7 +289,7 @@ describe("GitHub CLI setup", () => {
     const progress = await started;
     fake.child().finish(1);
     await Bun.sleep(0);
-    expect(gitHubCliLoginProgress()).toEqual({
+    expect(gitHubCliLoginProgress(contextFor())).toEqual({
       state: "failed",
       operationId: progress.operationId,
       error: "The sign-in did not complete (exit code 1)",
@@ -305,7 +311,7 @@ describe("GitHub CLI setup", () => {
       "cancel_github_cli_login",
     ])("%s rejects unknown arguments before acting", async (name) => {
       await expect(invoke(name, { unexpected: true })).rejects.toThrow("unexpected");
-      expect(gitHubCliLoginProgress()).toEqual({ state: "idle" });
+      expect(gitHubCliLoginProgress(contextFor())).toEqual({ state: "idle" });
     });
 
     test.each([null, 123, false, {}])(
@@ -321,7 +327,7 @@ describe("GitHub CLI setup", () => {
       await expect(invoke("start_github_cli_login", {}, contextFor("agent-test"))).rejects.toThrow(
         "isolated test profile",
       );
-      expect(gitHubCliLoginProgress()).toEqual({ state: "idle" });
+      expect(gitHubCliLoginProgress(contextFor())).toEqual({ state: "idle" });
     });
 
     test.skipIf(process.platform === "win32")(
@@ -342,7 +348,7 @@ describe("GitHub CLI setup", () => {
           expect(await invoke("get_github_cli_login")).toEqual(progress);
           expect(await invoke("cancel_github_cli_login")).toEqual({ state: "idle" });
         } finally {
-          cancelGitHubCliLogin();
+          cancelGitHubCliLogin(contextFor());
         }
       },
     );

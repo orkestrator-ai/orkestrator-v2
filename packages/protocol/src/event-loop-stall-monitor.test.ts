@@ -3,10 +3,11 @@ import {
   eventLoopDiagnostics,
   startEventLoopStallMonitor,
   type EventLoopStallMonitor,
+  type EventLoopStallMonitorOptions,
 } from "./event-loop-stall-monitor.js";
 
 /** A virtual clock and a single pending timer the test fires by hand. */
-function harness() {
+function harness(formatStall?: EventLoopStallMonitorOptions["formatStall"]) {
   let monotonic = 0;
   let wall = Date.parse("2026-10-28T02:22:55.000Z");
   let pending: { callback: () => void; dueAt: number } | null = null;
@@ -17,6 +18,7 @@ function harness() {
     logIntervalMs: 30_000,
     alwaysLogMs: 10_000,
     log: (message) => logs.push(message),
+    ...(formatStall ? { formatStall } : {}),
     now: () => monotonic,
     wallClock: () => wall,
     setTimer: (callback, ms) => {
@@ -68,6 +70,15 @@ describe("event loop stall monitor", () => {
       "[Backend] Event loop stalled for 2500 ms, ending 2026-10-28T02:22:59.150Z: a 500 ms timer fired late, so every request in that window waited",
     ]);
     expect(eventLoopDiagnostics()?.stalls).toBe(1);
+  });
+
+  test("lets the process word its own stall line", () => {
+    const run = harness(
+      ({ lagMs, endedAt, intervalMs, folded }) => `${lagMs}|${endedAt}|${intervalMs}|${folded}`,
+    );
+    monitor = run.monitor;
+    run.tick(2_500);
+    expect(run.logs).toEqual(["2500|2026-10-28T02:22:58.000Z|500|"]);
   });
 
   test("rate-limits stall lines and folds the suppressed ones into the next report", () => {

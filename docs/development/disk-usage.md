@@ -164,6 +164,16 @@ These belong to other tools. Orkestrator reports them and never deletes them.
 - **Superseded tool versions installed by mise:** `mise prune`.
 - **Legacy Turbo artifacts** at the top of `.turbo/` from an older layout:
   `mise run disk:report -- --fix legacy-turbo`.
+- **Leaked host-reachability probe networks**, `ork-<owner>-reach-probe-net`.
+  They hold no data, but each takes one of Docker's address pools; once the
+  pools are full no environment network can be created (`resource-exhausted`).
+  A backend's check removes its own network, and its next check reaps its own
+  owner's leftovers, but a test backend killed mid-check under a one-off data
+  directory leaves one nobody revisits. The report's `probe networks` row
+  counts them, and `mise run disk:report -- --fix probe-networks` removes,
+  one at a time by network id, only those with no container in any state and
+  created more than a day ago, whatever their owner. A check lasts seconds, so such a network
+  cannot belong to a running one (todo 0241).
 
 ## Commands
 

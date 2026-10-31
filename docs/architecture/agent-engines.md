@@ -219,9 +219,9 @@ none of its own and the read reaches the start of the conversation:
   setting sources and no session persistence (`--bare` would also disable
   OAuth/Keychain sign-in). Both read the prompt on stdin, framed as untrusted
   JSON data, without the coordinator preamble, framed guidance or the
-  annotation envelope. A failed strategy rests for ten minutes (`claude -p`
-  and `codex exec` both exit non-zero on failure, so an error can never become
-  a title); at most two run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0`
+  annotation envelope. A failed strategy rests for ten minutes (a non-zero exit
+  rejects, and `claude -p` exits 1 on every failure tried, so its error text
+  does not become a title); at most two run at once. `ORKESTRATOR_SESSION_TITLE_GENERATION=0`
   turns generation off, and it never runs under `bun test`.
 - The **Session titles** setting (`sessionTitleGeneration`) says which logins
   may be used, read per generation: any signed-in one (the default, so a Cursor,

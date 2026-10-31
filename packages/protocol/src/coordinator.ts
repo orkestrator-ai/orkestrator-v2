@@ -310,6 +310,25 @@ export interface CoordinatorPullRequestFollow {
   prUrl?: string;
   /** `multi-review`: the review association whose `pr-opened` notice this follows. */
   reviewAssociationId?: string;
+  /**
+   * How many PR states have been recorded (`statusNotice`), sent or quiet.
+   * The next notice is episode `notices + 1`, which makes its mail request
+   * id unique, so a state that recurs after a fix (conflicts, quiet,
+   * conflicts) is sent again, while a retry of the same episode, after a
+   * restart or from a second observer, replays the same message.
+   */
+  notices?: number;
+  /**
+   * The worker's last PR reading, captured just before its record is
+   * deleted (Merge and Cleanup), so a merge is still reported once the
+   * worker is gone.
+   */
+  final?: {
+    prUrl: string | null;
+    prState: "open" | "closed" | "merged" | null;
+    name?: string;
+    at: string;
+  };
   /** The newest `resolve_conflicts` run, reported once when its tab finishes. */
   resolve?: {
     tabId: string;

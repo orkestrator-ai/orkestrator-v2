@@ -1708,6 +1708,84 @@ describe("Orkestrator control MCP server", () => {
     ).not.toBe(true);
   });
 
+  test("list_workflows shows a followed pull request with its follow and PR fields", async () => {
+    const prUrl = "https://github.com/org/repo/pull/7";
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+      workflows: [
+        {
+          id: "association-pr",
+          kind: "pull-request",
+          resourceId: "env-1",
+          requestId: "pr-follow:pr",
+          createdAt: new Date(0).toISOString(),
+          statusNotice: { key: "conflicts:abc", notifiedAt: new Date(1).toISOString() },
+          pullRequest: {
+            source: "create-pr",
+            prUrl,
+            notices: 2,
+            resolve: { tabId: "resolve-tab", requestedAt: new Date(2).toISOString() },
+          },
+        },
+      ],
+    }));
+    overrides.set("get_environment", () => ({
+      id: "env-1",
+      projectId: "project-1",
+      name: "worker",
+      status: "running",
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: true,
+      prMergeability: "dirty",
+    }));
+    overrides.set("get_environment_pr_health", () => ({
+      "env-1": { prMonitorConfirmed: true, prCheckSummary: { passed: 2, total: 2, pending: 0 } },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery"],
+    });
+    const listed = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_workflows",
+      arguments: {},
+    });
+    expect(listed.body.result?.structuredContent).toMatchObject({
+      workflows: [
+        {
+          kind: "pull-request",
+          follow: {
+            source: "create-pr",
+            prUrl,
+            following: true,
+            lastReportedState: "pr-conflicts",
+            resolve: { tabId: "resolve-tab", state: "running" },
+          },
+          resource: {
+            id: "env-1",
+            prHasMergeConflicts: true,
+            prMergeability: "dirty",
+            prChecks: { passed: 2, failed: 0, pending: 0, total: 2 },
+            prReadyToMerge: false,
+            prNotReadyReason: "conflicts",
+          },
+        },
+      ],
+    });
+    const tools = (await rpc(credential.url, credential.token, "tools/list")).body.result!.tools!;
+    expect(tools.find((tool) => tool.name === "list_workflows")?.description).toContain(
+      "pull-request associations",
+    );
+  });
+
   test("authenticated coordinator transfers authorize both nested endpoints before admission", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

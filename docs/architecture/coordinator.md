@@ -1143,10 +1143,21 @@ observer once a coordinator-launched review with auto-PR has reported
 `pr-opened` (seeded as already told, so it is not repeated) or `pr-unknown`,
 or completed with its PR session started. From then on the review records
 its own PR states silently and the follow reports them. One live follow per
-coordinator, worker and node: `create_pr` and a later `resolve_conflicts`
-share it. The follow pins the first PR URL it sees; another URL on the
+coordinator, worker and node: `create_pr`, a later `resolve_conflicts` and a
+review's handoff share it. A request that joins a live follow is kept as a
+request alias (`requestAliases`), so the review still finds its handoff and
+stays silent, and its `pr-opened` seeds the shared follow unless that follow
+already reported the PR. The follow pins the first PR URL it sees; another URL on the
 worker, the worker disappearing, a merge or a close ends it
-(`terminalNotifiedAt`), so a reopened PR is not reported.
+(`terminalNotifiedAt`), so a reopened PR is not reported. Merge and Cleanup
+writes `merged` and deletes the worker straight away, before any
+observation can run, so deleting a worker first keeps its last PR reading
+on its follows (`pullRequest.final`, `captureFinalPullRequest` in
+`deleteEnvironment`): a follow whose worker is gone still reports a merge
+or close it had not reported, once, then ends. `list_workflows` shows a
+follow with what started it, its PR URL, whether it is still followed, the
+last state reported and a Resolve tab's progress, and the worker with its PR
+fields.
 
 Every key ends with a hash of the PR URL. `pr-opened` is sent once per PR;
 a first reading that already conflicts, fails or is ready sends that instead,
@@ -1154,6 +1165,11 @@ with the URL. An open PR with nothing to act on (checks running, review
 required, behind) is recorded without a wake, so the next conflict or
 failure after a fix is news again, while a reading that cannot tell (GitHub
 recomputing mergeability, the monitor not confirming it) changes nothing.
+Because the same state recurs with the same key, each recorded state counts
+an episode (`pullRequest.notices`), and a notice's mail request id includes
+the episode it opens: conflicts, then a fix, then conflicts again is two
+messages, while a retry of one episode (a restart, a second observer, a
+crash before the bookkeeping landed) reuses its request id and replays.
 Conflicts are the monitor's `hasMergeConflicts` or `dirty` mergeability.
 "Failed" is the check rollup reporting a failed check: it counts every
 check, so required ones are not told apart. "Ready to merge" is the
@@ -1191,8 +1207,9 @@ is a mail tile toned by the notice.
 **No wake storms.**
 
 - Dedupe: one notice per status key, recorded durably; the mail request id is
-  fixed by association, conversation and key, so a crash between placing a
-  notice and recording it cannot send it twice.
+  fixed by association, conversation and key (for a followed pull request,
+  key and episode), so a crash between placing a notice and recording it
+  cannot send it twice.
 - Coalescing: a status notice is held 10 seconds (`coalesceMs`); notices
   arriving while the window is open join it, so reviews settling together are
   one wake, and the drain batches them into one carrier (at most 10 messages,

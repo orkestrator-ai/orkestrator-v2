@@ -17,8 +17,10 @@ import {
   COORDINATOR_RESOLVE_REFRESH_WAIT_MS,
   COORDINATOR_RESOLVE_START_GRACE_MS,
   COORDINATOR_STATUS_COALESCE_MS,
+  CoordinatorStatusWakes,
   type CoordinatorStatusWakeTimers,
 } from "./coordinator-status-wakes.js";
+import type { StorageService } from "./storage.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import type { Environment } from "./models.js";
 
@@ -51,6 +53,10 @@ class ManualTimers implements CoordinatorStatusWakeTimers {
       .sort((left, right) => left.at - right.at);
     this.due = this.due.filter((entry) => entry.at > this.current);
     for (const entry of ready) entry.callback();
+  }
+
+  count(): number {
+    return this.due.length;
   }
 }
 
@@ -144,6 +150,41 @@ async function followOf(current: MailWorld, worker: MailActor) {
   ).find((item) => item.kind === "pull-request" && item.resourceId === worker.environmentId);
 }
 
+describe("followed-worker filter", () => {
+  test("a follow noted while a sweep reads the store is not dropped from the event filter", async () => {
+    timers = new ManualTimers();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let reads = 0;
+    const storage = {
+      coordinators: {
+        getCoordinatorReconciliationState: async () => {
+          reads += 1;
+          if (reads === 1) await gate;
+          return { workspaces: [], workflows: [] };
+        },
+      },
+      loadConfig: async () => ({ global: {} }),
+      addResourceChangeListener: () => () => undefined,
+    } as unknown as StorageService;
+    const wakes = new CoordinatorStatusWakes(storage, { timers });
+    const sweep = wakes.reconcile();
+    while (reads === 0) await new Promise((resolve) => setImmediate(resolve));
+    // create_pr writes its follow and notes it while the sweep's read is in flight.
+    wakes.notePullRequestFollowed("env-new");
+    release();
+    await sweep;
+    // Forget the note's own debounce; the filter (`followed`) is what is under test.
+    wakes.stop();
+    expect(timers.count()).toBe(0);
+    wakes.notePullRequestChange("env-new");
+    expect(timers.count()).toBe(1);
+    // A worker nobody follows still costs nothing.
+    wakes.notePullRequestChange("env-other");
+    expect(timers.count()).toBe(1);
+  });
+});
+
 describe("pull request status wakes", () => {
   test("a PR raised with create_pr wakes once per state change, until it merges", async () => {
     const current = await createWorld();
@@ -234,6 +275,94 @@ describe("pull request status wakes", () => {
     await current.restart();
     await settle(current);
     expect(current.wakes(coordinator)).toBe(5);
+  });
+
+  test("a state that recurs after a fix wakes again; re-observing one episode does not", async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("pr-env");
+    await follow(current, worker, "create-pr");
+    await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+    await settle(current);
+    await current.finishTurn(coordinator);
+    const conflicts = () =>
+      monitor(current, worker, { hasMergeConflicts: true, prMergeability: "dirty" });
+    const quiet = () =>
+      monitor(
+        current,
+        worker,
+        { hasMergeConflicts: false, prMergeability: "blocked" },
+        { confirmed: true, checks: { passed: 1, total: 2, pending: 1 } },
+      );
+    const failing = () =>
+      monitor(
+        current,
+        worker,
+        { hasMergeConflicts: false, prMergeability: "blocked" },
+        { confirmed: true, checks: { passed: 1, total: 2, pending: 0 } },
+      );
+    /** One state change, then the same episode seen again by a restarted backend. */
+    const step = async (change: () => Promise<void>) => {
+      await change();
+      await settle(current);
+      await current.finishTurn(coordinator);
+      await current.restart();
+      await settle(current);
+      await settle(current);
+    };
+    await step(conflicts);
+    await step(quiet);
+    await step(conflicts);
+    await step(quiet);
+    await step(failing);
+    await step(quiet);
+    await step(failing);
+    expect(states(current, coordinator)).toEqual([
+      "pr-opened",
+      "pr-conflicts",
+      "pr-conflicts",
+      "pr-checks-failed",
+      "pr-checks-failed",
+    ]);
+    expect(current.wakes(coordinator)).toBe(5);
+    // Eight recorded states (opened, then seven changes, quiet ones included).
+    expect((await followOf(current, worker))?.pullRequest?.notices).toBe(8);
+  });
+
+  test("Merge and Cleanup: a merge recorded just before the worker is deleted still wakes once", async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("pr-env");
+    const gone = await current.addEnvironment("gone-env");
+    await follow(current, worker, "create-pr");
+    await follow(current, gone, "create-pr", {}, "pr-follow:gone");
+    for (const actor of [worker, gone])
+      await monitor(current, actor, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+    await settle(current);
+    await current.finishTurn(coordinator);
+    expect(current.wakes(coordinator)).toBe(1);
+
+    // The merge write and the deletion land before any observation runs.
+    await current.storage.updateEnvironment(worker.environmentId, { prState: "merged" });
+    await current.coordinator.statusWakes.captureFinalPullRequest(
+      (await current.storage.getEnvironment(worker.environmentId))!,
+    );
+    await current.storage.removeEnvironment(worker.environmentId);
+    // A worker deleted with its PR still open is simply no longer followed.
+    await current.coordinator.statusWakes.captureFinalPullRequest(
+      (await current.storage.getEnvironment(gone.environmentId))!,
+    );
+    await current.storage.removeEnvironment(gone.environmentId);
+    await settle(current);
+    await current.restart();
+    await settle(current);
+
+    expect(states(current, coordinator).slice(-1)).toEqual(["pr-merged"]);
+    expect(current.wakes(coordinator)).toBe(2);
+    const [merged] = current.carriers(coordinator)[1]!;
+    expect(merged!.subject).toBe("Pull request pr-env was merged");
+    for (const actor of [worker, gone])
+      expect((await followOf(current, actor))?.terminalNotifiedAt).toBeDefined();
   });
 
   test("a PR the user raised has no follow and wakes nobody", async () => {
@@ -379,6 +508,63 @@ describe("pull request status wakes", () => {
     await settle(current);
     expect(states(current, coordinator)).toEqual(["resolve-finished"]);
     expect(current.received(coordinator)[0]).toContain("no longer reports conflicts");
+  });
+
+  test("a review joining a create_pr follow is found by its own request; one of them reports", async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("review-env");
+    const fix = { sessionKey: "fix", startedAt: "2026-10-16T10:10:00Z", status: "idle" };
+    await current.storage.saveMultiReviewWorkflow("review-1", worker.environmentId, 1, {
+      id: "review-1",
+      environmentId: worker.environmentId,
+      projectId: current.projectId,
+      reviewers: [],
+      autoPr: true,
+      phase: "interactive",
+      fixSession: fix,
+      autoPrLaunch: {
+        state: "launched",
+        requestId: "pr",
+        tabId: "pr-tab",
+        fixIdentity: multiReviewFixIdentity(fix),
+      },
+    });
+    const main = await current.main();
+    await current.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "association-review-1",
+      projectId: current.projectId,
+      coordinatorId: current.coordinatorId,
+      conversationId: main.conversationId!,
+      kind: "multi-review",
+      resourceId: "review-1",
+      requestId: "request-review-1",
+      createdAt: new Date().toISOString(),
+    });
+    // The coordinator also called create_pr, so a follow already exists.
+    await follow(current, worker, "create-pr");
+    await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+    await settle(current);
+    const joined = await followOf(current, worker);
+    expect(joined?.requestId).toBe("pr-follow:create-pr");
+    expect(joined?.requestAliases?.map((alias) => alias.requestId)).toContain(
+      "pr-follow:review:association-review-1",
+    );
+    expect(joined?.pullRequest?.reviewAssociationId).toBe("association-review-1");
+    await current.finishTurn(coordinator);
+    await monitor(current, worker, { hasMergeConflicts: true, prMergeability: "dirty" });
+    await settle(current);
+    await current.finishTurn(coordinator);
+    await monitor(current, worker, { prState: "closed" });
+    await settle(current);
+    await settle(current);
+    // The review's pr-opened is not repeated by the follow, and its pr-closed
+    // is left to the follow: each state is heard once.
+    expect(states(current, coordinator)).toEqual(["pr-opened", "pr-conflicts", "pr-closed"]);
+    const follows = (
+      await current.storage.coordinators.listCoordinatorWorkflowAssociations(current.projectId)
+    ).filter((item) => item.kind === "pull-request");
+    expect(follows).toHaveLength(1);
   });
 
   test("a review's auto-PR is followed after its pr-opened, without repeating it", async () => {

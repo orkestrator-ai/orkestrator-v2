@@ -27,6 +27,8 @@ import type { DraftsRepository } from "./storage-drafts.js";
 
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
+/** The payload hash of a request that joined a live pull-request follow. */
+const PULL_REQUEST_FOLLOW_ALIAS = "pull-request-follow";
 
 /**
  * Every coordinator's staged attachments, under the application data
@@ -748,7 +750,11 @@ export class CoordinatorsRepository {
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const same = store.workflows.find(
-        (item) => item.coordinatorId === input.coordinatorId && item.requestId === input.requestId,
+        (item) =>
+          item.coordinatorId === input.coordinatorId &&
+          (item.requestId === input.requestId ||
+            (item.kind === "pull-request" &&
+              item.requestAliases?.some((alias) => alias.requestId === input.requestId))),
       );
       if (same) {
         if (
@@ -783,6 +789,28 @@ export class CoordinatorsRepository {
         if (input.conversationId && live.conversationId !== input.conversationId) {
           // The newest request comes from the conversation now following it.
           live.conversationId = input.conversationId;
+          changed = true;
+        }
+        // The joining request stays findable (a review's handoff looks for its
+        // own request id), so the PR is reported by this follow alone.
+        const aliases = live.requestAliases ?? [];
+        if (aliases.length < MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+          live.requestAliases = [
+            ...aliases,
+            { requestId: input.requestId, payloadHash: PULL_REQUEST_FOLLOW_ALIAS },
+          ];
+          changed = true;
+        }
+        if (input.reviewAssociationId && !follow.reviewAssociationId) {
+          follow.reviewAssociationId = input.reviewAssociationId;
+          changed = true;
+        }
+        // What the coordinator was told elsewhere (a review's `pr-opened`) is
+        // not news here either, unless this follow already told it of that PR.
+        const seedTag = input.seedNoticeKey?.slice(input.seedNoticeKey.indexOf(":") + 1);
+        if (input.seedNoticeKey && seedTag && !live.statusNotice?.key.endsWith(`:${seedTag}`)) {
+          live.statusNotice = { key: input.seedNoticeKey, notifiedAt: new Date().toISOString() };
+          follow.notices = (follow.notices ?? 0) + 1;
           changed = true;
         }
         if (!changed) return live;

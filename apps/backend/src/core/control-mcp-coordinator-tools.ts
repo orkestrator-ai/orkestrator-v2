@@ -32,6 +32,13 @@ import {
 import type { CoordinatorControlScope } from "./control-mcp-tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "./control-shared-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
+import {
+  coordinatorPrFields,
+  nodePrHealth,
+  prReadingFrom,
+  pullRequestFollowSummary,
+  thisNodePrHealth,
+} from "./coordinator-pr-status.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
 import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
@@ -113,7 +120,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, multi-review and graph-run associations for this project with bounded authoritative summaries.",
+        "List durable worker, build-pipeline, multi-review, graph-run and pull-request associations for this project with bounded authoritative summaries. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge).",
       inputSchema: z.object({}),
       annotations: readAnnotations(),
     },
@@ -148,11 +155,25 @@ export function registerCoordinatorWorkflowTools(
               resource = { id: resourceId, status: "pending" };
             } else if (!inv) {
               resource = { id: resourceId, status: "unavailable" };
-            } else if (kind === "environment" || kind === "pull-request") {
+            } else if (kind === "environment") {
               const environment = await inv<unknown>("get_environment", {
                 environmentId: resourceId,
               });
               resource = isRecord(environment) ? environmentSummary(environment) : null;
+            } else if (kind === "pull-request") {
+              // The worker, with the PR fields its environment reads carry.
+              const environment = await inv<unknown>("get_environment", {
+                environmentId: resourceId,
+              });
+              if (isRecord(environment)) {
+                const health = nodeId
+                  ? await nodePrHealth(invoke, nodeId)
+                  : await thisNodePrHealth(invoke, coordinatorScope.projectId, [environment]);
+                resource = {
+                  ...environmentSummary(environment),
+                  ...coordinatorPrFields(prReadingFrom(environment, health.get(resourceId))),
+                };
+              }
             } else if (kind === "build-pipeline") {
               const workflow = await inv<unknown>("get_build_pipeline", {
                 pipelineId: resourceId,
@@ -184,6 +205,7 @@ export function registerCoordinatorWorkflowTools(
             baseBranch: association.baseBranch,
             baseCommit: association.baseCommit,
             createdAt: association.createdAt,
+            ...(kind === "pull-request" ? { follow: pullRequestFollowSummary(association) } : {}),
             resource,
           };
         }),

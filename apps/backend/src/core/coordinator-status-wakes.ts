@@ -847,6 +847,21 @@ function reviewFollowRequestId(reviewAssociationId: string): string {
   return `pr-follow:review:${reviewAssociationId}`;
 }
 
+/** Whether a follow was made by, or joined by, this request (`requestAliases`). */
+function hasFollowRequest(
+  workflows: CoordinatorWorkflowAssociation[],
+  coordinatorId: string,
+  requestId: string,
+): boolean {
+  return workflows.some(
+    (item) =>
+      item.coordinatorId === coordinatorId &&
+      (item.requestId === requestId ||
+        (item.kind === "pull-request" &&
+          item.requestAliases?.some((alias) => alias.requestId === requestId) === true)),
+  );
+}
+
 /** A review's reports of its auto-PR's own state, which a follow takes over. */
 const REVIEW_PR_STATES: ReadonlySet<string> = new Set([
   "pr-opened",
@@ -870,6 +885,13 @@ export class CoordinatorStatusWakes {
    * until the first sweep: every change is then observed.
    */
   private followed: Set<string> | null = null;
+  /**
+   * Follows noted since the last sweep, with a sequence number, so a sweep or
+   * observation that read the store before a follow was written does not
+   * drop it from `followed`. Pruned by each sweep.
+   */
+  private followNotes = 0;
+  private readonly recentFollows = new Map<string, number>();
   private unsubscribe: (() => void) | null = null;
   /** One pass at a time, so two observers of one state cannot both send it. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -961,13 +983,17 @@ export class CoordinatorStatusWakes {
 
   /** A coordinator started following this worker's pull request. */
   notePullRequestFollowed(environmentId: string, nodeId?: string): void {
-    this.followed?.add(followKey(environmentId, nodeId));
+    const key = followKey(environmentId, nodeId);
+    this.followNotes += 1;
+    this.recentFollows.set(key, this.followNotes);
+    this.followed?.add(key);
     this.notePullRequestChange(environmentId, nodeId);
   }
 
   /** Observe the pull requests followed on one worker now. */
   observePullRequests(environmentId: string, nodeId?: string): Promise<void> {
     return this.serialize(async () => {
+      const since = this.followNotes;
       const state = await this.storage.coordinators.getCoordinatorReconciliationState();
       const owned = state.workflows.filter(
         (association) =>
@@ -978,7 +1004,9 @@ export class CoordinatorStatusWakes {
           !association.terminalNotifiedAt,
       );
       if (owned.length === 0) {
-        this.followed?.delete(followKey(environmentId, nodeId));
+        const key = followKey(environmentId, nodeId);
+        // Unless it was followed after the read began.
+        if ((this.recentFollows.get(key) ?? 0) <= since) this.followed?.delete(key);
         return;
       }
       const mode = await this.mode();
@@ -1066,10 +1094,13 @@ export class CoordinatorStatusWakes {
    */
   reconcile(): Promise<void> {
     return this.serialize(async () => {
+      const since = this.followNotes;
       const state = await this.storage.coordinators.getCoordinatorReconciliationState();
       const mode = await this.mode();
-      this.followed = new Set(
-        state.workflows
+      // Follows noted while the store was being read may be missing from it.
+      const noted = [...this.recentFollows].filter(([, seq]) => seq > since).map(([key]) => key);
+      this.followed = new Set([
+        ...state.workflows
           .filter(
             (association) =>
               association.kind === "pull-request" &&
@@ -1077,7 +1108,10 @@ export class CoordinatorStatusWakes {
               !association.terminalNotifiedAt,
           )
           .map((association) => followKey(association.resourceId, association.nodeId)),
-      );
+        ...noted,
+      ]);
+      for (const [key, seq] of Array.from(this.recentFollows))
+        if (seq <= since) this.recentFollows.delete(key);
       for (const association of state.workflows) {
         if (
           (association.kind === "multi-review" ||
@@ -1202,11 +1236,7 @@ export class CoordinatorStatusWakes {
     if (
       kind === "multi-review" &&
       REVIEW_PR_STATES.has(status.state) &&
-      workflows.some(
-        (item) =>
-          item.coordinatorId === association.coordinatorId &&
-          item.requestId === reviewFollowRequestId(association.id),
-      )
+      hasFollowRequest(workflows, association.coordinatorId, reviewFollowRequestId(association.id))
     ) {
       // The pull request is followed now; it reports its own changes once.
       await this.recordNotice(association.id, status.key);
@@ -1289,14 +1319,9 @@ export class CoordinatorStatusWakes {
     const environmentId = text(snapshot.environmentId);
     if (!environmentId) return;
     const requestId = reviewFollowRequestId(association.id);
-    if (
-      workflows.some(
-        (item) => item.coordinatorId === association.coordinatorId && item.requestId === requestId,
-      )
-    )
-      return;
+    if (hasFollowRequest(workflows, association.coordinatorId, requestId)) return;
     const prUrl = text(prEnvironment.prUrl);
-    await this.storage.coordinators.followCoordinatorPullRequest({
+    const followed = await this.storage.coordinators.followCoordinatorPullRequest({
       projectId: association.projectId,
       coordinatorId: association.coordinatorId,
       ...(association.conversationId ? { conversationId: association.conversationId } : {}),
@@ -1310,6 +1335,10 @@ export class CoordinatorStatusWakes {
         ? { seedNoticeKey: `opened:${prKeyTag(prUrl)}` }
         : {}),
     });
+    // A live follow this joined may still be observed later in this pass:
+    // it must see the seed and alias, not the snapshot from before them.
+    const index = workflows.findIndex((item) => item.id === followed.id);
+    if (index >= 0) workflows[index] = followed;
     this.notePullRequestFollowed(environmentId, association.nodeId);
   }
 
@@ -1346,19 +1375,26 @@ export class CoordinatorStatusWakes {
       deleting = read.deleting === true;
     } else {
       const environment = await this.storage.getEnvironment(environmentId);
-      if (!environment) {
+      const final = association.pullRequest?.final;
+      if (environment) {
+        reading = prReadingFrom(
+          environment as unknown as Record<string, unknown>,
+          this.options.prMonitorHealth?.(environment),
+        );
+        name = environment.name;
+        // Merge and Cleanup deletes the worker after the merge: report the merge first.
+        deleting = Boolean(
+          environment.deletionRequestedAt || environment.lifecycleOperation === "deleting",
+        );
+      } else if (final?.prUrl && (final.prState === "merged" || final.prState === "closed")) {
+        // Deleted before an observation ran: its last reading, captured at deletion.
+        reading = prReadingFrom({ prUrl: final.prUrl, prState: final.prState });
+        name = final.name;
+        deleting = true;
+      } else {
         await this.endFollow(association);
         return;
       }
-      reading = prReadingFrom(
-        environment as unknown as Record<string, unknown>,
-        this.options.prMonitorHealth?.(environment),
-      );
-      name = environment.name;
-      // Merge and Cleanup deletes the worker after the merge: report the merge first.
-      deleting = Boolean(
-        environment.deletionRequestedAt || environment.lifecycleOperation === "deleting",
-      );
     }
     let follow = association.pullRequest ?? { source: "create-pr" as const };
     if (follow.prUrl && reading.prUrl && reading.prUrl !== follow.prUrl) {
@@ -1414,11 +1450,71 @@ export class CoordinatorStatusWakes {
       return;
     }
     if (pr.wake) {
-      const delivered = await this.deliver(workspaces, association, resource, status);
+      // The episode number makes a recurring state (conflicts again after a
+      // fix) a new message; it only advances when a state is recorded, so a
+      // retry of this episode replays the same request id.
+      const episode = (association.pullRequest?.notices ?? 0) + 1;
+      const delivered = await this.deliver(workspaces, association, resource, {
+        ...status,
+        key: `${status.key}#${episode}`,
+      });
       if (!delivered) return;
     }
-    await this.recordNotice(association.id, status.key);
+    await this.recordPullRequestNotice(association.id, status.key);
     if (status.terminal || deleting) await this.endFollow(association);
+  }
+
+  /** Record a followed PR's state, counting it as one more episode. */
+  private async recordPullRequestNotice(associationId: string, key: string): Promise<void> {
+    const notifiedAt = new Date(this.timers.now()).toISOString();
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (current.statusNotice?.key === key) return false;
+        current.statusNotice = { key, notifiedAt };
+        const follow = current.pullRequest ?? { source: "create-pr" as const };
+        current.pullRequest = { ...follow, notices: (follow.notices ?? 0) + 1 };
+        return true;
+      },
+    );
+  }
+
+  /**
+   * Keep a worker's last PR reading on its follows just before the worker's
+   * record is deleted, so a merge observed by the write path (Merge and
+   * Cleanup deletes right after persisting `merged`) is still reported once.
+   */
+  async captureFinalPullRequest(environment: Environment): Promise<void> {
+    const prState =
+      environment.prState === "open" ||
+      environment.prState === "closed" ||
+      environment.prState === "merged"
+        ? environment.prState
+        : null;
+    const at = new Date(this.timers.now()).toISOString();
+    const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+    const follows = state.workflows.filter(
+      (association) =>
+        association.kind === "pull-request" &&
+        !association.nodeId &&
+        association.resourceId === environment.id &&
+        !association.pending &&
+        !association.terminalNotifiedAt,
+    );
+    for (const association of follows) {
+      await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (current) => {
+          if (!current.pullRequest || current.terminalNotifiedAt) return false;
+          current.pullRequest = {
+            ...current.pullRequest,
+            final: { prUrl: environment.prUrl ?? null, prState, name: environment.name, at },
+          };
+          return true;
+        },
+      );
+    }
+    if (follows.length > 0) this.notePullRequestChange(environment.id);
   }
 
   /**
@@ -1507,7 +1603,10 @@ export class CoordinatorStatusWakes {
           resolve: { ...latest, finishedAt, notifiedAt },
         };
         // The report described this state; it is not news a second time.
-        if (pr) current.statusNotice = { key: pr.status.key, notifiedAt };
+        if (pr && current.statusNotice?.key !== pr.status.key) {
+          current.statusNotice = { key: pr.status.key, notifiedAt };
+          current.pullRequest.notices = (current.pullRequest.notices ?? 0) + 1;
+        }
         return true;
       },
     );

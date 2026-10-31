@@ -643,7 +643,7 @@ export function registerDockerCommands(
     };
     return toClientEnvironment(await storage.addEnvironment(env));
   });
-  register("propagate_github_token_to_containers", async (_args, { storage }) => {
+  register("propagate_github_token_to_containers", async (_args, { storage, runtime }) => {
     const config = await storage.loadConfig();
     const githubToken = await resolveGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
@@ -656,7 +656,10 @@ export function registerDockerCommands(
       )
         continue;
       try {
-        await syncContainerGitHubCredential(env.containerId, githubToken);
+        const containerId = env.containerId;
+        await runtime.prMonitor.viewerPermissions.rotateScope(`container:${containerId}`, () =>
+          syncContainerGitHubCredential(containerId, githubToken),
+        );
         updated.push(env.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -622,7 +622,14 @@ export class BuildPipelineSupervisor {
       interruption,
       contextUsage,
       usagePending,
-    } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
+    } = await readProviderStatus(
+      provider,
+      session.sdkSessionId,
+      session.structuredRequestId ??
+        (pipeline.activePromptContext?.sessionId === session.sdkSessionId
+          ? pipeline.activePromptContext.requestId
+          : undefined),
+    );
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
     // before it records that step's session, so a failure there belongs to a

@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   Loader2,
-  Container,
   RefreshCw,
   Trash2,
   AlertCircle,
@@ -24,12 +23,11 @@ import {
 } from "lucide-react";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
-import {
-  FullscreenSettingsLayout,
-  type SettingsMenuItem,
-} from "@/components/settings/FullscreenSettingsLayout";
+import { isWindowMachine, useAccountMachine } from "@/components/settings/account-machine";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import type { DockerSystemStats, ContainerInfo } from "@/lib/backend";
-import { useProjectStore, useEnvironmentStore } from "@/stores";
+import { useEnvironmentStore } from "@/stores";
+import type { Project } from "@/types";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -42,13 +40,9 @@ import {
 import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 import { DockerCleanupReview } from "./DockerCleanupReview";
+import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
 
-interface DockerStatsDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-/** Refresh interval while the dialog is open. */
+/** Refresh interval while the section is shown. */
 const STATS_REFRESH_MS = 5_000;
 /** A sample older than this is shown as stale. */
 const STATS_STALE_MS = 15_000;
@@ -63,7 +57,85 @@ function isUnclaimedContainer(container: ContainerInfo): boolean {
   );
 }
 
-export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps) {
+/** Settings → Docker, scoped to the machine selected in the header. */
+export function DockerSettings() {
+  const { machine } = useAccountMachine();
+  // Discard snapshots, open confirmations and pending probes when changing hosts.
+  return (
+    <MachineDockerSettings
+      key={machine === undefined ? "workspace" : (machine ?? "command-node")}
+    />
+  );
+}
+
+function MachineDockerSettings() {
+  const { machine } = useAccountMachine();
+  const windowAvailable = useDockerAvailability();
+  const windowMachine = isWindowMachine(machine);
+  const [remoteAvailable, setRemoteAvailable] = useState<boolean | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (windowMachine) return;
+    let active = true;
+    let probing = false;
+    const probe = async () => {
+      if (probing) return;
+      probing = true;
+      try {
+        const availability = await backend.checkDocker(machine);
+        if (active) {
+          setRemoteAvailable(availability.available);
+          setProbeError(null);
+        }
+      } catch (err) {
+        if (active) {
+          // A failed probe does not establish that Docker stopped. Retain the
+          // last confirmed state so transient link errors preserve open dialogs.
+          setProbeError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        probing = false;
+      }
+    };
+    void probe();
+    const timer = setInterval(() => void probe(), STATS_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [machine, windowMachine]);
+
+  const available = windowMachine ? windowAvailable : remoteAvailable;
+  if (available === null && probeError)
+    return (
+      <p role="status" className="text-sm text-destructive">
+        {probeError}
+      </p>
+    );
+  if (available === null) return <p className="text-sm text-muted-foreground">Checking Docker…</p>;
+  if (!available) {
+    return (
+      <div className="flex max-w-3xl items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span>Docker is not running. Start Docker to see its resources and containers.</span>
+      </div>
+    );
+  }
+  return (
+    <>
+      {probeError && (
+        <p role="status" className="text-sm text-destructive">
+          {probeError}
+        </p>
+      )}
+      <DockerSettingsPanel />
+    </>
+  );
+}
+
+function DockerSettingsPanel() {
+  const { machine } = useAccountMachine();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DockerSystemStats | null>(null);
@@ -75,9 +147,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [stoppingContainerId, setStoppingContainerId] = useState<string | null>(null);
   const [deletingContainerId, setDeletingContainerId] = useState<string | null>(null);
 
-  // Get project lookup function and projects list
-  const getProjectById = useProjectStore((state) => state.getProjectById);
-  const projects = useProjectStore((state) => state.projects);
+  // Projects must belong to the same host as the container being reattached.
+  const [projects, setProjects] = useState<Project[]>([]);
 
   // Get environment store action to add reattached environments
   const addEnvironment = useEnvironmentStore((state) => state.addEnvironment);
@@ -94,27 +165,35 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
   const loading = useRef(false);
   /** Fetches without a spinner; a refresh never overlaps another load. */
-  const fetchData = useCallback((background: boolean) => {
-    if (loading.current) return;
-    loading.current = true;
-    void Promise.all([backend.getDockerSystemStats(), backend.getOrkestratorContainers()])
-      .then(([statsData, containersData]) => {
-        setStats(statsData);
-        setStatsReceivedAt(Date.now());
-        setContainers(containersData);
-        if (background) setError(null);
-      })
-      .catch((err: unknown) => {
-        console.error("[DockerStatsDialog] Failed to load data:", err);
-        setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        loading.current = false;
-        // Also ends the spinner shown on opening, which a load already in
-        // flight then (possibly a background one) answers.
-        setIsLoading(false);
-      });
-  }, []);
+  const fetchData = useCallback(
+    (background: boolean) => {
+      if (loading.current) return;
+      loading.current = true;
+      void Promise.all([
+        backend.getDockerSystemStats(machine),
+        backend.getOrkestratorContainers(machine),
+        backend.getProjects(machine),
+      ])
+        .then(([statsData, containersData, projectsData]) => {
+          setProjects(projectsData);
+          setStats(statsData);
+          setStatsReceivedAt(Date.now());
+          setContainers(containersData);
+          if (background) setError(null);
+        })
+        .catch((err: unknown) => {
+          console.error("[DockerSettings] Failed to load data:", err);
+          setError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          loading.current = false;
+          // Also ends the spinner shown on opening, which a load already in
+          // flight then (possibly a background one) answers.
+          setIsLoading(false);
+        });
+    },
+    [machine],
+  );
 
   /** A load the user asked for, shown with a spinner. */
   const loadData = () => {
@@ -124,40 +203,25 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     fetchData(false);
   };
 
-  // Opening shows the spinner until the first load answers; closing resets.
-  const [wasOpen, setWasOpen] = useState(open);
-  if (wasOpen !== open) {
-    setWasOpen(open);
-    if (open) {
-      setIsLoading(true);
-      setError(null);
-    } else {
-      setStats(null);
-      setContainers([]);
-      setError(null);
-    }
-  }
-
-  // Load data when dialog opens, then refresh while it stays open. The
-  // backend shares one sample between callers, so this costs no extra
-  // Docker calls within its interval. Opening already showed the spinner.
+  // Load when the section is shown, then refresh while it stays on screen.
+  // The backend shares one sample between callers, so this costs no extra
+  // Docker calls within its interval. The first load clears the spinner.
   useEffect(() => {
-    if (!open) return;
     fetchData(false);
     const timer = setInterval(() => fetchData(true), STATS_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [open, fetchData]);
+  }, [fetchData]);
 
   const handleStopContainer = async (containerId: string) => {
     setStoppingContainerId(containerId);
     setError(null);
     try {
-      await backend.dockerStopContainer(containerId);
+      await backend.dockerStopContainer(containerId, machine);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerStatsDialog] Stop container failed:", err);
+      console.error("[DockerSettings] Stop container failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStoppingContainerId(null);
@@ -168,12 +232,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setDeletingContainerId(containerId);
     setError(null);
     try {
-      await backend.dockerRemoveContainer(containerId);
+      await backend.dockerRemoveContainer(containerId, machine);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerStatsDialog] Delete container failed:", err);
+      console.error("[DockerSettings] Delete container failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingContainerId(null);
@@ -198,11 +262,13 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         selectedProjectId,
         reattachingContainer.id,
         reattachName || undefined,
+        machine,
       );
-      // Add the new environment to the store so sidebar updates immediately
-      addEnvironment(newEnvironment);
+      // Only this window's environments belong in its store; remote realms
+      // reconcile their own snapshots from the backend resource events.
+      if (isWindowMachine(machine)) addEnvironment(newEnvironment);
       // Refresh the containers list
-      const containersData = await backend.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
       // Close dialog
       setShowReattachDialog(false);
@@ -210,16 +276,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       setSelectedProjectId("");
       setReattachName("");
     } catch (err) {
-      console.error("[DockerStatsDialog] Reattach failed:", err);
+      console.error("[DockerSettings] Reattach failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsReattaching(false);
     }
   };
-
-  const dockerMenuItems: SettingsMenuItem[] = [
-    { id: "containers", label: "Containers", icon: <Container className="h-4 w-4" /> },
-  ];
 
   const renderDockerSection = () => {
     if (error) {
@@ -240,7 +302,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     }
 
     return (
-      <div className="max-w-3xl space-y-6">
+      <SettingsPageLayout title="Containers">
         <DockerImageStatusPanel />
         {/* System Resources */}
         {stats && (
@@ -345,7 +407,9 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 const isDeleting = deletingContainerId === container.id;
                 const isOperating = isStopping || isDeleting;
                 const isRunning = container.state === "running";
-                const project = container.projectId ? getProjectById(container.projectId) : null;
+                const project = container.projectId
+                  ? projects.find((project) => project.id === container.projectId)
+                  : null;
                 return (
                   <div
                     key={container.id}
@@ -468,20 +532,13 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
             </p>
           )}
         </div>
-      </div>
+      </SettingsPageLayout>
     );
   };
 
   return (
     <>
-      <FullscreenSettingsLayout
-        open={open}
-        onOpenChange={onOpenChange}
-        title="Docker"
-        menuItems={dockerMenuItems}
-      >
-        {() => renderDockerSection()}
-      </FullscreenSettingsLayout>
+      {renderDockerSection()}
 
       <DockerCleanupReview
         open={showCleanupReview}

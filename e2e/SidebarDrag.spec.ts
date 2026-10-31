@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-async function drag(page: Page, handle: Locator, target: Locator, targetYFraction = 0.5) {
+async function holdDrag(page: Page, handle: Locator, target: Locator, targetYFraction = 0.5) {
   const start = (await handle.boundingBox())!;
   const end = (await target.boundingBox())!;
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
@@ -8,11 +8,135 @@ async function drag(page: Page, handle: Locator, target: Locator, targetYFractio
   await page.mouse.move(start.x + start.width / 2 + 12, start.y + start.height / 2, { steps: 3 });
   await expect(handle).toHaveAttribute("aria-pressed", "true");
   await page.mouse.move(end.x + end.width / 2, end.y + end.height * targetYFraction, { steps: 12 });
+}
+
+async function drag(page: Page, handle: Locator, target: Locator, targetYFraction = 0.5) {
+  await holdDrag(page, handle, target, targetYFraction);
   await page.mouse.up();
 }
 
 const project = (page: Page, name: string) =>
   page.getByRole("button", { name: new RegExp(`^(Self · )?${name} 3$`) });
+
+// Check the rendered positions after transitions settle, while the pointer is
+// still down. Persisted order alone cannot detect rows piling up during a drag.
+async function expectVerticalShift(row: Locator, top: number, shift: number) {
+  await expect
+    .poll(async () => Math.abs((await row.boundingBox())!.y - top - shift))
+    .toBeLessThan(1);
+}
+
+for (const merged of [false, true]) {
+  test(`${merged ? "merged" : "local"} project drag keeps expanded folder rows separate before release`, async ({
+    page,
+  }) => {
+    await page.goto(`/sidebar-drag?groups=1${merged ? "&merged=1" : ""}`);
+    // Keep one project expanded so measured blocks include environment rows,
+    // while the whole scenario fits both viewport profiles.
+    for (const name of ["p2", "q", "q2"]) {
+      await page.getByRole("button", { name: `Collapse project ${name}`, exact: true }).click();
+    }
+    const source = page.locator('[data-project-folder="Source"]');
+    const target = page.locator('[data-project-folder="Target"]');
+    const sourceHeading = source.getByTitle("Collapse folder Source", { exact: true }).first();
+    const targetHeading = target.getByTitle("Collapse folder Target", { exact: true }).first();
+    const rows = [
+      sourceHeading,
+      project(page, "p"),
+      project(page, "p2"),
+      targetHeading,
+      project(page, "q"),
+      project(page, "q2"),
+    ];
+    const before = await Promise.all(rows.map(async (row) => (await row.boundingBox())!.y));
+    const active = project(page, "p2");
+    const activeBlock = active.locator("xpath=ancestor::div[contains(@class, 'px-2')][1]");
+    const activeHeight = (await activeBlock.boundingBox())!.height;
+    // Verify the real folder measurement encloses its member nodes.
+    const targetBox = (await target.boundingBox())!;
+    const lastBox = (await project(page, "q2").boundingBox())!;
+    expect(targetBox.y).toBeLessThan(lastBox.y);
+    expect(targetBox.y + targetBox.height).toBeGreaterThanOrEqual(lastBox.y + lastBox.height);
+
+    await holdDrag(page, active, targetHeading);
+    await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
+    for (const index of [0, 1, 3, 4, 5]) {
+      await expectVerticalShift(rows[index]!, before[index]!, 0);
+    }
+    // Continue across the entire target folder. Its members must inherit one
+    // parent shift, rather than adding a second transform on top of it.
+    await project(page, "q2").hover();
+    await expect(
+      page.locator('[id^="DndLiveRegion"]').filter({ hasText: "over droppable area" }),
+    ).toContainText(merged ? "q2" : "area q2");
+    for (const index of [0, 1]) await expectVerticalShift(rows[index]!, before[index]!, 0);
+    for (const index of [3, 4, 5])
+      await expectVerticalShift(rows[index]!, before[index]!, -activeHeight);
+    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+    await page.keyboard.press("Escape");
+    for (const [index, row] of rows.entries()) await expectVerticalShift(row, before[index]!, 0);
+    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+  });
+
+  for (const collapsed of [false, true]) {
+    test(`${merged ? "merged" : "local"} folder drag shifts ${collapsed ? "collapsed" : "expanded"} target as one block before release`, async ({
+      page,
+    }) => {
+      await page.goto(`/sidebar-drag?groups=1${merged ? "&merged=1" : ""}`);
+      for (const name of ["p2", "q", "q2"]) {
+        await page.getByRole("button", { name: `Collapse project ${name}`, exact: true }).click();
+      }
+      const source = page.locator('[data-project-folder="Source"]');
+      const target = page.locator('[data-project-folder="Target"]');
+      if (collapsed)
+        await target.getByRole("button", { name: "Collapse folder Target", exact: true }).click();
+      const sourceHeading = source.getByTitle("Collapse folder Source", { exact: true }).first();
+      const targetHeading = target
+        .getByTitle(`${collapsed ? "Expand" : "Collapse"} folder Target`, { exact: true })
+        .first();
+      const sourceBox = (await source.boundingBox())!;
+      const targetBox = (await target.boundingBox())!;
+      const sourceHandleBox = (await sourceHeading.boundingBox())!;
+      const targetHandleBox = (await targetHeading.boundingBox())!;
+      // The merged sidebar moves the active node with the pointer. Local
+      // uses a drag overlay and leaves the node at its sortable destination.
+      const sourceShift = merged
+        ? targetHandleBox.y +
+          targetHandleBox.height / 2 -
+          sourceHandleBox.y -
+          sourceHandleBox.height / 2
+        : targetBox.height;
+      const sourceMember = project(page, "p2");
+      const sourceMemberTop = (await sourceMember.boundingBox())!.y;
+      const members = collapsed ? [] : [project(page, "q"), project(page, "q2")];
+      const memberTops = await Promise.all(
+        members.map(async (row) => (await row.boundingBox())!.y),
+      );
+      await holdDrag(page, sourceHeading, targetHeading);
+      await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
+      await expectVerticalShift(source, sourceBox.y, sourceShift);
+      await expectVerticalShift(sourceMember, sourceMemberTop, sourceShift);
+      await expectVerticalShift(target, targetBox.y, -sourceBox.height);
+      for (const [index, member] of members.entries()) {
+        await expectVerticalShift(member, memberTops[index]!, -sourceBox.height);
+      }
+      await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+      await page.mouse.up();
+      await expect(page.getByTestId("sidebar-writes")).toContainText(
+        merged ? "update_portal_layout" : "arrange_projects",
+      );
+      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+        "data-project-folder",
+        "Target",
+      );
+      await page.reload();
+      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+        "data-project-folder",
+        "Target",
+      );
+    });
+  }
+}
 
 for (const merged of [false, true]) {
   test(`${merged ? "merged" : "local"} project header drop reorders expanded projects and survives reload`, async ({

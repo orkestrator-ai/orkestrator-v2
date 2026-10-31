@@ -52,7 +52,7 @@ import {
 describe("remote gateway", () => {
   test("metrics exposes the content-free compatibility path snapshot", async () => {
     const { info } = await startGateway();
-    compatibilityPathUsage.record("bridge-close.legacy-delete");
+    compatibilityPathUsage.record("bridge-close.upgrade-required");
     const expected = compatibilityPathUsage.snapshot().paths;
     const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
       headers: { authorization: `Bearer ${info.token}` },

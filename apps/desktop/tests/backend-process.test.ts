@@ -32,6 +32,7 @@ import {
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
+  desktopGatewayPort,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
   removeAgentTestHostKeychainLink,
@@ -129,6 +130,13 @@ const FRESH_CONNECTED_FRAME = `id: desktop1:0\ndata: ${JSON.stringify({
 })}\n\n`;
 
 describe("Electron backend process supervisor", () => {
+  test("only the installed app asks for the fixed gateway port", () => {
+    expect(desktopGatewayPort(false)).toBe(34121);
+    expect(desktopGatewayPort(true)).toBe(0);
+    expect(desktopGatewayPort(true, 45000)).toBe(45000);
+    expect(desktopGatewayPort(false, 0)).toBe(0);
+  });
+
   test("accepts a live SSH-agent socket through a stable symlink and rejects an unreachable socket", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-socket-"));
     directories.push(directory);
@@ -456,6 +464,27 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_DESKTOP_SUPERVISED: "1",
       ORKESTRATOR_GATEWAY_DISABLED: "0",
       ORKESTRATOR_VERSION: "2.4.9",
+    });
+  });
+
+  test("a source-checkout profile drops an inherited production NODE_ENV", () => {
+    // A launcher started from an agent tab of a production backend inherits
+    // NODE_ENV=production, which sends bridge lookup to the packaged layout.
+    for (const flavor of ["development", "agent-test"] as const) {
+      expect(
+        createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0", { flavor }),
+      ).not.toHaveProperty("NODE_ENV");
+      expect(
+        createBackendProcessEnvironment({ NODE_ENV: "test" }, "2.5.0", { flavor }),
+      ).toMatchObject({ NODE_ENV: "test" });
+    }
+    expect(
+      createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0", {
+        flavor: "production",
+      }),
+    ).toMatchObject({ NODE_ENV: "production" });
+    expect(createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0")).toMatchObject({
+      NODE_ENV: "production",
     });
   });
 

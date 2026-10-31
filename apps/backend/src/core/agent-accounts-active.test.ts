@@ -195,6 +195,28 @@ test("a Codex bridge on an added account keeps its session records with the host
   expect(claudeEnv.CODEX_BRIDGE_STATE_DIR).toBeUndefined();
 });
 
+test("a Claude bridge on an added account is told its CLI reads a copy of the bridge's file", async () => {
+  // The host login: the CLI and the bridge read the same file. A launch
+  // environment built for an earlier account must not leak through.
+  const hostEnv: NodeJS.ProcessEnv = { ORKESTRATOR_CLAUDE_ACCOUNT_HOME: "/stale" };
+  await applyActiveAgentAccountEnvironment(context, "claude", hostEnv);
+  expect(hostEnv.ORKESTRATOR_CLAUDE_ACCOUNT_HOME).toBeUndefined();
+
+  await activate("claude");
+  // The bridge reads HOME's `.claude.json`; here that is the copy's source.
+  const env: NodeJS.ProcessEnv = { HOME: process.env.CLAUDE_CONFIG_DIR };
+  await applyActiveAgentAccountEnvironment(context, "claude", env);
+  expect(env.CLAUDE_CONFIG_DIR).toBe(accountHome("claude"));
+  expect(env.ORKESTRATOR_CLAUDE_ACCOUNT_HOME).toBe(accountHome("claude"));
+
+  // The backend's own CLAUDE_CONFIG_DIR is not the file the bridge reads:
+  // the copy's extra servers are then the user's, not stale ones.
+  const elsewhere: NodeJS.ProcessEnv = { HOME: path.join(root, "home") };
+  await applyActiveAgentAccountEnvironment(context, "claude", elsewhere);
+  expect(elsewhere.CLAUDE_CONFIG_DIR).toBe(accountHome("claude"));
+  expect(elsewhere.ORKESTRATOR_CLAUDE_ACCOUNT_HOME).toBeUndefined();
+});
+
 describe("applyCoordinatorClaudeAccount", () => {
   test("hands over only a Keychain-backed access token with enough lifetime", async () => {
     await activate("claude");

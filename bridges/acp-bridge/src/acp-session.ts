@@ -124,6 +124,7 @@ import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_LIMITS,
 } from "@orkestrator/protocol/agent-interactions";
+import { isSupportedMcpForm } from "@orkestrator/protocol/mcp-elicitation-form";
 import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { applyCommandInventory } from "./acp-commands.js";
 import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
@@ -216,6 +217,17 @@ export async function resumeSession(
   if (existing) return resumeExistingSession(existing, signal, patch, policy, agentMcp);
   const acpSessionId = parseExternalSessionToken(selectedSessionId);
   if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
+  return adoptAcpSession(acpSessionId, signal, patch, policy, agentMcp);
+}
+
+/** Load a vendor session into a bridge session, joining a load already under way. */
+export async function adoptAcpSession(
+  acpSessionId: string,
+  signal?: AbortSignal,
+  patch?: AcpComposerPatch,
+  policy?: AcpSpawnOptions["policy"],
+  agentMcp?: AcpSpawnOptions["agentMcp"],
+): Promise<SessionState> {
   // Checked before the `sessions` scan below: an adoption registers its state
   // before `session/load` returns, so a racing caller would otherwise find a
   // still-dispatching session and be told 409 for work it should simply join.
@@ -1030,6 +1042,14 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
   };
   child.onInteraction = (requestId, method, params) => {
     if (provider !== "grok") return false;
+    if (method === "x.ai/mcp/elicit" || method === "_x.ai/mcp/elicit") {
+      if (state.child !== child || sessions.get(state.id) !== state || state.closing) {
+        child.respond(requestId, { outcome: "cancel" });
+        return true;
+      }
+      parkGrokElicitation(state, child, requestId, params);
+      return true;
+    }
     if (
       method !== "x.ai/exit_plan_mode" &&
       method !== "_x.ai/exit_plan_mode" &&
@@ -1058,6 +1078,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     state.error = error.message;
     // The agent is gone, so nothing will ever complete the tools it had open.
     reconcileStaleToolParts(state, true);
+    state.wakeRetryWait?.();
     state.revision += 1;
     schedulePersist();
   };
@@ -1206,7 +1227,13 @@ export function clearApprovals(state: SessionState): void {
 }
 
 export function clearInteractions(state: SessionState): void {
-  for (const interaction of state.interactions.values()) interaction.deadline.settle();
+  for (const interaction of Array.from(state.interactions.values())) {
+    if (interaction.kind === "mcp-form" || interaction.kind === "mcp-url") {
+      interaction.respond({ outcome: "cancel" });
+    } else {
+      interaction.deadline.settle();
+    }
+  }
   state.interactions.clear();
   syncPromptTurnClock(state);
 }
@@ -1391,6 +1418,142 @@ export function parkGrokInteraction(
       ),
     });
   }
+  state.revision += 1;
+  schedulePersist();
+}
+
+const MAX_MCP_SERVER_NAME_LENGTH = 256;
+
+/**
+ * Grok's `_x.ai/mcp/elicit`: an MCP server asking the user for input while one
+ * of its tools runs. Grok advertises `elicitation` to its MCP servers itself and
+ * forwards each request here; the answer is tagged by `outcome` (`accept` with
+ * form `content`, `decline`, `cancel`), and anything else reads as a cancel.
+ *
+ * A request the card cannot render faithfully is declined on the spot with a
+ * notice, as on Claude: arrays, nested objects and combinators must not be
+ * presented as a text input, and only a web link may be offered to open.
+ */
+export function parkGrokElicitation(
+  state: SessionState,
+  child: AcpProcess,
+  requestId: number,
+  params: JsonObject,
+): void {
+  const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId.trim() : "";
+  if (
+    params.sessionId !== state.acpSessionId ||
+    !toolCallId ||
+    toolCallId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+    (state.interactions.size >= AGENT_INTERACTION_LIMITS.maxPendingRequests &&
+      !state.interactions.has(toolCallId))
+  ) {
+    child.respond(requestId, { outcome: "cancel" });
+    return;
+  }
+  const serverName =
+    (typeof params.serverName === "string" ? params.serverName.trim() : "").slice(
+      0,
+      MAX_MCP_SERVER_NAME_LENGTH,
+    ) || "An MCP server";
+  const message = (typeof params.message === "string" ? params.message : "").slice(
+    0,
+    AGENT_INTERACTION_LIMITS.maxTextLength,
+  );
+  const url = params.mode === "url" ? elicitationWebLink(params.url) : undefined;
+  const schema =
+    params.mode === "form" && isObject(params.requestedSchema) ? params.requestedSchema : undefined;
+  const collectable =
+    url !== undefined ||
+    (schema !== undefined &&
+      Buffer.byteLength(JSON.stringify(schema)) <= AGENT_INTERACTION_LIMITS.maxTextLength &&
+      isSupportedMcpForm(schema));
+  if (!collectable) {
+    state.health.recordNotice({
+      method: "mcp/elicit",
+      severity: "warning",
+      message: `${serverName} asked for input this tab cannot collect, so it was declined.`,
+    });
+    state.revision += 1;
+    child.respond(requestId, { outcome: "decline" });
+    return;
+  }
+
+  state.interactions.get(toolCallId)?.respond({ outcome: "cancel" });
+  const requestedAt = Date.now();
+  const promptSequence = state.promptSequence;
+  const finish = (result: JsonObject) => {
+    const interaction = state.interactions.get(toolCallId);
+    if (!interaction) return;
+    interaction.deadline.settle();
+    state.interactions.delete(toolCallId);
+    syncPromptTurnClock(state);
+    child.respond(requestId, result);
+    state.revision += 1;
+    schedulePersist();
+  };
+  const expire = () => {
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
+    finish({ outcome: "cancel" });
+  };
+  const deadline = parkedDeadline(state, requestedAt, () => turnHoldLimit(state), expire);
+  state.interactions.set(
+    toolCallId,
+    url !== undefined
+      ? {
+          id: toolCallId,
+          kind: "mcp-url",
+          serverName,
+          message,
+          url,
+          requestedAt,
+          respond: finish,
+          deadline,
+        }
+      : {
+          id: toolCallId,
+          kind: "mcp-form",
+          serverName,
+          message,
+          schema: schema!,
+          requestedAt,
+          respond: finish,
+          deadline,
+        },
+  );
+  state.revision += 1;
+  schedulePersist();
+}
+
+function elicitationWebLink(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > AGENT_INTERACTION_LIMITS.maxTextLength) {
+    return undefined;
+  }
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "https:" || protocol === "http:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Grok's `interaction_resolved` for an elicitation still parked here: the MCP
+ * server gave up, so Grok has already dropped the request and the card would
+ * only offer an answer nothing is waiting for. Grok sends the same notice after
+ * the bridge answers, by which point the entry is gone.
+ */
+function withdrawResolvedElicitation(state: SessionState, params: JsonObject): void {
+  const update = isObject(params.update) ? params.update : undefined;
+  if (update?.sessionUpdate !== "interaction_resolved") return;
+  if (typeof update.tool_call_id !== "string") return;
+  const parked = state.interactions.get(update.tool_call_id);
+  if (parked?.kind !== "mcp-form" && parked?.kind !== "mcp-url") return;
+  parked.deadline.settle();
+  state.interactions.delete(parked.id);
+  syncPromptTurnClock(state);
   state.revision += 1;
   schedulePersist();
 }
@@ -2055,6 +2218,9 @@ async function applyComposerCalls(
 }
 
 export function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
+  if (method === "_x.ai/session_notification" || method === "x.ai/session_notification") {
+    withdrawResolvedElicitation(state, params);
+  }
   // ACP v1 cannot bind an interjection to a run safely. Keep the experimental
   // adapter inaccessible unless an operator explicitly accepts that risk.
   const interjection =

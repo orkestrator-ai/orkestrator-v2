@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { claudeJsonPath } from "./claude-home.js";
+import { claudeAccountJsonPath, claudeJsonPath } from "./claude-home.js";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import {
   nativeAgentAllowsUserMcpServer,
@@ -460,6 +460,48 @@ async function loadScopedMcpServers(
     project: projectLocal ? sourceDigest(projectLocal.digest) : "excluded",
   };
   return { configs, revision: { fingerprint: revisionFingerprint(sources), sources, scope } };
+}
+
+/**
+ * Servers an added account's CLI loads from its own `.claude.json` that the
+ * configuration the bridge read (`declared`) does not name.
+ *
+ * The backend copies the host's servers into that file when the bridge starts
+ * and whenever the MCP editor saves, so the copy can still carry a server
+ * removed from the host file some other way, or one added inside the account
+ * home. The CLI loads it for the settings sources it was launched with (`user`
+ * reads `mcpServers`, `local` reads `projects[cwd]`), and nothing the bridge
+ * passes inline names it, so it is stale from launch. Empty for the host login,
+ * and under `strictMcpConfig`, where the CLI reads no MCP file.
+ */
+export async function claudeAccountOnlyMcpServerNames(
+  cwd: string,
+  settingSources: readonly string[],
+  declared: ReadonlySet<string>,
+  strictMcpConfig = false,
+): Promise<string[]> {
+  const path = claudeAccountJsonPath();
+  if (!path || strictMcpConfig) return [];
+  const [user, local] = await Promise.all([
+    settingSources.includes("user")
+      ? readJsonSliceCached<ClaudeJsonConfig, McpServersConfig>(
+          path,
+          "mcpServers",
+          (config) => config?.mcpServers,
+        )
+      : undefined,
+    settingSources.includes("local")
+      ? readJsonSliceCached<ClaudeJsonConfig, McpServersConfig>(
+          path,
+          `projects:${cwd}:mcpServers`,
+          (config) => config?.projects?.[cwd]?.mcpServers,
+        )
+      : undefined,
+  ]);
+  const names = new Set([...Object.keys(user ?? {}), ...Object.keys(local ?? {})]);
+  return Array.from(names)
+    .filter((name) => !declared.has(name))
+    .sort();
 }
 
 function revisionFingerprint(sources: McpConfigRevision["sources"]): string {

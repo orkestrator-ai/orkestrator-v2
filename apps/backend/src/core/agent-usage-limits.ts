@@ -11,7 +11,7 @@ import {
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
-import { sharedPlanUsageCache } from "./plan-usage-cache.js";
+import type { PlanUsageCache } from "./plan-usage-cache.js";
 
 /**
  * Which agent tabs of a project stopped on a provider usage limit, and which
@@ -61,7 +61,7 @@ export interface UsageLimitSources {
     listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]>;
   };
   /** The active account's cached plan usage; never a provider read. */
-  planUsage?: (platform: PlanUsagePlatform) => PlanUsageSnapshot | undefined;
+  planUsage: (platform: PlanUsagePlatform) => PlanUsageSnapshot | undefined;
   now?: () => number;
 }
 
@@ -73,11 +73,16 @@ function tabIdFromLogicalKey(environmentId: string, logicalSessionKey: string): 
   return logicalSessionKey.slice(prefix.length) || null;
 }
 
-function cachedPlanUsage(platform: PlanUsagePlatform): PlanUsageSnapshot | undefined {
-  const current = sharedPlanUsageCache.peek(platform);
-  if (current) return current;
-  const last = sharedPlanUsageCache.lastOk(platform);
-  return last ? stalePlanUsageSnapshot(last, Date.now()) : undefined;
+/** `UsageLimitSources.planUsage` over a backend's cache. */
+export function cachedPlanUsage(
+  cache: Pick<PlanUsageCache, "peek" | "lastOk">,
+): UsageLimitSources["planUsage"] {
+  return (platform) => {
+    const current = cache.peek(platform);
+    if (current) return current;
+    const last = cache.lastOk(platform);
+    return last ? stalePlanUsageSnapshot(last, Date.now()) : undefined;
+  };
 }
 
 export async function readProjectUsageLimits(
@@ -111,7 +116,7 @@ export async function readProjectUsageLimits(
     });
   }
   limitedTabs.sort((left, right) => right.observedAt.localeCompare(left.observedAt));
-  const read = sources.planUsage ?? cachedPlanUsage;
+  const read = sources.planUsage;
   const activeAccounts: UsageLimitedAccount[] = [];
   for (const platform of PLAN_USAGE_PLATFORMS) {
     const snapshot = read(platform);

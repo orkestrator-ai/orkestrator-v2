@@ -76,6 +76,7 @@ export class PromptQueueStore {
       queueKey,
       environmentId,
       messages,
+      ...(previous?.jobReceipts ? { jobReceipts: previous.jobReceipts } : {}),
       ...(previous?.outstandingClaim ? { outstandingClaim: previous.outstandingClaim } : {}),
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
       ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),

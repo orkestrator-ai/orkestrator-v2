@@ -1,0 +1,11 @@
+{
+  "name": "orkestrator-cursor-bridge-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cursor/sdk": "1.2.0"
+  },
+  "patchedDependencies": {
+    "@cursor/sdk@1.2.0": "patches/@cursor%2Fsdk@1.2.0.patch"
+  }
+}

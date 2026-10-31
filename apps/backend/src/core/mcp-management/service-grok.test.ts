@@ -272,6 +272,44 @@ describe("Grok adapter", () => {
     expect(source(snapshot, "grok:project").trust).toBe("unknown");
   });
 
+  test("Grok: only the store shape Grok writes is a trust decision", async () => {
+    const canonical = realpathSync(fixture.worktree);
+    // Grok 1.0.70 reads each of these as untrusted, so none is a grant here.
+    for (const body of [
+      `[folders]\n"${canonical}" = true\n`,
+      `[folders]\n"${canonical}" = "trusted"\n`,
+      `[[folders]]\npath = "${canonical}"\ntrusted = true\n`,
+      `[folders."${canonical}"]\ntrust = true\n`,
+      `[folders."${canonical}"]\ntrusted = "trusted"\n`,
+    ]) {
+      fixture.write("home/.grok/trusted_folders.toml", body);
+      expect(source(await grokSnapshot(), "grok:project").trust).toBe("unknown");
+    }
+  });
+
+  test("Grok: the project file and Claude's private entry follow folder trust", async () => {
+    const canonical = realpathSync(fixture.worktree);
+    fixture.write(
+      "home/.claude.json",
+      JSON.stringify({ projects: { [fixture.worktree]: { mcpServers: { l: { command: "x" } } } } }),
+    );
+    fixture.write("home/.grok/requirements.toml", `[mcp_servers.p]\ncommand = "org"\n`);
+    fixture.write("worktree/.grok/config.toml", `[mcp_servers.p]\ncommand = "project"\n`);
+    fixture.write("home/.grok/trusted_folders.toml", `[folders."${canonical}"]\ntrusted = false\n`);
+    let snapshot = await grokSnapshot();
+    const local = entry(snapshot, "grok:compat-claude-local", "l");
+    expect(local.status).toBe("policy-excluded");
+    expect(local.statusReason).toContain("declined to trust");
+    expect(source(snapshot, "grok:compat-claude-local").trust).toBe("excluded");
+
+    // requirements.toml outranks the project file even once it is trusted.
+    fixture.write("home/.grok/trusted_folders.toml", `[folders."${canonical}"]\ntrusted = true\n`);
+    snapshot = await grokSnapshot();
+    expect(entry(snapshot, "grok:compat-claude-local", "l").status).toBe("effective");
+    expect(snapshot.effective.p).toBe(entry(snapshot, "grok:requirements-user", "p").entryId);
+    expect(entry(snapshot, "grok:project", "p").status).toBe("shadowed");
+  });
+
   test("Grok: a linked worktree takes its main checkout's trust", async () => {
     fixture.write("main/.git/worktrees/wt/commondir", "../..\n");
     fixture.write(

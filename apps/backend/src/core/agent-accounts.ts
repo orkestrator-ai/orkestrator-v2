@@ -48,8 +48,8 @@ import {
   type AgentAccountLoginHandle,
   type SpawnLike,
 } from "./agent-accounts-login.js";
-import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
-import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
+import type { AgentAccountLogin } from "./agent-accounts-runtime.js";
+import { readAgentAccountPlanUsage, type PlanUsageRead } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 import {
@@ -65,21 +65,6 @@ import {
 const HOST_ACCOUNT_LABEL = "Host login";
 const USAGE_TTL_MS = 120_000;
 const USAGE_ERROR_TTL_MS = 10_000;
-let accountMutation = Promise.resolve();
-
-async function withAccountMutation<T>(run: () => Promise<T>): Promise<T> {
-  const previous = accountMutation;
-  let release: () => void = () => undefined;
-  accountMutation = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await run();
-  } finally {
-    release();
-  }
-}
 
 /** Tell every view of this machine's accounts to re-read them (`AGENT_ACCOUNTS_CHANGED_EVENT`). */
 function announceAccountsChanged(context: CommandContext, platform: AgentAccountPlatform): void {
@@ -191,8 +176,9 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
-  const changed = await withAccountMutation(async () => {
-    const outgoing = sharedPlanUsageCache.lastOk(platform);
+  const accounts = context.runtime.accounts;
+  const changed = await accounts.withMutation(async () => {
+    const outgoing = accounts.planUsage.cache.lastOk(platform);
     const previous = await context.storage.agentAccounts.mutateAgentAccounts<string | undefined>(
       (store) => {
         const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
@@ -212,17 +198,12 @@ export async function setActiveAgentAccount(
     // Readers take this same lock before selecting an account and before
     // publishing a result. No reader can observe a half-completed switch.
     bumpUsageGeneration(context, platform);
-    readPlanUsage.invalidate(platform);
-    setActivePlanUsageAccount(platform, accountId);
-    usageCache.delete(usageKey(context, platform, accountId));
-    if (previous) usageCache.delete(usageKey(context, platform, previous));
+    accounts.readPlanUsage.invalidate(platform);
+    accounts.planUsage.setActiveAccount(platform, accountId);
+    accounts.forgetUsage(usageKey(context, platform, accountId));
+    if (previous) accounts.forgetUsage(usageKey(context, platform, previous));
     if (previous && outgoing) {
-      await context.runtime.accounts.lastUsage.remember(
-        accountsRoot(context),
-        platform,
-        previous,
-        outgoing,
-      );
+      await accounts.lastUsage.remember(accountsRoot(context), platform, previous, outgoing);
     }
     return previous !== undefined;
   });
@@ -283,7 +264,7 @@ export async function removeAgentAccount(
   if (isAgentAccountInUseByLocalBridge(context, platform, accountId)) {
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
-  return withAccountMutation(async () => {
+  return context.runtime.accounts.withMutation(async () => {
     if (context.runtime.terminals.isAccountHomeInUse(homeFor(context, platform, accountId))) {
       throw new Error(
         "A terminal is still running on this account. Close it before removing the account.",
@@ -308,7 +289,7 @@ export async function removeAgentAccount(
       return { store: { ...store, accounts }, result: undefined };
     });
     bumpUsageGeneration(context, platform);
-    usageCache.delete(usageKey(context, platform, accountId));
+    context.runtime.accounts.forgetUsage(usageKey(context, platform, accountId));
     await context.runtime.accounts.lastUsage.forget(accountsRoot(context), platform, accountId);
     announceAccountsChanged(context, platform);
     return listAgentAccounts(context);
@@ -318,31 +299,8 @@ export async function removeAgentAccount(
 // ---------------------------------------------------------------------------
 // Sign-in
 
-interface ActiveLogin {
-  operationId: string;
-  completedAt?: string;
-  temporaryHome?: string;
-  committing?: boolean;
-  platform: AgentAccountPlatform;
-  /** The new account's id, or for `reauthenticate` the active account's. */
-  accountId: string;
-  mode: "add" | "reauthenticate";
-  state: "pending" | "succeeded" | "failed";
-  handle?: AgentAccountLoginHandle;
-  codeSubmitted?: boolean;
-  cancelled?: boolean;
-  error?: string;
-}
-
-/**
- * The single in-flight sign-in. One at a time across platforms: both CLIs
- * are human-paced browser flows and a second one would only confuse which
- * tab belongs to which account.
- */
-let activeLogin: ActiveLogin | undefined;
-
-function loginProgress(): AgentAccountLoginProgress {
-  const entry = activeLogin;
+function loginProgress(context: CommandContext): AgentAccountLoginProgress {
+  const entry = context.runtime.accounts.activeLogin();
   if (!entry) return { state: "idle" };
   return {
     state: entry.state,
@@ -364,8 +322,8 @@ function loginProgress(): AgentAccountLoginProgress {
   };
 }
 
-export function agentAccountLoginProgress(): AgentAccountLoginProgress {
-  return loginProgress();
+export function agentAccountLoginProgress(context: CommandContext): AgentAccountLoginProgress {
+  return loginProgress(context);
 }
 
 function errorMessage(error: unknown): string {
@@ -376,7 +334,7 @@ function errorMessage(error: unknown): string {
  * Remove the private directory created by an unsuccessful sign-in. Renewals
  * write into a temporary directory and never remove the existing account.
  */
-async function discardNewAccount(context: CommandContext, entry: ActiveLogin): Promise<void> {
+async function discardNewAccount(context: CommandContext, entry: AgentAccountLogin): Promise<void> {
   if (entry.mode === "reauthenticate") {
     if (entry.temporaryHome) await removeTemporaryClaudeLogin(entry.temporaryHome);
     return;
@@ -387,7 +345,7 @@ async function discardNewAccount(context: CommandContext, entry: ActiveLogin): P
 /** Publish a rejected sign-in only after cleanup and its final error have settled. */
 async function failLogin(
   context: CommandContext,
-  entry: ActiveLogin,
+  entry: AgentAccountLogin,
   error: unknown,
 ): Promise<string> {
   let message = errorMessage(error);
@@ -403,7 +361,7 @@ async function failLogin(
 }
 
 /** Private directory the CLI writes into, including a temporary home for renewals. */
-function loginHome(context: CommandContext, entry: ActiveLogin): string | undefined {
+function loginHome(context: CommandContext, entry: AgentAccountLogin): string | undefined {
   if (entry.temporaryHome) return entry.temporaryHome;
   return entry.accountId === DEFAULT_AGENT_ACCOUNT_ID
     ? undefined
@@ -414,9 +372,12 @@ function loginHome(context: CommandContext, entry: ActiveLogin): string | undefi
  * A renewed login: keep the account, refresh what is derived from it, and make
  * every running agent that may hold the previous login pick up the new one.
  */
-async function finishReauthentication(context: CommandContext, entry: ActiveLogin): Promise<void> {
+async function finishReauthentication(
+  context: CommandContext,
+  entry: AgentAccountLogin,
+): Promise<void> {
   const { platform, accountId } = entry;
-  await withAccountMutation(async () => {
+  await context.runtime.accounts.withMutation(async () => {
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
     const state = await readLoginState(context, platform, entry.temporaryHome);
     if (!state.signedIn) throw new Error("The sign-in finished but no login was saved.");
@@ -478,8 +439,8 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
       },
     );
     bumpUsageGeneration(context, platform);
-    usageCache.delete(usageKey(context, platform, accountId));
-    readPlanUsage.invalidate(platform);
+    context.runtime.accounts.forgetUsage(usageKey(context, platform, accountId));
+    context.runtime.accounts.readPlanUsage.invalidate(platform);
     // A local slot can be renewed as a different provider identity. Its old
     // quota must not survive that replacement, including across a restart.
     if (previousIdentity.identityKey !== state.identityKey) {
@@ -498,7 +459,7 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
     );
 }
 
-async function finishLogin(context: CommandContext, entry: ActiveLogin): Promise<void> {
+async function finishLogin(context: CommandContext, entry: AgentAccountLogin): Promise<void> {
   const { platform, accountId } = entry;
   try {
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
@@ -567,21 +528,24 @@ export async function startAgentAccountLogin(
   options: { spawnImpl?: SpawnLike; executable?: string; reauthenticate?: boolean } = {},
 ): Promise<AgentAccountLoginProgress> {
   const mode = options.reauthenticate ? "reauthenticate" : "add";
+  const activeLogin = context.runtime.accounts.activeLogin();
   if (activeLogin?.state === "pending") {
-    if (activeLogin.platform === platform && activeLogin.mode === mode) return loginProgress();
+    if (activeLogin.platform === platform && activeLogin.mode === mode) {
+      return loginProgress(context);
+    }
     throw new Error("Finish or cancel the other sign-in first.");
   }
   if (mode === "reauthenticate" && platform !== "claude") {
     throw new Error("Signing in again is only available for Claude.");
   }
-  const entry: ActiveLogin = {
+  const entry: AgentAccountLogin = {
     operationId: randomUUID(),
     platform,
     mode,
     accountId: mode === "add" ? randomUUID() : DEFAULT_AGENT_ACCOUNT_ID,
     state: "pending",
   };
-  activeLogin = entry;
+  context.runtime.accounts.claimLogin(entry);
   try {
     const store = await context.storage.agentAccounts.loadAgentAccounts();
     if (mode === "reauthenticate") {
@@ -653,65 +617,54 @@ export async function startAgentAccountLogin(
       entry.completedAt = new Date().toISOString();
       entry.error = errorMessage(error);
     });
-  return loginProgress();
+  return loginProgress(context);
 }
 
-export function submitAgentAccountLoginCode(code: string): AgentAccountLoginProgress {
-  const entry = activeLogin;
+export function submitAgentAccountLoginCode(
+  context: CommandContext,
+  code: string,
+): AgentAccountLoginProgress {
+  const entry = context.runtime.accounts.activeLogin();
   if (entry?.state !== "pending" || !entry.handle?.needsCode) {
     throw new Error("No sign-in is waiting for a code.");
   }
   entry.handle.submitCode(code);
   entry.codeSubmitted = true;
-  return loginProgress();
+  return loginProgress(context);
 }
 
 /** Cancel a pending sign-in, or dismiss a finished one. */
-export function cancelAgentAccountLogin(operationId?: string): AgentAccountLoginProgress {
-  const entry = activeLogin;
-  if (operationId && entry?.operationId !== operationId) return loginProgress();
-  if (entry?.committing && entry.state === "pending") return loginProgress();
-  activeLogin = undefined;
+export function cancelAgentAccountLogin(
+  context: CommandContext,
+  operationId?: string,
+): AgentAccountLoginProgress {
+  const entry = context.runtime.accounts.activeLogin();
+  if (operationId && entry?.operationId !== operationId) return loginProgress(context);
+  if (entry?.committing && entry.state === "pending") return loginProgress(context);
+  context.runtime.accounts.clearLogin();
   if (entry?.state === "pending") {
     entry.cancelled = true;
     entry.handle?.cancel();
   }
-  return loginProgress();
-}
-
-/** Test seam: forget any sign-in without touching its process. */
-export function resetAgentAccountLoginForTests(): void {
-  activeLogin = undefined;
-  usageCache.clear();
-  usageGenerations.clear();
+  return loginProgress(context);
 }
 
 // ---------------------------------------------------------------------------
 // Usage
 
-const usageCache = new Map<
-  string,
-  { expiresAt: number; rateLimited?: boolean; snapshot: PlanUsageSnapshot }
->();
-
 // Generation changes fence network work that outlives a switch, renewal or
 // removal. The mutation lock also covers persistence so deletion cannot race
 // a completed read's check-and-write.
-const usageGenerations = new Map<string, number>();
-
 function usageKey(context: CommandContext, platform: AgentAccountPlatform, id: string): string {
   return `${accountsRoot(context)}:${platform}:${id}`;
 }
 
 function usageGeneration(context: CommandContext, platform: AgentAccountPlatform): number {
-  return usageGenerations.get(usageKey(context, platform, "generation")) ?? 0;
+  return context.runtime.accounts.usageGeneration(usageKey(context, platform, "generation"));
 }
 
 function bumpUsageGeneration(context: CommandContext, platform: AgentAccountPlatform): void {
-  usageGenerations.set(
-    usageKey(context, platform, "generation"),
-    usageGeneration(context, platform) + 1,
-  );
+  context.runtime.accounts.bumpUsageGeneration(usageKey(context, platform, "generation"));
 }
 
 /**
@@ -728,21 +681,22 @@ export async function readAgentAccountUsage(
   context: CommandContext,
   platform: AgentAccountPlatform,
   accountId: string,
-  options: { force?: boolean; reader: PlanUsageReader; now?: () => number },
+  options: { force?: boolean; reader: PlanUsageRead; now?: () => number },
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
-  const { store, generation } = await withAccountMutation(async () => ({
+  const accounts = context.runtime.accounts;
+  const { store, generation } = await accounts.withMutation(async () => ({
     store: await context.storage.agentAccounts.loadAgentAccounts(),
     generation: usageGeneration(context, platform),
   }));
   const now = options.now ?? Date.now;
   const root = accountsRoot(context);
   const publish = (snapshot: PlanUsageSnapshot, retryAfterMs?: number, cache = false) =>
-    withAccountMutation(async () => {
+    accounts.withMutation(async () => {
       if (usageGeneration(context, platform) !== generation) {
         throw new Error("The account changed while reading plan usage. Try again.");
       }
-      const result = await context.runtime.accounts.lastUsage.withLastKnown(
+      const result = await accounts.lastUsage.withLastKnown(
         root,
         platform,
         accountId,
@@ -750,7 +704,7 @@ export async function readAgentAccountUsage(
         now(),
       );
       if (cache) {
-        usageCache.set(usageKey(context, platform, accountId), {
+        accounts.cacheUsage(usageKey(context, platform, accountId), {
           expiresAt:
             now() +
             (retryAfterMs ??
@@ -769,7 +723,7 @@ export async function readAgentAccountUsage(
   if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
   const key = usageKey(context, platform, accountId);
-  const cached = usageCache.get(key);
+  const cached = accounts.cachedUsage(key);
   // A forced refresh still waits out a 429: each retry spends the allowance.
   if (cached && cached.expiresAt > now() && (!options.force || cached.rateLimited)) {
     return publish(cached.snapshot);

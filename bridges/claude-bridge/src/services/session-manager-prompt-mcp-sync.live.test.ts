@@ -86,6 +86,19 @@ test("a running Claude CLI unloads removed and renamed MCP servers", async () =>
     started: ["alpha", "alpha"],
     initialized: ["alpha", "alpha"],
   });
+  // An added Claude account (0039 item 12): the CLI reads the account's copy
+  // (`extra` runs, the host's SSE entry never appears), the bridge reports
+  // the copy-only server stale from launch, and host edits reach the running
+  // CLI on the next turn: `added` loads, and `keep` unloads although the
+  // account's copy still names it.
+  expect(result.account).toEqual({
+    servers: ["added", "extra"],
+    tools: ["mcp__added__probe_added", "mcp__extra__probe_extra"],
+    stale: ["extra"],
+    alive: ["added", "extra"],
+    started: ["added", "extra", "keep"],
+    initialized: ["added", "extra", "keep"],
+  });
   // A server only the CLI's own settings load knew about cannot be
   // unloaded in place, so the sync reports it for refusal instead.
   expect(result.fileOnly).toEqual({

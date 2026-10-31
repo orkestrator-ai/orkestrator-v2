@@ -16,6 +16,33 @@ import {
   validateServerArguments,
 } from "./server-flags.js";
 
+describe("default gateway port", () => {
+  const main = defaultDataDir(process.platform, {});
+
+  test("only the default data directory's backend keeps the fixed port", () => {
+    expect(parseOptions([], {}).port).toBeUndefined();
+    expect(parseOptions(["--data-dir", main], {}).port).toBeUndefined();
+    expect(parseOptions([], { ORKESTRATOR_DATA_DIR: main }).port).toBeUndefined();
+    expect(parseOptions(["--data-dir", "/var/tmp/ork-b"], {}).port).toBe(0);
+    expect(parseOptions([], { ORKESTRATOR_DATA_DIR: "/var/tmp/ork-b" }).port).toBe(0);
+    expect(parseOptions(["--data-dir", `${main}-dev`], {}).port).toBe(0);
+  });
+
+  test("the test runner and agent-test backends never default to it", () => {
+    expect(parseOptions([], { NODE_ENV: "test" }).port).toBe(0);
+    expect(parseOptions(["--runtime-flavor", "agent-test"], {}).port).toBe(0);
+    expect(parseOptions([], { ORKESTRATOR_RUNTIME_FLAVOR: "agent-test" }).port).toBe(0);
+  });
+
+  test("an explicit port wins on any data directory", () => {
+    const other = ["--data-dir", "/var/tmp/ork-b"];
+    expect(parseOptions([...other, "--port", "40000"], {}).port).toBe(40_000);
+    expect(parseOptions(other, { ORKESTRATOR_GATEWAY_PORT: "40001" }).port).toBe(40_001);
+    expect(parseOptions(["--port", "40002"], { NODE_ENV: "test" }).port).toBe(40_002);
+    expect(parseOptions(["--port", "0"], {}).port).toBe(0);
+  });
+});
+
 describe("standalone backend options", () => {
   test("uses platform-specific default data directories", () => {
     expect(defaultDataDir("darwin", {}, "/home/test")).toBe(

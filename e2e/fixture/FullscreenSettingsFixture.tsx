@@ -1,6 +1,10 @@
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { useState } from "react";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
+import {
+  SettingsPageLayout,
+  SettingsRow,
+} from "../../apps/web/src/components/settings/SettingsPageLayout";
 import { SettingsMachineStrip } from "../../apps/web/src/components/settings/SettingsMachineStrip";
 
 // Enough sections to overflow a short desktop window, without depending on any
@@ -21,6 +25,7 @@ const machines = [
   { nodeId: "bk_laptop", name: "Laptop", colorToken: "rose", connected: false },
 ];
 const withSearch = new URLSearchParams(window.location.search).has("search-ui");
+const withPageLayout = new URLSearchParams(window.location.search).has("page-layout");
 const withMachines = new URLSearchParams(window.location.search).has("machines");
 
 export function FullscreenSettingsFixture() {
@@ -74,15 +79,56 @@ export function FullscreenSettingsFixture() {
           </button>
         }
       >
-        {(section) => (
-          <div className="h-[1200px]" data-testid="settings-content">
-            {withSearch && <input aria-label="Settings value" />}
-            Content for {section}
-            {withMachines
-              ? ` on ${section === "section-2" ? "Studio" : (machines.find((m) => m.nodeId === machine)?.name ?? "")}`
-              : null}
-          </div>
-        )}
+        {(section) =>
+          withPageLayout ? (
+            <div className="space-y-8">
+              {(["default", "wide"] as const).map((width) => (
+                <SettingsPageLayout
+                  key={width}
+                  width={width}
+                  data-testid={`page-${width}`}
+                  title={
+                    width === "default"
+                      ? menuItems.find((item) => item.id === section)?.label
+                      : "Wide page"
+                  }
+                  description="A settings page with actions and a control row."
+                  actions={
+                    <>
+                      <button type="button" className="w-24">
+                        First action
+                      </button>
+                      <button type="button" className="w-24">
+                        Second action
+                      </button>
+                    </>
+                  }
+                >
+                  <div className="rounded-lg border">
+                    <SettingsRow
+                      label={`${width} control`}
+                      htmlFor={`control-${width}`}
+                      description="A description that stays with the label."
+                    >
+                      <input id={`control-${width}`} className="w-44" />
+                    </SettingsRow>
+                  </div>
+                </SettingsPageLayout>
+              ))}
+            </div>
+          ) : (
+            <div className="h-[1200px]">
+              <SettingsPageLayout title={menuItems.find((item) => item.id === section)?.label} />
+              {withSearch && <input aria-label="Settings value" />}
+              <div data-testid="settings-content">
+                Content for {section}
+                {withMachines
+                  ? ` on ${section === "section-2" ? "Studio" : (machines.find((m) => m.nodeId === machine)?.name ?? "")}`
+                  : null}
+              </div>
+            </div>
+          )
+        }
       </FullscreenSettingsLayout>
     </>
   );

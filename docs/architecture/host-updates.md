@@ -245,9 +245,13 @@ the service:
    boot (`readStartupFailure` and `startupLogExcerpt`).
 
 A service for a second data directory on a computer that already runs
-Orkestrator gets its own unit, but it still shares the user's HOME and binds
-the default Control MCP port (34122) whenever that port is free. See
-[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md).
+Orkestrator gets its own unit, but it still shares the user's HOME. It leaves
+the fixed gateway port (34121) and Control MCP port (34122) to the default data
+directory's backend and takes free ports unless told otherwise; see
+[Default gateway port](remote-gateway.md#default-gateway-port),
+[0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md)
+and
+[0996-second-backend-takes-default-gateway-port.md](../todo/cross-cutting/0996-second-backend-takes-default-gateway-port.md).
 
 `service status` reports:
 - the unit, and whether it is running
@@ -283,7 +287,7 @@ The launcher works like this:
 | Task | What it does | Takes effect |
 | --- | --- | --- |
 | `toolchain-repair` | Reinstalls missing or corrupt pinned binaries through the shared manager, under its install lock. A desktop-hosted backend leaves `bin/current` alone; a standalone one moves it. | At once when the set is unchanged. `restartRequired` when the enabled platforms changed. |
-| `image-update` | Pulls `ghcr.io/orkestrator-ai/orkestrator-v2:<backend version>`, requires `compatible`, and tags it as the configured image. Lists environments whose container runs another image. Also started (or joined) automatically by `ensureEnvironmentImage` when a container create finds the default image missing, before it takes an admission slot; a custom `--docker-image` is never pulled. The Docker dialog's image panel offers the same download. | New environments. Rebuild existing ones from their environment menu. |
+| `image-update` | Pulls `ghcr.io/orkestrator-ai/orkestrator-v2:<backend version>`, requires `compatible`, and tags it as the configured image. Lists environments whose container runs another image. Also started (or joined) automatically by `ensureEnvironmentImage` when a container create finds the default image missing, before it takes an admission slot; a custom `--docker-image` is never pulled. The image panel in Settings → Docker offers the same download. | New environments. Rebuild existing ones from their environment menu. |
 | `gh-update` | `latest`: downloads the newest `gh` release, checks it against GitHub's published `gh_<v>_checksums.txt`, probes `--version`, and installs it under `toolchains/gh-latest/<v>`. `pinned`: goes back to the managed pin. Unqualified. | At once (`setManagedGitHubCli`). Re-applied at startup from the stored channel. |
 
 - **One task of each kind runs at a time.** A task that a restart cuts short is

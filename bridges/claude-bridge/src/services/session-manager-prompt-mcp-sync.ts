@@ -22,6 +22,11 @@ import { sessionOperationError } from "./session-manager-core.js";
 // (an SSE entry), is not reported as unloaded: its tools are refused by a
 // PreToolUse hook until the runtime ends, and the recorded revision names it,
 // so the apply view reports a restart rather than `applied`.
+//
+// On an added Claude account the CLI reads the account's own `.claude.json`,
+// a copy of the host file the bridge reads. A server only that copy names is
+// loaded at launch and never passed inline, so it starts out stale
+// (`claudeAccountOnlyMcpServerNames`).
 
 /** What a runtime's CLI was given, and still runs, as far as MCP goes. */
 export interface ClaudeRuntimeMcp {
@@ -33,13 +38,26 @@ export interface ClaudeRuntimeMcp {
   declared: Set<string>;
   /** Names the configuration no longer declares that the CLI still runs. */
   stale: Set<string>;
+  /** The stale names the CLI loaded only from an added account's own `.claude.json`. */
+  accountOnly: Set<string>;
 }
 
 export function createClaudeRuntimeMcp(
   servers: SdkMcpServersConfig,
   declared: Iterable<string>,
+  accountOnly: Iterable<string> = [],
 ): ClaudeRuntimeMcp {
-  return { servers, claimed: false, declared: new Set(declared), stale: new Set() };
+  const declaredNames = new Set(declared);
+  const loadedOnlyByAccount = new Set(
+    Array.from(accountOnly).filter((name) => !declaredNames.has(name)),
+  );
+  return {
+    servers,
+    claimed: false,
+    declared: declaredNames,
+    stale: new Set(loadedOnlyByAccount),
+    accountOnly: loadedOnlyByAccount,
+  };
 }
 
 /** The part of a runtime the sync reads and updates. */
@@ -159,7 +177,10 @@ export async function syncClaudeRuntimeMcp(
         )
       : !removed?.has(name);
   for (const name of Array.from(mcp.stale)) {
-    if (next.names.has(name) || !stillRuns(name)) mcp.stale.delete(name);
+    if (next.names.has(name) || !stillRuns(name)) {
+      mcp.stale.delete(name);
+      mcp.accountOnly.delete(name);
+    }
   }
   for (const name of undeclared) if (stillRuns(name)) mcp.stale.add(name);
   mcp.declared = new Set(next.names);
@@ -221,7 +242,9 @@ export function createStaleMcpServerHook(mcp: ClaudeRuntimeMcp): HookCallback {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `The MCP server "${server}" was removed from this session's configuration, so ${input.tool_name} is not available. This Claude process loaded it at launch and cannot unload it; it is gone once the process closes after an idle period, or when the session is stopped.`,
+        permissionDecisionReason: mcp.accountOnly.has(server)
+          ? `The MCP server "${server}" is only in this Claude account's own configuration, not in the user's Claude configuration, so ${input.tool_name} is not available. Orkestrator replaces an account's MCP servers with the user's when the account's Claude starts; add the server to the user's Claude configuration to use it.`
+          : `The MCP server "${server}" was removed from this session's configuration, so ${input.tool_name} is not available. This Claude process loaded it at launch and cannot unload it; it is gone once the process closes after an idle period, or when the session is stopped.`,
       },
     };
   };

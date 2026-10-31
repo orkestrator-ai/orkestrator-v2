@@ -123,7 +123,10 @@ describe("fields a transport cannot carry are refused, never silently dropped", 
       url: { kind: "set", value: "https://now-remote.example/mcp" },
     });
     const parsed = Bun.TOML.parse(fixture.read("home/.codex/config.toml")) as any;
-    expect(parsed.mcp_servers.local).toEqual({ url: "https://now-remote.example/mcp" });
+    expect(parsed.mcp_servers.local).toEqual({
+      url: "https://now-remote.example/mcp",
+      enabled: true,
+    });
   });
 
   test("Codex requires confirmation and removes preserved native keys on switch", async () => {

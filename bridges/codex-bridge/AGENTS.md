@@ -98,14 +98,15 @@ reported (`getAccountLoginKind`); a kind that arrives after the refusal
 rewords it in place through `account.loginKind`, keeping its occurrence.
 
 A turn the model refused for capacity (`codexErrorInfo: "serverOverloaded"`,
-"Selected model is at capacity") is not failed: the bridge continues it
+"Selected model is at capacity", or `"policyCapacityUnavailable"`, its 503 for
+policy-restricted capacity) is not failed: the bridge continues it
 (`app-server-runtime-capacity-retry.ts`, policy in `sessions/capacity-retry.ts`)
 with backoff and jitter, as the same `TurnAccumulator` under the same request
 id, and shows a `retry` card instead of the refusal line. Keep the session
 `running` and the journal record `accepted` from the refusal until the last
 attempt ends: unattended workflows fail on the first status read that says
-`error`. Never widen it to another code (usage and rate limits, login
-refusals and bad requests must fail at once), never send the user's prompt
+`error`. Never widen it to a code that is not capacity (usage and rate limits,
+flex capacity, login refusals and bad requests must fail at once), never send the user's prompt
 again, and never interrupt the refused turn on Stop — it has already ended.
 A continuation's user message starts with `[Orkestrator automatic retry]`;
 replay shows it as the card, never as a message the user typed. See

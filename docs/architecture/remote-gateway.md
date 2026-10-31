@@ -14,7 +14,8 @@ running Orkestrator.
 
 - `mise run dev` starts Electron, which supervises one backend. Electron uses
   an ephemeral loopback control listener. Authenticated browsers use a
-  separate Tailscale listener on port `34121` (or a local-only fallback).
+  separate browser listener on an OS-assigned free port; the bound URL is
+  logged (with a local-only fallback when Tailscale is unavailable).
   Losing Tailscale or a browser-port conflict does not take down the desktop
   control channel.
 - `mise run start:web` builds and starts the backend without Electron. The
@@ -110,7 +111,7 @@ equivalent environment variable unless noted.
 | Flag | Environment | Purpose |
 | --- | --- | --- |
 | `--host` | | Bind address. Default is the first Tailscale address. |
-| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121`. |
+| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121` for the default data directory's backend, and a free port for any other. See [Default gateway port](#default-gateway-port). |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
 | `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
@@ -127,6 +128,48 @@ Local-only development bind:
 ```bash
 bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
+
+### Default gateway port
+
+Only the backend of the platform default data directory (`isDefaultDataDir`, the
+same rule as the [Control MCP port](control-mcp.md)) defaults to `34121`, because
+remote machines reach it there. With no `--port` or `ORKESTRATOR_GATEWAY_PORT`,
+every other data directory and any `--runtime-flavor agent-test` backend takes a
+free port that changes on each start (`implicitGatewayPort` in
+`apps/backend/src/options.ts`). `mise run dev` asks for a free port too
+(`desktopGatewayPort`). So a second backend cannot move the main install's address
+by starting first. An explicit port always wins, on any data directory.
+
+A second backend that remote clients reach needs a stable address, so give it
+`--port`. The bound URLs are in `backend-instance.json`, and `orkestrator service
+install` prints them. The questions in `service install` offer a port for the
+tailnet address.
+
+`service install --data-dir <other> -- --tailscale-serve` without `--port`
+writes a free port chosen at install and `--strict-gateway-port`. Reinstalling
+keeps a valid nonreserved pin; saved zero, fixed or invalid ports are replaced.
+If the pin becomes occupied, startup fails without publishing another target.
+
+Standalone Serve also records ownership atomically in
+`<data-dir>/standalone-serve.json` before publishing its root proxy. Older units
+and hand-started backends can therefore recover their owned root when a free
+port or fallback changes across restarts. On the first update, ownership is
+recovered from the last successful `backend-instance.json` (the loopback primary
+URL and HTTPS browser URL). Only the matching tailnet-only root is replaced;
+other paths survive, and foreign roots and Funnel configurations remain
+conflicts. Keep these files when repairing a service. An old service with no
+usable ownership evidence needs host-side inspection of its Serve configuration
+before removing its stale root; reinstalling with a port alone cannot prove
+ownership of an unknown target.
+
+If a non-strict port is taken, the gateway tries the next 20 ports and then a
+free one. The walk skips `34121`, `34122`, `ORKESTRATOR_CONTROL_MCP_PORT` and the
+loopback client port. Every OS-assigned browser port is also checked against
+these reservations and released and retried if reserved. A port asked for by
+name is still tried first.
+
+See the [pending release migration note](../development/releasing.md#pending-release-note-gateway-port-migration)
+for existing services that remote clients reach directly over the tailnet.
 
 ## Compression and terminal transport
 
@@ -278,7 +321,7 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   before losing it counts as a first failure again. A server that accepts
   connections and drops them at once keeps backing off.
 - The main stream resumes from its cursor. The gateway's 25 s keepalive also
-  advances the cursor: before each keepalive comment it flushes a cursor frame
+  advances the cursor: before each keepalive it flushes a cursor frame
   past any events a scoped stream filtered out, so a quiet stream reconnects
   from a current position instead of replaying the filtered range. Terminal
   output has no replay, so
@@ -293,8 +336,29 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   mid-wait. Nothing happens when no stream is waiting.
 - None of these early retries resets the ladder. One that fails waits for
   the next step.
-- The browser keeps retrying an `EventSource` itself until it gives up
-  (`CLOSED`). The ladder only takes over from there.
+- A same-origin `EventSource` is closed on its first error and rebuilt on the
+  ladder from the current cursor. Left alone, a browser retries it by itself on
+  a fixed 3 s timer for the whole outage, in step with every other tab the same
+  outage dropped. The gateway still accepts `Last-Event-ID`.
+- A link can drop with no answer at all (a tailnet peer that vanished), and then
+  an open stream never errors: its socket waits on TCP for many minutes. So
+  every client watches for silence. A main stream that shows no sign of life for
+  60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`, two 25 s keepalives and some slack)
+  counts as lost, and an attempt with no answer after 20 s
+  (`GATEWAY_STREAM_CONNECT_TIMEOUT_MS`) counts as failed. Fetch-based clients
+  (direct browser, Electron) read the keepalive comments. An `EventSource` cannot
+  see a comment, so it asks with `keepaliveEvents=1` for a named
+  `gateway.keepalive` event, sent once at connect and then on each tick. A
+  gateway that ignores the parameter sends none, and the client then does not
+  watch that open stream, so an older backend is not taken for a dead link. The
+  terminal streams and the terminal WebSocket share the link and have no watchdog
+  of their own: the main stream's drops them too, and retries any of their
+  attempts still unanswered once it reopens.
+- A stream refused with `401` is no outage, because the link is up and no retry
+  will help. The state goes back to `connecting` while retries continue, so reads
+  run again and show the failure, and an agent-test tab goes to its login page.
+  An `EventSource` cannot read the status that closed it, so an HTTP failure on
+  one asks the same gate with `GET /__orkestrator/gateway-settings`.
 - Going offline in the browser pauses and resets nothing, because a local
   backend stays reachable without internet.
 - The opt-in terminal WebSocket has its own reconnect owner
@@ -308,7 +372,7 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   retry.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
-  backed-off and browser retries until a stream opens. The renderer uses it
+  backed-off retries until a stream opens. The renderer uses it
   to pause presentation reads and show the connection banner (see
   [event-snapshot-recovery.md](event-snapshot-recovery.md#freshness-in-the-ui)).
 

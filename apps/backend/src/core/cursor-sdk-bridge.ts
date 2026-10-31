@@ -173,6 +173,7 @@ export async function beginCursorSdkLogin(
     );
   }
 
+  options.signal?.throwIfAborted();
   const child = (options.spawnImpl ?? spawn)(
     options.runtime,
     [options.bridgeEntrypoint, "--login"],
@@ -296,15 +297,20 @@ export interface CursorSdkLoginProgress {
 export async function startCursorSdkLogin(
   context: CommandContext,
   options: {
-    bridgeEntrypoint: string;
+    bridgeEntrypoint: string | (() => Promise<string>);
     runtime: string;
     spawnImpl?: typeof spawn;
     openBrowser?: boolean;
   },
 ): Promise<{ loginUrl: string }> {
-  return context.runtime.localServers.cursorSdkLogin.start((signal) =>
-    beginCursorSdkLogin(context, { ...options, signal }),
-  );
+  return context.runtime.localServers.cursorSdkLogin.start(async (signal) => {
+    const bridgeEntrypoint =
+      typeof options.bridgeEntrypoint === "function"
+        ? await options.bridgeEntrypoint()
+        : options.bridgeEntrypoint;
+    signal.throwIfAborted();
+    return beginCursorSdkLogin(context, { ...options, bridgeEntrypoint, signal });
+  });
 }
 
 export async function cursorSdkLoginProgress(

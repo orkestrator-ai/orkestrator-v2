@@ -1,3 +1,4 @@
+import type { ManagedWebClientOwnershipStore } from "./managed-web-client.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -199,7 +200,11 @@ export class TailscaleServeManager {
   async start(
     targetPort: number,
     httpsPort = 443,
-    options: { adoptExisting?: boolean } = {},
+    options: {
+      adoptExisting?: boolean;
+      previousTargetPort?: number;
+      beforePublish?: () => Promise<void>;
+    } = {},
   ): Promise<string> {
     if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
       throw new Error(`Invalid Tailscale Serve target port: ${targetPort}`);
@@ -218,6 +223,7 @@ export class TailscaleServeManager {
     if (configuredPort(status, httpsPort)) {
       const existingUrl = adoptableServeUrl(status, targetPort, httpsPort);
       if (options.adoptExisting && existingUrl) {
+        await options.beforePublish?.();
         this.activeServe = { targetPort, httpsPort };
         return existingUrl;
       }
@@ -235,11 +241,23 @@ export class TailscaleServeManager {
         hasHttpsListener(status, httpsPort) &&
         !hasRootHandler(status, httpsPort) &&
         httpsHandlerPaths(status, httpsPort).length > 0;
-      if (!claimableRemainder) {
+      const ownedPreviousTarget =
+        options.adoptExisting &&
+        options.previousTargetPort !== undefined &&
+        adoptableServeUrl(status, options.previousTargetPort, httpsPort);
+      if (ownedPreviousTarget) {
+        // Durable ownership identifies the old root after a crash or a port
+        // change. Revalidate it before removing only that mount; foreign roots
+        // and Funnel configurations remain conflicts.
+        await this.removeRootHandler(httpsPort);
+      } else if (!claimableRemainder) {
         throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
       }
     }
 
+    // Record the next target after releasing the old root, but before publishing
+    // the new one, so every crash boundary can be recovered on the next boot.
+    await options.beforePublish?.();
     const args = [
       "serve",
       "--bg",
@@ -393,14 +411,25 @@ export class TailscaleServeManager {
  * Starts Serve for a standalone backend whose browser listener is already
  * bound. A tailnet-only root handler proxying to that port — typically left by
  * an earlier run that exited without teardown — is exactly the listener this
- * would configure, so it is adopted instead of failing startup. Anything else
- * on the HTTPS port, including a Funnel or a handler proxying elsewhere, is
- * still a conflict.
+ * would configure, so it is adopted instead of failing startup. Durable
+ * ownership also permits replacing the old target after a port change. A
+ * foreign root or Funnel configuration is still a conflict.
  */
-export function startStandaloneTailscaleServe(
+export async function startStandaloneTailscaleServe(
   serve: Pick<TailscaleServeManager, "start">,
   browserUrl: string,
   httpsPort: number,
+  ownershipStore?: ManagedWebClientOwnershipStore,
 ): Promise<string> {
-  return serve.start(getTailscaleServeTargetPort(browserUrl), httpsPort, { adoptExisting: true });
+  const targetPort = getTailscaleServeTargetPort(browserUrl);
+  const ownership = await ownershipStore?.load();
+  return serve.start(targetPort, httpsPort, {
+    adoptExisting: true,
+    ...(ownership?.httpsPort === httpsPort ? { previousTargetPort: ownership.targetPort } : {}),
+    ...(ownershipStore
+      ? {
+          beforePublish: () => ownershipStore.save({ version: 1, targetPort, httpsPort }),
+        }
+      : {}),
+  });
 }

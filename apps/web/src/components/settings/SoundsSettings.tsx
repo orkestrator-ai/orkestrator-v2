@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Play, Volume2 } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 import {
   normalizeNotificationSoundSettings,
   type NotificationSoundSettings,
 } from "@orkestrator/protocol/notification-sounds";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
 import { playNotificationSound, type NotificationSoundKind } from "@/lib/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { useSettingsConfig } from "./settings-config";
+import { SETTINGS_CARD_CLASS, SettingsPageLayout, SettingsRow } from "./SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 export function SoundsSettings() {
   const { machine } = useAccountMachine();
@@ -86,21 +87,11 @@ export function SoundsSettings() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8 pb-8">
-      <div>
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-cyan-400/10 text-cyan-400">
-            <Volume2 className="h-4 w-4" aria-hidden="true" />
-          </div>
-          <h2 className="text-xl font-semibold">Sounds</h2>
-        </div>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Play distinct cues for work that finishes in the background. Existing notifications are
-          not replayed when Orkestrator starts or reconnects.
-        </p>
-      </div>
-
-      <div className="divide-y divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/40">
+    <SettingsPageLayout
+      title="Sounds"
+      description="Play distinct cues for work that finishes in the background. Existing notifications are not replayed when Orkestrator starts or reconnects."
+    >
+      <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
         <SoundRow
           label="Agent stopped"
           description="Play a cue when an environment raises the same completed-activity indicator as the bell icon."
@@ -125,7 +116,7 @@ export function SoundsSettings() {
           </>
         )}
       </div>
-    </div>
+    </SettingsPageLayout>
   );
 }
 
@@ -143,18 +134,12 @@ function SoundRow({
   onPreview: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-      <div>
-        <Label className="text-sm">{label}</Label>
-        <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">{description}</p>
-      </div>
-      <div className="flex shrink-0 items-center gap-3">
-        <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
-          <Play className="h-3.5 w-3.5" aria-hidden="true" />
-          Preview
-        </Button>
-        <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
-      </div>
-    </div>
+    <SettingsRow label={label} description={description}>
+      <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
+        <Play className="h-3.5 w-3.5" aria-hidden="true" />
+        Preview
+      </Button>
+      <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
+    </SettingsRow>
   );
 }

@@ -10,7 +10,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-30) |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-31) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
@@ -233,6 +233,36 @@ every backend-only host, then restart the service.
   PATH is left alone. The container image sets the same two variables
   (`docker/Dockerfile`), so container Claude stays on `CLAUDE_CLI_VERSION`.
 
+#### Bridges a backend-only host installs on demand
+
+The published package ships every bridge, but not every bridge's SDK. Claude,
+Codex and ACP (Grok) are bundled complete. Cursor's SDK loads code-split chunks
+at runtime and carries a per-platform native package, and Pi's closure is about
+175 MB, so the package ships those two bridges' own bundles plus a pinned
+manifest, lockfile and any repository patch under
+`resources/<bridge>/runtime/` (`packages/cli/scripts/bridges.ts`).
+
+The first time a Cursor or Pi bridge starts — a session, a model-catalogue
+probe (which a backend runs at startup for every enabled platform), Cursor
+sign-in — the backend runs `bun install --frozen-lockfile` into
+`<data-dir>/bridge-runtimes/<bridge>/<digest>/`
+(`apps/backend/src/core/bridge-runtime-install.ts`). That needs the npm registry
+(or bun's cache) once per release; the digest covers the bundle and its inputs,
+so an upgrade installs beside the previous runtime and then removes it. A
+failed install fails that start with `Could not install Cursor support: …`.
+
+The committed inputs live in `packages/cli/bridge-runtimes/<bridge>/`.
+Regenerate them after changing an on-demand bridge's SDK pin or a patch that
+targets its closure, and commit the result:
+
+```bash
+bun packages/cli/scripts/lock-bridge-runtimes.ts
+```
+
+`packages/cli/tests/cli.test.ts` fails when they drift from the bridge's
+`package.json` or the root `patchedDependencies`, and `mise run smoke:cli`
+installs them from the registry before a publish.
+
 ### Container environments
 
 `docker/Dockerfile` has one exact build argument per CLI-backed agent —
@@ -421,6 +451,22 @@ in the probe's run) and after a 401 one, each with the blank refresh token,
 each failing and leaving the file untouched. A
 change there (a refresh before the window, or a rewritten file) needs
 `restrictCodexAuthSnapshot` and `TOKEN_REPLACEMENT_LEAD_MS` re-read.
+
+## Re-check capacity retries
+
+Each provider's retry rests on facts read from its pinned release
+([1010](../todo/agent-engines/1010-model-capacity-backoff-retry.md)). None of
+them breaks a build when it changes, so check them on a bump:
+
+- **Codex:** `CodexErrorInfo` for a new capacity code, and the two messages in
+  `sessions/capacity-retry.ts`.
+- **Claude:** `CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS` and `..._MAX_DELAY_MS`
+  still apply to overloads only and accept the values in `runtime-env.ts`.
+- **OpenCode:** a turn still ends with an `APIError` carrying `statusCode` once
+  OpenCode's own retries run out (`isOpenCodeCapacityError`).
+- **Grok:** the two overload sentences in `acp-prompt.ts`.
+- **Cursor:** whether the SDK now names a capacity error (task 4 is waiting on
+  this).
 
 ## Claude
 
@@ -975,7 +1021,8 @@ the pinned binary's parser over the production argument shape.
      generated union is now an intersection, which the protocol test still
      reads.
    - `CodexErrorInfo` gained `modelNotFound` (0.165, never retried) and
-     `policyCapacityUnavailable`; both pass through `codexErrorInfoToCode`.
+     `policyCapacityUnavailable` (retried like `serverOverloaded`, see
+     `sessions/capacity-retry.ts`); both pass through `codexErrorInfoToCode`.
    - Idle threads with no subscriber unload after 60 s instead of 1800 s
      (`thread_unload_delay_secs`), so a thread the bridge has idle-detached is
      freed a minute later and its next attach is a cold resume from the
@@ -1002,7 +1049,21 @@ the pinned binary's parser over the production argument shape.
    absolute paths, credentials, and tokens; run
    `scripts/scrub-codex-recording.ts`, use `--strip-content` when appropriate,
    and inspect the diff before committing.
-8. Search for the old version literal. Runtime comments marked “Verified
+8. Re-prove the MCP editor's Codex rules on the new binary, without
+   credentials:
+
+   ```bash
+   CODEX_CLI_PATH=/absolute/path/to/new/codex mise run verify:codex:mcp-live
+   ```
+
+   It compares `codex mcp list --json` in throwaway homes with the catalogue:
+   project trust (`codexProjectTrust` in `native-policy.ts`: exact
+   `[projects."<path>"]` keys, worktree then main checkout), field-by-field
+   merging of same-name entries (`codexMergedStatus` in `catalog.ts`), and
+   which files are sources. A failure means the editor's Codex rows no longer
+   match what Codex loads; fix the mirror and the table in
+   [`mcp-management.md`](../architecture/mcp-management.md) before bumping.
+9. Search for the old version literal. Runtime comments marked “Verified
    against codex …” need to be revalidated before their version is changed.
    Test fixtures and fake user-agent strings do not all need to track the pin;
    update them only when the assertion is intended to represent the current
@@ -1166,7 +1227,12 @@ Dockerfile pins the same archive digests the manifest does.
 ### Procedure
 
 1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then
-   `bun install`.
+   `bun install`, then regenerate the standalone package's Pi runtime (see
+   [Bridges a backend-only host installs on demand](#bridges-a-backend-only-host-installs-on-demand)):
+
+   ```bash
+   bun packages/cli/scripts/lock-bridge-runtimes.ts
+   ```
 
    Pin all three SDK packages at the **CLI's** version even when npm has a newer
    patch for some of them: `pi-ai` and `pi-agent-core` sometimes publish an
@@ -1377,7 +1443,19 @@ trusting a green result.
    Confirm `bun.lock` resolves the intended version and note which
    `@cursor/sdk-<platform>` optional packages it brought in. There is no CLI
    pin, no `scripts/download-*.sh`, no manifest entry, and no Dockerfile `ARG`
-   to mirror — this step is the whole pin.
+   to mirror. The diagnostic seam patch does have to move with it: `bun install`
+   only warns that the old patch no longer applies, so regenerate it with
+   `bun patch` against the new bundle, using the
+   [bindings described above](#what-is-enforced-and-what-is-not). The
+   version-drift and `sdk-diagnostics` tests fail until it is done.
+   The standalone package carries its own copy of the pin and the
+   patch registration; regenerate it once the patch for the new version is in
+   place (see
+   [Bridges a backend-only host installs on demand](#bridges-a-backend-only-host-installs-on-demand)):
+
+   ```bash
+   bun packages/cli/scripts/lock-bridge-runtimes.ts
+   ```
 2. Review the five compatibility files above against the new type definitions.
    Pay particular attention to `InteractionUpdate` variants and tool cases added
    upstream: both degrade silently by design.
@@ -1560,6 +1638,34 @@ experiments and the updater.
   That 1.0.67 still describes an inline `image` block sent with no path in the
   text needs a signed-in check. If Grok ever stops reading the block, set
   Grok's `attachments.images` to `false` in `nativeAgentCapabilities`.
+- **Files.** 1.0.67 and 1.0.70 answer `promptCapabilities.embeddedContext:
+  true`, so Grok's capability row offers file attachments
+  (`attachments.files`). The bridge sends a text file as an ACP `resource`
+  block with its contents inline, refuses binary content, and refuses any file
+  when the agent stops advertising `embeddedContext`. Proved signed in on 1.0.67
+  (2026-10-31), including a block whose `uri` named a file that does not exist,
+  so Grok answers from the block itself. If a release stops reading it, set
+  Grok's `attachments.files` back to `false`.
+- **MCP elicitation.** Grok tells its MCP servers it supports `elicitation` and
+  forwards each request as the extension request `_x.ai/mcp/elicit`
+  (`toolCallId`, `serverName`, `message`, `mode`, then `requestedSchema` or
+  `url` and `elicitationId`), including over `agent stdio`. The answer is tagged
+  by `outcome`: `{outcome:"accept",content}`, `{outcome:"decline"}` or
+  `{outcome:"cancel"}`. Grok reads anything else as malformed and cancels without
+  saying so, so an `action` key from MCP's own shape silently fails. It sends
+  `_x.ai/session_notification` with `interaction_resolved` when a request ends.
+  Proved signed in on 1.0.67 through the bridge (2026-10-31); `strings` show the
+  same types in 1.0.70.
+- **Session fork.** `_x.ai/session/fork` takes `sourceSessionId`, `sourceCwd`
+  (required) and `newCwd`, and optionally `targetPromptIndex`; it answers
+  `newSessionId`, and the fork loads with `session/load`, in the same or a fresh
+  process. Grok does not advertise ACP's own unstable `session/fork`. The index
+  keeps whole turns up to and including that prompt, and an index past the end
+  silently copies everything. `_x.ai/rewind/points` lists `prompt_index` and
+  `prompt_preview`, and `/compact` takes no index of its own. A fork at a point
+  before a compaction still holds what followed it, as summary, because
+  compaction squashes the history it copies. Proved signed in on 1.0.67
+  (2026-10-31); both methods are in 1.0.70's `strings`.
 - **Main-checkout approvals.** 1.0.67 lets a git worktree use its main
   checkout's saved "always allow" answers by default
   (`[features] worktree_inherits_main_approvals`), which would let a tool run
@@ -1634,7 +1740,22 @@ experiments and the updater.
 5. Confirm the argv contract by hand using the checks above. This is the
    step nothing else covers.
 6. Re-check [what Grok declares versus what it does](#what-grok-declares-versus-what-it-does).
-7. Smoke-test an interactive tab, including the inactive-environment path.
+7. Re-prove the MCP editor's Grok rules on the new binary, without
+   credentials:
+
+   ```bash
+   GROK_CLI_PATH=/absolute/path/to/new/grok mise run verify:grok:mcp-live
+   ```
+
+   It compares `grok inspect --json`, `grok mcp doctor --json` and `grok mcp
+   list --json` in throwaway homes with the catalogue: folder trust
+   (`grokFolderTrust`), which project-bound sources an untrusted folder holds
+   back, the precedence of every file Grok reads (`grokSources` in
+   `providers.ts`), the `[compat.*] mcps` switches (`grokCompat`) and saved
+   enable. Also diff the guide Grok unpacks into `$GROK_HOME/docs/user-guide`
+   (`07-mcp-servers.md`, `05-configuration.md`, `09-plugins.md`) against the
+   previous version's for new sources or policy keys the guard does not cover.
+8. Smoke-test an interactive tab, including the inactive-environment path.
 
 The `stable` pointer, not the binary, decides the channel. `grok --version` for
 1.0.44 printed `[alpha]` although `…/cli/stable` named it; a build can be promoted

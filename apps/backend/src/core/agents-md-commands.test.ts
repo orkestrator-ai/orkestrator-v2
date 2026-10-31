@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import * as agentsMdPr from "./agents-md-pr.js";
 import { agentsMdBaseBranch } from "./agents-md-commands.js";
 import { agentsMdBranchName, agentsMdRequestKey } from "./agents-md-pr.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -184,5 +185,62 @@ describe("AGENTS.md base branch selection", () => {
       },
     } as unknown as CommandContext;
     expect(await agentsMdBaseBranch(ctx, "p1")).toBe("main");
+  });
+});
+
+describe("AGENTS.md command credential wiring", () => {
+  test("reading the base section passes the owning storage as the GitHub config source", async () => {
+    const read = spyOn(agentsMdPr, "readAgentsMdSectionFromBase").mockResolvedValue({
+      baseBranch: "main",
+      baseCommit: "base-commit",
+      fetched: true,
+      fileExists: false,
+      section: { exists: false, text: null, entries: [] },
+    });
+    try {
+      await commands.get("read_project_agents_md_section")!(
+        { projectId: scope.projectId },
+        context,
+      );
+      expect(read).toHaveBeenCalledWith({
+        root: path.join(root, "checkout"),
+        baseBranch: "main",
+        gitHubConfig: storage,
+      });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test("opening the approved pull request passes the owning storage as the GitHub config source", async () => {
+    const key = agentsMdRequestKey("approved-request");
+    const open = spyOn(agentsMdPr, "openAgentsMdPullRequest").mockResolvedValue({
+      status: "existing",
+      url: "https://github.com/acme/widgets/pull/9",
+      branch: agentsMdBranchName(key),
+      baseBranch: "main",
+      outcomes: [],
+    });
+    try {
+      await commands.get("open_project_agents_md_pr")!(
+        {
+          projectId: scope.projectId,
+          requestKey: key,
+          changes: proposal.changes,
+          reason: proposal.reason,
+        },
+        context,
+      );
+      expect(open).toHaveBeenCalledWith({
+        root: path.join(root, "checkout"),
+        baseBranch: "main",
+        key,
+        changes: proposal.changes,
+        reason: proposal.reason,
+        gitHubConfig: storage,
+      });
+    } finally {
+      open.mockRestore();
+    }
   });
 });

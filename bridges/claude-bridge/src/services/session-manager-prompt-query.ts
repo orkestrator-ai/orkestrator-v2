@@ -29,6 +29,7 @@ import { debugLog } from "./logger.js";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
   AGENT_MCP_SERVER_NAME,
+  claudeAccountOnlyMcpServerNames,
   claudeGrantedMcpServerNames,
   claudeUserMcpQueryOptions,
   getMcpRuntimeConfig,
@@ -44,7 +45,7 @@ import {
   isCoordinatorReadOnlyPolicy,
   readOnlyRefusalRole,
 } from "./read-only-policy.js";
-import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
+import { runtimeEnvironmentForSessionQuery, withUnattendedOverloadRetry } from "./runtime-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -151,6 +152,14 @@ export async function resolveQueryPlan(
     resolveClaudeTurnPlugins(cwd, policy, settingSources),
   ]);
   turn.mcpServerNames = mcpServerNames;
+  // On an added account the CLI loads its own copy of the servers; what that
+  // copy names and the configuration does not is stale from launch.
+  const accountOnlyMcpServers = await claudeAccountOnlyMcpServerNames(
+    cwd,
+    settingSources,
+    mcpServerNames,
+    claudeUserMcpQueryOptions(policy).strictMcpConfig === true,
+  );
 
   const mcpServerCount = Object.keys(mcpServers).length;
   const pluginCount = plugins.length;
@@ -257,7 +266,10 @@ export async function resolveQueryPlan(
   );
 
   // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
-  const queryEnvironment = await runtimeEnvironmentForSessionQuery(policy);
+  const queryEnvironment = withUnattendedOverloadRetry(
+    session.executionPolicy,
+    await runtimeEnvironmentForSessionQuery(policy),
+  );
   const liveSettings = claudeLiveSettings({
     model: options?.model,
     permissionMode,
@@ -274,6 +286,7 @@ export async function resolveQueryPlan(
     effortLevel,
     mcpServers,
     mcpServerNames,
+    accountOnlyMcpServers,
     mcpConfigRevision,
     plugins,
     mcpServerCount,

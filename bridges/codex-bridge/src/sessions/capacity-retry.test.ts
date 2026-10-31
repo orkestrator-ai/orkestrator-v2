@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { toTurnError } from "../app-server/event-reducer.js";
 import {
+  CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE,
   CODEX_SERVER_OVERLOADED_MESSAGE,
   DEFAULT_CAPACITY_RETRY_POLICY,
   capacityRetriesExhaustedError,
@@ -13,6 +14,24 @@ import {
 } from "./capacity-retry.js";
 
 describe("isModelCapacityError", () => {
+  test("accepts app-server's policyCapacityUnavailable refusal", () => {
+    expect(
+      isModelCapacityError({
+        message: CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE,
+        code: "policyCapacityUnavailable",
+        httpStatusCode: 503,
+      }),
+    ).toBe(true);
+    expect(isModelCapacityError({ message: CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE })).toBe(true);
+    expect(
+      isModelCapacityError({
+        message: "x",
+        code: "policyCapacityUnavailable",
+        httpStatusCode: 401,
+      }),
+    ).toBe(false);
+  });
+
   test("accepts app-server's serverOverloaded refusal", () => {
     expect(
       isModelCapacityError(

@@ -6,6 +6,7 @@ import {
   type NativeAgentReadiness,
   type NativeAgentSignInRoute,
 } from "@orkestrator/protocol/native-agent";
+import type { PlanUsageState } from "./plan-usage-cache.js";
 import type { PromptAttachment } from "./prompt-attachments.js";
 import {
   type BridgeConnection,
@@ -100,6 +101,8 @@ export function isConnectPhaseFailure(error: unknown): boolean {
 
 export interface HttpBridgeProviderDependencies {
   fetch?: typeof fetch;
+  /** This backend's plan usage (`runtime.accounts.planUsage`); sessions report into it. */
+  planUsage?: PlanUsageState;
   stageImages?: (images: NonNullable<ProviderSendOptions["images"]>) => Promise<PromptAttachment[]>;
 }
 

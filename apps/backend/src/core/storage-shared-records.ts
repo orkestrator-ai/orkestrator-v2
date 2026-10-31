@@ -46,6 +46,22 @@ export function isPersistedPromptQueue(
     isNonBlankString(value.environmentId) &&
     promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId) &&
     Array.isArray(value.messages) &&
+    (value.jobReceipts === undefined ||
+      (Array.isArray(value.jobReceipts) &&
+        value.jobReceipts.length <= 256 &&
+        value.jobReceipts.every(
+          (receipt) =>
+            isRecord(receipt) &&
+            isNonBlankString(receipt.requestId) &&
+            receipt.requestId.length <= 256 &&
+            (receipt.dispatchRequestId === undefined ||
+              (isNonBlankString(receipt.dispatchRequestId) &&
+                receipt.dispatchRequestId.length <= 256)) &&
+            typeof receipt.fingerprint === "string" &&
+            /^[a-f0-9]{64}$/.test(receipt.fingerprint) &&
+            (receipt.status === "accepted" || receipt.status === "unknown") &&
+            (receipt.queued === undefined || receipt.queued === true),
+        ))) &&
     (value.outstandingClaim === undefined ||
       (isRecord(value.outstandingClaim) &&
         isRecord(value.outstandingClaim.message) &&

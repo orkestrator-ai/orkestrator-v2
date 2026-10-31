@@ -385,7 +385,8 @@ test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", 
   await expect(level).not.toHaveText(before!);
 });
 
-test("a two-finger pinch zooms the stacked column on touch", async ({ page }) => {
+test("a two-finger pinch zooms the stacked column on touch", async ({ page, browserName }) => {
+  test.skip(browserName === "webkit", "Desktop WebKit has no Touch constructor to build the pinch");
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
   test.skip(!isStacked(page), "The touch project uses the stacked layout");
   const level = page.getByTestId("multi-review-zoom-level");
@@ -538,6 +539,107 @@ test("fullscreen leaves Escape to another pane, an inactive tab and an open cont
   await page.getByRole("button", { name: "Exit fullscreen" }).press("Escape");
   await expect(overlay).toHaveCount(0);
 });
+
+test("the wide graph keeps its zoom and pan while another pane is shown", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
+  const level = page.getByTestId("multi-review-zoom-level");
+  const graph = page.locator("[data-flow-viewport]");
+  const pan = () => graph.evaluate((element) => [element.scrollLeft, element.scrollTop]);
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(level).toHaveText("150%");
+  await expect.poll(() => graph.evaluate((element) => element.scrollHeight)).toBeGreaterThan(1000);
+  await graph.evaluate((element) => {
+    element.scrollLeft = 120;
+    element.scrollTop = 40;
+  });
+  await expect.poll(pan).toEqual([120, 40]);
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(graph).toBeHidden();
+  await page.getByRole("button", { name: "Activate review pane" }).click();
+  await expect(level).toHaveText("150%");
+  await expect.poll(pan).toEqual([120, 40]);
+});
+
+test("centres a stage selected behind another pane when shown at the same width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 1000 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
+  const graph = page.locator("[data-flow-viewport]");
+  const selected = page.locator('[data-flow-node="consolidation"]');
+  const insideGraph = () =>
+    selected.evaluate((element) => {
+      const node = element.getBoundingClientRect();
+      const viewport = element.closest("[data-flow-viewport]")!.getBoundingClientRect();
+      return (
+        node.left >= viewport.left &&
+        node.right <= viewport.right &&
+        node.top >= viewport.top &&
+        node.bottom <= viewport.bottom
+      );
+    });
+  await expect(graph).toBeVisible();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(page.getByTestId("multi-review-zoom-level")).toHaveText("150%");
+  await graph.evaluate((element) => {
+    element.scrollLeft = 0;
+  });
+  await expect.poll(insideGraph).toBe(false);
+  const width = await graph.evaluate((element) => element.clientWidth);
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(graph).toBeHidden();
+  await page.getByRole("button", { name: "Advance to consolidation" }).click();
+  await expect(selected).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Activate review pane" }).click();
+  await expect.poll(() => graph.evaluate((element) => element.clientWidth)).toBe(width);
+  await expect.poll(insideGraph).toBe(true);
+});
+
+for (const widths of [
+  [1200, 390],
+  [390, 1200],
+]) {
+  test(`adopts a hidden resize from ${widths[0]} to ${widths[1]} across the graph breakpoint`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: widths[0]!, height: 1000 });
+    await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
+    const layout = () => page.locator("[data-flow-layout]").getAttribute("data-flow-layout");
+    const before = widths[0]! < 960 ? "stacked" : "graph";
+    const after = widths[1]! < 960 ? "stacked" : "graph";
+    await expect.poll(layout).toBe(before);
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    await expect(page.getByTestId("multi-review-zoom-level")).toHaveText("125%");
+    const graph = page.locator("[data-flow-viewport]");
+    await graph.evaluate((element) => {
+      element.scrollLeft = 40;
+    });
+    await expect.poll(() => graph.evaluate((element) => element.scrollLeft)).toBe(40);
+    await page.getByRole("button", { name: "Activate other pane" }).click();
+    await page.setViewportSize({ width: widths[1]!, height: 1000 });
+    await expect.poll(layout).toBe(before);
+    await page.getByRole("button", { name: "Activate review pane" }).click();
+    await expect.poll(layout).toBe(after);
+    await expect(page.getByTestId("multi-review-zoom-level")).toHaveText("100%");
+    await expect.poll(() => graph.evaluate((element) => element.clientWidth)).toBeGreaterThan(0);
+    const shownWidth = await graph.evaluate((element) => element.clientWidth);
+    expect(shownWidth).toBeLessThanOrEqual(widths[1]!);
+    expect(shownWidth).toBeGreaterThan(widths[1]! - 100);
+    await expect.poll(() => graph.evaluate((element) => element.scrollLeft)).toBe(0);
+    // Return to the original layout at a fresh width: its old zoom/pan must reset too.
+    await page.getByRole("button", { name: "Activate other pane" }).click();
+    await page.setViewportSize({ width: widths[0]! + 50, height: 1000 });
+    await page.getByRole("button", { name: "Activate review pane" }).click();
+    await expect.poll(layout).toBe(before);
+    await expect(page.getByTestId("multi-review-zoom-level")).toHaveText("100%");
+    const viewport = page.locator("[data-flow-viewport]");
+    await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBe(0);
+  });
+}
 
 test("shows a failed reviewer's error on its node, with the whole text in a tooltip", async ({
   page,
@@ -925,16 +1027,29 @@ test("findings stay reachable, fit the viewport and scroll internally", async ({
     }),
   ).toBe(false);
   await expect(panel).toBeVisible();
+  const overview = page.getByTestId("multi-review-overview-scroll");
+  const overviewTop = () => overview.evaluate((element) => element.scrollTop);
+  await overview.evaluate((element) => {
+    element.scrollTop = 120;
+  });
+  await expect.poll(overviewTop).toBeGreaterThan(0);
+  const readingTop = await overviewTop();
   await page.getByRole("button", { name: "Activate other pane" }).click();
   await page.getByRole("button", { name: "Activate review pane" }).click();
   await expect(panel).toHaveCount(0);
-  // Sticky positioning keeps the badge in view while reading further down.
-  await inspector.evaluate((element) => {
-    let parent = element.parentElement;
-    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
-    if (parent) parent.scrollTop += 150;
+  // Another pane taking over leaves the reader where they were.
+  await expect.poll(overviewTop).toBe(readingTop);
+  // Sticky positioning keeps the badge in view at the very end of the scroll.
+  // Only the stacked column is tall enough to carry it up to its sticky offset.
+  await overview.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
   });
   await expect(badge).toBeInViewport();
+  if (isStacked(page)) {
+    await expect
+      .poll(async () => (await badge.boundingBox())!.y - (await overview.boundingBox())!.y)
+      .toBeCloseTo(12, 0);
+  }
 });
 
 for (const scale of [0.75, 1, 1.5]) {

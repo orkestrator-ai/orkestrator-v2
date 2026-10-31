@@ -8,13 +8,14 @@ import {
   getHostGitHubToken,
   gitHubCliEnv,
   resolveGitHubToken,
-  setGitHubCliConfigSource,
+  type GitHubCliConfigSource,
 } from "./github-credentials.js";
 import type { AppConfig } from "./models.js";
 
 const config = (global: Partial<AppConfig["global"]>) => global as AppConfig["global"];
+let source: GitHubCliConfigSource | undefined;
 function useGlobal(global: Partial<AppConfig["global"]>): void {
-  setGitHubCliConfigSource(async () => config(global));
+  source = { loadConfig: async () => ({ global: config(global) }) };
 }
 
 describe("selected GitHub credentials", () => {
@@ -38,7 +39,7 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
     process.env.GITHUB_TOKEN = "inherited_github";
   });
   afterEach(async () => {
-    setGitHubCliConfigSource(undefined);
+    source = undefined;
     setManagedGitHubCli(undefined);
     for (const key of ["GH_TOKEN", "GITHUB_TOKEN"]) {
       if (previous[key] === undefined) delete process.env[key];
@@ -50,19 +51,23 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
   test("host mode strips inherited tokens without mutating the base environment", async () => {
     useGlobal({ useHostGitHubCredentials: true, githubToken: "stored_pat" });
     const base = { PATH: "/managed/bin", GH_TOKEN: "other", GITHUB_TOKEN: "another" };
-    expect(await gitHubCliEnv(base)).toEqual({ PATH: "/managed/bin" });
+    expect(await gitHubCliEnv(source, base)).toEqual({ PATH: "/managed/bin" });
     expect(base.GH_TOKEN).toBe("other");
-    expect(await gitHubCliEnv()).not.toHaveProperty("GH_TOKEN");
-    expect(await gitHubCliEnv()).not.toHaveProperty("GITHUB_TOKEN");
-    setGitHubCliConfigSource(undefined);
-    expect(await gitHubCliEnv()).not.toHaveProperty("GH_TOKEN");
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GH_TOKEN");
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GITHUB_TOKEN");
+    source = undefined;
+    expect(await gitHubCliEnv(source)).not.toHaveProperty("GH_TOKEN");
   });
 
   test("PAT mode overrides caller tokens and preserves other base variables", async () => {
     useGlobal({ useHostGitHubCredentials: false, githubToken: " stored_pat " });
-    expect((await gitHubCliEnv()).GH_TOKEN).toBe("stored_pat");
+    expect((await gitHubCliEnv(source)).GH_TOKEN).toBe("stored_pat");
     expect(
-      await gitHubCliEnv({ PATH: "/managed/bin", GH_TOKEN: "other", GITHUB_TOKEN: "other" }),
+      await gitHubCliEnv(source, {
+        PATH: "/managed/bin",
+        GH_TOKEN: "other",
+        GITHUB_TOKEN: "other",
+      }),
     ).toEqual({ PATH: "/managed/bin", GH_TOKEN: "stored_pat" });
   });
 
@@ -71,8 +76,8 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
     async (githubToken) => {
       useGlobal({ useHostGitHubCredentials: false, githubToken });
       expect(await getHostGitHubToken()).toBe("host_identity");
-      await expect(gitHubCliEnv()).rejects.toThrow("personal access token is missing");
-      await expect(gitHubCliEnv({ GH_TOKEN: "host" })).rejects.toThrow("Settings");
+      await expect(gitHubCliEnv(source)).rejects.toThrow("personal access token is missing");
+      await expect(gitHubCliEnv(source, { GH_TOKEN: "host" })).rejects.toThrow("Settings");
       expect(
         await resolveGitHubToken(config({ useHostGitHubCredentials: false, githubToken })),
       ).toBeUndefined();

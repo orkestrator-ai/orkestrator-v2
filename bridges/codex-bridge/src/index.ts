@@ -1290,7 +1290,11 @@ app.post("/session/:id/commands/refresh", async (c) => {
 });
 
 app.get("/session/list", async (c) => {
-  return c.json(await appServerRuntime.listSessions());
+  return c.json(
+    await appServerRuntime.listSessions({
+      includeArchived: c.req.query("includeArchived") === "1",
+    }),
+  );
 });
 
 /**

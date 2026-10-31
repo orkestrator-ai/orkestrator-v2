@@ -24,6 +24,10 @@ import {
   parseGatewayCursor,
 } from "../src/gateway-event-replay";
 import {
+  GATEWAY_KEEPALIVE_EVENT,
+  GATEWAY_KEEPALIVE_EVENTS_PARAM,
+} from "@orkestrator/protocol/gateway-event-stream";
+import {
   TerminalWebSocketGateway,
   TERMINAL_WEBSOCKET_MAX_CHANNELS,
   TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET,
@@ -2003,6 +2007,28 @@ describe("remote gateway", () => {
     first.close();
     second.close();
     filtered.close();
+  });
+
+  test("sends keepalive events, at once and then on the keepalive tick, only to a client that asks", async () => {
+    const { gateway, info } = await startGateway({ keepaliveMs: 5 });
+    const frame = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
+    const asked = await openEventStream(gateway, info, `?${GATEWAY_KEEPALIVE_EVENTS_PARAM}=1`);
+    const plain = await openEventStream(gateway, info);
+    await waitUntil(() => asked.received().includes(frame), "The first keepalive never arrived");
+    expect(asked.received().indexOf(frame)).toBeLessThan(
+      asked.received().indexOf("gateway.connected"),
+    );
+
+    await waitUntil(
+      () => asked.received().split(frame).length > 2 && plain.received().includes(": keepalive"),
+      "Keepalives never arrived",
+    );
+    // A client that did not ask, an older one, keeps seeing only the comment.
+    expect(plain.received()).not.toContain(GATEWAY_KEEPALIVE_EVENT);
+    expect(asked.received()).not.toContain(": keepalive");
+    asked.close();
+    plain.close();
+    await gateway.stop();
   });
 
   test("attributes keepalive drops to a reserved label and counts keepalives", async () => {

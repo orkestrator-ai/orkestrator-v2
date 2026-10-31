@@ -90,6 +90,79 @@ describe("Codex archive", () => {
     ]);
   });
 
+  test("archived conversations are listed last and flagged, only when asked for", async () => {
+    writeRollout("sessions", "thread-live");
+    writeRollout("sessions", "thread-listed-archived");
+    writeRollout("archived_sessions", "thread-moved");
+    const h = await harness({
+      "thread/list": (params) =>
+        params.archived === true
+          ? { data: [threadPayload("thread-listed-archived")], nextCursor: null }
+          : { data: [], nextCursor: null },
+    });
+    const { sessions } = await h.runtime.listSessions({ includeArchived: true });
+    expect(sessions[0]).toMatchObject({ id: "thread-live" });
+    expect(sessions[0]!.archived).toBeUndefined();
+    expect(
+      sessions
+        .slice(1)
+        .map((session) => [session.id, session.archived])
+        .sort(),
+    ).toEqual([
+      ["thread-listed-archived", true],
+      ["thread-moved", true],
+    ]);
+  });
+
+  test.each([512, 513])(
+    "bounds serialized history while retaining archives beside %s live rows",
+    async (liveCount) => {
+      const longTitle = "x".repeat(1_024);
+      const h = await harness({
+        "thread/list": (params) => ({
+          data: Array.from(
+            { length: params.archived === true ? 2_000 : liveCount },
+            (_, index) => ({
+              ...threadPayload(`${params.archived === true ? "archived" : "live"}-${index}`),
+              name: index % 2 === 0 ? longTitle : null,
+              preview: longTitle,
+            }),
+          ),
+          nextCursor: null,
+        }),
+      });
+      const result = await h.runtime.listSessions({ includeArchived: true });
+      expect(result.sessions.filter((entry) => !entry.archived)).toHaveLength(512);
+      expect(result.sessions.filter((entry) => entry.archived)).toHaveLength(512);
+      expect(result.sessions[512]).toMatchObject({ id: "archived-0", archived: true });
+      expect(result.sessions.every((entry) => (entry.title?.length ?? 0) <= 512)).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(2 * 1024 * 1024);
+      expect((await h.runtime.listSessions()).sessions.every((entry) => !entry.archived)).toBe(
+        true,
+      );
+    },
+  );
+
+  test("byte budgets include JSON escaping and preserve space for each category", async () => {
+    const h = await harness({
+      "thread/list": (params) => ({
+        data: Array.from({ length: 512 }, (_, index) => ({
+          ...threadPayload(`${params.archived === true ? "archived" : "live"}-${index}`),
+          name: "\u0000".repeat(512),
+        })),
+        nextCursor: null,
+      }),
+    });
+    const result = await h.runtime.listSessions({ includeArchived: true });
+    const live = result.sessions.filter((entry) => !entry.archived);
+    const archived = result.sessions.filter((entry) => entry.archived);
+    expect(live.length).toBeGreaterThan(0);
+    expect(archived.length).toBeGreaterThan(0);
+    expect(live.length).toBeLessThan(512);
+    expect(archived.length).toBeLessThan(512);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(2 * 1024 * 1024);
+  });
+
   test("the resume list leaves archived conversations out", async () => {
     writeRollout("sessions", "thread-live");
     writeRollout("sessions", "thread-listed-archived");

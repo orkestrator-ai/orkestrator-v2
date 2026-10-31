@@ -7,9 +7,20 @@
 // developer running the suite, and no test may read or write the real ones.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 let overrideHome: string | null = null;
+/** `undefined`: follow the environment. Tests set a directory or `null`. */
+let overrideAccountHome: string | null | undefined;
+
+/**
+ * Set by the backend for a bridge launched on an added Claude account
+ * (`applyActiveAgentAccountEnvironment` in `apps/backend`), to the same
+ * directory as `CLAUDE_CONFIG_DIR`. That directory's `.claude.json` holds a
+ * copy of the host file's MCP servers, so the CLI loads that copy while the
+ * bridge reads the host file. Unset for the host login and coordinators.
+ */
+export const CLAUDE_ACCOUNT_HOME_ENV = "ORKESTRATOR_CLAUDE_ACCOUNT_HOME";
 
 /**
  * Root of the user's Claude configuration.
@@ -24,6 +35,26 @@ export function claudeHome(): string {
 /** Global Claude config: MCP servers, plugins, and per-project overrides. */
 export function claudeJsonPath(): string {
   return join(claudeHome(), ".claude.json");
+}
+
+/**
+ * The added account's own `.claude.json`, which the CLI reads in place of
+ * `claudeJsonPath()`; null when the CLI reads the same file as the bridge.
+ * Only a directory the backend marked as an account home counts: a user who
+ * sets `CLAUDE_CONFIG_DIR` themselves keeps their servers in that file, and
+ * it is not a copy of anything. A test home ignores the environment.
+ */
+export function claudeAccountJsonPath(): string | null {
+  let home = overrideAccountHome;
+  if (home === undefined) {
+    if (overrideHome !== null) return null;
+    const marked = process.env[CLAUDE_ACCOUNT_HOME_ENV]?.trim();
+    const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+    home = marked && configDir && resolve(marked) === resolve(configDir) ? configDir : null;
+  }
+  if (!home) return null;
+  const file = join(home, ".claude.json");
+  return resolve(file) === resolve(claudeJsonPath()) ? null : file;
 }
 
 /**
@@ -99,4 +130,9 @@ export function claudeCoordinatorSkillPluginsDir(): string {
  */
 export function setClaudeHomeForTesting(home: string | null): void {
   overrideHome = home;
+}
+
+/** Exported for tests: the account directory `claudeAccountJsonPath` uses; `undefined` restores the environment. */
+export function setClaudeAccountHomeForTesting(home: string | null | undefined): void {
+  overrideAccountHome = home;
 }
